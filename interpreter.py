@@ -59,30 +59,42 @@ class KoanInterpreter:
     def __init__(self):
         self.objects = nx.DiGraph()
 
-    @classmethod
-    def parse_no_parens(cls, string):
-        return string.strip().split(' ')
 
-    @classmethod
-    def parse_parens(cls, string):
-        string = string.replace(',', ' ')  # commas are for readability only
+def next_paren(string):
+    open = string.find('(')
+    closed = string.find(')')
+    return open if open < closed else -1
 
-        try:
-            before, after = string.split(')', maxsplit=1)
-        except ValueError:
-            return cls.parse_no_parens(string)
-        else:
-            before, inside = before.rsplit('(', maxsplit=1)
 
-            begin = cls.parse_no_parens(before)
-            middle = cls.parse_parens(inside)
-            end = cls.parse_parens(after)
-            return begin + [middle] + end
+def new_expression(string):
+    expr = []
+    open = next_paren(string)
+    while open != -1:
+        if open > 0:
+            expr.append(string[:open])
+        inside, string = new_expression(string[open+1:])
+        expr.append(inside)
+        open = next_paren(string)
+
+    if string:
+        inside, after = end_expression(string)
+        expr.append(inside)
+    else:
+        after = ''
+    return expr, after
+
+
+def end_expression(string):
+    try:
+        inside, after = string.split(')', maxsplit=1)
+        return inside, after
+    except ValueError:  # if tuple unpacking fails
+        return string, ''
 
 
 test_lines = [
     '(hi there)',  # extra spaces before and after
-    'hey (whoever you are) look at',
-    'hey (whoever you are) look at (that over there)'
+    'hey (whoever you are) look  at',  # careful to avoid the empty term
+    'hey (whoever you are) look at (that over there)',
     'hey (whoever you are) look at (whatever (that over there) is)',  # fails
 ]
