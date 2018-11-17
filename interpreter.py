@@ -40,6 +40,40 @@ class KoanObject:
         self.ktype = ktype
 
 
+def next_paren(string):
+    open = string.find('(')
+    closed = string.find(')')
+    return open if open < closed else -1
+
+
+def close_paren(string):
+    try:
+        inside, after = string.split(')', maxsplit=1)
+        return inside, after
+    except ValueError:  # if tuple unpacking fails
+        return string, ''
+
+
+def nest_parens(string):
+    expr = []
+    open = next_paren(string)
+    while open != -1:  # while there are more subexpressions
+        if open > 0:
+            expr.append(string[:open])
+        # expr.extend(string[:open].split())
+        inside, string = nest_parens(string[open+1:])
+        expr.append(inside)
+        open = next_paren(string)
+
+    if string:  # if the string did end on a closed paren
+        inside, after = close_paren(string)
+        expr.append(inside)
+        # expr.extend(inside.split())
+    else:
+        after = ''
+    return expr, after
+
+
 class KoanInterpreter:
     """ Key Ideas:
         - A program is a graph described by expressions. Expressions are
@@ -59,37 +93,8 @@ class KoanInterpreter:
     def __init__(self):
         self.objects = nx.DiGraph()
 
-
-def next_paren(string):
-    open = string.find('(')
-    closed = string.find(')')
-    return open if open < closed else -1
-
-
-def new_expression(string):
-    expr = []
-    open = next_paren(string)
-    while open != -1:
-        if open > 0:
-            expr.append(string[:open])
-        inside, string = new_expression(string[open+1:])
-        expr.append(inside)
-        open = next_paren(string)
-
-    if string:
-        inside, after = end_expression(string)
-        expr.append(inside)
-    else:
-        after = ''
-    return expr, after
-
-
-def end_expression(string):
-    try:
-        inside, after = string.split(')', maxsplit=1)
-        return inside, after
-    except ValueError:  # if tuple unpacking fails
-        return string, ''
+    def nest_parens(self, string):
+        return nest_parens(string)[0]
 
 
 test_lines = [
