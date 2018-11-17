@@ -1,4 +1,4 @@
-verse
+Koan
 =====
 
-a terse multiparadigm language
+a multiparadigm graph-based language
