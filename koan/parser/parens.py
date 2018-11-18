@@ -13,13 +13,21 @@ def first_sep(string):
     return open if (closed == -1 or -1 < open < closed) else closed
 
 
+def maybe_append(to_list, elem):
+    """ for convenience and readability
+    """
+    if elem:
+        to_list.append(elem)
+
+
 _too_many_open = 'open paren without matching closed paren'
 _too_many_closed = 'closed paren without matching open paren'
 
 
 def nest_parens_recursive(string, _nested=False):
     """ Takes a string that may have nested pairs of parentheses and breaks it
-        into a list of str and nested lists.
+        into a list of str and nested lists, removing the parentheses in the
+        process.
         Recursive implementation.
 
         Parameters
@@ -37,16 +45,16 @@ def nest_parens_recursive(string, _nested=False):
                  string after the close paren.
     """
     expr = []
-    while string and string[first_sep(string)] == '(':
+    while string and string[first_sep(string)] == '(':  # for each subexpression
         before, rest = string.split('(', maxsplit=1)
-        if before:
-            expr.append(before)
+        maybe_append(expr, before)
         complete, string = nest_parens_recursive(rest, _nested=True)
         expr.append(complete)
 
+    # Finish the expression.
     try:
         inside, after = string.split(')', maxsplit=1)
-    except ValueError:
+    except ValueError:  # no close paren
         if _nested:
             raise ParseError(_too_many_open)
         inside, after = string, ''
@@ -54,14 +62,14 @@ def nest_parens_recursive(string, _nested=False):
         if not _nested:
             raise ParseError(_too_many_closed)
 
-    if inside:
-        expr.append(inside)
+    maybe_append(expr, inside)
     return expr, after
 
 
 def nest_parens_flat(string):
     """ Takes a string that may have nested pairs of parentheses and breaks it
-        into a list of str and nested lists.
+        into a list of str and nested lists, removing the parentheses in the
+        process.
         Nonrecursive implementation.
 
         Parameters
@@ -81,15 +89,13 @@ def nest_parens_flat(string):
 
         elif string[sep] == '(':
             before, string = string.split('(', maxsplit=1)
-            if before:
-                partials[-1].append(before)
+            maybe_append(partials[-1], before)
             partials.append([])  # new expression
 
         elif string[sep] == ')':
             inside, string = string.split(')', maxsplit=1)
             complete = partials.pop()  # current expression finished
-            if inside:  # complete expression not empty
-                complete.append(inside)
+            maybe_append(complete, inside)
             try:
                 partials[-1].append(complete)
             except IndexError:  # no more partial expressions to finish
