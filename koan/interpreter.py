@@ -1,5 +1,7 @@
 import networkx as nx
 
+from .parser import nest_parens
+
 
 actions = [
     'map',          # functions, lists, dictionaries
@@ -40,40 +42,6 @@ class KoanObject:
         self.ktype = ktype
 
 
-def next_paren(string):
-    open = string.find('(')
-    closed = string.find(')')
-    return open if open < closed else -1
-
-
-def close_paren(string):
-    try:
-        inside, after = string.split(')', maxsplit=1)
-        return inside, after
-    except ValueError:  # if tuple unpacking fails
-        return string, ''
-
-
-def nest_parens(string):
-    expr = []
-    open = next_paren(string)
-    while open != -1:  # while there are more subexpressions
-        if open > 0:
-            expr.append(string[:open])
-        # expr.extend(string[:open].split())
-        inside, string = nest_parens(string[open+1:])
-        expr.append(inside)
-        open = next_paren(string)
-
-    if string:  # if the string did end on a closed paren
-        inside, after = close_paren(string)
-        expr.append(inside)
-        # expr.extend(inside.split())
-    else:
-        after = ''
-    return expr, after
-
-
 class KoanInterpreter:
     """ Key Ideas:
         - A program is a graph described by expressions. Expressions are
@@ -82,7 +50,7 @@ class KoanInterpreter:
           of the names is marked with a "`". These are keywords. Together, the
           keywords in an expression specify a function call.
         - Just like Lisp code is a data structure (a tree of expressions), Koan
-          code is a graph of objects (some of which are expressions?).
+          code is a graph of objects (which are defined by expressions).
         - A Koan editor may be hybrid text-graphical.
         - Duck typing. Everything that can be done with an object (including
           calling it as a function) is just another aspect of its type.
@@ -95,11 +63,3 @@ class KoanInterpreter:
 
     def nest_parens(self, string):
         return nest_parens(string)[0]
-
-
-test_lines = [
-    '(hi there)',  # extra spaces before and after
-    'hey (whoever you are) look  at',  # careful to avoid the empty term
-    'hey (whoever you are) look at (that over there)',
-    'hey (whoever you are) look at (whatever (that over there) is)',  # fails
-]
