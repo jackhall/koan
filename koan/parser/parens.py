@@ -1,4 +1,5 @@
-from ..errors import ParseError
+class ParseError(RuntimeError):
+    pass
 
 
 def first_sep(string):

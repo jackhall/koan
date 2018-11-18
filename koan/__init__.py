@@ -1,2 +1,1 @@
-from .errors import *
-from .interpreter import *
+from .interpreter import KoanObject, KoanInterpreter

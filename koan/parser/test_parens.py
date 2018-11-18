@@ -1,7 +1,6 @@
 import unittest
 
-from .parens import nest_parens
-from ..errors import ParseError
+from .parens import nest_parens, ParseError
 
 
 class TestNestParens(unittest.TestCase):
