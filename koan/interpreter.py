@@ -3,20 +3,28 @@ import networkx as nx
 from .parser import nest_parens
 
 
-actions = [
+# core: needed to implement Parser, Dispatcher, Compiler and Executer
+# library: vital for writing good general-purpse code
+
+
+core_actions = [
     'map',          # functions, lists, dictionaries
-    'iterate',      # can be mapped to first/rest
-    'measure',      # iterates and has a known # of elements
-    'contain',      # can query contents
-    'mutate',       # contains and contents can be added/removed
-    'order',        # can be ordered via "<" or ">"
+    'iterate',      # can be mapped to first/rest (axiom of choice for sets?)
     'equal',        # can be checked for equality (as opposed to identity)
-    'summarize',    # can be mapped to a string
-    'serialize',    # summarizes and can be reconstructed from string summary
+    'contain',      # can query contents
     'hash',         # can be mapped reliably to a random integer
     'encode',       # can be mapped to and from a bytearray
     'execute',      # function with no arguments, expression, thread
 ]
+
+library_actions = [
+    'measure',      # iterates and has a known # of elements
+    'mutate',       # contains and contents can be added/removed (state monad)
+    'order',        # can be ordered via "<" or ">"
+    'summarize',    # map to a string
+    'serialize',    # summarizes and can be reconstructed from string summary
+]
+
 
 # A given type may offer multiple actions. When the actions of two types are
 # disjoint, their product can perform the union of actions without ambiguity.
@@ -24,75 +32,140 @@ actions = [
 # intersection of their actions. (Coproduct is an Either functor.)
 # If the action sets of two types are not disjoint, their product type must
 # implement that action separately (it may delegate). The product of a pair
-# with third type produces a triple, not a pair with a child pair. 
+# with third type produces a triple, not a pair with a child pair.
 
 # kinds of iterate: list, a map from natural numbers, generator, a set
 # kinds of map: function (non-enumerable input type), dict ("small" input type)
 
 
-monads = [
+core_monads = [
     'guard',        # context manager, object destructor, mutex
-    'log',
     'error',
-    'future',
     'state',
 ]
 
 
-builtin_types = [  # a type is a set defined like a duck with an unit test
-    'null', 'true', 'false',  # singletons
-    'number',       # (numeric tower) order, equal, serialize, hash, encode
-    'function',     # map
-    'class',        # function, but with inheritance features
-    'dict',         # function, can iterate, measure, mutate, equal(?),
-                    # serialize(?), hash(?)
-    'list',         # dictionary, but ordered and keys are naturals
-    'relation',     # similar to a SQL table or a dataframe
-    'expression',   # list of symbols and expressions, can dispatched
-    'object',       # can be executed, be a node in a graph of objects
-    'char',         # equal, hash, serialize, encode
-    'string',       # list of char, but serializes differently
-    'graph',        # mutate, equal, serialize(?)
-    'module',       # graph, can execute
+library_monads = [
+    'io',
+    'log',
+    'future',
 ]
 
 
-class KoanParse:
+core_types = [  # a type is a set defined like a duck with an unit test
+    'null', 'true', 'false',  # singletons
+    'number',       # (numeric tower) order, equal, serialize, hash, encode
+    'function',     # map
+    'dict',         # function, can iterate, measure, mutate, equal(?),
+                    # serialize(?), hash(?)
+    'object',       # can be executed, be a node in a graph of objects
+    'list',         # dictionary, but ordered and keys are naturals
+    'expression',   # list of symbols and expressions, can dispatched
+    'char',         # equal, hash, serialize, encode
+    'string',       # list of char, but serializes differently
+    'graph',        # mutate, equal, serialize(?)
+    'module',       # graph of objects, can be executed
+]
+
+
+library_types = [
+    'class',        # function creating types, with features for extension,
+                    # product and coproduct
+    'relation',     # similar to a SQL table or a dataframe
+]
+
+
+class Object:
+    def __init__(self, unbound_kwargs):
+        self.positional_args = None  # [] indicates a placeholder
+        self.remaining_args = unbound_kwargs
+
+    def execute(self, *args, **kwargs):
+        """ If all args are present, execute. Else, return new bound Object.
+        All keyword args must be present, and at least one positional arg. It
+        may be necessary to define a placeholder to handle no positional args.
+        If not executable, return self? Like a map from singleton?
+        """
+        pass
+
+
+class Expression(list):
+    """ Object that represents code. """
+    def __init__(self, parent):
+        self.parents = {parent}
+
+    def __eq__(self, other):
+        """ Can this expression be substituted for another? """
+        pass
+
+    def __hash__(self):
+        """ Based on hashes of elements, for checking existing expressions. """
+        pass
+
+    def __getstate__(self):
+        """ For pickling. """
+        pass
+
+    def __setstate__(self):
+        """ For unpickling. """
+        pass
+
+
+class Parser:
     """ Map text to tree of expressions. """
-    pass
+    def parse(self, code):
+        pass
 
 
-class KoanDispatch:
-    """ Map an expression to an object. Has `state` monad for namespace/scope.
+class Dispatcher:
+    """ Walk tree of expressions, map expressions to a morphism or type.
+    Has `state` monad for namespace/scope.
+    """
+    def __init__(self, scope):
+        self.namespace = scope
+
+    def dispatch(self, expression):
+        # May recognize the expression refers to an existing object.
+        pass
+
+
+class Module:
+    """ Object with entry point for each executable object, set of types/checkers.
+
+    State here would mean the module itself can be changed on the fly.
+    Otherwise the non-executable objects are types. Is a module a category? To
+    deal with state or similar, the module would have to offer a monad.
     """
     pass
 
 
-class KoanCompile:
+class Compiler:
     """ Assemble objects into a module. Has `state` monad for graph of objects.
     Has `guard` monad for dispatcher.
     """
     pass
 
 
-class KoanExecute:
-    """ Walk the module until it's complete. Has a general monad for IO. """
+class Executer:
+    """ Walk the module and any dependent modules until it's complete.
+    Has a general monad for IO and a state monad for instance state.
+    """
     pass
 
 
-class KoanInterpret:
+class Interpreter:
     """ Walk an iterable of expressions, dispatching, incrementally compiling,
     then executing them.
     """
     pass
 
 
-class KoanDebug:
+class Debugger:
     """ Walk the module, using unit tests and duck tests to find an issue. """
     pass
 
 
-class KoanInterpreter:
+class KoanInterpreter:  # just a bunch of notes now
     """ Key Ideas:
         - A program made up of expressions. Expressions are denoted by
           whitespace (newlines/spaces) or parentheses.
