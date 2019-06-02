@@ -130,11 +130,15 @@ class Dispatcher:
 
 
 class Module:
-    """ Object with entry point for each executable object, set of types/checkers.
+    """ Object with entry point for each executable object, a set of types/
+    checkers, and properties of the category for help executing.
 
     State here would mean the module itself can be changed on the fly.
     Otherwise the non-executable objects are types. Is a module a category? To
     deal with state or similar, the module would have to offer a monad.
+
+    Need a way to specify/test properties of objects and combinations thereof,
+    for instance inversion, idempotence or associativity.
     """
     pass
 
