@@ -19,10 +19,6 @@ def maybe_append(to_list, elem):
         to_list.append(elem)
 
 
-_too_many_open = 'open paren without matching closed paren'
-_too_many_closed = 'closed paren without matching open paren'
-
-
 def nest_parens(string):
     """ Takes a string that may have nested pairs of parentheses and breaks it
         into a list of str and nested lists, removing the parentheses in the
@@ -55,9 +51,9 @@ def nest_parens(string):
             try:
                 partials[-1].append(complete)
             except IndexError:  # no more partial expressions to finish
-                raise ParseError(_too_many_closed)
+                raise ParseError('closed paren without matching open paren')
 
     if len(partials) > 1:  # not all partial expressions were finished
-        raise ParseError(_too_many_open)
+        raise ParseError('open paren without matching closed paren')
     else:
         return partials[0]
