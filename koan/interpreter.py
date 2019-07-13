@@ -56,6 +56,7 @@ core_types = [  # a type is a set defined like a duck with an unit test
     'null', 'true', 'false',  # singletons
     'number',       # (numeric tower) order, equal, serialize, hash, encode
     'function',     # map
+    'set',          # contain, iterate, equal
     'dict',         # function, can iterate, measure, mutate, equal(?),
                     # serialize(?), hash(?)
     'object',       # can be executed, be a node in a graph of objects
