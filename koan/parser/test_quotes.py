@@ -1,58 +1,63 @@
-import unittest
-
-from .quotes import remove_string_literals
+from .quotes import remove_string_literals, reinsert_string_literals
 
 
-class TestNoLiterals(unittest.TestCase):
-    cases = {
-        # no quotes
-        "lorem ipsum": ("lorem ipsum",
-                        []),
+cases = {
+    # no quotes
+    "lorem ipsum": ("lorem ipsum",
+                    []),
 
-        # single quotes
-        "''": ("''",
-               [""]),
-        "'hello'": ("''",
-                    ["hello"]),
-        "say 'hello' to me": ("say '' to me",
-                              ["hello"]),
-        r"say 'hel\'lo' to me": ("say '' to me",
-                                 [r"hel\'lo"]),
-        "say 'bye' after 'hello'.": ("say '' after ''.",
-                                     ["bye", "hello"]),
+    # single quotes
+    "''": ("'0'",
+           [""]),
+    "'hello'": ("'0'",
+                ["hello"]),
+    "'hello''bye'": ("'1''0'",
+                     ['bye', 'hello']),
+    "say 'hello' to me": ("say '0' to me",
+                          ["hello"]),
+    r"say 'hel\'lo' to me": ("say '0' to me",
+                             [r"hel\'lo"]),
+    "say 'bye' after 'hello'.": ("say '1' after '0'.",
+                                 ["hello", "bye"]),
 
-        # double quotes
-        '""': ('""',
-               [""]),
-        '"hello"': ('""',
-                    ["hello"]),
-        'say "hello" to me': ('say "" to me',
-                              ["hello"]),
-        r'say "hel\"lo" to me': ('say "" to me',
-                                 [r'hel\"lo']),
-        'say "bye" after "hello".': ('say "" after "".',
-                                     ["bye", "hello"]),
+    # double quotes
+    '""': ('"0"',
+           [""]),
+    '"hello"': ('"0"',
+                ["hello"]),
+    '"hello""bye"': ('"1""0"',
+                     ['bye', 'hello']),
+    'say "hello" to me': ('say "0" to me',
+                          ["hello"]),
+    r'say "hel\"lo" to me': ('say "0" to me',
+                             [r'hel\"lo']),
+    'say "bye" after "hello".': ('say "1" after "0".',
+                                 ["hello", "bye"]),
 
-        # both
-        '''say 'hey "hello" you' again''': ('''say '' again''',
-                                            ['hey "hello" you']),
-        '''say "hey 'hello' you" again''': ('''say "" again''',
-                                            ["hey 'hello' you"]),
-        r'''say 'he\'y "hello" you' again''': ('''say '' again''',
-                                            [r'he\'y "hello" you']),
-        r'''say 'he\'y "hel\"lo" you' again''': ('''say '' again''',
-                                            [r'he\'y "hel\"lo" you']),
-    }
+    # both
+    '''say 'hey "hello" you' again''': ("say '0' again",
+                                        ['hey "hello" you']),
+    '''say "hey 'hello' you" again''': ('say "0" again',
+                                        ["hey 'hello' you"]),
+    r'''say 'he\'y "hello" you' again''': ("say '0' again",
+                                           [r'he\'y "hello" you']),
+    r'''say 'he\'y "hel\"lo" you' again''': ("say '0' again",
+                                             [r'he\'y "hel\"lo" you']),
+    '''say "by'e" after 'hel"lo'.''': ('''say "1" after '0'.''',
+                                       ['hel"lo', "by'e"]),
+}
 
-    def test_remove(self):
-        """ Make sure string literals can be removed properly. """
-        for code, (expected_remainder, expected_literals) in cases.items():
-            actual_remainder, matches = remove_string_literals(code)
-            self.assertEqual(expected_remainder, actual_remainder)
 
-            actual_literals = [m.group(0)[1:-1] for m in matches]
-            self.assertEqual(expected_literals, actual_literals)
+def test_remove():
+    """ Make sure string literals can be removed properly. """
+    for code, (expected_remainder, expected_literals) in cases.items():
+        actual_remainder, actual_literals = remove_string_literals(code)
+        assert expected_remainder == actual_remainder, 'failed on: ' + code
+        assert expected_literals == actual_literals, 'failed on: ' + code
 
-    def test_replace(self):
-        """ Make sure removing and recombining literals are inverses."""
-        pass
+
+def test_replace():
+    """ Make sure removing and recombining literals are inverses."""
+    for code in cases:
+        bare_code, literals = remove_string_literals(code)
+        assert code == reinsert_string_literals(bare_code, literals)
