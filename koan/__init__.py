@@ -1,1 +1,1 @@
-from .interpreter import KoanObject, KoanInterpreter
+from .interpreter import Object, Interpreter
