@@ -1,3 +1,5 @@
+""" Parse code into nested lists. Code must have string literals removed.
+"""
 from .common import ParseError
 
 

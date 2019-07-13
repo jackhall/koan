@@ -1,7 +1,4 @@
-"""
-- identify and temporarily remove string literals
-    - identify string literals (regex)
-    - collapse code into a single line (ignore newlines in quotes) (regex)
+""" Remove and reinsert string literals from code.
 """
 import re
 
