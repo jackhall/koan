@@ -24,7 +24,7 @@ def remove_string_literals(code):
         start, end = match.span()
         code = code[:start+1] + str(i) + code[end-1:]
 
-    return code, [match.group(0)[1:-1] for match in literals]
+    return code, [match[0][1:-1] for match in literals]
 
 
 def reinsert_string_literals(code, literals):
@@ -32,7 +32,7 @@ def reinsert_string_literals(code, literals):
     """
     for match in reversed(list(find_literals("'\"", code))):
         start, end = match.span()
-        index = int(match.group(0)[1:-1])
+        index = int(match[0][1:-1])
         code = code[:start+1] + literals[index] + code[end-1:]
 
     return code
