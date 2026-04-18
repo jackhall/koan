@@ -1,0 +1,8 @@
+[package]
+name = "koan"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "koan"
+path = "src/main.rs"

@@ -12,7 +12,7 @@ core_actions = [
     'iterate',      # can be mapped to first/rest (axiom of choice for sets?)
     'equal',        # can be checked for equality (as opposed to identity)
     'contain',      # can query contents
-    'hash',         # can be mapped reliably to a random integer
+    'hash',         # can be mapped reliably to an integer
     'encode',       # can be mapped to and from a bytearray
     'execute',      # function with no arguments, expression, thread
 ]
