@@ -9,6 +9,7 @@ mod kstring;
 mod kexpression;
 mod monad;
 mod parse;
+mod dispatch;
 
 fn main() {
     println!("{}", eval("Hello, world!").value);
