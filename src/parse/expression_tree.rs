@@ -110,7 +110,7 @@ pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpr
 
 pub fn parse(input: &str) -> Result<KExpression, String> {
     let (masked, quotes) = mask_quotes(input);
-    let collapsed = collapse_whitespace(&masked);
+    let collapsed = collapse_whitespace(&masked)?;
     build_tree(&collapsed, &quotes)
 }
 

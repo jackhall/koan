@@ -1,14 +1,24 @@
-pub fn collapse_whitespace(input: &str) -> String {
+pub fn collapse_whitespace(input: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut stack: Vec<usize> = Vec::new();
 
-    for raw in input.lines() {
+    for (lineno, raw) in input.lines().enumerate() {
         let stripped = raw.trim_start();
         let indent = raw.len() - stripped.len();
         let content = stripped.trim_end();
 
         if content.is_empty() {
             continue;
+        }
+
+        if raw[..indent].contains('\t') {
+            return Err(format!("tab indentation not allowed on line {}", lineno + 1));
+        }
+        if indent % 2 != 0 {
+            return Err(format!(
+                "odd-numbered space indentation on line {}",
+                lineno + 1
+            ));
         }
 
         while let Some(&top) = stack.last() {
@@ -32,7 +42,7 @@ pub fn collapse_whitespace(input: &str) -> String {
         out.push(')');
     }
 
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -41,38 +51,38 @@ mod tests {
 
     #[test]
     fn empty_input() {
-        assert_eq!(collapse_whitespace(""), "");
+        assert_eq!(collapse_whitespace("").unwrap(), "");
     }
 
     #[test]
     fn only_whitespace() {
-        assert_eq!(collapse_whitespace("   \n\t\n   \n"), "");
+        assert_eq!(collapse_whitespace("   \n\t\n   \n").unwrap(), "");
     }
 
     #[test]
     fn single_line() {
-        assert_eq!(collapse_whitespace("foo"), "(foo)");
+        assert_eq!(collapse_whitespace("foo").unwrap(), "(foo)");
     }
 
     #[test]
     fn single_line_multiple_tokens() {
-        assert_eq!(collapse_whitespace("foo bar baz"), "(foo bar baz)");
+        assert_eq!(collapse_whitespace("foo bar baz").unwrap(), "(foo bar baz)");
     }
 
     #[test]
     fn sibling_lines() {
-        assert_eq!(collapse_whitespace("foo\nbar"), "(foo) (bar)");
+        assert_eq!(collapse_whitespace("foo\nbar").unwrap(), "(foo) (bar)");
     }
 
     #[test]
     fn parent_with_child() {
-        assert_eq!(collapse_whitespace("foo\n    bar"), "(foo (bar))");
+        assert_eq!(collapse_whitespace("foo\n    bar").unwrap(), "(foo (bar))");
     }
 
     #[test]
     fn parent_with_two_children() {
         assert_eq!(
-            collapse_whitespace("foo\n    bar\n    baz"),
+            collapse_whitespace("foo\n    bar\n    baz").unwrap(),
             "(foo (bar) (baz))"
         );
     }
@@ -80,7 +90,7 @@ mod tests {
     #[test]
     fn nested_three_deep() {
         assert_eq!(
-            collapse_whitespace("a\n  b\n    c"),
+            collapse_whitespace("a\n  b\n    c").unwrap(),
             "(a (b (c)))"
         );
     }
@@ -88,7 +98,7 @@ mod tests {
     #[test]
     fn dedent_back_to_root() {
         assert_eq!(
-            collapse_whitespace("foo\n    bar\nbaz"),
+            collapse_whitespace("foo\n    bar\nbaz").unwrap(),
             "(foo (bar)) (baz)"
         );
     }
@@ -96,7 +106,7 @@ mod tests {
     #[test]
     fn dedent_multiple_levels() {
         assert_eq!(
-            collapse_whitespace("a\n  b\n    c\nd"),
+            collapse_whitespace("a\n  b\n    c\nd").unwrap(),
             "(a (b (c))) (d)"
         );
     }
@@ -104,7 +114,7 @@ mod tests {
     #[test]
     fn child_then_sibling_then_child() {
         assert_eq!(
-            collapse_whitespace("foo\n    bar\n    baz\n        qux\n    quux\nanother"),
+            collapse_whitespace("foo\n    bar\n    baz\n        qux\n    quux\nanother").unwrap(),
             "(foo (bar) (baz (qux)) (quux)) (another)"
         );
     }
@@ -112,30 +122,34 @@ mod tests {
     #[test]
     fn blank_lines_skipped() {
         assert_eq!(
-            collapse_whitespace("foo\n\n    bar\n\n\nbaz"),
+            collapse_whitespace("foo\n\n    bar\n\n\nbaz").unwrap(),
             "(foo (bar)) (baz)"
         );
     }
 
     #[test]
-    fn tabs_as_indent() {
-        assert_eq!(
-            collapse_whitespace("foo\n\tbar\n\tbaz"),
-            "(foo (bar) (baz))"
-        );
+    fn tabs_rejected() {
+        assert!(collapse_whitespace("foo\n\tbar").is_err());
+        assert!(collapse_whitespace("foo\n  \tbar").is_err());
+    }
+
+    #[test]
+    fn odd_spaces_rejected() {
+        assert!(collapse_whitespace("foo\n bar").is_err());
+        assert!(collapse_whitespace("foo\n   bar").is_err());
     }
 
     #[test]
     fn multi_token_lines_nested() {
         assert_eq!(
-            collapse_whitespace("if x > 0\n    print pos\n    y = 1\nelse\n    print neg"),
+            collapse_whitespace("if x > 0\n    print pos\n    y = 1\nelse\n    print neg").unwrap(),
             "(if x > 0 (print pos) (y = 1)) (else (print neg))"
         );
     }
 
     #[test]
     fn output_has_no_tabs_or_newlines() {
-        let out = collapse_whitespace("a\n\tb\n\t\tc\n\td\ne");
+        let out = collapse_whitespace("a\n  b\n    c\n  d\ne").unwrap();
         assert!(!out.contains('\n'));
         assert!(!out.contains('\t'));
     }
