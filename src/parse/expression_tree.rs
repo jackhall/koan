@@ -5,7 +5,8 @@ use regex::Regex;
 
 use crate::kexpression::{ExpressionPart, KExpression, KLiteral};
 use crate::kobject::KObject;
-use crate::parse::quotes::QUOTE_PLACEHOLDER;
+use crate::parse::quotes::{mask_quotes, QUOTE_PLACEHOLDER};
+use crate::parse::whitespace::collapse_whitespace;
 
 static SIGNED_INT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[+-]?\d+$").unwrap());
 
@@ -54,7 +55,7 @@ fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<Strin
         .ok_or_else(|| format!("unknown placeholder index: {}", idx))
 }
 
-pub fn build(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression, String> {
+pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression, String> {
     let mut stack: Vec<KExpression> = vec![empty_expression()];
     let mut buf = String::new();
     let mut chars = masked.chars();
@@ -107,6 +108,12 @@ pub fn build(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpressio
     Ok(stack.pop().unwrap())
 }
 
+pub fn parse(input: &str) -> Result<KExpression, String> {
+    let (masked, quotes) = mask_quotes(input);
+    let collapsed = collapse_whitespace(&masked);
+    build_tree(&collapsed, &quotes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,7 +137,7 @@ mod tests {
 
     fn tree(input: &str) -> Result<String, String> {
         let (masked, dict) = mask_quotes(input);
-        build(&masked, &dict).map(|e| describe(&e))
+        build_tree(&masked, &dict).map(|e| describe(&e))
     }
 
     #[test]
