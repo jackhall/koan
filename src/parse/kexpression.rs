@@ -3,6 +3,7 @@ use crate::dispatch::ktraits::{Parseable, Executable};
 
 /// Concrete literal kinds the parser recognizes; produced by `tokens::try_literal` and consumed
 /// when resolving an `ExpressionPart` into a runtime `KObject`.
+#[derive(Debug)]
 pub enum KLiteral {
     Number(f64),
     String(String),
@@ -12,6 +13,7 @@ pub enum KLiteral {
 
 /// One element inside a parsed expression: either a raw identifier-like `Token`, a nested
 /// sub-`Expression`, or a fully-typed `Literal`. Built by the parser, traversed by dispatch.
+#[derive(Debug)]
 pub enum ExpressionPart {
     Token(String),
     Expression(Box<KExpression>),
@@ -37,6 +39,7 @@ impl ExpressionPart {
 
 /// A parsed Koan expression: an ordered sequence of `ExpressionPart`s. The output of the parse
 /// pipeline and the input to `Scope::dispatch`, which matches it against function signatures.
+#[derive(Debug)]
 pub struct KExpression {
     pub parts: Vec<ExpressionPart>,
 }

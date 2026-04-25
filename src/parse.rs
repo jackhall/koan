@@ -1,5 +1,5 @@
 pub mod kexpression;
 mod quotes;
-mod expression_tree;
+pub mod expression_tree;
 mod tokens;
 mod whitespace;
