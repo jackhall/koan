@@ -5,20 +5,19 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::parse::kexpression::{ExpressionPart, KLiteral};
+use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap()
 });
 
 /// Convert a single whitespace-delimited token into an `ExpressionPart`. First tries `try_literal`
-/// for `null`/`true`/`false`/numbers; if the token contains `!`, `.`, or `[`, hands off to
-/// `parse_compound` to desugar member access, indexing, and negation into nested expressions.
+/// on the whole token (so e.g. `3.14` stays a number rather than being parsed as `(attr 3 14)`);
+/// otherwise hands off to `parse_compound` to desugar member access, indexing, and negation into
+/// nested expressions.
 pub fn classify_token(tok: String) -> Result<ExpressionPart, String> {
     if let Some(part) = try_literal(&tok) {
         return Ok(part);
-    }
-    if !tok.chars().any(|c| c == '!' || c == '.' || c == '[') {
-        return Ok(ExpressionPart::Token(tok));
     }
     let mut chars = tok.chars().peekable();
     let part = parse_compound(&mut chars)?;
@@ -52,51 +51,52 @@ fn classify_atom(tok: &str) -> ExpressionPart {
     try_literal(tok).unwrap_or_else(|| ExpressionPart::Token(tok.to_string()))
 }
 
-/// Recursive-descent parser for compound tokens. Consumes any leading `!`s (negation), then
-/// reads an atom and folds in suffix operators: `.name` becomes `(attr expr name)`,
-/// `[inner]` becomes `(expr at inner)`. Each leading `!` wraps the result in `(not ..)`.
+/// Recursive-descent parser for compound tokens. Strips leading prefix operators, reads an
+/// atom, then folds in any infix/postfix suffix operators. Each matched operator's builder
+/// constructs the resulting expression — the dispatcher knows operand arity and source per
+/// kind, the builder knows the output shape per operator.
 fn parse_compound(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String> {
-    let mut nots = 0;
-    while chars.peek() == Some(&'!') {
-        nots += 1;
+    let mut prefixes: Vec<&Operator> = Vec::new();
+    while let Some(&c) = chars.peek() {
+        let Some(op) = find_prefix(c) else { break };
         chars.next();
+        prefixes.push(op);
     }
 
     let mut expr = read_atom(chars)?;
 
-    loop {
-        match chars.peek() {
-            Some(&'.') => {
-                chars.next();
-                let name = read_atom(chars)?;
-                expr = ExpressionPart::expression(vec![ExpressionPart::Token("attr".to_string()), expr, name]);
+    while let Some(&c) = chars.peek() {
+        let Some(op) = find_suffix(c) else { break };
+        chars.next();
+        expr = match op.kind {
+            OperatorKind::Infix => {
+                let rhs = read_atom(chars)?;
+                (op.build)(vec![expr, rhs])
             }
-            Some(&'[') => {
-                chars.next();
+            OperatorKind::Postfix { close } => {
                 let inner = parse_compound(chars)?;
-                match chars.next() {
-                    Some(']') => {}
-                    _ => return Err("unclosed [".to_string()),
+                if chars.next() != Some(close) {
+                    return Err(format!("unclosed {}", op.trigger));
                 }
-                expr = ExpressionPart::expression(vec![expr, ExpressionPart::Token("at".to_string()), inner]);
+                (op.build)(vec![expr, inner])
             }
-            _ => break,
-        }
+            OperatorKind::Suffix => (op.build)(vec![expr]),
+            OperatorKind::Prefix => unreachable!("find_suffix excludes Prefix"),
+        };
     }
 
-    for _ in 0..nots {
-        expr = ExpressionPart::expression(vec![ExpressionPart::Token("not".to_string()), expr]);
+    for op in prefixes.into_iter().rev() {
+        expr = (op.build)(vec![expr]);
     }
-
     Ok(expr)
 }
 
-/// Consume characters from `chars` until the next compound-token operator (`.`, `[`, `]`, `!`)
-/// and classify the run via `classify_atom`. Errors on an empty atom.
+/// Consume characters from `chars` until the next operator trigger or postfix close char
+/// (driven by `OPERATORS`) and classify the run via `classify_atom`. Errors on an empty atom.
 fn read_atom(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String> {
     let mut s = String::new();
     while let Some(&c) = chars.peek() {
-        if matches!(c, '.' | '[' | ']' | '!') {
+        if is_atom_terminator(c) {
             break;
         }
         s.push(c);
@@ -256,5 +256,33 @@ mod tests {
     #[test]
     fn bare_bang_errors() {
         assert!(classify("!").is_err());
+    }
+
+    #[test]
+    fn suffix_try() {
+        assert_eq!(classify("foo?").unwrap(), "[t(try) t(foo)]");
+    }
+
+    #[test]
+    fn chained_suffix() {
+        assert_eq!(classify("foo??").unwrap(), "[t(try) [t(try) t(foo)]]");
+    }
+
+    #[test]
+    fn suffix_after_attr() {
+        assert_eq!(
+            classify("foo.bar?").unwrap(),
+            "[t(try) [t(attr) t(foo) t(bar)]]"
+        );
+    }
+
+    #[test]
+    fn negation_over_suffix() {
+        assert_eq!(classify("!foo?").unwrap(), "[t(not) [t(try) t(foo)]]");
+    }
+
+    #[test]
+    fn leading_suffix_errors() {
+        assert!(classify("?foo").is_err());
     }
 }

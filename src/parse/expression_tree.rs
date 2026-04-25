@@ -97,11 +97,19 @@ pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpr
 }
 
 /// Top-level parse pipeline: mask string literals, collapse indentation into parens, then
-/// build the expression tree. The single public entry point users of `parse` should call.
-pub fn parse(input: &str) -> Result<KExpression, String> {
+/// build the expression tree. Returns one `KExpression` per top-level line; the single public
+/// entry point users of `parse` should call.
+pub fn parse(input: &str) -> Result<Vec<KExpression>, String> {
     let (masked, quotes) = mask_quotes(input);
     let collapsed = collapse_whitespace(&masked)?;
-    build_tree(&collapsed, &quotes)
+    let root = build_tree(&collapsed, &quotes)?;
+    root.parts
+        .into_iter()
+        .map(|part| match part {
+            ExpressionPart::Expression(e) => Ok(*e),
+            other => Err(format!("unexpected top-level part: {:?}", other)),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -128,6 +136,20 @@ mod tests {
     fn tree(input: &str) -> Result<String, String> {
         let (masked, dict) = mask_quotes(input);
         build_tree(&masked, &dict).map(|e| describe(&e))
+    }
+
+    fn top(input: &str) -> Result<Vec<String>, String> {
+        parse(input).map(|exprs| exprs.iter().map(describe).collect())
+    }
+
+    #[test]
+    fn parse_single_line_has_no_top_level_wrapper() {
+        assert_eq!(top("foo bar").unwrap(), vec!["[t(foo) t(bar)]"]);
+    }
+
+    #[test]
+    fn parse_multiple_lines_are_siblings() {
+        assert_eq!(top("foo\nbar").unwrap(), vec!["[t(foo)]", "[t(bar)]"]);
     }
 
     #[test]

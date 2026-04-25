@@ -30,8 +30,8 @@ fn main() -> ExitCode {
     };
 
     match parse(&source) {
-        Ok(expr) => {
-            println!("{:#?}", expr);
+        Ok(exprs) => {
+            println!("{:#?}", exprs);
             ExitCode::SUCCESS
         }
         Err(e) => {
