@@ -1,13 +1,5 @@
 #![allow(dead_code)]
 
-mod ktraits;
-mod kobject;
-mod ktask;
-mod kloop;
-mod klist;
-mod kstring;
-mod kexpression;
-mod monad;
 mod parse;
 mod dispatch;
 

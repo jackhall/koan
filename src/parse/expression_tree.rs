@@ -1,42 +1,21 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
-use regex::Regex;
-
-use crate::kexpression::{ExpressionPart, KExpression, KLiteral};
-use crate::kobject::KObject;
+use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::quotes::{mask_quotes, QUOTE_PLACEHOLDER};
+use crate::parse::tokens::classify_token;
 use crate::parse::whitespace::collapse_whitespace;
 
-static SIGNED_INT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[+-]?\d+$").unwrap());
-
 fn empty_expression() -> KExpression {
-    KExpression {
-        base: KObject { name: String::new(), remaining_args: HashMap::new() },
-        parts: Vec::new(),
-    }
+    KExpression { parts: Vec::new() }
 }
 
-fn classify_token(tok: String) -> ExpressionPart {
-    match tok.as_str() {
-        "null" => return ExpressionPart::Literal(KLiteral::Null),
-        "true" => return ExpressionPart::Literal(KLiteral::Boolean(true)),
-        "false" => return ExpressionPart::Literal(KLiteral::Boolean(false)),
-        _ => {}
-    }
-    if SIGNED_INT.is_match(&tok) {
-        if let Ok(n) = tok.parse::<f64>() {
-            return ExpressionPart::Literal(KLiteral::Number(n));
-        }
-    }
-    ExpressionPart::Token(tok)
-}
-
-fn flush_token(stack: &mut [KExpression], buf: &mut String) {
+fn flush_token(stack: &mut [KExpression], buf: &mut String) -> Result<(), String> {
     if !buf.is_empty() {
         let tok = std::mem::take(buf);
-        stack.last_mut().unwrap().parts.push(classify_token(tok));
+        let part = classify_token(tok)?;
+        stack.last_mut().unwrap().parts.push(part);
     }
+    Ok(())
 }
 
 fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<String, String> {
@@ -63,11 +42,11 @@ pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpr
     while let Some(c) = chars.next() {
         match c {
             '(' => {
-                flush_token(&mut stack, &mut buf);
+                flush_token(&mut stack, &mut buf)?;
                 stack.push(empty_expression());
             }
             ')' => {
-                flush_token(&mut stack, &mut buf);
+                flush_token(&mut stack, &mut buf)?;
                 if stack.len() < 2 {
                     return Err("closed paren without matching open paren".to_string());
                 }
@@ -79,7 +58,7 @@ pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpr
                     .push(ExpressionPart::Expression(Box::new(complete)));
             }
             '\'' | '"' => {
-                flush_token(&mut stack, &mut buf);
+                flush_token(&mut stack, &mut buf)?;
                 let open = c;
                 let mut inner = String::new();
                 loop {
@@ -96,11 +75,11 @@ pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpr
                     .parts
                     .push(ExpressionPart::Literal(KLiteral::String(literal)));
             }
-            c if c.is_whitespace() => flush_token(&mut stack, &mut buf),
+            c if c.is_whitespace() => flush_token(&mut stack, &mut buf)?,
             _ => buf.push(c),
         }
     }
-    flush_token(&mut stack, &mut buf);
+    flush_token(&mut stack, &mut buf)?;
 
     if stack.len() > 1 {
         return Err("open paren without matching closed paren".to_string());
@@ -244,10 +223,10 @@ mod tests {
     }
 
     #[test]
-    fn floats_and_scientific_stay_tokens() {
+    fn floats_and_scientific_are_number_literals() {
         assert_eq!(
             tree("3.14 1e3 -2.5e-2").unwrap(),
-            "[t(3.14) t(1e3) t(-2.5e-2)]"
+            "[n(3.14) n(1000) n(-0.025)]"
         );
     }
 

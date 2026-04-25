@@ -1,6 +1,5 @@
-use crate::kobject::KObject;
-use crate::ktraits::{Parseable, Executable};
-use std::collections::HashMap;
+use crate::dispatch::kobject::KObject;
+use crate::dispatch::ktraits::{Parseable, Executable};
 
 pub enum KLiteral {
     Number(f64),
@@ -15,13 +14,29 @@ pub enum ExpressionPart {
     Literal(KLiteral),
 }
 
+impl ExpressionPart {
+    pub fn expression(parts: Vec<ExpressionPart>) -> ExpressionPart {
+        ExpressionPart::Expression(Box::new(KExpression { parts }))
+    }
+
+    pub fn resolve<'a>(&self) -> KObject<'a> {
+        match self {
+            ExpressionPart::Token(s) => KObject::KString(s.clone()),
+            ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
+            ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(s.clone()),
+            ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
+            ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
+            ExpressionPart::Expression(e) => KObject::KString(e.summarize()),
+        }
+    }
+}
+
 pub struct KExpression {
-    pub base: KObject,
     pub parts: Vec<ExpressionPart>,
 }
 
 impl Parseable for KExpression {
-    fn equal(&self, other: &dyn Parseable) -> bool { self.base.equal(other) }
+    fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
     fn summarize(&self) -> String {
         self.parts.iter()
             .map(|p| match p {
@@ -41,6 +56,6 @@ impl Parseable for KExpression {
 
 impl Executable for KExpression {
     fn execute(&self, _args: &[&dyn Parseable]) -> Box<dyn Parseable> {
-        Box::new(KObject { name: self.summarize(), remaining_args: HashMap::new() })
+        Box::new(KObject::KString(self.summarize()))
     }
 }

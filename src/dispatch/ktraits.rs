@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 pub trait Parseable {
     fn equal(&self, other: &dyn Parseable) -> bool;
     fn summarize(&self) -> String;
@@ -16,10 +18,24 @@ pub trait Collection: Iterable {
 }
 
 pub trait Serializable: Parseable {
-    fn hash(&self) -> u64;
+    fn hash(&self, state: &mut dyn Hasher);
     fn encode(&self) -> Vec<u8>;
     fn decode(bytes: &[u8]) -> Self where Self: Sized;
 }
+
+impl<'a> Hash for dyn Serializable + 'a {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Serializable::hash(self, state);
+    }
+}
+
+impl<'a> PartialEq for dyn Serializable + 'a {
+    fn eq(&self, other: &Self) -> bool {
+        self.equal(other)
+    }
+}
+
+impl<'a> Eq for dyn Serializable + 'a {}
 
 pub trait Monadic {
     type Inner;

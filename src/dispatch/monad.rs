@@ -1,4 +1,4 @@
-use crate::ktraits::Monadic;
+use super::ktraits::Monadic;
 
 impl<A> Monadic for Option<A> {
     type Inner = A;
