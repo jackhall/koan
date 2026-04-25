@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
-use crate::parse::kexpression::KExpression;
-
-pub fn parse(_input: &str) -> KExpression {
-    todo!()
-}
-
 pub const QUOTE_PLACEHOLDER: char = '\u{001F}';
 
+/// First parse pass: replace each quoted region's contents with a placeholder marker
+/// (`QUOTE_PLACEHOLDER` followed by an index) and return the masked string plus a dictionary
+/// mapping those indices back to the original literal text. Protects string contents from later
+/// tokenization in `build_tree`, which uses `resolve_literal` to look the originals back up.
 pub fn mask_quotes(input: &str) -> (String, HashMap<usize, String>) {
     let mut out = String::with_capacity(input.len());
     let mut dict: HashMap<usize, String> = HashMap::new();

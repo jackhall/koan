@@ -5,10 +5,14 @@ use crate::parse::quotes::{mask_quotes, QUOTE_PLACEHOLDER};
 use crate::parse::tokens::classify_token;
 use crate::parse::whitespace::collapse_whitespace;
 
+/// Construct an empty `KExpression`; used by `build_tree` to seed each new nesting level.
 fn empty_expression() -> KExpression {
     KExpression { parts: Vec::new() }
 }
 
+/// If `buf` holds a pending token, classify it via `tokens::classify_token` and push the result
+/// onto the innermost expression on `stack`. Called by `build_tree` whenever a delimiter ends a
+/// run of token characters.
 fn flush_token(stack: &mut [KExpression], buf: &mut String) -> Result<(), String> {
     if !buf.is_empty() {
         let tok = std::mem::take(buf);
@@ -18,6 +22,8 @@ fn flush_token(stack: &mut [KExpression], buf: &mut String) -> Result<(), String
     Ok(())
 }
 
+/// Look up the original literal text for a `mask_quotes` placeholder. `inner` is the masked
+/// content found between two matching quote characters during `build_tree`.
 fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<String, String> {
     if inner.is_empty() {
         return Ok(String::new());
@@ -34,6 +40,9 @@ fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<Strin
         .ok_or_else(|| format!("unknown placeholder index: {}", idx))
 }
 
+/// Walk a quote-masked, paren-delimited string and assemble it into a nested `KExpression`.
+/// Opens a new sub-expression on `(`, closes it on `)`, recovers string literals via
+/// `resolve_literal`, and classifies non-quoted runs through `tokens::classify_token`.
 pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression, String> {
     let mut stack: Vec<KExpression> = vec![empty_expression()];
     let mut buf = String::new();
@@ -87,6 +96,8 @@ pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpr
     Ok(stack.pop().unwrap())
 }
 
+/// Top-level parse pipeline: mask string literals, collapse indentation into parens, then
+/// build the expression tree. The single public entry point users of `parse` should call.
 pub fn parse(input: &str) -> Result<KExpression, String> {
     let (masked, quotes) = mask_quotes(input);
     let collapsed = collapse_whitespace(&masked)?;

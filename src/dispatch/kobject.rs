@@ -5,6 +5,9 @@ use super::ktraits::{Parseable, Serializable};
 use super::kfunction::KFunction;
 use super::scope::KFuture;
 
+/// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
+/// reference to a function in some scope. The universal value type that `KFunction`s consume
+/// and produce; implements `Parseable` so values can be compared and rendered uniformly.
 pub enum KObject<'a> {
     UserDefined,
     Number(f64),

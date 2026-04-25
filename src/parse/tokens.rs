@@ -10,6 +10,9 @@ static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap()
 });
 
+/// Convert a single whitespace-delimited token into an `ExpressionPart`. First tries `try_literal`
+/// for `null`/`true`/`false`/numbers; if the token contains `!`, `.`, or `[`, hands off to
+/// `parse_compound` to desugar member access, indexing, and negation into nested expressions.
 pub fn classify_token(tok: String) -> Result<ExpressionPart, String> {
     if let Some(part) = try_literal(&tok) {
         return Ok(part);
@@ -25,6 +28,9 @@ pub fn classify_token(tok: String) -> Result<ExpressionPart, String> {
     Ok(part)
 }
 
+/// Try to parse `tok` as a recognized literal (`null`, `true`, `false`, or a number matching
+/// the `FLOAT` regex). Returns `None` if it isn't one. Shared by `classify_token` and
+/// `classify_atom` so both apply the same literal rules.
 fn try_literal(tok: &str) -> Option<ExpressionPart> {
     match tok {
         "null" => return Some(ExpressionPart::Literal(KLiteral::Null)),
@@ -40,10 +46,15 @@ fn try_literal(tok: &str) -> Option<ExpressionPart> {
     None
 }
 
+/// Classify a sub-token (the piece between operators inside a compound token): literal if
+/// possible, otherwise a `Token`. Used by `read_atom`.
 fn classify_atom(tok: &str) -> ExpressionPart {
     try_literal(tok).unwrap_or_else(|| ExpressionPart::Token(tok.to_string()))
 }
 
+/// Recursive-descent parser for compound tokens. Consumes any leading `!`s (negation), then
+/// reads an atom and folds in suffix operators: `.name` becomes `(attr expr name)`,
+/// `[inner]` becomes `(expr at inner)`. Each leading `!` wraps the result in `(not ..)`.
 fn parse_compound(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String> {
     let mut nots = 0;
     while chars.peek() == Some(&'!') {
@@ -80,6 +91,8 @@ fn parse_compound(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String>
     Ok(expr)
 }
 
+/// Consume characters from `chars` until the next compound-token operator (`.`, `[`, `]`, `!`)
+/// and classify the run via `classify_atom`. Errors on an empty atom.
 fn read_atom(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String> {
     let mut s = String::new();
     while let Some(&c) = chars.peek() {

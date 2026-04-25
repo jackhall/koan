@@ -1,3 +1,7 @@
+/// Convert indentation-based block structure into parenthesized form, so the downstream
+/// `build_tree` only has to deal with `(...)` grouping. Each non-blank line becomes a `(...)`
+/// group, deeper indents nest inside their parent, and dedents close the matching groups.
+/// Rejects tab indentation and odd-numbered space indentation (only even-space indents allowed).
 pub fn collapse_whitespace(input: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut stack: Vec<usize> = Vec::new();
