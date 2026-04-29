@@ -182,9 +182,3 @@ class KoanInterpreter:  # just a bunch of notes now
         - Lexical scoping.
     """
     version = '0.0.1'
-
-    def __init__(self):
-        self.objects = nx.DiGraph()
-
-    def nest_parens(self, string):
-        return nest_parens(string)[0]
