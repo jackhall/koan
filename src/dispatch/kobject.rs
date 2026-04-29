@@ -16,7 +16,7 @@ pub enum KObject<'a> {
     List(Vec<KObject<'a>>),
     Dict(HashMap<Box<dyn Serializable + 'a>, KObject<'a>>),
     KExpression(KExpression),
-    KTask(KFuture<'a>),
+    KFuture(KFuture<'a>),
     KFunction(&'a KFunction<'a>),
     Null,
 }
@@ -43,7 +43,7 @@ impl<'a> Parseable for KObject<'a> {
                 format!("{{{}}}", parts.join(", "))
             }
             KObject::KExpression(e) => e.summarize(),
-            KObject::KTask(t) => t.parsed.summarize(),
+            KObject::KFuture(t) => t.parsed.summarize(),
             KObject::KFunction(f) => f.summarize(),
             KObject::Null => "null".to_string(),
         }

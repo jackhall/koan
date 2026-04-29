@@ -6,18 +6,24 @@ use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 use super::kobject::KObject;
 use super::scope::{KFuture, Scope};
 
+/// A function pointer that implements a `KFunction`'s body: takes the call-site `Scope` and the
+/// resolved `ArgumentBundle` and produces a `KObject`. `for<'a>` so a single `fn` can be invoked
+/// against any caller scope lifetime.
+pub type BuiltinFn = for<'a> fn(&mut Scope<'a>, ArgumentBundle<'a>) -> &'a KObject<'a>;
 
-/// A callable Koan function: its `ExpressionSignature` (the call shape it matches) plus a
-/// reference to the `Scope` where it was defined. `Scope::dispatch` finds the right `KFunction`
-/// by signature and then `bind`s a `KExpression` into a `KFuture`.
+/// A callable Koan function: its `ExpressionSignature` (the call shape it matches), an optional
+/// reference to the `Scope` where it was defined (`None` for builtins), and the function pointer
+/// implementing its body. `Scope::dispatch` finds the right `KFunction` by signature and then
+/// `bind`s a `KExpression` into a `KFuture`.
 pub struct KFunction<'a> {
-    pub scope: &'a Scope<'a>,
+    pub scope: Option<&'a Scope<'a>>,
     pub signature: ExpressionSignature,
+    pub body: BuiltinFn,
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(scope: &'a Scope<'a>, signature: ExpressionSignature) -> Self {
-        Self { scope, signature }
+    pub fn new(scope: Option<&'a Scope<'a>>, signature: ExpressionSignature, body: BuiltinFn) -> Self {
+        Self { scope, signature, body }
     }
 
     pub fn summarize(&self) -> String {
@@ -83,6 +89,7 @@ impl<'a> ArgumentBundle<'a> {
 /// `Scope::dispatch` walks each registered function's signature looking for one whose
 /// `matches` returns true for an incoming `KExpression`.
 pub struct ExpressionSignature {
+    pub return_type: KType,
     pub elements: Vec<SignatureElement>,
 }
 
@@ -122,6 +129,7 @@ impl Argument {
             KType::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
             KType::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),
             KType::Null => matches!(part, ExpressionPart::Literal(KLiteral::Null)),
+            KType::Identifier => matches!(part, ExpressionPart::Token(_)),
         }
     }
 }
@@ -129,11 +137,13 @@ impl Argument {
 /// Built-in type tags used by `Argument::matches` to reject ill-typed call sites at dispatch
 /// time. In the future this should not assume all types can be enumerated; the user should be
 /// able to define duck types.
+#[derive(Copy, Clone)]
 pub enum KType {
     Number,
     Str,
     Bool,
     Null,
+    Identifier,
     Any,
 }
 

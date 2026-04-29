@@ -30,7 +30,7 @@ impl<'a> Scope<'a> {
         self.data.insert(name, obj);
     }
 
-    pub fn dispatch(&'a self, expr: KExpression) -> Result<KFuture<'a>, String> {
+    pub fn dispatch(&self, expr: KExpression) -> Result<KFuture<'a>, String> {
         let function = self
             .functions
             .iter()
