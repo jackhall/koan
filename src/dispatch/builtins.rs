@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 
 use super::kfunction::{Argument, ArgumentBundle, ExpressionSignature, KFunction, KType, SignatureElement};
 use super::kobject::KObject;
@@ -29,10 +30,10 @@ pub fn builtin_let<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a
     leaked
 }
 
-/// `print <msg:Str>` — prints the bound `KString` to stdout.
-pub fn builtin_print<'a>(_scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
+/// `print <msg:Str>` — writes the bound `KString` to `scope.out`, followed by a newline.
+pub fn builtin_print<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
     if let Some(KObject::KString(s)) = bundle.get("msg") {
-        println!("{s}");
+        let _ = writeln!(scope.out, "{s}");
     }
     null()
 }
@@ -41,7 +42,12 @@ pub fn builtin_print<'a>(_scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> 
 /// `Box::leak`s its own function and object boxes, so the returned scope is `'static` and child
 /// scopes can chain off it via `Scope.outer` to inherit the builtins.
 pub fn default_scope() -> Scope<'static> {
-    let mut scope = Scope { outer: None, data: HashMap::new(), functions: Vec::new() };
+    let mut scope = Scope {
+        outer: None,
+        data: HashMap::new(),
+        functions: Vec::new(),
+        out: Box::new(std::io::stdout()),
+    };
 
     let let_fn: &'static KFunction<'static> = Box::leak(Box::new(KFunction::new(
         None,
@@ -88,7 +94,12 @@ mod tests {
 
     #[test]
     fn let_inserts_binding_into_scope() {
-        let mut scope = Scope { outer: None, data: HashMap::new(), functions: Vec::new() };
+        let mut scope = Scope {
+            outer: None,
+            data: HashMap::new(),
+            functions: Vec::new(),
+            out: Box::new(std::io::sink()),
+        };
         let mut args = HashMap::new();
         args.insert("name".to_string(), Rc::new(KObject::KString("x".into())));
         args.insert("value".to_string(), Rc::new(KObject::Number(42.0)));

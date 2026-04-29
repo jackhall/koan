@@ -2,14 +2,16 @@
 
 mod parse;
 mod dispatch;
+mod execute;
 
 use std::io::Read;
 use std::process::ExitCode;
 
-use crate::parse::expression_tree::parse;
+use crate::dispatch::builtins::default_scope;
+use crate::execute::interpret::interpret;
 
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
-/// stdin, parse it, and pretty-print the resulting `KExpression` tree.
+/// stdin, then parse, dispatch, and execute it via `interpret`.
 fn main() -> ExitCode {
     let source = match std::env::args().nth(1) {
         Some(path) => match std::fs::read_to_string(&path) {
@@ -29,13 +31,11 @@ fn main() -> ExitCode {
         }
     };
 
-    match parse(&source) {
-        Ok(exprs) => {
-            println!("{:#?}", exprs);
-            ExitCode::SUCCESS
-        }
+    let mut scope = default_scope();
+    match interpret(&source, &mut scope) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("parse error: {}", e);
+            eprintln!("error: {}", e);
             ExitCode::FAILURE
         }
     }
