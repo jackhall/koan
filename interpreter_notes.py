@@ -1,8 +1,3 @@
-import networkx as nx
-
-from .parser import nest_parens
-
-
 # core: needed to implement Parser, Dispatcher, Compiler and Executer
 # library: vital for writing good general-purpse code
 
