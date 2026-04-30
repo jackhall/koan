@@ -3,7 +3,7 @@ use crate::dispatch::ktraits::{Parseable, Executable};
 
 /// Concrete literal kinds the parser recognizes; produced by `tokens::try_literal` and consumed
 /// when resolving an `ExpressionPart` into a runtime `KObject`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum KLiteral {
     Number(f64),
     String(String),
@@ -39,14 +39,14 @@ impl<'a> ExpressionPart<'a> {
         ExpressionPart::Expression(Box::new(KExpression { parts }))
     }
 
-    pub fn resolve<'b>(&self) -> KObject<'b> {
+    pub fn resolve(&self) -> KObject<'a> {
         match self {
             ExpressionPart::Token(s) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
             ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
-            ExpressionPart::Expression(e) => KObject::KString(e.summarize()),
+            ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
             ExpressionPart::Future(obj) => match obj {
                 KObject::Number(n) => KObject::Number(*n),
                 KObject::KString(s) => KObject::KString(s.clone()),
@@ -55,6 +55,23 @@ impl<'a> ExpressionPart<'a> {
                 other => KObject::KString(other.summarize()),
             },
         }
+    }
+}
+
+impl<'a> Clone for ExpressionPart<'a> {
+    fn clone(&self) -> Self {
+        match self {
+            ExpressionPart::Token(s) => ExpressionPart::Token(s.clone()),
+            ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
+            ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
+            ExpressionPart::Future(o) => ExpressionPart::Future(*o),
+        }
+    }
+}
+
+impl<'a> Clone for KExpression<'a> {
+    fn clone(&self) -> Self {
+        KExpression { parts: self.parts.clone() }
     }
 }
 

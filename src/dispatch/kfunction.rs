@@ -145,13 +145,16 @@ impl Argument {
                 ExpressionPart::Literal(KLiteral::Null) | ExpressionPart::Future(KObject::Null)
             ),
             KType::Identifier => matches!(part, ExpressionPart::Token(_)),
+            KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
         }
     }
 }
 
 /// Built-in type tags used by `Argument::matches` to reject ill-typed call sites at dispatch
-/// time. In the future this should not assume all types can be enumerated; the user should be
-/// able to define duck types.
+/// time. `KExpression` is the lazy slot — it accepts an unevaluated `ExpressionPart::Expression`
+/// and rides through `bind` as `KObject::KExpression`, letting the receiving builtin choose
+/// when (or whether) to dispatch and run it. In the future this should not assume all types
+/// can be enumerated; the user should be able to define duck types.
 #[derive(Copy, Clone)]
 pub enum KType {
     Number,
@@ -159,6 +162,7 @@ pub enum KType {
     Bool,
     Null,
     Identifier,
+    KExpression,
     Any,
 }
 

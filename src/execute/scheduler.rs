@@ -114,6 +114,9 @@ impl<'a> Scheduler<'a> {
                             .expect("dependency must have produced a result before this node");
                         expr.parts[part_idx] = ExpressionPart::Future(dep_value);
                     }
+                    // `subs` only covers eagerly-scheduled positions. Lazy Expression parts
+                    // (those landing on `KType::KExpression` slots per `lazy_candidate`) are
+                    // intentionally left in place and ride through `dispatch` as data.
                     let future = scope.dispatch(expr)?;
                     let body = future.function.body;
                     body(scope, future.bundle)
