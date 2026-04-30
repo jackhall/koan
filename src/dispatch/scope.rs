@@ -16,7 +16,7 @@ pub struct KFuture<'a> {
 
 /// Lexical environment: a parent-scope link plus name → value bindings, with functions also
 /// indexed in `functions` so `dispatch` can scan them by signature without rewalking `data`.
-/// `out` is the sink used by builtins like `print` — pluggable so tests and embedders can
+/// `out` is the sink used by builtins like `PRINT` — pluggable so tests and embedders can
 /// capture program output instead of going to stdout.
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,

@@ -19,16 +19,16 @@ The CLI reads source from a file (first argument) or from stdin:
 
 ```sh
 cargo run -- path/to/program.koan
-echo 'print "hello"' | cargo run
+echo 'PRINT "hello"' | cargo run
 ```
 
-The two builtins currently wired in are `let <name> = <value>` and `print <msg>` — see [src/dispatch/builtins.rs](src/dispatch/builtins.rs).
+The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, and `IF <predicate> THEN <value>` — see [src/dispatch/builtins.rs](src/dispatch/builtins.rs). Note: the scheduler eagerly evaluates every nested `(...)` before its parent dispatches, so `IF`/`THEN` is a post-hoc selector, not a lazy short-circuit.
 
 Example:
 
 ```
-let x = 42
-print "hello"
+LET x = 42
+PRINT "hello"
 ```
 
 Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals.
@@ -75,7 +75,7 @@ Runtime values are [`KObject`](src/dispatch/kobject.rs) (scalars, collections, e
 
 [`Scheduler`](src/execute/scheduler.rs) holds a directed acyclic graph of deferred work. Callers register pre-bound `KFuture`s via `add` / `add_with_deps`, or unbound `KExpression`s with `(part_index, dep)` substitutions via `add_pending` (each returned `NodeId` points backwards in submission order, so the graph is acyclic by construction). `execute` topologically sorts via Kahn's algorithm; for pending nodes it splices each dep's runtime result into the parent's parts as an `ExpressionPart::Future`, then dispatches and binds against the live scope before running.
 
-[`interpret`](src/execute/interpret.rs) is the glue: parse the source, then walk each top-level expression post-order and submit every nested `(...)` to the scheduler — leaf expressions go in pre-bound, parents go in as pending with substitutions onto their sub-expressions' nodes. The caller keeps ownership of the `Scope` so output and post-run bindings are inspectable — that's how the tests in [interpret.rs](src/execute/interpret.rs) capture `print` output and assert on `let` bindings.
+[`interpret`](src/execute/interpret.rs) is the glue: parse the source, then walk each top-level expression post-order and submit every nested `(...)` to the scheduler — leaf expressions go in pre-bound, parents go in as pending with substitutions onto their sub-expressions' nodes. The caller keeps ownership of the `Scope` so output and post-run bindings are inspectable — that's how the tests in [interpret.rs](src/execute/interpret.rs) capture `PRINT` output and assert on `LET` bindings.
 
 ## Source layout
 
@@ -96,7 +96,7 @@ src/
 │   ├── ktraits.rs       Parseable / Executable / Iterable / Serializable / Monadic
 │   ├── kfunction.rs     KFunction, signatures, ArgumentBundle, KType
 │   ├── scope.rs         Scope and KFuture
-│   ├── builtins.rs      let, print, default_scope()
+│   ├── builtins.rs      LET, PRINT, IF/THEN, default_scope()
 │   └── monad.rs         Monadic impl for Option
 ├── execute.rs
 └── execute/

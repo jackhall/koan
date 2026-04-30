@@ -96,9 +96,32 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
     Ok(stack.pop().unwrap())
 }
 
-/// Top-level parse pipeline: mask string literals, collapse indentation into parens, then
-/// build the expression tree. Returns one `KExpression` per top-level line; the single public
-/// entry point users of `parse` should call.
+/// Strip redundant single-`Expression` wrappers from `expr` and each of its sub-expressions
+/// so that `((foo bar))` and `(foo bar)` produce the same shape — extra parens shouldn't
+/// change what gets dispatched downstream.
+fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
+    while expr.parts.len() == 1 && matches!(expr.parts[0], ExpressionPart::Expression(_)) {
+        if let Some(ExpressionPart::Expression(inner)) = expr.parts.pop() {
+            expr = *inner;
+        }
+    }
+    expr.parts = expr
+        .parts
+        .into_iter()
+        .map(|part| match part {
+            ExpressionPart::Expression(inner) => {
+                ExpressionPart::Expression(Box::new(peel_redundant(*inner)))
+            }
+            other => other,
+        })
+        .collect();
+    expr
+}
+
+/// Top-level parse pipeline: mask string literals, collapse indentation into parens, build
+/// the expression tree, then peel redundant single-expression wrappers. Returns one
+/// `KExpression` per top-level line; the single public entry point users of `parse` should
+/// call.
 pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
     let (masked, quotes) = mask_quotes(input);
     let collapsed = collapse_whitespace(&masked)?;
@@ -106,7 +129,7 @@ pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
     root.parts
         .into_iter()
         .map(|part| match part {
-            ExpressionPart::Expression(e) => Ok(*e),
+            ExpressionPart::Expression(e) => Ok(peel_redundant(*e)),
             other => Err(format!("unexpected top-level part: {:?}", other)),
         })
         .collect()
@@ -151,6 +174,35 @@ mod tests {
     #[test]
     fn parse_multiple_lines_are_siblings() {
         assert_eq!(top("foo\nbar").unwrap(), vec!["[t(foo)]", "[t(bar)]"]);
+    }
+
+    #[test]
+    fn parse_peels_top_level_redundant_parens() {
+        assert_eq!(top("(foo bar)").unwrap(), top("foo bar").unwrap());
+    }
+
+    #[test]
+    fn parse_peels_multiple_redundant_layers() {
+        assert_eq!(top("(((foo bar)))").unwrap(), vec!["[t(foo) t(bar)]"]);
+    }
+
+    #[test]
+    fn parse_peels_redundant_wrappers_inside_subexpressions() {
+        // The inner `((bar baz))` collapses to `(bar baz)` — a sub-expression with one
+        // wrapping layer, not two — so peel doesn't change argument arity.
+        assert_eq!(
+            top("foo ((bar baz))").unwrap(),
+            top("foo (bar baz)").unwrap(),
+        );
+    }
+
+    #[test]
+    fn parse_keeps_meaningful_subexpression_parens() {
+        // A single set of parens around an argument is meaningful structure, not redundancy.
+        assert_eq!(
+            top("foo (bar baz)").unwrap(),
+            vec!["[t(foo) [t(bar) t(baz)]]"],
+        );
     }
 
     #[test]

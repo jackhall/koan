@@ -25,17 +25,10 @@ pub fn interpret(source: &str, scope: &mut Scope<'static>) -> Result<(), String>
 /// substitutions. The scheduler will splice each dep's runtime result into the parent's
 /// parts as a `Future` part before late-dispatching it.
 fn schedule_expr<'a>(
-    mut expr: KExpression<'a>,
+    expr: KExpression<'a>,
     scope: &Scope<'a>,
     scheduler: &mut Scheduler<'a>,
 ) -> Result<NodeId, String> {
-    // Peel redundant single-`Expression` wrappers so `((foo bar))` schedules the same as
-    // `(foo bar)` — the user's parens shouldn't change what's dispatched.
-    while expr.parts.len() == 1 && matches!(expr.parts[0], ExpressionPart::Expression(_)) {
-        if let Some(ExpressionPart::Expression(inner)) = expr.parts.pop() {
-            expr = *inner;
-        }
-    }
     let mut parts: Vec<ExpressionPart<'a>> = Vec::with_capacity(expr.parts.len());
     let mut subs: Vec<(usize, NodeId)> = Vec::new();
     for (i, part) in expr.parts.into_iter().enumerate() {
@@ -84,10 +77,21 @@ mod tests {
         let mut scope = default_scope();
         scope.out = Box::new(SharedBuf(captured.clone()));
 
-        interpret("let x = 42\nprint \"hello\"\n", &mut scope).unwrap();
+        interpret("LET x = 42\nPRINT \"hello\"\n", &mut scope).unwrap();
 
         assert_eq!(captured.borrow().as_slice(), b"hello\n");
         assert!(matches!(scope.data.get("x"), Some(KObject::Number(n)) if *n == 42.0));
+    }
+
+    #[test]
+    fn interprets_if_then_via_print() {
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut scope = default_scope();
+        scope.out = Box::new(SharedBuf(captured.clone()));
+
+        interpret(r#"PRINT (IF true THEN "yes")"#, &mut scope).unwrap();
+
+        assert_eq!(captured.borrow().as_slice(), b"yes\n");
     }
 
     #[test]
@@ -96,7 +100,7 @@ mod tests {
         let mut scope = default_scope();
         scope.out = Box::new(SharedBuf(captured.clone()));
 
-        interpret(r#"(print (let msg = "hello world!"))"#, &mut scope).unwrap();
+        interpret(r#"(PRINT (LET msg = "hello world!"))"#, &mut scope).unwrap();
 
         assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
         assert!(matches!(scope.data.get("msg"), Some(KObject::KString(s)) if s == "hello world!"));

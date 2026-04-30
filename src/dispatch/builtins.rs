@@ -9,7 +9,7 @@ fn null<'a>() -> &'a KObject<'a> {
     Box::leak(Box::new(KObject::Null))
 }
 
-/// `let <name:Identifier> = <value:Any>` — copies the bound value (scalars only) into a
+/// `LET <name:Identifier> = <value:Any>` — copies the bound value (scalars only) into a
 /// `Box::leak`'d `KObject` so it satisfies `Scope::add`'s `&'a KObject<'a>` signature, inserts
 /// it under `name`, and returns that same leaked reference. Non-scalar values are silently
 /// dropped and produce a freshly leaked `KObject::Null`.
@@ -30,12 +30,33 @@ pub fn builtin_let<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a
     leaked
 }
 
-/// `print <msg:Str>` — writes the bound `KString` to `scope.out`, followed by a newline.
+/// `PRINT <msg:Str>` — writes the bound `KString` to `scope.out`, followed by a newline.
 pub fn builtin_print<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
     if let Some(KObject::KString(s)) = bundle.get("msg") {
         let _ = writeln!(scope.out, "{s}");
     }
     null()
+}
+
+/// `IF <predicate:Bool> THEN <value:Any>` — if `predicate` is true, returns a freshly leaked
+/// copy of `value`; otherwise returns `Null`. Note: the scheduler evaluates the return-side
+/// sub-expression before this body runs, so the choice is post-hoc, not lazy.
+pub fn builtin_if_then<'a>(_scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
+    let predicate = match bundle.get("predicate") {
+        Some(KObject::Bool(b)) => *b,
+        _ => return null(),
+    };
+    if !predicate {
+        return null();
+    }
+    let cloned = match bundle.get("value") {
+        Some(KObject::Number(n)) => KObject::Number(*n),
+        Some(KObject::KString(s)) => KObject::KString(s.clone()),
+        Some(KObject::Bool(b)) => KObject::Bool(*b),
+        Some(KObject::Null) => KObject::Null,
+        _ => return null(),
+    };
+    Box::leak(Box::new(cloned))
 }
 
 /// Build a fresh root scope populated with the language's builtin `KFunction`s. Each call
@@ -54,7 +75,7 @@ pub fn default_scope() -> Scope<'static> {
         ExpressionSignature {
             return_type: KType::Null,
             elements: vec![
-                SignatureElement::Token("let".into()),
+                SignatureElement::Token("LET".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier, variadic: false }),
                 SignatureElement::Token("=".into()),
                 SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any,        variadic: false }),
@@ -63,21 +84,37 @@ pub fn default_scope() -> Scope<'static> {
         builtin_let,
     )));
     let let_obj: &'static KObject<'static> = Box::leak(Box::new(KObject::KFunction(let_fn)));
-    scope.add("let".into(), let_obj);
+    scope.add("LET".into(), let_obj);
 
     let print_fn: &'static KFunction<'static> = Box::leak(Box::new(KFunction::new(
         None,
         ExpressionSignature {
             return_type: KType::Null,
             elements: vec![
-                SignatureElement::Token("print".into()),
+                SignatureElement::Token("PRINT".into()),
                 SignatureElement::Argument(Argument { name: "msg".into(), ktype: KType::Str, variadic: false }),
             ],
         },
         builtin_print,
     )));
     let print_obj: &'static KObject<'static> = Box::leak(Box::new(KObject::KFunction(print_fn)));
-    scope.add("print".into(), print_obj);
+    scope.add("PRINT".into(), print_obj);
+
+    let if_then_fn: &'static KFunction<'static> = Box::leak(Box::new(KFunction::new(
+        None,
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Token("IF".into()),
+                SignatureElement::Argument(Argument { name: "predicate".into(), ktype: KType::Bool, variadic: false }),
+                SignatureElement::Token("THEN".into()),
+                SignatureElement::Argument(Argument { name: "value".into(),     ktype: KType::Any,  variadic: false }),
+            ],
+        },
+        builtin_if_then,
+    )));
+    let if_then_obj: &'static KObject<'static> = Box::leak(Box::new(KObject::KFunction(if_then_fn)));
+    scope.add("if_then".into(), if_then_obj);
 
     scope
 }
@@ -87,7 +124,7 @@ mod tests {
     use std::collections::HashMap;
     use std::rc::Rc;
 
-    use super::{builtin_let, default_scope, Scope};
+    use super::{builtin_if_then, builtin_let, default_scope, Scope};
     use crate::dispatch::kfunction::ArgumentBundle;
     use crate::dispatch::kobject::KObject;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
@@ -112,18 +149,71 @@ mod tests {
     }
 
     #[test]
+    fn if_then_true_returns_value() {
+        let mut scope = Scope {
+            outer: None,
+            data: HashMap::new(),
+            functions: Vec::new(),
+            out: Box::new(std::io::sink()),
+        };
+        let mut args = HashMap::new();
+        args.insert("predicate".to_string(), Rc::new(KObject::Bool(true)));
+        args.insert("value".to_string(), Rc::new(KObject::Number(7.0)));
+
+        let result = builtin_if_then(&mut scope, ArgumentBundle { args });
+
+        assert!(matches!(result, KObject::Number(n) if *n == 7.0));
+    }
+
+    #[test]
+    fn if_then_false_returns_null() {
+        let mut scope = Scope {
+            outer: None,
+            data: HashMap::new(),
+            functions: Vec::new(),
+            out: Box::new(std::io::sink()),
+        };
+        let mut args = HashMap::new();
+        args.insert("predicate".to_string(), Rc::new(KObject::Bool(false)));
+        args.insert("value".to_string(), Rc::new(KObject::Number(7.0)));
+
+        let result = builtin_if_then(&mut scope, ArgumentBundle { args });
+
+        assert!(matches!(result, KObject::Null));
+    }
+
+    #[test]
+    fn dispatch_if_then_expression() {
+        let mut scope = default_scope();
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Token("IF".into()),
+                ExpressionPart::Literal(KLiteral::Boolean(true)),
+                ExpressionPart::Token("THEN".into()),
+                ExpressionPart::Literal(KLiteral::Number(99.0)),
+            ],
+        };
+
+        let future = scope.dispatch(expr).expect("dispatch should match `if_then`");
+        let body = future.function.body;
+        let result = body(&mut scope, future.bundle);
+
+        assert!(matches!(result, KObject::Number(n) if *n == 99.0));
+    }
+
+    #[test]
     fn dispatch_let_expression() {
         let mut scope = default_scope();
         let expr = KExpression {
             parts: vec![
-                ExpressionPart::Token("let".into()),
+                ExpressionPart::Token("LET".into()),
                 ExpressionPart::Token("x".into()),
                 ExpressionPart::Token("=".into()),
                 ExpressionPart::Literal(KLiteral::Number(42.0)),
             ],
         };
 
-        let future = scope.dispatch(expr).expect("dispatch should match `let`");
+        let future = scope.dispatch(expr).expect("dispatch should match `LET`");
         let body = future.function.body;
         let bundle = future.bundle;
         let result = body(&mut scope, bundle);

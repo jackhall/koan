@@ -169,7 +169,7 @@ mod tests {
     fn let_expr<'a>(name: &str, value: f64) -> KExpression<'a> {
         KExpression {
             parts: vec![
-                ExpressionPart::Token("let".into()),
+                ExpressionPart::Token("LET".into()),
                 ExpressionPart::Token(name.into()),
                 ExpressionPart::Token("=".into()),
                 ExpressionPart::Literal(KLiteral::Number(value)),
