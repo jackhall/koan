@@ -73,9 +73,9 @@ Runtime values are [`KObject`](src/dispatch/kobject.rs) (scalars, collections, e
 
 ### execute — run the DAG
 
-[`Scheduler`](src/execute/scheduler.rs) holds a directed acyclic graph of `KFuture`s. Callers add futures with `add` / `add_with_deps` (the returned `NodeId` points backwards in submission order, so the graph is acyclic by construction); `execute` topologically sorts via Kahn's algorithm and invokes each function body against the root scope.
+[`Scheduler`](src/execute/scheduler.rs) holds a directed acyclic graph of deferred work. Callers register pre-bound `KFuture`s via `add` / `add_with_deps`, or unbound `KExpression`s with `(part_index, dep)` substitutions via `add_pending` (each returned `NodeId` points backwards in submission order, so the graph is acyclic by construction). `execute` topologically sorts via Kahn's algorithm; for pending nodes it splices each dep's runtime result into the parent's parts as an `ExpressionPart::Future`, then dispatches and binds against the live scope before running.
 
-[`interpret`](src/execute/interpret.rs) is the glue: parse the source, dispatch every top-level expression into the scheduler, then run it. The caller keeps ownership of the `Scope` so output and post-run bindings are inspectable — that's how the test in [interpret.rs](src/execute/interpret.rs) captures `print` output and asserts on `let` bindings.
+[`interpret`](src/execute/interpret.rs) is the glue: parse the source, then walk each top-level expression post-order and submit every nested `(...)` to the scheduler — leaf expressions go in pre-bound, parents go in as pending with substitutions onto their sub-expressions' nodes. The caller keeps ownership of the `Scope` so output and post-run bindings are inspectable — that's how the tests in [interpret.rs](src/execute/interpret.rs) capture `print` output and assert on `let` bindings.
 
 ## Source layout
 

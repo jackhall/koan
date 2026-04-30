@@ -6,14 +6,14 @@ use crate::parse::tokens::classify_token;
 use crate::parse::whitespace::collapse_whitespace;
 
 /// Construct an empty `KExpression`; used by `build_tree` to seed each new nesting level.
-fn empty_expression() -> KExpression {
+fn empty_expression<'a>() -> KExpression<'a> {
     KExpression { parts: Vec::new() }
 }
 
 /// If `buf` holds a pending token, classify it via `tokens::classify_token` and push the result
 /// onto the innermost expression on `stack`. Called by `build_tree` whenever a delimiter ends a
 /// run of token characters.
-fn flush_token(stack: &mut [KExpression], buf: &mut String) -> Result<(), String> {
+fn flush_token<'a>(stack: &mut [KExpression<'a>], buf: &mut String) -> Result<(), String> {
     if !buf.is_empty() {
         let tok = std::mem::take(buf);
         let part = classify_token(tok)?;
@@ -43,8 +43,8 @@ fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<Strin
 /// Walk a quote-masked, paren-delimited string and assemble it into a nested `KExpression`.
 /// Opens a new sub-expression on `(`, closes it on `)`, recovers string literals via
 /// `resolve_literal`, and classifies non-quoted runs through `tokens::classify_token`.
-pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression, String> {
-    let mut stack: Vec<KExpression> = vec![empty_expression()];
+pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression<'a>, String> {
+    let mut stack: Vec<KExpression<'a>> = vec![empty_expression()];
     let mut buf = String::new();
     let mut chars = masked.chars();
 
@@ -99,7 +99,7 @@ pub fn build_tree(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpr
 /// Top-level parse pipeline: mask string literals, collapse indentation into parens, then
 /// build the expression tree. Returns one `KExpression` per top-level line; the single public
 /// entry point users of `parse` should call.
-pub fn parse(input: &str) -> Result<Vec<KExpression>, String> {
+pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
     let (masked, quotes) = mask_quotes(input);
     let collapsed = collapse_whitespace(&masked)?;
     let root = build_tree(&collapsed, &quotes)?;
@@ -117,7 +117,7 @@ mod tests {
     use super::*;
     use crate::parse::quotes::mask_quotes;
 
-    fn describe(e: &KExpression) -> String {
+    fn describe(e: &KExpression<'_>) -> String {
         let parts: Vec<String> = e
             .parts
             .iter()
@@ -128,6 +128,7 @@ mod tests {
                 ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
                 ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
                 ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
+                ExpressionPart::Future(_) => "future".to_string(),
             })
             .collect();
         format!("[{}]", parts.join(" "))

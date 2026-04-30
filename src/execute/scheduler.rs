@@ -2,9 +2,11 @@ use std::collections::VecDeque;
 
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::{KFuture, Scope};
+use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-/// Stable handle to a node in a `Scheduler`'s DAG. Returned by `Scheduler::add` and
-/// `add_with_deps`, and used to declare a later future's dependencies on earlier ones.
+/// Stable handle to a node in a `Scheduler`'s DAG. Returned by `Scheduler::add`,
+/// `add_with_deps`, and `add_pending`, and used to declare a later node's dependencies on
+/// earlier ones.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct NodeId(usize);
 
@@ -12,18 +14,33 @@ impl NodeId {
     pub fn index(self) -> usize { self.0 }
 }
 
-/// One vertex of the scheduler DAG: the deferred call (`KFuture`) plus the ids of nodes whose
-/// execution must complete before this one runs.
+/// What a scheduler node will run. `Bound` is a `KFuture` whose `ArgumentBundle` was already
+/// produced at submission time. `Pending` is an unbound `KExpression` plus substitution edges
+/// `(part_index, dep)`: at execute time the scheduler splices each dep's result into the
+/// expression's parts, then dispatches and binds against the live `Scope` to obtain a future.
+/// Pending lets a parent call wait on the runtime values of its sub-expressions.
+enum NodeWork<'a> {
+    Bound(KFuture<'a>),
+    Pending {
+        expr: KExpression<'a>,
+        subs: Vec<(usize, NodeId)>,
+    },
+}
+
+/// One vertex of the scheduler DAG: the work to perform plus the ids of nodes whose execution
+/// must complete before this one runs.
 struct Node<'a> {
-    future: KFuture<'a>,
+    work: NodeWork<'a>,
     deps: Vec<NodeId>,
 }
 
-/// Holds a directed acyclic graph of `KFuture`s and runs them in dependency order. Callers
-/// register futures via `add`/`add_with_deps`, which return a `NodeId` that can be reused as a
-/// dependency for later additions; `execute` performs a Kahn-style topological sort, invokes
-/// each function body against the supplied root `Scope`, and yields the produced `KObject`
-/// references in submission order.
+/// Holds a directed acyclic graph of deferred work and runs it in dependency order. Callers
+/// register pre-bound futures via `add`/`add_with_deps`, or unbound expressions whose
+/// arguments depend on other nodes' results via `add_pending`; each call returns a `NodeId`
+/// that can be reused as a dependency for later additions. `execute` performs a Kahn-style
+/// topological sort, materializes each pending expression once its deps have produced values,
+/// invokes the function body against the supplied root `Scope`, and yields the produced
+/// `KObject` references in submission order.
 pub struct Scheduler<'a> {
     nodes: Vec<Node<'a>>,
 }
@@ -39,27 +56,46 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Insert a future that must run after every `dep` has completed. Each `dep` must refer to a
-    /// node already in the scheduler — `NodeId`s are only minted by `add`/`add_with_deps`, so
-    /// edges always point backwards in submission order and the graph is acyclic by construction.
+    /// node already in the scheduler — `NodeId`s are only minted by add methods, so edges always
+    /// point backwards in submission order and the graph is acyclic by construction.
     pub fn add_with_deps(&mut self, future: KFuture<'a>, deps: Vec<NodeId>) -> NodeId {
         let id = NodeId(self.nodes.len());
-        for dep in &deps {
+        Self::check_deps(id, &deps);
+        self.nodes.push(Node { work: NodeWork::Bound(future), deps });
+        id
+    }
+
+    /// Insert an unbound `KExpression` whose `(part_index, dep)` substitutions name the nodes
+    /// whose results should be spliced in before dispatch. Deps are derived from `subs` and
+    /// must refer to nodes already in the scheduler.
+    pub fn add_pending(&mut self, expr: KExpression<'a>, subs: Vec<(usize, NodeId)>) -> NodeId {
+        let id = NodeId(self.nodes.len());
+        let mut deps: Vec<NodeId> = subs.iter().map(|(_, d)| *d).collect();
+        deps.sort_by_key(|n| n.0);
+        deps.dedup();
+        Self::check_deps(id, &deps);
+        self.nodes.push(Node { work: NodeWork::Pending { expr, subs }, deps });
+        id
+    }
+
+    fn check_deps(id: NodeId, deps: &[NodeId]) {
+        for dep in deps {
             assert!(
                 dep.0 < id.0,
                 "scheduler dependency NodeId({}) does not refer to an existing node",
                 dep.0,
             );
         }
-        self.nodes.push(Node { future, deps });
-        id
     }
 
     pub fn len(&self) -> usize { self.nodes.len() }
     pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
-    /// Topologically sort the DAG and run each future against `scope`. Returns the produced
-    /// `KObject`s indexed by `NodeId` (i.e. submission order), or an error string if the graph
-    /// somehow contains a cycle.
+    /// Topologically sort the DAG and run each node against `scope`. For `Pending` nodes,
+    /// substitute each dep's already-computed result into the expression's parts before
+    /// dispatching. Returns the produced `KObject`s indexed by `NodeId` (i.e. submission
+    /// order), or an error string if a node fails to dispatch or the graph somehow contains a
+    /// cycle.
     pub fn execute(self, scope: &mut Scope<'a>) -> Result<Vec<&'a KObject<'a>>, String> {
         let order = self.topo_order()?;
         let n = self.nodes.len();
@@ -67,8 +103,23 @@ impl<'a> Scheduler<'a> {
         let mut results: Vec<Option<&'a KObject<'a>>> = vec![None; n];
         for idx in order {
             let node = nodes[idx].take().expect("topological order must not revisit a node");
-            let body = node.future.function.body;
-            results[idx] = Some(body(scope, node.future.bundle));
+            let value: &'a KObject<'a> = match node.work {
+                NodeWork::Bound(future) => {
+                    let body = future.function.body;
+                    body(scope, future.bundle)
+                }
+                NodeWork::Pending { mut expr, subs } => {
+                    for (part_idx, dep) in subs {
+                        let dep_value = results[dep.0]
+                            .expect("dependency must have produced a result before this node");
+                        expr.parts[part_idx] = ExpressionPart::Future(dep_value);
+                    }
+                    let future = scope.dispatch(expr)?;
+                    let body = future.function.body;
+                    body(scope, future.bundle)
+                }
+            };
+            results[idx] = Some(value);
         }
         Ok(results.into_iter().map(|r| r.expect("every node should be executed")).collect())
     }
@@ -115,7 +166,7 @@ mod tests {
     use crate::dispatch::builtins::default_scope;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
-    fn let_expr(name: &str, value: f64) -> KExpression {
+    fn let_expr<'a>(name: &str, value: f64) -> KExpression<'a> {
         KExpression {
             parts: vec![
                 ExpressionPart::Token("let".into()),

@@ -15,7 +15,7 @@ static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
 /// on the whole token (so e.g. `3.14` stays a number rather than being parsed as `(attr 3 14)`);
 /// otherwise hands off to `parse_compound` to desugar member access, indexing, and negation into
 /// nested expressions.
-pub fn classify_token(tok: String) -> Result<ExpressionPart, String> {
+pub fn classify_token<'a>(tok: String) -> Result<ExpressionPart<'a>, String> {
     if let Some(part) = try_literal(&tok) {
         return Ok(part);
     }
@@ -30,7 +30,7 @@ pub fn classify_token(tok: String) -> Result<ExpressionPart, String> {
 /// Try to parse `tok` as a recognized literal (`null`, `true`, `false`, or a number matching
 /// the `FLOAT` regex). Returns `None` if it isn't one. Shared by `classify_token` and
 /// `classify_atom` so both apply the same literal rules.
-fn try_literal(tok: &str) -> Option<ExpressionPart> {
+fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
     match tok {
         "null" => return Some(ExpressionPart::Literal(KLiteral::Null)),
         "true" => return Some(ExpressionPart::Literal(KLiteral::Boolean(true))),
@@ -47,7 +47,7 @@ fn try_literal(tok: &str) -> Option<ExpressionPart> {
 
 /// Classify a sub-token (the piece between operators inside a compound token): literal if
 /// possible, otherwise a `Token`. Used by `read_atom`.
-fn classify_atom(tok: &str) -> ExpressionPart {
+fn classify_atom<'a>(tok: &str) -> ExpressionPart<'a> {
     try_literal(tok).unwrap_or_else(|| ExpressionPart::Token(tok.to_string()))
 }
 
@@ -55,7 +55,7 @@ fn classify_atom(tok: &str) -> ExpressionPart {
 /// atom, then folds in any infix/postfix suffix operators. Each matched operator's builder
 /// constructs the resulting expression — the dispatcher knows operand arity and source per
 /// kind, the builder knows the output shape per operator.
-fn parse_compound(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String> {
+fn parse_compound<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, String> {
     let mut prefixes: Vec<&Operator> = Vec::new();
     while let Some(&c) = chars.peek() {
         let Some(op) = find_prefix(c) else { break };
@@ -93,7 +93,7 @@ fn parse_compound(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String>
 
 /// Consume characters from `chars` until the next operator trigger or postfix close char
 /// (driven by `OPERATORS`) and classify the run via `classify_atom`. Errors on an empty atom.
-fn read_atom(chars: &mut Peekable<Chars>) -> Result<ExpressionPart, String> {
+fn read_atom<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, String> {
     let mut s = String::new();
     while let Some(&c) = chars.peek() {
         if is_atom_terminator(c) {
@@ -113,7 +113,7 @@ mod tests {
     use super::classify_token;
     use crate::parse::kexpression::{ExpressionPart, KLiteral};
 
-    fn describe(p: &ExpressionPart) -> String {
+    fn describe(p: &ExpressionPart<'_>) -> String {
         match p {
             ExpressionPart::Token(s) => format!("t({})", s),
             ExpressionPart::Expression(e) => {
@@ -124,6 +124,7 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
+            ExpressionPart::Future(_) => "future".to_string(),
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::parse::kexpression::ExpressionPart;
 
-type Builder = fn(Vec<ExpressionPart>) -> ExpressionPart;
+type Builder = for<'a> fn(Vec<ExpressionPart<'a>>) -> ExpressionPart<'a>;
 
 /// Distinguishes how `parse_compound` gathers operands around a trigger character.
 pub enum OperatorKind {
@@ -31,24 +31,24 @@ const OPERATORS: &[Operator] = &[
     Operator { trigger: '?', kind: OperatorKind::Suffix,                 build: build_try  },
 ];
 
-fn build_not(mut ops: Vec<ExpressionPart>) -> ExpressionPart {
+fn build_not<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let expr = ops.pop().unwrap();
     ExpressionPart::expression(vec![ExpressionPart::Token("not".to_string()), expr])
 }
 
-fn build_attr(mut ops: Vec<ExpressionPart>) -> ExpressionPart {
+fn build_attr<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let rhs = ops.pop().unwrap();
     let lhs = ops.pop().unwrap();
     ExpressionPart::expression(vec![ExpressionPart::Token("attr".to_string()), lhs, rhs])
 }
 
-fn build_at(mut ops: Vec<ExpressionPart>) -> ExpressionPart {
+fn build_at<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let inner = ops.pop().unwrap();
     let lhs = ops.pop().unwrap();
     ExpressionPart::expression(vec![lhs, ExpressionPart::Token("at".to_string()), inner])
 }
 
-fn build_try(mut ops: Vec<ExpressionPart>) -> ExpressionPart {
+fn build_try<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let lhs = ops.pop().unwrap();
     ExpressionPart::expression(vec![ExpressionPart::Token("try".to_string()), lhs])
 }

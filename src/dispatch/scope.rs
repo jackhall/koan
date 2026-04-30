@@ -9,7 +9,7 @@ use super::kobject::KObject;
 /// the chosen `KFunction`, and the `ArgumentBundle` produced by `KFunction::bind`. Carried
 /// inside `KObject::KTask` and is the unit of deferred work in the dispatch system.
 pub struct KFuture<'a> {
-    pub parsed: KExpression,
+    pub parsed: KExpression<'a>,
     pub function: &'a KFunction<'a>,
     pub bundle: ArgumentBundle<'a>,
 }
@@ -33,7 +33,7 @@ impl<'a> Scope<'a> {
         self.data.insert(name, obj);
     }
 
-    pub fn dispatch(&self, expr: KExpression) -> Result<KFuture<'a>, String> {
+    pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, String> {
         let function = self
             .functions
             .iter()

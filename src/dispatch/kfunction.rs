@@ -39,7 +39,7 @@ impl<'a> KFunction<'a> {
         format!("fn({})", parts.join(" "))
     }
 
-    pub fn bind(&'a self, expr: KExpression) -> Result<KFuture<'a>, String> {
+    pub fn bind(&'a self, expr: KExpression<'a>) -> Result<KFuture<'a>, String> {
         if self.signature.elements.len() != expr.parts.len() {
             return Err(format!(
                 "expected {} parts, got {}",
@@ -94,7 +94,7 @@ pub struct ExpressionSignature {
 }
 
 impl ExpressionSignature {
-    pub fn matches(&self, expr: &KExpression) -> bool {
+    pub fn matches(&self, expr: &KExpression<'_>) -> bool {
         if self.elements.len() != expr.parts.len() {
             return false;
         }
@@ -122,13 +122,28 @@ pub struct Argument {
 }
 
 impl Argument {
-    pub fn matches(&self, part: &ExpressionPart) -> bool {
+    pub fn matches(&self, part: &ExpressionPart<'_>) -> bool {
         match self.ktype {
             KType::Any => true,
-            KType::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
-            KType::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
-            KType::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),
-            KType::Null => matches!(part, ExpressionPart::Literal(KLiteral::Null)),
+            KType::Number => matches!(
+                part,
+                ExpressionPart::Literal(KLiteral::Number(_))
+                    | ExpressionPart::Future(KObject::Number(_))
+            ),
+            KType::Str => matches!(
+                part,
+                ExpressionPart::Literal(KLiteral::String(_))
+                    | ExpressionPart::Future(KObject::KString(_))
+            ),
+            KType::Bool => matches!(
+                part,
+                ExpressionPart::Literal(KLiteral::Boolean(_))
+                    | ExpressionPart::Future(KObject::Bool(_))
+            ),
+            KType::Null => matches!(
+                part,
+                ExpressionPart::Literal(KLiteral::Null) | ExpressionPart::Future(KObject::Null)
+            ),
             KType::Identifier => matches!(part, ExpressionPart::Token(_)),
         }
     }

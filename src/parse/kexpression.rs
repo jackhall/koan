@@ -11,21 +11,35 @@ pub enum KLiteral {
     Null,
 }
 
-/// One element inside a parsed expression: either a raw identifier-like `Token`, a nested
-/// sub-`Expression`, or a fully-typed `Literal`. Built by the parser, traversed by dispatch.
-#[derive(Debug)]
-pub enum ExpressionPart {
+/// One element inside a parsed expression: a raw identifier-like `Token`, a nested
+/// sub-`Expression`, a fully-typed `Literal`, or a `Future` slot carrying the runtime result of a
+/// sub-expression that has already been scheduled and run. The parser only emits the first three
+/// variants; `Future` is introduced by the scheduler when it splices a dep's result into its
+/// dependent's parts list before late dispatch.
+pub enum ExpressionPart<'a> {
     Token(String),
-    Expression(Box<KExpression>),
+    Expression(Box<KExpression<'a>>),
     Literal(KLiteral),
+    Future(&'a KObject<'a>),
 }
 
-impl ExpressionPart {
-    pub fn expression(parts: Vec<ExpressionPart>) -> ExpressionPart {
+impl<'a> std::fmt::Debug for ExpressionPart<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExpressionPart::Token(s) => f.debug_tuple("Token").field(s).finish(),
+            ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
+            ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
+            ExpressionPart::Future(obj) => write!(f, "Future({})", obj.summarize()),
+        }
+    }
+}
+
+impl<'a> ExpressionPart<'a> {
+    pub fn expression(parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
         ExpressionPart::Expression(Box::new(KExpression { parts }))
     }
 
-    pub fn resolve<'a>(&self) -> KObject<'a> {
+    pub fn resolve<'b>(&self) -> KObject<'b> {
         match self {
             ExpressionPart::Token(s) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
@@ -33,18 +47,30 @@ impl ExpressionPart {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KString(e.summarize()),
+            ExpressionPart::Future(obj) => match obj {
+                KObject::Number(n) => KObject::Number(*n),
+                KObject::KString(s) => KObject::KString(s.clone()),
+                KObject::Bool(b) => KObject::Bool(*b),
+                KObject::Null => KObject::Null,
+                other => KObject::KString(other.summarize()),
+            },
         }
     }
 }
 
 /// A parsed Koan expression: an ordered sequence of `ExpressionPart`s. The output of the parse
 /// pipeline and the input to `Scope::dispatch`, which matches it against function signatures.
-#[derive(Debug)]
-pub struct KExpression {
-    pub parts: Vec<ExpressionPart>,
+pub struct KExpression<'a> {
+    pub parts: Vec<ExpressionPart<'a>>,
 }
 
-impl Parseable for KExpression {
+impl<'a> std::fmt::Debug for KExpression<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KExpression").field("parts", &self.parts).finish()
+    }
+}
+
+impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
     fn summarize(&self) -> String {
         self.parts.iter()
@@ -57,13 +83,14 @@ impl Parseable for KExpression {
                     KLiteral::Boolean(b) => b.to_string(),
                     KLiteral::Null => "null".to_string(),
                 },
+                ExpressionPart::Future(obj) => obj.summarize(),
             })
             .collect::<Vec<_>>()
             .join(" ")
     }
 }
 
-impl Executable for KExpression {
+impl<'a> Executable for KExpression<'a> {
     fn execute(&self, _args: &[&dyn Parseable]) -> Box<dyn Parseable> {
         Box::new(KObject::KString(self.summarize()))
     }

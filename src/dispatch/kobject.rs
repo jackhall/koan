@@ -15,7 +15,7 @@ pub enum KObject<'a> {
     Bool(bool),
     List(Vec<KObject<'a>>),
     Dict(HashMap<Box<dyn Serializable + 'a>, KObject<'a>>),
-    KExpression(KExpression),
+    KExpression(KExpression<'a>),
     KFuture(KFuture<'a>),
     KFunction(&'a KFunction<'a>),
     Null,
