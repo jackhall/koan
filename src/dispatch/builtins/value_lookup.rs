@@ -5,12 +5,13 @@ use crate::try_args;
 
 use super::{null, register_builtin};
 
-/// `<v:Identifier>` — single-part expression containing one name token. Looks `v` up in
-/// `scope.data` and returns the bound `KObject`, or `Null` if unbound. Lets a parens-wrapped
-/// name like `(some_var)` dispatch and resolve to its current value.
+/// `<v:Identifier>` — single-part expression containing one name token. Looks `v` up via
+/// `Scope::lookup` (which walks the `outer` chain) and returns the bound `KObject`, or `Null`
+/// if unbound at every level. Lets a parens-wrapped name like `(some_var)` dispatch and
+/// resolve to its current value.
 pub fn body<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
     try_args!(bundle, return null(); v: KString);
-    scope.data.get(&v).copied().unwrap_or_else(null)
+    scope.lookup(&v).unwrap_or_else(null)
 }
 
 pub fn register(scope: &mut Scope<'static>) {
@@ -40,12 +41,7 @@ mod tests {
     #[test]
     fn value_lookup_returns_binding() {
         let bound: &'static KObject<'static> = Box::leak(Box::new(KObject::Number(42.0)));
-        let mut scope = Scope {
-            outer: None,
-            data: HashMap::new(),
-            functions: Vec::new(),
-            out: Box::new(std::io::sink()),
-        };
+        let mut scope = Scope::test_sink();
         scope.data.insert("foo".to_string(), bound);
 
         let mut args = HashMap::new();
@@ -58,17 +54,29 @@ mod tests {
 
     #[test]
     fn value_lookup_unbound_returns_null() {
-        let mut scope = Scope {
-            outer: None,
-            data: HashMap::new(),
-            functions: Vec::new(),
-            out: Box::new(std::io::sink()),
-        };
+        let mut scope = Scope::test_sink();
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("missing".into())));
 
         let result = body(&mut scope, ArgumentBundle { args });
 
         assert!(matches!(result, KObject::Null));
+    }
+
+    #[test]
+    fn value_lookup_walks_outer_scope() {
+        let bound: &'static KObject<'static> = Box::leak(Box::new(KObject::Number(7.0)));
+        let mut outer = Scope::test_sink();
+        outer.data.insert("from_outer".to_string(), bound);
+
+        let mut inner = Scope::test_sink();
+        inner.outer = Some(&outer);
+
+        let mut args = HashMap::new();
+        args.insert("v".to_string(), Rc::new(KObject::KString("from_outer".into())));
+
+        let result = body(&mut inner, ArgumentBundle { args });
+
+        assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 }

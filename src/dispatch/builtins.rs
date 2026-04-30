@@ -4,11 +4,11 @@ use super::kfunction::{BuiltinFn, ExpressionSignature, KFunction};
 use super::kobject::KObject;
 use super::scope::Scope;
 
-pub mod if_then;
-pub mod let_binding;
-pub mod print;
-pub mod value_lookup;
-pub mod value_pass;
+mod if_then;
+mod let_binding;
+mod print;
+mod value_lookup;
+mod value_pass;
 
 /// Returns a freshly leaked `KObject::Null`, used by builtins as their "no-op / type mismatch"
 /// return so they always satisfy the `&'a KObject<'a>` signature without threading lifetimes.

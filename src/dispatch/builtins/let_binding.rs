@@ -51,12 +51,7 @@ mod tests {
 
     #[test]
     fn let_inserts_binding_into_scope() {
-        let mut scope = Scope {
-            outer: None,
-            data: HashMap::new(),
-            functions: Vec::new(),
-            out: Box::new(std::io::sink()),
-        };
+        let mut scope = Scope::test_sink();
         let mut args = HashMap::new();
         args.insert("name".to_string(), Rc::new(KObject::KString("x".into())));
         args.insert("value".to_string(), Rc::new(KObject::Number(42.0)));

@@ -42,12 +42,7 @@ mod tests {
 
     #[test]
     fn value_pass_returns_literal() {
-        let mut scope = Scope {
-            outer: None,
-            data: HashMap::new(),
-            functions: Vec::new(),
-            out: Box::new(std::io::sink()),
-        };
+        let mut scope = Scope::test_sink();
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::Number(7.0)));
 
