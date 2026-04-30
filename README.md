@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, and `IF <predicate> THEN <value>` — see [src/dispatch/builtins.rs](src/dispatch/builtins.rs). Note: the scheduler eagerly evaluates every nested `(...)` before its parent dispatches, so `IF`/`THEN` is a post-hoc selector, not a lazy short-circuit.
+The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, and `IF <predicate> THEN <value>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). Note: the scheduler eagerly evaluates every nested `(...)` before its parent dispatches, so `IF`/`THEN` is a post-hoc selector, not a lazy short-circuit.
 
 Example:
 
@@ -96,7 +96,13 @@ src/
 │   ├── ktraits.rs       Parseable / Executable / Iterable / Serializable / Monadic
 │   ├── kfunction.rs     KFunction, signatures, ArgumentBundle, KType
 │   ├── scope.rs         Scope and KFuture
-│   ├── builtins.rs      LET, PRINT, IF/THEN, default_scope()
+│   ├── builtins.rs      try_args!, register_builtin, default_scope()
+│   ├── builtins/        one file per builtin (body + register paired)
+│   │   ├── let_binding.rs
+│   │   ├── print.rs
+│   │   ├── value_lookup.rs
+│   │   ├── value_pass.rs
+│   │   └── if_then.rs
 │   └── monad.rs         Monadic impl for Option
 ├── execute.rs
 └── execute/
