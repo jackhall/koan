@@ -33,6 +33,8 @@ PRINT "hello"
 
 Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals.
 
+For a walk-through of the language surface with runnable snippets, see [TUTORIAL.md](TUTORIAL.md).
+
 ## Test
 
 ```sh
@@ -109,3 +111,7 @@ src/
     ├── scheduler.rs     DAG of KFutures, topo-sorted execution
     └── interpret.rs     parse → dispatch → schedule → execute
 ```
+
+## Roadmap
+
+Larger structural items are tracked in [ROADMAP.md](ROADMAP.md).
