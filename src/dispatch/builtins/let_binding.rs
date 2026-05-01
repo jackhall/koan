@@ -28,9 +28,9 @@ pub fn register(scope: &mut Scope<'static>) {
         ExpressionSignature {
             return_type: KType::Null,
             elements: vec![
-                SignatureElement::Token("LET".into()),
+                SignatureElement::Keyword("LET".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier }),
-                SignatureElement::Token("=".into()),
+                SignatureElement::Keyword("=".into()),
                 SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any }),
             ],
         },
@@ -69,9 +69,9 @@ mod tests {
         let mut scope = default_scope();
         let expr = KExpression {
             parts: vec![
-                ExpressionPart::Token("LET".into()),
-                ExpressionPart::Token("x".into()),
-                ExpressionPart::Token("=".into()),
+                ExpressionPart::Keyword("LET".into()),
+                ExpressionPart::Identifier("x".into()),
+                ExpressionPart::Keyword("=".into()),
                 ExpressionPart::Literal(KLiteral::Number(42.0)),
             ],
         };

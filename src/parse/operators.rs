@@ -35,18 +35,18 @@ const OPERATORS: &[Operator] = &[
 
 fn build_not<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let expr = ops.pop().unwrap();
-    ExpressionPart::expression(vec![ExpressionPart::Token("not".to_string()), expr])
+    ExpressionPart::expression(vec![ExpressionPart::Keyword("NOT".to_string()), expr])
 }
 
 fn build_attr<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let rhs = ops.pop().unwrap();
     let lhs = ops.pop().unwrap();
-    ExpressionPart::expression(vec![ExpressionPart::Token("attr".to_string()), lhs, rhs])
+    ExpressionPart::expression(vec![ExpressionPart::Keyword("ATTR".to_string()), lhs, rhs])
 }
 
 fn build_try<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let lhs = ops.pop().unwrap();
-    ExpressionPart::expression(vec![ExpressionPart::Token("try".to_string()), lhs])
+    ExpressionPart::expression(vec![ExpressionPart::Keyword("TRY".to_string()), lhs])
 }
 
 pub fn find_prefix(c: char) -> Option<&'static Operator> {

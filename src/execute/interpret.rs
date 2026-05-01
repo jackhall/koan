@@ -29,7 +29,7 @@ fn schedule_expr<'a>(
         let mut parts: Vec<ExpressionPart<'a>> = expr.parts;
         let mut subs: Vec<(usize, NodeId)> = Vec::with_capacity(eager_indices.len());
         for i in eager_indices {
-            let inner = match std::mem::replace(&mut parts[i], ExpressionPart::Token(String::new())) {
+            let inner = match std::mem::replace(&mut parts[i], ExpressionPart::Identifier(String::new())) {
                 ExpressionPart::Expression(boxed) => *boxed,
                 _ => unreachable!("lazy_candidate only flags Expression parts"),
             };
@@ -52,12 +52,12 @@ fn schedule_expr<'a>(
                 let dep = schedule_expr(*inner, scope, scheduler)?;
                 subs.push((i, dep));
                 // Placeholder — overwritten with `Future(result)` at execute time before dispatch.
-                parts.push(ExpressionPart::Token(String::new()));
+                parts.push(ExpressionPart::Identifier(String::new()));
             }
             ExpressionPart::ListLiteral(items) => {
                 let dep = schedule_list_literal(items, scope, scheduler)?;
                 subs.push((i, dep));
-                parts.push(ExpressionPart::Token(String::new()));
+                parts.push(ExpressionPart::Identifier(String::new()));
             }
             other => parts.push(other),
         }

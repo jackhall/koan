@@ -1,4 +1,4 @@
-use crate::dispatch::kfunction::{is_fixed_token, UntypedElement, UntypedKey};
+use crate::dispatch::kfunction::{UntypedElement, UntypedKey};
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::ktraits::{Parseable, Executable};
 
@@ -12,11 +12,18 @@ pub enum KLiteral {
     Null,
 }
 
-/// One element of a parsed expression. The parser emits `Token`, `Expression`, `ListLiteral`,
-/// and `Literal`; the scheduler introduces `Future` later, splicing a completed dep's result
-/// into its dependent's parts list before late dispatch.
+/// One element of a parsed expression. The parser classifies each source token into either
+/// `Keyword` (a fixed dispatch position like `LET`/`=`/`THEN`) or `Identifier` (a name slot
+/// like `x`/`foo`); see `is_keyword_token` for the rule. `Expression`, `ListLiteral`, and
+/// `Literal` are the other parser outputs; the scheduler introduces `Future` later, splicing
+/// a completed dep's result into its dependent's parts list before late dispatch.
 pub enum ExpressionPart<'a> {
-    Token(String),
+    /// Fixed token consumed by a `SignatureElement::Token` slot at dispatch time. Contributes
+    /// `UntypedElement::Keyword(s)` to the bucket key.
+    Keyword(String),
+    /// Name slot bound to an `Argument` whose `KType` is `Identifier` or `Any`. Contributes
+    /// `UntypedElement::Slot` to the bucket key — same shape as a literal or expression slot.
+    Identifier(String),
     Expression(Box<KExpression<'a>>),
     /// A `[a b c]` source-level list. Each element is itself an `ExpressionPart`; sub-expression
     /// elements (`ExpressionPart::Expression`) are scheduled as deps and replaced with `Future`s
@@ -30,7 +37,8 @@ pub enum ExpressionPart<'a> {
 impl<'a> std::fmt::Debug for ExpressionPart<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExpressionPart::Token(s) => f.debug_tuple("Token").field(s).finish(),
+            ExpressionPart::Keyword(s) => f.debug_tuple("Keyword").field(s).finish(),
+            ExpressionPart::Identifier(s) => f.debug_tuple("Identifier").field(s).finish(),
             ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
             ExpressionPart::ListLiteral(items) => f.debug_tuple("ListLiteral").field(items).finish(),
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
@@ -46,7 +54,8 @@ impl<'a> ExpressionPart<'a> {
 
     pub fn resolve(&self) -> KObject<'a> {
         match self {
-            ExpressionPart::Token(s) => KObject::KString(s.clone()),
+            ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
+            ExpressionPart::Identifier(s) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
             ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
@@ -69,7 +78,8 @@ impl<'a> ExpressionPart<'a> {
 impl<'a> Clone for ExpressionPart<'a> {
     fn clone(&self) -> Self {
         match self {
-            ExpressionPart::Token(s) => ExpressionPart::Token(s.clone()),
+            ExpressionPart::Keyword(s) => ExpressionPart::Keyword(s.clone()),
+            ExpressionPart::Identifier(s) => ExpressionPart::Identifier(s.clone()),
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
@@ -91,15 +101,15 @@ pub struct KExpression<'a> {
 }
 
 impl<'a> KExpression<'a> {
-    /// Bucket key for this expression: tokens that look fixed (no lowercase letters) become
-    /// `Fixed(s)`; lowercase identifier-like tokens and all literal/expression/future parts
-    /// become `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature
-    /// that should match — `is_fixed_token` is the shared rule.
+    /// Bucket key for this expression: `Keyword` parts contribute `Keyword(s)`; everything else
+    /// (identifiers, literals, sub-expressions, list literals, futures) contributes `Slot`.
+    /// Must agree with `ExpressionSignature::untyped_key` for any signature that should match —
+    /// the parser classifies tokens via `is_keyword_token` up front so this is a direct lookup.
     pub fn untyped_key(&self) -> UntypedKey {
         self.parts
             .iter()
             .map(|part| match part {
-                ExpressionPart::Token(s) if is_fixed_token(s) => UntypedElement::Fixed(s.clone()),
+                ExpressionPart::Keyword(s) => UntypedElement::Keyword(s.clone()),
                 _ => UntypedElement::Slot,
             })
             .collect()
@@ -118,7 +128,8 @@ impl<'a> Parseable for KExpression<'a> {
     fn summarize(&self) -> String {
         fn part_summary(p: &ExpressionPart<'_>) -> String {
             match p {
-                ExpressionPart::Token(s) => s.clone(),
+                ExpressionPart::Keyword(s) => s.clone(),
+                ExpressionPart::Identifier(s) => s.clone(),
                 ExpressionPart::Expression(e) => e.summarize(),
                 ExpressionPart::ListLiteral(items) => {
                     let inner: Vec<String> = items.iter().map(part_summary).collect();

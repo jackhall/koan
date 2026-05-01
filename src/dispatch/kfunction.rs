@@ -6,25 +6,28 @@ use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 use super::kobject::KObject;
 use super::scope::{KFuture, Scope};
 
-/// One position in a function's structural shape: a `Fixed` token or a typeless `Slot`. A
-/// sequence of these is the dispatch bucket key; overloads sharing a shape compete on `KType`
-/// specificity within the bucket.
+/// One position in a function's structural shape: a `Keyword` (fixed token) or a typeless
+/// `Slot`. A sequence of these is the dispatch bucket key; overloads sharing a shape compete
+/// on `KType` specificity within the bucket.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
-    Fixed(String),
+    Keyword(String),
     Slot,
 }
 
 /// Bucket key produced by `ExpressionSignature::untyped_key` and `KExpression::untyped_key`.
-/// They MUST agree on the same key for any signature/expression that should match — the
-/// "fixed tokens are uppercase, lowercase identifiers are slots" rule below is the contract.
+/// They MUST agree on the same key for any signature/expression that should match. The parser
+/// classifies source tokens into `ExpressionPart::Keyword` vs `ExpressionPart::Identifier` up
+/// front using `is_keyword_token`; signatures map every `SignatureElement::Token` to
+/// `Keyword`. `ExpressionSignature::normalize` uppercases lowercase registered tokens so the
+/// two sides agree on the spelling.
 pub type UntypedKey = Vec<UntypedElement>;
 
-/// True iff `s` is a fixed token rather than an identifier slot when computing an
-/// `UntypedKey`: no lowercase ASCII letters. `LET`, `=`, `THEN` qualify; `x`, `foo`, `Foo`
-/// don't. Registration uppercases lowercase tokens so user source and registered signatures
-/// agree on the key.
-pub fn is_fixed_token(s: &str) -> bool {
+/// True iff `s` is a keyword (fixed token) rather than an identifier when classifying a source
+/// token: no lowercase ASCII letters. `LET`, `=`, `THEN` qualify; `x`, `foo`, `Foo` don't.
+/// Used by the parser's `classify_atom` and by `ExpressionSignature::normalize` to keep the
+/// two ends of the dispatch contract aligned.
+pub fn is_keyword_token(s: &str) -> bool {
     !s.chars().any(|c| c.is_ascii_lowercase())
 }
 
@@ -67,7 +70,7 @@ impl<'a> KFunction<'a> {
             .elements
             .iter()
             .map(|el| match el {
-                SignatureElement::Token(s) => s.clone(),
+                SignatureElement::Keyword(s) => s.clone(),
                 SignatureElement::Argument(arg) => format!("<{}>", arg.name),
             })
             .collect();
@@ -85,12 +88,12 @@ impl<'a> KFunction<'a> {
         let mut args: HashMap<String, Rc<KObject<'a>>> = HashMap::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             match el {
-                SignatureElement::Token(s) => match part {
-                    ExpressionPart::Token(t) if s == t => {}
-                    ExpressionPart::Token(t) => {
-                        return Err(format!("expected token '{s}', got '{t}'"));
+                SignatureElement::Keyword(s) => match part {
+                    ExpressionPart::Keyword(t) if s == t => {}
+                    ExpressionPart::Keyword(t) => {
+                        return Err(format!("expected keyword '{s}', got '{t}'"));
                     }
-                    _ => return Err(format!("expected token '{s}'")),
+                    _ => return Err(format!("expected keyword '{s}'")),
                 },
                 SignatureElement::Argument(arg) => {
                     if !arg.matches(part) {
@@ -134,20 +137,20 @@ impl ExpressionSignature {
             return false;
         }
         self.elements.iter().zip(&expr.parts).all(|(el, part)| match (el, part) {
-            (SignatureElement::Token(s), ExpressionPart::Token(t)) => s == t,
-            (SignatureElement::Token(_), _) => false,
+            (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
+            (SignatureElement::Keyword(_), _) => false,
             (SignatureElement::Argument(arg), part) => arg.matches(part),
         })
     }
 
-    /// Bucket key for this signature: fixed tokens become `Fixed(s)`, argument slots become
+    /// Bucket key for this signature: keyword tokens become `Keyword(s)`, argument slots become
     /// `Slot`. Slot types are erased — same shape with different types lives in the same bucket
     /// and competes on specificity at dispatch time.
     pub fn untyped_key(&self) -> UntypedKey {
         self.elements
             .iter()
             .map(|el| match el {
-                SignatureElement::Token(s) => UntypedElement::Fixed(s.clone()),
+                SignatureElement::Keyword(s) => UntypedElement::Keyword(s.clone()),
                 SignatureElement::Argument(_) => UntypedElement::Slot,
             })
             .collect()
@@ -159,7 +162,7 @@ impl ExpressionSignature {
     /// the "drop in a builtin without thinking about caps" affordance.
     pub fn normalize(&mut self) {
         for el in &mut self.elements {
-            if let SignatureElement::Token(s) = el {
+            if let SignatureElement::Keyword(s) = el {
                 if s.chars().any(|c| c.is_ascii_lowercase()) {
                     *s = s.to_ascii_uppercase();
                 }
@@ -194,7 +197,7 @@ impl ExpressionSignature {
 /// One slot in an `ExpressionSignature`: a literal `Token` that must match by string equality,
 /// or a typed `Argument` whose value is captured into the `ArgumentBundle`.
 pub enum SignatureElement {
-    Token(String),
+    Keyword(String),
     Argument(Argument),
 }
 
@@ -229,7 +232,7 @@ impl Argument {
                 part,
                 ExpressionPart::Literal(KLiteral::Null) | ExpressionPart::Future(KObject::Null)
             ),
-            KType::Identifier => matches!(part, ExpressionPart::Token(_)),
+            KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
         }
     }

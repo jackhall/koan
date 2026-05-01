@@ -151,8 +151,8 @@ fn lazy_eager_indices(f: &KFunction<'_>, expr: &KExpression<'_>) -> Option<Vec<u
     let mut has_lazy_slot = false;
     for (i, (el, part)) in sig.elements.iter().zip(expr.parts.iter()).enumerate() {
         match (el, part) {
-            (SignatureElement::Token(s), ExpressionPart::Token(t)) if s == t => {}
-            (SignatureElement::Token(_), _) => return None,
+            (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
+            (SignatureElement::Keyword(_), _) => return None,
             (SignatureElement::Argument(arg), part) => match (arg.ktype, part) {
                 (KType::KExpression, ExpressionPart::Expression(_)) => {
                     has_lazy_slot = true;
@@ -205,9 +205,9 @@ mod tests {
 
         let expr = KExpression {
             parts: vec![
-                ExpressionPart::Token("LET".into()),
-                ExpressionPart::Token("x".into()),
-                ExpressionPart::Token("=".into()),
+                ExpressionPart::Keyword("LET".into()),
+                ExpressionPart::Identifier("x".into()),
+                ExpressionPart::Keyword("=".into()),
                 ExpressionPart::Literal(KLiteral::Number(1.0)),
             ],
         };
@@ -219,7 +219,7 @@ mod tests {
     fn dispatch_with_no_outer_and_no_match_errors() {
         let scope = Scope::test_sink();
         let expr = KExpression {
-            parts: vec![ExpressionPart::Token("nope".into())],
+            parts: vec![ExpressionPart::Identifier("nope".into())],
         };
         assert!(scope.dispatch(expr).is_err());
     }
@@ -270,7 +270,7 @@ mod tests {
                     ktype: a,
                     
                 }),
-                SignatureElement::Token("OP".into()),
+                SignatureElement::Keyword("OP".into()),
                 SignatureElement::Argument(Argument {
                     name: "b".into(),
                     ktype: b,
@@ -290,7 +290,7 @@ mod tests {
         register_builtin(&mut scope, "any_first", one_slot_sig("v", KType::Any), body_any);
         register_builtin(&mut scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
 
-        let expr = KExpression { parts: vec![ExpressionPart::Token("foo".into())] };
+        let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
         let future = scope.dispatch(expr).expect("should match Identifier overload");
         let result = (future.function.body)(&mut scope, future.bundle);
         assert!(matches!(result, KObject::KString(s) if s == "identifier"),
@@ -335,7 +335,7 @@ mod tests {
         let expr = KExpression {
             parts: vec![
                 ExpressionPart::Literal(KLiteral::Number(5.0)),
-                ExpressionPart::Token("OP".into()),
+                ExpressionPart::Keyword("OP".into()),
                 ExpressionPart::Literal(KLiteral::Number(7.0)),
             ],
         };
@@ -355,7 +355,7 @@ mod tests {
         let sig = ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
-                SignatureElement::Token("foo".into()), // lowercase — should be coerced
+                SignatureElement::Keyword("foo".into()), // lowercase — should be coerced
                 SignatureElement::Argument(Argument {
                     name: "v".into(),
                     ktype: KType::Number,
@@ -369,7 +369,7 @@ mod tests {
         // `FOO <v>` registration.
         let expr = KExpression {
             parts: vec![
-                ExpressionPart::Token("FOO".into()),
+                ExpressionPart::Keyword("FOO".into()),
                 ExpressionPart::Literal(KLiteral::Number(1.0)),
             ],
         };

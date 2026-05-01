@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::dispatch::kfunction::is_keyword_token;
 use crate::parse::kexpression::{ExpressionPart, KLiteral};
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
 
@@ -45,10 +46,18 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
     None
 }
 
-/// Classify a sub-token (the piece between operators inside a compound token): literal if
-/// possible, otherwise a `Token`. Used by `read_atom`.
+/// Classify a sub-token (the piece between operators inside a compound token): literal first,
+/// then `Keyword` if it has no lowercase letters (per `is_keyword_token`), otherwise
+/// `Identifier`. Used by `read_atom`.
 fn classify_atom<'a>(tok: &str) -> ExpressionPart<'a> {
-    try_literal(tok).unwrap_or_else(|| ExpressionPart::Token(tok.to_string()))
+    if let Some(part) = try_literal(tok) {
+        return part;
+    }
+    if is_keyword_token(tok) {
+        ExpressionPart::Keyword(tok.to_string())
+    } else {
+        ExpressionPart::Identifier(tok.to_string())
+    }
 }
 
 /// Recursive-descent parser for compound tokens. Strips leading prefix operators, reads an
@@ -108,7 +117,8 @@ mod tests {
 
     fn describe(p: &ExpressionPart<'_>) -> String {
         match p {
-            ExpressionPart::Token(s) => format!("t({})", s),
+            ExpressionPart::Keyword(s) => format!("t({})", s),
+            ExpressionPart::Identifier(s) => format!("t({})", s),
             ExpressionPart::Expression(e) => {
                 let inner: Vec<String> = e.parts.iter().map(describe).collect();
                 format!("[{}]", inner.join(" "))
@@ -151,28 +161,28 @@ mod tests {
 
     #[test]
     fn attr_access() {
-        assert_eq!(classify("foo.bar").unwrap(), "[t(attr) t(foo) t(bar)]");
+        assert_eq!(classify("foo.bar").unwrap(), "[t(ATTR) t(foo) t(bar)]");
     }
 
     #[test]
     fn chained_attr_access() {
         assert_eq!(
             classify("foo.bar.baz").unwrap(),
-            "[t(attr) [t(attr) t(foo) t(bar)] t(baz)]"
+            "[t(ATTR) [t(ATTR) t(foo) t(bar)] t(baz)]"
         );
     }
 
 
     #[test]
     fn negation() {
-        assert_eq!(classify("!foo").unwrap(), "[t(not) t(foo)]");
+        assert_eq!(classify("!foo").unwrap(), "[t(NOT) t(foo)]");
     }
 
     #[test]
     fn double_negation() {
         assert_eq!(
             classify("!!foo").unwrap(),
-            "[t(not) [t(not) t(foo)]]"
+            "[t(NOT) [t(NOT) t(foo)]]"
         );
     }
 
@@ -180,7 +190,7 @@ mod tests {
     fn negation_over_attr() {
         assert_eq!(
             classify("!foo.bar").unwrap(),
-            "[t(not) [t(attr) t(foo) t(bar)]]"
+            "[t(NOT) [t(ATTR) t(foo) t(bar)]]"
         );
     }
 
@@ -197,7 +207,7 @@ mod tests {
 
     #[test]
     fn attr_wins_when_rhs_not_numeric() {
-        assert_eq!(classify("3.foo").unwrap(), "[t(attr) n(3) t(foo)]");
+        assert_eq!(classify("3.foo").unwrap(), "[t(ATTR) n(3) t(foo)]");
     }
 
     #[test]
@@ -217,25 +227,25 @@ mod tests {
 
     #[test]
     fn suffix_try() {
-        assert_eq!(classify("foo?").unwrap(), "[t(try) t(foo)]");
+        assert_eq!(classify("foo?").unwrap(), "[t(TRY) t(foo)]");
     }
 
     #[test]
     fn chained_suffix() {
-        assert_eq!(classify("foo??").unwrap(), "[t(try) [t(try) t(foo)]]");
+        assert_eq!(classify("foo??").unwrap(), "[t(TRY) [t(TRY) t(foo)]]");
     }
 
     #[test]
     fn suffix_after_attr() {
         assert_eq!(
             classify("foo.bar?").unwrap(),
-            "[t(try) [t(attr) t(foo) t(bar)]]"
+            "[t(TRY) [t(ATTR) t(foo) t(bar)]]"
         );
     }
 
     #[test]
     fn negation_over_suffix() {
-        assert_eq!(classify("!foo?").unwrap(), "[t(not) [t(try) t(foo)]]");
+        assert_eq!(classify("!foo?").unwrap(), "[t(NOT) [t(TRY) t(foo)]]");
     }
 
     #[test]

@@ -62,10 +62,10 @@ Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree
 1. [quotes.rs](src/parse/quotes.rs) — replace string-literal contents with placeholders so later passes don't re-tokenize them.
 2. [whitespace.rs](src/parse/whitespace.rs) — turn indentation-based block structure into parenthesized form.
 3. [expression_tree.rs](src/parse/expression_tree.rs) — walk the paren-delimited string into a nested expression tree.
-4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, identifier, or compound (member access, indexing, prefix/suffix operators).
+4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (no lowercase letters — `LET`, `=`, `THEN`), identifier, or compound (member access, indexing, prefix/suffix operators).
 5. [operators.rs](src/parse/operators.rs) — table of compound-token operators (`!`, `.`, `[]`, `?`); add a row to extend.
 
-The output is one [`KExpression`](src/parse/kexpression.rs) per top-level line: an ordered sequence of `ExpressionPart`s (raw `Token`, nested `Expression`, or typed `Literal`).
+The output is one [`KExpression`](src/parse/kexpression.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword`/`Identifier` split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key.
 
 ### dispatch — `KExpression` → `KFuture` against a `Scope`
 

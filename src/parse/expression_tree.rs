@@ -221,7 +221,8 @@ mod tests {
     fn describe(e: &KExpression<'_>) -> String {
         fn describe_part(p: &ExpressionPart<'_>) -> String {
             match p {
-                ExpressionPart::Token(s) => format!("t({})", s),
+                ExpressionPart::Keyword(s) => format!("t({})", s),
+                ExpressionPart::Identifier(s) => format!("t({})", s),
                 ExpressionPart::Expression(e) => describe(e),
                 ExpressionPart::ListLiteral(items) => {
                     let inner: Vec<String> = items.iter().map(describe_part).collect();

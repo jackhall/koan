@@ -43,9 +43,9 @@ pub fn register(scope: &mut Scope<'static>) {
         ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
-                SignatureElement::Token("IF".into()),
+                SignatureElement::Keyword("IF".into()),
                 SignatureElement::Argument(Argument { name: "predicate".into(), ktype: KType::Bool }),
-                SignatureElement::Token("THEN".into()),
+                SignatureElement::Keyword("THEN".into()),
                 SignatureElement::Argument(Argument { name: "value".into(),     ktype: KType::KExpression }),
             ],
         },
@@ -69,9 +69,9 @@ mod tests {
         };
         let expr = KExpression {
             parts: vec![
-                ExpressionPart::Token("IF".into()),
+                ExpressionPart::Keyword("IF".into()),
                 ExpressionPart::Literal(KLiteral::Boolean(true)),
-                ExpressionPart::Token("THEN".into()),
+                ExpressionPart::Keyword("THEN".into()),
                 ExpressionPart::Expression(Box::new(inner)),
             ],
         };
@@ -88,17 +88,17 @@ mod tests {
         let mut scope = default_scope();
         let inner = KExpression {
             parts: vec![
-                ExpressionPart::Token("LET".into()),
-                ExpressionPart::Token("z".into()),
-                ExpressionPart::Token("=".into()),
+                ExpressionPart::Keyword("LET".into()),
+                ExpressionPart::Identifier("z".into()),
+                ExpressionPart::Keyword("=".into()),
                 ExpressionPart::Literal(KLiteral::Number(11.0)),
             ],
         };
         let expr = KExpression {
             parts: vec![
-                ExpressionPart::Token("IF".into()),
+                ExpressionPart::Keyword("IF".into()),
                 ExpressionPart::Literal(KLiteral::Boolean(true)),
-                ExpressionPart::Token("THEN".into()),
+                ExpressionPart::Keyword("THEN".into()),
                 ExpressionPart::Expression(Box::new(inner)),
             ],
         };
@@ -122,17 +122,17 @@ mod tests {
         let mut scope = default_scope();
         let inner = KExpression {
             parts: vec![
-                ExpressionPart::Token("LET".into()),
-                ExpressionPart::Token("skipped".into()),
-                ExpressionPart::Token("=".into()),
+                ExpressionPart::Keyword("LET".into()),
+                ExpressionPart::Identifier("skipped".into()),
+                ExpressionPart::Keyword("=".into()),
                 ExpressionPart::Literal(KLiteral::Number(1.0)),
             ],
         };
         let expr = KExpression {
             parts: vec![
-                ExpressionPart::Token("IF".into()),
+                ExpressionPart::Keyword("IF".into()),
                 ExpressionPart::Literal(KLiteral::Boolean(false)),
-                ExpressionPart::Token("THEN".into()),
+                ExpressionPart::Keyword("THEN".into()),
                 ExpressionPart::Expression(Box::new(inner)),
             ],
         };

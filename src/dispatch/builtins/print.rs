@@ -21,7 +21,7 @@ pub fn register(scope: &mut Scope<'static>) {
         ExpressionSignature {
             return_type: KType::Null,
             elements: vec![
-                SignatureElement::Token("PRINT".into()),
+                SignatureElement::Keyword("PRINT".into()),
                 SignatureElement::Argument(Argument { name: "msg".into(), ktype: KType::Str }),
             ],
         },
