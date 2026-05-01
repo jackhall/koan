@@ -17,12 +17,10 @@ pub struct KFuture<'a> {
     pub bundle: ArgumentBundle<'a>,
 }
 
-/// Lexical environment: a parent-scope link plus name → value bindings, with functions
-/// bucketed in `functions` by their *untyped signature* (the arrangement of fixed tokens and
-/// slots, with slot types erased). All overloads sharing a shape live in one bucket; dispatch
-/// uses `KType` specificity to pick between them. `out` is the sink used by builtins like
-/// `PRINT` — pluggable so tests and embedders can capture program output instead of going
-/// to stdout.
+/// Lexical environment. `functions` buckets overloads by their *untyped signature* — the
+/// arrangement of fixed tokens and slots with slot types erased — so dispatch can pick
+/// between same-shape overloads by `KType` specificity. `out` is pluggable so tests and
+/// embedders can capture builtin output instead of routing it to stdout.
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,
     pub data: HashMap<String, &'a KObject<'a>>,
@@ -48,18 +46,9 @@ impl<'a> Scope<'a> {
         self.outer.and_then(|outer| outer.lookup(name))
     }
 
-    /// Resolve `expr` against this scope's registered functions, walking the `outer` chain on
-    /// miss so child scopes inherit builtins (and any user-defined functions) from their
-    /// parents.
-    ///
-    /// Lookup is bucketed by `expr.untyped_key()`: only signatures sharing the call site's
-    /// arrangement of fixed tokens and slots are considered. Among those, the one with
-    /// strictly more specific slot types wins (`Number` beats `Any`, etc.). If two equally
-    /// specific signatures match, the call is ambiguous and dispatch errors.
-    ///
-    /// On miss in this scope, dispatch falls through to `outer`. Ambiguity in this scope does
-    /// *not* fall through — the inner scope had a real conflict, and silently shadowing it
-    /// would hide it from the author.
+    /// Resolve `expr` against this scope's functions, walking `outer` on miss so child scopes
+    /// inherit from their parents. Ambiguity does *not* fall through to `outer` — the inner
+    /// scope had a real conflict, and silently shadowing it would hide it from the author.
     pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, String> {
         match self.pick(&expr) {
             Pick::One(f) => return f.bind(expr),
@@ -77,20 +66,15 @@ impl<'a> Scope<'a> {
         Err(format!("no matching function for {}", expr.summarize()))
     }
 
-    /// Find a "lazy candidate" for `expr`: a function in this scope (or, on miss, an outer
-    /// scope) whose signature matches the call shape AND has at least one `KType::KExpression`
-    /// slot that an `ExpressionPart::Expression` would land on. Returns the indices of the
-    /// *eager* `Expression` parts (those landing on non-`KExpression` slots) — the caller
-    /// schedules those as deps and leaves the lazy ones in place for the receiving builtin to
-    /// dispatch itself.
-    ///
-    /// Walks `outer` for the same reason `dispatch` does, and uses bucket lookup +
-    /// specificity to break ties between multiple viable lazy candidates.
+    /// Find a "lazy candidate" for `expr`: a matching function with at least one
+    /// `KType::KExpression` slot bound by an `ExpressionPart::Expression`. Returns the indices
+    /// of the *eager* `Expression` parts — the caller schedules those as deps and leaves the
+    /// lazy ones in place for the receiving builtin to dispatch itself. Walks `outer` like
+    /// `dispatch` does.
     ///
     /// TODO(lazy-list-of-expressions): once user functions exist, `[e1 e2 e3]` will need to
-    /// ride into the parent as `KExpression` data (function bodies) rather than be eagerly
-    /// scheduled. Today every list-literal element resolves eagerly via
-    /// `schedule_list_literal`.
+    /// ride into the parent as `KExpression` data rather than be eagerly scheduled. Today
+    /// every list-literal element resolves eagerly via `schedule_list_literal`.
     pub fn lazy_candidate(&self, expr: &KExpression<'_>) -> Option<Vec<usize>> {
         if !expr.parts.iter().any(|p| matches!(p, ExpressionPart::Expression(_))) {
             return None;
@@ -248,12 +232,9 @@ mod tests {
     };
     use crate::dispatch::kobject::KObject;
 
-    // Sentinel-returning bodies. Each produces a distinct `KString` so a test can identify
-    // which overload won dispatch by inspecting the returned value. Each body needs to satisfy
-    // `for<'a> fn(&mut Scope<'a>, ArgumentBundle<'a>) -> &'a KObject<'a>`, which is why the
-    // `'a` lifetime is named explicitly: a `&'static KObject<'static>` (the leaked marker)
-    // coerces to `&'a KObject<'a>` because both `&` and `KObject<_>` are covariant in their
-    // lifetime parameter.
+    // Sentinel-returning bodies. Each produces a distinct `KString` so a test can tell which
+    // overload won dispatch. The explicit `'a` is needed so the leaked `&'static KObject<'static>`
+    // marker coerces (covariantly) to `&'a KObject<'a>`.
     fn marker<'a>(s: &'static str) -> &'a KObject<'a> {
         Box::leak(Box::new(KObject::KString(s.into())))
     }

@@ -54,15 +54,9 @@ fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<Strin
 }
 
 /// Walk a quote-masked, delimited string and assemble it into a nested `KExpression`. Opens a
-/// new sub-expression on `(` and closes it on `)`; opens a list literal on `[` (when no
-/// pending compound-token chars are buffered) and closes it on `]`. Recovers string literals
-/// via `resolve_literal`, and classifies non-quoted runs through `tokens::classify_token`.
-///
-/// `[` triggers list-literal mode only when `buf` is empty — i.e., at the start of a new
-/// whitespace-delimited token. Mid-token `[` (as in `foo[idx]`) stays in `buf` and is handled
-/// later by `tokens::parse_compound`'s postfix-indexing operator. Symmetrically, `]` closes
-/// the list only when the innermost frame is a `Frame::List`; inside an expression frame it
-/// goes to `buf` to support compound tokens.
+/// sub-expression on `(`, closes it on `)`; opens a list literal on `[`, closes it on `]`.
+/// String literals are restored via `resolve_literal`; other runs go through `classify_token`.
+/// List-literal brackets must be adjacent only to delimiters — see `is_list_open_delimiter`.
 pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression<'a>, String> {
     let mut stack: Vec<Frame<'a>> = vec![Frame::Expression(KExpression { parts: Vec::new() })];
     let mut buf = String::new();

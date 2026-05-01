@@ -3,12 +3,9 @@ use crate::execute::scheduler::{AggregateElement, NodeId, Scheduler};
 use crate::parse::expression_tree::parse;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-/// Parse Koan source and submit each top-level expression — including its nested
-/// sub-expressions — to a `Scheduler`, then run the resulting DAG against `scope`. Each
-/// nested `(...)` becomes its own scheduled future; a parent expression depends on its
-/// sub-expressions and is dispatched late, with `ExpressionPart::Future` slots filled in
-/// from the deps' results. The caller owns the scope so output sink and post-run bindings
-/// can be inspected.
+/// Parse Koan source and run it: each top-level expression and its nested sub-expressions
+/// are submitted as scheduler nodes, then the DAG executes against `scope`. The caller owns
+/// the scope so the output sink and post-run bindings can be inspected.
 pub fn interpret(source: &str, scope: &mut Scope<'static>) -> Result<(), String> {
     let exprs = parse(source)?;
     let mut scheduler = Scheduler::new();
@@ -19,13 +16,10 @@ pub fn interpret(source: &str, scope: &mut Scope<'static>) -> Result<(), String>
     Ok(())
 }
 
-/// Recursively schedule `expr`. If a "lazy candidate" function exists — one whose signature
-/// matches the call shape AND has at least one `KExpression`-typed slot binding an Expression
-/// part — schedule only the *eager* Expression parts (those landing on non-`KExpression`
-/// slots) as deps, leaving the lazy ones as raw `Expression` parts in the parent. Otherwise
-/// fall back to the post-order eager pipeline: every nested `Expression` becomes its own
-/// scheduler node and the parent is added as a `Pending` with `(part_index, dep)` subs whose
-/// results the scheduler splices in as `Future` parts before late dispatch.
+/// Recursively schedule `expr`. If a lazy candidate matches (see `Scope::lazy_candidate`),
+/// only the eager Expression parts become deps; lazy ones ride into the parent as raw
+/// `Expression` data. Otherwise every nested `Expression` becomes its own node and the
+/// parent is added as `Pending` with subs for late dispatch.
 fn schedule_expr<'a>(
     expr: KExpression<'a>,
     scope: &Scope<'a>,
@@ -77,15 +71,9 @@ fn schedule_expr<'a>(
     }
 }
 
-/// Schedule a `[a b c]` list literal: each `Expression` element becomes its own scheduler
-/// node, and a single `Aggregate` node depends on those, gathering the resolved values into a
-/// `KObject::List`. Non-expression elements (literals, tokens, futures, nested list literals)
-/// resolve directly and ride into the aggregator as `Static` slots — no scheduling needed.
-///
-/// A nested `ListLiteral` element gets recursively scheduled the same way: the inner
-/// aggregator becomes a dep of the outer one. The outer aggregator's `KObject::List` ends up
-/// containing the inner list as one of its elements, which is what `[[1 2] [3 4]]` should
-/// produce.
+/// Schedule a `[a b c]` list literal: `Expression` elements become scheduler nodes,
+/// `ListLiteral` elements recurse, and other elements resolve directly as `Static` slots. A
+/// single `Aggregate` node depends on them and gathers the results into a `KObject::List`.
 fn schedule_list_literal<'a>(
     items: Vec<ExpressionPart<'a>>,
     scope: &Scope<'a>,

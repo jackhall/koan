@@ -6,11 +6,9 @@ use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 use super::kobject::KObject;
 use super::scope::{KFuture, Scope};
 
-/// One position in a function's structural shape, with slot types erased: a literal `Fixed`
-/// token (string-equality-matched) or an unconstrained `Slot` standing in for any typed argument
-/// slot. The shape is the dispatch bucket key — every overload sharing the same arrangement of
-/// fixed tokens and slots lives in one bucket, with `KType` specificity used to pick between
-/// them inside the bucket.
+/// One position in a function's structural shape: a `Fixed` token or a typeless `Slot`. A
+/// sequence of these is the dispatch bucket key; overloads sharing a shape compete on `KType`
+/// specificity within the bucket.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
     Fixed(String),
@@ -22,12 +20,10 @@ pub enum UntypedElement {
 /// "fixed tokens are uppercase, lowercase identifiers are slots" rule below is the contract.
 pub type UntypedKey = Vec<UntypedElement>;
 
-/// True iff `s` should be classified as a fixed token (rather than an identifier-like slot)
-/// when computing an `UntypedKey`. The rule: a token is fixed if it contains no lowercase
-/// ASCII letters. `LET`, `=`, `THEN` qualify; `x`, `foo`, `Foo` do not. Registration coerces
-/// lowercase token strings to uppercase so an author writing `let` is silently fixed up to
-/// `LET`; this keeps incoming-expression keys (which the user's source provides directly) in
-/// agreement with registered-signature keys.
+/// True iff `s` is a fixed token rather than an identifier slot when computing an
+/// `UntypedKey`: no lowercase ASCII letters. `LET`, `=`, `THEN` qualify; `x`, `foo`, `Foo`
+/// don't. Registration uppercases lowercase tokens so user source and registered signatures
+/// agree on the key.
 pub fn is_fixed_token(s: &str) -> bool {
     !s.chars().any(|c| c.is_ascii_lowercase())
 }
@@ -157,14 +153,10 @@ impl ExpressionSignature {
             .collect()
     }
 
-    /// In-place fixup applied at registration: any fixed `Token` containing lowercase ASCII
-    /// letters is uppercased so its key agrees with the key dispatch will compute from
-    /// incoming expressions.
-    ///
-    /// TODO(monadic-effects): once `Scope::out` generalizes into the effect-handler shape,
-    /// emit a warning effect here when a token gets coerced rather than silently rewriting
-    /// it. Today there's no warning channel, and rejecting would break the "drop in a builtin
-    /// without thinking about caps" affordance the language wants.
+    /// Registration-time fixup: uppercase any lowercase fixed `Token` so its bucket key matches
+    /// what dispatch will compute from incoming expressions. TODO(monadic-effects): once
+    /// effects exist, emit a warning here instead of silently rewriting — rejecting would lose
+    /// the "drop in a builtin without thinking about caps" affordance.
     pub fn normalize(&mut self) {
         for el in &mut self.elements {
             if let SignatureElement::Token(s) = el {
@@ -175,11 +167,9 @@ impl ExpressionSignature {
         }
     }
 
-    /// Partial-order specificity comparison used to break overload ties inside a bucket.
-    /// Assumes `self` and `other` have the same `UntypedKey` (caller responsibility — the
-    /// dispatcher only compares signatures it pulled from one bucket). Slots compare via
-    /// `KType::is_more_specific_than`; fixed-token positions are equal by construction so
-    /// they don't affect the result.
+    /// Partial-order specificity comparison for overload tiebreaking. Assumes `self` and
+    /// `other` share an `UntypedKey` (caller's responsibility) — only argument slots
+    /// contribute, since fixed-token positions are equal by construction.
     pub fn specificity_vs(&self, other: &ExpressionSignature) -> Specificity {
         let mut any_more = false;
         let mut any_less = false;
@@ -245,11 +235,9 @@ impl Argument {
     }
 }
 
-/// Built-in type tags used by `Argument::matches` to reject ill-typed call sites at dispatch
-/// time. `KExpression` is the lazy slot — it accepts an unevaluated `ExpressionPart::Expression`
-/// and rides through `bind` as `KObject::KExpression`, letting the receiving builtin choose
-/// when (or whether) to dispatch and run it. In the future this should not assume all types
-/// can be enumerated; the user should be able to define duck types.
+/// Type tags used by `Argument::matches` at dispatch time. `KExpression` is the lazy slot:
+/// it accepts an unevaluated `ExpressionPart::Expression` so the receiving builtin can choose
+/// when (or whether) to run it. Future work: let users define duck types instead of an enum.
 #[derive(Copy, Clone)]
 pub enum KType {
     Number,
@@ -262,11 +250,9 @@ pub enum KType {
 }
 
 impl KType {
-    /// Specificity ordering used by `ExpressionSignature::specificity_vs`. Concrete types
-    /// outrank `Any`; concrete types are mutually exclusive (a `Number` slot won't match a
-    /// `Str` literal and vice versa), so concrete-vs-concrete is treated as incomparable —
-    /// which falls out of returning `false` both directions and is what the comparator wants.
-    /// Returns `false` when `self == other` (equality, not strict inequality).
+    /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`; concrete-vs-
+    /// concrete is incomparable (mutually exclusive — a `Number` slot won't match a `Str`
+    /// literal anyway). Returns `false` for equal types — strict, not reflexive.
     pub fn is_more_specific_than(self, other: KType) -> bool {
         !matches!(self, KType::Any) && matches!(other, KType::Any)
     }

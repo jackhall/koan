@@ -12,12 +12,9 @@ pub enum KLiteral {
     Null,
 }
 
-/// One element inside a parsed expression: a raw identifier-like `Token`, a nested
-/// sub-`Expression`, a `ListLiteral` from `[...]` source syntax, a fully-typed `Literal`, or a
-/// `Future` slot carrying the runtime result of a sub-expression that has already been
-/// scheduled and run. The parser emits everything except `Future`; the scheduler introduces
-/// `Future` when it splices a dep's result into its dependent's parts list before late
-/// dispatch.
+/// One element of a parsed expression. The parser emits `Token`, `Expression`, `ListLiteral`,
+/// and `Literal`; the scheduler introduces `Future` later, splicing a completed dep's result
+/// into its dependent's parts list before late dispatch.
 pub enum ExpressionPart<'a> {
     Token(String),
     Expression(Box<KExpression<'a>>),
@@ -55,12 +52,9 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
-            // A list literal materializes into `KObject::List` by resolving each element. Any
-            // sub-expression elements should already have been replaced by `Future`s by the
-            // scheduler before this runs (see `schedule_expr`'s ListLiteral handling); a raw
-            // `Expression` element here would round-trip through `KExpression` rather than its
-            // computed value, which is the same fate any other `Expression` part suffers
-            // outside the eager pipeline.
+            // The scheduler ordinarily replaces sub-expression elements with `Future`s before
+            // this runs (see `schedule_list_literal`); a raw `Expression` element here would
+            // round-trip through `KExpression` rather than its computed value.
             ExpressionPart::ListLiteral(items) => {
                 KObject::List(items.iter().map(|p| p.resolve()).collect())
             }

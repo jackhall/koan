@@ -22,13 +22,10 @@ pub enum KObject<'a> {
 }
 
 impl<'a> KObject<'a> {
-    /// Recursive clone that preserves structure for compound variants (`List`, `KExpression`).
-    /// `Dict` and `KFuture` are not deep-cloneable in general (the former carries `Box<dyn
-    /// Serializable>` keys whose owners we can't duplicate; the latter carries an
-    /// `ArgumentBundle` of `Rc`-shared values that aren't cloneable here), so they fall back to
-    /// `Null`. Used by `ExpressionPart::resolve` when materializing a `Future`-borne value
-    /// into a fresh `KObject`, and by the scheduler's `Aggregate` node when copying each
-    /// list-literal element's result into the produced `KObject::List`.
+    /// Recursive clone. `Dict` and `KFuture` fall back to `Null` because their internals
+    /// (`Box<dyn Serializable>` keys, `Rc`-shared bundle values) aren't cloneable. Used by
+    /// `ExpressionPart::resolve` and the scheduler's `Aggregate` node when copying borrowed
+    /// values into a fresh `KObject`.
     pub fn deep_clone(&self) -> KObject<'a> {
         match self {
             KObject::Number(n) => KObject::Number(*n),
