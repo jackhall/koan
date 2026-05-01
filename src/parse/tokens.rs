@@ -73,13 +73,6 @@ fn parse_compound<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>,
                 let rhs = read_atom(chars)?;
                 (op.build)(vec![expr, rhs])
             }
-            OperatorKind::Postfix { close } => {
-                let inner = parse_compound(chars)?;
-                if chars.next() != Some(close) {
-                    return Err(format!("unclosed {}", op.trigger));
-                }
-                (op.build)(vec![expr, inner])
-            }
             OperatorKind::Suffix => (op.build)(vec![expr]),
             OperatorKind::Prefix => unreachable!("find_suffix excludes Prefix"),
         };
@@ -125,6 +118,10 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
             ExpressionPart::Future(_) => "future".to_string(),
+            ExpressionPart::ListLiteral(items) => {
+                let inner: Vec<String> = items.iter().map(describe).collect();
+                format!("L[{}]", inner.join(" "))
+            }
         }
     }
 
@@ -165,18 +162,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn index_access() {
-        assert_eq!(classify("foo[2]").unwrap(), "[t(foo) t(at) n(2)]");
-    }
-
-    #[test]
-    fn chained_index_access() {
-        assert_eq!(
-            classify("foo[2][3]").unwrap(),
-            "[[t(foo) t(at) n(2)] t(at) n(3)]"
-        );
-    }
 
     #[test]
     fn negation() {
@@ -200,30 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn attr_then_index() {
-        assert_eq!(
-            classify("foo.bar[2]").unwrap(),
-            "[[t(attr) t(foo) t(bar)] t(at) n(2)]"
-        );
-    }
-
-    #[test]
-    fn index_contains_attr() {
-        assert_eq!(
-            classify("foo[bar.baz]").unwrap(),
-            "[t(foo) t(at) [t(attr) t(bar) t(baz)]]"
-        );
-    }
-
-    #[test]
-    fn nested_indexing() {
-        assert_eq!(
-            classify("foo[bar[2]]").unwrap(),
-            "[t(foo) t(at) [t(bar) t(at) n(2)]]"
-        );
-    }
-
-    #[test]
     fn decimal_number_is_literal() {
         assert_eq!(classify("3.14").unwrap(), "n(3.14)");
     }
@@ -237,11 +198,6 @@ mod tests {
     #[test]
     fn attr_wins_when_rhs_not_numeric() {
         assert_eq!(classify("3.foo").unwrap(), "[t(attr) n(3) t(foo)]");
-    }
-
-    #[test]
-    fn unclosed_bracket_errors() {
-        assert!(classify("foo[2").is_err());
     }
 
     #[test]

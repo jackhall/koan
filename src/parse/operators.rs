@@ -8,8 +8,6 @@ pub enum OperatorKind {
     Prefix,
     /// `lhs <trigger> atom` — builder receives `[lhs, rhs]`.
     Infix,
-    /// `lhs <trigger> compound <close>` — builder receives `[lhs, inner]`.
-    Postfix { close: char },
     /// `lhs <trigger>` — builder receives `[lhs]`. Like Rust's `?` operator.
     Suffix,
 }
@@ -24,11 +22,15 @@ pub struct Operator {
 
 /// Registry of compound-token operators. `parse_compound` dispatches off this table; to add
 /// a new operator, append one row and define its builder fn.
+///
+/// `[` and `]` are intentionally absent: they're list-literal delimiters handled at the
+/// `build_tree` level (`[a b c]` → `ExpressionPart::ListLiteral`), not token-internal
+/// operators. Compound indexing like `foo[idx]` is therefore not currently expressible — a
+/// future syntax for indexing will be reintroduced separately.
 const OPERATORS: &[Operator] = &[
-    Operator { trigger: '!', kind: OperatorKind::Prefix,                 build: build_not  },
-    Operator { trigger: '.', kind: OperatorKind::Infix,                  build: build_attr },
-    Operator { trigger: '[', kind: OperatorKind::Postfix { close: ']' }, build: build_at   },
-    Operator { trigger: '?', kind: OperatorKind::Suffix,                 build: build_try  },
+    Operator { trigger: '!', kind: OperatorKind::Prefix, build: build_not  },
+    Operator { trigger: '.', kind: OperatorKind::Infix,  build: build_attr },
+    Operator { trigger: '?', kind: OperatorKind::Suffix, build: build_try  },
 ];
 
 fn build_not<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
@@ -40,12 +42,6 @@ fn build_attr<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     let rhs = ops.pop().unwrap();
     let lhs = ops.pop().unwrap();
     ExpressionPart::expression(vec![ExpressionPart::Token("attr".to_string()), lhs, rhs])
-}
-
-fn build_at<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    let inner = ops.pop().unwrap();
-    let lhs = ops.pop().unwrap();
-    ExpressionPart::expression(vec![lhs, ExpressionPart::Token("at".to_string()), inner])
 }
 
 fn build_try<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
@@ -62,7 +58,5 @@ pub fn find_suffix(c: char) -> Option<&'static Operator> {
 }
 
 pub fn is_atom_terminator(c: char) -> bool {
-    OPERATORS.iter().any(|op| {
-        op.trigger == c || matches!(op.kind, OperatorKind::Postfix { close } if close == c)
-    })
+    OPERATORS.iter().any(|op| op.trigger == c)
 }

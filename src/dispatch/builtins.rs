@@ -16,19 +16,6 @@ pub(crate) fn null<'a>() -> &'a KObject<'a> {
     Box::leak(Box::new(KObject::Null))
 }
 
-/// Clone the scalar variants (`Number`, `KString`, `Bool`, `Null`) of a `KObject` into a fresh
-/// owned value; returns `None` for non-scalar variants. Used by builtins like `LET` and
-/// `value_pass` that copy a bound argument into a leaked slot.
-pub(crate) fn clone_scalar<'a>(obj: &KObject<'a>) -> Option<KObject<'a>> {
-    match obj {
-        KObject::Number(n) => Some(KObject::Number(*n)),
-        KObject::KString(s) => Some(KObject::KString(s.clone())),
-        KObject::Bool(b) => Some(KObject::Bool(*b)),
-        KObject::Null => Some(KObject::Null),
-        _ => None,
-    }
-}
-
 /// `Box::leak` a fresh `KFunction` + wrapping `KObject::KFunction`, then add the leaked object
 /// to `scope` under `name`. Centralizes the static-lifetime wrapping each per-builtin `register`
 /// fn would otherwise duplicate.
@@ -84,14 +71,17 @@ macro_rules! try_args {
 /// `Box::leak`s its own function and object boxes, so the returned scope is `'static` and child
 /// scopes can chain off it via `Scope.outer` to inherit the builtins.
 ///
-/// Registration order matters when signatures overlap: `value_lookup` (Identifier) is registered
-/// before `value_pass` (Any) so a single-token expression resolves to a binding before falling
-/// through to the catch-all literal pass.
+/// Registration order does not affect dispatch. `Scope::dispatch` buckets registered functions
+/// by their untyped signature shape and picks among overloads in the same bucket by `KType`
+/// specificity. `value_lookup` (single `Identifier` slot) and `value_pass` (single `Any` slot)
+/// share the bucket `[Slot]`; `value_lookup` wins for inputs like `(some_var)` because
+/// `Identifier` is more specific than `Any`. Re-ordering the calls below should leave behavior
+/// unchanged — the test suite is the authority.
 pub fn default_scope() -> Scope<'static> {
     let mut scope = Scope {
         outer: None,
         data: HashMap::new(),
-        functions: Vec::new(),
+        functions: HashMap::new(),
         out: Box::new(std::io::stdout()),
     };
 

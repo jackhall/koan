@@ -2,15 +2,15 @@ use crate::dispatch::kfunction::{Argument, ArgumentBundle, ExpressionSignature, 
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 
-use super::{clone_scalar, null, register_builtin};
+use super::{null, register_builtin};
 
 /// `<v:Any>` — single-part expression containing a literal (or a previously-evaluated future).
-/// Returns the value as a fresh leaked `KObject`. Combined with `builtin_value_lookup`
-/// (registered first) this lets parens-wrapped atoms — `(99)`, `("x")`, `(some_var)` —
-/// dispatch through the regular pipeline.
+/// Returns the value as a fresh leaked `KObject` via `deep_clone`. Combined with
+/// `value_lookup` this lets parens-wrapped atoms — `(99)`, `("x")`, `(some_var)`, `([1 2 3])`
+/// — dispatch through the regular pipeline.
 pub fn body<'a>(_scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
-    let cloned = match bundle.get("v").and_then(clone_scalar) {
-        Some(v) => v,
+    let cloned = match bundle.get("v") {
+        Some(obj) => obj.deep_clone(),
         None => return null(),
     };
     Box::leak(Box::new(cloned))
@@ -23,7 +23,7 @@ pub fn register(scope: &mut Scope<'static>) {
         ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
-                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any, variadic: false }),
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
             ],
         },
         body,

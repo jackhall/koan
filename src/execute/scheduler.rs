@@ -14,17 +14,26 @@ impl NodeId {
     pub fn index(self) -> usize { self.0 }
 }
 
-/// What a scheduler node will run. `Bound` is a `KFuture` whose `ArgumentBundle` was already
-/// produced at submission time. `Pending` is an unbound `KExpression` plus substitution edges
-/// `(part_index, dep)`: at execute time the scheduler splices each dep's result into the
-/// expression's parts, then dispatches and binds against the live `Scope` to obtain a future.
-/// Pending lets a parent call wait on the runtime values of its sub-expressions.
+/// What a scheduler node will run. `Bound` is already-bound; `Pending` defers binding until
+/// its `subs` deps have produced values to splice into the expression. `Aggregate` collects
+/// element results into a `KObject::List` to materialize list literals like `[a b c]`.
 enum NodeWork<'a> {
     Bound(KFuture<'a>),
     Pending {
         expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
     },
+    Aggregate {
+        elements: Vec<AggregateElement<'a>>,
+    },
+}
+
+/// One slot in an `Aggregate` node. `Static` is an already-resolved value; `Dep` defers to a
+/// previously-scheduled node. The mix lets a list literal like `[1 (LET x = 5) z]` schedule
+/// only the sub-expression and inline the other two.
+pub enum AggregateElement<'a> {
+    Static(KObject<'a>),
+    Dep(NodeId),
 }
 
 /// One vertex of the scheduler DAG: the work to perform plus the ids of nodes whose execution
@@ -34,13 +43,10 @@ struct Node<'a> {
     deps: Vec<NodeId>,
 }
 
-/// Holds a directed acyclic graph of deferred work and runs it in dependency order. Callers
-/// register pre-bound futures via `add`/`add_with_deps`, or unbound expressions whose
-/// arguments depend on other nodes' results via `add_pending`; each call returns a `NodeId`
-/// that can be reused as a dependency for later additions. `execute` performs a Kahn-style
-/// topological sort, materializes each pending expression once its deps have produced values,
-/// invokes the function body against the supplied root `Scope`, and yields the produced
-/// `KObject` references in submission order.
+/// A DAG of deferred work, executed in dependency order. Each `add_*` call returns a `NodeId`
+/// usable as a dependency for later additions. `execute` runs a Kahn-style topological sort,
+/// splices each pending expression's deps into its parts before dispatch, and yields results
+/// in submission order.
 pub struct Scheduler<'a> {
     nodes: Vec<Node<'a>>,
 }
@@ -78,6 +84,26 @@ impl<'a> Scheduler<'a> {
         id
     }
 
+    /// Insert an aggregator: a node that emits a `KObject::List` once each `Dep` element has
+    /// produced its result. `Static` elements ride through unchanged. The aggregator's deps are
+    /// the unique `Dep` ids inside `elements` — so the topological order schedules every
+    /// element before this node runs.
+    pub fn add_aggregate(&mut self, elements: Vec<AggregateElement<'a>>) -> NodeId {
+        let id = NodeId(self.nodes.len());
+        let mut deps: Vec<NodeId> = elements
+            .iter()
+            .filter_map(|e| match e {
+                AggregateElement::Dep(n) => Some(*n),
+                AggregateElement::Static(_) => None,
+            })
+            .collect();
+        deps.sort_by_key(|n| n.0);
+        deps.dedup();
+        Self::check_deps(id, &deps);
+        self.nodes.push(Node { work: NodeWork::Aggregate { elements }, deps });
+        id
+    }
+
     fn check_deps(id: NodeId, deps: &[NodeId]) {
         for dep in deps {
             assert!(
@@ -91,11 +117,9 @@ impl<'a> Scheduler<'a> {
     pub fn len(&self) -> usize { self.nodes.len() }
     pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
-    /// Topologically sort the DAG and run each node against `scope`. For `Pending` nodes,
-    /// substitute each dep's already-computed result into the expression's parts before
-    /// dispatching. Returns the produced `KObject`s indexed by `NodeId` (i.e. submission
-    /// order), or an error string if a node fails to dispatch or the graph somehow contains a
-    /// cycle.
+    /// Run nodes in topological order against `scope`, splicing each `Pending` node's dep
+    /// results into its expression before dispatching. Returns results indexed by `NodeId`
+    /// (i.e. submission order).
     pub fn execute(self, scope: &mut Scope<'a>) -> Result<Vec<&'a KObject<'a>>, String> {
         let order = self.topo_order()?;
         let n = self.nodes.len();
@@ -120,6 +144,18 @@ impl<'a> Scheduler<'a> {
                     let future = scope.dispatch(expr)?;
                     let body = future.function.body;
                     body(scope, future.bundle)
+                }
+                NodeWork::Aggregate { elements } => {
+                    let items: Vec<KObject<'a>> = elements
+                        .into_iter()
+                        .map(|e| match e {
+                            AggregateElement::Static(obj) => obj,
+                            AggregateElement::Dep(dep) => results[dep.0]
+                                .expect("aggregate dep must have produced a result")
+                                .deep_clone(),
+                        })
+                        .collect();
+                    Box::leak(Box::new(KObject::List(items)))
                 }
             };
             results[idx] = Some(value);

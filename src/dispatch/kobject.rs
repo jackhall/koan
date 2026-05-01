@@ -21,6 +21,26 @@ pub enum KObject<'a> {
     Null,
 }
 
+impl<'a> KObject<'a> {
+    /// Recursive clone. `Dict` and `KFuture` fall back to `Null` because their internals
+    /// (`Box<dyn Serializable>` keys, `Rc`-shared bundle values) aren't cloneable. Used by
+    /// `ExpressionPart::resolve` and the scheduler's `Aggregate` node when copying borrowed
+    /// values into a fresh `KObject`.
+    pub fn deep_clone(&self) -> KObject<'a> {
+        match self {
+            KObject::Number(n) => KObject::Number(*n),
+            KObject::KString(s) => KObject::KString(s.clone()),
+            KObject::Bool(b) => KObject::Bool(*b),
+            KObject::Null => KObject::Null,
+            KObject::UserDefined => KObject::UserDefined,
+            KObject::List(items) => KObject::List(items.iter().map(|i| i.deep_clone()).collect()),
+            KObject::KExpression(e) => KObject::KExpression(e.clone()),
+            KObject::KFunction(f) => KObject::KFunction(*f),
+            KObject::Dict(_) | KObject::KFuture(_) => KObject::Null,
+        }
+    }
+}
+
 impl<'a> Parseable for KObject<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool {
         self.summarize() == other.summarize()

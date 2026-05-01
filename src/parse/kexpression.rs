@@ -1,3 +1,4 @@
+use crate::dispatch::kfunction::{is_fixed_token, UntypedElement, UntypedKey};
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::ktraits::{Parseable, Executable};
 
@@ -11,14 +12,17 @@ pub enum KLiteral {
     Null,
 }
 
-/// One element inside a parsed expression: a raw identifier-like `Token`, a nested
-/// sub-`Expression`, a fully-typed `Literal`, or a `Future` slot carrying the runtime result of a
-/// sub-expression that has already been scheduled and run. The parser only emits the first three
-/// variants; `Future` is introduced by the scheduler when it splices a dep's result into its
-/// dependent's parts list before late dispatch.
+/// One element of a parsed expression. The parser emits `Token`, `Expression`, `ListLiteral`,
+/// and `Literal`; the scheduler introduces `Future` later, splicing a completed dep's result
+/// into its dependent's parts list before late dispatch.
 pub enum ExpressionPart<'a> {
     Token(String),
     Expression(Box<KExpression<'a>>),
+    /// A `[a b c]` source-level list. Each element is itself an `ExpressionPart`; sub-expression
+    /// elements (`ExpressionPart::Expression`) are scheduled as deps and replaced with `Future`s
+    /// before the parent is dispatched. The whole literal resolves to `KObject::List` at
+    /// `resolve()` time.
+    ListLiteral(Vec<ExpressionPart<'a>>),
     Literal(KLiteral),
     Future(&'a KObject<'a>),
 }
@@ -28,6 +32,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
         match self {
             ExpressionPart::Token(s) => f.debug_tuple("Token").field(s).finish(),
             ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
+            ExpressionPart::ListLiteral(items) => f.debug_tuple("ListLiteral").field(items).finish(),
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
             ExpressionPart::Future(obj) => write!(f, "Future({})", obj.summarize()),
         }
@@ -47,13 +52,16 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
-            ExpressionPart::Future(obj) => match obj {
-                KObject::Number(n) => KObject::Number(*n),
-                KObject::KString(s) => KObject::KString(s.clone()),
-                KObject::Bool(b) => KObject::Bool(*b),
-                KObject::Null => KObject::Null,
-                other => KObject::KString(other.summarize()),
-            },
+            // The scheduler ordinarily replaces sub-expression elements with `Future`s before
+            // this runs (see `schedule_list_literal`); a raw `Expression` element here would
+            // round-trip through `KExpression` rather than its computed value.
+            ExpressionPart::ListLiteral(items) => {
+                KObject::List(items.iter().map(|p| p.resolve()).collect())
+            }
+            // Preserve compound shapes (List, KExpression) by deep-cloning rather than
+            // stringifying — a Future-borne List or KExpression must materialize back to its
+            // structured form.
+            ExpressionPart::Future(obj) => obj.deep_clone(),
         }
     }
 }
@@ -63,6 +71,7 @@ impl<'a> Clone for ExpressionPart<'a> {
         match self {
             ExpressionPart::Token(s) => ExpressionPart::Token(s.clone()),
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
+            ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
             ExpressionPart::Future(o) => ExpressionPart::Future(*o),
         }
@@ -81,6 +90,23 @@ pub struct KExpression<'a> {
     pub parts: Vec<ExpressionPart<'a>>,
 }
 
+impl<'a> KExpression<'a> {
+    /// Bucket key for this expression: tokens that look fixed (no lowercase letters) become
+    /// `Fixed(s)`; lowercase identifier-like tokens and all literal/expression/future parts
+    /// become `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature
+    /// that should match — `is_fixed_token` is the shared rule.
+    pub fn untyped_key(&self) -> UntypedKey {
+        self.parts
+            .iter()
+            .map(|part| match part {
+                ExpressionPart::Token(s) if is_fixed_token(s) => UntypedElement::Fixed(s.clone()),
+                _ => UntypedElement::Slot,
+            })
+            .collect()
+    }
+
+}
+
 impl<'a> std::fmt::Debug for KExpression<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KExpression").field("parts", &self.parts).finish()
@@ -90,10 +116,14 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
     fn summarize(&self) -> String {
-        self.parts.iter()
-            .map(|p| match p {
+        fn part_summary(p: &ExpressionPart<'_>) -> String {
+            match p {
                 ExpressionPart::Token(s) => s.clone(),
                 ExpressionPart::Expression(e) => e.summarize(),
+                ExpressionPart::ListLiteral(items) => {
+                    let inner: Vec<String> = items.iter().map(part_summary).collect();
+                    format!("[{}]", inner.join(" "))
+                }
                 ExpressionPart::Literal(lit) => match lit {
                     KLiteral::Number(n) => n.to_string(),
                     KLiteral::String(s) => s.clone(),
@@ -101,7 +131,10 @@ impl<'a> Parseable for KExpression<'a> {
                     KLiteral::Null => "null".to_string(),
                 },
                 ExpressionPart::Future(obj) => obj.summarize(),
-            })
+            }
+        }
+        self.parts.iter()
+            .map(part_summary)
             .collect::<Vec<_>>()
             .join(" ")
     }
