@@ -18,13 +18,27 @@ impl NodeId {
 /// produced at submission time. `Pending` is an unbound `KExpression` plus substitution edges
 /// `(part_index, dep)`: at execute time the scheduler splices each dep's result into the
 /// expression's parts, then dispatches and binds against the live `Scope` to obtain a future.
-/// Pending lets a parent call wait on the runtime values of its sub-expressions.
+/// `Aggregate` collects results from a list of element deps and emits a `KObject::List`, used
+/// to materialize a `[a b c]` list literal once each element has run.
 enum NodeWork<'a> {
     Bound(KFuture<'a>),
     Pending {
         expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
     },
+    Aggregate {
+        elements: Vec<AggregateElement<'a>>,
+    },
+}
+
+/// One slot in an `Aggregate` node. `Static` carries an already-resolved `KObject` for elements
+/// that don't need scheduler involvement (literals, tokens, futures already in hand); `Dep`
+/// defers to a previously-scheduled node whose result becomes this element. The mix lets a
+/// list literal like `[1 (LET x = 5) z]` schedule only the `(LET x = 5)` sub-expression and
+/// inline the other two.
+pub enum AggregateElement<'a> {
+    Static(KObject<'a>),
+    Dep(NodeId),
 }
 
 /// One vertex of the scheduler DAG: the work to perform plus the ids of nodes whose execution
@@ -78,6 +92,26 @@ impl<'a> Scheduler<'a> {
         id
     }
 
+    /// Insert an aggregator: a node that emits a `KObject::List` once each `Dep` element has
+    /// produced its result. `Static` elements ride through unchanged. The aggregator's deps are
+    /// the unique `Dep` ids inside `elements` — so the topological order schedules every
+    /// element before this node runs.
+    pub fn add_aggregate(&mut self, elements: Vec<AggregateElement<'a>>) -> NodeId {
+        let id = NodeId(self.nodes.len());
+        let mut deps: Vec<NodeId> = elements
+            .iter()
+            .filter_map(|e| match e {
+                AggregateElement::Dep(n) => Some(*n),
+                AggregateElement::Static(_) => None,
+            })
+            .collect();
+        deps.sort_by_key(|n| n.0);
+        deps.dedup();
+        Self::check_deps(id, &deps);
+        self.nodes.push(Node { work: NodeWork::Aggregate { elements }, deps });
+        id
+    }
+
     fn check_deps(id: NodeId, deps: &[NodeId]) {
         for dep in deps {
             assert!(
@@ -120,6 +154,18 @@ impl<'a> Scheduler<'a> {
                     let future = scope.dispatch(expr)?;
                     let body = future.function.body;
                     body(scope, future.bundle)
+                }
+                NodeWork::Aggregate { elements } => {
+                    let items: Vec<KObject<'a>> = elements
+                        .into_iter()
+                        .map(|e| match e {
+                            AggregateElement::Static(obj) => obj,
+                            AggregateElement::Dep(dep) => results[dep.0]
+                                .expect("aggregate dep must have produced a result")
+                                .deep_clone(),
+                        })
+                        .collect();
+                    Box::leak(Box::new(KObject::List(items)))
                 }
             };
             results[idx] = Some(value);

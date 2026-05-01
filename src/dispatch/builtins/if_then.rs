@@ -44,9 +44,9 @@ pub fn register(scope: &mut Scope<'static>) {
             return_type: KType::Any,
             elements: vec![
                 SignatureElement::Token("IF".into()),
-                SignatureElement::Argument(Argument { name: "predicate".into(), ktype: KType::Bool,        variadic: false }),
+                SignatureElement::Argument(Argument { name: "predicate".into(), ktype: KType::Bool }),
                 SignatureElement::Token("THEN".into()),
-                SignatureElement::Argument(Argument { name: "value".into(),     ktype: KType::KExpression, variadic: false }),
+                SignatureElement::Argument(Argument { name: "value".into(),     ktype: KType::KExpression }),
             ],
         },
         body,

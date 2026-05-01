@@ -3,16 +3,17 @@ use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::try_args;
 
-use super::{clone_scalar, null, register_builtin};
+use super::{null, register_builtin};
 
-/// `LET <name:Identifier> = <value:Any>` — copies the bound value (scalars only) into a
-/// `Box::leak`'d `KObject` so it satisfies `Scope::add`'s `&'a KObject<'a>` signature, inserts
-/// it under `name`, and returns that same leaked reference. Non-scalar values are silently
-/// dropped and produce a freshly leaked `KObject::Null`.
+/// `LET <name:Identifier> = <value:Any>` — copies the bound value into a `Box::leak`'d
+/// `KObject` so it satisfies `Scope::add`'s `&'a KObject<'a>` signature, inserts it under
+/// `name`, and returns that same leaked reference. Compound values (`List`, `KExpression`)
+/// are deep-cloned through `KObject::deep_clone`; opaque variants (`KFuture`, `Dict`) collapse
+/// to `Null` per `deep_clone`'s contract.
 pub fn body<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
     try_args!(bundle, return null(); name: KString);
-    let cloned = match bundle.get("value").and_then(clone_scalar) {
-        Some(v) => v,
+    let cloned = match bundle.get("value") {
+        Some(obj) => obj.deep_clone(),
         None => return null(),
     };
     let leaked: &'a KObject<'a> = Box::leak(Box::new(cloned));
@@ -28,9 +29,9 @@ pub fn register(scope: &mut Scope<'static>) {
             return_type: KType::Null,
             elements: vec![
                 SignatureElement::Token("LET".into()),
-                SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier, variadic: false }),
+                SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier }),
                 SignatureElement::Token("=".into()),
-                SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any,        variadic: false }),
+                SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any }),
             ],
         },
         body,

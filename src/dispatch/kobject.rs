@@ -21,6 +21,29 @@ pub enum KObject<'a> {
     Null,
 }
 
+impl<'a> KObject<'a> {
+    /// Recursive clone that preserves structure for compound variants (`List`, `KExpression`).
+    /// `Dict` and `KFuture` are not deep-cloneable in general (the former carries `Box<dyn
+    /// Serializable>` keys whose owners we can't duplicate; the latter carries an
+    /// `ArgumentBundle` of `Rc`-shared values that aren't cloneable here), so they fall back to
+    /// `Null`. Used by `ExpressionPart::resolve` when materializing a `Future`-borne value
+    /// into a fresh `KObject`, and by the scheduler's `Aggregate` node when copying each
+    /// list-literal element's result into the produced `KObject::List`.
+    pub fn deep_clone(&self) -> KObject<'a> {
+        match self {
+            KObject::Number(n) => KObject::Number(*n),
+            KObject::KString(s) => KObject::KString(s.clone()),
+            KObject::Bool(b) => KObject::Bool(*b),
+            KObject::Null => KObject::Null,
+            KObject::UserDefined => KObject::UserDefined,
+            KObject::List(items) => KObject::List(items.iter().map(|i| i.deep_clone()).collect()),
+            KObject::KExpression(e) => KObject::KExpression(e.clone()),
+            KObject::KFunction(f) => KObject::KFunction(*f),
+            KObject::Dict(_) | KObject::KFuture(_) => KObject::Null,
+        }
+    }
+}
+
 impl<'a> Parseable for KObject<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool {
         self.summarize() == other.summarize()

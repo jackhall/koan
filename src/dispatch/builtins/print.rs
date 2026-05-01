@@ -22,7 +22,7 @@ pub fn register(scope: &mut Scope<'static>) {
             return_type: KType::Null,
             elements: vec![
                 SignatureElement::Token("PRINT".into()),
-                SignatureElement::Argument(Argument { name: "msg".into(), ktype: KType::Str, variadic: false }),
+                SignatureElement::Argument(Argument { name: "msg".into(), ktype: KType::Str }),
             ],
         },
         body,

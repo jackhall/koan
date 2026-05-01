@@ -1,6 +1,5 @@
-use crate::dispatch::kfunction::{KType, SignatureElement};
 use crate::dispatch::scope::Scope;
-use crate::execute::scheduler::{NodeId, Scheduler};
+use crate::execute::scheduler::{AggregateElement, NodeId, Scheduler};
 use crate::parse::expression_tree::parse;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
@@ -32,7 +31,7 @@ fn schedule_expr<'a>(
     scope: &Scope<'a>,
     scheduler: &mut Scheduler<'a>,
 ) -> Result<NodeId, String> {
-    if let Some(eager_indices) = lazy_candidate(scope, &expr) {
+    if let Some(eager_indices) = scope.lazy_candidate(&expr) {
         let mut parts: Vec<ExpressionPart<'a>> = expr.parts;
         let mut subs: Vec<(usize, NodeId)> = Vec::with_capacity(eager_indices.len());
         for i in eager_indices {
@@ -61,6 +60,11 @@ fn schedule_expr<'a>(
                 // Placeholder — overwritten with `Future(result)` at execute time before dispatch.
                 parts.push(ExpressionPart::Token(String::new()));
             }
+            ExpressionPart::ListLiteral(items) => {
+                let dep = schedule_list_literal(items, scope, scheduler)?;
+                subs.push((i, dep));
+                parts.push(ExpressionPart::Token(String::new()));
+            }
             other => parts.push(other),
         }
     }
@@ -73,53 +77,37 @@ fn schedule_expr<'a>(
     }
 }
 
-/// Look for a function in `scope` whose signature matches `expr`'s shape AND has at least one
-/// Expression part landing on a `KType::KExpression` slot. Returns the indices of Expression
-/// parts that sit on non-`KExpression` slots — those need eager scheduling. The caller leaves
-/// Expression parts at lazy-slot positions in place so the receiving builtin gets them as
-/// `KObject::KExpression` data.
+/// Schedule a `[a b c]` list literal: each `Expression` element becomes its own scheduler
+/// node, and a single `Aggregate` node depends on those, gathering the resolved values into a
+/// `KObject::List`. Non-expression elements (literals, tokens, futures, nested list literals)
+/// resolve directly and ride into the aggregator as `Static` slots — no scheduling needed.
 ///
-/// The "at least one lazy slot" requirement is what disambiguates: a function with only
-/// `Any`-typed slots would otherwise falsely qualify (since `Any` matches `Expression`), and
-/// `bind` would deposit a `KObject::KExpression` into a bundle the body doesn't know how to
-/// handle. Requiring an explicit `KExpression` slot guarantees the function opted in.
-fn lazy_candidate<'a>(scope: &Scope<'a>, expr: &KExpression<'a>) -> Option<Vec<usize>> {
-    if !expr.parts.iter().any(|p| matches!(p, ExpressionPart::Expression(_))) {
-        return None;
-    }
-    for f in &scope.functions {
-        let sig = &f.signature;
-        if sig.elements.len() != expr.parts.len() {
-            continue;
-        }
-        let mut eager_indices: Vec<usize> = Vec::new();
-        let mut has_lazy_slot = false;
-        let mut ok = true;
-        for (i, (el, part)) in sig.elements.iter().zip(expr.parts.iter()).enumerate() {
-            match (el, part) {
-                (SignatureElement::Token(s), ExpressionPart::Token(t)) if s == t => {}
-                (SignatureElement::Token(_), _) => { ok = false; break; }
-                (SignatureElement::Argument(arg), part) => match (arg.ktype, part) {
-                    (KType::KExpression, ExpressionPart::Expression(_)) => {
-                        has_lazy_slot = true;
-                    }
-                    (KType::KExpression, _) => { ok = false; break; }
-                    (_, ExpressionPart::Expression(_)) => {
-                        // Speculative: assume the eager-evaluated result will type-match at
-                        // late dispatch. If not, dispatch will fail at that point.
-                        eager_indices.push(i);
-                    }
-                    (_, other) => {
-                        if !arg.matches(other) { ok = false; break; }
-                    }
-                },
+/// A nested `ListLiteral` element gets recursively scheduled the same way: the inner
+/// aggregator becomes a dep of the outer one. The outer aggregator's `KObject::List` ends up
+/// containing the inner list as one of its elements, which is what `[[1 2] [3 4]]` should
+/// produce.
+fn schedule_list_literal<'a>(
+    items: Vec<ExpressionPart<'a>>,
+    scope: &Scope<'a>,
+    scheduler: &mut Scheduler<'a>,
+) -> Result<NodeId, String> {
+    let mut elements: Vec<AggregateElement<'a>> = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            ExpressionPart::Expression(inner) => {
+                let dep = schedule_expr(*inner, scope, scheduler)?;
+                elements.push(AggregateElement::Dep(dep));
+            }
+            ExpressionPart::ListLiteral(inner) => {
+                let dep = schedule_list_literal(inner, scope, scheduler)?;
+                elements.push(AggregateElement::Dep(dep));
+            }
+            other => {
+                elements.push(AggregateElement::Static(other.resolve()));
             }
         }
-        if ok && has_lazy_slot {
-            return Some(eager_indices);
-        }
     }
-    None
+    Ok(scheduler.add_aggregate(elements))
 }
 
 #[cfg(test)]
@@ -230,5 +218,84 @@ mod tests {
 
         assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
         assert!(matches!(scope.data.get("msg"), Some(KObject::KString(s)) if s == "hello world!"));
+    }
+
+    #[test]
+    fn let_binds_a_list_literal_of_numbers() {
+        let mut scope = default_scope();
+        interpret("LET xs = [1 2 3]\n", &mut scope).unwrap();
+        match scope.data.get("xs") {
+            Some(KObject::List(items)) => {
+                assert_eq!(items.len(), 3);
+                assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
+                assert!(matches!(items[2], KObject::Number(n) if n == 3.0));
+            }
+            _ => panic!("expected `xs` bound to a List"),
+        }
+    }
+
+    #[test]
+    fn let_binds_an_empty_list_literal() {
+        let mut scope = default_scope();
+        interpret("LET xs = []\n", &mut scope).unwrap();
+        match scope.data.get("xs") {
+            Some(KObject::List(items)) => assert!(items.is_empty()),
+            _ => panic!("expected `xs` bound to an empty List"),
+        }
+    }
+
+    #[test]
+    fn list_literal_with_subexpression_element_evaluates_eagerly() {
+        // `(LET y = 7)` evaluates as part of the list construction; afterwards `y` is bound
+        // and the list contains the LET's return value (the bound number).
+        let mut scope = default_scope();
+        interpret("LET xs = [1 (LET y = 7) 3]\n", &mut scope).unwrap();
+        match scope.data.get("xs") {
+            Some(KObject::List(items)) => {
+                assert_eq!(items.len(), 3);
+                assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
+                assert!(matches!(items[1], KObject::Number(n) if n == 7.0));
+                assert!(matches!(items[2], KObject::Number(n) if n == 3.0));
+            }
+            _ => panic!("expected `xs` bound to a List"),
+        }
+        assert!(matches!(scope.data.get("y"), Some(KObject::Number(n)) if *n == 7.0));
+    }
+
+    #[test]
+    fn multiline_list_literal_binds_correctly() {
+        // The `[` opens on line 1, elements span the next three lines, `]` closes on line 5.
+        // `collapse_whitespace` is bracket-aware, so the continuation lines are appended into
+        // the list span instead of being wrapped as indented children.
+        let src = "LET xs = [\n  1\n  2\n  3\n]\n";
+        let mut scope = default_scope();
+        interpret(src, &mut scope).unwrap();
+        match scope.data.get("xs") {
+            Some(KObject::List(items)) => {
+                assert_eq!(items.len(), 3);
+                assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
+                assert!(matches!(items[2], KObject::Number(n) if n == 3.0));
+            }
+            _ => panic!("expected `xs` bound to a List"),
+        }
+    }
+
+    #[test]
+    fn nested_list_literal_produces_list_of_lists() {
+        let mut scope = default_scope();
+        interpret("LET xs = [[1 2] [3 4]]\n", &mut scope).unwrap();
+        match scope.data.get("xs") {
+            Some(KObject::List(outer)) => {
+                assert_eq!(outer.len(), 2);
+                match &outer[0] {
+                    KObject::List(inner) => {
+                        assert_eq!(inner.len(), 2);
+                        assert!(matches!(inner[0], KObject::Number(n) if n == 1.0));
+                    }
+                    _ => panic!("inner[0] should be a List"),
+                }
+            }
+            _ => panic!("expected `xs` bound to a List"),
+        }
     }
 }
