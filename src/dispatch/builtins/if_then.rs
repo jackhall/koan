@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use crate::dispatch::kfunction::{Argument, ArgumentBundle, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::kfunction::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
+    SignatureElement,
+};
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::try_args;
@@ -8,10 +11,15 @@ use crate::try_args;
 use super::{null, register_builtin};
 
 /// `IF <predicate:Bool> THEN <value:KExpression>` — the lazy form. When `predicate` is false,
-/// the captured `value` expression is never touched. When true, dispatches the captured
-/// expression against `scope` and returns the produced `KObject`. Bare atoms inside parens
-/// (e.g. `(99)`, `(some_var)`) dispatch through the `value_lookup`/`value_pass` builtins.
-pub fn body<'a>(scope: &mut Scope<'a>, mut bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
+/// the captured `value` expression is never touched. When true, hands the captured expression
+/// to the scheduler as a `Dispatch` node and forwards `if_then`'s own result through it; the
+/// scheduler then walks the value's AST, evaluates any nested sub-expressions, and runs the
+/// final body in topological order.
+pub fn body<'a>(
+    _scope: &mut Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    mut bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
     try_args!(bundle, return null(); predicate: Bool);
     if !predicate {
         return null();
@@ -28,12 +36,7 @@ pub fn body<'a>(scope: &mut Scope<'a>, mut bundle: ArgumentBundle<'a>) -> &'a KO
             _ => return null(),
         },
     };
-    let future = match scope.dispatch(expr) {
-        Ok(f) => f,
-        Err(_) => return null(),
-    };
-    let inner = future.function.body;
-    inner(scope, future.bundle)
+    BodyResult::Defer(sched.add_dispatch(expr))
 }
 
 pub fn register(scope: &mut Scope<'static>) {
@@ -57,13 +60,25 @@ pub fn register(scope: &mut Scope<'static>) {
 mod tests {
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::kobject::KObject;
+    use crate::dispatch::scope::Scope;
+    use crate::execute::scheduler::Scheduler;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
+
+    fn run_one<'a>(
+        scope: &mut Scope<'a>,
+        expr: KExpression<'a>,
+    ) -> &'a KObject<'a> {
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr);
+        let results = sched.execute(scope).expect("scheduler should succeed");
+        results[id.index()]
+    }
 
     #[test]
     fn dispatch_if_then_expression() {
         let mut scope = default_scope();
         // IF true THEN (99) — value side parens-wrapped so it's an Expression that the
-        // lazy if_then captures and then dispatches via `value_pass`.
+        // lazy if_then captures and the scheduler then dispatches via `value_pass`.
         let inner = KExpression {
             parts: vec![ExpressionPart::Literal(KLiteral::Number(99.0))],
         };
@@ -76,10 +91,7 @@ mod tests {
             ],
         };
 
-        let future = scope.dispatch(expr).expect("dispatch should match `if_then`");
-        let body = future.function.body;
-        let result = body(&mut scope, future.bundle);
-
+        let result = run_one(&mut scope, expr);
         assert!(matches!(result, KObject::Number(n) if *n == 99.0));
     }
 
@@ -103,16 +115,9 @@ mod tests {
             ],
         };
 
-        let future = scope.dispatch(expr).expect("dispatch should match lazy if_then");
-        // The bundle's `value` arg is captured as a KExpression, not eagerly resolved.
-        assert!(matches!(
-            future.bundle.get("value"),
-            Some(KObject::KExpression(_))
-        ));
-
-        let body = future.function.body;
-        let result = body(&mut scope, future.bundle);
-        // Lazy body dispatched at runtime: LET ran, returned 11, and bound z.
+        let result = run_one(&mut scope, expr);
+        // Lazy body deferred to scheduler: LET ran inside the spawned Dispatch, returned 11,
+        // and bound z; the IF's result forwards through the spawned node.
         assert!(matches!(result, KObject::Number(n) if *n == 11.0));
         assert!(matches!(scope.data.get("z"), Some(KObject::Number(n)) if *n == 11.0));
     }
@@ -137,10 +142,7 @@ mod tests {
             ],
         };
 
-        let future = scope.dispatch(expr).expect("dispatch should match lazy if_then");
-        let body = future.function.body;
-        let result = body(&mut scope, future.bundle);
-
+        let result = run_one(&mut scope, expr);
         assert!(matches!(result, KObject::Null));
         assert!(scope.data.get("skipped").is_none());
     }

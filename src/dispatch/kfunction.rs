@@ -43,23 +43,65 @@ pub enum Specificity {
     Incomparable,
 }
 
-/// A function pointer that implements a `KFunction`'s body: takes the call-site `Scope` and the
-/// resolved `ArgumentBundle` and produces a `KObject`. `for<'a>` so a single `fn` can be invoked
-/// against any caller scope lifetime.
-pub type BuiltinFn = for<'a> fn(&mut Scope<'a>, ArgumentBundle<'a>) -> &'a KObject<'a>;
+/// Stable handle to a node in the scheduler's DAG. Lives here (rather than `execute/scheduler`)
+/// so `BodyResult::Defer` can name a node without `dispatch` having to import from `execute` —
+/// see the module-level note on `SchedulerHandle` for the layering rationale.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct NodeId(pub usize);
+
+impl NodeId {
+    pub fn index(self) -> usize { self.0 }
+}
+
+/// Side-channel a builtin body uses to spawn additional `Dispatch` nodes during the scheduler's
+/// run. Defined in `dispatch` (rather than as inherent methods on `Scheduler`) so `BuiltinFn`
+/// can reference it without dragging the whole scheduler module into `dispatch`'s import graph.
+/// `Scheduler` impls this trait in `execute/scheduler.rs`. The single method is intentional —
+/// a builtin's lever into the scheduler is "schedule this expression for late dispatch and give
+/// me back a NodeId to forward my result through"; nothing else.
+pub trait SchedulerHandle<'a> {
+    fn add_dispatch(&mut self, expr: KExpression<'a>) -> NodeId;
+}
+
+/// What a builtin's body returns. `Value` is the common case — the body computed its result
+/// inline. `Defer` says "my result is whatever node `id` eventually produces"; the scheduler
+/// forwards through the chain when later code reads the body's host node. Used by `if_then`
+/// for its lazy `value` slot and by `KFunction::invoke` for `Body::UserDefined`.
+pub enum BodyResult<'a> {
+    Value(&'a KObject<'a>),
+    Defer(NodeId),
+}
+
+/// A function pointer that implements a builtin `KFunction`'s body. `for<'a>` so a single `fn`
+/// works for any caller scope lifetime; the `&mut dyn SchedulerHandle<'a>` is the lever a body
+/// uses to defer sub-expression evaluation back to the scheduler.
+pub type BuiltinFn = for<'a> fn(
+    &mut Scope<'a>,
+    &mut dyn SchedulerHandle<'a>,
+    ArgumentBundle<'a>,
+) -> BodyResult<'a>;
+
+/// What a `KFunction`'s body actually is. Builtins carry a host `fn` pointer; user-defined
+/// functions carry a captured `KExpression` to be dispatched at call time. Kept as an enum
+/// rather than a `Box<dyn Fn>` so the user-defined case stays introspectable — the upcoming TCO
+/// and error-frame work both need to walk into the captured expression.
+pub enum Body<'a> {
+    Builtin(BuiltinFn),
+    UserDefined(KExpression<'a>),
+}
 
 /// A callable Koan function: its `ExpressionSignature` (the call shape it matches), an optional
-/// reference to the `Scope` where it was defined (`None` for builtins), and the function pointer
-/// implementing its body. `Scope::dispatch` finds the right `KFunction` by signature and then
-/// `bind`s a `KExpression` into a `KFuture`.
+/// reference to the `Scope` where it was defined (`None` for builtins), and the body
+/// implementation. `Scope::dispatch` finds the right `KFunction` by signature and then `bind`s a
+/// `KExpression` into a `KFuture`; the body runs via `KFunction::invoke` at execute time.
 pub struct KFunction<'a> {
     pub scope: Option<&'a Scope<'a>>,
     pub signature: ExpressionSignature,
-    pub body: BuiltinFn,
+    pub body: Body<'a>,
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(scope: Option<&'a Scope<'a>>, mut signature: ExpressionSignature, body: BuiltinFn) -> Self {
+    pub fn new(scope: Option<&'a Scope<'a>>, mut signature: ExpressionSignature, body: Body<'a>) -> Self {
         signature.normalize();
         Self { scope, signature, body }
     }
