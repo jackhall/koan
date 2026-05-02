@@ -252,6 +252,14 @@ impl<'a> Scheduler<'a> {
     /// If the function lives in a longer-lived arena (run-root or another live frame), no
     /// Rc is needed and the lifted value's frame field stays `None`.
     ///
+    /// `KObject::KFuture` is handled conservatively: any unanchored KFuture lifted from
+    /// the dying frame gets the dying-frame Rc attached, regardless of where its `function`
+    /// was defined. The KFuture's `bundle.args` and `parsed.parts`' `Future(&KObject)` refs
+    /// can independently point into the dying arena, and we have no per-descendant arena
+    /// tracking to tell us whether they do — anchoring unconditionally is safe and the
+    /// over-keep is theoretical until KFutures escape as values (they currently don't;
+    /// kept for the planned async features).
+    ///
     /// Pre-existing `Some(rc)` on the input value is preserved (the value is already
     /// keeping some arena alive; we don't overwrite that with the current dying frame's).
     ///
@@ -263,12 +271,14 @@ impl<'a> Scheduler<'a> {
     /// what makes the structural sharing safe.
     ///
     /// Whole-tree fast path: if the dying arena has zero `KFunction`s allocated in it, no
-    /// descendant of `v` can possibly point a `&KFunction` (directly or via a KFuture)
-    /// into that arena, so no Rc-attach is needed anywhere. We skip the recursive walk and
-    /// fall back to `deep_clone`, which is O(1) for composites (Rc::clone) and a small
-    /// allocation for primitives. The check is one O(1) integer load on the arena.
+    /// descendant `&KFunction` can point into it (per `alloc_function`'s invariant). This
+    /// is sound *today* because KFutures don't escape as values — the only way a lifted
+    /// `v` could need anchoring under this condition is via a KFuture descendant, and
+    /// none exist in current usage. When KFutures begin escaping (planned async), this
+    /// gate must add a no-unanchored-KFuture-descendant clause; the slow path's KFuture
+    /// arm is already correct. The check is one O(1) emptiness query on the arena.
     fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
-        if dying_frame.arena().functions_len() == 0 {
+        if dying_frame.arena().functions_is_empty() {
             return v.deep_clone();
         }
         match v {
@@ -287,22 +297,7 @@ impl<'a> Scheduler<'a> {
                 KObject::KFunction(*f, new_frame)
             }
             KObject::KFuture(t, existing) => {
-                // The bare `&KFunction` plus the parsed-expression `Future(&KObject)` parts
-                // and the bundle's args can all point into the per-call arena. A single Rc
-                // keeps that arena alive, covering every internal reference transitively.
-                // We use the function's captured arena as the "is this in the dying arena"
-                // signal, mirroring KFunction's lift rule.
-                let new_frame = if existing.is_some() {
-                    existing.clone()
-                } else {
-                    let dying_runtime: *const RuntimeArena = dying_frame.arena();
-                    let captured_runtime: *const RuntimeArena = t.function.captured_scope().arena;
-                    if std::ptr::eq(captured_runtime, dying_runtime) {
-                        Some(Rc::clone(dying_frame))
-                    } else {
-                        None
-                    }
-                };
+                let new_frame = existing.clone().or_else(|| Some(Rc::clone(dying_frame)));
                 KObject::KFuture(t.deep_clone(), new_frame)
             }
             KObject::List(items) => {
@@ -331,11 +326,16 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// True iff lifting `v` against `dying_frame` would attach an `Rc` to some descendant
-    /// `KFunction`. Used by `lift_kobject` to short-circuit the rebuild for composite
-    /// values whose payloads need no change: if `needs_lift` returns false, the existing
-    /// `Rc<Vec>`/`Rc<HashMap>` can be cloned instead of allocating a fresh one. Walks
-    /// composites recursively but bottoms out on the first match (`any`-style).
+    /// True iff lifting `v` against `dying_frame` would attach an `Rc` to some descendant.
+    /// Drives both `lift_kobject`'s top-level fast-path skip and the per-composite rebuild
+    /// decision: when this returns false, the existing `Rc<Vec>`/`Rc<HashMap>` can be cloned
+    /// instead of allocating a fresh one. Walks composites recursively but bottoms out on
+    /// the first match (`any`-style).
+    ///
+    /// `KFuture(_, None)` returns true unconditionally, mirroring `lift_kobject`'s
+    /// conservative anchor for KFutures — we can't cheaply tell whether the bundle/parsed
+    /// borrows reach into the dying arena, so we treat any unanchored KFuture as if they
+    /// might.
     fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
         match v {
             KObject::KFunction(_, Some(_)) => false,
@@ -345,11 +345,7 @@ impl<'a> Scheduler<'a> {
                 std::ptr::eq(captured_runtime, dying_runtime)
             }
             KObject::KFuture(_, Some(_)) => false,
-            KObject::KFuture(t, None) => {
-                let dying_runtime: *const RuntimeArena = dying_frame.arena();
-                let captured_runtime: *const RuntimeArena = t.function.captured_scope().arena;
-                std::ptr::eq(captured_runtime, dying_runtime)
-            }
+            KObject::KFuture(_, None) => true,
             KObject::List(items) => items.iter().any(|x| Self::needs_lift(x, dying_frame)),
             KObject::Dict(entries) => entries.values().any(|x| Self::needs_lift(x, dying_frame)),
             _ => false,

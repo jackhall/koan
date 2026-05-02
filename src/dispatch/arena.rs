@@ -46,6 +46,13 @@ impl RuntimeArena {
         unsafe { std::mem::transmute::<&'a mut KObject<'static>, &'a KObject<'a>>(stored) }
     }
 
+    /// INVARIANT: callers must allocate a `KFunction` into the same `RuntimeArena` that owns
+    /// its `captured` scope. `lift_kobject`'s fast path in the scheduler relies on this: it
+    /// skips the recursive Rc-attach walk when `functions_is_empty()` is true, on the
+    /// reasoning that "no KFunction allocated here ⇒ no KFunction has captured_scope in this
+    /// arena." If a future change ever allocates a KFunction into a different arena than its
+    /// captured scope, that fast path will silently drop arenas out from under live
+    /// `&KFunction` references and the invariant must be revisited.
     pub fn alloc_function<'a>(&'a self, f: KFunction<'a>) -> &'a KFunction<'a> {
         let static_f: KFunction<'static> = unsafe {
             std::mem::transmute::<KFunction<'a>, KFunction<'static>>(f)
@@ -62,12 +69,12 @@ impl RuntimeArena {
         unsafe { std::mem::transmute::<&'a mut Scope<'static>, &'a Scope<'a>>(stored) }
     }
 
-    /// How many `KFunction`s have been allocated into this arena. Used by `lift_kobject`'s
-    /// fast path: when this is zero, no value can hold a `&KFunction` (whether directly via
+    /// Whether the functions sub-arena holds zero `KFunction`s. Used by `lift_kobject`'s fast
+    /// path: when true, no value can hold a `&KFunction` (whether directly via
     /// `KObject::KFunction` or indirectly via a `KFuture`'s `function` field) pointing into
     /// this arena, so the lift's recursive walk has nothing to attach an `Rc` to and can
     /// collapse to a plain `deep_clone`. `typed_arena::Arena::len()` is O(1).
-    pub fn functions_len(&self) -> usize { self.functions.len() }
+    pub fn functions_is_empty(&self) -> bool { self.functions.len() == 0 }
 }
 
 impl Default for RuntimeArena {
