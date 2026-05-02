@@ -52,8 +52,15 @@ impl RuntimeArena {
     /// reasoning that "no KFunction allocated here ⇒ no KFunction has captured_scope in this
     /// arena." If a future change ever allocates a KFunction into a different arena than its
     /// captured scope, that fast path will silently drop arenas out from under live
-    /// `&KFunction` references and the invariant must be revisited.
+    /// `&KFunction` references and the invariant must be revisited. The `debug_assert!` below
+    /// catches a violation at the allocation site rather than later as a use-after-free.
     pub fn alloc_function<'a>(&'a self, f: KFunction<'a>) -> &'a KFunction<'a> {
+        debug_assert!(
+            std::ptr::eq(self as *const RuntimeArena, f.captured_scope().arena as *const RuntimeArena),
+            "alloc_function invariant: KFunction must be allocated into the same RuntimeArena \
+             that owns its captured scope (lift_kobject's functions_is_empty fast path depends \
+             on this)"
+        );
         let static_f: KFunction<'static> = unsafe {
             std::mem::transmute::<KFunction<'a>, KFunction<'static>>(f)
         };
@@ -177,6 +184,7 @@ impl CallArena {
             functions: RefCell::new(HashMap::new()),
             out: RefCell::new(None),
             arena: arena_ref,
+            pending: RefCell::new(Vec::new()),
         };
         let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
         let scope_ptr = allocated as *const Scope<'_> as *const Scope<'static>;

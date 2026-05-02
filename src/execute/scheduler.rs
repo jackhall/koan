@@ -234,6 +234,12 @@ impl<'a> Scheduler<'a> {
                     self.queue.push_front(idx);
                 }
             }
+            // Drain `scope`'s pending writes — `Scope::add` queues writes that hit a borrow
+            // conflict (a builtin iterating `data`/`functions` while a re-entrant write tries
+            // to mutate). Drain runs here, between dispatch nodes, so the next node's reads
+            // see them. The hot path is the no-op early-return inside `drain_pending` (queue
+            // is empty in the typical case); only the rare re-entrant-write path does work.
+            scope.drain_pending();
             // Finalize any frame-holding slots whose forward chain has now resolved:
             // lift the terminal Value into the captured arena, store as Value at the
             // slot, and drop the frame. Most iterations have nothing to do here; only

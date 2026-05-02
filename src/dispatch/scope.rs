@@ -48,6 +48,11 @@ pub struct Scope<'a> {
     pub functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
+    /// Writes that hit a borrow conflict at `add` time (data/functions already iterated by
+    /// some caller up the stack). The scheduler drains this between dispatch nodes via
+    /// `drain_pending`. Direct writes (no conflict) bypass the queue entirely, so the hot
+    /// path is unchanged. See `add` for the conditional-defer logic.
+    pub pending: RefCell<Vec<(String, &'a KObject<'a>)>>,
 }
 
 impl<'a> Scope<'a> {
@@ -60,6 +65,7 @@ impl<'a> Scope<'a> {
             functions: RefCell::new(HashMap::new()),
             out: RefCell::new(Some(out)),
             arena,
+            pending: RefCell::new(Vec::new()),
         }
     }
 
@@ -80,25 +86,74 @@ impl<'a> Scope<'a> {
             functions: RefCell::new(HashMap::new()),
             out: RefCell::new(None),
             arena: outer.arena,
+            pending: RefCell::new(Vec::new()),
         }
     }
 
+    /// Insert `name → obj` into this scope. Conditional-defer: tries the direct mutation
+    /// first, falls back to the `pending` queue iff a borrow conflict would otherwise panic
+    /// (typically a caller up the stack is iterating `data` or `functions` and re-entrantly
+    /// triggers a write). The scheduler drains the queue between dispatch nodes via
+    /// `drain_pending`. The hot path — no concurrent borrow — is the same direct insert as
+    /// before; queued writes are observably deferred until drain.
     pub fn add(&self, name: String, obj: &'a KObject<'a>) {
+        if let Err(name) = self.try_apply(name, obj) {
+            self.pending.borrow_mut().push((name, obj));
+        }
+    }
+
+    /// Direct-write path. Returns `Ok(())` on success; on borrow conflict returns the unused
+    /// `name` back so `add` can move it into the pending queue without cloning. KFunction
+    /// dedupe (by pointer) lives here so it applies to both direct and drained writes —
+    /// rebinding the same function under a new name must not push a second copy into the
+    /// bucket, which would make `pick` report ambiguity. KFunctions are arena-allocated and
+    /// never moved, so pointer equality is sufficient.
+    fn try_apply(&self, name: String, obj: &'a KObject<'a>) -> Result<(), String> {
         if let KObject::KFunction(f, _) = obj {
-            // Dedupe by pointer: rebinding the same KFunction under a new name (e.g.,
-            // `LET f = SOME_FN`) must not push a second copy into the dispatch bucket, or
-            // `pick` would see two equally-specific candidates and report ambiguity.
-            // KFunctions are arena-allocated and never moved, so pointer equality is
-            // sufficient.
+            let mut functions = match self.functions.try_borrow_mut() {
+                Ok(g) => g,
+                Err(_) => return Err(name),
+            };
+            let mut data = match self.data.try_borrow_mut() {
+                Ok(d) => d,
+                Err(_) => return Err(name),
+            };
             let key = f.signature.untyped_key();
             let f_ref: &'a KFunction<'a> = *f;
-            let mut functions = self.functions.borrow_mut();
             let bucket = functions.entry(key).or_default();
             if !bucket.iter().any(|existing| std::ptr::eq(*existing, f_ref)) {
                 bucket.push(f_ref);
             }
+            data.insert(name, obj);
+        } else {
+            let mut data = match self.data.try_borrow_mut() {
+                Ok(d) => d,
+                Err(_) => return Err(name),
+            };
+            data.insert(name, obj);
         }
-        self.data.borrow_mut().insert(name, obj);
+        Ok(())
+    }
+
+    /// Apply queued writes. Called by the scheduler after each dispatch node so writes that
+    /// queued during a re-entrant borrow become visible by the next node's run. Items that
+    /// still hit a borrow conflict (rare — would mean drain itself was re-entered through a
+    /// live borrow) stay queued for the next drain attempt; the queue is therefore eventually
+    /// consistent rather than guaranteed-empty after one call.
+    pub fn drain_pending(&self) {
+        if self.pending.borrow().is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut *self.pending.borrow_mut());
+        let mut still_pending: Vec<(String, &'a KObject<'a>)> = Vec::new();
+        for (name, obj) in pending {
+            if let Err(name) = self.try_apply(name, obj) {
+                still_pending.push((name, obj));
+            }
+        }
+        if !still_pending.is_empty() {
+            self.pending.borrow_mut().extend(still_pending);
+        }
     }
 
     /// Look up `name` in this scope, walking the `outer` chain on miss. Returns the bound
@@ -307,6 +362,35 @@ mod tests {
             parts: vec![ExpressionPart::Identifier("nope".into())],
         };
         assert!(scope.dispatch(expr).is_err());
+    }
+
+    /// Re-entrant `add` while a `data` borrow is held would have panicked under the old
+    /// unconditional `borrow_mut`. Conditional-defer routes the write to `pending` instead;
+    /// after the borrow drops, `drain_pending` applies it. The held iteration sees the
+    /// pre-write snapshot (snapshot-iteration semantics), and the post-drain state has the
+    /// new entry visible — this is the foreach-binding pattern that motivated the change.
+    #[test]
+    fn add_during_active_data_borrow_queues_and_drains() {
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let pre = arena.alloc_object(KObject::Number(1.0));
+        scope.add("pre".to_string(), pre);
+
+        let new_entry = arena.alloc_object(KObject::Number(2.0));
+        {
+            // Hold an immutable borrow of `data` (simulates a builtin iterating bindings).
+            let snapshot = scope.data.borrow();
+            assert!(snapshot.contains_key("pre"));
+            // Re-entrant write: would have panicked pre-fix. Now queues silently.
+            scope.add("during".to_string(), new_entry);
+            // Iteration sees the pre-write snapshot only.
+            assert!(!snapshot.contains_key("during"));
+        }
+        // Borrow released. Pending still holds the queued write until drain runs.
+        assert!(scope.data.borrow().get("during").is_none());
+        scope.drain_pending();
+        let after = scope.data.borrow();
+        assert!(matches!(after.get("during"), Some(KObject::Number(n)) if *n == 2.0));
     }
 
     // --- specificity / bucketing / shadowing tests for the dispatch refactor ---
