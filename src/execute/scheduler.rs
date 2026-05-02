@@ -289,10 +289,17 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
 
 impl<'a> KFunction<'a> {
     /// Run this function's body for an already-bound call. Builtins call straight through to
-    /// their `fn` pointer with the scheduler handle. User-defined functions hand their captured
-    /// body `KExpression` to the scheduler via `add_dispatch` and forward their result through
-    /// the spawned node — so the body's nested `Expression` parts get full AST-walking and
-    /// dependency scheduling, identical to a top-level submission.
+    /// their `fn` pointer with the scheduler handle. User-defined functions:
+    ///   1. Substitute each parameter `Identifier` in the body with `Future(value)` for the
+    ///      bound argument, recursing into nested sub-expressions and list literals.
+    ///   2. Hand the substituted body to the scheduler via `add_dispatch` and forward the
+    ///      result through the spawned node.
+    /// Substitution rather than a child scope is the first-cut tradeoff: it handles the
+    /// common case (parameters referenced by name in the body) without the per-call scope
+    /// allocation the leak-fix roadmap item will need to handle anyway. The cost is that
+    /// shadowing a parameter inside the body — `(LET x = 99)` when `x` is a parameter —
+    /// rewrites the LET's name slot to a `Future`, which then fails LET's `Identifier`-typed
+    /// match. That failure is loud (dispatch error), not silent.
     pub fn invoke(
         &'a self,
         scope: &mut Scope<'a>,
@@ -301,8 +308,48 @@ impl<'a> KFunction<'a> {
     ) -> BodyResult<'a> {
         match &self.body {
             Body::Builtin(f) => f(scope, sched, bundle),
-            Body::UserDefined(expr) => BodyResult::Defer(sched.add_dispatch(expr.clone())),
+            Body::UserDefined(expr) => {
+                let substituted = substitute_params(expr.clone(), &bundle);
+                BodyResult::Defer(sched.add_dispatch(substituted))
+            }
         }
+    }
+}
+
+/// Replace every `Identifier(name)` in `expr` whose name is a key in `bundle.args` with a
+/// `Future(value)` carrying that arg's value. Recurses into nested `Expression` and
+/// `ListLiteral` parts so a body like `(PRINT (x))` substitutes the inner `(x)` correctly.
+/// `Keyword`, `Literal`, and `Future` parts pass through unchanged. Each substituted value
+/// is `Box::leak`'d, consistent with the rest of the codebase's program-lifetime allocation
+/// model — the leak-fix roadmap item will replace these with arena-allocated values.
+fn substitute_params<'a>(
+    expr: KExpression<'a>,
+    bundle: &ArgumentBundle<'a>,
+) -> KExpression<'a> {
+    KExpression {
+        parts: expr.parts.into_iter().map(|p| substitute_part(p, bundle)).collect(),
+    }
+}
+
+fn substitute_part<'a>(
+    part: ExpressionPart<'a>,
+    bundle: &ArgumentBundle<'a>,
+) -> ExpressionPart<'a> {
+    match part {
+        ExpressionPart::Identifier(name) => match bundle.get(&name) {
+            Some(value) => {
+                let leaked: &'a KObject<'a> = Box::leak(Box::new(value.deep_clone()));
+                ExpressionPart::Future(leaked)
+            }
+            None => ExpressionPart::Identifier(name),
+        },
+        ExpressionPart::Expression(boxed) => {
+            ExpressionPart::Expression(Box::new(substitute_params(*boxed, bundle)))
+        }
+        ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(
+            items.into_iter().map(|p| substitute_part(p, bundle)).collect(),
+        ),
+        other => other,
     }
 }
 

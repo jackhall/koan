@@ -12,15 +12,18 @@ use super::{null, register_builtin};
 
 /// `FN <signature:KExpression> = <body:KExpression>` — the user-defined function constructor.
 /// Both slots are `KType::KExpression`, so the parser's parenthesized sub-expressions match
-/// and ride through as data (the existing `lazy_candidate` path covers two-`KExpression`
-/// signatures). The captured signature `KExpression` is structurally inspected here — never
-/// dispatched — to derive the registered function's `ExpressionSignature`. The body
-/// `KExpression` is captured raw and re-dispatched at call time inside `KFunction::invoke`.
+/// and ride through as data. The captured signature `KExpression` is structurally inspected
+/// here — never dispatched — to derive the registered function's `ExpressionSignature`. The
+/// body `KExpression` is captured raw; `KFunction::invoke` substitutes parameter values into
+/// it and re-dispatches at call time.
 ///
-/// First cut: zero-arg shape only. The signature `KExpression` must be exactly one part of
-/// variant `ExpressionPart::Keyword(name)` (so a call site like `GREET` is invocable like a
-/// builtin, not via parens). Anything else is rejected with `null()`. Once the error story
-/// roadmap item lands, those rejections become `KError`s that say *what* the user got wrong.
+/// Signature shape: each `Keyword` part becomes a `SignatureElement::Keyword` (a fixed token
+/// in the call site); each `Identifier` part becomes an `Argument` of type `Any` named after
+/// the identifier (a slot the caller supplies). At least one `Keyword` is required so the
+/// signature has a fixed token to dispatch on — a signature of all-Identifier slots would
+/// shadow `value_lookup`/`value_pass`. Other shapes (literals, nested expressions in the
+/// signature itself) are rejected with `null()`. Type annotations on argument slots are a
+/// future extension that hangs off this same parsing pass.
 pub fn body<'a>(
     scope: &mut Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -35,14 +38,26 @@ pub fn body<'a>(
         None => return null(),
     };
 
-    let name = match signature_expr.parts.as_slice() {
-        [ExpressionPart::Keyword(n)] => n.clone(),
-        _ => return null(),
+    let elements = match parse_signature_elements(&signature_expr) {
+        Some(es) => es,
+        None => return null(),
+    };
+    // Pick the first Keyword as the data-table key. `scope.functions` does the load-bearing
+    // dispatch lookup by signature; `scope.data` is mostly for discoverability and
+    // shadow-by-name semantics, neither of which has a single right answer for a multi-token
+    // signature like `(a ADD b)`. First Keyword is a defensible default.
+    let name = elements.iter().find_map(|e| match e {
+        SignatureElement::Keyword(s) => Some(s.clone()),
+        _ => None,
+    });
+    let name = match name {
+        Some(n) => n,
+        None => return null(),
     };
 
     let user_sig = ExpressionSignature {
         return_type: KType::Any,
-        elements: vec![SignatureElement::Keyword(name.clone())],
+        elements,
     };
 
     let f: &'a KFunction<'a> = Box::leak(Box::new(KFunction::new(
@@ -53,6 +68,21 @@ pub fn body<'a>(
     let obj: &'a KObject<'a> = Box::leak(Box::new(KObject::KFunction(f)));
     scope.add(name, obj);
     null()
+}
+
+/// Convert the captured signature `KExpression` into a list of `SignatureElement`s.
+/// `Keyword(s)` → fixed `Keyword(s)` token. `Identifier(s)` → `Argument { name: s, ktype: Any }`.
+/// Any other variant (`Literal`, `Expression`, `ListLiteral`, `Future`) means the user wrote
+/// something that isn't a valid signature shape — return `None` and let the caller bail.
+fn parse_signature_elements<'a>(signature: &KExpression<'a>) -> Option<Vec<SignatureElement>> {
+    signature.parts.iter().map(|part| match part {
+        ExpressionPart::Keyword(s) => Some(SignatureElement::Keyword(s.clone())),
+        ExpressionPart::Identifier(s) => Some(SignatureElement::Argument(Argument {
+            name: s.clone(),
+            ktype: KType::Any,
+        })),
+        _ => None,
+    }).collect()
 }
 
 /// Pull a `KType::KExpression`-typed argument out of the bundle and return the inner
@@ -231,5 +261,88 @@ mod tests {
              GREET",
         );
         assert_eq!(bytes, b"hello world\nhello world\n");
+    }
+
+    // --- parameterized user-fns ------------------------------------------------
+
+    #[test]
+    fn fn_with_single_param_substitutes_at_call_site() {
+        // `(SAY x)` is a Keyword + Identifier signature: `[Keyword("SAY"), Argument(x: Any)]`.
+        // The body's `Identifier("x")` is rewritten to `Future(<call-site value>)` before
+        // dispatch, so PRINT sees a `Future(KString)` and matches its `msg: Str` slot.
+        let bytes = capture_program_output(
+            "FN (SAY x) = (PRINT x)\n\
+             SAY \"hello\"",
+        );
+        assert_eq!(bytes, b"hello\n");
+    }
+
+    #[test]
+    fn fn_with_two_params_binds_each_by_name() {
+        let bytes = capture_program_output(
+            "FN (FIRST x y) = (PRINT x)\n\
+             FIRST \"one\" \"two\"",
+        );
+        assert_eq!(bytes, b"one\n");
+    }
+
+    #[test]
+    fn fn_with_infix_shape_dispatches_on_keyword_position() {
+        // `(a SAID)` is `[Argument(a: Any), Keyword("SAID")]` — the Keyword is in the
+        // *trailing* position so the call site reads `<value> SAID`. Confirms that the
+        // signature parser doesn't require the Keyword first; any arrangement works.
+        let bytes = capture_program_output(
+            "FN (a SAID) = (PRINT a)\n\
+             \"hi\" SAID",
+        );
+        assert_eq!(bytes, b"hi\n");
+    }
+
+    #[test]
+    fn fn_param_shadows_outer_binding_at_call_site() {
+        // The outer `LET msg = "outer"` binds `msg` in the program scope. The user-fn
+        // declares its own `msg` parameter; substitution rewrites `msg` in the body with
+        // the *call-site* value before dispatch, so the param wins over the outer binding.
+        let bytes = capture_program_output(
+            "LET msg = \"outer\"\n\
+             FN (SAY msg) = (PRINT msg)\n\
+             SAY \"param wins\"",
+        );
+        assert_eq!(bytes, b"param wins\n");
+    }
+
+    #[test]
+    fn fn_param_substitutes_inside_nested_subexpression() {
+        // `(PRINT (x))` has `x` inside a parenthesized sub-Expression. Substitution must
+        // recurse into nested `ExpressionPart::Expression` parts, not just the top-level
+        // ones. After substitution the inner `(Future(...))` dispatches via `value_pass`
+        // and its result feeds PRINT.
+        let bytes = capture_program_output(
+            "FN (WRAP x) = (PRINT (x))\n\
+             WRAP \"wrapped\"",
+        );
+        assert_eq!(bytes, b"wrapped\n");
+    }
+
+    #[test]
+    fn fn_returns_param_value_directly() {
+        // Body is just `(x)` — value_lookup finds nothing because `x` isn't an Identifier
+        // anymore after substitution; instead `(Future(value))` resolves via `value_pass`.
+        // Confirms the param flows through as the user-fn's own return value.
+        let mut scope = default_scope();
+        interpret("FN (ECHO v) = (v)", &mut scope).expect("setup should run");
+
+        let result = run_one(&mut scope, parse_one("ECHO 7"));
+        assert!(matches!(result, KObject::Number(n) if *n == 7.0));
+    }
+
+    #[test]
+    fn fn_signature_with_no_keyword_is_rejected() {
+        // `(x)` parses as a single Identifier — all-slot signature. That would shadow
+        // `value_lookup`/`value_pass` on every single-Identifier expression, so FN refuses
+        // to register it. Same gate that catches typos like `FN (greet) = ...` (lowercase).
+        let mut scope = default_scope();
+        interpret("FN (x) = (PRINT \"oops\")", &mut scope).expect("FN should run");
+        assert!(scope.data.get("x").is_none());
     }
 }
