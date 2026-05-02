@@ -1,4 +1,7 @@
-use crate::dispatch::kfunction::{Argument, ArgumentBundle, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::kfunction::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
+    SignatureElement,
+};
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::try_args;
@@ -10,7 +13,11 @@ use super::{null, register_builtin};
 /// `name`, and returns that same leaked reference. Compound values (`List`, `KExpression`)
 /// are deep-cloned through `KObject::deep_clone`; opaque variants (`KFuture`, `Dict`) collapse
 /// to `Null` per `deep_clone`'s contract.
-pub fn body<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
+pub fn body<'a>(
+    scope: &mut Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
+    bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
     try_args!(bundle, return null(); name: KString);
     let cloned = match bundle.get("value") {
         Some(obj) => obj.deep_clone(),
@@ -18,7 +25,7 @@ pub fn body<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObjec
     };
     let leaked: &'a KObject<'a> = Box::leak(Box::new(cloned));
     scope.add(name, leaked);
-    leaked
+    BodyResult::Value(leaked)
 }
 
 pub fn register(scope: &mut Scope<'static>) {
@@ -45,21 +52,27 @@ mod tests {
 
     use super::body;
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::kfunction::ArgumentBundle;
+    use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
     use crate::dispatch::kobject::KObject;
     use crate::dispatch::scope::Scope;
+    use crate::execute::scheduler::Scheduler;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
     fn let_inserts_binding_into_scope() {
         let mut scope = Scope::test_sink();
+        let mut sched = Scheduler::new();
         let mut args = HashMap::new();
         args.insert("name".to_string(), Rc::new(KObject::KString("x".into())));
         args.insert("value".to_string(), Rc::new(KObject::Number(42.0)));
 
-        let result = body(&mut scope, ArgumentBundle { args });
+        let result = body(&mut scope, &mut sched, ArgumentBundle { args });
 
-        assert!(matches!(result, KObject::Number(n) if *n == 42.0));
+        let value = match result {
+            BodyResult::Value(v) => v,
+            BodyResult::Tail(_) => panic!("LET should not produce a Tail"),
+        };
+        assert!(matches!(value, KObject::Number(n) if *n == 42.0));
         let entry = scope.data.get("x").expect("expected binding 'x'");
         assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
     }
@@ -76,12 +89,11 @@ mod tests {
             ],
         };
 
-        let future = scope.dispatch(expr).expect("dispatch should match `LET`");
-        let body = future.function.body;
-        let bundle = future.bundle;
-        let result = body(&mut scope, bundle);
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr);
+        let results = sched.execute(&mut scope).unwrap();
 
-        assert!(matches!(result, KObject::Number(n) if *n == 42.0));
+        assert!(matches!(results[id.index()], KObject::Number(n) if *n == 42.0));
         let entry = scope.data.get("x").expect("expected binding 'x'");
         assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
     }

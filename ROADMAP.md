@@ -30,17 +30,25 @@ A reasonable first cut: implement the zero-argument shape — `FN <name:Identifi
 
 ## Replace `Box::leak` with arena-allocated `KObject`s
 
-**Problem.** The dispatch system threads `&'a KObject<'a>` through every builtin's return type, and the only way to satisfy that signature today is `Box::leak(Box::new(...))`. Every call to [`null()`](src/dispatch/builtins.rs) leaks a fresh `KObject::Null`; [`let_binding::body`](src/dispatch/builtins/let_binding.rs) and [`value_pass::body`](src/dispatch/builtins/value_pass.rs) each leak a cloned scalar per invocation. Per-builtin function/object pairs in [`register_builtin`](src/dispatch/builtins.rs) also leak, but those live for the program — the call-site allocations are the real issue.
+**Problem.** The dispatch system threads `&'a KObject<'a>` through every builtin's return type, and the only way to satisfy that signature today is `Box::leak(Box::new(...))`. Per-call leak sources, in rough order of how often they fire:
 
-**Impact.** Memory grows monotonically with program execution. A loop running `LET x = 1` will exhaust process memory. Fine for the prototype; blocking for any real workload.
+- [`null_kobject()`](src/dispatch/builtins.rs) leaks a fresh `KObject::Null` every time a builtin early-exits (every type mismatch, every `if_then` false branch, every `value_lookup` miss).
+- [`let_binding::body`](src/dispatch/builtins/let_binding.rs) and [`value_pass::body`](src/dispatch/builtins/value_pass.rs) each leak a cloned scalar per invocation.
+- [`scheduler::substitute_params`](src/execute/scheduler.rs) leaks one cloned `KObject` for *every reference* to *every parameter* in a user-defined function's body, every call. A parameterized user-fn called in a loop is the worst case the prototype has — the leak scales as `params_referenced × call_count`.
+- [`scheduler::run_aggregate`](src/execute/scheduler.rs) leaks a `KObject::List` every time a list literal evaluates.
+- [`fn_def::body`](src/dispatch/builtins/fn_def.rs) leaks a `KFunction` + wrapping `KObject::KFunction` every time `FN` runs. Once-per-definition is fine for the program-lifetime case, but a future "FN inside a loop" pattern makes this per-call too.
+
+Per-builtin function/object pairs in [`register_builtin`](src/dispatch/builtins.rs) also leak, but those live for the program — the call-site allocations are the real issue.
+
+**Impact.** Memory grows monotonically with program execution. A loop running `LET x = 1` will exhaust process memory. Worse, now that user-defined functions exist, a parameterized user-fn called in a loop leaks *multiple* `KObject`s per iteration via `substitute_params`. Fine for the prototype; blocking for any real workload, and increasingly painful as the language grows toward useful programs.
 
 **Directions.**
 
-- *Cheap partial win, ~5 minutes:* make `null()` return a `&'static KObject<'static>` from a single `static NULL: KObject = KObject::Null;`. Removes one of the two leak sources without touching the API.
-- *Real fix, owning `Scope`:* embed an arena (`bumpalo` or hand-rolled) in `Scope` and have builtins allocate via `scope.alloc(obj)` instead of `Box::leak`. The `&'a KObject<'a>` signature stays; allocations get freed when the scope drops.
+- *Cheap partial win, ~5 minutes:* make `null_kobject()` return a `&'static KObject<'static>` from a single `static NULL: KObject = KObject::Null;`. Removes the most-frequently-fired leak source without touching the API.
+- *Real fix, owning `Scope`:* embed an arena (`bumpalo` or hand-rolled) in `Scope` and have builtins allocate via `scope.alloc(obj)` instead of `Box::leak`. The `&'a KObject<'a>` signature stays; allocations get freed when the scope drops. The scheduler-side leak sites (`substitute_params`, `run_aggregate`) need scheduler access to the same arena — either by threading the scope reference through, or by giving the scheduler its own arena that lives for the run.
 - *Real fix, owned returns:* change `BuiltinFn` to return `KObject<'a>` by value, and have the dispatcher store results in a scope-owned vector or arena. Bigger surface-area change but removes the lifetime gymnastics in `KFunction`/`Scope`.
 
-The arena route is least disruptive to current code shape; the owned-return route is cleaner if we're willing to revisit the type signatures.
+The arena route is least disruptive to current code shape; the owned-return route is cleaner if we're willing to revisit the type signatures. Either way, the scope of the fix is no longer just builtins — `substitute_params` and `run_aggregate` live in the scheduler and need to be covered by whatever ownership model lands.
 
 ## Surface dispatch and type errors instead of swallowing as `Null`
 

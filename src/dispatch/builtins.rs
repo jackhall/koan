@@ -1,19 +1,28 @@
 use std::collections::HashMap;
 
-use super::kfunction::{BuiltinFn, ExpressionSignature, KFunction};
+use super::kfunction::{Body, BodyResult, BuiltinFn, ExpressionSignature, KFunction};
 use super::kobject::KObject;
 use super::scope::Scope;
 
+mod fn_def;
 mod if_then;
 mod let_binding;
 mod print;
 mod value_lookup;
 mod value_pass;
 
-/// Returns a freshly leaked `KObject::Null`, used by builtins as their "no-op / type mismatch"
-/// return so they always satisfy the `&'a KObject<'a>` signature without threading lifetimes.
-pub(crate) fn null<'a>() -> &'a KObject<'a> {
+/// Freshly leaked `KObject::Null`, for sites that need a literal value reference (e.g. inserting
+/// a placeholder into `Scope::data`). Most early-return sites want `null()` instead, which wraps
+/// this in `BodyResult::Value`.
+pub(crate) fn null_kobject<'a>() -> &'a KObject<'a> {
     Box::leak(Box::new(KObject::Null))
+}
+
+/// `BodyResult::Value(null_kobject())` — the canonical "no useful return value" early-exit for
+/// builtins. Pairs with `try_args!`'s `return $err;` clause so a typo or type mismatch produces
+/// `Null` synchronously without further scheduler work.
+pub(crate) fn null<'a>() -> BodyResult<'a> {
+    BodyResult::Value(null_kobject())
 }
 
 /// `Box::leak` a fresh `KFunction` + wrapping `KObject::KFunction`, then add the leaked object
@@ -26,7 +35,7 @@ pub(crate) fn register_builtin(
     body: BuiltinFn,
 ) {
     let f: &'static KFunction<'static> =
-        Box::leak(Box::new(KFunction::new(None, signature, body)));
+        Box::leak(Box::new(KFunction::new(None, signature, Body::Builtin(body))));
     let obj: &'static KObject<'static> = Box::leak(Box::new(KObject::KFunction(f)));
     scope.add(name.into(), obj);
 }
@@ -90,6 +99,7 @@ pub fn default_scope() -> Scope<'static> {
     value_lookup::register(&mut scope);
     value_pass::register(&mut scope);
     if_then::register(&mut scope);
+    fn_def::register(&mut scope);
 
     scope
 }

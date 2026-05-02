@@ -1,13 +1,20 @@
 use std::io::Write;
 
-use crate::dispatch::kfunction::{Argument, ArgumentBundle, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::kfunction::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
+    SignatureElement,
+};
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 
 use super::{null, register_builtin};
 
 /// `PRINT <msg:Str>` — writes the bound `KString` to `scope.out`, followed by a newline.
-pub fn body<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
+pub fn body<'a>(
+    scope: &mut Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
+    bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
     if let Some(KObject::KString(s)) = bundle.get("msg") {
         let _ = writeln!(scope.out, "{s}");
     }

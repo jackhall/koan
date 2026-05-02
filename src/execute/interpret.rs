@@ -1,101 +1,18 @@
 use crate::dispatch::scope::Scope;
-use crate::execute::scheduler::{AggregateElement, NodeId, Scheduler};
+use crate::execute::scheduler::Scheduler;
 use crate::parse::expression_tree::parse;
-use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-/// Parse Koan source and run it: each top-level expression and its nested sub-expressions
-/// are submitted as scheduler nodes, then the DAG executes against `scope`. The caller owns
-/// the scope so the output sink and post-run bindings can be inspected.
+/// Parse Koan source and run it. The scheduler walks the AST itself — every top-level
+/// expression goes in as a single `Dispatch` node; the scheduler then handles nested
+/// sub-expressions, list literals, and lazy slots dynamically as nodes execute.
 pub fn interpret(source: &str, scope: &mut Scope<'static>) -> Result<(), String> {
     let exprs = parse(source)?;
     let mut scheduler = Scheduler::new();
     for expr in exprs {
-        schedule_expr(expr, scope, &mut scheduler)?;
+        scheduler.add_dispatch(expr);
     }
     scheduler.execute(scope)?;
     Ok(())
-}
-
-/// Recursively schedule `expr`. If a lazy candidate matches (see `Scope::lazy_candidate`),
-/// only the eager Expression parts become deps; lazy ones ride into the parent as raw
-/// `Expression` data. Otherwise every nested `Expression` becomes its own node and the
-/// parent is added as `Pending` with subs for late dispatch.
-fn schedule_expr<'a>(
-    expr: KExpression<'a>,
-    scope: &Scope<'a>,
-    scheduler: &mut Scheduler<'a>,
-) -> Result<NodeId, String> {
-    if let Some(eager_indices) = scope.lazy_candidate(&expr) {
-        let mut parts: Vec<ExpressionPart<'a>> = expr.parts;
-        let mut subs: Vec<(usize, NodeId)> = Vec::with_capacity(eager_indices.len());
-        for i in eager_indices {
-            let inner = match std::mem::replace(&mut parts[i], ExpressionPart::Identifier(String::new())) {
-                ExpressionPart::Expression(boxed) => *boxed,
-                _ => unreachable!("lazy_candidate only flags Expression parts"),
-            };
-            let dep = schedule_expr(inner, scope, scheduler)?;
-            subs.push((i, dep));
-        }
-        let parent = KExpression { parts };
-        if subs.is_empty() {
-            let future = scope.dispatch(parent)?;
-            return Ok(scheduler.add(future));
-        }
-        return Ok(scheduler.add_pending(parent, subs));
-    }
-
-    let mut parts: Vec<ExpressionPart<'a>> = Vec::with_capacity(expr.parts.len());
-    let mut subs: Vec<(usize, NodeId)> = Vec::new();
-    for (i, part) in expr.parts.into_iter().enumerate() {
-        match part {
-            ExpressionPart::Expression(inner) => {
-                let dep = schedule_expr(*inner, scope, scheduler)?;
-                subs.push((i, dep));
-                // Placeholder — overwritten with `Future(result)` at execute time before dispatch.
-                parts.push(ExpressionPart::Identifier(String::new()));
-            }
-            ExpressionPart::ListLiteral(items) => {
-                let dep = schedule_list_literal(items, scope, scheduler)?;
-                subs.push((i, dep));
-                parts.push(ExpressionPart::Identifier(String::new()));
-            }
-            other => parts.push(other),
-        }
-    }
-    let new_expr = KExpression { parts };
-    if subs.is_empty() {
-        let future = scope.dispatch(new_expr)?;
-        Ok(scheduler.add(future))
-    } else {
-        Ok(scheduler.add_pending(new_expr, subs))
-    }
-}
-
-/// Schedule a `[a b c]` list literal: `Expression` elements become scheduler nodes,
-/// `ListLiteral` elements recurse, and other elements resolve directly as `Static` slots. A
-/// single `Aggregate` node depends on them and gathers the results into a `KObject::List`.
-fn schedule_list_literal<'a>(
-    items: Vec<ExpressionPart<'a>>,
-    scope: &Scope<'a>,
-    scheduler: &mut Scheduler<'a>,
-) -> Result<NodeId, String> {
-    let mut elements: Vec<AggregateElement<'a>> = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
-            ExpressionPart::Expression(inner) => {
-                let dep = schedule_expr(*inner, scope, scheduler)?;
-                elements.push(AggregateElement::Dep(dep));
-            }
-            ExpressionPart::ListLiteral(inner) => {
-                let dep = schedule_list_literal(inner, scope, scheduler)?;
-                elements.push(AggregateElement::Dep(dep));
-            }
-            other => {
-                elements.push(AggregateElement::Static(other.resolve()));
-            }
-        }
-    }
-    Ok(scheduler.add_aggregate(elements))
 }
 
 #[cfg(test)]

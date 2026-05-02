@@ -1,5 +1,7 @@
-use crate::dispatch::kfunction::{Argument, ArgumentBundle, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::kobject::KObject;
+use crate::dispatch::kfunction::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
+    SignatureElement,
+};
 use crate::dispatch::scope::Scope;
 use crate::try_args;
 
@@ -9,9 +11,16 @@ use super::{null, register_builtin};
 /// `Scope::lookup` (which walks the `outer` chain) and returns the bound `KObject`, or `Null`
 /// if unbound at every level. Lets a parens-wrapped name like `(some_var)` dispatch and
 /// resolve to its current value.
-pub fn body<'a>(scope: &mut Scope<'a>, bundle: ArgumentBundle<'a>) -> &'a KObject<'a> {
+pub fn body<'a>(
+    scope: &mut Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
+    bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
     try_args!(bundle, return null(); v: KString);
-    scope.lookup(&v).unwrap_or_else(null)
+    match scope.lookup(&v) {
+        Some(obj) => BodyResult::Value(obj),
+        None => null(),
+    }
 }
 
 pub fn register(scope: &mut Scope<'static>) {
@@ -34,9 +43,21 @@ mod tests {
     use std::rc::Rc;
 
     use super::body;
-    use crate::dispatch::kfunction::ArgumentBundle;
+    use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
     use crate::dispatch::kobject::KObject;
     use crate::dispatch::scope::Scope;
+    use crate::execute::scheduler::Scheduler;
+
+    fn run_body<'a>(
+        scope: &mut Scope<'a>,
+        bundle: ArgumentBundle<'a>,
+    ) -> &'a KObject<'a> {
+        let mut sched = Scheduler::new();
+        match body(scope, &mut sched, bundle) {
+            BodyResult::Value(v) => v,
+            BodyResult::Tail(_) => panic!("value_lookup should not produce a Tail"),
+        }
+    }
 
     #[test]
     fn value_lookup_returns_binding() {
@@ -47,7 +68,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("foo".into())));
 
-        let result = body(&mut scope, ArgumentBundle { args });
+        let result = run_body(&mut scope, ArgumentBundle { args });
 
         assert!(matches!(result, KObject::Number(n) if *n == 42.0));
     }
@@ -58,7 +79,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("missing".into())));
 
-        let result = body(&mut scope, ArgumentBundle { args });
+        let result = run_body(&mut scope, ArgumentBundle { args });
 
         assert!(matches!(result, KObject::Null));
     }
@@ -75,7 +96,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("from_outer".into())));
 
-        let result = body(&mut inner, ArgumentBundle { args });
+        let result = run_body(&mut inner, ArgumentBundle { args });
 
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }

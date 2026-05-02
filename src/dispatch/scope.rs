@@ -228,9 +228,11 @@ mod tests {
 
     use crate::dispatch::builtins::register_builtin;
     use crate::dispatch::kfunction::{
-        Argument, ArgumentBundle, ExpressionSignature, KType, SignatureElement,
+        Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
+        SignatureElement,
     };
     use crate::dispatch::kobject::KObject;
+    use crate::execute::scheduler::Scheduler;
 
     // Sentinel-returning bodies. Each produces a distinct `KString` so a test can tell which
     // overload won dispatch. The explicit `'a` is needed so the leaked `&'static KObject<'static>`
@@ -239,13 +241,13 @@ mod tests {
         Box::leak(Box::new(KObject::KString(s.into())))
     }
 
-    fn body_identifier<'a>(_s: &mut Scope<'a>, _a: ArgumentBundle<'a>) -> &'a KObject<'a> { marker("identifier") }
-    fn body_any<'a>(_s: &mut Scope<'a>, _a: ArgumentBundle<'a>) -> &'a KObject<'a> { marker("any") }
-    fn body_number_any<'a>(_s: &mut Scope<'a>, _a: ArgumentBundle<'a>) -> &'a KObject<'a> { marker("number_any") }
-    fn body_any_number<'a>(_s: &mut Scope<'a>, _a: ArgumentBundle<'a>) -> &'a KObject<'a> { marker("any_number") }
-    fn body_inner_any<'a>(_s: &mut Scope<'a>, _a: ArgumentBundle<'a>) -> &'a KObject<'a> { marker("inner_any") }
-    fn body_outer_number<'a>(_s: &mut Scope<'a>, _a: ArgumentBundle<'a>) -> &'a KObject<'a> { marker("outer_number") }
-    fn body_lowercase<'a>(_s: &mut Scope<'a>, _a: ArgumentBundle<'a>) -> &'a KObject<'a> { marker("lowercase") }
+    fn body_identifier<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("identifier")) }
+    fn body_any<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any")) }
+    fn body_number_any<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("number_any")) }
+    fn body_any_number<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any_number")) }
+    fn body_inner_any<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("inner_any")) }
+    fn body_outer_number<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("outer_number")) }
+    fn body_lowercase<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("lowercase")) }
 
     fn one_slot_sig(name: &str, kt: KType) -> ExpressionSignature {
         ExpressionSignature {
@@ -291,8 +293,10 @@ mod tests {
         register_builtin(&mut scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
 
         let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
-        let future = scope.dispatch(expr).expect("should match Identifier overload");
-        let result = (future.function.body)(&mut scope, future.bundle);
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr);
+        let results = sched.execute(&mut scope).unwrap();
+        let result = results[id.index()];
         assert!(matches!(result, KObject::KString(s) if s == "identifier"),
             "Identifier overload should win on an identifier input, got {:?}", summarize_marker(result));
     }
@@ -315,8 +319,10 @@ mod tests {
         inner.outer = Some(outer_ref);
 
         let expr = KExpression { parts: vec![ExpressionPart::Literal(KLiteral::Number(7.0))] };
-        let future = inner.dispatch(expr).expect("inner Any should match");
-        let result = (future.function.body)(&mut inner, future.bundle);
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr);
+        let results = sched.execute(&mut inner).unwrap();
+        let result = results[id.index()];
         assert!(matches!(result, KObject::KString(s) if s == "inner_any"),
             "inner Any must shadow outer Number (lexical shadowing > specificity), got {:?}",
             summarize_marker(result));
@@ -373,8 +379,10 @@ mod tests {
                 ExpressionPart::Literal(KLiteral::Number(1.0)),
             ],
         };
-        let future = scope.dispatch(expr).expect("uppercase form should match coerced signature");
-        let result = (future.function.body)(&mut scope, future.bundle);
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr);
+        let results = sched.execute(&mut scope).unwrap();
+        let result = results[id.index()];
         assert!(matches!(result, KObject::KString(s) if s == "lowercase"));
     }
 
