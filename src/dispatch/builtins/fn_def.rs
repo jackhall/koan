@@ -25,7 +25,7 @@ use super::{null, register_builtin};
 /// signature itself) are rejected with `null()`. Type annotations on argument slots are a
 /// future extension that hangs off this same parsing pass.
 pub fn body<'a>(
-    scope: &mut Scope<'a>,
+    scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -60,12 +60,12 @@ pub fn body<'a>(
         elements,
     };
 
-    let f: &'a KFunction<'a> = Box::leak(Box::new(KFunction::new(
-        None,
+    let arena = scope.arena.expect("FN requires an arena-backed scope");
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::new(
         user_sig,
         Body::UserDefined(body_expr),
-    )));
-    let obj: &'a KObject<'a> = Box::leak(Box::new(KObject::KFunction(f)));
+    ));
+    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f));
     scope.add(name, obj);
     null()
 }
@@ -103,7 +103,7 @@ fn extract_kexpression<'a>(
     }
 }
 
-pub fn register(scope: &mut Scope<'static>) {
+pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "FN",
@@ -126,11 +126,11 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
+    use crate::dispatch::arena::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::kfunction::SignatureElement;
     use crate::dispatch::kobject::KObject;
     use crate::dispatch::scope::Scope;
-    use crate::execute::interpret::interpret;
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
     use crate::parse::kexpression::KExpression;
@@ -139,13 +139,6 @@ mod tests {
         let mut exprs = parse(src).expect("parse should succeed");
         assert_eq!(exprs.len(), 1, "test helper expects a single expression");
         exprs.remove(0)
-    }
-
-    fn run_one<'a>(scope: &mut Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr);
-        let results = sched.execute(scope).expect("scheduler should succeed");
-        results[id.index()]
     }
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -157,24 +150,49 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
     }
 
-    /// Run `source` against a fresh `default_scope()` with `PRINT` redirected to a buffer;
-    /// return the captured bytes. The standard rig for end-to-end FN tests that assert on
-    /// observable output rather than dispatch internals.
+    /// Build a default scope in `arena` with PRINT routed into `captured`. Returns the
+    /// run-root scope. Replaces the previous `capture_program_output` rig — tests now own
+    /// the arena explicitly so they can inspect post-run state.
+    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
+        default_scope(arena, Box::new(SharedBuf(captured)))
+    }
+
+    /// Run `source` to completion against `scope`; for one-shot dispatch tests.
+    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
+        let exprs = parse(source).expect("parse should succeed");
+        let mut sched = Scheduler::new();
+        for expr in exprs {
+            sched.add_dispatch(expr, scope);
+        }
+        sched.execute().expect("scheduler should succeed");
+    }
+
+    /// Run a single parsed expression and return its result reference.
+    fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr, scope);
+        let results = sched.execute().expect("scheduler should succeed");
+        results[id.index()]
+    }
+
     fn capture_program_output(source: &str) -> Vec<u8> {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-        interpret(source, &mut scope).expect("program should run");
+        let scope = build_scope(&arena, captured.clone());
+        run(scope, source);
         let bytes = captured.borrow().clone();
         bytes
     }
 
     #[test]
     fn fn_registers_user_function_under_keyword_signature() {
-        let mut scope = default_scope();
-        interpret("FN (GREET) = (PRINT \"hi\")", &mut scope).expect("FN should run");
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (GREET) = (PRINT \"hi\")");
 
-        let entry = scope.data.get("GREET").expect("GREET should be bound");
+        let data = scope.data.borrow();
+        let entry = data.get("GREET").expect("GREET should be bound");
         let f = match entry {
             KObject::KFunction(f) => *f,
             _ => panic!("expected GREET to bind a KFunction"),
@@ -187,45 +205,42 @@ mod tests {
 
     #[test]
     fn fn_call_dispatches_body_at_call_time() {
-        let mut scope = default_scope();
-        interpret("LET x = 42\nFN (GETX) = (x)", &mut scope).expect("setup should run");
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET x = 42\nFN (GETX) = (x)");
 
-        let result = run_one(&mut scope, parse_one("GETX"));
+        let result = run_one(scope, parse_one("GETX"));
         assert!(matches!(result, KObject::Number(n) if *n == 42.0),
             "GETX should return the value bound to x at call time");
     }
 
     #[test]
     fn fn_rejects_non_keyword_name() {
-        // Lowercase `greet` parses as Identifier, not Keyword. The signature `KExpression`
-        // shape doesn't match the zero-arg pattern, so FN should refuse without registering.
-        let mut scope = default_scope();
-        interpret("FN (greet) = (PRINT \"hi\")", &mut scope).expect("FN should run");
-        assert!(scope.data.get("greet").is_none());
-        assert!(scope.data.get("GREET").is_none());
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (greet) = (PRINT \"hi\")");
+        let data = scope.data.borrow();
+        assert!(data.get("greet").is_none());
+        assert!(data.get("GREET").is_none());
     }
 
     #[test]
     fn fn_call_runs_body_each_time() {
-        // Two separate calls each produce a fresh result. (Per-call allocation is implicit:
-        // every dispatch leaks a new KFuture and the body's `value_lookup` leaks a new clone
-        // of x's value.)
-        let mut scope = default_scope();
-        interpret("LET x = 7\nFN (GETX) = (x)", &mut scope).expect("setup should run");
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET x = 7\nFN (GETX) = (x)");
 
         for _ in 0..2 {
-            let result = run_one(&mut scope, parse_one("GETX"));
+            let result = run_one(scope, parse_one("GETX"));
             assert!(matches!(result, KObject::Number(n) if *n == 7.0));
         }
     }
 
     #[test]
     fn fn_body_with_nested_expression_evaluates() {
-        // Canonical regression for the dispatch-as-node refactor: a user-fn body whose own
-        // parts include a nested `(msg)` Expression now works, because the scheduler walks
-        // the body's AST when it runs the spawned Dispatch — same machinery as a top-level
-        // expression. Previously this silently nulled because `KFunction::invoke` dispatched
-        // its body inline against `scope` without scheduler access.
         let bytes = capture_program_output(
             "LET msg = \"from outer scope\"\n\
              FN (SAY) = (PRINT (msg))\n\
@@ -236,11 +251,6 @@ mod tests {
 
     #[test]
     fn user_fn_calls_user_fn_transitively() {
-        // FOO's body is just `(BAR)` — calling another user fn. With TCO, FOO's invocation
-        // returns `Tail(BAR)`, which the scheduler resolves by rewriting FOO's slot to
-        // `Dispatch(BAR)` in place. BAR then returns `Tail((PRINT "ok"))` and the slot is
-        // rewritten again. Each tail step reuses the same slot — see
-        // `chained_user_fn_tail_calls_reuse_one_slot` for the explicit slot-count assertion.
         let bytes = capture_program_output(
             "FN (BAR) = (PRINT \"ok\")\n\
              FN (FOO) = (BAR)\n\
@@ -251,27 +261,19 @@ mod tests {
 
     #[test]
     fn chained_user_fn_tail_calls_reuse_one_slot() {
-        // Three tail steps: A -> B -> PRINT. Each `KFunction::invoke` for a user-defined
-        // body returns `BodyResult::Tail(substituted_body)`; the scheduler rewrites the
-        // current node's work to `Dispatch(body)` and re-runs the same slot. After the
-        // chain completes, only one slot exists. Without TCO the chain would have produced
-        // at least three slots (A's, B's spawned Dispatch, PRINT's spawned Dispatch).
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
+        let scope = build_scope(&arena, captured.clone());
 
-        // Set up the user fns.
-        interpret(
+        run(
+            scope,
             "FN (B) = (PRINT \"ok\")\n\
              FN (A) = (B)",
-            &mut scope,
-        )
-        .expect("setup should run");
+        );
 
-        // Now drive A through a Scheduler we keep alive so we can inspect node count.
         let mut sched = Scheduler::new();
-        sched.add_dispatch(parse_one("A"));
-        sched.execute(&mut scope).expect("A should run");
+        sched.add_dispatch(parse_one("A"), scope);
+        sched.execute().expect("A should run");
 
         assert_eq!(captured.borrow().as_slice(), b"ok\n");
         assert_eq!(
@@ -284,10 +286,6 @@ mod tests {
 
     #[test]
     fn calling_user_fn_repeatedly_runs_body_each_time() {
-        // Each `GREET` is its own top-level Dispatch and produces its own observable
-        // PRINT side effect. Confirms per-call execution via captured stdout (the existing
-        // `fn_call_runs_body_each_time` test asserts the return value, this one asserts
-        // the side-effect output).
         let bytes = capture_program_output(
             "FN (GREET) = (PRINT \"hello world\")\n\
              GREET\n\
@@ -296,13 +294,8 @@ mod tests {
         assert_eq!(bytes, b"hello world\nhello world\n");
     }
 
-    // --- parameterized user-fns ------------------------------------------------
-
     #[test]
     fn fn_with_single_param_substitutes_at_call_site() {
-        // `(SAY x)` is a Keyword + Identifier signature: `[Keyword("SAY"), Argument(x: Any)]`.
-        // The body's `Identifier("x")` is rewritten to `Future(<call-site value>)` before
-        // dispatch, so PRINT sees a `Future(KString)` and matches its `msg: Str` slot.
         let bytes = capture_program_output(
             "FN (SAY x) = (PRINT x)\n\
              SAY \"hello\"",
@@ -321,9 +314,6 @@ mod tests {
 
     #[test]
     fn fn_with_infix_shape_dispatches_on_keyword_position() {
-        // `(a SAID)` is `[Argument(a: Any), Keyword("SAID")]` — the Keyword is in the
-        // *trailing* position so the call site reads `<value> SAID`. Confirms that the
-        // signature parser doesn't require the Keyword first; any arrangement works.
         let bytes = capture_program_output(
             "FN (a SAID) = (PRINT a)\n\
              \"hi\" SAID",
@@ -333,9 +323,6 @@ mod tests {
 
     #[test]
     fn fn_param_shadows_outer_binding_at_call_site() {
-        // The outer `LET msg = "outer"` binds `msg` in the program scope. The user-fn
-        // declares its own `msg` parameter; substitution rewrites `msg` in the body with
-        // the *call-site* value before dispatch, so the param wins over the outer binding.
         let bytes = capture_program_output(
             "LET msg = \"outer\"\n\
              FN (SAY msg) = (PRINT msg)\n\
@@ -346,10 +333,6 @@ mod tests {
 
     #[test]
     fn fn_param_substitutes_inside_nested_subexpression() {
-        // `(PRINT (x))` has `x` inside a parenthesized sub-Expression. Substitution must
-        // recurse into nested `ExpressionPart::Expression` parts, not just the top-level
-        // ones. After substitution the inner `(Future(...))` dispatches via `value_pass`
-        // and its result feeds PRINT.
         let bytes = capture_program_output(
             "FN (WRAP x) = (PRINT (x))\n\
              WRAP \"wrapped\"",
@@ -359,23 +342,22 @@ mod tests {
 
     #[test]
     fn fn_returns_param_value_directly() {
-        // Body is just `(x)` — value_lookup finds nothing because `x` isn't an Identifier
-        // anymore after substitution; instead `(Future(value))` resolves via `value_pass`.
-        // Confirms the param flows through as the user-fn's own return value.
-        let mut scope = default_scope();
-        interpret("FN (ECHO v) = (v)", &mut scope).expect("setup should run");
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (ECHO v) = (v)");
 
-        let result = run_one(&mut scope, parse_one("ECHO 7"));
+        let result = run_one(scope, parse_one("ECHO 7"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
     #[test]
     fn fn_signature_with_no_keyword_is_rejected() {
-        // `(x)` parses as a single Identifier — all-slot signature. That would shadow
-        // `value_lookup`/`value_pass` on every single-Identifier expression, so FN refuses
-        // to register it. Same gate that catches typos like `FN (greet) = ...` (lowercase).
-        let mut scope = default_scope();
-        interpret("FN (x) = (PRINT \"oops\")", &mut scope).expect("FN should run");
-        assert!(scope.data.get("x").is_none());
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (x) = (PRINT \"oops\")");
+        let data = scope.data.borrow();
+        assert!(data.get("x").is_none());
     }
 }

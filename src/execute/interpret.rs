@@ -1,17 +1,34 @@
-use crate::dispatch::scope::Scope;
+use crate::dispatch::arena::RuntimeArena;
+use crate::dispatch::builtins::default_scope;
 use crate::execute::scheduler::Scheduler;
 use crate::parse::expression_tree::parse;
 
-/// Parse Koan source and run it. The scheduler walks the AST itself — every top-level
-/// expression goes in as a single `Dispatch` node; the scheduler then handles nested
+/// Parse Koan source and run it. Each call constructs a fresh `RuntimeArena` and a per-run
+/// scope tree (the default scope with builtins registered, allocated in that arena); every
+/// value the program allocates lives in that arena and is dropped when this function returns.
+/// The scheduler walks the AST itself — every top-level expression goes in as a single
+/// `Dispatch` node bound to the run-root scope; the scheduler then handles nested
 /// sub-expressions, list literals, and lazy slots dynamically as nodes execute.
-pub fn interpret(source: &str, scope: &mut Scope<'static>) -> Result<(), String> {
+pub fn interpret(source: &str) -> Result<(), String> {
+    interpret_with_writer(source, Box::new(std::io::stdout()))
+}
+
+/// Same as `interpret` but lets the caller supply a writer for `PRINT` output. Tests use this
+/// to capture `PRINT` into a buffer; the CLI uses the default-stdout `interpret`. Constructs
+/// a fresh arena local to this call; everything the program allocates dies when this function
+/// returns.
+pub fn interpret_with_writer(
+    source: &str,
+    out: Box<dyn std::io::Write>,
+) -> Result<(), String> {
     let exprs = parse(source)?;
+    let arena = RuntimeArena::new();
+    let root = default_scope(&arena, out);
     let mut scheduler = Scheduler::new();
     for expr in exprs {
-        scheduler.add_dispatch(expr);
+        scheduler.add_dispatch(expr, root);
     }
-    scheduler.execute(scope)?;
+    scheduler.execute()?;
     Ok(())
 }
 
@@ -22,8 +39,8 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::dispatch::builtins::default_scope;
     use crate::dispatch::kobject::KObject;
+    use crate::dispatch::scope::Scope;
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 
@@ -35,37 +52,44 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
     }
 
+    /// Spin up an arena + default scope, run `source`, return (captured PRINT output, arena,
+    /// root scope) so the caller can inspect bindings before the arena drops at end of scope.
+    /// Each test that needs both stdout and post-run state uses this rig directly.
+    fn run<'a>(source: &str, arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
+        let exprs = parse(source).expect("parse should succeed");
+        let root = default_scope(arena, Box::new(SharedBuf(captured)));
+        let mut scheduler = Scheduler::new();
+        for expr in exprs {
+            scheduler.add_dispatch(expr, root);
+        }
+        scheduler.execute().expect("program should run");
+        root
+    }
+
     #[test]
     fn interprets_let_and_print() {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-
-        interpret("LET x = 42\nPRINT \"hello\"\n", &mut scope).unwrap();
+        let scope = run("LET x = 42\nPRINT \"hello\"\n", &arena, captured.clone());
 
         assert_eq!(captured.borrow().as_slice(), b"hello\n");
-        assert!(matches!(scope.data.get("x"), Some(KObject::Number(n)) if *n == 42.0));
+        let data = scope.data.borrow();
+        assert!(matches!(data.get("x"), Some(KObject::Number(n)) if *n == 42.0));
     }
 
     #[test]
     fn interprets_if_then_via_print() {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-
-        interpret(r#"PRINT (IF true THEN ("yes"))"#, &mut scope).unwrap();
-
+        run(r#"PRINT (IF true THEN ("yes"))"#, &arena, captured.clone());
         assert_eq!(captured.borrow().as_slice(), b"yes\n");
     }
 
     #[test]
     fn if_then_false_does_not_run_lazy_expression() {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-
-        interpret(r#"IF false THEN (PRINT "should not appear")"#, &mut scope).unwrap();
-
+        run(r#"IF false THEN (PRINT "should not appear")"#, &arena, captured.clone());
         assert!(
             captured.borrow().is_empty(),
             "lazy expression must not execute when predicate is false; got {:?}",
@@ -75,61 +99,55 @@ mod tests {
 
     #[test]
     fn if_then_true_runs_lazy_expression() {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-
-        interpret(r#"IF true THEN (PRINT "ran")"#, &mut scope).unwrap();
-
+        run(r#"IF true THEN (PRINT "ran")"#, &arena, captured.clone());
         assert_eq!(captured.borrow().as_slice(), b"ran\n");
     }
 
     #[test]
     fn if_then_lazy_value_lookup_resolves_name() {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-
-        interpret(
+        run(
             "LET greeting = \"hi\"\nPRINT (IF true THEN (greeting))\n",
-            &mut scope,
-        )
-        .unwrap();
-
-        // The lazy expression `(greeting)` dispatches to `value_lookup`, which finds the
-        // string bound by the prior LET and returns it for PRINT to write.
+            &arena,
+            captured.clone(),
+        );
         assert_eq!(captured.borrow().as_slice(), b"hi\n");
     }
 
     #[test]
     fn if_then_false_skips_let_side_effect() {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-
-        interpret("IF false THEN (LET y = 1)\nPRINT \"after\"\n", &mut scope).unwrap();
-
-        assert!(scope.data.get("y").is_none(), "lazy LET must not have bound y");
+        let scope = run(
+            "IF false THEN (LET y = 1)\nPRINT \"after\"\n",
+            &arena,
+            captured.clone(),
+        );
+        assert!(scope.data.borrow().get("y").is_none(), "lazy LET must not have bound y");
         assert_eq!(captured.borrow().as_slice(), b"after\n");
     }
 
     #[test]
     fn interprets_nested_expression() {
+        let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let mut scope = default_scope();
-        scope.out = Box::new(SharedBuf(captured.clone()));
-
-        interpret(r#"(PRINT (LET msg = "hello world!"))"#, &mut scope).unwrap();
+        let scope = run(r#"(PRINT (LET msg = "hello world!"))"#, &arena, captured.clone());
 
         assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
-        assert!(matches!(scope.data.get("msg"), Some(KObject::KString(s)) if s == "hello world!"));
+        let data = scope.data.borrow();
+        assert!(matches!(data.get("msg"), Some(KObject::KString(s)) if *s == "hello world!"));
     }
 
     #[test]
     fn let_binds_a_list_literal_of_numbers() {
-        let mut scope = default_scope();
-        interpret("LET xs = [1 2 3]\n", &mut scope).unwrap();
-        match scope.data.get("xs") {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let scope = run("LET xs = [1 2 3]\n", &arena, captured);
+        let data = scope.data.borrow();
+        match data.get("xs") {
             Some(KObject::List(items)) => {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
@@ -141,9 +159,11 @@ mod tests {
 
     #[test]
     fn let_binds_an_empty_list_literal() {
-        let mut scope = default_scope();
-        interpret("LET xs = []\n", &mut scope).unwrap();
-        match scope.data.get("xs") {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let scope = run("LET xs = []\n", &arena, captured);
+        let data = scope.data.borrow();
+        match data.get("xs") {
             Some(KObject::List(items)) => assert!(items.is_empty()),
             _ => panic!("expected `xs` bound to an empty List"),
         }
@@ -153,9 +173,11 @@ mod tests {
     fn list_literal_with_subexpression_element_evaluates_eagerly() {
         // `(LET y = 7)` evaluates as part of the list construction; afterwards `y` is bound
         // and the list contains the LET's return value (the bound number).
-        let mut scope = default_scope();
-        interpret("LET xs = [1 (LET y = 7) 3]\n", &mut scope).unwrap();
-        match scope.data.get("xs") {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let scope = run("LET xs = [1 (LET y = 7) 3]\n", &arena, captured);
+        let data = scope.data.borrow();
+        match data.get("xs") {
             Some(KObject::List(items)) => {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
@@ -164,18 +186,16 @@ mod tests {
             }
             _ => panic!("expected `xs` bound to a List"),
         }
-        assert!(matches!(scope.data.get("y"), Some(KObject::Number(n)) if *n == 7.0));
+        assert!(matches!(data.get("y"), Some(KObject::Number(n)) if *n == 7.0));
     }
 
     #[test]
     fn multiline_list_literal_binds_correctly() {
-        // The `[` opens on line 1, elements span the next three lines, `]` closes on line 5.
-        // `collapse_whitespace` is bracket-aware, so the continuation lines are appended into
-        // the list span instead of being wrapped as indented children.
-        let src = "LET xs = [\n  1\n  2\n  3\n]\n";
-        let mut scope = default_scope();
-        interpret(src, &mut scope).unwrap();
-        match scope.data.get("xs") {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let scope = run("LET xs = [\n  1\n  2\n  3\n]\n", &arena, captured);
+        let data = scope.data.borrow();
+        match data.get("xs") {
             Some(KObject::List(items)) => {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
@@ -187,9 +207,11 @@ mod tests {
 
     #[test]
     fn nested_list_literal_produces_list_of_lists() {
-        let mut scope = default_scope();
-        interpret("LET xs = [[1 2] [3 4]]\n", &mut scope).unwrap();
-        match scope.data.get("xs") {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let scope = run("LET xs = [[1 2] [3 4]]\n", &arena, captured);
+        let data = scope.data.borrow();
+        match data.get("xs") {
             Some(KObject::List(outer)) => {
                 assert_eq!(outer.len(), 2);
                 match &outer[0] {

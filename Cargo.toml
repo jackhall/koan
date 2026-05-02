@@ -9,3 +9,4 @@ path = "src/main.rs"
 
 [dependencies]
 regex = "1.12.3"
+typed-arena = "2"

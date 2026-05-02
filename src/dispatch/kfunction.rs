@@ -64,21 +64,39 @@ pub trait SchedulerHandle<'a> {
 }
 
 /// What a builtin's body returns. `Value` is the common case — the body computed its result
-/// inline. `Tail(expr)` says "my result is whatever this expression produces, evaluate it in
-/// place"; the scheduler rewrites the current node's work to a fresh `Dispatch(expr)` and
-/// re-runs the same slot, so a chain of tail calls (or unbounded tail recursion) reuses one
-/// slot rather than allocating a new one per step. Used by `if_then` for its lazy `value`
-/// slot and by `KFunction::invoke` for `Body::UserDefined`.
+/// inline. `Tail { expr, scope }` says "my result is whatever this expression produces,
+/// evaluate it in place"; the scheduler rewrites the current node's work to a fresh
+/// `Dispatch(expr)` and re-runs the same slot. `scope = Some(s)` rebinds the slot to evaluate
+/// against `s` (used by `KFunction::invoke` for user-defined bodies, which install a per-call
+/// child scope holding parameter bindings). `scope = None` keeps the slot's current scope
+/// (used by `if_then` for its lazy `value` slot). A chain of tail calls reuses one slot
+/// rather than allocating a new one per step.
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
-    Tail(KExpression<'a>),
+    Tail { expr: KExpression<'a>, scope: Option<&'a Scope<'a>> },
+}
+
+impl<'a> BodyResult<'a> {
+    /// Tail return that keeps the current node's scope. Used by builtins like `if_then` whose
+    /// lazy slot evaluates in the same scope as the original call.
+    pub fn tail(expr: KExpression<'a>) -> Self {
+        BodyResult::Tail { expr, scope: None }
+    }
+
+    /// Tail return that switches the slot to a new scope. Used by `KFunction::invoke` for
+    /// user-defined bodies — `scope` is a per-call child scope holding the bound parameters.
+    pub fn tail_with_scope(expr: KExpression<'a>, scope: &'a Scope<'a>) -> Self {
+        BodyResult::Tail { expr, scope: Some(scope) }
+    }
 }
 
 /// A function pointer that implements a builtin `KFunction`'s body. `for<'a>` so a single `fn`
 /// works for any caller scope lifetime; the `&mut dyn SchedulerHandle<'a>` is the lever a body
-/// uses to defer sub-expression evaluation back to the scheduler.
+/// uses to defer sub-expression evaluation back to the scheduler. `Scope` is shared (`&'a`)
+/// rather than `&mut` because a single scope reference is used by every node spawned during a
+/// per-call body's evaluation; mutability is interior (RefCell).
 pub type BuiltinFn = for<'a> fn(
-    &mut Scope<'a>,
+    &'a Scope<'a>,
     &mut dyn SchedulerHandle<'a>,
     ArgumentBundle<'a>,
 ) -> BodyResult<'a>;
@@ -92,20 +110,26 @@ pub enum Body<'a> {
     UserDefined(KExpression<'a>),
 }
 
-/// A callable Koan function: its `ExpressionSignature` (the call shape it matches), an optional
-/// reference to the `Scope` where it was defined (`None` for builtins), and the body
-/// implementation. `Scope::dispatch` finds the right `KFunction` by signature and then `bind`s a
-/// `KExpression` into a `KFuture`; the body runs via `KFunction::invoke` at execute time.
+/// A callable Koan function: its `ExpressionSignature` (the call shape it matches) and the
+/// body implementation. `Scope::dispatch` finds the right `KFunction` by signature and then
+/// `bind`s a `KExpression` into a `KFuture`; the body runs via `KFunction::invoke` at execute
+/// time.
+///
+/// The previously-present `scope: Option<&'a Scope<'a>>` field (intended for closures —
+/// capturing the defining scope) was removed because it was always `None` and made
+/// `KFunction<'a>` invariant in `'a` (because `Scope<'a>` is invariant via its `RefCell`s),
+/// which prevented the `'static`-leaked builtin registrations from coercing into a
+/// shorter-lived run-root scope. The closures roadmap item will restore a captured scope by
+/// some other mechanism (probably a separate per-function arena handle).
 pub struct KFunction<'a> {
-    pub scope: Option<&'a Scope<'a>>,
     pub signature: ExpressionSignature,
     pub body: Body<'a>,
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(scope: Option<&'a Scope<'a>>, mut signature: ExpressionSignature, body: Body<'a>) -> Self {
+    pub fn new(mut signature: ExpressionSignature, body: Body<'a>) -> Self {
         signature.normalize();
-        Self { scope, signature, body }
+        Self { signature, body }
     }
 
     pub fn summarize(&self) -> String {
