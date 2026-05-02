@@ -55,7 +55,7 @@ mod tests {
         let mut sched = Scheduler::new();
         match body(scope, &mut sched, bundle) {
             BodyResult::Value(v) => v,
-            BodyResult::Defer(_) => panic!("value_lookup should not defer"),
+            BodyResult::Tail(_) => panic!("value_lookup should not produce a Tail"),
         }
     }
 

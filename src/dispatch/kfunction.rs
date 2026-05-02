@@ -64,12 +64,14 @@ pub trait SchedulerHandle<'a> {
 }
 
 /// What a builtin's body returns. `Value` is the common case — the body computed its result
-/// inline. `Defer` says "my result is whatever node `id` eventually produces"; the scheduler
-/// forwards through the chain when later code reads the body's host node. Used by `if_then`
-/// for its lazy `value` slot and by `KFunction::invoke` for `Body::UserDefined`.
+/// inline. `Tail(expr)` says "my result is whatever this expression produces, evaluate it in
+/// place"; the scheduler rewrites the current node's work to a fresh `Dispatch(expr)` and
+/// re-runs the same slot, so a chain of tail calls (or unbounded tail recursion) reuses one
+/// slot rather than allocating a new one per step. Used by `if_then` for its lazy `value`
+/// slot and by `KFunction::invoke` for `Body::UserDefined`.
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
-    Defer(NodeId),
+    Tail(KExpression<'a>),
 }
 
 /// A function pointer that implements a builtin `KFunction`'s body. `for<'a>` so a single `fn`

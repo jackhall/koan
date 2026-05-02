@@ -56,7 +56,7 @@ mod tests {
 
         let result = match body(&mut scope, &mut sched, ArgumentBundle { args }) {
             BodyResult::Value(v) => v,
-            BodyResult::Defer(_) => panic!("value_pass should not defer"),
+            BodyResult::Tail(_) => panic!("value_pass should not produce a Tail"),
         };
 
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));

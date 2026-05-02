@@ -236,17 +236,50 @@ mod tests {
 
     #[test]
     fn user_fn_calls_user_fn_transitively() {
-        // FOO's body is just `(BAR)` — calling another user fn. The forward chain runs
-        // FOO -> spawned Dispatch for `(BAR)` -> spawned Dispatch for BAR's body -> PRINT.
-        // Tests that `BodyResult::Defer` composes through multiple layers without losing
-        // the final value (the bind that depends on FOO's result correctly waits for
-        // BAR's downstream PRINT to complete before reading).
+        // FOO's body is just `(BAR)` — calling another user fn. With TCO, FOO's invocation
+        // returns `Tail(BAR)`, which the scheduler resolves by rewriting FOO's slot to
+        // `Dispatch(BAR)` in place. BAR then returns `Tail((PRINT "ok"))` and the slot is
+        // rewritten again. Each tail step reuses the same slot — see
+        // `chained_user_fn_tail_calls_reuse_one_slot` for the explicit slot-count assertion.
         let bytes = capture_program_output(
             "FN (BAR) = (PRINT \"ok\")\n\
              FN (FOO) = (BAR)\n\
              FOO",
         );
         assert_eq!(bytes, b"ok\n");
+    }
+
+    #[test]
+    fn chained_user_fn_tail_calls_reuse_one_slot() {
+        // Three tail steps: A -> B -> PRINT. Each `KFunction::invoke` for a user-defined
+        // body returns `BodyResult::Tail(substituted_body)`; the scheduler rewrites the
+        // current node's work to `Dispatch(body)` and re-runs the same slot. After the
+        // chain completes, only one slot exists. Without TCO the chain would have produced
+        // at least three slots (A's, B's spawned Dispatch, PRINT's spawned Dispatch).
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut scope = default_scope();
+        scope.out = Box::new(SharedBuf(captured.clone()));
+
+        // Set up the user fns.
+        interpret(
+            "FN (B) = (PRINT \"ok\")\n\
+             FN (A) = (B)",
+            &mut scope,
+        )
+        .expect("setup should run");
+
+        // Now drive A through a Scheduler we keep alive so we can inspect node count.
+        let mut sched = Scheduler::new();
+        sched.add_dispatch(parse_one("A"));
+        sched.execute(&mut scope).expect("A should run");
+
+        assert_eq!(captured.borrow().as_slice(), b"ok\n");
+        assert_eq!(
+            sched.len(),
+            1,
+            "tail-call slot reuse: A -> B -> PRINT should collapse into one slot, got {}",
+            sched.len(),
+        );
     }
 
     #[test]

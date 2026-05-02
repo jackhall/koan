@@ -11,13 +11,13 @@ use crate::try_args;
 use super::{null, register_builtin};
 
 /// `IF <predicate:Bool> THEN <value:KExpression>` — the lazy form. When `predicate` is false,
-/// the captured `value` expression is never touched. When true, hands the captured expression
-/// to the scheduler as a `Dispatch` node and forwards `if_then`'s own result through it; the
-/// scheduler then walks the value's AST, evaluates any nested sub-expressions, and runs the
-/// final body in topological order.
+/// the captured `value` expression is never touched. When true, returns the captured expression
+/// as a `Tail`: the scheduler rewrites the if_then's own slot to a fresh `Dispatch(value)` and
+/// re-runs in place, walking the value's AST, evaluating sub-expressions, and producing its
+/// result — all in the slot the if_then originally occupied.
 pub fn body<'a>(
     _scope: &mut Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     try_args!(bundle, return null(); predicate: Bool);
@@ -36,7 +36,7 @@ pub fn body<'a>(
             _ => return null(),
         },
     };
-    BodyResult::Defer(sched.add_dispatch(expr))
+    BodyResult::Tail(expr)
 }
 
 pub fn register(scope: &mut Scope<'static>) {

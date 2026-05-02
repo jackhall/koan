@@ -8,13 +8,22 @@ use crate::dispatch::scope::{KFuture, Scope};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 /// What a scheduler node will produce when its work runs. `Value` is computed inline; `Forward`
-/// says "my result is whatever node `id` produces" — set when a `Dispatch` defers to a `Bind`
-/// it spawned, or when a builtin body returns `BodyResult::Defer`. `read_result` follows
-/// `Forward` chains until it lands on a `Value`. Cycles are statically prevented because every
-/// `NodeId` produced by `add_*` is strictly greater than every `NodeId` it could forward to.
+/// says "my result is whatever node `id` produces" — set when a `Dispatch` spawns a `Bind` for
+/// its sub-expression deps. `read_result` follows `Forward` chains until it lands on a `Value`.
+/// Cycles are statically prevented because every `NodeId` produced by `add_*` is strictly
+/// greater than every `NodeId` it could forward to.
 enum NodeOutput<'a> {
     Value(&'a KObject<'a>),
     Forward(NodeId),
+}
+
+/// What `run_dispatch`/`run_bind` tells the execute loop to do next. `Done(output)` stores the
+/// output at the current node's slot — the normal path. `Replace(work)` is the tail-call path:
+/// rewrite the current node's `work` and re-enqueue the same `idx` so it runs again with the
+/// new work. Constant memory across tail-call sequences because no fresh slot is allocated.
+enum NodeStep<'a> {
+    Done(NodeOutput<'a>),
+    Replace(NodeWork<'a>),
 }
 
 /// What a scheduler node will run.
@@ -87,12 +96,13 @@ impl<'a> Scheduler<'a> {
         id
     }
 
-    /// Drain the FIFO queue. A `Bind` or `Aggregate` whose subs forward through to a not-yet-
-    /// resolved node (which happens when a builtin body deferred via `BodyResult::Defer` to a
-    /// node added later) gets re-queued at the back; the deferred-to node will eventually run
-    /// and the next pop of the bind will find a resolved chain. Returns each node's final
-    /// resolved `KObject` indexed by `NodeId`.
-    pub fn execute(mut self, scope: &mut Scope<'a>) -> Result<Vec<&'a KObject<'a>>, String> {
+    /// Drain the FIFO queue. A `Bind`/`Aggregate` whose subs forward through to a not-yet-
+    /// resolved node gets re-queued at the back. A node whose work returns `NodeStep::Replace`
+    /// (the tail-call path) gets its work rewritten and re-enqueued at the *front* so the same
+    /// slot runs again with the new work — no new allocation. Returns each top-level node's
+    /// final resolved `KObject` indexed by `NodeId`. Takes `&mut self` so callers (and tests)
+    /// can inspect post-run state like `nodes.len()`.
+    pub fn execute(&mut self, scope: &mut Scope<'a>) -> Result<Vec<&'a KObject<'a>>, String> {
         while let Some(idx) = self.queue.pop_front() {
             let node = self.nodes[idx]
                 .take()
@@ -107,12 +117,18 @@ impl<'a> Scheduler<'a> {
                     continue;
                 }
             }
-            let output = match work {
+            let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope)?,
-                NodeWork::Aggregate { elements } => self.run_aggregate(elements),
+                NodeWork::Aggregate { elements } => NodeStep::Done(self.run_aggregate(elements)),
             };
-            self.results[idx] = Some(output);
+            match step {
+                NodeStep::Done(output) => self.results[idx] = Some(output),
+                NodeStep::Replace(new_work) => {
+                    self.nodes[idx] = Some(Node { work: new_work });
+                    self.queue.push_front(idx);
+                }
+            }
         }
         let n = self.results.len();
         Ok((0..n).map(|i| self.read_result(NodeId(i))).collect())
@@ -135,13 +151,15 @@ impl<'a> Scheduler<'a> {
     /// eager-position `Expression` parts; the lazy positions ride through as `KExpression`
     /// data into a builtin slot typed `KExpression` (`if_then`, `FN`). Otherwise schedule
     /// every `Expression` (and `ListLiteral`) part as a sub-dispatch / aggregate dep.
-    /// Returns `Value` if dispatch + invoke happens inline (no nesting); `Forward(bind_id)`
-    /// when it had to emit a `Bind` to wait on subs.
+    /// Returns a `NodeStep`: `Done(Value)` for an inline-dispatched body that produced a
+    /// value, `Done(Forward(bind_id))` when it spawned a `Bind` to wait on subs, or
+    /// `Replace(Dispatch(expr))` when the body was a tail call (the slot gets rewritten
+    /// in place by the execute loop).
     fn run_dispatch(
         &mut self,
         expr: KExpression<'a>,
         scope: &mut Scope<'a>,
-    ) -> Result<NodeOutput<'a>, String> {
+    ) -> Result<NodeStep<'a>, String> {
         if let Some(eager_indices) = scope.lazy_candidate(&expr) {
             let mut parts = expr.parts;
             let mut subs = Vec::with_capacity(eager_indices.len());
@@ -159,10 +177,10 @@ impl<'a> Scheduler<'a> {
             let parent = KExpression { parts };
             if subs.is_empty() {
                 let future = scope.dispatch(parent)?;
-                return Ok(self.invoke_to_output(future, scope));
+                return Ok(self.invoke_to_step(future, scope));
             }
             let bind_id = self.add(NodeWork::Bind { expr: parent, subs });
-            return Ok(NodeOutput::Forward(bind_id));
+            return Ok(NodeStep::Done(NodeOutput::Forward(bind_id)));
         }
 
         let mut new_parts = Vec::with_capacity(expr.parts.len());
@@ -186,10 +204,10 @@ impl<'a> Scheduler<'a> {
         let new_expr = KExpression { parts: new_parts };
         if subs.is_empty() {
             let future = scope.dispatch(new_expr)?;
-            return Ok(self.invoke_to_output(future, scope));
+            return Ok(self.invoke_to_step(future, scope));
         }
         let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs });
-        Ok(NodeOutput::Forward(bind_id))
+        Ok(NodeStep::Done(NodeOutput::Forward(bind_id)))
     }
 
     fn run_bind(
@@ -197,13 +215,13 @@ impl<'a> Scheduler<'a> {
         mut expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
         scope: &mut Scope<'a>,
-    ) -> Result<NodeOutput<'a>, String> {
+    ) -> Result<NodeStep<'a>, String> {
         for (part_idx, dep_id) in subs {
             let value = self.read_result(dep_id);
             expr.parts[part_idx] = ExpressionPart::Future(value);
         }
         let future = scope.dispatch(expr)?;
-        Ok(self.invoke_to_output(future, scope))
+        Ok(self.invoke_to_step(future, scope))
     }
 
     fn run_aggregate(&self, elements: Vec<AggregateElement<'a>>) -> NodeOutput<'a> {
@@ -236,10 +254,15 @@ impl<'a> Scheduler<'a> {
         self.add(NodeWork::Aggregate { elements })
     }
 
-    fn invoke_to_output(&mut self, future: KFuture<'a>, scope: &mut Scope<'a>) -> NodeOutput<'a> {
+    /// Run a bound future's body and translate its `BodyResult` into a `NodeStep`. `Value`
+    /// becomes `Done(Value)` — the slot stores the result. `Tail(expr)` becomes
+    /// `Replace(Dispatch(expr))` — the execute loop rewrites the current slot's work and
+    /// re-runs it, producing the tail-call slot reuse that keeps recursion at constant
+    /// scheduler memory.
+    fn invoke_to_step(&mut self, future: KFuture<'a>, scope: &mut Scope<'a>) -> NodeStep<'a> {
         match future.function.invoke(scope, self, future.bundle) {
-            BodyResult::Value(v) => NodeOutput::Value(v),
-            BodyResult::Defer(nid) => NodeOutput::Forward(nid),
+            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::Tail(expr) => NodeStep::Replace(NodeWork::Dispatch(expr)),
         }
     }
 
@@ -292,8 +315,10 @@ impl<'a> KFunction<'a> {
     /// their `fn` pointer with the scheduler handle. User-defined functions:
     ///   1. Substitute each parameter `Identifier` in the body with `Future(value)` for the
     ///      bound argument, recursing into nested sub-expressions and list literals.
-    ///   2. Hand the substituted body to the scheduler via `add_dispatch` and forward the
-    ///      result through the spawned node.
+    ///   2. Return the substituted body as `BodyResult::Tail` so the scheduler rewrites the
+    ///      caller's own slot to a fresh `Dispatch` of the body — a tail call reuses the
+    ///      caller's slot in place rather than spawning a new node and forwarding to it.
+    ///      Recursive user-fns therefore run in constant scheduler memory.
     /// Substitution rather than a child scope is the first-cut tradeoff: it handles the
     /// common case (parameters referenced by name in the body) without the per-call scope
     /// allocation the leak-fix roadmap item will need to handle anyway. The cost is that
@@ -309,8 +334,7 @@ impl<'a> KFunction<'a> {
         match &self.body {
             Body::Builtin(f) => f(scope, sched, bundle),
             Body::UserDefined(expr) => {
-                let substituted = substitute_params(expr.clone(), &bundle);
-                BodyResult::Defer(sched.add_dispatch(substituted))
+                BodyResult::Tail(substitute_params(expr.clone(), &bundle))
             }
         }
     }
@@ -409,5 +433,38 @@ mod tests {
 
         sched.execute(&mut scope).unwrap();
         assert!(matches!(scope.data.get("b"), Some(KObject::Number(n)) if *n == 10.0));
+    }
+
+    #[test]
+    fn tail_call_reuses_node_slot_in_place() {
+        // `IF true THEN ("hi")` — when the predicate is true, `if_then` returns
+        // `BodyResult::Tail(value_expr)`. The scheduler should rewrite the if_then's own
+        // slot to a `Dispatch(value_expr)` and re-run, NOT spawn a fresh slot and forward.
+        // Without TCO this would land at len() == 2 (one slot for if_then, one for the
+        // value evaluation). With TCO, len() == 1 — the if_then's slot was reused.
+        let mut scope = default_scope();
+        let mut sched = Scheduler::new();
+        let value = KExpression {
+            parts: vec![ExpressionPart::Literal(KLiteral::String("hi".into()))],
+        };
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("IF".into()),
+                ExpressionPart::Literal(KLiteral::Boolean(true)),
+                ExpressionPart::Keyword("THEN".into()),
+                ExpressionPart::Expression(Box::new(value)),
+            ],
+        };
+        let id = sched.add_dispatch(expr);
+
+        let results = sched.execute(&mut scope).unwrap();
+
+        assert!(matches!(results[id.index()], KObject::KString(s) if s == "hi"));
+        assert_eq!(
+            sched.len(),
+            1,
+            "tail-call slot reuse: the if_then's original slot should have been rewritten \
+             to evaluate `(\"hi\")`, not allocate a new slot",
+        );
     }
 }

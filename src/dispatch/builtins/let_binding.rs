@@ -70,7 +70,7 @@ mod tests {
 
         let value = match result {
             BodyResult::Value(v) => v,
-            BodyResult::Defer(_) => panic!("LET should not defer"),
+            BodyResult::Tail(_) => panic!("LET should not produce a Tail"),
         };
         assert!(matches!(value, KObject::Number(n) if *n == 42.0));
         let entry = scope.data.get("x").expect("expected binding 'x'");
