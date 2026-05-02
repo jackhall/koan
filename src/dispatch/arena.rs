@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use typed_arena::Arena;
 
 use super::kfunction::KFunction;
@@ -57,10 +61,28 @@ impl RuntimeArena {
         let stored: &'a mut Scope<'static> = self.scopes.alloc(static_s);
         unsafe { std::mem::transmute::<&'a mut Scope<'static>, &'a Scope<'a>>(stored) }
     }
+
+    /// How many `KFunction`s have been allocated into this arena. Used by `lift_kobject`'s
+    /// fast path: when this is zero, no value can hold a `&KFunction` (whether directly via
+    /// `KObject::KFunction` or indirectly via a `KFuture`'s `function` field) pointing into
+    /// this arena, so the lift's recursive walk has nothing to attach an `Rc` to and can
+    /// collapse to a plain `deep_clone`. `typed_arena::Arena::len()` is O(1).
+    pub fn functions_len(&self) -> usize { self.functions.len() }
 }
 
 impl Default for RuntimeArena {
     fn default() -> Self { Self::new() }
+}
+
+#[cfg(test)]
+impl RuntimeArena {
+    /// Total number of values stored across the three sub-arenas. Test-only — used by the
+    /// per-call-arena leak regression test to prove the run-root arena's growth is bounded
+    /// across many user-fn calls. `typed_arena::Arena::len()` is O(1) and counts allocations
+    /// since arena construction.
+    pub fn alloc_count(&self) -> usize {
+        self.objects.len() + self.functions.len() + self.scopes.len()
+    }
 }
 
 /// Wrapper that lets us put a `KObject` in a `static`. `KObject` isn't `Sync` because some
@@ -92,4 +114,77 @@ pub fn true_singleton<'a>() -> &'a KObject<'a> {
 /// Singleton `&KObject::Bool(false)`.
 pub fn false_singleton<'a>() -> &'a KObject<'a> {
     unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(&FALSE_HOLDER.0) }
+}
+
+/// One user-fn call's allocation frame. Owns its own `RuntimeArena` for the per-call child
+/// `Scope`, parameter clones, and the substituted body's identifier→`Future` rewrites.
+///
+/// Reference-counted (`Rc<CallArena>`) so the arena's lifetime can be extended past slot
+/// finalize when something else holds a reference — e.g., a closure that captured this
+/// frame's scope and escaped via the body's return. The slot drops its Rc on finalize; if
+/// no other Rc is held, the arena drops at that moment (matching the pre-Rc behavior). If
+/// a closure carries a clone of the Rc, the arena lives until that closure is gone.
+///
+/// No `prev` chain: lexical scoping (closure capture in `KFunction::captured`) means each
+/// per-call child's `outer` is the FN's *captured* scope (run-root for top-level FNs), not
+/// the previous call's per-call scope. So previous frames hold no references the current
+/// frame's child needs, and they can drop immediately on TCO replace.
+///
+/// SAFETY: `CallArena` is only ever heap-pinned via `Rc` (which boxes its inner). The
+/// `arena` field's heap address is stable for the Rc's life, so the `scope_ptr` (which
+/// points into `arena.scopes`) stays valid as long as the Rc is alive. Accessors `scope()`
+/// and `arena()` re-attach lifetimes anchored to the borrow of `&CallArena`. Field
+/// declaration order keeps `arena` first so the auto-derived `Drop` runs `arena`'s cleanup
+/// before any later field — matches "inner allocations die before outer pointers."
+pub struct CallArena {
+    arena: RuntimeArena,
+    scope_ptr: *const Scope<'static>,
+}
+
+impl CallArena {
+    /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
+    /// `outer` is the FN's captured definition scope (or, for callers that don't have a
+    /// captured scope, the call-site scope as a fallback). The returned `Rc` owns the arena
+    /// and the child scope; `Node::frame` takes one clone, and any closure that escapes the
+    /// call may take additional clones (Stages 2 & 3).
+    pub fn new<'p>(outer: &'p Scope<'p>) -> Rc<CallArena> {
+        // Build the CallArena directly into the Rc allocation. `Rc::new` heap-pins, so the
+        // inner `arena`'s address is stable for the Rc's lifetime — the same property the
+        // previous `Box`-based design relied on. We need to mutate `scope_ptr` after
+        // allocation; do this via `Rc::get_mut` while we still hold the unique reference
+        // (no clones have been made yet).
+        let mut rc = Rc::new(CallArena {
+            arena: RuntimeArena::new(),
+            scope_ptr: std::ptr::null(),
+        });
+        let arena_ptr: *const RuntimeArena = &rc.arena;
+        // SAFETY: heap-pinning keeps `arena_ptr` valid for the Rc's lifetime, which exceeds
+        // this function's duration; `outer` lives long enough by caller contract.
+        let arena_ref: &'static RuntimeArena = unsafe { &*arena_ptr };
+        let outer_static: &Scope<'static> = unsafe {
+            std::mem::transmute::<&Scope<'_>, &Scope<'static>>(outer)
+        };
+        let child = Scope {
+            outer: Some(outer_static),
+            data: RefCell::new(HashMap::new()),
+            functions: RefCell::new(HashMap::new()),
+            out: RefCell::new(None),
+            arena: arena_ref,
+        };
+        let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
+        let scope_ptr = allocated as *const Scope<'_> as *const Scope<'static>;
+        // Unique reference at this point — no clones exist yet. `get_mut` is safe.
+        Rc::get_mut(&mut rc)
+            .expect("freshly-constructed Rc has unique ownership")
+            .scope_ptr = scope_ptr;
+        rc
+    }
+
+    pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
+        unsafe {
+            std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.scope_ptr)
+        }
+    }
+
+    pub fn arena<'a>(&'a self) -> &'a RuntimeArena { &self.arena }
 }

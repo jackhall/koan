@@ -20,6 +20,19 @@ pub struct KFuture<'a> {
     pub bundle: ArgumentBundle<'a>,
 }
 
+impl<'a> KFuture<'a> {
+    /// Recursive clone. The `function` reference is shared (KFunctions are arena-allocated
+    /// and immutable); `parsed` clones the AST; `bundle` deep-clones each argument value into
+    /// fresh `Rc`s so the clone is independent of the original.
+    pub fn deep_clone(&self) -> KFuture<'a> {
+        KFuture {
+            parsed: self.parsed.clone(),
+            function: self.function,
+            bundle: self.bundle.deep_clone(),
+        }
+    }
+}
+
 /// Lexical environment. `functions` buckets overloads by their *untyped signature* — the
 /// arrangement of fixed tokens and slots with slot types erased — so dispatch can pick
 /// between same-shape overloads by `KType` specificity. `out` is pluggable so tests and
@@ -34,7 +47,7 @@ pub struct Scope<'a> {
     pub data: RefCell<HashMap<String, &'a KObject<'a>>>,
     pub functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
-    pub arena: Option<&'a RuntimeArena>,
+    pub arena: &'a RuntimeArena,
 }
 
 impl<'a> Scope<'a> {
@@ -46,27 +59,44 @@ impl<'a> Scope<'a> {
             data: RefCell::new(HashMap::new()),
             functions: RefCell::new(HashMap::new()),
             out: RefCell::new(Some(out)),
-            arena: Some(arena),
+            arena,
         }
     }
 
-    /// Build a child scope parented to `self`, sharing its arena. Used by `KFunction::invoke`
-    /// to create per-call frames for user-defined functions: parameters get bound into the
-    /// child's `data`, free names resolve via the `outer` walk to the call-site scope.
+    /// Build a child scope parented to `self`, sharing its arena. Used by tests that don't
+    /// distinguish lexical from dynamic scoping; `KFunction::invoke` uses `child_under`
+    /// instead so the child's `outer` is the FN's *captured* scope, not the call site.
     pub fn child_for_call(&'a self) -> Scope<'a> {
+        Self::child_under(self)
+    }
+
+    /// Build a child scope with an explicit `outer` pointer. Used by `KFunction::invoke` for
+    /// user-defined bodies — `outer` is the FN's captured definition scope (lexical scoping),
+    /// not the call site. The child shares `outer`'s arena.
+    pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Scope {
-            outer: Some(self),
+            outer: Some(outer),
             data: RefCell::new(HashMap::new()),
             functions: RefCell::new(HashMap::new()),
             out: RefCell::new(None),
-            arena: self.arena,
+            arena: outer.arena,
         }
     }
 
     pub fn add(&self, name: String, obj: &'a KObject<'a>) {
-        if let KObject::KFunction(f) = obj {
+        if let KObject::KFunction(f, _) = obj {
+            // Dedupe by pointer: rebinding the same KFunction under a new name (e.g.,
+            // `LET f = SOME_FN`) must not push a second copy into the dispatch bucket, or
+            // `pick` would see two equally-specific candidates and report ambiguity.
+            // KFunctions are arena-allocated and never moved, so pointer equality is
+            // sufficient.
             let key = f.signature.untyped_key();
-            self.functions.borrow_mut().entry(key).or_default().push(*f);
+            let f_ref: &'a KFunction<'a> = *f;
+            let mut functions = self.functions.borrow_mut();
+            let bucket = functions.entry(key).or_default();
+            if !bucket.iter().any(|existing| std::ptr::eq(*existing, f_ref)) {
+                bucket.push(f_ref);
+            }
         }
         self.data.borrow_mut().insert(name, obj);
     }
@@ -98,6 +128,12 @@ impl<'a> Scope<'a> {
     /// Resolve `expr` against this scope's functions, walking `outer` on miss so child scopes
     /// inherit from their parents. Ambiguity does *not* fall through to `outer` — the inner
     /// scope had a real conflict, and silently shadowing it would hide it from the author.
+    ///
+    /// Function-as-value calls (e.g., `LET f = (FN ...)` then `f (args)`) do not live here:
+    /// they go through the [`call_by_name`](super::builtins::call_by_name) builtin, whose
+    /// signature `[Identifier, KExpression]` matches identifier-leading expressions and
+    /// synthesizes a re-dispatchable expression by weaving the looked-up function's keyword
+    /// tokens back in.
     pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, String> {
         match self.pick(&expr) {
             Pick::One(f) => return f.bind(expr),
@@ -113,6 +149,17 @@ impl<'a> Scope<'a> {
             return outer.dispatch(expr);
         }
         Err(format!("no matching function for {}", expr.summarize()))
+    }
+
+    /// Look up `name` in the scope chain and return the bound `KFunction`, or `None` if the
+    /// name is unbound or bound to a non-function value. Used by the
+    /// [`call_by_name`](super::builtins::call_by_name) builtin to resolve identifier-leading
+    /// expressions to the function they should invoke.
+    pub fn lookup_kfunction(&self, name: &str) -> Option<&'a KFunction<'a>> {
+        match self.lookup(name)? {
+            KObject::KFunction(f, _) => Some(*f),
+            _ => None,
+        }
     }
 
     /// Find a "lazy candidate" for `expr`: a matching function with at least one
@@ -226,23 +273,6 @@ fn lazy_eager_indices(f: &KFunction<'_>, expr: &KExpression<'_>) -> Option<Vec<u
 }
 
 #[cfg(test)]
-impl<'a> Scope<'a> {
-    /// Test-only constructor: a root scope with no bindings, no arena, and a swallowing
-    /// writer. Generic over `'a` so callers can chain it under a stack-borrowed outer scope
-    /// without fighting `'static`. Tests that need to exercise allocation should use
-    /// `Scope::run_root` with a real `RuntimeArena`.
-    pub fn test_sink() -> Scope<'a> {
-        Scope {
-            outer: None,
-            data: RefCell::new(HashMap::new()),
-            functions: RefCell::new(HashMap::new()),
-            out: RefCell::new(Some(Box::new(std::io::sink()))),
-            arena: None,
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::Scope;
     use crate::dispatch::arena::RuntimeArena;
@@ -350,8 +380,8 @@ mod tests {
         let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
-        let results = sched.execute().unwrap();
-        let result = results[id.index()];
+        sched.execute().unwrap();
+        let result = sched.read(id);
         assert!(matches!(result, KObject::KString(s) if s == "identifier"),
             "Identifier overload should win on an identifier input, got {:?}", summarize_marker(result));
     }
@@ -370,8 +400,8 @@ mod tests {
         let expr = KExpression { parts: vec![ExpressionPart::Literal(KLiteral::Number(7.0))] };
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, inner);
-        let results = sched.execute().unwrap();
-        let result = results[id.index()];
+        sched.execute().unwrap();
+        let result = sched.read(id);
         assert!(matches!(result, KObject::KString(s) if s == "inner_any"),
             "inner Any must shadow outer Number (lexical shadowing > specificity), got {:?}",
             summarize_marker(result));
@@ -432,8 +462,8 @@ mod tests {
         };
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
-        let results = sched.execute().unwrap();
-        let result = results[id.index()];
+        sched.execute().unwrap();
+        let result = sched.read(id);
         assert!(matches!(result, KObject::KString(s) if s == "lowercase"));
     }
 

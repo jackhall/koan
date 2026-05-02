@@ -3,6 +3,7 @@ use super::kfunction::{Body, BodyResult, BuiltinFn, ExpressionSignature, KFuncti
 use super::kobject::KObject;
 use super::scope::Scope;
 
+pub mod call_by_name;
 mod fn_def;
 mod if_then;
 mod let_binding;
@@ -34,11 +35,16 @@ pub(crate) fn register_builtin<'a>(
     signature: ExpressionSignature,
     body: BuiltinFn,
 ) {
-    let arena = scope
-        .arena
-        .expect("register_builtin requires an arena-backed scope");
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::new(signature, Body::Builtin(body)));
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f));
+    let arena = scope.arena;
+    // Builtins capture the scope they're being registered into — typically run-root (set up
+    // by `default_scope`). The captured scope's arena is the same arena the KFunction lives
+    // in, so `lift_kobject`'s arena-pointer comparison correctly identifies builtins as
+    // never-in-a-dying-frame.
+    let f: &'a KFunction<'a> =
+        arena.alloc_function(KFunction::new(signature, Body::Builtin(body), scope));
+    // `frame: None` here — the lift-on-return logic in the scheduler doesn't need to attach
+    // an Rc for builtins (their captured arena is run-root and never dies).
+    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
     scope.add(name.into(), obj);
 }
 
@@ -101,6 +107,7 @@ pub fn default_scope<'a>(
     value_pass::register(scope);
     if_then::register(scope);
     fn_def::register(scope);
+    call_by_name::register(scope);
 
     scope
 }

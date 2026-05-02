@@ -19,7 +19,7 @@ pub fn body<'a>(
         Some(obj) => obj.deep_clone(),
         None => return null(),
     };
-    let arena = scope.arena.expect("value_pass requires an arena-backed scope");
+    let arena = scope.arena;
     BodyResult::Value(arena.alloc_object(cloned))
 }
 

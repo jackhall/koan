@@ -72,8 +72,8 @@ mod tests {
     ) -> &'a KObject<'a> {
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
-        let results = sched.execute().expect("scheduler should succeed");
-        results[id.index()]
+        sched.execute().expect("scheduler should succeed");
+        sched.read(id)
     }
 
     #[test]

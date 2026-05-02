@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::dispatch::kfunction::{UntypedElement, UntypedKey};
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::ktraits::{Parseable, Executable};
@@ -65,7 +67,7 @@ impl<'a> ExpressionPart<'a> {
             // this runs (see `schedule_list_literal`); a raw `Expression` element here would
             // round-trip through `KExpression` rather than its computed value.
             ExpressionPart::ListLiteral(items) => {
-                KObject::List(items.iter().map(|p| p.resolve()).collect())
+                KObject::List(Rc::new(items.iter().map(|p| p.resolve()).collect()))
             }
             // Preserve compound shapes (List, KExpression) by deep-cloning rather than
             // stringifying — a Future-borne List or KExpression must materialize back to its

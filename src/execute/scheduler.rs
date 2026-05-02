@@ -1,5 +1,7 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
+use crate::dispatch::arena::{CallArena, RuntimeArena};
 use crate::dispatch::kfunction::{
     ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
 };
@@ -9,7 +11,7 @@ use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 /// What a scheduler node will produce when its work runs. `Value` is computed inline; `Forward`
 /// says "my result is whatever node `id` produces" — set when a `Dispatch` spawns a `Bind` for
-/// its sub-expression deps. `read_result` follows `Forward` chains until it lands on a `Value`.
+/// its sub-expression deps. `read` follows `Forward` chains until it lands on a `Value`.
 /// Cycles are statically prevented because every `NodeId` produced by `add_*` is strictly
 /// greater than every `NodeId` it could forward to.
 enum NodeOutput<'a> {
@@ -18,14 +20,15 @@ enum NodeOutput<'a> {
 }
 
 /// What `run_dispatch`/`run_bind` tells the execute loop to do next. `Done(output)` stores the
-/// output at the current node's slot — the normal path. `Replace { work, scope }` is the
+/// output at the current node's slot — the normal path. `Replace { work, frame }` is the
 /// tail-call path: rewrite the current node's `work` and re-enqueue the same `idx` so it runs
-/// again with the new work. When `scope` is `Some`, also rebind the node's scope (used by
-/// user-fn invocation to install the per-call child scope); `None` keeps the existing scope.
-/// Constant memory across tail-call sequences because no fresh slot is allocated.
+/// again with the new work. When `frame` is `Some`, install it on the slot (its `scope()`
+/// becomes the slot's scope, its `arena()` owns the per-call allocations) — used by user-fn
+/// invocation. `None` keeps the existing frame and scope. Constant memory across tail-call
+/// sequences because no fresh slot is allocated.
 enum NodeStep<'a> {
     Done(NodeOutput<'a>),
-    Replace { work: NodeWork<'a>, scope: Option<&'a Scope<'a>> },
+    Replace { work: NodeWork<'a>, frame: Option<Rc<CallArena>> },
 }
 
 /// What a scheduler node will run.
@@ -63,6 +66,15 @@ struct Node<'a> {
     /// tail-replace installs a per-call child scope here so the body's lookups resolve
     /// parameters by name.
     scope: &'a Scope<'a>,
+    /// Per-call frame this slot holds. `Some` for user-fn body slots, `None` for top-level
+    /// dispatch and sub-Dispatch/Bind/Aggregate slots. The Rc drops when the slot reaches
+    /// Done or is replaced; the underlying arena drops at that point only if no other Rc
+    /// (e.g., from a closure that captured this frame's scope and escaped) is held.
+    /// Lexical scoping (`KFunction::captured`) means each per-call child's `outer` is the
+    /// FN's captured scope (run-root for top-level FNs), so a frame holds no references
+    /// that a successor frame at the same slot needs — drop on TCO replace is immediate,
+    /// no `prev` chain.
+    frame: Option<Rc<CallArena>>,
 }
 
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
@@ -81,10 +93,11 @@ pub struct Scheduler<'a> {
     nodes: Vec<Option<Node<'a>>>,
     results: Vec<Option<NodeOutput<'a>>>,
     queue: VecDeque<usize>,
-    /// Set by the execute loop to the currently-running node's scope. Read by
-    /// `SchedulerHandle::add_dispatch` so builtin-side `add_dispatch` calls inherit the
-    /// running node's scope. `None` outside the execute loop.
-    active_scope: Option<*const Scope<'a>>,
+    /// Slots that returned `Done(Forward(_))` while owning a per-call frame and are now
+    /// waiting for their forward chain to resolve. `finalize_ready_frames` only scans this
+    /// vec rather than all `nodes`, keeping the per-iteration cost proportional to the
+    /// number of in-flight user-fn calls (typically tiny) instead of total scheduler size.
+    frame_holding_slots: Vec<usize>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -93,7 +106,7 @@ impl<'a> Scheduler<'a> {
             nodes: Vec::new(),
             results: Vec::new(),
             queue: VecDeque::new(),
-            active_scope: None,
+            frame_holding_slots: Vec::new(),
         }
     }
 
@@ -110,7 +123,7 @@ impl<'a> Scheduler<'a> {
 
     fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         let id = NodeId(self.nodes.len());
-        self.nodes.push(Some(Node { work, scope }));
+        self.nodes.push(Some(Node { work, scope, frame: None }));
         self.results.push(None);
         self.queue.push_back(id.index());
         id
@@ -120,43 +133,267 @@ impl<'a> Scheduler<'a> {
     /// resolved node gets re-queued at the back. A node whose work returns
     /// `NodeStep::Replace` (the tail-call path) gets its work rewritten and re-enqueued at
     /// the *front* so the same slot runs again with the new work — no new allocation.
-    /// `Replace { scope: Some(s) }` also rebinds the slot's scope to `s`. Returns each
-    /// top-level node's final resolved `KObject` indexed by `NodeId`. Takes `&mut self` so
-    /// callers (and tests) can inspect post-run state like `nodes.len()`.
-    pub fn execute(&mut self) -> Result<Vec<&'a KObject<'a>>, String> {
+    /// `Replace { frame: Some(f) }` also installs `f` on the slot, dropping the slot's
+    /// previous frame; the new frame's `scope()` becomes the slot's scope and its `arena()`
+    /// owns the per-call allocations.
+    ///
+    /// On `Done`: if the slot owned a frame, the body's return `Value` references memory
+    /// inside the per-call arena that's about to drop. Lift the value into the captured
+    /// scope's arena (= the per-call scope's `outer.arena`, which by lexical scoping is the
+    /// FN's definition arena and outlives the call) by deep-cloning it. Forwards need no
+    /// lift — the forwarded slot does its own lift on its own Done.
+    ///
+    /// Use `read(id)` to retrieve a top-level dispatch's result after `execute` returns.
+    /// Internal Bind/Aggregate/sub-Dispatch slots' results may point into per-call arenas
+    /// that finalization has freed; the public API keeps those internals out of reach.
+    pub fn execute(&mut self) -> Result<(), String> {
         while let Some(idx) = self.queue.pop_front() {
             let node = self.nodes[idx]
                 .take()
                 .expect("scheduler must not revisit a completed node");
             let scope = node.scope;
             let work = node.work;
+            let prev_frame = node.frame;
             // Bind/Aggregate may need their dep results to be fully resolved (forward chain
             // ending in a `Value`). If any forward-chains to an unresolved slot, requeue.
             if let Some(deps) = work_deps(&work) {
                 if !deps.iter().all(|d| self.is_result_ready(*d)) {
-                    self.nodes[idx] = Some(Node { work, scope });
+                    self.nodes[idx] = Some(Node { work, scope, frame: prev_frame });
                     self.queue.push_back(idx);
                     continue;
                 }
             }
-            self.active_scope = Some(scope as *const _);
             let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope)?,
                 NodeWork::Aggregate { elements } => NodeStep::Done(self.run_aggregate(elements, scope)),
             };
-            self.active_scope = None;
             match step {
-                NodeStep::Done(output) => self.results[idx] = Some(output),
-                NodeStep::Replace { work: new_work, scope: new_scope } => {
-                    let next_scope = new_scope.unwrap_or(scope);
-                    self.nodes[idx] = Some(Node { work: new_work, scope: next_scope });
+                NodeStep::Done(output) => {
+                    match (output, prev_frame) {
+                        (NodeOutput::Value(v), Some(frame)) => {
+                            // Body produced a Value directly — lift into the captured
+                            // arena. By lexical scoping, the per-call scope's `outer` IS
+                            // the captured scope (run-root for top-level FNs), whose arena
+                            // outlives the call. If the lifted value carries a KFunction
+                            // reference into the dying frame's arena, `lift_kobject`
+                            // attaches an Rc clone so the arena stays alive past the
+                            // slot's frame drop.
+                            let dest = scope
+                                .outer
+                                .expect("per-call scope must have an outer (its captured scope)")
+                                .arena;
+                            let lifted_obj = Self::lift_kobject(v, &frame);
+                            let lifted = dest.alloc_object(lifted_obj);
+                            self.results[idx] = Some(NodeOutput::Value(lifted));
+                            // `frame` drops here. If the lifted value cloned an Rc, the
+                            // arena lives on; otherwise this is the last reference and
+                            // the per-call arena frees.
+                        }
+                        (NodeOutput::Forward(target), Some(frame)) => {
+                            // Body forwarded into sub-slots whose scopes live in the
+                            // per-call arena. Keep the frame alive on this slot until the
+                            // forward chain resolves; a finalize pass below promotes the
+                            // chain's terminal Value into the captured arena and drops
+                            // the frame. The slot is no longer in the queue, so its
+                            // `work` is unused — store a stub. Track the slot so
+                            // `finalize_ready_frames` can find it without scanning all
+                            // nodes.
+                            self.results[idx] = Some(NodeOutput::Forward(target));
+                            self.nodes[idx] = Some(Node {
+                                work: NodeWork::Dispatch(KExpression { parts: Vec::new() }),
+                                scope,
+                                frame: Some(frame),
+                            });
+                            self.frame_holding_slots.push(idx);
+                        }
+                        (other, None) => {
+                            self.results[idx] = Some(other);
+                        }
+                    }
+                }
+                NodeStep::Replace { work: new_work, frame: new_frame } => {
+                    // TCO: drop the slot's previous frame immediately. Lexical scoping
+                    // means the new frame's child scope's `outer` is the captured scope,
+                    // not the previous frame's, so this is safe.
+                    drop(prev_frame);
+                    let (next_scope, next_frame) = match new_frame {
+                        Some(f) => {
+                            // SAFETY: `f.scope()` borrows from `f`, but `f` is owned by the
+                            // slot once installed. The `&'a` we hand to the next iteration
+                            // is anchored to `self.nodes[idx]`'s storage, which lives until
+                            // the slot drops or its frame is replaced again.
+                            let s: &'a Scope<'a> = unsafe {
+                                std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(f.scope())
+                            };
+                            (s, Some(f))
+                        }
+                        None => (scope, None),
+                    };
+                    self.nodes[idx] = Some(Node { work: new_work, scope: next_scope, frame: next_frame });
                     self.queue.push_front(idx);
                 }
             }
+            // Finalize any frame-holding slots whose forward chain has now resolved:
+            // lift the terminal Value into the captured arena, store as Value at the
+            // slot, and drop the frame. Most iterations have nothing to do here; only
+            // user-fn slots that returned `Done(Forward)` carry frames awaiting resolution.
+            self.finalize_ready_frames();
         }
-        let n = self.results.len();
-        Ok((0..n).map(|i| self.read_result(NodeId(i))).collect())
+        Ok(())
+    }
+
+    /// Lift a KObject value out of the dying frame's arena into the destination arena.
+    /// Owned variants (Number, KString, Bool, Null) `deep_clone` cleanly because their
+    /// content is owned. `KObject::KFunction(&f, frame)` is the special case: `&f` may
+    /// point into the dying frame's arena (an escaping closure). If so, we carry a clone
+    /// of the dying frame's `Rc<CallArena>` in the lifted value's frame field, so the
+    /// arena stays alive past the slot's frame drop and the `&f` reference remains valid.
+    /// If the function lives in a longer-lived arena (run-root or another live frame), no
+    /// Rc is needed and the lifted value's frame field stays `None`.
+    ///
+    /// Pre-existing `Some(rc)` on the input value is preserved (the value is already
+    /// keeping some arena alive; we don't overwrite that with the current dying frame's).
+    ///
+    /// Composite variants (`List`, `Dict`) recurse to find embedded closures that need an
+    /// Rc attach, but memoize via `needs_lift`: when no descendant needs lifting, the
+    /// payload's existing `Rc` is cloned instead of rebuilding the `Vec`/`HashMap`. This
+    /// makes a value's second-and-later lifts through a return chain O(N) walk + O(1)
+    /// rebuild for the unchanged composites — Koan's collection-immutability contract is
+    /// what makes the structural sharing safe.
+    ///
+    /// Whole-tree fast path: if the dying arena has zero `KFunction`s allocated in it, no
+    /// descendant of `v` can possibly point a `&KFunction` (directly or via a KFuture)
+    /// into that arena, so no Rc-attach is needed anywhere. We skip the recursive walk and
+    /// fall back to `deep_clone`, which is O(1) for composites (Rc::clone) and a small
+    /// allocation for primitives. The check is one O(1) integer load on the arena.
+    fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
+        if dying_frame.arena().functions_len() == 0 {
+            return v.deep_clone();
+        }
+        match v {
+            KObject::KFunction(f, existing) => {
+                let new_frame = if existing.is_some() {
+                    existing.clone()
+                } else {
+                    let dying_runtime: *const RuntimeArena = dying_frame.arena();
+                    let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
+                    if std::ptr::eq(captured_runtime, dying_runtime) {
+                        Some(Rc::clone(dying_frame))
+                    } else {
+                        None
+                    }
+                };
+                KObject::KFunction(*f, new_frame)
+            }
+            KObject::KFuture(t, existing) => {
+                // The bare `&KFunction` plus the parsed-expression `Future(&KObject)` parts
+                // and the bundle's args can all point into the per-call arena. A single Rc
+                // keeps that arena alive, covering every internal reference transitively.
+                // We use the function's captured arena as the "is this in the dying arena"
+                // signal, mirroring KFunction's lift rule.
+                let new_frame = if existing.is_some() {
+                    existing.clone()
+                } else {
+                    let dying_runtime: *const RuntimeArena = dying_frame.arena();
+                    let captured_runtime: *const RuntimeArena = t.function.captured_scope().arena;
+                    if std::ptr::eq(captured_runtime, dying_runtime) {
+                        Some(Rc::clone(dying_frame))
+                    } else {
+                        None
+                    }
+                };
+                KObject::KFuture(t.deep_clone(), new_frame)
+            }
+            KObject::List(items) => {
+                if items.iter().any(|x| Self::needs_lift(x, dying_frame)) {
+                    let lifted: Vec<KObject<'b>> = items
+                        .iter()
+                        .map(|x| Self::lift_kobject(x, dying_frame))
+                        .collect();
+                    KObject::List(Rc::new(lifted))
+                } else {
+                    KObject::List(Rc::clone(items))
+                }
+            }
+            KObject::Dict(entries) => {
+                if entries.values().any(|x| Self::needs_lift(x, dying_frame)) {
+                    let lifted: HashMap<_, _> = entries
+                        .iter()
+                        .map(|(k, v)| (k.clone_box(), Self::lift_kobject(v, dying_frame)))
+                        .collect();
+                    KObject::Dict(Rc::new(lifted))
+                } else {
+                    KObject::Dict(Rc::clone(entries))
+                }
+            }
+            other => other.deep_clone(),
+        }
+    }
+
+    /// True iff lifting `v` against `dying_frame` would attach an `Rc` to some descendant
+    /// `KFunction`. Used by `lift_kobject` to short-circuit the rebuild for composite
+    /// values whose payloads need no change: if `needs_lift` returns false, the existing
+    /// `Rc<Vec>`/`Rc<HashMap>` can be cloned instead of allocating a fresh one. Walks
+    /// composites recursively but bottoms out on the first match (`any`-style).
+    fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
+        match v {
+            KObject::KFunction(_, Some(_)) => false,
+            KObject::KFunction(f, None) => {
+                let dying_runtime: *const RuntimeArena = dying_frame.arena();
+                let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
+                std::ptr::eq(captured_runtime, dying_runtime)
+            }
+            KObject::KFuture(_, Some(_)) => false,
+            KObject::KFuture(t, None) => {
+                let dying_runtime: *const RuntimeArena = dying_frame.arena();
+                let captured_runtime: *const RuntimeArena = t.function.captured_scope().arena;
+                std::ptr::eq(captured_runtime, dying_runtime)
+            }
+            KObject::List(items) => items.iter().any(|x| Self::needs_lift(x, dying_frame)),
+            KObject::Dict(entries) => entries.values().any(|x| Self::needs_lift(x, dying_frame)),
+            _ => false,
+        }
+    }
+
+    /// Walk slots that returned `Done(Forward)` while owning a per-call frame; for each
+    /// whose forward chain has resolved to a Value, lift the Value into the captured arena
+    /// (the per-call scope's `outer.arena`) and drop the frame's slot-Rc. Called after
+    /// every iteration of `execute`'s main loop.
+    ///
+    /// Reads the sidecar `frame_holding_slots` rather than scanning all `nodes`. Slots
+    /// whose chain hasn't resolved yet stay in the sidecar for a future iteration; slots
+    /// that finalize get removed.
+    fn finalize_ready_frames(&mut self) {
+        let mut still_waiting: Vec<usize> = Vec::with_capacity(self.frame_holding_slots.len());
+        for idx in std::mem::take(&mut self.frame_holding_slots) {
+            if !self.is_result_ready(NodeId(idx)) {
+                still_waiting.push(idx);
+                continue;
+            }
+            let value = self.read(NodeId(idx));
+            let (dest, lifted_obj) = {
+                let node = self.nodes[idx].as_ref().unwrap();
+                let frame = node
+                    .frame
+                    .as_ref()
+                    .expect("frame_holding_slot must own a frame");
+                let dest = node
+                    .scope
+                    .outer
+                    .expect("per-call scope must have an outer (its captured scope)")
+                    .arena;
+                let lifted_obj = Self::lift_kobject(value, frame);
+                (dest, lifted_obj)
+            };
+            let lifted = dest.alloc_object(lifted_obj);
+            self.results[idx] = Some(NodeOutput::Value(lifted));
+            // Drop the slot's frame and clear the node. If the lifted value cloned an Rc,
+            // the per-call arena lives on (closure escape); otherwise this is the last
+            // strong reference and the arena frees.
+            self.nodes[idx] = None;
+        }
+        self.frame_holding_slots = still_waiting;
     }
 
     /// True iff `id`'s `Forward` chain ends in a stored `Value`. Used by the execute loop to
@@ -242,7 +479,7 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
     ) -> Result<NodeStep<'a>, String> {
         for (part_idx, dep_id) in subs {
-            let value = self.read_result(dep_id);
+            let value = self.read(dep_id);
             expr.parts[part_idx] = ExpressionPart::Future(value);
         }
         let future = scope.dispatch(expr)?;
@@ -254,11 +491,11 @@ impl<'a> Scheduler<'a> {
             .into_iter()
             .map(|e| match e {
                 AggregateElement::Static(obj) => obj,
-                AggregateElement::Dep(dep) => self.read_result(dep).deep_clone(),
+                AggregateElement::Dep(dep) => self.read(dep).deep_clone(),
             })
             .collect();
-        let arena = scope.arena.expect("Aggregate requires an arena-backed scope");
-        let allocated: &'a KObject<'a> = arena.alloc_object(KObject::List(items));
+        let arena = scope.arena;
+        let allocated: &'a KObject<'a> = arena.alloc_object(KObject::List(Rc::new(items)));
         NodeOutput::Value(allocated)
     }
 
@@ -288,14 +525,19 @@ impl<'a> Scheduler<'a> {
     fn invoke_to_step(&mut self, future: KFuture<'a>, scope: &'a Scope<'a>) -> NodeStep<'a> {
         match future.function.invoke(scope, self, future.bundle) {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, scope: new_scope } => NodeStep::Replace {
+            BodyResult::Tail { expr, frame } => NodeStep::Replace {
                 work: NodeWork::Dispatch(expr),
-                scope: new_scope,
+                frame,
             },
         }
     }
 
-    fn read_result(&self, id: NodeId) -> &'a KObject<'a> {
+    /// Retrieve the resolved `KObject` for a top-level dispatch (a `NodeId` returned from
+    /// `add_dispatch`). Walks `Forward` chains to a stored `Value`. Only safe to call on
+    /// IDs returned by `add_dispatch` — internal Bind/Aggregate/sub-Dispatch slots' results
+    /// may have been freed by `finalize_ready_frames` when their parent user-fn slot's
+    /// per-call frame dropped, so reading them would be UAF.
+    pub fn read(&self, id: NodeId) -> &'a KObject<'a> {
         let mut cur = id;
         loop {
             match self.results[cur.index()]
@@ -334,16 +576,10 @@ fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
 }
 
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
-    /// Schedule a fresh `Dispatch` node against the currently-active scope (the scope of the
-    /// node whose body is calling this). Used by builtin bodies — currently no in-tree builtin
-    /// reaches for it (TCO covers the prior `if_then` use), but the lever is preserved.
-    fn add_dispatch(&mut self, expr: KExpression<'a>) -> NodeId {
-        let scope_ptr = self.active_scope.expect("add_dispatch called outside execute loop");
-        // SAFETY: `active_scope` is set immediately before invoking a node's body to a
-        // `&'a Scope<'a>` that lives for the entire run, and cleared immediately after. The
-        // pointer is only read while the body is running, so the original reference is still
-        // valid.
-        let scope: &'a Scope<'a> = unsafe { &*scope_ptr };
+    /// Schedule a fresh `Dispatch` node against `scope`. Used by builtin bodies that want
+    /// to spawn sub-work — currently no in-tree builtin reaches for it (TCO covers the
+    /// prior `if_then` use), but the lever is preserved.
+    fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add(self, NodeWork::Dispatch(expr), scope)
     }
 }
@@ -378,17 +614,26 @@ impl<'a> KFunction<'a> {
         match &self.body {
             Body::Builtin(f) => f(scope, sched, bundle),
             Body::UserDefined(expr) => {
-                let arena = scope
-                    .arena
-                    .expect("user-defined function call requires an arena-backed scope");
-                let child = arena.alloc_scope(scope.child_for_call());
+                // Build a fresh per-call frame whose arena owns the per-call allocations
+                // (child scope, parameter clones, substituted body's Future rewrites).
+                // `outer` is the FN's captured definition scope (lexical scoping); for top-
+                // level FNs that's run-root.
+                let outer = self.captured_scope();
+                let frame: Rc<CallArena> = CallArena::new(outer);
+                // Re-borrow through raw pointers so the borrow ends before the `frame` move
+                // below. SAFETY: heap-pinning makes `arena_ptr` and `scope_ptr` valid for
+                // the box's life; allocations into the arena live until `frame` drops.
+                let arena_ptr: *const RuntimeArena = frame.arena();
+                let scope_ptr: *const Scope<'_> = frame.scope();
+                let inner_arena: &'a RuntimeArena = unsafe { &*(arena_ptr as *const _) };
+                let child: &'a Scope<'a> = unsafe { &*(scope_ptr as *const _) };
                 for (name, rc) in bundle.args.iter() {
                     let cloned = rc.deep_clone();
-                    let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
+                    let allocated = inner_arena.alloc_object(cloned);
                     child.add(name.clone(), allocated);
                 }
-                let substituted = substitute_params(expr.clone(), &bundle, arena);
-                BodyResult::tail_with_scope(substituted, child)
+                let substituted = substitute_params(expr.clone(), &bundle, inner_arena);
+                BodyResult::tail_with_frame(substituted, frame)
             }
         }
     }
@@ -466,11 +711,10 @@ mod tests {
         let id1 = sched.add_dispatch(let_expr("x", 1.0), root);
         let id2 = sched.add_dispatch(let_expr("y", 2.0), root);
 
-        let results = sched.execute().unwrap();
+        sched.execute().unwrap();
 
-        assert_eq!(results.len(), 2);
-        assert!(matches!(results[id1.index()], KObject::Number(n) if *n == 1.0));
-        assert!(matches!(results[id2.index()], KObject::Number(n) if *n == 2.0));
+        assert!(matches!(sched.read(id1), KObject::Number(n) if *n == 1.0));
+        assert!(matches!(sched.read(id2), KObject::Number(n) if *n == 2.0));
         let data = root.data.borrow();
         assert!(data.contains_key("x"));
         assert!(data.contains_key("y"));
@@ -526,9 +770,9 @@ mod tests {
         };
         let id = sched.add_dispatch(expr, root);
 
-        let results = sched.execute().unwrap();
+        sched.execute().unwrap();
 
-        assert!(matches!(results[id.index()], KObject::KString(s) if s == "hi"));
+        assert!(matches!(sched.read(id), KObject::KString(s) if s == "hi"));
         assert_eq!(
             sched.len(),
             1,

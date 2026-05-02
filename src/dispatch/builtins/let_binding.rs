@@ -10,8 +10,7 @@ use super::{null, register_builtin};
 
 /// `LET <name:Identifier> = <value:Any>` — copies the bound value into an arena-allocated
 /// `KObject`, inserts it under `name`, and returns that same arena reference. Compound values
-/// (`List`, `KExpression`) are deep-cloned through `KObject::deep_clone`; opaque variants
-/// (`KFuture`, `Dict`) collapse to `Null` per `deep_clone`'s contract.
+/// recurse through `KObject::deep_clone`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -22,7 +21,7 @@ pub fn body<'a>(
         Some(obj) => obj.deep_clone(),
         None => return null(),
     };
-    let arena = scope.arena.expect("LET requires an arena-backed scope");
+    let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
     scope.add(name, allocated);
     BodyResult::Value(allocated)
@@ -96,9 +95,9 @@ mod tests {
 
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
-        let results = sched.execute().unwrap();
+        sched.execute().unwrap();
 
-        assert!(matches!(results[id.index()], KObject::Number(n) if *n == 42.0));
+        assert!(matches!(sched.read(id), KObject::Number(n) if *n == 42.0));
         let data = scope.data.borrow();
         let entry = data.get("x").expect("expected binding 'x'");
         assert!(matches!(entry, KObject::Number(n) if *n == 42.0));

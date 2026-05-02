@@ -60,14 +60,21 @@ pub fn body<'a>(
         elements,
     };
 
-    let arena = scope.arena.expect("FN requires an arena-backed scope");
+    let arena = scope.arena;
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::new(
         user_sig,
         Body::UserDefined(body_expr),
+        scope,
     ));
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f));
+    // `frame: None` here — the lift-on-return logic in the scheduler will populate the Rc
+    // when this KFunction value escapes out of a per-call body. For top-level FNs, there's
+    // no per-call frame to clone, so None stays.
+    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
     scope.add(name, obj);
-    null()
+    // Returning the function reference (rather than null) lets callers do
+    // `LET f = (FN ...)` to capture a callable handle, which the dispatch fallback for
+    // identifier-bound KFunctions can then invoke.
+    BodyResult::Value(obj)
 }
 
 /// Convert the captured signature `KExpression` into a list of `SignatureElement`s.
@@ -171,8 +178,8 @@ mod tests {
     fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
-        let results = sched.execute().expect("scheduler should succeed");
-        results[id.index()]
+        sched.execute().expect("scheduler should succeed");
+        sched.read(id)
     }
 
     fn capture_program_output(source: &str) -> Vec<u8> {
@@ -194,7 +201,7 @@ mod tests {
         let data = scope.data.borrow();
         let entry = data.get("GREET").expect("GREET should be bound");
         let f = match entry {
-            KObject::KFunction(f) => *f,
+            KObject::KFunction(f, _) => *f,
             _ => panic!("expected GREET to bind a KFunction"),
         };
         match f.signature.elements.as_slice() {
@@ -359,5 +366,50 @@ mod tests {
         run(scope, "FN (x) = (PRINT \"oops\")");
         let data = scope.data.borrow();
         assert!(data.get("x").is_none());
+    }
+
+    /// The leak-fix regression test: a parameterized user-fn called many times must not
+    /// grow the run-root arena per call. Pre-fix, every call leaked a child Scope, a param
+    /// clone, the substituted body's identifier->Future rewrites, and value_pass's clone —
+    /// 5+ allocations per call into run-root. Post-fix, those land in the per-call arena
+    /// and free at call return; only the lift-on-return value persists in run-root (one
+    /// `KObject::Number` per call). The bound used here (~3 allocations/call) tolerates
+    /// the lift while rejecting the old linear leak.
+    #[test]
+    fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (ECHO v) = (v)");
+        let baseline = arena.alloc_count();
+        for _ in 0..50 {
+            let _ = run_one(scope, parse_one("ECHO 7"));
+        }
+        let after = arena.alloc_count();
+        let growth = after - baseline;
+        // Measured at exactly 50 (one `KObject::Number(7)` lifted per call). Old behavior
+        // would have been 250-350+: child Scope, param clone, substituted-Future, value_pass
+        // clone, and the value_pass dispatch's Bind value, all per call. The < 150 bound
+        // tolerates the lift while rejecting the old linear leak.
+        assert!(
+            growth < 50 * 3,
+            "per-call leak regression: {growth} new run-root allocations across 50 \
+             ECHO calls (expected < 150)",
+        );
+    }
+
+    /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a
+    /// callable handle via `LET f = (FN ...)`. Pre-change, `FN` returned `null()`. Calling
+    /// the captured handle is tested in [`call_by_name`](super::super::call_by_name).
+    #[test]
+    fn fn_def_returns_the_registered_kfunction() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        let result = run_one(scope, parse_one("FN (DOUBLE x) = (x)"));
+        assert!(
+            matches!(result, KObject::KFunction(_, _)),
+            "FN should return its registered KFunction",
+        );
     }
 }
