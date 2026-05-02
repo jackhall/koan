@@ -7,7 +7,6 @@ mod execute;
 use std::io::Read;
 use std::process::ExitCode;
 
-use crate::dispatch::builtins::default_scope;
 use crate::execute::interpret::interpret;
 
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
@@ -31,8 +30,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut scope = default_scope();
-    match interpret(&source, &mut scope) {
+    match interpret(&source) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {}", e);

@@ -14,9 +14,10 @@ use super::{null, register_builtin};
 /// the captured `value` expression is never touched. When true, returns the captured expression
 /// as a `Tail`: the scheduler rewrites the if_then's own slot to a fresh `Dispatch(value)` and
 /// re-runs in place, walking the value's AST, evaluating sub-expressions, and producing its
-/// result — all in the slot the if_then originally occupied.
+/// result — all in the slot the if_then originally occupied. Scope is unchanged (`tail` not
+/// `tail_with_scope`); the lazy expression evaluates in the same scope as the IF call site.
 pub fn body<'a>(
-    _scope: &mut Scope<'a>,
+    _scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -36,10 +37,10 @@ pub fn body<'a>(
             _ => return null(),
         },
     };
-    BodyResult::Tail(expr)
+    BodyResult::tail(expr)
 }
 
-pub fn register(scope: &mut Scope<'static>) {
+pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "if_then",
@@ -58,6 +59,7 @@ pub fn register(scope: &mut Scope<'static>) {
 
 #[cfg(test)]
 mod tests {
+    use crate::dispatch::arena::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::kobject::KObject;
     use crate::dispatch::scope::Scope;
@@ -65,18 +67,19 @@ mod tests {
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
     fn run_one<'a>(
-        scope: &mut Scope<'a>,
+        scope: &'a Scope<'a>,
         expr: KExpression<'a>,
     ) -> &'a KObject<'a> {
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr);
-        let results = sched.execute(scope).expect("scheduler should succeed");
-        results[id.index()]
+        let id = sched.add_dispatch(expr, scope);
+        sched.execute().expect("scheduler should succeed");
+        sched.read(id)
     }
 
     #[test]
     fn dispatch_if_then_expression() {
-        let mut scope = default_scope();
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
         // IF true THEN (99) — value side parens-wrapped so it's an Expression that the
         // lazy if_then captures and the scheduler then dispatches via `value_pass`.
         let inner = KExpression {
@@ -91,13 +94,14 @@ mod tests {
             ],
         };
 
-        let result = run_one(&mut scope, expr);
+        let result = run_one(scope, expr);
         assert!(matches!(result, KObject::Number(n) if *n == 99.0));
     }
 
     #[test]
     fn dispatch_lazy_if_then_captures_expression_as_data() {
-        let mut scope = default_scope();
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
         let inner = KExpression {
             parts: vec![
                 ExpressionPart::Keyword("LET".into()),
@@ -115,16 +119,18 @@ mod tests {
             ],
         };
 
-        let result = run_one(&mut scope, expr);
+        let result = run_one(scope, expr);
         // Lazy body deferred to scheduler: LET ran inside the spawned Dispatch, returned 11,
         // and bound z; the IF's result forwards through the spawned node.
         assert!(matches!(result, KObject::Number(n) if *n == 11.0));
-        assert!(matches!(scope.data.get("z"), Some(KObject::Number(n)) if *n == 11.0));
+        let data = scope.data.borrow();
+        assert!(matches!(data.get("z"), Some(KObject::Number(n)) if *n == 11.0));
     }
 
     #[test]
     fn dispatch_lazy_if_then_false_skips_expression() {
-        let mut scope = default_scope();
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
         let inner = KExpression {
             parts: vec![
                 ExpressionPart::Keyword("LET".into()),
@@ -142,8 +148,9 @@ mod tests {
             ],
         };
 
-        let result = run_one(&mut scope, expr);
+        let result = run_one(scope, expr);
         assert!(matches!(result, KObject::Null));
-        assert!(scope.data.get("skipped").is_none());
+        let data = scope.data.borrow();
+        assert!(data.get("skipped").is_none());
     }
 }

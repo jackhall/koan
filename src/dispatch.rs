@@ -1,3 +1,4 @@
+pub mod arena;
 pub mod builtins;
 pub mod kfunction;
 pub mod kobject;

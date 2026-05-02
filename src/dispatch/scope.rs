@@ -1,7 +1,10 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Write;
 
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
+use super::arena::RuntimeArena;
 use super::kfunction::{
     ArgumentBundle, KFunction, KType, SignatureElement, Specificity, UntypedKey,
 };
@@ -17,38 +20,175 @@ pub struct KFuture<'a> {
     pub bundle: ArgumentBundle<'a>,
 }
 
+impl<'a> KFuture<'a> {
+    /// Recursive clone. The `function` reference is shared (KFunctions are arena-allocated
+    /// and immutable); `parsed` clones the AST; `bundle` deep-clones each argument value into
+    /// fresh `Rc`s so the clone is independent of the original.
+    pub fn deep_clone(&self) -> KFuture<'a> {
+        KFuture {
+            parsed: self.parsed.clone(),
+            function: self.function,
+            bundle: self.bundle.deep_clone(),
+        }
+    }
+}
+
 /// Lexical environment. `functions` buckets overloads by their *untyped signature* — the
 /// arrangement of fixed tokens and slots with slot types erased — so dispatch can pick
 /// between same-shape overloads by `KType` specificity. `out` is pluggable so tests and
-/// embedders can capture builtin output instead of routing it to stdout.
+/// embedders can capture builtin output instead of routing it to stdout — only the root scope
+/// holds a writer; child scopes have `None` and `write_out` walks `outer` to find one.
+///
+/// All mutable state is interior-mutable (`RefCell`) so a `&'a Scope<'a>` can be shared across
+/// scheduler nodes (each per-call body Dispatch holds a borrow of its child scope) while
+/// builtins still mutate `data` / `functions` / `out` through it.
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,
-    pub data: HashMap<String, &'a KObject<'a>>,
-    pub functions: HashMap<UntypedKey, Vec<&'a KFunction<'a>>>,
-    pub out: Box<dyn std::io::Write + 'a>,
+    pub data: RefCell<HashMap<String, &'a KObject<'a>>>,
+    pub functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
+    pub out: RefCell<Option<Box<dyn Write + 'a>>>,
+    pub arena: &'a RuntimeArena,
+    /// Writes that hit a borrow conflict at `add` time (data/functions already iterated by
+    /// some caller up the stack). The scheduler drains this between dispatch nodes via
+    /// `drain_pending`. Direct writes (no conflict) bypass the queue entirely, so the hot
+    /// path is unchanged. See `add` for the conditional-defer logic.
+    pub pending: RefCell<Vec<(String, &'a KObject<'a>)>>,
 }
 
 impl<'a> Scope<'a> {
-    pub fn add(&mut self, name: String, obj: &'a KObject<'a>) {
-        if let KObject::KFunction(f) = obj {
-            let key = f.signature.untyped_key();
-            self.functions.entry(key).or_default().push(*f);
+    /// Construct a fresh root scope with the given writer and arena. Used by `interpret` to
+    /// build the run-root that chains under the program-lifetime `default_scope`.
+    pub fn run_root(arena: &'a RuntimeArena, outer: Option<&'a Scope<'a>>, out: Box<dyn Write + 'a>) -> Self {
+        Self {
+            outer,
+            data: RefCell::new(HashMap::new()),
+            functions: RefCell::new(HashMap::new()),
+            out: RefCell::new(Some(out)),
+            arena,
+            pending: RefCell::new(Vec::new()),
         }
-        self.data.insert(name, obj);
+    }
+
+    /// Build a child scope parented to `self`, sharing its arena. Used by tests that don't
+    /// distinguish lexical from dynamic scoping; `KFunction::invoke` uses `child_under`
+    /// instead so the child's `outer` is the FN's *captured* scope, not the call site.
+    pub fn child_for_call(&'a self) -> Scope<'a> {
+        Self::child_under(self)
+    }
+
+    /// Build a child scope with an explicit `outer` pointer. Used by `KFunction::invoke` for
+    /// user-defined bodies — `outer` is the FN's captured definition scope (lexical scoping),
+    /// not the call site. The child shares `outer`'s arena.
+    pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
+        Scope {
+            outer: Some(outer),
+            data: RefCell::new(HashMap::new()),
+            functions: RefCell::new(HashMap::new()),
+            out: RefCell::new(None),
+            arena: outer.arena,
+            pending: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Insert `name → obj` into this scope. Conditional-defer: tries the direct mutation
+    /// first, falls back to the `pending` queue iff a borrow conflict would otherwise panic
+    /// (typically a caller up the stack is iterating `data` or `functions` and re-entrantly
+    /// triggers a write). The scheduler drains the queue between dispatch nodes via
+    /// `drain_pending`. The hot path — no concurrent borrow — is the same direct insert as
+    /// before; queued writes are observably deferred until drain.
+    pub fn add(&self, name: String, obj: &'a KObject<'a>) {
+        if let Err(name) = self.try_apply(name, obj) {
+            self.pending.borrow_mut().push((name, obj));
+        }
+    }
+
+    /// Direct-write path. Returns `Ok(())` on success; on borrow conflict returns the unused
+    /// `name` back so `add` can move it into the pending queue without cloning. KFunction
+    /// dedupe (by pointer) lives here so it applies to both direct and drained writes —
+    /// rebinding the same function under a new name must not push a second copy into the
+    /// bucket, which would make `pick` report ambiguity. KFunctions are arena-allocated and
+    /// never moved, so pointer equality is sufficient.
+    fn try_apply(&self, name: String, obj: &'a KObject<'a>) -> Result<(), String> {
+        if let KObject::KFunction(f, _) = obj {
+            let mut functions = match self.functions.try_borrow_mut() {
+                Ok(g) => g,
+                Err(_) => return Err(name),
+            };
+            let mut data = match self.data.try_borrow_mut() {
+                Ok(d) => d,
+                Err(_) => return Err(name),
+            };
+            let key = f.signature.untyped_key();
+            let f_ref: &'a KFunction<'a> = *f;
+            let bucket = functions.entry(key).or_default();
+            if !bucket.iter().any(|existing| std::ptr::eq(*existing, f_ref)) {
+                bucket.push(f_ref);
+            }
+            data.insert(name, obj);
+        } else {
+            let mut data = match self.data.try_borrow_mut() {
+                Ok(d) => d,
+                Err(_) => return Err(name),
+            };
+            data.insert(name, obj);
+        }
+        Ok(())
+    }
+
+    /// Apply queued writes. Called by the scheduler after each dispatch node so writes that
+    /// queued during a re-entrant borrow become visible by the next node's run. Items that
+    /// still hit a borrow conflict (rare — would mean drain itself was re-entered through a
+    /// live borrow) stay queued for the next drain attempt; the queue is therefore eventually
+    /// consistent rather than guaranteed-empty after one call.
+    pub fn drain_pending(&self) {
+        if self.pending.borrow().is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut *self.pending.borrow_mut());
+        let mut still_pending: Vec<(String, &'a KObject<'a>)> = Vec::new();
+        for (name, obj) in pending {
+            if let Err(name) = self.try_apply(name, obj) {
+                still_pending.push((name, obj));
+            }
+        }
+        if !still_pending.is_empty() {
+            self.pending.borrow_mut().extend(still_pending);
+        }
     }
 
     /// Look up `name` in this scope, walking the `outer` chain on miss. Returns the bound
     /// `KObject` from the nearest enclosing scope, or `None` if unbound at every level.
     pub fn lookup(&self, name: &str) -> Option<&'a KObject<'a>> {
-        if let Some(obj) = self.data.get(name).copied() {
+        if let Some(obj) = self.data.borrow().get(name).copied() {
             return Some(obj);
         }
         self.outer.and_then(|outer| outer.lookup(name))
     }
 
+    /// Walk the `outer` chain to find the nearest scope that holds a writer, and write `bytes`
+    /// to it. Used by PRINT. Child scopes constructed by `child_for_call` have `out: None`,
+    /// so writes ascend to the run-root (or to whichever scope the caller stashed the writer
+    /// into). Errors from the underlying writer are dropped — same shape as the previous
+    /// `let _ = writeln!(scope.out, ...)` call site.
+    pub fn write_out(&self, bytes: &[u8]) {
+        if let Some(w) = self.out.borrow_mut().as_mut() {
+            let _ = w.write_all(bytes);
+            return;
+        }
+        if let Some(outer) = self.outer {
+            outer.write_out(bytes);
+        }
+    }
+
     /// Resolve `expr` against this scope's functions, walking `outer` on miss so child scopes
     /// inherit from their parents. Ambiguity does *not* fall through to `outer` — the inner
     /// scope had a real conflict, and silently shadowing it would hide it from the author.
+    ///
+    /// Function-as-value calls (e.g., `LET f = (FN ...)` then `f (args)`) do not live here:
+    /// they go through the [`call_by_name`](super::builtins::call_by_name) builtin, whose
+    /// signature `[Identifier, KExpression]` matches identifier-leading expressions and
+    /// synthesizes a re-dispatchable expression by weaving the looked-up function's keyword
+    /// tokens back in.
     pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, String> {
         match self.pick(&expr) {
             Pick::One(f) => return f.bind(expr),
@@ -66,6 +206,17 @@ impl<'a> Scope<'a> {
         Err(format!("no matching function for {}", expr.summarize()))
     }
 
+    /// Look up `name` in the scope chain and return the bound `KFunction`, or `None` if the
+    /// name is unbound or bound to a non-function value. Used by the
+    /// [`call_by_name`](super::builtins::call_by_name) builtin to resolve identifier-leading
+    /// expressions to the function they should invoke.
+    pub fn lookup_kfunction(&self, name: &str) -> Option<&'a KFunction<'a>> {
+        match self.lookup(name)? {
+            KObject::KFunction(f, _) => Some(*f),
+            _ => None,
+        }
+    }
+
     /// Find a "lazy candidate" for `expr`: a matching function with at least one
     /// `KType::KExpression` slot bound by an `ExpressionPart::Expression`. Returns the indices
     /// of the *eager* `Expression` parts — the caller schedules those as deps and leaves the
@@ -79,8 +230,8 @@ impl<'a> Scope<'a> {
         if !expr.parts.iter().any(|p| matches!(p, ExpressionPart::Expression(_))) {
             return None;
         }
-        let mut viable: Vec<(&KFunction<'a>, Vec<usize>)> = self
-            .functions
+        let functions = self.functions.borrow();
+        let mut viable: Vec<(&KFunction<'a>, Vec<usize>)> = functions
             .get(&expr.untyped_key())
             .into_iter()
             .flatten()
@@ -92,6 +243,7 @@ impl<'a> Scope<'a> {
             // time. Falling back to the eager pipeline here would misevaluate the lazy slot.
             return pick_most_specific_index(&funcs).map(|i| viable.swap_remove(i).1);
         }
+        drop(functions);
         self.outer.and_then(|outer| outer.lazy_candidate(expr))
     }
 
@@ -99,7 +251,8 @@ impl<'a> Scope<'a> {
     /// missing or has no matching candidates; the caller decides whether to walk `outer`.
     fn pick(&self, expr: &KExpression<'a>) -> Pick<'a> {
         let key = expr.untyped_key();
-        let bucket = match self.functions.get(&key) {
+        let functions = self.functions.borrow();
+        let bucket = match functions.get(&key) {
             Some(b) => b,
             None => return Pick::None,
         };
@@ -175,23 +328,9 @@ fn lazy_eager_indices(f: &KFunction<'_>, expr: &KExpression<'_>) -> Option<Vec<u
 }
 
 #[cfg(test)]
-impl<'a> Scope<'a> {
-    /// Test-only constructor: a root scope with no bindings and a swallowing writer. Generic
-    /// over `'a` so callers can chain it under a stack-borrowed outer scope without fighting
-    /// `'static`.
-    pub fn test_sink() -> Scope<'a> {
-        Scope {
-            outer: None,
-            data: HashMap::new(),
-            functions: HashMap::new(),
-            out: Box::new(std::io::sink()),
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::Scope;
+    use crate::dispatch::arena::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
@@ -199,9 +338,9 @@ mod tests {
     fn dispatch_walks_outer_chain_to_find_builtin() {
         // Parent owns the LET builtin; child has no functions of its own. Dispatching LET
         // against the child must climb to the parent.
-        let outer = default_scope();
-        let mut inner = Scope::test_sink();
-        inner.outer = Some(&outer);
+        let arena = RuntimeArena::new();
+        let outer = default_scope(&arena, Box::new(std::io::sink()));
+        let inner = arena.alloc_scope(outer.child_for_call());
 
         let expr = KExpression {
             parts: vec![
@@ -217,11 +356,41 @@ mod tests {
 
     #[test]
     fn dispatch_with_no_outer_and_no_match_errors() {
-        let scope = Scope::test_sink();
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
         let expr = KExpression {
             parts: vec![ExpressionPart::Identifier("nope".into())],
         };
         assert!(scope.dispatch(expr).is_err());
+    }
+
+    /// Re-entrant `add` while a `data` borrow is held would have panicked under the old
+    /// unconditional `borrow_mut`. Conditional-defer routes the write to `pending` instead;
+    /// after the borrow drops, `drain_pending` applies it. The held iteration sees the
+    /// pre-write snapshot (snapshot-iteration semantics), and the post-drain state has the
+    /// new entry visible — this is the foreach-binding pattern that motivated the change.
+    #[test]
+    fn add_during_active_data_borrow_queues_and_drains() {
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let pre = arena.alloc_object(KObject::Number(1.0));
+        scope.add("pre".to_string(), pre);
+
+        let new_entry = arena.alloc_object(KObject::Number(2.0));
+        {
+            // Hold an immutable borrow of `data` (simulates a builtin iterating bindings).
+            let snapshot = scope.data.borrow();
+            assert!(snapshot.contains_key("pre"));
+            // Re-entrant write: would have panicked pre-fix. Now queues silently.
+            scope.add("during".to_string(), new_entry);
+            // Iteration sees the pre-write snapshot only.
+            assert!(!snapshot.contains_key("during"));
+        }
+        // Borrow released. Pending still holds the queued write until drain runs.
+        assert!(scope.data.borrow().get("during").is_none());
+        scope.drain_pending();
+        let after = scope.data.borrow();
+        assert!(matches!(after.get("during"), Some(KObject::Number(n)) if *n == 2.0));
     }
 
     // --- specificity / bucketing / shadowing tests for the dispatch refactor ---
@@ -241,13 +410,13 @@ mod tests {
         Box::leak(Box::new(KObject::KString(s.into())))
     }
 
-    fn body_identifier<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("identifier")) }
-    fn body_any<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any")) }
-    fn body_number_any<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("number_any")) }
-    fn body_any_number<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any_number")) }
-    fn body_inner_any<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("inner_any")) }
-    fn body_outer_number<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("outer_number")) }
-    fn body_lowercase<'a>(_s: &mut Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("lowercase")) }
+    fn body_identifier<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("identifier")) }
+    fn body_any<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any")) }
+    fn body_number_any<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("number_any")) }
+    fn body_any_number<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any_number")) }
+    fn body_inner_any<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("inner_any")) }
+    fn body_outer_number<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("outer_number")) }
+    fn body_lowercase<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("lowercase")) }
 
     fn one_slot_sig(name: &str, kt: KType) -> ExpressionSignature {
         ExpressionSignature {
@@ -255,7 +424,7 @@ mod tests {
             elements: vec![SignatureElement::Argument(Argument {
                 name: name.into(),
                 ktype: kt,
-                
+
             })],
         }
     }
@@ -270,13 +439,13 @@ mod tests {
                 SignatureElement::Argument(Argument {
                     name: "a".into(),
                     ktype: a,
-                    
+
                 }),
                 SignatureElement::Keyword("OP".into()),
                 SignatureElement::Argument(Argument {
                     name: "b".into(),
                     ktype: b,
-                    
+
                 }),
             ],
         }
@@ -287,16 +456,16 @@ mod tests {
     /// `Identifier` for an identifier-shaped input.
     #[test]
     fn dispatch_picks_identifier_over_any_regardless_of_registration_order() {
-        let mut scope = Scope::<'static>::test_sink();
-        // Register Any first, then Identifier — reversed from default_scope.
-        register_builtin(&mut scope, "any_first", one_slot_sig("v", KType::Any), body_any);
-        register_builtin(&mut scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        register_builtin(scope, "any_first", one_slot_sig("v", KType::Any), body_any);
+        register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
 
         let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr);
-        let results = sched.execute(&mut scope).unwrap();
-        let result = results[id.index()];
+        let id = sched.add_dispatch(expr, scope);
+        sched.execute().unwrap();
+        let result = sched.read(id);
         assert!(matches!(result, KObject::KString(s) if s == "identifier"),
             "Identifier overload should win on an identifier input, got {:?}", summarize_marker(result));
     }
@@ -305,24 +474,18 @@ mod tests {
     /// Pure lexical shadowing — innermost match wins regardless of specificity at outer levels.
     #[test]
     fn dispatch_inner_scope_shadows_outer_more_specific() {
-        // `register_builtin` requires `&mut Scope<'static>`, and `inner.outer` needs a
-        // `&'static Scope<'static>`. Leak the outer scope to satisfy both: build it with
-        // its function registered, then `Box::leak` it to acquire a `'static` borrow.
-        let outer_ref: &'static Scope<'static> = {
-            let mut outer = Scope::<'static>::test_sink();
-            register_builtin(&mut outer, "outer_specific", one_slot_sig("v", KType::Number), body_outer_number);
-            Box::leak(Box::new(outer))
-        };
+        let arena = RuntimeArena::new();
+        let outer = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        register_builtin(outer, "outer_specific", one_slot_sig("v", KType::Number), body_outer_number);
 
-        let mut inner = Scope::<'static>::test_sink();
-        register_builtin(&mut inner, "inner_loose", one_slot_sig("v", KType::Any), body_inner_any);
-        inner.outer = Some(outer_ref);
+        let inner = arena.alloc_scope(outer.child_for_call());
+        register_builtin(inner, "inner_loose", one_slot_sig("v", KType::Any), body_inner_any);
 
         let expr = KExpression { parts: vec![ExpressionPart::Literal(KLiteral::Number(7.0))] };
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr);
-        let results = sched.execute(&mut inner).unwrap();
-        let result = results[id.index()];
+        let id = sched.add_dispatch(expr, inner);
+        sched.execute().unwrap();
+        let result = sched.read(id);
         assert!(matches!(result, KObject::KString(s) if s == "inner_any"),
             "inner Any must shadow outer Number (lexical shadowing > specificity), got {:?}",
             summarize_marker(result));
@@ -334,9 +497,10 @@ mod tests {
     /// expression out of the list-shape short-circuit.
     #[test]
     fn dispatch_errors_on_ambiguous_overlap() {
-        let mut scope = Scope::<'static>::test_sink();
-        register_builtin(&mut scope, "number_any", two_slot_sig(KType::Number, KType::Any), body_number_any);
-        register_builtin(&mut scope, "any_number", two_slot_sig(KType::Any, KType::Number), body_any_number);
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        register_builtin(scope, "number_any", two_slot_sig(KType::Number, KType::Any), body_number_any);
+        register_builtin(scope, "any_number", two_slot_sig(KType::Any, KType::Number), body_any_number);
 
         let expr = KExpression {
             parts: vec![
@@ -357,7 +521,8 @@ mod tests {
     /// function. (Once monadic effects exist, this should also produce a warning effect.)
     #[test]
     fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
-        let mut scope = Scope::<'static>::test_sink();
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
         let sig = ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
@@ -365,11 +530,11 @@ mod tests {
                 SignatureElement::Argument(Argument {
                     name: "v".into(),
                     ktype: KType::Number,
-                    
+
                 }),
             ],
         };
-        register_builtin(&mut scope, "FOO", sig, body_lowercase);
+        register_builtin(scope, "FOO", sig, body_lowercase);
 
         // The source-side caller writes `FOO 1` (uppercase), which must match the coerced
         // `FOO <v>` registration.
@@ -380,9 +545,9 @@ mod tests {
             ],
         };
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr);
-        let results = sched.execute(&mut scope).unwrap();
-        let result = results[id.index()];
+        let id = sched.add_dispatch(expr, scope);
+        sched.execute().unwrap();
+        let result = sched.read(id);
         assert!(matches!(result, KObject::KString(s) if s == "lowercase"));
     }
 

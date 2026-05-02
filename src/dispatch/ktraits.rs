@@ -29,10 +29,16 @@ pub trait Collection: Iterable {
 /// A `Parseable` that can be hashed and round-tripped through bytes. Doubles as the
 /// `Dict` key trait — the `Hash`/`PartialEq`/`Eq` impls below for `dyn Serializable`
 /// are what make `HashMap<Box<dyn Serializable>, _>` viable in `KObject::Dict`.
+///
+/// `clone_box` lets a boxed key be cloned without knowing its concrete type — required for
+/// `KObject::Dict::deep_clone`. The returned box is `'static` (since concrete keys today are
+/// owned-data types like `String`/`Number`); coerces into the Dict's `Box<dyn Serializable + 'a>`
+/// slot via the standard `'static: 'a` trait-object covariance.
 pub trait Serializable: Parseable {
     fn hash(&self, state: &mut dyn Hasher);
     fn encode(&self) -> Vec<u8>;
     fn decode(bytes: &[u8]) -> Self where Self: Sized;
+    fn clone_box(&self) -> Box<dyn Serializable>;
 }
 
 impl<'a> Hash for dyn Serializable + 'a {

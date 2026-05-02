@@ -7,11 +7,11 @@ use crate::dispatch::scope::Scope;
 use super::{null, register_builtin};
 
 /// `<v:Any>` — single-part expression containing a literal (or a previously-evaluated future).
-/// Returns the value as a fresh leaked `KObject` via `deep_clone`. Combined with
+/// Returns the value as a fresh arena-allocated `KObject` via `deep_clone`. Combined with
 /// `value_lookup` this lets parens-wrapped atoms — `(99)`, `("x")`, `(some_var)`, `([1 2 3])`
 /// — dispatch through the regular pipeline.
 pub fn body<'a>(
-    _scope: &mut Scope<'a>,
+    scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -19,10 +19,11 @@ pub fn body<'a>(
         Some(obj) => obj.deep_clone(),
         None => return null(),
     };
-    BodyResult::Value(Box::leak(Box::new(cloned)))
+    let arena = scope.arena;
+    BodyResult::Value(arena.alloc_object(cloned))
 }
 
-pub fn register(scope: &mut Scope<'static>) {
+pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "value_pass",
@@ -49,14 +50,16 @@ mod tests {
 
     #[test]
     fn value_pass_returns_literal() {
-        let mut scope = Scope::test_sink();
+        use crate::dispatch::arena::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
         let mut sched = Scheduler::new();
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::Number(7.0)));
 
-        let result = match body(&mut scope, &mut sched, ArgumentBundle { args }) {
+        let result = match body(scope, &mut sched, ArgumentBundle { args }) {
             BodyResult::Value(v) => v,
-            BodyResult::Tail(_) => panic!("value_pass should not produce a Tail"),
+            BodyResult::Tail { .. } => panic!("value_pass should not produce a Tail"),
         };
 
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));

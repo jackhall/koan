@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+// (CallArena is reference-counted via std::rc::Rc — re-exporting here for `BodyResult::Tail`
+// users.)
+
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
+use super::arena::CallArena;
 use super::kobject::KObject;
 use super::scope::{KFuture, Scope};
 
@@ -57,28 +61,53 @@ impl NodeId {
 /// run. Defined in `dispatch` (rather than as inherent methods on `Scheduler`) so `BuiltinFn`
 /// can reference it without dragging the whole scheduler module into `dispatch`'s import graph.
 /// `Scheduler` impls this trait in `execute/scheduler.rs`. The single method is intentional —
-/// a builtin's lever into the scheduler is "schedule this expression for late dispatch and give
-/// me back a NodeId to forward my result through"; nothing else.
+/// a builtin's lever into the scheduler is "schedule this expression for late dispatch in the
+/// given scope, and give me back a NodeId to forward my result through"; nothing else. The
+/// scope is passed explicitly rather than read from a thread-local, so callers can spawn work
+/// in any scope they hold (typically their own).
 pub trait SchedulerHandle<'a> {
-    fn add_dispatch(&mut self, expr: KExpression<'a>) -> NodeId;
+    fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId;
 }
 
 /// What a builtin's body returns. `Value` is the common case — the body computed its result
-/// inline. `Tail(expr)` says "my result is whatever this expression produces, evaluate it in
-/// place"; the scheduler rewrites the current node's work to a fresh `Dispatch(expr)` and
-/// re-runs the same slot, so a chain of tail calls (or unbounded tail recursion) reuses one
-/// slot rather than allocating a new one per step. Used by `if_then` for its lazy `value`
-/// slot and by `KFunction::invoke` for `Body::UserDefined`.
+/// inline. `Tail { expr, frame }` says "my result is whatever this expression produces,
+/// evaluate it in place"; the scheduler rewrites the current node's work to a fresh
+/// `Dispatch(expr)` and re-runs the same slot. `frame = Some(f)` installs the per-call
+/// `CallArena` `f` in the slot — its scope becomes the slot's scope and its arena owns the
+/// per-call allocations. Used by `KFunction::invoke` for user-defined bodies. `frame = None`
+/// keeps the slot's existing frame and scope (used by `if_then` for its lazy `value` slot).
+/// A chain of tail calls reuses one slot rather than allocating a new one per step; a TCO
+/// replace with `frame = Some` drops the slot's previous frame immediately because lexical
+/// scoping means the new frame's child scope's `outer` is the FN's captured scope, not the
+/// previous frame's.
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
-    Tail(KExpression<'a>),
+    Tail { expr: KExpression<'a>, frame: Option<Rc<CallArena>> },
+}
+
+impl<'a> BodyResult<'a> {
+    /// Tail return that keeps the slot's existing frame and scope. Used by builtins like
+    /// `if_then` whose lazy slot evaluates in the same frame as the IF call.
+    pub fn tail(expr: KExpression<'a>) -> Self {
+        BodyResult::Tail { expr, frame: None }
+    }
+
+    /// Tail return that installs a fresh per-call frame on the slot. Used by
+    /// `KFunction::invoke` for user-defined bodies — `frame` is an `Rc` to the per-call
+    /// arena and the child scope holding bound parameters. Other Rcs (e.g., escaping
+    /// closures, future stages) may share ownership.
+    pub fn tail_with_frame(expr: KExpression<'a>, frame: Rc<CallArena>) -> Self {
+        BodyResult::Tail { expr, frame: Some(frame) }
+    }
 }
 
 /// A function pointer that implements a builtin `KFunction`'s body. `for<'a>` so a single `fn`
 /// works for any caller scope lifetime; the `&mut dyn SchedulerHandle<'a>` is the lever a body
-/// uses to defer sub-expression evaluation back to the scheduler.
+/// uses to defer sub-expression evaluation back to the scheduler. `Scope` is shared (`&'a`)
+/// rather than `&mut` because a single scope reference is used by every node spawned during a
+/// per-call body's evaluation; mutability is interior (RefCell).
 pub type BuiltinFn = for<'a> fn(
-    &mut Scope<'a>,
+    &'a Scope<'a>,
     &mut dyn SchedulerHandle<'a>,
     ArgumentBundle<'a>,
 ) -> BodyResult<'a>;
@@ -92,20 +121,45 @@ pub enum Body<'a> {
     UserDefined(KExpression<'a>),
 }
 
-/// A callable Koan function: its `ExpressionSignature` (the call shape it matches), an optional
-/// reference to the `Scope` where it was defined (`None` for builtins), and the body
-/// implementation. `Scope::dispatch` finds the right `KFunction` by signature and then `bind`s a
-/// `KExpression` into a `KFuture`; the body runs via `KFunction::invoke` at execute time.
+/// A callable Koan function: its `ExpressionSignature` (the call shape it matches), the body
+/// implementation, and a captured scope. `Scope::dispatch` finds the right `KFunction` by
+/// signature and then `bind`s a `KExpression` into a `KFuture`; the body runs via
+/// `KFunction::invoke` at execute time.
+///
+/// `captured` is the lexical environment captured at definition time: for user-defined FNs
+/// it's the scope that ran the `FN ...` form; for builtins it's the run-root scope (where
+/// they were registered). User-fn bodies resolve free names through this chain — lexical
+/// scoping. The captured pointer is lifetime-erased to `*const Scope<'static>` to keep
+/// `KFunction<'a>` covariant in `'a`; storing a real `&'a Scope<'a>` would make `KFunction`
+/// invariant (because `Scope<'a>` is invariant via its `RefCell`s) and would break builtin
+/// registration's coercion from `'static` to shorter lifetimes. SAFETY: the captured scope
+/// is allocated in a `RuntimeArena` that outlives this `KFunction` — they share the arena
+/// (FN registers the function in the same scope it captures; builtins are registered in
+/// run-root). See the `arena.rs` module-level note for the broader lifetime-erasure pattern.
 pub struct KFunction<'a> {
-    pub scope: Option<&'a Scope<'a>>,
     pub signature: ExpressionSignature,
     pub body: Body<'a>,
+    captured: *const Scope<'static>,
 }
 
 impl<'a> KFunction<'a> {
-    pub fn new(scope: Option<&'a Scope<'a>>, mut signature: ExpressionSignature, body: Body<'a>) -> Self {
+    /// Construct a `KFunction`. `captured` is the FN's defining scope (or, for builtins,
+    /// run-root — the scope they're being registered into).
+    pub fn new(
+        mut signature: ExpressionSignature,
+        body: Body<'a>,
+        captured: &'a Scope<'a>,
+    ) -> Self {
         signature.normalize();
-        Self { scope, signature, body }
+        let captured = captured as *const Scope<'_> as *const Scope<'static>;
+        Self { signature, body, captured }
+    }
+
+    /// Re-attach the captured scope pointer to a fresh `'a` lifetime. The lifetime tracks
+    /// the original scope's allocation, which by the SAFETY argument on the struct still
+    /// lives.
+    pub fn captured_scope(&self) -> &'a Scope<'a> {
+        unsafe { std::mem::transmute::<*const Scope<'static>, &'a Scope<'a>>(self.captured) }
     }
 
     pub fn summarize(&self) -> String {
@@ -153,6 +207,39 @@ impl<'a> KFunction<'a> {
             bundle: ArgumentBundle { args },
         })
     }
+
+    /// Apply this function to a positional argument list, weaving the signature's keyword
+    /// tokens back in. Returns a `BodyResult::Tail` whose expression matches this function's
+    /// keyword-bucketed signature on re-dispatch (so the scheduler picks `self` again via
+    /// the standard path, this time with `bind` happy because all keywords are present).
+    /// On arity mismatch returns `null()` — once the error-handling roadmap item lands this
+    /// becomes a structured error.
+    ///
+    /// Used by the [`call_by_name`](super::builtins::call_by_name) builtin's body to wire
+    /// `f (a b)` to the underlying function's call. Lives on `KFunction` so the builtin's
+    /// body stays a thin shim and the synthesis logic is co-located with the rest of "how
+    /// to call a function."
+    pub fn apply<'b>(&self, args: Vec<ExpressionPart<'b>>) -> BodyResult<'b> {
+        let arg_slots = self
+            .signature
+            .elements
+            .iter()
+            .filter(|el| matches!(el, SignatureElement::Argument(_)))
+            .count();
+        if arg_slots != args.len() {
+            return BodyResult::Value(crate::dispatch::arena::null_singleton());
+        }
+        let mut parts = Vec::with_capacity(self.signature.elements.len());
+        let mut args_iter = args.into_iter();
+        for el in &self.signature.elements {
+            match el {
+                SignatureElement::Keyword(s) => parts.push(ExpressionPart::Keyword(s.clone())),
+                SignatureElement::Argument(_) => parts
+                    .push(args_iter.next().expect("arg count equals slot count by check above")),
+            }
+        }
+        BodyResult::tail(KExpression { parts })
+    }
 }
 
 /// Name → resolved value map produced by `KFunction::bind`; the concrete arguments a
@@ -164,6 +251,19 @@ pub struct ArgumentBundle<'a> {
 impl<'a> ArgumentBundle<'a> {
     pub fn get(&self, name: &str) -> Option<&KObject<'a>> {
         self.args.get(name).map(|v| v.as_ref())
+    }
+
+    /// Independent clone: each value is `deep_clone`d into a fresh `Rc`. The original bundle's
+    /// `Rc`-shared values are not preserved as shared in the clone — `deep_clone`'s contract is
+    /// "fully independent copy."
+    pub fn deep_clone(&self) -> ArgumentBundle<'a> {
+        ArgumentBundle {
+            args: self
+                .args
+                .iter()
+                .map(|(k, v)| (k.clone(), Rc::new(v.deep_clone())))
+                .collect(),
+        }
     }
 }
 

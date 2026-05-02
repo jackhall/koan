@@ -12,7 +12,7 @@ use super::{null, register_builtin};
 /// if unbound at every level. Lets a parens-wrapped name like `(some_var)` dispatch and
 /// resolve to its current value.
 pub fn body<'a>(
-    scope: &mut Scope<'a>,
+    scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
@@ -23,7 +23,7 @@ pub fn body<'a>(
     }
 }
 
-pub fn register(scope: &mut Scope<'static>) {
+pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "value_lookup",
@@ -43,60 +43,63 @@ mod tests {
     use std::rc::Rc;
 
     use super::body;
+    use crate::dispatch::arena::RuntimeArena;
     use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
     use crate::dispatch::kobject::KObject;
     use crate::dispatch::scope::Scope;
     use crate::execute::scheduler::Scheduler;
 
     fn run_body<'a>(
-        scope: &mut Scope<'a>,
+        scope: &'a Scope<'a>,
         bundle: ArgumentBundle<'a>,
     ) -> &'a KObject<'a> {
         let mut sched = Scheduler::new();
         match body(scope, &mut sched, bundle) {
             BodyResult::Value(v) => v,
-            BodyResult::Tail(_) => panic!("value_lookup should not produce a Tail"),
+            BodyResult::Tail { .. } => panic!("value_lookup should not produce a Tail"),
         }
     }
 
     #[test]
     fn value_lookup_returns_binding() {
-        let bound: &'static KObject<'static> = Box::leak(Box::new(KObject::Number(42.0)));
-        let mut scope = Scope::test_sink();
-        scope.data.insert("foo".to_string(), bound);
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let bound = arena.alloc_object(KObject::Number(42.0));
+        scope.data.borrow_mut().insert("foo".to_string(), bound);
 
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("foo".into())));
 
-        let result = run_body(&mut scope, ArgumentBundle { args });
+        let result = run_body(scope, ArgumentBundle { args });
 
         assert!(matches!(result, KObject::Number(n) if *n == 42.0));
     }
 
     #[test]
     fn value_lookup_unbound_returns_null() {
-        let mut scope = Scope::test_sink();
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("missing".into())));
 
-        let result = run_body(&mut scope, ArgumentBundle { args });
+        let result = run_body(scope, ArgumentBundle { args });
 
         assert!(matches!(result, KObject::Null));
     }
 
     #[test]
     fn value_lookup_walks_outer_scope() {
-        let bound: &'static KObject<'static> = Box::leak(Box::new(KObject::Number(7.0)));
-        let mut outer = Scope::test_sink();
-        outer.data.insert("from_outer".to_string(), bound);
+        let arena = RuntimeArena::new();
+        let outer = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let bound = arena.alloc_object(KObject::Number(7.0));
+        outer.data.borrow_mut().insert("from_outer".to_string(), bound);
 
-        let mut inner = Scope::test_sink();
-        inner.outer = Some(&outer);
+        let inner = arena.alloc_scope(outer.child_for_call());
 
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("from_outer".into())));
 
-        let result = run_body(&mut inner, ArgumentBundle { args });
+        let result = run_body(inner, ArgumentBundle { args });
 
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
