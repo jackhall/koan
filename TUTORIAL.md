@@ -51,7 +51,7 @@ PRINT "hello, world"
 
 Reads as `PRINT <msg>`, where `<msg>` must be a string. It writes the string and a trailing newline to the scope's output sink (stdout by default).
 
-`PRINT` only accepts strings — passing a number is a type mismatch and currently silently produces nothing. That is a known rough edge tracked in [ROADMAP.md](ROADMAP.md) under "Surface dispatch and type errors."
+`PRINT` only accepts strings — passing a number is a type mismatch and surfaces as a structured `KError` at the CLI (see "Errors" below).
 
 ## Looking up bound names
 
@@ -62,7 +62,7 @@ LET msg = "hi"
 PRINT msg
 ```
 
-A bare identifier dispatches through `value_lookup` ([value_lookup.rs](src/dispatch/builtins/value_lookup.rs)), which walks the scope chain to find the bound value. Unbound names resolve to `null`.
+A bare identifier dispatches through `value_lookup` ([value_lookup.rs](src/dispatch/builtins/value_lookup.rs)), which walks the scope chain to find the bound value. Unbound names produce a structured `unbound name` error (see "Errors" below).
 
 ## Sub-expressions with parentheses
 
@@ -146,14 +146,31 @@ What happens, in order:
 3. `IF shout THEN (PRINT who)` evaluates the predicate (`shout` looks up to `true`), so the lazy branch fires.
 4. The lazy branch is `(PRINT who)`. The inner `who` looks up to `"world"`, and `PRINT` writes `world\n` to stdout.
 
+## Errors
+
+Failures surface as structured `KError` values at the CLI rather than silent `null`s. The error prints to stderr with the structured kind followed by a frame chain showing where it came from. Examples:
+
+```
+$ echo 'foo' | cargo run
+error: unbound name 'foo'
+
+$ echo 'IF "x" THEN ("y")' | cargo run
+error: dispatch failed for IF x THEN y: no matching function
+
+$ printf 'FN (BAD) = (undefined)\nBAD\n' | cargo run
+error: unbound name 'undefined'
+  in fn(BAD) (fn(BAD))
+```
+
+There is no in-language try/catch construct — errors propagate to the top level automatically. A future builtin will let in-language code observe and handle errors as values; for now they short-circuit the program. Intentional `null` results (e.g., `IF false THEN x`, `PRINT`'s return value) stay as `null` and do not error.
+
 ## What's not in the language yet
 
 Things you might expect that don't exist today — all tracked in [ROADMAP.md](ROADMAP.md):
 
-- **No user-defined functions.** The only callables are the three builtins above plus the two implicit identifier/literal-passing rules. You can't write `FN` or `def` yet.
 - **No user-defined types.** `KType` is a closed enum of seven host-defined kinds; you can't declare a record, a variant, or a trait.
 - **No arithmetic, comparison, or logical operators.** `1 + 1` does not parse as addition. The token-level operator table in [operators.rs](src/parse/operators.rs) only has compound-token desugarings (`!`, `.`, `[]`, `?`), and those are not wired to runtime behavior.
-- **No loops.** Recursion will be the iteration model once user functions exist; today neither is available.
-- **No real error reporting.** Type mismatches and unbound names produce `null` silently rather than raising.
+- **No loops.** Recursion is the iteration model now that user functions exist (see [ROADMAP.md](ROADMAP.md)'s leak-fix and TCO sections).
+- **No in-language error catching.** Errors surface to the CLI but no surface syntax or builtin lets a Koan program inspect and handle them yet.
 
 If a snippet doesn't behave the way you expect, the most likely cause is one of the above, not a bug in your code.

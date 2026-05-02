@@ -1,3 +1,4 @@
+use crate::dispatch::kerror::{KError, KErrorKind};
 use crate::dispatch::kfunction::{
     Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
     SignatureElement,
@@ -6,7 +7,7 @@ use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::try_args;
 
-use super::{null, register_builtin};
+use super::{err, register_builtin};
 
 /// `LET <name:Identifier> = <value:Any>` — copies the bound value into an arena-allocated
 /// `KObject`, inserts it under `name`, and returns that same arena reference. Compound values
@@ -16,10 +17,10 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    try_args!(bundle, return null(); name: KString);
+    try_args!(bundle; name: KString);
     let cloned = match bundle.get("value") {
         Some(obj) => obj.deep_clone(),
-        None => return null(),
+        None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
     let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
@@ -72,6 +73,7 @@ mod tests {
         let value = match result {
             BodyResult::Value(v) => v,
             BodyResult::Tail { .. } => panic!("LET should not produce a Tail"),
+            BodyResult::Err(e) => panic!("LET errored unexpectedly: {e}"),
         };
         assert!(matches!(value, KObject::Number(n) if *n == 42.0));
         let data = scope.data.borrow();

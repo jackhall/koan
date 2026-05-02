@@ -33,6 +33,8 @@ fn main() -> ExitCode {
     match interpret(&source) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            // KError's Display formats `kind` followed by frames in `(expression) (function)`
+            // form, one per line. The "error:" prefix matches the previous CLI shape.
             eprintln!("error: {}", e);
             ExitCode::FAILURE
         }

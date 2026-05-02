@@ -1,3 +1,4 @@
+use crate::dispatch::kerror::{KError, KErrorKind};
 use crate::dispatch::kfunction::{
     Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
     SignatureElement,
@@ -5,21 +6,21 @@ use crate::dispatch::kfunction::{
 use crate::dispatch::scope::Scope;
 use crate::try_args;
 
-use super::{null, register_builtin};
+use super::{err, register_builtin};
 
 /// `<v:Identifier>` — single-part expression containing one name token. Looks `v` up via
-/// `Scope::lookup` (which walks the `outer` chain) and returns the bound `KObject`, or `Null`
-/// if unbound at every level. Lets a parens-wrapped name like `(some_var)` dispatch and
-/// resolve to its current value.
+/// `Scope::lookup` (which walks the `outer` chain) and returns the bound `KObject`, or
+/// `KError::UnboundName` if unbound at every level. Lets a parens-wrapped name like
+/// `(some_var)` dispatch and resolve to its current value.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    try_args!(bundle, return null(); v: KString);
+    try_args!(bundle; v: KString);
     match scope.lookup(&v) {
         Some(obj) => BodyResult::Value(obj),
-        None => null(),
+        None => err(KError::new(KErrorKind::UnboundName(v))),
     }
 }
 
@@ -44,6 +45,7 @@ mod tests {
 
     use super::body;
     use crate::dispatch::arena::RuntimeArena;
+    use crate::dispatch::kerror::{KError, KErrorKind};
     use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
     use crate::dispatch::kobject::KObject;
     use crate::dispatch::scope::Scope;
@@ -57,7 +59,18 @@ mod tests {
         match body(scope, &mut sched, bundle) {
             BodyResult::Value(v) => v,
             BodyResult::Tail { .. } => panic!("value_lookup should not produce a Tail"),
+            BodyResult::Err(e) => panic!("value_lookup errored unexpectedly: {e}"),
         }
+    }
+
+    /// Like `run_body` but returns the `BodyResult` so error-path tests can pattern-match
+    /// on the `Err` variant.
+    fn run_body_result<'a>(
+        scope: &'a Scope<'a>,
+        bundle: ArgumentBundle<'a>,
+    ) -> BodyResult<'a> {
+        let mut sched = Scheduler::new();
+        body(scope, &mut sched, bundle)
     }
 
     #[test]
@@ -76,15 +89,28 @@ mod tests {
     }
 
     #[test]
-    fn value_lookup_unbound_returns_null() {
+    fn value_lookup_unbound_returns_error() {
         let arena = RuntimeArena::new();
         let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("missing".into())));
 
-        let result = run_body(scope, ArgumentBundle { args });
+        let result = run_body_result(scope, ArgumentBundle { args });
 
-        assert!(matches!(result, KObject::Null));
+        match result {
+            BodyResult::Err(KError { kind: KErrorKind::UnboundName(name), .. }) => {
+                assert_eq!(name, "missing");
+            }
+            other => panic!("expected UnboundName error, got {:?}", error_kind_name(&other)),
+        }
+    }
+
+    fn error_kind_name(r: &BodyResult<'_>) -> &'static str {
+        match r {
+            BodyResult::Value(_) => "Value",
+            BodyResult::Tail { .. } => "Tail",
+            BodyResult::Err(_) => "Err",
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::dispatch::kerror::{KError, KErrorKind};
 use crate::dispatch::kfunction::{
     Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
     SignatureElement,
@@ -8,7 +9,7 @@ use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::try_args;
 
-use super::{null, register_builtin};
+use super::{err, null, register_builtin};
 
 /// `IF <predicate:Bool> THEN <value:KExpression>` — the lazy form. When `predicate` is false,
 /// the captured `value` expression is never touched. When true, returns the captured expression
@@ -21,20 +22,33 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    try_args!(bundle, return null(); predicate: Bool);
+    // Default form: predicate type mismatch surfaces as KError::TypeMismatch.
+    try_args!(bundle; predicate: Bool);
     if !predicate {
+        // Intentional null: the predicate was false, so the lazy slot is skipped — the
+        // conditional intentionally has no value. NOT an error path.
         return null();
     }
     let value_rc = match bundle.args.remove("value") {
         Some(rc) => rc,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::MissingArg("value".to_string())));
+        }
     };
     let expr = match Rc::try_unwrap(value_rc) {
         Ok(KObject::KExpression(e)) => e,
-        Ok(_) => return null(),
+        Ok(_) => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "IF...THEN value slot resolved to a non-KExpression".to_string(),
+            )));
+        }
         Err(rc) => match &*rc {
             KObject::KExpression(e) => e.clone(),
-            _ => return null(),
+            _ => {
+                return err(KError::new(KErrorKind::ShapeError(
+                    "IF...THEN value slot resolved to a non-KExpression (shared)".to_string(),
+                )));
+            }
         },
     };
     BodyResult::tail(expr)

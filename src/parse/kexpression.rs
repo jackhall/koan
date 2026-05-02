@@ -54,6 +54,28 @@ impl<'a> ExpressionPart<'a> {
         ExpressionPart::Expression(Box::new(KExpression { parts }))
     }
 
+    /// Short textual rendering of this part, matching the per-part subset of
+    /// `KExpression::summarize`. Used by error reporting (`KError::TypeMismatch.got` and
+    /// `Frame::expression`) to name an offending part without dragging in `Parseable`.
+    pub fn summarize(&self) -> String {
+        match self {
+            ExpressionPart::Keyword(s) => s.clone(),
+            ExpressionPart::Identifier(s) => s.clone(),
+            ExpressionPart::Expression(e) => e.summarize(),
+            ExpressionPart::ListLiteral(items) => {
+                let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
+                format!("[{}]", inner.join(" "))
+            }
+            ExpressionPart::Literal(lit) => match lit {
+                KLiteral::Number(n) => n.to_string(),
+                KLiteral::String(s) => s.clone(),
+                KLiteral::Boolean(b) => b.to_string(),
+                KLiteral::Null => "null".to_string(),
+            },
+            ExpressionPart::Future(obj) => obj.summarize(),
+        }
+    }
+
     pub fn resolve(&self) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
@@ -128,26 +150,8 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
     fn summarize(&self) -> String {
-        fn part_summary(p: &ExpressionPart<'_>) -> String {
-            match p {
-                ExpressionPart::Keyword(s) => s.clone(),
-                ExpressionPart::Identifier(s) => s.clone(),
-                ExpressionPart::Expression(e) => e.summarize(),
-                ExpressionPart::ListLiteral(items) => {
-                    let inner: Vec<String> = items.iter().map(part_summary).collect();
-                    format!("[{}]", inner.join(" "))
-                }
-                ExpressionPart::Literal(lit) => match lit {
-                    KLiteral::Number(n) => n.to_string(),
-                    KLiteral::String(s) => s.clone(),
-                    KLiteral::Boolean(b) => b.to_string(),
-                    KLiteral::Null => "null".to_string(),
-                },
-                ExpressionPart::Future(obj) => obj.summarize(),
-            }
-        }
         self.parts.iter()
-            .map(part_summary)
+            .map(|p| p.summarize())
             .collect::<Vec<_>>()
             .join(" ")
     }

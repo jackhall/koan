@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::dispatch::kerror::{KError, KErrorKind};
 use crate::dispatch::kfunction::{
     Argument, ArgumentBundle, Body, BodyResult, ExpressionSignature, KFunction, KType,
     SchedulerHandle, SignatureElement,
@@ -8,7 +9,7 @@ use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use super::{null, register_builtin};
+use super::{err, register_builtin};
 
 /// `FN <signature:KExpression> = <body:KExpression>` — the user-defined function constructor.
 /// Both slots are `KType::KExpression`, so the parser's parenthesized sub-expressions match
@@ -31,16 +32,28 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     let signature_expr = match extract_kexpression(&mut bundle, "signature") {
         Some(e) => e,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN signature slot must be a parenthesized expression".to_string(),
+            )));
+        }
     };
     let body_expr = match extract_kexpression(&mut bundle, "body") {
         Some(e) => e,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN body slot must be a parenthesized expression".to_string(),
+            )));
+        }
     };
 
     let elements = match parse_signature_elements(&signature_expr) {
         Some(es) => es,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN signature must contain only Keyword and Identifier parts".to_string(),
+            )));
+        }
     };
     // Pick the first Keyword as the data-table key. `scope.functions` does the load-bearing
     // dispatch lookup by signature; `scope.data` is mostly for discoverability and
@@ -52,7 +65,12 @@ pub fn body<'a>(
     });
     let name = match name {
         Some(n) => n,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
+                    .to_string(),
+            )));
+        }
     };
 
     let user_sig = ExpressionSignature {

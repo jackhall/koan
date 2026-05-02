@@ -18,6 +18,9 @@ pub fn body<'a>(
         let line = format!("{s}\n");
         scope.write_out(line.as_bytes());
     }
+    // Intentional null: PRINT has no useful return value. NOT an error path. The signature
+    // requires `msg: Str`, so a non-string here is impossible at this point — the dispatch
+    // bind step would have produced KError::TypeMismatch before invoking the body.
     null()
 }
 

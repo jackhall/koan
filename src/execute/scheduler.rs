@@ -2,33 +2,45 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use crate::dispatch::arena::{CallArena, RuntimeArena};
+use crate::dispatch::kerror::{Frame, KError};
 use crate::dispatch::kfunction::{
     ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
 };
 use crate::dispatch::kobject::KObject;
+use crate::dispatch::ktraits::Parseable;
 use crate::dispatch::scope::{KFuture, Scope};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 /// What a scheduler node will produce when its work runs. `Value` is computed inline; `Forward`
 /// says "my result is whatever node `id` produces" — set when a `Dispatch` spawns a `Bind` for
-/// its sub-expression deps. `read` follows `Forward` chains until it lands on a `Value`.
-/// Cycles are statically prevented because every `NodeId` produced by `add_*` is strictly
-/// greater than every `NodeId` it could forward to.
+/// its sub-expression deps. `Err` says the work errored; dependents short-circuit and propagate
+/// it (with a frame appended for context). `read` and `is_result_ready` follow `Forward` chains
+/// until they land on a terminal `Value` or `Err`. Cycles are statically prevented because
+/// every `NodeId` produced by `add_*` is strictly greater than every `NodeId` it could forward
+/// to.
 enum NodeOutput<'a> {
     Value(&'a KObject<'a>),
     Forward(NodeId),
+    Err(KError),
 }
 
 /// What `run_dispatch`/`run_bind` tells the execute loop to do next. `Done(output)` stores the
-/// output at the current node's slot — the normal path. `Replace { work, frame }` is the
-/// tail-call path: rewrite the current node's `work` and re-enqueue the same `idx` so it runs
-/// again with the new work. When `frame` is `Some`, install it on the slot (its `scope()`
-/// becomes the slot's scope, its `arena()` owns the per-call allocations) — used by user-fn
-/// invocation. `None` keeps the existing frame and scope. Constant memory across tail-call
-/// sequences because no fresh slot is allocated.
+/// output at the current node's slot — the normal path. `Replace { work, frame, function }`
+/// is the tail-call path: rewrite the current node's `work` and re-enqueue the same `idx` so
+/// it runs again with the new work. When `frame` is `Some`, install it on the slot (its
+/// `scope()` becomes the slot's scope, its `arena()` owns the per-call allocations) — used
+/// by user-fn invocation. `None` keeps the existing frame and scope. `function` is an
+/// optional label used to append a `Frame` to any error that lands on this slot — set by
+/// user-fn invocation so an error inside a user-fn body carries the function's name in the
+/// trace; `None` for non-call replacements like `if_then`'s lazy slot. Constant memory
+/// across tail-call sequences because no fresh slot is allocated.
 enum NodeStep<'a> {
     Done(NodeOutput<'a>),
-    Replace { work: NodeWork<'a>, frame: Option<Rc<CallArena>> },
+    Replace {
+        work: NodeWork<'a>,
+        frame: Option<Rc<CallArena>>,
+        function: Option<String>,
+    },
 }
 
 /// What a scheduler node will run.
@@ -75,6 +87,12 @@ struct Node<'a> {
     /// that a successor frame at the same slot needs — drop on TCO replace is immediate,
     /// no `prev` chain.
     frame: Option<Rc<CallArena>>,
+    /// User-fn name installed by a TCO `Replace` whose body is `UserDefined`. When this
+    /// slot's work errors, the slot's Done arm appends a `Frame { function }` to the
+    /// resulting `KError` so the call-stack trace names which user-fn the error happened
+    /// inside. `None` for builtin slots and for non-call replacements like `if_then`'s
+    /// lazy slot. Set in lockstep with `frame` (a per-call frame implies a user-fn entry).
+    function: Option<String>,
 }
 
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
@@ -123,7 +141,7 @@ impl<'a> Scheduler<'a> {
 
     fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         let id = NodeId(self.nodes.len());
-        self.nodes.push(Some(Node { work, scope, frame: None }));
+        self.nodes.push(Some(Node { work, scope, frame: None, function: None }));
         self.results.push(None);
         self.queue.push_back(id.index());
         id
@@ -146,7 +164,7 @@ impl<'a> Scheduler<'a> {
     /// Use `read(id)` to retrieve a top-level dispatch's result after `execute` returns.
     /// Internal Bind/Aggregate/sub-Dispatch slots' results may point into per-call arenas
     /// that finalization has freed; the public API keeps those internals out of reach.
-    pub fn execute(&mut self) -> Result<(), String> {
+    pub fn execute(&mut self) -> Result<(), KError> {
         while let Some(idx) = self.queue.pop_front() {
             let node = self.nodes[idx]
                 .take()
@@ -154,11 +172,17 @@ impl<'a> Scheduler<'a> {
             let scope = node.scope;
             let work = node.work;
             let prev_frame = node.frame;
+            let prev_function = node.function;
             // Bind/Aggregate may need their dep results to be fully resolved (forward chain
             // ending in a `Value`). If any forward-chains to an unresolved slot, requeue.
             if let Some(deps) = work_deps(&work) {
                 if !deps.iter().all(|d| self.is_result_ready(*d)) {
-                    self.nodes[idx] = Some(Node { work, scope, frame: prev_frame });
+                    self.nodes[idx] = Some(Node {
+                        work,
+                        scope,
+                        frame: prev_frame,
+                        function: prev_function,
+                    });
                     self.queue.push_back(idx);
                     continue;
                 }
@@ -204,15 +228,30 @@ impl<'a> Scheduler<'a> {
                                 work: NodeWork::Dispatch(KExpression { parts: Vec::new() }),
                                 scope,
                                 frame: Some(frame),
+                                function: prev_function.clone(),
                             });
                             self.frame_holding_slots.push(idx);
+                        }
+                        (NodeOutput::Err(e), Some(_frame)) => {
+                            // User-fn body errored. Drop the frame (the body's per-call
+                            // arena was about to drop on Done anyway). Append a Frame
+                            // naming the user-fn so the trace points to which call this
+                            // error happened inside.
+                            let with_frame = match &prev_function {
+                                Some(name) => e.with_frame(Frame {
+                                    function: name.clone(),
+                                    expression: name.clone(),
+                                }),
+                                None => e,
+                            };
+                            self.results[idx] = Some(NodeOutput::Err(with_frame));
                         }
                         (other, None) => {
                             self.results[idx] = Some(other);
                         }
                     }
                 }
-                NodeStep::Replace { work: new_work, frame: new_frame } => {
+                NodeStep::Replace { work: new_work, frame: new_frame, function: new_function } => {
                     // TCO: drop the slot's previous frame immediately. Lexical scoping
                     // means the new frame's child scope's `outer` is the captured scope,
                     // not the previous frame's, so this is safe.
@@ -230,7 +269,16 @@ impl<'a> Scheduler<'a> {
                         }
                         None => (scope, None),
                     };
-                    self.nodes[idx] = Some(Node { work: new_work, scope: next_scope, frame: next_frame });
+                    // Inherit prev_function when the replacement doesn't supply its own —
+                    // a Tail without a fresh frame is staying in the same call (e.g.,
+                    // if_then's lazy slot keeps the IF's frame).
+                    let next_function = new_function.or(prev_function);
+                    self.nodes[idx] = Some(Node {
+                        work: new_work,
+                        scope: next_scope,
+                        frame: next_frame,
+                        function: next_function,
+                    });
                     self.queue.push_front(idx);
                 }
             }
@@ -373,23 +421,41 @@ impl<'a> Scheduler<'a> {
                 still_waiting.push(idx);
                 continue;
             }
-            let value = self.read(NodeId(idx));
-            let (dest, lifted_obj) = {
-                let node = self.nodes[idx].as_ref().unwrap();
-                let frame = node
-                    .frame
-                    .as_ref()
-                    .expect("frame_holding_slot must own a frame");
-                let dest = node
-                    .scope
-                    .outer
-                    .expect("per-call scope must have an outer (its captured scope)")
-                    .arena;
-                let lifted_obj = Self::lift_kobject(value, frame);
-                (dest, lifted_obj)
-            };
-            let lifted = dest.alloc_object(lifted_obj);
-            self.results[idx] = Some(NodeOutput::Value(lifted));
+            match self.read_result(NodeId(idx)) {
+                Ok(value) => {
+                    let (dest, lifted_obj) = {
+                        let node = self.nodes[idx].as_ref().unwrap();
+                        let frame = node
+                            .frame
+                            .as_ref()
+                            .expect("frame_holding_slot must own a frame");
+                        let dest = node
+                            .scope
+                            .outer
+                            .expect("per-call scope must have an outer (its captured scope)")
+                            .arena;
+                        let lifted_obj = Self::lift_kobject(value, frame);
+                        (dest, lifted_obj)
+                    };
+                    let lifted = dest.alloc_object(lifted_obj);
+                    self.results[idx] = Some(NodeOutput::Value(lifted));
+                }
+                Err(e) => {
+                    // Forward chain ended in an error. Append this slot's function
+                    // frame (if any) so the trace records that the error happened
+                    // inside this user-fn — non-tail-call chains, where the body
+                    // forwards through a Bind, surface their function this way.
+                    let owned = e.clone_for_propagation();
+                    let with_frame = match &self.nodes[idx].as_ref().unwrap().function {
+                        Some(name) => owned.with_frame(Frame {
+                            function: name.clone(),
+                            expression: name.clone(),
+                        }),
+                        None => owned,
+                    };
+                    self.results[idx] = Some(NodeOutput::Err(with_frame));
+                }
+            }
             // Drop the slot's frame and clear the node. If the lifted value cloned an Rc,
             // the per-call arena lives on (closure escape); otherwise this is the last
             // strong reference and the arena frees.
@@ -398,13 +464,16 @@ impl<'a> Scheduler<'a> {
         self.frame_holding_slots = still_waiting;
     }
 
-    /// True iff `id`'s `Forward` chain ends in a stored `Value`. Used by the execute loop to
-    /// decide whether a `Bind`/`Aggregate` whose subs depend on `id` is safe to run yet.
+    /// True iff `id`'s `Forward` chain ends in a stored terminal output (`Value` or `Err`).
+    /// Used by the execute loop to decide whether a `Bind`/`Aggregate` whose subs depend on
+    /// `id` is safe to run yet. An errored sub is "ready" — the parent will short-circuit
+    /// on it during `run_bind`/`run_aggregate` rather than dispatch.
     fn is_result_ready(&self, id: NodeId) -> bool {
         let mut cur = id;
         loop {
             match self.results.get(cur.index()).and_then(|o| o.as_ref()) {
                 Some(NodeOutput::Value(_)) => return true,
+                Some(NodeOutput::Err(_)) => return true,
                 Some(NodeOutput::Forward(next)) => cur = *next,
                 None => return false,
             }
@@ -423,7 +492,7 @@ impl<'a> Scheduler<'a> {
         &mut self,
         expr: KExpression<'a>,
         scope: &'a Scope<'a>,
-    ) -> Result<NodeStep<'a>, String> {
+    ) -> Result<NodeStep<'a>, KError> {
         if let Some(eager_indices) = scope.lazy_candidate(&expr) {
             let mut parts = expr.parts;
             let mut subs = Vec::with_capacity(eager_indices.len());
@@ -479,7 +548,20 @@ impl<'a> Scheduler<'a> {
         mut expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
         scope: &'a Scope<'a>,
-    ) -> Result<NodeStep<'a>, String> {
+    ) -> Result<NodeStep<'a>, KError> {
+        // Short-circuit if any sub errored: propagate that error rather than dispatch the
+        // parent. Append a frame naming the parent's expression so the trace reconstructs
+        // the call chain.
+        for (_, dep_id) in &subs {
+            if let Err(e) = self.read_result(*dep_id) {
+                let frame = Frame {
+                    function: "<bind>".to_string(),
+                    expression: expr.summarize(),
+                };
+                let propagated = e.clone_for_propagation().with_frame(frame);
+                return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
+            }
+        }
         for (part_idx, dep_id) in subs {
             let value = self.read(dep_id);
             expr.parts[part_idx] = ExpressionPart::Future(value);
@@ -489,13 +571,25 @@ impl<'a> Scheduler<'a> {
     }
 
     fn run_aggregate(&self, elements: Vec<AggregateElement<'a>>, scope: &'a Scope<'a>) -> NodeOutput<'a> {
-        let items: Vec<KObject<'a>> = elements
-            .into_iter()
-            .map(|e| match e {
-                AggregateElement::Static(obj) => obj,
-                AggregateElement::Dep(dep) => self.read(dep).deep_clone(),
-            })
-            .collect();
+        // Short-circuit on the first errored dep — propagate that error rather than build a
+        // partial list. Frame is generic ("<list>") because the aggregate has no signature
+        // text to carry.
+        let mut items: Vec<KObject<'a>> = Vec::with_capacity(elements.len());
+        for e in elements {
+            match e {
+                AggregateElement::Static(obj) => items.push(obj),
+                AggregateElement::Dep(dep) => match self.read_result(dep) {
+                    Ok(v) => items.push(v.deep_clone()),
+                    Err(err) => {
+                        let frame = Frame {
+                            function: "<list>".to_string(),
+                            expression: "list literal".to_string(),
+                        };
+                        return NodeOutput::Err(err.clone_for_propagation().with_frame(frame));
+                    }
+                },
+            }
+        }
         let arena = scope.arena;
         let allocated: &'a KObject<'a> = arena.alloc_object(KObject::List(Rc::new(items)));
         NodeOutput::Value(allocated)
@@ -527,28 +621,43 @@ impl<'a> Scheduler<'a> {
     fn invoke_to_step(&mut self, future: KFuture<'a>, scope: &'a Scope<'a>) -> NodeStep<'a> {
         match future.function.invoke(scope, self, future.bundle) {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame } => NodeStep::Replace {
+            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
                 work: NodeWork::Dispatch(expr),
                 frame,
+                function,
             },
+            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }
 
-    /// Retrieve the resolved `KObject` for a top-level dispatch (a `NodeId` returned from
-    /// `add_dispatch`). Walks `Forward` chains to a stored `Value`. Only safe to call on
-    /// IDs returned by `add_dispatch` — internal Bind/Aggregate/sub-Dispatch slots' results
-    /// may have been freed by `finalize_ready_frames` when their parent user-fn slot's
-    /// per-call frame dropped, so reading them would be UAF.
-    pub fn read(&self, id: NodeId) -> &'a KObject<'a> {
+    /// Retrieve the resolved result for a top-level dispatch (a `NodeId` returned from
+    /// `add_dispatch`). Walks `Forward` chains to a terminal `Value` (returned as `Ok`) or
+    /// `Err` (returned as `Err`). Only safe to call on IDs returned by `add_dispatch` —
+    /// internal Bind/Aggregate/sub-Dispatch slots' results may have been freed by
+    /// `finalize_ready_frames` when their parent user-fn slot's per-call frame dropped, so
+    /// reading them would be UAF.
+    pub fn read_result(&self, id: NodeId) -> Result<&'a KObject<'a>, &KError> {
         let mut cur = id;
         loop {
             match self.results[cur.index()]
                 .as_ref()
                 .expect("result must be ready by the time it's read")
             {
-                NodeOutput::Value(v) => return v,
+                NodeOutput::Value(v) => return Ok(v),
+                NodeOutput::Err(e) => return Err(e),
                 NodeOutput::Forward(next) => cur = *next,
             }
+        }
+    }
+
+    /// Convenience wrapper for the value-only path: panics if the result is an `Err`.
+    /// Most existing tests assume the program ran successfully and want the returned
+    /// `KObject` directly; they can keep calling `read`. Tests asserting on errors use
+    /// `read_result`.
+    pub fn read(&self, id: NodeId) -> &'a KObject<'a> {
+        match self.read_result(id) {
+            Ok(v) => v,
+            Err(e) => panic!("read called on errored node: {e}"),
         }
     }
 }
@@ -635,7 +744,7 @@ impl<'a> KFunction<'a> {
                     child.add(name.clone(), allocated);
                 }
                 let substituted = substitute_params(expr.clone(), &bundle, inner_arena);
-                BodyResult::tail_with_frame(substituted, frame)
+                BodyResult::tail_with_frame(substituted, frame, self.summarize())
             }
         }
     }

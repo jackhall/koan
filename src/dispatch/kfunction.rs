@@ -7,7 +7,9 @@ use std::rc::Rc;
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
 use super::arena::CallArena;
+use super::kerror::{KError, KErrorKind};
 use super::kobject::KObject;
+use super::ktraits::Parseable;
 use super::scope::{KFuture, Scope};
 
 /// One position in a function's structural shape: a `Keyword` (fixed token) or a typeless
@@ -79,25 +81,45 @@ pub trait SchedulerHandle<'a> {
 /// A chain of tail calls reuses one slot rather than allocating a new one per step; a TCO
 /// replace with `frame = Some` drops the slot's previous frame immediately because lexical
 /// scoping means the new frame's child scope's `outer` is the FN's captured scope, not the
-/// previous frame's.
+/// previous frame's. `Err(KError)` propagates a structured failure; the scheduler short-
+/// circuits any node whose dependency errored, appending a `Frame` as the error walks up.
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
-    Tail { expr: KExpression<'a>, frame: Option<Rc<CallArena>> },
+    Tail {
+        expr: KExpression<'a>,
+        frame: Option<Rc<CallArena>>,
+        /// User-fn name to attach to the slot for error-frame purposes. `Some(name)` for
+        /// `KFunction::invoke`'s UserDefined path so an error inside the body's evaluation
+        /// surfaces with that name in its frame trace; `None` for builtin tails like
+        /// `if_then`'s lazy slot, which is just deferred-eval continuation, not a call.
+        function: Option<String>,
+    },
+    Err(KError),
 }
 
 impl<'a> BodyResult<'a> {
     /// Tail return that keeps the slot's existing frame and scope. Used by builtins like
     /// `if_then` whose lazy slot evaluates in the same frame as the IF call.
     pub fn tail(expr: KExpression<'a>) -> Self {
-        BodyResult::Tail { expr, frame: None }
+        BodyResult::Tail { expr, frame: None, function: None }
     }
 
     /// Tail return that installs a fresh per-call frame on the slot. Used by
     /// `KFunction::invoke` for user-defined bodies — `frame` is an `Rc` to the per-call
     /// arena and the child scope holding bound parameters. Other Rcs (e.g., escaping
-    /// closures, future stages) may share ownership.
-    pub fn tail_with_frame(expr: KExpression<'a>, frame: Rc<CallArena>) -> Self {
-        BodyResult::Tail { expr, frame: Some(frame) }
+    /// closures, future stages) may share ownership. `function` names the user-fn for
+    /// error-frame purposes.
+    pub fn tail_with_frame(
+        expr: KExpression<'a>,
+        frame: Rc<CallArena>,
+        function: String,
+    ) -> Self {
+        BodyResult::Tail { expr, frame: Some(frame), function: Some(function) }
+    }
+
+    /// Error return. Wraps a `KError` so the scheduler can short-circuit dependents.
+    pub fn err(e: KError) -> Self {
+        BodyResult::Err(e)
     }
 }
 
@@ -175,13 +197,12 @@ impl<'a> KFunction<'a> {
         format!("fn({})", parts.join(" "))
     }
 
-    pub fn bind(&'a self, expr: KExpression<'a>) -> Result<KFuture<'a>, String> {
+    pub fn bind(&'a self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
         if self.signature.elements.len() != expr.parts.len() {
-            return Err(format!(
-                "expected {} parts, got {}",
-                self.signature.elements.len(),
-                expr.parts.len()
-            ));
+            return Err(KError::new(KErrorKind::ArityMismatch {
+                expected: self.signature.elements.len(),
+                got: expr.parts.len(),
+            }));
         }
         let mut args: HashMap<String, Rc<KObject<'a>>> = HashMap::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
@@ -189,13 +210,25 @@ impl<'a> KFunction<'a> {
                 SignatureElement::Keyword(s) => match part {
                     ExpressionPart::Keyword(t) if s == t => {}
                     ExpressionPart::Keyword(t) => {
-                        return Err(format!("expected keyword '{s}', got '{t}'"));
+                        return Err(KError::new(KErrorKind::DispatchFailed {
+                            expr: expr.summarize(),
+                            reason: format!("expected keyword '{s}', got '{t}'"),
+                        }));
                     }
-                    _ => return Err(format!("expected keyword '{s}'")),
+                    _ => {
+                        return Err(KError::new(KErrorKind::DispatchFailed {
+                            expr: expr.summarize(),
+                            reason: format!("expected keyword '{s}'"),
+                        }));
+                    }
                 },
                 SignatureElement::Argument(arg) => {
                     if !arg.matches(part) {
-                        return Err(format!("type mismatch for argument '{}'", arg.name));
+                        return Err(KError::new(KErrorKind::TypeMismatch {
+                            arg: arg.name.clone(),
+                            expected: arg.ktype.name().to_string(),
+                            got: part.summarize(),
+                        }));
                     }
                     args.insert(arg.name.clone(), Rc::new(part.resolve()));
                 }
@@ -212,8 +245,7 @@ impl<'a> KFunction<'a> {
     /// tokens back in. Returns a `BodyResult::Tail` whose expression matches this function's
     /// keyword-bucketed signature on re-dispatch (so the scheduler picks `self` again via
     /// the standard path, this time with `bind` happy because all keywords are present).
-    /// On arity mismatch returns `null()` — once the error-handling roadmap item lands this
-    /// becomes a structured error.
+    /// On arity mismatch returns `BodyResult::Err(KError::ArityMismatch)`.
     ///
     /// Used by the [`call_by_name`](super::builtins::call_by_name) builtin's body to wire
     /// `f (a b)` to the underlying function's call. Lives on `KFunction` so the builtin's
@@ -227,7 +259,10 @@ impl<'a> KFunction<'a> {
             .filter(|el| matches!(el, SignatureElement::Argument(_)))
             .count();
         if arg_slots != args.len() {
-            return BodyResult::Value(crate::dispatch::arena::null_singleton());
+            return BodyResult::Err(KError::new(KErrorKind::ArityMismatch {
+                expected: arg_slots,
+                got: args.len(),
+            }));
         }
         let mut parts = Vec::with_capacity(self.signature.elements.len());
         let mut args_iter = args.into_iter();
@@ -402,6 +437,19 @@ impl KType {
     /// literal anyway). Returns `false` for equal types — strict, not reflexive.
     pub fn is_more_specific_than(self, other: KType) -> bool {
         !matches!(self, KType::Any) && matches!(other, KType::Any)
+    }
+
+    /// Short human-readable name for this type — used by error formatters.
+    pub fn name(self) -> &'static str {
+        match self {
+            KType::Number => "Number",
+            KType::Str => "Str",
+            KType::Bool => "Bool",
+            KType::Null => "Null",
+            KType::Identifier => "Identifier",
+            KType::KExpression => "KExpression",
+            KType::Any => "Any",
+        }
     }
 }
 
