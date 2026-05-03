@@ -231,6 +231,61 @@ dispatch correctness in the user's head.
 shorthand still works but doesn't unlock the generic-function-over-groups payoff. Land
 alongside or after the trait machinery.
 
+## Module system and directory layout
+
+**Problem.** [`main.rs`](src/main.rs) reads one source string — a file path argument or
+stdin — and that is the entire Koan program. There is no way for one Koan source file to
+reference definitions in another: no import, no module path, no project-level entry point.
+A Koan codebase is one file. Realistic programs outgrow that long before they outgrow a
+few hundred lines, and the language cannot represent its own standard library as separate
+files because the standard library does not yet exist as Koan code at all.
+
+**Impact.**
+
+- *Decomposition is impossible.* Splitting a growing program into related groups of
+  functions and types is a basic readability move; Koan can't do it. Every function the
+  language ships at the user level — once it has any — has to live in the same file as
+  the user's program, or be a host-side builtin.
+- *No standard library in Koan itself.* A future "list utilities" or "string helpers"
+  module written in Koan can't ship until there's a way to load it. The only path today
+  is to bake everything into Rust as a builtin, which is the wrong layer for code that
+  would naturally be expressible in Koan.
+- *No private/exported boundary.* Every top-level definition is visible to every other
+  one in the same file. With one file, that's tolerable; with many, it forces every name
+  in the codebase to globally not collide. Per-file privacy is an obvious want but has no
+  syntactic anchor.
+- *Tests can't live alongside code.* A test file referencing the function it tests is the
+  default shape of a test suite in every other language. Koan can express neither side of
+  that.
+
+**Directions.** None decided.
+
+- *Filesystem layout.* Flat directory of `.koan` files, or a tree (`utils/list.koan`,
+  `utils/string.koan`)? Implicit entry point (`main.koan`) or explicit manifest file?
+  Single-file programs (today's shape) should keep working — directory mode is an
+  addition.
+- *Import surface.* An explicit `IMPORT "utils/list"` builtin that loads and registers
+  another file's definitions, vs. implicit "everything in the project directory is
+  visible". Explicit is more verbose but makes the dependency graph readable; implicit
+  is cheaper to write but couples every file to every other.
+- *Namespacing.* Qualified names (`list::map`) keep collisions controlled and signal where
+  a name comes from at the call site; flat naming with shadowing rules is simpler but
+  re-creates the global-scope problem at codebase scale. Trait/type names are the
+  load-bearing case — two modules each defining a `Point` type need a story.
+- *Definition vs side-effect at module load.* Does loading a module run its top-level
+  expressions (so importing has effects), or only register its `FN` and `TYPE`
+  definitions and leave expression evaluation to the entry-point file? The latter matches
+  most languages and dovetails with the monadic-effect work — effectful module
+  initialization wants the same handler machinery as effectful builtins.
+- *Circular imports.* Disallow (simplest, may force awkward splits), allow with
+  forward-declaration discipline, or resolve via the existing dispatch-as-node scheduler
+  by treating cross-module references as another deferred dependency.
+
+**Sequencing.** Wants user-defined types at least sketched, since "what can a module
+export" is the load-bearing design question and types are the awkward case. Mostly
+orthogonal to the effect and error work — the module loader uses whatever `BuiltinFn`
+signature exists at the time. Lands cleanly any time after types settle.
+
 ## Other deferred surface items
 
 Smaller pieces called out in passing as the larger items shipped:
