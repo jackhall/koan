@@ -115,24 +115,21 @@ stepping stones rather than end states.
 ## User-declarable types and traits
 
 The substrate landed and the surface for sum and product types ships
-(`UNION`, `STRUCT` — see [DECISIONS.md](DECISIONS.md)). What's still open is
-field access on structs, traits, and lifting `KType` out of its closed-enum
-shape so user code can extend it.
+(`UNION`, `STRUCT` — see [DECISIONS.md](DECISIONS.md)). Field access on
+structs is now in via [ATTR](src/dispatch/builtins/attr.rs) (`p.x`). What's
+still open is traits, and lifting `KType` out of its closed-enum shape so
+user code can extend it.
 
 **Problem.** [`KType`](src/dispatch/kfunction.rs) remains a *closed* enum — users can
 declare records and tagged unions but they all reduce to the built-in `KObject::Struct`
 and `KObject::Tagged` variants under a single `KType::Type` meta-type. Its doc comment
 already flags the bigger limitation: *"In the future this should not assume all types
-can be enumerated; the user should be able to define duck types."* Field access (reading
-`p.x` off a `Point`) has no surface form yet. Argument types in user-fn signatures are
-also still uniformly `Any` — per-param annotations are the natural next surface extension
-and reuse the parser's `Type` token class.
+can be enumerated; the user should be able to define duck types."* Argument types in
+user-fn signatures are also still uniformly `Any` — per-param annotations are the
+natural next surface extension and reuse the parser's `Type` token class.
 
 **Impact.**
 
-- *No field access on structs.* `STRUCT Point = (x: Number, y: Number)` and
-  `LET p = (Point 3 4)` work, but there is no surface form to read `p`'s `x` field.
-  Users can construct struct values and pass them around but not introspect them.
 - *No abstraction over types.* Writing a function over "anything that can be iterated" or
   "anything that can be compared" requires a trait or contract — Koan has no way to
   express either. The host-side [`ktraits.rs`](src/dispatch/ktraits.rs) (`Parseable`,

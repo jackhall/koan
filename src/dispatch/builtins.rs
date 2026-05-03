@@ -4,6 +4,7 @@ use super::kfunction::{Body, BodyResult, BuiltinFn, ExpressionSignature, KFuncti
 use super::kobject::KObject;
 use super::scope::Scope;
 
+mod attr;
 pub mod call_by_name;
 mod fn_def;
 mod if_then;
@@ -164,6 +165,7 @@ pub fn default_scope<'a>(
     super::struct_value::register(scope);
     type_call::register(scope);
     match_case::register(scope);
+    attr::register(scope);
 
     scope
 }

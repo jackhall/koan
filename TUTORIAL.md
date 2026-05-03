@@ -305,6 +305,29 @@ LET partial = (Point (x: 3))
 A struct's runtime type is `KType::Struct`; the schema itself is
 `KType::Type` (shared with `TaggedUnionType`).
 
+Read a field off a struct value with the `.` operator (an alias for the
+`ATTR` builtin):
+
+```
+LET dx = p.x                             # 3
+PRINT (p.y)                              # 4
+
+STRUCT Line = (start: Struct, finish: Struct)
+LET seg = (Line (start: p, finish: q))
+LET tipx = seg.finish.x                  # chained: 3
+```
+
+Reading a missing field, or applying `.` to a non-struct value, errors at
+access time:
+
+```
+LET bogus = p.z
+# error: shape error: struct `Point` has no field `z`
+
+LET wat = (5).x
+# error: type mismatch for argument 's': expected Struct, got Number
+```
+
 ## Errors
 
 Failures are first-class [`KError`](src/dispatch/kerror.rs) values with a
@@ -366,6 +389,7 @@ One line per surface form. Sources under
 | `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/dispatch/builtins/match_case.rs)          |
 | `<verb:TypeRef> (<args>)`                             | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/dispatch/builtins/type_call.rs)            |
 | `<verb:Identifier> (<args>)`                          | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/dispatch/builtins/call_by_name.rs)      |
+| `<s>.<field>` (`ATTR <s> <field>`)                    | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/dispatch/builtins/attr.rs)                      |
 | `<v:Identifier>` (single-part)                        | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/dispatch/builtins/value_lookup.rs)      |
 | `<v>` (single-part literal/expr)                      | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/dispatch/builtins/value_pass.rs)          |
 
@@ -373,10 +397,9 @@ One line per surface form. Sources under
 
 Tracked in [ROADMAP.md](ROADMAP.md):
 
-- **No user-declarable traits, no field access on structs.** `UNION` and
-  `STRUCT` cover sum and product types, but there's no syntax yet for
-  reading a field off a struct value or for declaring a trait. `KType` is
-  otherwise a closed enum.
+- **No user-declarable traits.** `UNION` and `STRUCT` cover sum and product
+  types and `.` reads fields off a struct value, but there's no syntax yet
+  for declaring a trait. `KType` is otherwise a closed enum.
 - **No per-parameter type annotations** on user functions (uniformly `Any`).
 - **No arithmetic, comparison, or logical operators.** `1 + 1` doesn't parse
   as addition. The character-trigger registry only does syntactic desugaring.
