@@ -1,22 +1,23 @@
 use std::rc::Rc;
 
+use crate::dispatch::kerror::{KError, KErrorKind};
 use crate::dispatch::kfunction::{
     Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
     SignatureElement,
 };
 use crate::dispatch::kobject::KObject;
+use crate::dispatch::ktraits::Parseable;
 use crate::dispatch::scope::Scope;
 
-use super::{null, register_builtin};
+use super::{err, register_builtin};
 
 /// `<verb:Identifier> <args:KExpression>` — invokes a function bound to `verb` in scope by
 /// applying it to the positional parts of `args`. Surface syntax: `f (a b c)` where `f` is
 /// an Identifier whose binding is a `KObject::KFunction`. `verb` is resolved via
 /// `Scope::lookup_kfunction`; `KFunction::apply` weaves the function's signature keywords
 /// back in and returns a `BodyResult::Tail` that the scheduler re-dispatches against the
-/// keyword-bucketed signature. Falls through to `null()` when `verb` is unbound or bound to
-/// a non-function — the dispatch table sees the `null` and the caller observes an unhelpful
-/// no-op until the error-handling roadmap item lands.
+/// keyword-bucketed signature. Errored cases (verb unbound, bound to a non-function, args
+/// slot misshapen) return structured `KError` variants the CLI reports verbatim.
 ///
 /// Body intentionally thin: the synthesis logic lives on [`KFunction::apply`] alongside the
 /// rest of "how to call a function," keeping this builtin a clean dispatch consumer rather
@@ -30,22 +31,53 @@ pub fn body<'a>(
     // the identifier text — same shape as PRINT et al. observe for Identifier-typed slots.
     let verb = match bundle.get("verb") {
         Some(KObject::KString(s)) => s.clone(),
-        _ => return null(),
+        Some(other) => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "KString".to_string(),
+                got: other.summarize(),
+            }));
+        }
+        None => {
+            return err(KError::new(KErrorKind::MissingArg("verb".to_string())));
+        }
     };
     let args_expr = match bundle.args.remove("args") {
         Some(rc) => match Rc::try_unwrap(rc) {
             Ok(KObject::KExpression(e)) => e,
-            Ok(_) => return null(),
+            Ok(_) => {
+                return err(KError::new(KErrorKind::ShapeError(
+                    "call_by_name args slot resolved to a non-KExpression".to_string(),
+                )));
+            }
             Err(rc) => match &*rc {
                 KObject::KExpression(e) => e.clone(),
-                _ => return null(),
+                _ => {
+                    return err(KError::new(KErrorKind::ShapeError(
+                        "call_by_name args slot resolved to a non-KExpression (shared)"
+                            .to_string(),
+                    )));
+                }
             },
         },
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::MissingArg("args".to_string())));
+        }
     };
     match scope.lookup_kfunction(&verb) {
         Some(f) => f.apply(args_expr.parts),
-        None => null(),
+        None => {
+            // Distinguish "unbound" (no name in scope) from "bound to a non-function." The
+            // first is UnboundName; the second is TypeMismatch on the verb's resolved value.
+            match scope.lookup(&verb) {
+                None => err(KError::new(KErrorKind::UnboundName(verb))),
+                Some(obj) => err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "verb".to_string(),
+                    expected: "KFunction".to_string(),
+                    got: obj.summarize(),
+                })),
+            }
+        }
     }
 }
 
@@ -72,6 +104,7 @@ mod tests {
 
     use crate::dispatch::arena::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
+    use crate::dispatch::kerror::KErrorKind;
     use crate::dispatch::kobject::KObject;
     use crate::dispatch::ktraits::Parseable;
     use crate::dispatch::scope::Scope;
@@ -114,6 +147,21 @@ mod tests {
         sched.read(id)
     }
 
+    /// Like `run_one` but returns the error if the dispatch errored. Tests asserting on
+    /// `KError` variants use `expect_err_kind(this, |k| ...)` to inspect.
+    fn run_one_err<'a>(
+        scope: &'a Scope<'a>,
+        expr: KExpression<'a>,
+    ) -> crate::dispatch::kerror::KError {
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr, scope);
+        sched.execute().expect("scheduler should not surface errors directly");
+        match sched.read_result(id) {
+            Ok(v) => panic!("expected dispatch to error, got value {}", v.summarize()),
+            Err(e) => e.clone(),
+        }
+    }
+
     /// `LET f = (FN ...)` captures the FN's returned KFunction. Calling it via
     /// `f (arg)` dispatches through `call_by_name`, which weaves the function's keyword
     /// (DOUBLE) back in and re-dispatches as `DOUBLE arg`.
@@ -122,7 +170,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (DOUBLE x) = (x))");
+        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
         let result = run_one(scope, parse_one("f (7)"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
@@ -134,42 +182,52 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (a PICK b) = (a))");
+        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
         let result = run_one(scope, parse_one("f (1 2)"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
     /// Arity mismatch: f takes 1 arg, called with 3.
     #[test]
-    fn call_by_name_arity_mismatch_returns_null() {
+    fn call_by_name_arity_mismatch_returns_error() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (DOUBLE x) = (x))");
-        let result = run_one(scope, parse_one("f (1 2 3)"));
-        assert!(matches!(result, KObject::Null));
+        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
+        let err = run_one_err(scope, parse_one("f (1 2 3)"));
+        assert!(
+            matches!(err.kind, KErrorKind::ArityMismatch { expected: 1, got: 3 }),
+            "expected ArityMismatch{{1, 3}}, got {err}",
+        );
     }
 
-    /// Non-function binding: `x` is a Number; calling `x (7)` returns Null because
-    /// `lookup_kfunction` filters out non-functions.
+    /// Non-function binding: `x` is a Number; calling `x (7)` errors with TypeMismatch on
+    /// the verb, since lookup found a binding but it isn't a function.
     #[test]
-    fn call_by_name_on_non_function_returns_null() {
+    fn call_by_name_on_non_function_returns_error() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "LET x = 42");
-        let result = run_one(scope, parse_one("x (7)"));
-        assert!(matches!(result, KObject::Null));
+        let err = run_one_err(scope, parse_one("x (7)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "verb"),
+            "expected TypeMismatch on verb, got {err}",
+        );
     }
 
-    /// Unbound name: `f` was never bound; lookup returns None, builtin returns Null.
+    /// Unbound name: `f` was never bound; lookup returns None, builtin returns
+    /// `KError::UnboundName`.
     #[test]
-    fn call_by_name_unbound_returns_null() {
+    fn call_by_name_unbound_returns_error() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let result = run_one(scope, parse_one("undefined (7)"));
-        assert!(matches!(result, KObject::Null));
+        let err = run_one_err(scope, parse_one("undefined (7)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::UnboundName(name) if name == "undefined"),
+            "expected UnboundName(\"undefined\"), got {err}",
+        );
     }
 
     /// Closure-escape: a function defined inside another function's body, returned out of
@@ -187,19 +245,22 @@ mod tests {
         // (INNER) in MAKE's per-call scope, then is returned (FN's value).
         run(
             scope,
-            "FN (MAKE) = (FN (INNER) = (\"hi\"))\n\
+            "FN (MAKE) -> KFunction = (FN (INNER) -> Str = (\"hi\"))\n\
              LET f = (MAKE)",
         );
         // After MAKE's call frame drops, only the lifted KObject::KFunction (carrying the
         // Rc) is keeping MAKE's per-call arena alive. Invoking the inner FN must still
-        // succeed: the function reference is valid, captured scope is reachable.
-        let result = run_one(scope, parse_one("f (1)"));
+        // succeed without UAF.
+        let err = run_one_err(scope, parse_one("f (1)"));
         // `f (1)` invokes via `call_by_name` → INNER. INNER's signature is
-        // `[Keyword(INNER)]` (no args), so synthesize_keyword_call finds an arity mismatch
-        // (1 arg supplied vs 0 expected) and returns Null. That's fine for this test —
-        // what we're checking is that we don't UAF; getting Null instead of crashing
-        // proves the reference and arena are alive.
-        assert!(matches!(result, KObject::Null));
+        // `[Keyword(INNER)]` (no args), so the synthesized call has arity 1 vs expected 0
+        // and `KFunction::apply` returns ArityMismatch. The point of this test is that we
+        // get a structured error rather than a UAF crash — that proves the reference and
+        // arena are alive.
+        assert!(
+            matches!(err.kind, KErrorKind::ArityMismatch { expected: 0, got: 1 }),
+            "expected ArityMismatch{{0, 1}}, got {err}",
+        );
     }
 
     /// Variant of the closure-escape test where the inner FN takes a parameter, so the
@@ -212,7 +273,7 @@ mod tests {
         let scope = build_scope(&arena, captured);
         run(
             scope,
-            "FN (MAKE) = (FN (ECHO x) = (x))\n\
+            "FN (MAKE) -> KFunction = (FN (ECHO x) -> Number = (x))\n\
              LET f = (MAKE)",
         );
         let result = run_one(scope, parse_one("f (42)"));
@@ -230,7 +291,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (MAKE) = ([(FN (ECHO x) = (x))])");
+        run(scope, "FN (MAKE) -> List = ([(FN (ECHO x) -> Number = (x))])");
         let result = run_one(scope, parse_one("(MAKE)"));
         let items = match result {
             KObject::List(items) => items,

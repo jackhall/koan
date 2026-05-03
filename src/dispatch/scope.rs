@@ -5,6 +5,7 @@ use std::io::Write;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::arena::RuntimeArena;
+use super::kerror::{KError, KErrorKind};
 use super::kfunction::{
     ArgumentBundle, KFunction, KType, SignatureElement, Specificity, UntypedKey,
 };
@@ -189,21 +190,24 @@ impl<'a> Scope<'a> {
     /// signature `[Identifier, KExpression]` matches identifier-leading expressions and
     /// synthesizes a re-dispatchable expression by weaving the looked-up function's keyword
     /// tokens back in.
-    pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, String> {
+    pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
         match self.pick(&expr) {
             Pick::One(f) => return f.bind(expr),
             Pick::Ambiguous(n) => {
-                return Err(format!(
-                    "ambiguous dispatch: {n} candidates match {} with equal specificity",
-                    expr.summarize(),
-                ));
+                return Err(KError::new(KErrorKind::AmbiguousDispatch {
+                    expr: expr.summarize(),
+                    candidates: n,
+                }));
             }
             Pick::None => {}
         }
         if let Some(outer) = self.outer {
             return outer.dispatch(expr);
         }
-        Err(format!("no matching function for {}", expr.summarize()))
+        Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: "no matching function".to_string(),
+        }))
     }
 
     /// Look up `name` in the scope chain and return the bound `KFunction`, or `None` if the
@@ -511,7 +515,10 @@ mod tests {
         };
         let result = scope.dispatch(expr);
         match result {
-            Err(e) => assert!(e.contains("ambiguous"), "expected ambiguity error, got: {e}"),
+            Err(e) => assert!(
+                matches!(e.kind, crate::dispatch::kerror::KErrorKind::AmbiguousDispatch { .. }),
+                "expected ambiguity error, got: {e}",
+            ),
             Ok(_) => panic!("equally-specific overloads should produce an ambiguity error"),
         }
     }

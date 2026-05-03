@@ -14,11 +14,12 @@ pub enum KLiteral {
     Null,
 }
 
-/// One element of a parsed expression. The parser classifies each source token into either
-/// `Keyword` (a fixed dispatch position like `LET`/`=`/`THEN`) or `Identifier` (a name slot
-/// like `x`/`foo`); see `is_keyword_token` for the rule. `Expression`, `ListLiteral`, and
-/// `Literal` are the other parser outputs; the scheduler introduces `Future` later, splicing
-/// a completed dep's result into its dependent's parts list before late dispatch.
+/// One element of a parsed expression. The parser classifies each source token into one of:
+/// `Keyword` (all-caps fixed tokens like `LET`/`=`/`THEN`; see `is_keyword_token`), `Type`
+/// (capitalized type names like `Number`/`MyType`/`KFunction` — first char uppercase plus at
+/// least one lowercase), or `Identifier` (everything else: lowercase/snake names). `Expression`,
+/// `ListLiteral`, and `Literal` are the other parser outputs; the scheduler introduces `Future`
+/// later, splicing a completed dep's result into its dependent's parts list before late dispatch.
 pub enum ExpressionPart<'a> {
     /// Fixed token consumed by a `SignatureElement::Token` slot at dispatch time. Contributes
     /// `UntypedElement::Keyword(s)` to the bucket key.
@@ -26,6 +27,11 @@ pub enum ExpressionPart<'a> {
     /// Name slot bound to an `Argument` whose `KType` is `Identifier` or `Any`. Contributes
     /// `UntypedElement::Slot` to the bucket key — same shape as a literal or expression slot.
     Identifier(String),
+    /// A type-name reference like `Number` or `KFunction`. Used in surface positions that name
+    /// a type (e.g. the return-type slot of `FN (sig) -> Type = (body)`). Contributes
+    /// `UntypedElement::Slot` to the bucket key; an `Argument` whose `ktype` is `KType::TypeRef`
+    /// matches this part.
+    Type(String),
     Expression(Box<KExpression<'a>>),
     /// A `[a b c]` source-level list. Each element is itself an `ExpressionPart`; sub-expression
     /// elements (`ExpressionPart::Expression`) are scheduled as deps and replaced with `Future`s
@@ -41,6 +47,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
         match self {
             ExpressionPart::Keyword(s) => f.debug_tuple("Keyword").field(s).finish(),
             ExpressionPart::Identifier(s) => f.debug_tuple("Identifier").field(s).finish(),
+            ExpressionPart::Type(s) => f.debug_tuple("Type").field(s).finish(),
             ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
             ExpressionPart::ListLiteral(items) => f.debug_tuple("ListLiteral").field(items).finish(),
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
@@ -54,10 +61,34 @@ impl<'a> ExpressionPart<'a> {
         ExpressionPart::Expression(Box::new(KExpression { parts }))
     }
 
+    /// Short textual rendering of this part, matching the per-part subset of
+    /// `KExpression::summarize`. Used by error reporting (`KError::TypeMismatch.got` and
+    /// `Frame::expression`) to name an offending part without dragging in `Parseable`.
+    pub fn summarize(&self) -> String {
+        match self {
+            ExpressionPart::Keyword(s) => s.clone(),
+            ExpressionPart::Identifier(s) => s.clone(),
+            ExpressionPart::Type(s) => s.clone(),
+            ExpressionPart::Expression(e) => e.summarize(),
+            ExpressionPart::ListLiteral(items) => {
+                let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
+                format!("[{}]", inner.join(" "))
+            }
+            ExpressionPart::Literal(lit) => match lit {
+                KLiteral::Number(n) => n.to_string(),
+                KLiteral::String(s) => s.clone(),
+                KLiteral::Boolean(b) => b.to_string(),
+                KLiteral::Null => "null".to_string(),
+            },
+            ExpressionPart::Future(obj) => obj.summarize(),
+        }
+    }
+
     pub fn resolve(&self) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
             ExpressionPart::Identifier(s) => KObject::KString(s.clone()),
+            ExpressionPart::Type(s) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
             ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
@@ -82,6 +113,7 @@ impl<'a> Clone for ExpressionPart<'a> {
         match self {
             ExpressionPart::Keyword(s) => ExpressionPart::Keyword(s.clone()),
             ExpressionPart::Identifier(s) => ExpressionPart::Identifier(s.clone()),
+            ExpressionPart::Type(s) => ExpressionPart::Type(s.clone()),
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
@@ -128,26 +160,8 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
     fn summarize(&self) -> String {
-        fn part_summary(p: &ExpressionPart<'_>) -> String {
-            match p {
-                ExpressionPart::Keyword(s) => s.clone(),
-                ExpressionPart::Identifier(s) => s.clone(),
-                ExpressionPart::Expression(e) => e.summarize(),
-                ExpressionPart::ListLiteral(items) => {
-                    let inner: Vec<String> = items.iter().map(part_summary).collect();
-                    format!("[{}]", inner.join(" "))
-                }
-                ExpressionPart::Literal(lit) => match lit {
-                    KLiteral::Number(n) => n.to_string(),
-                    KLiteral::String(s) => s.clone(),
-                    KLiteral::Boolean(b) => b.to_string(),
-                    KLiteral::Null => "null".to_string(),
-                },
-                ExpressionPart::Future(obj) => obj.summarize(),
-            }
-        }
         self.parts.iter()
-            .map(part_summary)
+            .map(|p| p.summarize())
             .collect::<Vec<_>>()
             .join(" ")
     }

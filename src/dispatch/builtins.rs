@@ -1,4 +1,5 @@
 use super::arena::null_singleton;
+use super::kerror::KError;
 use super::kfunction::{Body, BodyResult, BuiltinFn, ExpressionSignature, KFunction};
 use super::kobject::KObject;
 use super::scope::Scope;
@@ -19,10 +20,19 @@ pub(crate) fn null_kobject<'a>() -> &'a KObject<'a> {
 }
 
 /// `BodyResult::Value(null_kobject())` — the canonical "no useful return value" early-exit for
-/// builtins. Pairs with `try_args!`'s `return $err;` clause so a typo or type mismatch produces
-/// `Null` synchronously without further scheduler work.
+/// builtins. Used for *intentional* nulls only: an `IF false THEN x` skipping its lazy slot,
+/// `PRINT`'s no-useful-return value. Failure paths (type mismatches, missing args, unbound
+/// names, shape errors) return `err(...)` instead so the scheduler can short-circuit and the
+/// CLI can report what went wrong.
 pub(crate) fn null<'a>() -> BodyResult<'a> {
     BodyResult::Value(null_kobject())
+}
+
+/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. Replaces the prior
+/// pattern of returning `null()` from every failure path. The error propagates through the
+/// scheduler's Forward chain and short-circuits any dependent node.
+pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
+    BodyResult::Err(e)
 }
 
 /// Allocate a fresh `KFunction` + wrapping `KObject::KFunction` in `scope`'s arena, then add
@@ -48,24 +58,34 @@ pub(crate) fn register_builtin<'a>(
     scope.add(name.into(), obj);
 }
 
-/// Pull typed arguments out of an `ArgumentBundle`, returning `$err` early on missing-or-mistyped
-/// values. Each `name: Variant` pair becomes a `let name = ...` binding extracted from
-/// `KObject::Variant`. Supported variants: `KString` (cloned to `String`), `Number` (deref'd to
-/// `f64`), `Bool` (deref'd to `bool`).
+/// Pull typed arguments out of an `ArgumentBundle`. Two forms:
 ///
 /// ```ignore
-/// try_args!(bundle, return null(); name: KString, predicate: Bool);
+/// // Default form: a missing or mistyped arg returns BodyResult::Err with a structured
+/// // KError::TypeMismatch identifying the offending argument and what was actually present.
+/// try_args!(bundle; name: KString, predicate: Bool);
+///
+/// // Override form: the caller supplies the early-return expression. Used when the
+/// // builtin wants to return something other than the structured TypeMismatch error
+/// // (e.g., an intentional null on a benign mismatch — currently no in-tree call site
+/// // does this, but the override stays available).
+/// try_args!(bundle, return null(); name: KString);
 /// ```
+///
+/// Each `name: Variant` pair becomes a `let name = ...` binding extracted from
+/// `KObject::Variant`. Supported variants: `KString` (cloned to `String`), `Number`
+/// (deref'd to `f64`), `Bool` (deref'd to `bool`).
 ///
 /// The macro earns its keep by centralizing the "on failure, exit the caller" clause and
 /// keeping each builtin's arg extraction to one line. It is not strictly necessary — a
-/// `let Some(KObject::KString(name)) = bundle.get("name") else { return null() };` chain, or
+/// `let Some(KObject::KString(name)) = bundle.get("name") else { return ... };` chain, or
 /// a `bundle.try_get::<T>(name)` helper trait, would cover the same ground with a few more
 /// lines per builtin and one less piece of project-specific syntax to learn. If new
 /// `@extract` arms start piling up or the macro grows much beyond its current shape, that's
 /// the signal it's outgrowing its weight; switch to the helper-trait version instead.
 #[macro_export]
 macro_rules! try_args {
+    // Override form: caller supplies the early-return expression.
     (
         $bundle:expr,
         return $err:expr;
@@ -76,6 +96,33 @@ macro_rules! try_args {
                 Some($crate::dispatch::kobject::KObject::$variant(v)) =>
                     $crate::try_args!(@extract $variant, v),
                 _ => return $err,
+            };
+        )*
+    };
+    // Default form: missing/mistyped → BodyResult::Err with structured TypeMismatch.
+    (
+        $bundle:expr;
+        $( $name:ident : $variant:ident ),* $(,)?
+    ) => {
+        $(
+            let $name = match $bundle.get(stringify!($name)) {
+                Some($crate::dispatch::kobject::KObject::$variant(v)) =>
+                    $crate::try_args!(@extract $variant, v),
+                other => return $crate::dispatch::builtins::err(
+                    $crate::dispatch::kerror::KError::new(
+                        $crate::dispatch::kerror::KErrorKind::TypeMismatch {
+                            arg: stringify!($name).to_string(),
+                            expected: stringify!($variant).to_string(),
+                            got: match other {
+                                Some(o) => {
+                                    use $crate::dispatch::ktraits::Parseable;
+                                    o.summarize()
+                                }
+                                None => "(missing)".to_string(),
+                            },
+                        }
+                    )
+                ),
             };
         )*
     };

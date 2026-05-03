@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::parse::kexpression::KExpression;
 use super::arena::CallArena;
 use super::ktraits::{Parseable, Serializable};
-use super::kfunction::KFunction;
+use super::kfunction::{KFunction, KType};
 use super::scope::KFuture;
 
 /// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
@@ -44,6 +44,26 @@ pub enum KObject<'a> {
 }
 
 impl<'a> KObject<'a> {
+    /// Runtime type tag for this value. Used by the scheduler's post-call return-type check
+    /// (`KType::matches_value`) and any future static-pass tooling. `KFuture` reports as
+    /// `KFunction` since a bound-but-unrun call is functionally a thunk and KFutures don't
+    /// escape as user-visible values today. `UserDefined` is a placeholder; until it carries
+    /// real type info it returns `Any` so it satisfies any declared return type.
+    pub fn ktype(&self) -> KType {
+        match self {
+            KObject::Number(_) => KType::Number,
+            KObject::KString(_) => KType::Str,
+            KObject::Bool(_) => KType::Bool,
+            KObject::Null => KType::Null,
+            KObject::List(_) => KType::List,
+            KObject::Dict(_) => KType::Dict,
+            KObject::KFunction(_, _) => KType::KFunction,
+            KObject::KFuture(_, _) => KType::KFunction,
+            KObject::KExpression(_) => KType::KExpression,
+            KObject::UserDefined => KType::Any,
+        }
+    }
+
     /// Independent-but-cheap clone. Composite payloads are `Rc`-shared (the immutability
     /// contract on the `List`/`Dict` variants makes structural sharing safe), so cloning
     /// those is `Rc::clone` rather than a recursive walk. `KFuture` and `KExpression` carry

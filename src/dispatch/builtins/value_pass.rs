@@ -1,10 +1,11 @@
+use crate::dispatch::kerror::{KError, KErrorKind};
 use crate::dispatch::kfunction::{
     Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
     SignatureElement,
 };
 use crate::dispatch::scope::Scope;
 
-use super::{null, register_builtin};
+use super::{err, register_builtin};
 
 /// `<v:Any>` — single-part expression containing a literal (or a previously-evaluated future).
 /// Returns the value as a fresh arena-allocated `KObject` via `deep_clone`. Combined with
@@ -17,7 +18,7 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     let cloned = match bundle.get("v") {
         Some(obj) => obj.deep_clone(),
-        None => return null(),
+        None => return err(KError::new(KErrorKind::MissingArg("v".to_string()))),
     };
     let arena = scope.arena;
     BodyResult::Value(arena.alloc_object(cloned))
@@ -60,6 +61,7 @@ mod tests {
         let result = match body(scope, &mut sched, ArgumentBundle { args }) {
             BodyResult::Value(v) => v,
             BodyResult::Tail { .. } => panic!("value_pass should not produce a Tail"),
+            BodyResult::Err(e) => panic!("value_pass errored unexpectedly: {e}"),
         };
 
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));

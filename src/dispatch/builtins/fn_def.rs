@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::dispatch::kerror::{KError, KErrorKind};
 use crate::dispatch::kfunction::{
     Argument, ArgumentBundle, Body, BodyResult, ExpressionSignature, KFunction, KType,
     SchedulerHandle, SignatureElement,
@@ -8,22 +9,25 @@ use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use super::{null, register_builtin};
+use super::{err, register_builtin};
 
-/// `FN <signature:KExpression> = <body:KExpression>` — the user-defined function constructor.
-/// Both slots are `KType::KExpression`, so the parser's parenthesized sub-expressions match
-/// and ride through as data. The captured signature `KExpression` is structurally inspected
-/// here — never dispatched — to derive the registered function's `ExpressionSignature`. The
-/// body `KExpression` is captured raw; `KFunction::invoke` substitutes parameter values into
-/// it and re-dispatches at call time.
+/// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
+/// function constructor. The signature and body slots are `KType::KExpression`, so the parser's
+/// parenthesized sub-expressions match and ride through as data. The return-type slot is a
+/// `KType::TypeRef`, matching a single capitalized type-name token (e.g. `Number`, `KFunction`).
+/// The captured signature `KExpression` is structurally inspected here — never dispatched —
+/// to derive the registered function's `ExpressionSignature`. The body `KExpression` is
+/// captured raw; `KFunction::invoke` substitutes parameter values into it and re-dispatches
+/// at call time.
 ///
 /// Signature shape: each `Keyword` part becomes a `SignatureElement::Keyword` (a fixed token
 /// in the call site); each `Identifier` part becomes an `Argument` of type `Any` named after
 /// the identifier (a slot the caller supplies). At least one `Keyword` is required so the
 /// signature has a fixed token to dispatch on — a signature of all-Identifier slots would
-/// shadow `value_lookup`/`value_pass`. Other shapes (literals, nested expressions in the
-/// signature itself) are rejected with `null()`. Type annotations on argument slots are a
-/// future extension that hangs off this same parsing pass.
+/// shadow `value_lookup`/`value_pass`. Type-name parts inside the signature itself are
+/// rejected — types appear only in the `-> Type` return slot, not in parameter positions
+/// (per-param annotations are a deferred roadmap item). Other shapes (literals, nested
+/// expressions in the signature) are rejected with a `ShapeError`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -31,16 +35,46 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     let signature_expr = match extract_kexpression(&mut bundle, "signature") {
         Some(e) => e,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN signature slot must be a parenthesized expression".to_string(),
+            )));
+        }
+    };
+    let return_type_name = match extract_string(&mut bundle, "return_type") {
+        Some(s) => s,
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN return-type slot must be a type name (e.g. `Number`)".to_string(),
+            )));
+        }
+    };
+    let return_type = match KType::from_name(&return_type_name) {
+        Some(t) => t,
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "unknown type name '{return_type_name}' in FN return-type slot",
+            ))));
+        }
     };
     let body_expr = match extract_kexpression(&mut bundle, "body") {
         Some(e) => e,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN body slot must be a parenthesized expression".to_string(),
+            )));
+        }
     };
 
     let elements = match parse_signature_elements(&signature_expr) {
         Some(es) => es,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN signature must contain only Keyword and Identifier parts \
+                 (type names appear in `-> ReturnType`, not in parameter slots)"
+                    .to_string(),
+            )));
+        }
     };
     // Pick the first Keyword as the data-table key. `scope.functions` does the load-bearing
     // dispatch lookup by signature; `scope.data` is mostly for discoverability and
@@ -52,11 +86,16 @@ pub fn body<'a>(
     });
     let name = match name {
         Some(n) => n,
-        None => return null(),
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "FN signature must contain at least one Keyword (a fixed token to dispatch on)"
+                    .to_string(),
+            )));
+        }
     };
 
     let user_sig = ExpressionSignature {
-        return_type: KType::Any,
+        return_type,
         elements,
     };
 
@@ -110,17 +149,37 @@ fn extract_kexpression<'a>(
     }
 }
 
+/// Pull a `KString`-bearing argument out of the bundle and return the inner string. Used to
+/// recover the type-name string from a `KType::TypeRef` slot — `ExpressionPart::Type(s)`
+/// resolves to `KObject::KString(s)`.
+fn extract_string<'a>(
+    bundle: &mut ArgumentBundle<'a>,
+    name: &str,
+) -> Option<String> {
+    let rc = bundle.args.remove(name)?;
+    match Rc::try_unwrap(rc) {
+        Ok(KObject::KString(s)) => Some(s),
+        Ok(_) => None,
+        Err(rc) => match &*rc {
+            KObject::KString(s) => Some(s.clone()),
+            _ => None,
+        },
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "FN",
         ExpressionSignature {
-            return_type: KType::Null,
+            return_type: KType::KFunction,
             elements: vec![
                 SignatureElement::Keyword("FN".into()),
-                SignatureElement::Argument(Argument { name: "signature".into(), ktype: KType::KExpression }),
+                SignatureElement::Argument(Argument { name: "signature".into(),   ktype: KType::KExpression }),
+                SignatureElement::Keyword("->".into()),
+                SignatureElement::Argument(Argument { name: "return_type".into(), ktype: KType::TypeRef }),
                 SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument { name: "body".into(),      ktype: KType::KExpression }),
+                SignatureElement::Argument(Argument { name: "body".into(),        ktype: KType::KExpression }),
             ],
         },
         body,
@@ -196,7 +255,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (GREET) = (PRINT \"hi\")");
+        run(scope, "FN (GREET) -> Null = (PRINT \"hi\")");
 
         let data = scope.data.borrow();
         let entry = data.get("GREET").expect("GREET should be bound");
@@ -215,7 +274,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET x = 42\nFN (GETX) = (x)");
+        run(scope, "LET x = 42\nFN (GETX) -> Number = (x)");
 
         let result = run_one(scope, parse_one("GETX"));
         assert!(matches!(result, KObject::Number(n) if *n == 42.0),
@@ -227,7 +286,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (greet) = (PRINT \"hi\")");
+        run(scope, "FN (greet) -> Null = (PRINT \"hi\")");
         let data = scope.data.borrow();
         assert!(data.get("greet").is_none());
         assert!(data.get("GREET").is_none());
@@ -238,7 +297,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET x = 7\nFN (GETX) = (x)");
+        run(scope, "LET x = 7\nFN (GETX) -> Number = (x)");
 
         for _ in 0..2 {
             let result = run_one(scope, parse_one("GETX"));
@@ -250,7 +309,7 @@ mod tests {
     fn fn_body_with_nested_expression_evaluates() {
         let bytes = capture_program_output(
             "LET msg = \"from outer scope\"\n\
-             FN (SAY) = (PRINT (msg))\n\
+             FN (SAY) -> Null = (PRINT (msg))\n\
              SAY",
         );
         assert_eq!(bytes, b"from outer scope\n");
@@ -259,8 +318,8 @@ mod tests {
     #[test]
     fn user_fn_calls_user_fn_transitively() {
         let bytes = capture_program_output(
-            "FN (BAR) = (PRINT \"ok\")\n\
-             FN (FOO) = (BAR)\n\
+            "FN (BAR) -> Null = (PRINT \"ok\")\n\
+             FN (FOO) -> Null = (BAR)\n\
              FOO",
         );
         assert_eq!(bytes, b"ok\n");
@@ -274,8 +333,8 @@ mod tests {
 
         run(
             scope,
-            "FN (B) = (PRINT \"ok\")\n\
-             FN (A) = (B)",
+            "FN (B) -> Null = (PRINT \"ok\")\n\
+             FN (A) -> Null = (B)",
         );
 
         let mut sched = Scheduler::new();
@@ -294,7 +353,7 @@ mod tests {
     #[test]
     fn calling_user_fn_repeatedly_runs_body_each_time() {
         let bytes = capture_program_output(
-            "FN (GREET) = (PRINT \"hello world\")\n\
+            "FN (GREET) -> Null = (PRINT \"hello world\")\n\
              GREET\n\
              GREET",
         );
@@ -304,7 +363,7 @@ mod tests {
     #[test]
     fn fn_with_single_param_substitutes_at_call_site() {
         let bytes = capture_program_output(
-            "FN (SAY x) = (PRINT x)\n\
+            "FN (SAY x) -> Null = (PRINT x)\n\
              SAY \"hello\"",
         );
         assert_eq!(bytes, b"hello\n");
@@ -313,7 +372,7 @@ mod tests {
     #[test]
     fn fn_with_two_params_binds_each_by_name() {
         let bytes = capture_program_output(
-            "FN (FIRST x y) = (PRINT x)\n\
+            "FN (FIRST x y) -> Null = (PRINT x)\n\
              FIRST \"one\" \"two\"",
         );
         assert_eq!(bytes, b"one\n");
@@ -322,7 +381,7 @@ mod tests {
     #[test]
     fn fn_with_infix_shape_dispatches_on_keyword_position() {
         let bytes = capture_program_output(
-            "FN (a SAID) = (PRINT a)\n\
+            "FN (a SAID) -> Null = (PRINT a)\n\
              \"hi\" SAID",
         );
         assert_eq!(bytes, b"hi\n");
@@ -332,7 +391,7 @@ mod tests {
     fn fn_param_shadows_outer_binding_at_call_site() {
         let bytes = capture_program_output(
             "LET msg = \"outer\"\n\
-             FN (SAY msg) = (PRINT msg)\n\
+             FN (SAY msg) -> Null = (PRINT msg)\n\
              SAY \"param wins\"",
         );
         assert_eq!(bytes, b"param wins\n");
@@ -341,7 +400,7 @@ mod tests {
     #[test]
     fn fn_param_substitutes_inside_nested_subexpression() {
         let bytes = capture_program_output(
-            "FN (WRAP x) = (PRINT (x))\n\
+            "FN (WRAP x) -> Null = (PRINT (x))\n\
              WRAP \"wrapped\"",
         );
         assert_eq!(bytes, b"wrapped\n");
@@ -352,7 +411,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (ECHO v) = (v)");
+        run(scope, "FN (ECHO v) -> Number = (v)");
 
         let result = run_one(scope, parse_one("ECHO 7"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
@@ -363,7 +422,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (x) = (PRINT \"oops\")");
+        run(scope, "FN (x) -> Null = (PRINT \"oops\")");
         let data = scope.data.borrow();
         assert!(data.get("x").is_none());
     }
@@ -380,7 +439,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (ECHO v) = (v)");
+        run(scope, "FN (ECHO v) -> Number = (v)");
         let baseline = arena.alloc_count();
         for _ in 0..50 {
             let _ = run_one(scope, parse_one("ECHO 7"));
@@ -398,6 +457,104 @@ mod tests {
         );
     }
 
+    /// `FN` parses the declared return type from the `-> Type` slot and stores it on the
+    /// registered function's signature.
+    #[test]
+    fn fn_parses_declared_return_type_onto_signature() {
+        use crate::dispatch::kfunction::KType;
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (DOUBLE x) -> Number = (x)");
+
+        let data = scope.data.borrow();
+        let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
+        let f = match entry {
+            KObject::KFunction(f, _) => *f,
+            _ => panic!("expected DOUBLE to bind a KFunction"),
+        };
+        assert_eq!(f.signature.return_type, KType::Number);
+    }
+
+    /// Missing `-> Type` annotation: the FN call doesn't match the registered signature, so
+    /// no user-fn gets bound. (Sub-expression dispatch may also error first depending on body
+    /// shape — the load-bearing assertion is that DOUBLE isn't bound.)
+    #[test]
+    fn fn_without_return_type_annotation_does_not_register() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        let exprs = parse("FN (DOUBLE x) = (PRINT \"x\")").expect("parse should succeed");
+        let mut sched = Scheduler::new();
+        for expr in exprs {
+            sched.add_dispatch(expr, scope);
+        }
+        let _ = sched.execute(); // ignore: may or may not error depending on which sub fails first
+        let data = scope.data.borrow();
+        assert!(data.get("DOUBLE").is_none(), "DOUBLE should not be registered without -> Type");
+    }
+
+    /// Unknown type name in the return slot surfaces as a `ShapeError`.
+    #[test]
+    fn fn_with_unknown_return_type_name_errors() {
+        use crate::dispatch::kerror::KErrorKind;
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(parse_one("FN (DOUBLE x) -> Bogus = (x)"), scope);
+        sched.execute().expect("execute does not surface per-slot errors");
+        let err = match sched.read_result(id) {
+            Err(e) => e,
+            Ok(_) => panic!("unknown type name should error"),
+        };
+        assert!(
+            matches!(err.kind, KErrorKind::ShapeError(ref msg) if msg.contains("Bogus")),
+            "expected ShapeError mentioning 'Bogus', got {err}",
+        );
+    }
+
+    /// Runtime return-type check fires when the body produces a value of the wrong type.
+    #[test]
+    fn user_fn_return_type_mismatch_surfaces_as_kerror() {
+        use crate::dispatch::kerror::KErrorKind;
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (LIE) -> Number = (\"oops\")");
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(parse_one("LIE"), scope);
+        sched.execute().expect("execute does not surface per-slot errors");
+        let err = match sched.read_result(id) {
+            Err(e) => e,
+            Ok(_) => panic!("LIE should fail return-type check"),
+        };
+        match &err.kind {
+            KErrorKind::TypeMismatch { arg, expected, got } => {
+                assert_eq!(arg, "<return>");
+                assert_eq!(expected, "Number");
+                assert_eq!(got, "Str");
+            }
+            _ => panic!("expected TypeMismatch on <return>, got {err}"),
+        }
+        assert!(
+            err.frames.iter().any(|f| f.function.contains("LIE")),
+            "expected a frame mentioning LIE, got {:?}",
+            err.frames.iter().map(|f| &f.function).collect::<Vec<_>>(),
+        );
+    }
+
+    /// `Any` return type is the no-op fast path: any body value satisfies it.
+    #[test]
+    fn user_fn_with_any_return_type_accepts_anything() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (PURE) -> Any = (\"a string\")");
+        let result = run_one(scope, parse_one("PURE"));
+        assert!(matches!(result, KObject::KString(s) if s == "a string"));
+    }
+
     /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a
     /// callable handle via `LET f = (FN ...)`. Pre-change, `FN` returned `null()`. Calling
     /// the captured handle is tested in [`call_by_name`](super::super::call_by_name).
@@ -406,7 +563,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let result = run_one(scope, parse_one("FN (DOUBLE x) = (x)"));
+        let result = run_one(scope, parse_one("FN (DOUBLE x) -> Number = (x)"));
         assert!(
             matches!(result, KObject::KFunction(_, _)),
             "FN should return its registered KFunction",
