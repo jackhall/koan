@@ -3,16 +3,18 @@
 /// group, deeper indents nest inside their parent, and dedents close the matching groups.
 /// Rejects tab indentation and odd-numbered space indentation (only even-space indents allowed).
 ///
-/// **List-literal continuations.** When a `[` opens but its matching `]` is on a later line,
-/// the lines in between are *not* line-wrapped — they're appended to the open list span as
-/// plain whitespace-separated content, and `build_tree` pairs the brackets itself. Compound
-/// indexing like `foo[idx]` is balanced on its own line, so it never tips depth across line
-/// boundaries; the rule only fires when `[` and `]` are on different lines. Strings are
-/// already masked at this point, so brackets inside them don't reach this function.
+/// **Collection-literal continuations.** When a `[` or `{` opens but its matching `]`/`}` is
+/// on a later line, the lines in between are *not* line-wrapped — they're appended to the open
+/// span as plain whitespace-separated content, and `build_tree` pairs the brackets itself.
+/// Compound indexing like `foo[idx]` is balanced on its own line, so it never tips depth across
+/// line boundaries; the rule only fires when an open bracket and its match are on different
+/// lines. A single delta counter handles `[`/`]` and `{`/`}` together — `build_tree`'s frame
+/// stack catches any cross-pairing (`[1 2}`). Strings are already masked at this point, so
+/// brackets inside them don't reach this function.
 pub fn collapse_whitespace(input: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut stack: Vec<usize> = Vec::new();
-    let mut bracket_depth: i32 = 0;
+    let mut delim_depth: i32 = 0;
 
     for (lineno, raw) in input.lines().enumerate() {
         let stripped = raw.trim_start();
@@ -23,13 +25,13 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
             continue;
         }
 
-        if bracket_depth > 0 {
-            // Inside an open list span: append the line as continuation content. Skip the
+        if delim_depth > 0 {
+            // Inside an open list/dict span: append the line as continuation content. Skip the
             // indent / paren-wrapping pass — the line is logically part of the bracket
             // expression, not a sibling block.
             out.push(' ');
             out.push_str(content);
-            bracket_depth += line_bracket_delta(content);
+            delim_depth += line_delim_delta(content);
             continue;
         }
 
@@ -58,7 +60,7 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
         out.push('(');
         out.push_str(content);
         stack.push(indent);
-        bracket_depth += line_bracket_delta(content);
+        delim_depth += line_delim_delta(content);
     }
 
     while stack.pop().is_some() {
@@ -68,12 +70,15 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Net `[` − `]` count on a single line (post-quote-masking, post-trim). Compound tokens like
-/// `foo[idx]` and `bar[i][j]` balance to zero per line because tokens can't span lines, so
-/// only an unmatched list-literal `[` shifts the running depth.
-fn line_bracket_delta(s: &str) -> i32 {
-    let opens = s.chars().filter(|&c| c == '[').count() as i32;
-    let closes = s.chars().filter(|&c| c == ']').count() as i32;
+/// Net `[`+`{` − `]`+`}` count on a single line (post-quote-masking, post-trim). Compound
+/// tokens like `foo[idx]` and `bar[i][j]` balance to zero per line because tokens can't span
+/// lines, so only an unmatched list/dict literal `[` or `{` shifts the running depth. A single
+/// counter conflates the two bracket families intentionally — this function only decides
+/// whether we're "inside an open span"; `build_tree`'s frame stack enforces that a `[` is
+/// matched by `]` (not `}`) and vice versa.
+fn line_delim_delta(s: &str) -> i32 {
+    let opens = s.chars().filter(|&c| c == '[' || c == '{').count() as i32;
+    let closes = s.chars().filter(|&c| c == ']' || c == '}').count() as i32;
     opens - closes
 }
 
@@ -224,6 +229,32 @@ mod tests {
         assert_eq!(
             collapse_whitespace("LET xs = [1 2 3]\nbar").unwrap(),
             "(LET xs = [1 2 3]) (bar)",
+        );
+    }
+
+    #[test]
+    fn multiline_dict_literal_continues() {
+        // Same continuation rule as lists: `{` opens, lines append, `}` closes.
+        assert_eq!(
+            collapse_whitespace("LET d = {\n  a: 1\n  b: 2\n}").unwrap(),
+            "(LET d = { a: 1 b: 2 })",
+        );
+    }
+
+    #[test]
+    fn inline_dict_does_not_perturb_indentation() {
+        assert_eq!(
+            collapse_whitespace("LET d = {a: 1}\nbar").unwrap(),
+            "(LET d = {a: 1}) (bar)",
+        );
+    }
+
+    #[test]
+    fn nested_multiline_dict_inside_list() {
+        // List opens on line 1, dict opens inside on line 2; both close on the last line.
+        assert_eq!(
+            collapse_whitespace("[\n  {a: 1\n   b: 2}\n]").unwrap(),
+            "([ {a: 1 b: 2} ])",
         );
     }
 }

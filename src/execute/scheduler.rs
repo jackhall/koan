@@ -6,8 +6,9 @@ use crate::dispatch::kerror::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::{
     ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
 };
+use crate::dispatch::kkey::KKey;
 use crate::dispatch::kobject::KObject;
-use crate::dispatch::ktraits::Parseable;
+use crate::dispatch::ktraits::{Parseable, Serializable};
 use crate::dispatch::scope::{KFuture, Scope};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
@@ -61,12 +62,27 @@ enum NodeWork<'a> {
     Aggregate {
         elements: Vec<AggregateElement<'a>>,
     },
+    /// Materializes a dict literal once each key/value `Dep` resolves. Mirrors `Aggregate`'s
+    /// shape but holds pairs and converts each resolved key to a `KKey` (rejecting non-scalar
+    /// keys with `KErrorKind::ShapeError`) before inserting into the runtime `HashMap`.
+    AggregateDict {
+        entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)>,
+    },
 }
 
 /// One slot in an `Aggregate` node. `Static` is an already-resolved value; `Dep` defers to a
 /// previously-scheduled node. The mix lets a list literal like `[1 (LET x = 5) z]` schedule
 /// only the sub-expression and inline the other two.
 enum AggregateElement<'a> {
+    Static(KObject<'a>),
+    Dep(NodeId),
+}
+
+/// One side of one pair in an `AggregateDict` node. Same `Static` / `Dep` split as
+/// `AggregateElement`; reused for both keys and values so a dict literal like
+/// `{(get_k): 1 a: (get_v)}` can defer the two sub-expression sides while inlining the
+/// scalar literal sides.
+enum AggregateDictElement<'a> {
     Static(KObject<'a>),
     Dep(NodeId),
 }
@@ -199,6 +215,9 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope)?,
                 NodeWork::Aggregate { elements } => NodeStep::Done(self.run_aggregate(elements, scope)),
+                NodeWork::AggregateDict { entries } => {
+                    NodeStep::Done(self.run_aggregate_dict(entries, scope))
+                }
             };
             match step {
                 NodeStep::Done(output) => {
@@ -580,6 +599,11 @@ impl<'a> Scheduler<'a> {
                     subs.push((i, agg_id));
                     new_parts.push(ExpressionPart::Identifier(String::new()));
                 }
+                ExpressionPart::DictLiteral(pairs) => {
+                    let agg_id = self.schedule_dict_literal(pairs, scope);
+                    subs.push((i, agg_id));
+                    new_parts.push(ExpressionPart::Identifier(String::new()));
+                }
                 other => new_parts.push(other),
             }
         }
@@ -656,10 +680,107 @@ impl<'a> Scheduler<'a> {
                     let nested_id = self.schedule_list_literal(inner, scope);
                     elements.push(AggregateElement::Dep(nested_id));
                 }
+                ExpressionPart::DictLiteral(pairs) => {
+                    let nested_id = self.schedule_dict_literal(pairs, scope);
+                    elements.push(AggregateElement::Dep(nested_id));
+                }
                 other => elements.push(AggregateElement::Static(other.resolve())),
             }
         }
         self.add(NodeWork::Aggregate { elements }, scope)
+    }
+
+    /// Schedule each side of each pair in a dict literal. Sub-expressions, nested list/dict
+    /// literals, and bare identifiers (which need scope lookup for Python-like name
+    /// resolution on both keys and values) become `Dep` nodes; everything else inlines as
+    /// `Static`. Identifier wrapping happens here rather than at parse time so the AST
+    /// stays faithful to the source.
+    fn schedule_dict_literal(
+        &mut self,
+        pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
+        scope: &'a Scope<'a>,
+    ) -> NodeId {
+        let mut entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)> =
+            Vec::with_capacity(pairs.len());
+        for (k, v) in pairs {
+            entries.push((
+                self.schedule_dict_part(k, scope),
+                self.schedule_dict_part(v, scope),
+            ));
+        }
+        self.add(NodeWork::AggregateDict { entries }, scope)
+    }
+
+    fn schedule_dict_part(
+        &mut self,
+        part: ExpressionPart<'a>,
+        scope: &'a Scope<'a>,
+    ) -> AggregateDictElement<'a> {
+        match part {
+            ExpressionPart::Expression(boxed) => {
+                let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
+                AggregateDictElement::Dep(sub_id)
+            }
+            ExpressionPart::ListLiteral(items) => {
+                let id = self.schedule_list_literal(items, scope);
+                AggregateDictElement::Dep(id)
+            }
+            ExpressionPart::DictLiteral(inner) => {
+                let id = self.schedule_dict_literal(inner, scope);
+                AggregateDictElement::Dep(id)
+            }
+            // Bare identifier: wrap as a single-Identifier sub-expression so dispatch routes
+            // through `value_lookup`. Same treatment for keys and values — Python-like name
+            // resolution applies to both sides of a dict pair.
+            ExpressionPart::Identifier(name) => {
+                let expr = KExpression {
+                    parts: vec![ExpressionPart::Identifier(name)],
+                };
+                let sub_id = self.add(NodeWork::Dispatch(expr), scope);
+                AggregateDictElement::Dep(sub_id)
+            }
+            other => AggregateDictElement::Static(other.resolve()),
+        }
+    }
+
+    fn run_aggregate_dict(
+        &self,
+        entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)>,
+        scope: &'a Scope<'a>,
+    ) -> NodeOutput<'a> {
+        let dict_frame = || Frame {
+            function: "<dict>".to_string(),
+            expression: "dict literal".to_string(),
+        };
+        let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
+        for (k_el, v_el) in entries {
+            let key_obj = match k_el {
+                AggregateDictElement::Static(obj) => obj,
+                AggregateDictElement::Dep(dep) => match self.read_result(dep) {
+                    Ok(v) => v.deep_clone(),
+                    Err(err) => {
+                        return NodeOutput::Err(err.clone_for_propagation().with_frame(dict_frame()));
+                    }
+                },
+            };
+            let value_obj = match v_el {
+                AggregateDictElement::Static(obj) => obj,
+                AggregateDictElement::Dep(dep) => match self.read_result(dep) {
+                    Ok(v) => v.deep_clone(),
+                    Err(err) => {
+                        return NodeOutput::Err(err.clone_for_propagation().with_frame(dict_frame()));
+                    }
+                },
+            };
+            let kkey = match KKey::try_from_kobject(&key_obj) {
+                Ok(k) => k,
+                Err(e) => return NodeOutput::Err(e.with_frame(dict_frame())),
+            };
+            map.insert(Box::new(kkey), value_obj);
+        }
+        let arena = scope.arena;
+        let allocated: &'a KObject<'a> = arena.alloc_object(KObject::Dict(Rc::new(map)));
+        NodeOutput::Value(allocated)
     }
 
     /// Run a bound future's body and translate its `BodyResult` into a `NodeStep`. `Value`
@@ -729,6 +850,16 @@ fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
                 .filter_map(|e| match e {
                     AggregateElement::Dep(d) => Some(*d),
                     AggregateElement::Static(_) => None,
+                })
+                .collect(),
+        ),
+        NodeWork::AggregateDict { entries } => Some(
+            entries
+                .iter()
+                .flat_map(|(k, v)| [k, v])
+                .filter_map(|e| match e {
+                    AggregateDictElement::Dep(d) => Some(*d),
+                    AggregateDictElement::Static(_) => None,
                 })
                 .collect(),
         ),
@@ -839,6 +970,17 @@ fn substitute_part<'a>(
             items
                 .into_iter()
                 .map(|p| substitute_part(p, bundle, arena))
+                .collect(),
+        ),
+        ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(
+            pairs
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        substitute_part(k, bundle, arena),
+                        substitute_part(v, bundle, arena),
+                    )
+                })
                 .collect(),
         ),
         other => other,

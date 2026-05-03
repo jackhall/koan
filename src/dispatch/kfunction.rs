@@ -417,7 +417,10 @@ impl Argument {
                 part,
                 ExpressionPart::ListLiteral(_) | ExpressionPart::Future(KObject::List(_))
             ),
-            KType::Dict => matches!(part, ExpressionPart::Future(KObject::Dict(_))),
+            KType::Dict => matches!(
+                part,
+                ExpressionPart::DictLiteral(_) | ExpressionPart::Future(KObject::Dict(_))
+            ),
             KType::KFunction => matches!(
                 part,
                 ExpressionPart::Future(KObject::KFunction(_, _))

@@ -149,6 +149,13 @@ mod tests {
                 let inner: Vec<String> = items.iter().map(describe).collect();
                 format!("L[{}]", inner.join(" "))
             }
+            ExpressionPart::DictLiteral(pairs) => {
+                let inner: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", describe(k), describe(v)))
+                    .collect();
+                format!("D{{{}}}", inner.join(", "))
+            }
         }
     }
 
