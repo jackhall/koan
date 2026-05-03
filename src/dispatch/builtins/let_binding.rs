@@ -33,7 +33,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "LET",
         ExpressionSignature {
-            return_type: KType::Null,
+            return_type: KType::Any,
             elements: vec![
                 SignatureElement::Keyword("LET".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier }),

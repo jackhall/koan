@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use crate::dispatch::arena::{CallArena, RuntimeArena};
-use crate::dispatch::kerror::{Frame, KError};
+use crate::dispatch::kerror::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::{
     ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
 };
@@ -39,7 +39,7 @@ enum NodeStep<'a> {
     Replace {
         work: NodeWork<'a>,
         frame: Option<Rc<CallArena>>,
-        function: Option<String>,
+        function: Option<&'a KFunction<'a>>,
     },
 }
 
@@ -87,12 +87,20 @@ struct Node<'a> {
     /// that a successor frame at the same slot needs — drop on TCO replace is immediate,
     /// no `prev` chain.
     frame: Option<Rc<CallArena>>,
-    /// User-fn name installed by a TCO `Replace` whose body is `UserDefined`. When this
-    /// slot's work errors, the slot's Done arm appends a `Frame { function }` to the
-    /// resulting `KError` so the call-stack trace names which user-fn the error happened
-    /// inside. `None` for builtin slots and for non-call replacements like `if_then`'s
-    /// lazy slot. Set in lockstep with `frame` (a per-call frame implies a user-fn entry).
-    function: Option<String>,
+    /// User-fn reference installed by a TCO `Replace` whose body is `UserDefined`. The slot
+    /// reads it on Done for two purposes: (1) enforce the function's declared
+    /// `signature.return_type` against the produced value (the runtime return-type check),
+    /// and (2) on error, append a `Frame { function: f.summarize() }` to the resulting
+    /// `KError` so the call-stack trace names which user-fn the error happened inside.
+    /// `None` for builtin slots and for non-call replacements like `if_then`'s lazy slot.
+    /// Set in lockstep with `frame` (a per-call frame implies a user-fn entry).
+    ///
+    /// TCO note: when A tail-calls B, this field is rewritten to B at the `Replace` site
+    /// (lines around 275). The runtime check therefore only enforces the *tail-most*
+    /// function's return type — sound for "the value the user sees has the type the
+    /// outermost FN promised" only when intermediate frames' types agree, which the
+    /// future static pass will check at compile time. Documented limitation.
+    function: Option<&'a KFunction<'a>>,
 }
 
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
@@ -208,6 +216,27 @@ impl<'a> Scheduler<'a> {
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let lifted_obj = Self::lift_kobject(v, &frame);
+                            // Runtime return-type check: enforce the called function's
+                            // declared `signature.return_type` against the produced value.
+                            // `Any` is the no-op fast path (always satisfied). On mismatch,
+                            // synthesize a TypeMismatch error with the function's frame
+                            // attached and skip the alloc.
+                            if let Some(f) = prev_function {
+                                let rt = f.signature.return_type;
+                                if !rt.matches_value(&lifted_obj) {
+                                    let err = KError::new(KErrorKind::TypeMismatch {
+                                        arg: "<return>".to_string(),
+                                        expected: rt.name().to_string(),
+                                        got: lifted_obj.ktype().name().to_string(),
+                                    })
+                                    .with_frame(Frame {
+                                        function: f.summarize(),
+                                        expression: f.summarize(),
+                                    });
+                                    self.results[idx] = Some(NodeOutput::Err(err));
+                                    continue;
+                                }
+                            }
                             let lifted = dest.alloc_object(lifted_obj);
                             self.results[idx] = Some(NodeOutput::Value(lifted));
                             // `frame` drops here. If the lifted value cloned an Rc, the
@@ -237,10 +266,10 @@ impl<'a> Scheduler<'a> {
                             // arena was about to drop on Done anyway). Append a Frame
                             // naming the user-fn so the trace points to which call this
                             // error happened inside.
-                            let with_frame = match &prev_function {
-                                Some(name) => e.with_frame(Frame {
-                                    function: name.clone(),
-                                    expression: name.clone(),
+                            let with_frame = match prev_function {
+                                Some(f) => e.with_frame(Frame {
+                                    function: f.summarize(),
+                                    expression: f.summarize(),
                                 }),
                                 None => e,
                             };
@@ -423,7 +452,7 @@ impl<'a> Scheduler<'a> {
             }
             match self.read_result(NodeId(idx)) {
                 Ok(value) => {
-                    let (dest, lifted_obj) = {
+                    let (dest, lifted_obj, function) = {
                         let node = self.nodes[idx].as_ref().unwrap();
                         let frame = node
                             .frame
@@ -435,8 +464,28 @@ impl<'a> Scheduler<'a> {
                             .expect("per-call scope must have an outer (its captured scope)")
                             .arena;
                         let lifted_obj = Self::lift_kobject(value, frame);
-                        (dest, lifted_obj)
+                        (dest, lifted_obj, node.function)
                     };
+                    // Runtime return-type check: same enforcement as the direct Done(Value)
+                    // path at line ~210. Forward-chain finalizers (a user-fn body that spawned
+                    // a Bind for a sub-expression) land here instead.
+                    if let Some(f) = function {
+                        let rt = f.signature.return_type;
+                        if !rt.matches_value(&lifted_obj) {
+                            let err = KError::new(KErrorKind::TypeMismatch {
+                                arg: "<return>".to_string(),
+                                expected: rt.name().to_string(),
+                                got: lifted_obj.ktype().name().to_string(),
+                            })
+                            .with_frame(Frame {
+                                function: f.summarize(),
+                                expression: f.summarize(),
+                            });
+                            self.results[idx] = Some(NodeOutput::Err(err));
+                            self.nodes[idx] = None;
+                            continue;
+                        }
+                    }
                     let lifted = dest.alloc_object(lifted_obj);
                     self.results[idx] = Some(NodeOutput::Value(lifted));
                 }
@@ -446,10 +495,10 @@ impl<'a> Scheduler<'a> {
                     // inside this user-fn — non-tail-call chains, where the body
                     // forwards through a Bind, surface their function this way.
                     let owned = e.clone_for_propagation();
-                    let with_frame = match &self.nodes[idx].as_ref().unwrap().function {
-                        Some(name) => owned.with_frame(Frame {
-                            function: name.clone(),
-                            expression: name.clone(),
+                    let with_frame = match self.nodes[idx].as_ref().unwrap().function {
+                        Some(f) => owned.with_frame(Frame {
+                            function: f.summarize(),
+                            expression: f.summarize(),
                         }),
                         None => owned,
                     };
@@ -744,7 +793,7 @@ impl<'a> KFunction<'a> {
                     child.add(name.clone(), allocated);
                 }
                 let substituted = substitute_params(expr.clone(), &bundle, inner_arena);
-                BodyResult::tail_with_frame(substituted, frame, self.summarize())
+                BodyResult::tail_with_frame(substituted, frame, self)
             }
         }
     }

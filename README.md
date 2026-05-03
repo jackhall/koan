@@ -22,16 +22,20 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, and `IF <predicate> THEN <value>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). Note: the scheduler eagerly evaluates every nested `(...)` before its parent dispatches, so `IF`/`THEN` is a post-hoc selector, not a lazy short-circuit.
+The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `IF <predicate> THEN <value>`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). Note: the scheduler eagerly evaluates every nested `(...)` before its parent dispatches, so `IF`/`THEN` is a post-hoc selector, not a lazy short-circuit.
+
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The known types are `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `KFunction`, `KExpression`, and `Any`.
 
 Example:
 
 ```
 LET x = 42
 PRINT "hello"
+FN (ECHO x) -> Number = (x)
+LET y = (ECHO 21)
 ```
 
-Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals.
+Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals. The lexer distinguishes three token classes for non-literal atoms: **all-caps tokens** (`LET`, `THEN`, `=`, `->`) are dispatch keywords; **capitalized names with at least one lowercase letter** (`Number`, `Str`, `KFunction`, `MyType`) are type references; everything else (lowercase / snake_case) is an identifier.
 
 For a walk-through of the language surface with runnable snippets, see [TUTORIAL.md](TUTORIAL.md).
 
@@ -62,10 +66,10 @@ Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree
 1. [quotes.rs](src/parse/quotes.rs) — replace string-literal contents with placeholders so later passes don't re-tokenize them.
 2. [whitespace.rs](src/parse/whitespace.rs) — turn indentation-based block structure into parenthesized form.
 3. [expression_tree.rs](src/parse/expression_tree.rs) — walk the paren-delimited string into a nested expression tree.
-4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (no lowercase letters — `LET`, `=`, `THEN`), identifier, or compound (member access, indexing, prefix/suffix operators).
+4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (no lowercase — `LET`, `=`, `THEN`, `->`), type name (capitalized + has lowercase — `Number`, `KFunction`), identifier, or compound (member access, indexing, prefix/suffix operators).
 5. [operators.rs](src/parse/operators.rs) — table of compound-token operators (`!`, `.`, `[]`, `?`); add a row to extend.
 
-The output is one [`KExpression`](src/parse/kexpression.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword`/`Identifier` split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key.
+The output is one [`KExpression`](src/parse/kexpression.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
 
 ### dispatch — `KExpression` → `KFuture` against a `Scope`
 

@@ -109,6 +109,25 @@ Here the inner `("yes")` is the lazy branch. Because the predicate is true, it d
 
 The "post-hoc selector" caveat in the README applies elsewhere: when an expression is *not* in `IF ... THEN` shape, every nested `(...)` is evaluated eagerly before its parent dispatches. `IF`/`THEN` is special-cased.
 
+## `FN` — define a function
+
+```
+FN (ECHO x) -> Number = (x)
+LET twentyone = (ECHO 21)
+```
+
+Reads as `FN <signature> -> <ReturnType> = <body>`. The signature `(ECHO x)` is a parenthesized expression mixing fixed dispatch keywords (`ECHO`) and parameter slots (`x`); the body `(x)` is the parenthesized expression evaluated at call time. `Number` in the `-> Type` slot is a *type name* — capitalized atoms with at least one lowercase letter classify as type references, distinct from all-caps dispatch keywords. The known type names are `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `KFunction`, `KExpression`, and `Any`.
+
+The return type is **non-optional** and **enforced at runtime**. If the body produces a value whose type doesn't match the declaration, the call fails with a `TypeMismatch` error:
+
+```
+$ printf 'FN (LIE) -> Number = ("oops")\nLIE\n' | cargo run
+error: type mismatch for argument '<return>': expected Number, got Str
+  in fn(LIE) (fn(LIE))
+```
+
+Use `-> Any` to opt out of the check (the body's value can be anything). For polymorphic helpers whose return type genuinely depends on the inputs, this is the right choice today; per-argument type annotations and parametric returns are deferred.
+
 ## Indentation as block structure
 
 Two-space indents under a parent line nest inside it, the same as wrapping in parens. These two programs are equivalent:
@@ -157,7 +176,7 @@ error: unbound name 'foo'
 $ echo 'IF "x" THEN ("y")' | cargo run
 error: dispatch failed for IF x THEN y: no matching function
 
-$ printf 'FN (BAD) = (undefined)\nBAD\n' | cargo run
+$ printf 'FN (BAD) -> Any = (undefined)\nBAD\n' | cargo run
 error: unbound name 'undefined'
   in fn(BAD) (fn(BAD))
 ```
@@ -168,7 +187,7 @@ There is no in-language try/catch construct — errors propagate to the top leve
 
 Things you might expect that don't exist today — all tracked in [ROADMAP.md](ROADMAP.md):
 
-- **No user-defined types.** `KType` is a closed enum of seven host-defined kinds; you can't declare a record, a variant, or a trait.
+- **No user-defined types.** `KType` is a closed enum of host-defined kinds (`Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `KFunction`, `KExpression`, `Any`); you can't declare a record, a variant, or a trait. Function return types do exist as of this PR — see [`FN`](#fn--define-a-function) — but argument types are still uniformly `Any`.
 - **No arithmetic, comparison, or logical operators.** `1 + 1` does not parse as addition. The token-level operator table in [operators.rs](src/parse/operators.rs) only has compound-token desugarings (`!`, `.`, `[]`, `?`), and those are not wired to runtime behavior.
 - **No loops.** Recursion is the iteration model now that user functions exist (see [ROADMAP.md](ROADMAP.md)'s leak-fix and TCO sections).
 - **No in-language error catching.** Errors surface to the CLI but no surface syntax or builtin lets a Koan program inspect and handle them yet.

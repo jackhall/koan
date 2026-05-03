@@ -88,11 +88,13 @@ pub enum BodyResult<'a> {
     Tail {
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
-        /// User-fn name to attach to the slot for error-frame purposes. `Some(name)` for
-        /// `KFunction::invoke`'s UserDefined path so an error inside the body's evaluation
-        /// surfaces with that name in its frame trace; `None` for builtin tails like
+        /// User-fn reference attached to the slot for two purposes: (1) the slot's Done arm
+        /// reads `signature.return_type` to enforce the declared return type at runtime, and
+        /// (2) on error, `function.summarize()` becomes the appended `Frame`'s function name
+        /// so the call-stack trace identifies which user-fn the error happened inside.
+        /// `Some(f)` for `KFunction::invoke`'s UserDefined path; `None` for builtin tails like
         /// `if_then`'s lazy slot, which is just deferred-eval continuation, not a call.
-        function: Option<String>,
+        function: Option<&'a KFunction<'a>>,
     },
     Err(KError),
 }
@@ -107,12 +109,12 @@ impl<'a> BodyResult<'a> {
     /// Tail return that installs a fresh per-call frame on the slot. Used by
     /// `KFunction::invoke` for user-defined bodies — `frame` is an `Rc` to the per-call
     /// arena and the child scope holding bound parameters. Other Rcs (e.g., escaping
-    /// closures, future stages) may share ownership. `function` names the user-fn for
-    /// error-frame purposes.
+    /// closures, future stages) may share ownership. `function` is the called user-fn,
+    /// kept on the slot for return-type enforcement and error-frame attribution.
     pub fn tail_with_frame(
         expr: KExpression<'a>,
         frame: Rc<CallArena>,
-        function: String,
+        function: &'a KFunction<'a>,
     ) -> Self {
         BodyResult::Tail { expr, frame: Some(frame), function: Some(function) }
     }
@@ -411,23 +413,44 @@ impl Argument {
                 part,
                 ExpressionPart::Literal(KLiteral::Null) | ExpressionPart::Future(KObject::Null)
             ),
+            KType::List => matches!(
+                part,
+                ExpressionPart::ListLiteral(_) | ExpressionPart::Future(KObject::List(_))
+            ),
+            KType::Dict => matches!(part, ExpressionPart::Future(KObject::Dict(_))),
+            KType::KFunction => matches!(
+                part,
+                ExpressionPart::Future(KObject::KFunction(_, _))
+                    | ExpressionPart::Future(KObject::KFuture(_, _))
+            ),
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
+            KType::TypeRef => matches!(part, ExpressionPart::Type(_)),
         }
     }
 }
 
-/// Type tags used by `Argument::matches` at dispatch time. `KExpression` is the lazy slot:
-/// it accepts an unevaluated `ExpressionPart::Expression` so the receiving builtin can choose
-/// when (or whether) to run it. Future work: let users define duck types instead of an enum.
-#[derive(Copy, Clone)]
+/// Type tags used by `Argument::matches` at dispatch time, by user-facing return-type
+/// annotations on functions, and by the scheduler's runtime return-type check.
+///
+/// `KExpression` is the lazy slot: it accepts an unevaluated `ExpressionPart::Expression`
+/// so the receiving builtin can choose when (or whether) to run it. `TypeRef` is a meta-type
+/// for argument slots that capture a parsed type-name token (`ExpressionPart::Type(_)`) —
+/// used by `FN`'s return-type annotation slot, not declarable in user code.
+///
+/// Future work: let users define duck types instead of an enum.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum KType {
     Number,
     Str,
     Bool,
     Null,
+    List,
+    Dict,
+    KFunction,
     Identifier,
     KExpression,
+    TypeRef,
     Any,
 }
 
@@ -439,17 +462,48 @@ impl KType {
         !matches!(self, KType::Any) && matches!(other, KType::Any)
     }
 
-    /// Short human-readable name for this type — used by error formatters.
+    /// Short human-readable name for this type — used by error formatters and parsed back by
+    /// `from_name` for surface-level annotations.
     pub fn name(self) -> &'static str {
         match self {
             KType::Number => "Number",
             KType::Str => "Str",
             KType::Bool => "Bool",
             KType::Null => "Null",
+            KType::List => "List",
+            KType::Dict => "Dict",
+            KType::KFunction => "KFunction",
             KType::Identifier => "Identifier",
             KType::KExpression => "KExpression",
+            KType::TypeRef => "TypeRef",
             KType::Any => "Any",
         }
+    }
+
+    /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
+    /// `KFunction`). Returns `None` for unknown names. `Identifier` and `TypeRef` are
+    /// dispatch-time meta-types — not surface-declarable, since no `KObject` value carries
+    /// them, so a function declaring such a return type could never satisfy its contract.
+    pub fn from_name(name: &str) -> Option<KType> {
+        match name {
+            "Number" => Some(KType::Number),
+            "Str" => Some(KType::Str),
+            "Bool" => Some(KType::Bool),
+            "Null" => Some(KType::Null),
+            "List" => Some(KType::List),
+            "Dict" => Some(KType::Dict),
+            "KFunction" => Some(KType::KFunction),
+            "KExpression" => Some(KType::KExpression),
+            "Any" => Some(KType::Any),
+            _ => None,
+        }
+    }
+
+    /// True iff a runtime `KObject` value satisfies this declared type. `Any` matches
+    /// everything; otherwise compare against the value's `ktype()`. Used by the scheduler's
+    /// post-call return-type check.
+    pub fn matches_value(self, obj: &KObject<'_>) -> bool {
+        matches!(self, KType::Any) || self == obj.ktype()
     }
 }
 

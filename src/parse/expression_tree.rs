@@ -223,6 +223,7 @@ mod tests {
             match p {
                 ExpressionPart::Keyword(s) => format!("t({})", s),
                 ExpressionPart::Identifier(s) => format!("t({})", s),
+                ExpressionPart::Type(s) => format!("T({})", s),
                 ExpressionPart::Expression(e) => describe(e),
                 ExpressionPart::ListLiteral(items) => {
                     let inner: Vec<String> = items.iter().map(describe_part).collect();
@@ -408,14 +409,24 @@ mod tests {
 
     #[test]
     fn inf_and_nan_stay_tokens() {
-        assert_eq!(tree("inf NaN").unwrap(), "[t(inf) t(NaN)]");
+        // `inf` is lowercase → Identifier; `NaN` is capitalized + has lowercase → Type.
+        // Neither classifies as a numeric Literal, which is what this test guards.
+        assert_eq!(tree("inf NaN").unwrap(), "[t(inf) T(NaN)]");
     }
 
     #[test]
-    fn capitalized_keywords_stay_tokens() {
+    fn capitalized_names_classify_as_types_all_caps_as_keyword() {
         assert_eq!(
             tree("True False Null NULL").unwrap(),
-            "[t(True) t(False) t(Null) t(NULL)]"
+            "[T(True) T(False) T(Null) t(NULL)]"
+        );
+    }
+
+    #[test]
+    fn camelcase_type_names_classify_as_types() {
+        assert_eq!(
+            tree("Number MyType KFunction Point3D").unwrap(),
+            "[T(Number) T(MyType) T(KFunction) T(Point3D)]"
         );
     }
 

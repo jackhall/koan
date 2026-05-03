@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn error_inside_user_fn_body_carries_frame() {
         let result = interpret_with_writer(
-            "FN (BAD) = (undefined_thing)\nBAD",
+            "FN (BAD) -> Any = (undefined_thing)\nBAD",
             Box::new(std::io::sink()),
         );
         match result {
@@ -362,8 +362,8 @@ mod tests {
     #[test]
     fn frame_chain_walks_nested_user_fn_calls() {
         let result = interpret_with_writer(
-            "FN (INNER) = (undefined)\n\
-             FN (OUTER) = (LET xx = (INNER))\n\
+            "FN (INNER) -> Any = (undefined)\n\
+             FN (OUTER) -> Any = (LET xx = (INNER))\n\
              OUTER",
             Box::new(std::io::sink()),
         );

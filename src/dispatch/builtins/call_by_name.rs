@@ -170,7 +170,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (DOUBLE x) = (x))");
+        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
         let result = run_one(scope, parse_one("f (7)"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
@@ -182,7 +182,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (a PICK b) = (a))");
+        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
         let result = run_one(scope, parse_one("f (1 2)"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
@@ -193,7 +193,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (DOUBLE x) = (x))");
+        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
         let err = run_one_err(scope, parse_one("f (1 2 3)"));
         assert!(
             matches!(err.kind, KErrorKind::ArityMismatch { expected: 1, got: 3 }),
@@ -245,7 +245,7 @@ mod tests {
         // (INNER) in MAKE's per-call scope, then is returned (FN's value).
         run(
             scope,
-            "FN (MAKE) = (FN (INNER) = (\"hi\"))\n\
+            "FN (MAKE) -> KFunction = (FN (INNER) -> Str = (\"hi\"))\n\
              LET f = (MAKE)",
         );
         // After MAKE's call frame drops, only the lifted KObject::KFunction (carrying the
@@ -273,7 +273,7 @@ mod tests {
         let scope = build_scope(&arena, captured);
         run(
             scope,
-            "FN (MAKE) = (FN (ECHO x) = (x))\n\
+            "FN (MAKE) -> KFunction = (FN (ECHO x) -> Number = (x))\n\
              LET f = (MAKE)",
         );
         let result = run_one(scope, parse_one("f (42)"));
@@ -291,7 +291,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (MAKE) = ([(FN (ECHO x) = (x))])");
+        run(scope, "FN (MAKE) -> List = ([(FN (ECHO x) -> Number = (x))])");
         let result = run_one(scope, parse_one("(MAKE)"));
         let items = match result {
             KObject::List(items) => items,

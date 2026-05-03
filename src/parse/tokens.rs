@@ -47,17 +47,33 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
 }
 
 /// Classify a sub-token (the piece between operators inside a compound token): literal first,
-/// then `Keyword` if it has no lowercase letters (per `is_keyword_token`), otherwise
-/// `Identifier`. Used by `read_atom`.
+/// then `Keyword` if it has no lowercase letters (per `is_keyword_token`), then `Type` if it
+/// starts uppercase and has at least one lowercase character (covers both `Camelcased` and
+/// `CamelCased`), otherwise `Identifier`. Used by `read_atom`.
 fn classify_atom<'a>(tok: &str) -> ExpressionPart<'a> {
     if let Some(part) = try_literal(tok) {
         return part;
     }
     if is_keyword_token(tok) {
         ExpressionPart::Keyword(tok.to_string())
+    } else if is_type_name(tok) {
+        ExpressionPart::Type(tok.to_string())
     } else {
         ExpressionPart::Identifier(tok.to_string())
     }
+}
+
+/// True iff `tok` looks like a type name: first char ASCII-uppercase plus at least one
+/// ASCII-lowercase elsewhere. Admits `Number`, `Point`, `MyType`, `Point3D`, `KFunction`;
+/// rejects all-caps tokens (caught earlier by `is_keyword_token`) and lowercase-leading
+/// tokens (fall through to `Identifier`).
+fn is_type_name(tok: &str) -> bool {
+    let mut chars = tok.chars();
+    let Some(first) = chars.next() else { return false; };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    chars.any(|c| c.is_ascii_lowercase())
 }
 
 /// Recursive-descent parser for compound tokens. Strips leading prefix operators, reads an
@@ -119,6 +135,7 @@ mod tests {
         match p {
             ExpressionPart::Keyword(s) => format!("t({})", s),
             ExpressionPart::Identifier(s) => format!("t({})", s),
+            ExpressionPart::Type(s) => format!("T({})", s),
             ExpressionPart::Expression(e) => {
                 let inner: Vec<String> = e.parts.iter().map(describe).collect();
                 format!("[{}]", inner.join(" "))
