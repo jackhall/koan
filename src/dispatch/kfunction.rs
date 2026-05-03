@@ -243,36 +243,73 @@ impl<'a> KFunction<'a> {
         })
     }
 
-    /// Apply this function to a positional argument list, weaving the signature's keyword
-    /// tokens back in. Returns a `BodyResult::Tail` whose expression matches this function's
-    /// keyword-bucketed signature on re-dispatch (so the scheduler picks `self` again via
-    /// the standard path, this time with `bind` happy because all keywords are present).
-    /// On arity mismatch returns `BodyResult::Err(KError::ArityMismatch)`.
+    /// Apply this function to a **named** argument list, weaving the signature's keyword
+    /// tokens back in. The caller passes the inner parts of `f (a: 1, b: 2)` and this method
+    /// parses them as `<name>: <value>` triples (via
+    /// [`parse_named_value_pairs`](super::named_pairs::parse_named_value_pairs)), validates
+    /// names against the signature's `Argument` slot names, and reorders the values into
+    /// signature order before emitting the tail.
+    ///
+    /// Validation precedence (when both fire, the first wins): missing arg → unknown arg →
+    /// arity. Missing-first because telling the user "you forgot `b`" is more actionable
+    /// than "you have a stray `c`".
+    ///
+    /// Returns `BodyResult::Tail` whose expression matches this function's keyword-bucketed
+    /// signature on re-dispatch — same final shape as the old positional path, just
+    /// reordered by name. Errors map to `ShapeError` (malformed pair shape), `MissingArg`,
+    /// or `ArityMismatch` as appropriate.
     ///
     /// Used by the [`call_by_name`](super::builtins::call_by_name) builtin's body to wire
-    /// `f (a b)` to the underlying function's call. Lives on `KFunction` so the builtin's
+    /// `f (a: 1)` to the underlying function's call. Lives on `KFunction` so the builtin's
     /// body stays a thin shim and the synthesis logic is co-located with the rest of "how
     /// to call a function."
     pub fn apply<'b>(&self, args: Vec<ExpressionPart<'b>>) -> BodyResult<'b> {
-        let arg_slots = self
+        let tmp_expr = KExpression { parts: args };
+        let pairs = match super::named_pairs::parse_named_value_pairs(&tmp_expr, "function call") {
+            Ok(p) => p,
+            Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
+        };
+        let arg_names: Vec<&str> = self
             .signature
             .elements
             .iter()
-            .filter(|el| matches!(el, SignatureElement::Argument(_)))
-            .count();
-        if arg_slots != args.len() {
+            .filter_map(|el| match el {
+                SignatureElement::Argument(a) => Some(a.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        // Missing-first error precedence: any missing arg shadows arity / unknown checks.
+        for name in &arg_names {
+            if !pairs.iter().any(|(n, _)| n == name) {
+                return BodyResult::Err(KError::new(KErrorKind::MissingArg((*name).to_string())));
+            }
+        }
+        for (pair_name, _) in &pairs {
+            if !arg_names.iter().any(|n| n == pair_name) {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "unknown name `{}` in function call",
+                    pair_name
+                ))));
+            }
+        }
+        if pairs.len() != arg_names.len() {
             return BodyResult::Err(KError::new(KErrorKind::ArityMismatch {
-                expected: arg_slots,
-                got: args.len(),
+                expected: arg_names.len(),
+                got: pairs.len(),
             }));
         }
         let mut parts = Vec::with_capacity(self.signature.elements.len());
-        let mut args_iter = args.into_iter();
         for el in &self.signature.elements {
             match el {
                 SignatureElement::Keyword(s) => parts.push(ExpressionPart::Keyword(s.clone())),
-                SignatureElement::Argument(_) => parts
-                    .push(args_iter.next().expect("arg count equals slot count by check above")),
+                SignatureElement::Argument(a) => {
+                    let value_part = pairs
+                        .iter()
+                        .find(|(n, _)| n == &a.name)
+                        .map(|(_, v)| v.clone())
+                        .expect("missing-arg check above guarantees presence");
+                    parts.push(value_part);
+                }
             }
         }
         BodyResult::tail(KExpression { parts })

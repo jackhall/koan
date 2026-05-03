@@ -19,9 +19,11 @@ use super::{err, register_builtin};
 /// Same triple shape as `UNION` — both delegate to [`parse_typed_field_list`] so the parsing
 /// logic and error messages stay consistent.
 ///
-/// Unlike `UNION`, struct schemas preserve declaration order: positional construction
-/// (`Point (3 4)`) maps the i-th value to the i-th declared field, so the registered schema
-/// must be an ordered `Vec<(String, KType)>` rather than a `HashMap`.
+/// Unlike `UNION`, struct schemas preserve declaration order so [`struct_value::apply`]
+/// (super::struct_value::apply) can reorder the user's named-arg pairs (`Point (x: 3, y: 4)`
+/// or `Point (y: 4, x: 3)`) into a stable canonical order before the construction primitive
+/// runs. The registered schema is therefore an ordered `Vec<(String, KType)>` rather than a
+/// `HashMap`.
 ///
 /// Empty schemas, unknown type names, duplicate field names, and malformed triples all
 /// surface as `ShapeError` with the offending position called out. The named form

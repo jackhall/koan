@@ -6,6 +6,7 @@ pub mod kkey;
 pub mod kobject;
 pub mod ktraits;
 pub mod monad;
+pub mod named_pairs;
 pub mod scope;
 pub mod struct_value;
 pub mod tagged_union;

@@ -12,12 +12,14 @@ use crate::dispatch::scope::Scope;
 use super::{err, register_builtin};
 
 /// `<verb:Identifier> <args:KExpression>` — invokes a function bound to `verb` in scope by
-/// applying it to the positional parts of `args`. Surface syntax: `f (a b c)` where `f` is
-/// an Identifier whose binding is a `KObject::KFunction`. `verb` is resolved via
-/// `Scope::lookup_kfunction`; `KFunction::apply` weaves the function's signature keywords
-/// back in and returns a `BodyResult::Tail` that the scheduler re-dispatches against the
-/// keyword-bucketed signature. Errored cases (verb unbound, bound to a non-function, args
-/// slot misshapen) return structured `KError` variants the CLI reports verbatim.
+/// applying it to the **named-argument** parts of `args`. Surface syntax: `f (a: 1, b: 2)`
+/// where `f` is an Identifier whose binding is a `KObject::KFunction`. `verb` is resolved
+/// via `Scope::lookup_kfunction`; `KFunction::apply` parses the inner expression as
+/// `<name>: <value>` triples, reorders by signature parameter names, weaves the function's
+/// signature keywords back in, and returns a `BodyResult::Tail` that the scheduler
+/// re-dispatches against the keyword-bucketed signature. Errored cases (verb unbound, bound
+/// to a non-function, args slot misshapen, missing/unknown/duplicate name) return
+/// structured `KError` variants the CLI reports verbatim.
 ///
 /// Body intentionally thin: the synthesis logic lives on [`KFunction::apply`] alongside the
 /// rest of "how to call a function," keeping this builtin a clean dispatch consumer rather
@@ -174,53 +176,113 @@ mod tests {
     }
 
     /// `LET f = (FN ...)` captures the FN's returned KFunction. Calling it via
-    /// `f (arg)` dispatches through `call_by_name`, which weaves the function's keyword
-    /// (DOUBLE) back in and re-dispatches as `DOUBLE arg`.
+    /// `f (x: 7)` dispatches through `call_by_name`, which parses named pairs, reorders by
+    /// signature parameter names, weaves the function's keyword (DOUBLE) back in, and
+    /// re-dispatches as `DOUBLE 7`.
     #[test]
     fn fn_callable_via_call_by_name() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
-        let result = run_one(scope, parse_one("f (7)"));
+        let result = run_one(scope, parse_one("f (x: 7)"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
     /// A function whose signature has a keyword in a non-leading position — the synthesized
-    /// expression must reinsert the keyword between the positional args.
+    /// expression must reinsert the keyword between the named-and-reordered args.
     #[test]
     fn call_by_name_weaves_internal_keyword() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
-        let result = run_one(scope, parse_one("f (1 2)"));
+        let result = run_one(scope, parse_one("f (a: 1, b: 2)"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
-    /// Arity mismatch: f takes 1 arg, called with 3.
+    /// Named args are order-independent: caller writes them in any order, `apply` reorders
+    /// to signature order. Reverse the caller's order from the previous test and the keyword
+    /// PICK still sits between `a` and `b` in the synthesized tail.
     #[test]
-    fn call_by_name_arity_mismatch_returns_error() {
+    fn call_by_name_named_args_order_independent() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
+        let result = run_one(scope, parse_one("f (b: 2, a: 1)"));
+        assert!(matches!(result, KObject::Number(n) if *n == 1.0));
+    }
+
+    /// Missing named arg: f takes both `a` and `b`, called with only `a`.
+    #[test]
+    fn call_by_name_missing_named_arg() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
+        let err = run_one_err(scope, parse_one("f (a: 1)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::MissingArg(name) if name == "b"),
+            "expected MissingArg(\"b\"), got {err}",
+        );
+    }
+
+    /// Unknown named arg: f's signature names `a` and `b`, but caller passes `c`. Missing-
+    /// first error precedence means `b` is reported before `c`, so to test the unknown
+    /// branch we provide both required names plus an extra.
+    #[test]
+    fn call_by_name_unknown_named_arg() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
+        let err = run_one_err(scope, parse_one("f (a: 1, b: 2, c: 3)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown name") && msg.contains("`c`")),
+            "expected ShapeError on unknown name c, got {err}",
+        );
+    }
+
+    /// Missing colon: caller writes `f (a 1)` instead of `f (a: 1)`. The named-pair parser
+    /// rejects the malformed shape with a ShapeError.
+    #[test]
+    fn call_by_name_missing_colon() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
-        let err = run_one_err(scope, parse_one("f (1 2 3)"));
+        let err = run_one_err(scope, parse_one("f (a 1)"));
         assert!(
-            matches!(err.kind, KErrorKind::ArityMismatch { expected: 1, got: 3 }),
-            "expected ArityMismatch{{1, 3}}, got {err}",
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("separator") || msg.contains("triples")),
+            "expected ShapeError on missing colon, got {err}",
         );
     }
 
-    /// Non-function binding: `x` is a Number; calling `x (7)` errors with TypeMismatch on
-    /// the verb, since lookup found a binding but it isn't a function.
+    /// Duplicate name in the named-arg list: `f (x: 1, x: 2)`.
+    #[test]
+    fn call_by_name_duplicate_named_arg() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
+        let err = run_one_err(scope, parse_one("f (x: 1, x: 2)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
+            "expected ShapeError on duplicate name, got {err}",
+        );
+    }
+
+    /// Non-function binding: `x` is a Number; calling `x (foo: 7)` errors with TypeMismatch
+    /// on the verb. Verb resolution fires before pair parsing, so the error is about the
+    /// verb's binding rather than the pair shape.
     #[test]
     fn call_by_name_on_non_function_returns_error() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "LET x = 42");
-        let err = run_one_err(scope, parse_one("x (7)"));
+        let err = run_one_err(scope, parse_one("x (foo: 7)"));
         assert!(
             matches!(
                 &err.kind,
@@ -253,14 +315,14 @@ mod tests {
     /// LET-bound StructType: same as the tagged-union case but for the struct path. The
     /// outer `STRUCT` form registers the type token (`Pt`) in scope as a side effect AND
     /// returns the `StructType` value, which LET captures under the lowercase alias. The
-    /// alias then routes through `call_by_name`.
+    /// alias then routes through `call_by_name` and uses named-arg construction.
     #[test]
     fn call_by_name_on_struct_type_constructs() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "LET pt = (STRUCT Pt = (x: Number, y: Number))");
-        let result = run_one(scope, parse_one("pt (3 4)"));
+        let result = run_one(scope, parse_one("pt (x: 3, y: 4)"));
         match result {
             KObject::Struct { type_name, fields } => {
                 assert_eq!(type_name, "Pt");
@@ -272,13 +334,13 @@ mod tests {
     }
 
     /// Unbound name: `f` was never bound; lookup returns None, builtin returns
-    /// `KError::UnboundName`.
+    /// `KError::UnboundName`. Verb resolution fires before pair parsing.
     #[test]
     fn call_by_name_unbound_returns_error() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let err = run_one_err(scope, parse_one("undefined (7)"));
+        let err = run_one_err(scope, parse_one("undefined (foo: 7)"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "undefined"),
             "expected UnboundName(\"undefined\"), got {err}",
@@ -305,22 +367,20 @@ mod tests {
         );
         // After MAKE's call frame drops, only the lifted KObject::KFunction (carrying the
         // Rc) is keeping MAKE's per-call arena alive. Invoking the inner FN must still
-        // succeed without UAF.
-        let err = run_one_err(scope, parse_one("f (1)"));
-        // `f (1)` invokes via `call_by_name` → INNER. INNER's signature is
-        // `[Keyword(INNER)]` (no args), so the synthesized call has arity 1 vs expected 0
-        // and `KFunction::apply` returns ArityMismatch. The point of this test is that we
-        // get a structured error rather than a UAF crash — that proves the reference and
-        // arena are alive.
+        // succeed without UAF. INNER takes no args, so we call it with empty parens — this
+        // returns "hi" as a normal value. The point of this test is that we get a
+        // structured outcome (a real KString, not a UAF crash), which proves the reference
+        // and arena are alive.
+        let result = run_one(scope, parse_one("f ()"));
         assert!(
-            matches!(err.kind, KErrorKind::ArityMismatch { expected: 0, got: 1 }),
-            "expected ArityMismatch{{0, 1}}, got {err}",
+            matches!(result, KObject::KString(s) if s == "hi"),
+            "expected KString(\"hi\"), got {}", result.summarize(),
         );
     }
 
     /// Variant of the closure-escape test where the inner FN takes a parameter, so the
-    /// invocation actually returns the body's value rather than arity-mismatching to Null.
-    /// Confirms the captured scope's substitute-and-dispatch path works after escape.
+    /// invocation actually returns the body's value via the named-arg path. Confirms the
+    /// captured scope's substitute-and-dispatch path works after escape.
     #[test]
     fn escaped_closure_with_param_returns_body_value() {
         let arena = RuntimeArena::new();
@@ -331,7 +391,7 @@ mod tests {
             "FN (MAKE) -> KFunction = (FN (ECHO x) -> Number = (x))\n\
              LET f = (MAKE)",
         );
-        let result = run_one(scope, parse_one("f (42)"));
+        let result = run_one(scope, parse_one("f (x: 42)"));
         assert!(matches!(result, KObject::Number(n) if *n == 42.0));
     }
 

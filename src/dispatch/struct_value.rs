@@ -6,12 +6,15 @@
 //!
 //! Unlike the tagged-union primitive (3 fixed slots: schema/tag/value), struct construction
 //! is variable-arity — a `Point` schema declares 2 fields, a `User` schema might declare 5.
-//! To keep the primitive's signature fixed, `apply` wraps each value-part in an
-//! `ExpressionPart::Expression` (single-part KExpression) inside a `ListLiteral`. The
-//! scheduler aggregates the list, dispatching each wrapped sub-expression through
-//! `value_lookup`/`value_pass` so identifiers and literals both resolve to their values
-//! before the primitive sees the assembled `KObject::List`. The primitive then validates
-//! arity and per-field types against the schema and emits a `KObject::Struct`.
+//! Construction is **named-only**: the user writes `Point (x: 3, y: 4)` and `apply` parses
+//! the inner expression as `<name>: <value>` triples (via
+//! [`parse_named_value_pairs`](super::named_pairs::parse_named_value_pairs)), validates
+//! against the declared schema, and reorders the values to match schema declaration order.
+//! Reordered value-parts are then wrapped in single-part sub-expressions inside a
+//! `ListLiteral`. The scheduler aggregates the list, dispatching each wrapped sub-expression
+//! through `value_lookup`/`value_pass` so identifiers and literals both resolve to their
+//! values before the primitive sees the assembled `KObject::List`. The primitive then
+//! validates per-field types against the schema and emits a `KObject::Struct`.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -22,29 +25,72 @@ use crate::dispatch::kfunction::{
     SignatureElement,
 };
 use crate::dispatch::kobject::KObject;
+use crate::dispatch::named_pairs::parse_named_value_pairs;
 use crate::dispatch::scope::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::builtins::register_builtin;
 
-/// Synthesize a tail that re-dispatches through the struct construction primitive once
-/// each value-part has been resolved. Each arg part is wrapped in a single-part
-/// sub-expression so bare identifiers route through `value_lookup` (returning the bound
-/// value) and bare literals route through `value_pass` — uniform handling regardless of
-/// the surface form. The wrapped parts are bundled into an `ExpressionPart::ListLiteral`,
-/// which the scheduler aggregates into a `KObject::List` before the primitive runs.
+/// Parse the inner expression of a `Point (x: 3, y: 4)` form as named pairs, validate the
+/// names match the schema, reorder the values into schema declaration order, and synthesize
+/// a tail that re-dispatches through the construction primitive.
+///
+/// Validation precedence (when both fire, the first wins): missing field → unknown field →
+/// arity. Missing-first because telling the user "you forgot `y`" is more actionable than
+/// "you have a stray `z`" — adding the missing field is what they need either way.
+///
+/// After reordering, each value-part is wrapped in a single-part sub-expression so bare
+/// identifiers route through `value_lookup` and bare literals through `value_pass` —
+/// uniform handling regardless of surface form. The wrapped parts are bundled into an
+/// `ExpressionPart::ListLiteral`, which the scheduler aggregates into a `KObject::List`
+/// before the construction primitive runs.
 pub fn apply<'a>(
     schema_obj: &'a KObject<'a>,
     args_parts: Vec<ExpressionPart<'a>>,
 ) -> BodyResult<'a> {
-    debug_assert!(
-        matches!(schema_obj, KObject::StructType { .. }),
-        "struct_value::apply called on non-StructType",
-    );
-    let wrapped: Vec<ExpressionPart<'a>> = args_parts
-        .into_iter()
-        .map(|p| ExpressionPart::expression(vec![p]))
-        .collect();
+    let fields = match schema_obj {
+        KObject::StructType { fields, .. } => Rc::clone(fields),
+        _ => {
+            debug_assert!(false, "struct_value::apply called on non-StructType");
+            return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                "struct_value::apply called on non-StructType".to_string(),
+            )));
+        }
+    };
+    let tmp_expr = KExpression { parts: args_parts };
+    let pairs = match parse_named_value_pairs(&tmp_expr, "struct construction") {
+        Ok(p) => p,
+        Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
+    };
+    // Missing-first error precedence: any missing field shadows arity / unknown checks.
+    for (field_name, _) in fields.iter() {
+        if !pairs.iter().any(|(n, _)| n == field_name) {
+            return BodyResult::Err(KError::new(KErrorKind::MissingArg(field_name.clone())));
+        }
+    }
+    for (pair_name, _) in pairs.iter() {
+        if !fields.iter().any(|(n, _)| n == pair_name) {
+            return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                "unknown field `{}` in struct construction",
+                pair_name
+            ))));
+        }
+    }
+    if pairs.len() != fields.len() {
+        return BodyResult::Err(KError::new(KErrorKind::ArityMismatch {
+            expected: fields.len(),
+            got: pairs.len(),
+        }));
+    }
+    let mut wrapped: Vec<ExpressionPart<'a>> = Vec::with_capacity(fields.len());
+    for (field_name, _) in fields.iter() {
+        let value_part = pairs
+            .iter()
+            .find(|(n, _)| n == field_name)
+            .map(|(_, v)| v.clone())
+            .expect("missing-field check above guarantees presence");
+        wrapped.push(ExpressionPart::expression(vec![value_part]));
+    }
     let parts = vec![
         ExpressionPart::Future(schema_obj),
         ExpressionPart::ListLiteral(wrapped),
@@ -211,7 +257,7 @@ mod tests {
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let result = run_one(scope, parse_one("Point (3 4)"));
+        let result = run_one(scope, parse_one("Point (x: 3, y: 4)"));
         match result {
             KObject::Struct { type_name, fields } => {
                 assert_eq!(type_name, "Point");
@@ -224,28 +270,28 @@ mod tests {
     }
 
     #[test]
-    fn struct_construction_arity_too_few() {
+    fn struct_construction_missing_field_errors() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let err = run_one_err(scope, parse_one("Point (3)"));
+        let err = run_one_err(scope, parse_one("Point (x: 3)"));
         assert!(
-            matches!(err.kind, KErrorKind::ArityMismatch { expected: 2, got: 1 }),
-            "expected ArityMismatch{{2, 1}}, got {err}",
+            matches!(&err.kind, KErrorKind::MissingArg(name) if name == "y"),
+            "expected MissingArg(\"y\"), got {err}",
         );
     }
 
     #[test]
-    fn struct_construction_arity_too_many() {
+    fn struct_construction_unknown_field_errors() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let err = run_one_err(scope, parse_one("Point (3 4 5)"));
+        let err = run_one_err(scope, parse_one("Point (x: 3, y: 4, z: 5)"));
         assert!(
-            matches!(err.kind, KErrorKind::ArityMismatch { expected: 2, got: 3 }),
-            "expected ArityMismatch{{2, 3}}, got {err}",
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown field") && msg.contains("`z`")),
+            "expected ShapeError on unknown field z, got {err}",
         );
     }
 
@@ -255,7 +301,7 @@ mod tests {
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let err = run_one_err(scope, parse_one("Point (3 \"oops\")"));
+        let err = run_one_err(scope, parse_one("Point (x: 3, y: \"oops\")"));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "y");
@@ -268,14 +314,13 @@ mod tests {
 
     #[test]
     fn struct_construction_with_identifier_arg() {
-        // Bare identifiers in the args list resolve through value_lookup because `apply`
-        // wraps each part in a single-part sub-expression. The user does not need to
-        // parens-wrap individually.
+        // Bare identifiers on the value side resolve through value_lookup because `apply`
+        // wraps each value-part in a single-part sub-expression after reordering.
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)\nLET ax = 7\nLET ay = 9");
-        let result = run_one(scope, parse_one("Point (ax ay)"));
+        let result = run_one(scope, parse_one("Point (x: ax, y: ay)"));
         match result {
             KObject::Struct { fields, .. } => {
                 assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 7.0));
@@ -286,11 +331,55 @@ mod tests {
     }
 
     #[test]
+    fn struct_construction_order_independent() {
+        // The user can write fields in any order; `apply` reorders to schema declaration order
+        // before construction. Result is identical regardless of source order.
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "STRUCT Point = (x: Number, y: Number)");
+        let result = run_one(scope, parse_one("Point (y: 4, x: 3)"));
+        match result {
+            KObject::Struct { fields, .. } => {
+                assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
+                assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));
+            }
+            other => panic!("expected Struct, got {:?}", other.ktype()),
+        }
+    }
+
+    #[test]
+    fn struct_construction_missing_colon_errors() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "STRUCT Point = (x: Number, y: Number)");
+        let err = run_one_err(scope, parse_one("Point (x 3, y 4)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("separator") || msg.contains("triples")),
+            "expected ShapeError on missing colon, got {err}",
+        );
+    }
+
+    #[test]
+    fn struct_construction_duplicate_name_errors() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "STRUCT Point = (x: Number, y: Number)");
+        let err = run_one_err(scope, parse_one("Point (x: 1, x: 2)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
+            "expected ShapeError on duplicate name, got {err}",
+        );
+    }
+
+    #[test]
     fn struct_construction_unbound_type_token_errors() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let err = run_one_err(scope, parse_one("Bogus (1 2)"));
+        let err = run_one_err(scope, parse_one("Bogus (x: 1, y: 2)"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "Bogus"),
             "expected UnboundName(\"Bogus\"), got {err}",
@@ -304,7 +393,7 @@ mod tests {
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let result = run_one(scope, parse_one("Point (3 4)"));
+        let result = run_one(scope, parse_one("Point (x: 3, y: 4)"));
         let summary = crate::dispatch::ktraits::Parseable::summarize(result);
         assert!(summary.starts_with("Point("), "summary should start with Point(, got {summary}");
         assert!(summary.contains("x: 3"), "summary should include x: 3, got {summary}");

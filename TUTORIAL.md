@@ -197,8 +197,21 @@ are rejected — types live only in the `-> Type` slot.
 
 ```
 LET f = (FN (DOUBLE x) -> Number = (x))
-f (21)           # → 21, via call_by_name
+f (x: 21)        # → 21, via call_by_name (named arguments)
 ```
+
+Function calls through `call_by_name` use **named arguments**: each value is
+introduced by its parameter name and a colon. Order is independent of the
+declaration:
+
+```
+LET pair = (FN (a TIMES b) -> Number = (a))
+pair (a: 3, b: 4)        # → 3
+pair (b: 4, a: 3)        # → 3 (same call, different argument order)
+```
+
+Missing names error with `KErrorKind::MissingArg`; unknown names with
+`KErrorKind::ShapeError`.
 
 Free names in a body resolve through the FN's *captured* definition scope —
 true lexical scoping, including for closures returned from another function's
@@ -259,29 +272,34 @@ STRUCT Point = (x: Number, y: Number)
 STRUCT User = (id: Number, name: Str, active: Bool)
 ```
 
-Field declaration order is part of the contract: construction is positional,
-so the *i*-th value goes to the *i*-th field. The construction surface
-mirrors tagged unions:
+Construction is **named**: each value is introduced by its field name and a
+colon. Order is independent of the declaration — the constructor reorders the
+pairs into schema order before validating types:
 
 ```
-LET p = (Point (3 4))
-LET u = (User (42 "alice" true))
+LET p = (Point (x: 3, y: 4))
+LET u = (User (id: 42, name: "alice", active: true))
+LET q = (Point (y: 4, x: 3))             # same struct as p
 ```
 
-Bare identifiers in the args list resolve through scope just like literals
-do — no extra parens needed:
+Bare identifiers on the value side resolve through scope just like literals do —
+no extra parens needed:
 
 ```
 LET vx = 7
 LET vy = 11
-LET q = (Point (vx vy))
+LET q = (Point (x: vx, y: vy))
 ```
 
-Wrong arity or wrong field-type errors at construction time:
+Missing or unknown field names, and wrong field-type values, all error at
+construction time:
 
 ```
-LET bad = (Point ("oops" 4))
+LET bad = (Point (x: "oops", y: 4))
 # error: type mismatch for argument 'x': expected Number, got Str
+
+LET partial = (Point (x: 3))
+# error: missing argument 'y'
 ```
 
 A struct's runtime type is `KType::Struct`; the schema itself is
@@ -346,7 +364,7 @@ One line per surface form. Sources under
 | `UNION <Name> = (<schema>)` / `UNION (<schema>)`      | Declare a tagged-union type. Named form binds `<Name>` in scope.                                | [union.rs](src/dispatch/builtins/union.rs)                    |
 | `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/dispatch/builtins/struct_def.rs)          |
 | `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/dispatch/builtins/match_case.rs)          |
-| `<verb:TypeRef> (<args>)`                             | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (3 4)`.                    | [type_call.rs](src/dispatch/builtins/type_call.rs)            |
+| `<verb:TypeRef> (<args>)`                             | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/dispatch/builtins/type_call.rs)            |
 | `<verb:Identifier> (<args>)`                          | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/dispatch/builtins/call_by_name.rs)      |
 | `<v:Identifier>` (single-part)                        | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/dispatch/builtins/value_lookup.rs)      |
 | `<v>` (single-part literal/expr)                      | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/dispatch/builtins/value_pass.rs)          |
