@@ -550,8 +550,8 @@ mod tests {
     }
 
     /// Sanity check the intentional-vs-error split: `IF false THEN ("nope")` returns Null
-    /// (intentional skip), not an error. `PRINT "x"` similarly returns null and exits 0.
-    /// These are the two surviving `null()` call sites.
+    /// (intentional skip), not an error. `PRINT "x"` writes its arg and returns the rendered
+    /// string; both should let the program exit 0.
     #[test]
     fn intentional_null_paths_do_not_surface_as_errors() {
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));

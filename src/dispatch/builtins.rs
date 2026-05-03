@@ -24,10 +24,9 @@ pub(crate) fn null_kobject<'a>() -> &'a KObject<'a> {
 }
 
 /// `BodyResult::Value(null_kobject())` — the canonical "no useful return value" early-exit for
-/// builtins. Used for *intentional* nulls only: an `IF false THEN x` skipping its lazy slot,
-/// `PRINT`'s no-useful-return value. Failure paths (type mismatches, missing args, unbound
-/// names, shape errors) return `err(...)` instead so the scheduler can short-circuit and the
-/// CLI can report what went wrong.
+/// builtins. Used for *intentional* nulls only, e.g. an `IF false THEN x` skipping its lazy
+/// slot. Failure paths (type mismatches, missing args, unbound names, shape errors) return
+/// `err(...)` instead so the scheduler can short-circuit and the CLI can report what went wrong.
 pub(crate) fn null<'a>() -> BodyResult<'a> {
     BodyResult::Value(null_kobject())
 }
