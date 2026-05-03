@@ -3,16 +3,30 @@
 /// group, deeper indents nest inside their parent, and dedents close the matching groups.
 /// Rejects tab indentation and odd-numbered space indentation (only even-space indents allowed).
 ///
-/// **List-literal continuations.** When a `[` opens but its matching `]` is on a later line,
-/// the lines in between are *not* line-wrapped — they're appended to the open list span as
-/// plain whitespace-separated content, and `build_tree` pairs the brackets itself. Compound
-/// indexing like `foo[idx]` is balanced on its own line, so it never tips depth across line
-/// boundaries; the rule only fires when `[` and `]` are on different lines. Strings are
-/// already masked at this point, so brackets inside them don't reach this function.
+/// **Collection-literal continuations.** When a `[` or `{` opens but its matching `]`/`}` is
+/// on a later line, the lines in between are *not* line-wrapped — they're appended to the open
+/// span as plain whitespace-separated content, and `build_tree` pairs the brackets itself.
+/// Compound indexing like `foo[idx]` is balanced on its own line, so it never tips depth across
+/// line boundaries; the rule only fires when an open bracket and its match are on different
+/// lines. A single delta counter handles `[`/`]` and `{`/`}` together — `build_tree`'s frame
+/// stack catches any cross-pairing (`[1 2}`). Strings are already masked at this point, so
+/// brackets inside them don't reach this function.
+///
+/// **Trailing-comma continuations.** A line whose trimmed content ends in `,` declares that
+/// the expression continues on the next non-blank line — the same suspend-indentation path
+/// the bracket case uses. This lets `UNION Maybe = (some: Number,\n  none: Null)` and bare
+/// multi-line calls like `add 1,\n  2,\n  3` parse as one expression instead of siblings.
+/// Parens (`(`) are intentionally *not* tracked the same way — they're already used to wrap
+/// sub-expressions inside indent-structured blocks, so making them suspend indentation would
+/// change the meaning of existing programs. The trailing comma is opt-in: lines that don't
+/// end in `,` keep their old sibling-boundary behavior. Blank lines preserve the
+/// continuation flag (they're skipped before the suspend check fires), so a blank line
+/// between two comma-joined fragments doesn't break the chain.
 pub fn collapse_whitespace(input: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut stack: Vec<usize> = Vec::new();
-    let mut bracket_depth: i32 = 0;
+    let mut delim_depth: i32 = 0;
+    let mut continuing: bool = false;
 
     for (lineno, raw) in input.lines().enumerate() {
         let stripped = raw.trim_start();
@@ -23,13 +37,14 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
             continue;
         }
 
-        if bracket_depth > 0 {
-            // Inside an open list span: append the line as continuation content. Skip the
-            // indent / paren-wrapping pass — the line is logically part of the bracket
-            // expression, not a sibling block.
+        if delim_depth > 0 || continuing {
+            // Inside an open list/dict span or a trailing-comma continuation: append the line
+            // as continuation content. Skip the indent / paren-wrapping pass — the line is
+            // logically part of the open expression, not a sibling block.
             out.push(' ');
             out.push_str(content);
-            bracket_depth += line_bracket_delta(content);
+            delim_depth += line_delim_delta(content);
+            continuing = content.ends_with(',');
             continue;
         }
 
@@ -58,7 +73,8 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
         out.push('(');
         out.push_str(content);
         stack.push(indent);
-        bracket_depth += line_bracket_delta(content);
+        delim_depth += line_delim_delta(content);
+        continuing = content.ends_with(',');
     }
 
     while stack.pop().is_some() {
@@ -68,12 +84,15 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Net `[` − `]` count on a single line (post-quote-masking, post-trim). Compound tokens like
-/// `foo[idx]` and `bar[i][j]` balance to zero per line because tokens can't span lines, so
-/// only an unmatched list-literal `[` shifts the running depth.
-fn line_bracket_delta(s: &str) -> i32 {
-    let opens = s.chars().filter(|&c| c == '[').count() as i32;
-    let closes = s.chars().filter(|&c| c == ']').count() as i32;
+/// Net `[`+`{` − `]`+`}` count on a single line (post-quote-masking, post-trim). Compound
+/// tokens like `foo[idx]` and `bar[i][j]` balance to zero per line because tokens can't span
+/// lines, so only an unmatched list/dict literal `[` or `{` shifts the running depth. A single
+/// counter conflates the two bracket families intentionally — this function only decides
+/// whether we're "inside an open span"; `build_tree`'s frame stack enforces that a `[` is
+/// matched by `]` (not `}`) and vice versa.
+fn line_delim_delta(s: &str) -> i32 {
+    let opens = s.chars().filter(|&c| c == '[' || c == '{').count() as i32;
+    let closes = s.chars().filter(|&c| c == ']' || c == '}').count() as i32;
     opens - closes
 }
 
@@ -225,5 +244,86 @@ mod tests {
             collapse_whitespace("LET xs = [1 2 3]\nbar").unwrap(),
             "(LET xs = [1 2 3]) (bar)",
         );
+    }
+
+    #[test]
+    fn multiline_dict_literal_continues() {
+        // Same continuation rule as lists: `{` opens, lines append, `}` closes.
+        assert_eq!(
+            collapse_whitespace("LET d = {\n  a: 1\n  b: 2\n}").unwrap(),
+            "(LET d = { a: 1 b: 2 })",
+        );
+    }
+
+    #[test]
+    fn inline_dict_does_not_perturb_indentation() {
+        assert_eq!(
+            collapse_whitespace("LET d = {a: 1}\nbar").unwrap(),
+            "(LET d = {a: 1}) (bar)",
+        );
+    }
+
+    #[test]
+    fn nested_multiline_dict_inside_list() {
+        // List opens on line 1, dict opens inside on line 2; both close on the last line.
+        assert_eq!(
+            collapse_whitespace("[\n  {a: 1\n   b: 2}\n]").unwrap(),
+            "([ {a: 1 b: 2} ])",
+        );
+    }
+
+    // --- Trailing-comma line continuation ---
+
+    #[test]
+    fn trailing_comma_continues_expression() {
+        // The `,` at end of line 1 suspends indentation handling; line 2 appends to the open
+        // group instead of becoming a child block.
+        assert_eq!(
+            collapse_whitespace("add 1,\n    2").unwrap(),
+            "(add 1, 2)",
+        );
+    }
+
+    #[test]
+    fn trailing_comma_chain_across_three_lines() {
+        // Continuation persists as long as each line keeps ending in `,`.
+        assert_eq!(
+            collapse_whitespace("foo 1,\n    2,\n    3").unwrap(),
+            "(foo 1, 2, 3)",
+        );
+    }
+
+    #[test]
+    fn trailing_comma_inside_paren_expression() {
+        // The motivating UNION shape: open paren on line 1, comma signals continuation,
+        // close paren on line 2.
+        assert_eq!(
+            collapse_whitespace("UNION Maybe = (some: Number,\n               none: Null)")
+                .unwrap(),
+            "(UNION Maybe = (some: Number, none: Null))",
+        );
+    }
+
+    #[test]
+    fn trailing_comma_continuation_through_blank_line() {
+        // Blank lines are skipped before the continuation check, so they don't break a
+        // comma chain — same shape Python uses inside bracket continuations.
+        assert_eq!(
+            collapse_whitespace("add 1,\n\n    2").unwrap(),
+            "(add 1, 2)",
+        );
+    }
+
+    #[test]
+    fn dangling_trailing_comma_at_eof() {
+        // No following line to consume the continuation; the `,` rides through unchanged.
+        // `build_tree` drops it as a no-op once it sees an expression-frame `,`.
+        assert_eq!(collapse_whitespace("foo,").unwrap(), "(foo,)");
+    }
+
+    #[test]
+    fn no_trailing_comma_keeps_sibling_boundary() {
+        // Guard: lines that don't end in `,` still produce sibling groups.
+        assert_eq!(collapse_whitespace("foo\nbar").unwrap(), "(foo) (bar)");
     }
 }

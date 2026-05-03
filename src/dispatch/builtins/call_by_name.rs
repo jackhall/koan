@@ -67,13 +67,20 @@ pub fn body<'a>(
     match scope.lookup_kfunction(&verb) {
         Some(f) => f.apply(args_expr.parts),
         None => {
-            // Distinguish "unbound" (no name in scope) from "bound to a non-function." The
-            // first is UnboundName; the second is TypeMismatch on the verb's resolved value.
+            // Identifier didn't resolve to a function. Two more cases:
+            //   - unbound name → UnboundName
+            //   - bound to a TaggedUnionType → take the type-construction path, mirroring
+            //     `type_call` but reached through a LET-bound (lowercase) identifier rather
+            //     than a Type token. The synthesis helper lives in `type_call`.
+            //   - bound to anything else → TypeMismatch on the verb's resolved value.
             match scope.lookup(&verb) {
                 None => err(KError::new(KErrorKind::UnboundName(verb))),
+                Some(obj @ KObject::TaggedUnionType(_)) => {
+                    crate::dispatch::tagged_union::apply(obj, args_expr.parts)
+                }
                 Some(obj) => err(KError::new(KErrorKind::TypeMismatch {
                     arg: "verb".to_string(),
-                    expected: "KFunction".to_string(),
+                    expected: "KFunction or TaggedUnionType".to_string(),
                     got: obj.summarize(),
                 })),
             }
@@ -211,9 +218,32 @@ mod tests {
         run(scope, "LET x = 42");
         let err = run_one_err(scope, parse_one("x (7)"));
         assert!(
-            matches!(&err.kind, KErrorKind::TypeMismatch { arg, .. } if arg == "verb"),
+            matches!(
+                &err.kind,
+                KErrorKind::TypeMismatch { arg, expected, .. }
+                    if arg == "verb" && expected == "KFunction or TaggedUnionType"
+            ),
             "expected TypeMismatch on verb, got {err}",
         );
+    }
+
+    /// LET-bound TaggedUnionType: a lowercase identifier whose value is a tagged-union type
+    /// can be used as a constructor — `call_by_name` detects the `TaggedUnionType` and takes
+    /// the same construction path as the type-token form.
+    #[test]
+    fn call_by_name_on_tagged_union_constructs() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET maybe = (UNION (some: Number none: Null))");
+        let result = run_one(scope, parse_one("maybe (some 42)"));
+        match result {
+            KObject::Tagged { tag, value } => {
+                assert_eq!(tag, "some");
+                assert!(matches!(&**value, KObject::Number(n) if *n == 42.0));
+            }
+            other => panic!("expected Tagged, got {:?}", other.ktype()),
+        }
     }
 
     /// Unbound name: `f` was never bound; lookup returns None, builtin returns

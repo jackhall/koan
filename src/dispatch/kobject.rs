@@ -30,8 +30,17 @@ use super::scope::KFuture;
 /// `Future` parts are also borrowed `&KObject`s — all of which can point into a per-call
 /// arena. A single `Rc<CallArena>` keeps that arena alive, transitively keeping every
 /// internal reference valid. Set by `lift_kobject` when a KFuture-as-value escapes.
+///
+/// `TaggedUnionType(Rc<HashMap<...>>)`: a first-class tagged-union schema, mapping tag
+/// names to the `KType` each tag's payload must satisfy. Built by the `UNION` builtin and
+/// consumed by `TAG` (and the surface-level type-token / call-by-name construction paths)
+/// to validate tagged values at construction time.
+///
+/// `Tagged { tag, value }`: a tagged value — one variant of a tagged union, carrying its
+/// tag name and inner payload. The payload is `Rc`-shared like `List`/`Dict` to keep
+/// `deep_clone` cheap and the lift-on-return walk able to skip allocation when no
+/// descendant `KFunction` is in flight.
 pub enum KObject<'a> {
-    UserDefined,
     Number(f64),
     KString(String),
     Bool(bool),
@@ -40,6 +49,11 @@ pub enum KObject<'a> {
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
+    TaggedUnionType(Rc<HashMap<String, KType>>),
+    Tagged {
+        tag: String,
+        value: Rc<KObject<'a>>,
+    },
     Null,
 }
 
@@ -47,8 +61,7 @@ impl<'a> KObject<'a> {
     /// Runtime type tag for this value. Used by the scheduler's post-call return-type check
     /// (`KType::matches_value`) and any future static-pass tooling. `KFuture` reports as
     /// `KFunction` since a bound-but-unrun call is functionally a thunk and KFutures don't
-    /// escape as user-visible values today. `UserDefined` is a placeholder; until it carries
-    /// real type info it returns `Any` so it satisfies any declared return type.
+    /// escape as user-visible values today.
     pub fn ktype(&self) -> KType {
         match self {
             KObject::Number(_) => KType::Number,
@@ -60,7 +73,8 @@ impl<'a> KObject<'a> {
             KObject::KFunction(_, _) => KType::KFunction,
             KObject::KFuture(_, _) => KType::KFunction,
             KObject::KExpression(_) => KType::KExpression,
-            KObject::UserDefined => KType::Any,
+            KObject::TaggedUnionType(_) => KType::TaggedUnionType,
+            KObject::Tagged { .. } => KType::Tagged,
         }
     }
 
@@ -77,12 +91,16 @@ impl<'a> KObject<'a> {
             KObject::KString(s) => KObject::KString(s.clone()),
             KObject::Bool(b) => KObject::Bool(*b),
             KObject::Null => KObject::Null,
-            KObject::UserDefined => KObject::UserDefined,
             KObject::List(items) => KObject::List(Rc::clone(items)),
             KObject::Dict(entries) => KObject::Dict(Rc::clone(entries)),
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
             KObject::KFunction(f, frame) => KObject::KFunction(*f, frame.clone()),
+            KObject::TaggedUnionType(schema) => KObject::TaggedUnionType(Rc::clone(schema)),
+            KObject::Tagged { tag, value } => KObject::Tagged {
+                tag: tag.clone(),
+                value: Rc::clone(value),
+            },
         }
     }
 }
@@ -93,7 +111,6 @@ impl<'a> Parseable for KObject<'a> {
     }
     fn summarize(&self) -> String {
         match self {
-            KObject::UserDefined => "null".to_string(),
             KObject::Number(n) => n.to_string(),
             KObject::KString(s) => s.clone(),
             KObject::Bool(b) => b.to_string(),
@@ -111,6 +128,14 @@ impl<'a> Parseable for KObject<'a> {
             KObject::KExpression(e) => e.summarize(),
             KObject::KFuture(t, _) => t.parsed.summarize(),
             KObject::KFunction(f, _) => f.summarize(),
+            KObject::TaggedUnionType(schema) => {
+                let parts: Vec<String> = schema
+                    .iter()
+                    .map(|(tag, ktype)| format!("{}: {}", tag, ktype.name()))
+                    .collect();
+                format!("Union{{{}}}", parts.join(", "))
+            }
+            KObject::Tagged { tag, value } => format!("{}({})", tag, value.summarize()),
             KObject::Null => "null".to_string(),
         }
     }

@@ -1,124 +1,272 @@
 # Roadmap
 
-Larger structural items that don't fit in a single PR. Each section names the problem, why it matters, and possible directions — not a fixed design.
+Open structural items that don't fit in a single PR. Each section names the problem, why it
+matters, and possible directions — not a fixed design.
 
-The order matters. Sequencing here is purely about technical and design dependencies — Koan has no users yet, and won't until this roadmap is fully implemented, so backward-compatibility costs play no role in ordering. The cost being optimized is engineering rework: doing one item before another it depends on means doing the dependent item twice.
+The order matters. Sequencing is purely about technical and design dependencies — Koan has
+no users yet, so backward-compatibility costs play no role. The cost being optimized is
+engineering rework: doing one item before another it depends on means doing the dependent
+item twice.
 
-User-defined functions and the first-cut tail-call optimization have shipped, along with a structural detour — the dispatch-as-node scheduler refactor — that wasn't in the original plan but turned out to be the natural shape once user-fns surfaced what was wrong with the previous schedule-time-then-execute split. Those landings settled `BuiltinFn`'s shape (now `fn(&mut Scope, &mut dyn SchedulerHandle, ArgumentBundle) -> BodyResult { Value | Tail }`) and named the next concrete pressures: parameterized user-fns leak per-call (so the leak fix is now load-bearing for any real workload), and TCO's slot reuse only covers the outermost user-fn frame (so transient-node reclamation, which lives inside the leak fix, gates true O(1) recursive memory). The leak fix and error handling come next in that order — each revisits `BuiltinFn`'s return type, and folding the next design problem into the same pass keeps the rewrites cheap. Monadic side-effect capture lands as the third (and intended-final) revision to that signature, replacing the ad-hoc `Scope::out` channel with a uniform carrier. User-defined types and traits come last: with the dispatch priority comparator built and the calling convention settled, the type machinery gets designed against a stable substrate.
+Shipped items live in [DECISIONS.md](DECISIONS.md). What's shipped so far: user-defined
+functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimization, the
+leak fix (with lexical closures + per-call arenas), structured error propagation, and the
+user-defined-types substrate (return-type enforcement at runtime). The next signature
+revision after error handling lands monadic side-effect capture; user-declarable types and
+traits unlock the items downstream (group-based operators, the IF-THEN→MATCH deprecation's
+Bool design call), so they sit in the middle of the sequence rather than last.
 
-## A builtin for user-defined functions ✓
+## Transient-node reclamation
 
-**Status: shipped.** Surface syntax `FN (<signature>) = (<body>)` where the signature is a `KExpression` mixing fixed `Keyword` tokens and `Identifier` slots that bind as `Any`-typed `Argument`s; the body is a `KExpression` evaluated at call time. `KFunction.body` is the enum [`Body { Builtin(BuiltinFn) | UserDefined(KExpression) }`](src/dispatch/kfunction.rs) — shape (a) from the original directions, chosen because the upcoming TCO and error-frame work both want to introspect user-fn bodies (a `Box<dyn Fn>` would have hidden them).
+**Problem.** TCO's slot reuse covers only the outermost user-fn frame.
+[`Scheduler`](src/execute/scheduler.rs)'s `nodes`/`results` vecs still grow per iteration
+whenever a body-internal sub-expression spawns a sub-`Dispatch`/`Bind`. Realistic recursion
+(the predicate computation in an `IF`-guarded base case, or a recursive call's argument
+expressions) accumulates entries. The `frame_holding_slots` sidecar added during the leak
+fix is one piece of the substrate, but full transient-node reclamation — detecting that a
+`Bind`/`Aggregate` and all its sub-`Dispatch`es are no longer reachable and reclaiming
+their vec slots — is unbuilt.
 
-Calling convention is parameter substitution: `KFunction::invoke` rewrites parameter `Identifier`s in a clone of the body to `Future(call-site value)` and returns it as `BodyResult::Tail` for the scheduler to dispatch in place. Free names (anything not a parameter) resolve via the call-time scope chain — for top-level `FN` definitions this coincides with lexical scoping.
+**Impact.** This gates true O(1) tail-recursive memory. Factorial, list walk, and similar
+patterns run in O(n) scheduler memory until it lands. It's the load-bearing remaining
+problem from the leak fix.
 
-**Deferred.** True lexical closures (a user-fn returning another user-fn that closes over local state) need real per-call child scopes, which depend on the leak fix landing first; substitution doesn't carry the captured scope across function boundaries. Type annotations on parameter slots are a future extension that hangs off the existing signature parser. Variadic arguments — the original "function body is a sequence of expressions" sketch — still want a design pass; the comparator's tiebreak rule for variadic-vs-fixed signatures is the load-bearing question and is unchanged from the original roadmap.
+**Sequencing.** Deserves its own roadmap entry once the surrounding `BuiltinFn` signature
+settles — the next pass for monadic effects revisits that signature, and folding
+reclamation into the same pass keeps the rewrite cheap.
 
-## The dispatch-as-node scheduler refactor ✓
+## Open issues from the leak-fix audit
 
-**Status: shipped, was not in the original roadmap.** The original architecture split dispatch across schedule time (eager dispatch in `schedule_expr`), execute time (`Pending` nodes), and inline-in-builtin-bodies (`if_then` and the original `KFunction::invoke` reaching for `scope.dispatch` directly). Three workarounds for one missing abstraction: only the schedule-time path could compose with sub-expression evaluation, so user-fn bodies with nested expressions silently nulled and forward references to user-fns required a try-eager-then-fallback hack.
+Most leak-fix follow-ups landed (see [DECISIONS.md](DECISIONS.md)). Two remain:
 
-The refactor made `Dispatch(KExpression)` a scheduler node type. `schedule_expr` collapsed to "add a `Dispatch` per top-level expression"; the rest is dynamic — `Dispatch` walks its expression's parts at run time, spawns sub-`Dispatch`/`Bind`/`Aggregate` nodes, and a builtin body that holds `&mut dyn SchedulerHandle` can also add `Dispatch` nodes (used by `if_then`'s lazy slot before TCO landed; now superseded by `Tail`). `BuiltinFn`'s return type became `BodyResult { Value(&KObject) | Tail(KExpression) }`. The `Forward(NodeId)` mechanism in the result vec lets a body whose result depends on a deferred computation defer cleanly.
+- **Miri hasn't run.** `CallArena::new`'s heap-pin + lifetime-erasure transmutes match the
+  existing `RuntimeArena::alloc_*` pattern, but neither has been validated under Miri. The
+  closure-escape paths in particular cross several lifetime-erased boundaries; Miri is the
+  cheapest way to prove the unsafe blocks are settled.
 
-This was the foundational change that made the rest of the user-fn and TCO work tractable. Worth recording in the roadmap because the next several items design against its shape (the leak fix has to cover scheduler-side allocations, the error story has to thread errors through the node graph, monadic effects need access to the same node-spawn lever).
-
-## Tail-call optimization ✓
-
-**Status: first cut shipped.** [`BodyResult::Tail(KExpression)`](src/dispatch/kfunction.rs) makes a builtin's tail return rewrite the *current scheduler slot's work* to a fresh `Dispatch(expr)` and re-run in place — no new node allocated, no `Forward` chain. Both deferring builtins (`if_then`, `KFunction::invoke` for user-fns) were tail by construction and migrated. A chain of tail calls (`A → B → PRINT` or unbounded `LOOP → LOOP`) reuses one slot end-to-end. Verified with two slot-count assertions in the test suite.
-
-The roadmap's original concern — host-stack overflow on naïve recursion — was actually solved earlier by the dispatch-as-node refactor (every "recursive call" enters the FIFO queue rather than growing the Rust call stack). What `Tail` adds is constant *scheduler-vec* memory across the tail-call sequence.
-
-**Deferred.** The `Tail` rewrite covers only the outermost slot. Body-internal sub-expressions — the predicate of an `IF`-guarded base case, the argument expressions to a recursive call — still allocate sub-`Dispatch` + `Bind` nodes per iteration, and those nodes are never reclaimed. Realistic recursive patterns (factorial, list walk) run in O(n) scheduler memory until the leak fix lands transient-node reclamation; the chain-of-tail-calls slot reuse alone isn't enough for them. The leak fix is the gating dependency.
-
-## Replace `Box::leak` with arena-allocated `KObject`s — leak fix shipped, follow-ups pending
-
-**Status: leak fix shipped via lexical closures + per-call arenas + Rc-counted closure escape.** `Box::leak` is gone from production code (one remaining occurrence in [scope.rs:326](src/dispatch/scope.rs#L326) is a test-only sentinel marker for the dispatch-specificity unit tests, not a runtime allocation). Per-call user-fn allocations (substituted body, child scope, parameter clones, in-body `LET`/`value_pass` allocations) live in a per-call `RuntimeArena` owned by [`CallArena`](src/dispatch/arena.rs) and freed when the call's slot finalizes — *unless* a closure that captured the per-call scope has escaped, in which case the `Rc<CallArena>` carried by the lifted value keeps the arena alive for as long as the closure is reachable. Free names in user-fn bodies resolve through the FN's *captured* definition scope ([`KFunction.captured`](src/dispatch/kfunction.rs)) — lexical scoping for free vars, which broke the F_{k+1}→F_k chain that would otherwise have made TCO recursion O(n) memory. Top-level FNs capture the run-root, so behavior matches the old dynamic-scoping model for currently-expressible programs. First-class function values (returning a fresh FN from a body, binding it via `LET`, calling via `call_by_name`) work end-to-end.
-
-The leak-fix regression test [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](src/dispatch/builtins/fn_def.rs) confirms 50 ECHO calls grow run-root by exactly 50 (one lifted return value per call), down from the prior 250+.
-
-**Follow-ups, ordered by severity.** These came out of an audit after the leak fix landed and an audit-of-the-audit after Stage 4 work. None are active UAFs in current expressivity; the open items are sharp edges that will start mattering as the language grows.
-
-1. ✓ **`deep_clone` is shallow for reference-bearing `KObject` variants.** Fixed in four stages.
-   - **Stage 1**: `Box<CallArena>` → `Rc<CallArena>`. The slot's frame Rc drops on finalize; the underlying arena drops only when no Rc is held.
-   - **Stage 2**: `KObject::KFunction(&fn, Option<Rc<CallArena>>)` — variant gains a frame field that keeps the function's underlying per-call arena alive when the closure escaped.
-   - **Stage 3**: [`lift_kobject`](src/execute/scheduler.rs#L280) compares the lifted KFunction's `captured_scope().arena` pointer to the dying frame's arena pointer; match → carry an Rc clone, mismatch → no Rc.
-   - **Stage 4 (shipped, partial)**: `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` got the same treatment — KFutures embed a `&KFunction` plus a bundle and a parsed `KExpression` whose `Future(&KObject)` parts can independently point into the dying arena. `lift_kobject` anchors any unanchored KFuture descendant conservatively (we don't track per-descendant arena provenance, so we attach the dying-frame Rc unconditionally on the KFuture arm). KFutures don't escape as values today, so the over-keep is theoretical until the planned async work surfaces them.
-   - Composite variants (`List`, `Dict`) recurse, with a `needs_lift` short-circuit: when no descendant needs anchoring, the existing `Rc<Vec>`/`Rc<HashMap>` is cloned in place rather than rebuilt. Koan's collection-immutability contract is what makes the structural sharing safe.
-   - Tests at [src/dispatch/builtins/call_by_name.rs](src/dispatch/builtins/call_by_name.rs) (`closure_escapes_outer_call_and_remains_invocable`, `escaped_closure_with_param_returns_body_value`) confirm the previously-UAF closure-escape pattern now works.
-
-2. ✓ **Lift is unconditional — resolved.** [`lift_kobject`](src/execute/scheduler.rs#L280) has a whole-tree fast path: if the dying arena allocated zero `KFunction`s ([`functions_is_empty`](src/dispatch/arena.rs#L77)), no descendant `&KFunction` can point into it, and the lift collapses to a plain `deep_clone`. For non-fast-path lifts, KFunction/KFuture arms attach an Rc only when needed; List/Dict reuse their existing `Rc` payload when no descendant needs lifting. Owned variants (Number, KString, Bool, Null) still `deep_clone` — that's correct, just mildly wasteful for the "value already in dest arena" case, which would need full arena-provenance tracking to eliminate.
-
-3. ✓ **`finalize_ready_frames` was O(n²) over scheduler size.** Fixed via a sidecar `frame_holding_slots: Vec<usize>` in `Scheduler` updated on stash/finalize.
-
-4. ✓ **`Scope::arena: Option<&'a RuntimeArena>` was `None` only for `test_sink()`.** Field tightened to `&'a RuntimeArena`; `test_sink()` takes a caller-supplied arena.
-
-5. ✓ **`active_scope: Option<*const Scope<'a>>` raw pointer dance.** The running scope is now passed through `SchedulerHandle::add_dispatch(expr, scope)` directly; the field and the unsafe transmute are gone.
-
-6. ✓ **Item-8 "captured scope must have an arena" — obsolete.** [`KFunction::captured_scope()`](src/dispatch/kfunction.rs#L161) returns `&'a Scope<'a>` (not `Option`), and `Scope::arena` is `&'a RuntimeArena` (not `Option`). The `unwrap_or(scope)` fallback the original audit flagged no longer exists; both shapes are non-nullable by construction.
-
-**Open issues.**
-
-A. ✓ **`alloc_function` invariant now `debug_assert`'d.** [`RuntimeArena::alloc_function`](src/dispatch/arena.rs#L49) compares `self` against `f.captured_scope().arena` and panics in debug builds if a KFunction is being allocated into a different arena than its captured scope. Catches the failure mode at the allocation site rather than later as a use-after-free in `lift_kobject`'s fast path. Verified: all 142 tests pass with the assertion live, confirming current call sites (builtin registration, FN definition) hold the invariant.
-
-B. **Miri hasn't run.** `CallArena::new`'s heap-pin + lifetime-erasure transmutes match the existing `RuntimeArena::alloc_*` pattern, but neither has been validated under Miri. The closure-escape paths in particular cross several lifetime-erased boundaries; Miri is the cheapest way to prove the unsafe blocks are settled.
-
-C. ✓ **`Scope::data`/`Scope::functions` re-entrancy footgun resolved via conditional-defer.** [`Scope::add`](src/dispatch/scope.rs) now tries `try_borrow_mut` on `data`/`functions` and falls back to a `pending` queue when a borrow is already held; the scheduler drains the queue between dispatch nodes via [`drain_pending`](src/dispatch/scope.rs). The hot path (no concurrent borrow) is the same direct insert as before — no measured overhead. Re-entrant writes that would have panicked now queue silently and become visible after the iterating borrow releases, with snapshot-iteration semantics for the iterator. Regression test [`add_during_active_data_borrow_queues_and_drains`](src/dispatch/scope.rs) holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms the queued write applied — pre-fix this would have panicked at the second `borrow_mut`.
-
-D. **KFuture conservative anchoring leaves room for tightening.** [`lift_kobject`](src/execute/scheduler.rs#L299)'s KFuture arm attaches the dying-frame Rc unconditionally because we don't track which arena each of `KFuture.bundle.args` and `KFuture.parsed.parts` came from. With per-descendant arena provenance this could become a `needs_lift`-style targeted attach. Non-issue today (KFutures don't escape as values), but worth revisiting alongside the async-features work that will make KFutures escape.
-
-**Sibling concern: scheduler-vec growth (transient-node reclamation).** The [`Scheduler`](src/execute/scheduler.rs)'s `nodes`/`results` vecs still grow per iteration whenever a body-internal sub-expression spawns a sub-`Dispatch`/`Bind`. Tail-call slot reuse covers only the outermost user-fn frame, so realistic recursion (the predicate computation in an `IF`-guarded base case, or a recursive call's argument expressions) accumulates entries. The `frame_holding_slots` sidecar added for #3 is one piece of the substrate, but full transient-node reclamation — detecting that a `Bind`/`Aggregate` and all its sub-`Dispatch`es are no longer reachable and reclaiming their vec slots — is unbuilt. This gates true O(1) tail-recursive memory and is the load-bearing remaining problem from the original "leak fix" item; it deserves its own roadmap entry once the error-handling pass clarifies the surrounding signature.
-
-## Surface dispatch and type errors instead of swallowing as `Null` ✓
-
-**Status: shipped.** `BodyResult` gained an `Err(KError)` arm; the scheduler propagates errors through Forward chains, short-circuiting any Bind whose dependency errored and appending a `Frame` per propagation step. [`KError`](src/dispatch/kerror.rs) is a struct (`kind: KErrorKind`, `frames: Vec<Frame>`) with variants for `TypeMismatch`, `MissingArg`, `UnboundName`, `ArityMismatch`, `AmbiguousDispatch`, `DispatchFailed`, `ShapeError`, `ParseError`, and `User` (landing pad for a future RAISE-style builtin). The CLI formats errors to stderr with the frame chain via [`KError`'s `Display`](src/dispatch/kerror.rs).
-
-The `try_args!` macro grew a default form `try_args!(bundle; arg: Variant, ...)` whose failure constructs a structured `TypeMismatch` automatically; the original override form `try_args!(bundle, return $err; ...)` is preserved for the rare site that wants something other than the default. The `null()` helper now means *intentional* null only — `IF false THEN x` skipping its lazy slot and `PRINT`'s no-useful-return value are the two surviving call sites; every other former `null()` site became `err(KError::...)`. `Scope::dispatch` and `KFunction::bind` returned `Result<KFuture, String>`; both now return `Result<KFuture, KError>` so dispatch failures (no matching function, ambiguous overload, arity mismatch in bind) flow through the same channel as builtin errors. `Scheduler::execute -> Result<(), KError>` and `interpret -> Result<(), KError>` complete the surfacing.
-
-The user-explicit constraint was no in-language try/catch — errors are values that propagate implicitly, and "catching" is for builtins to do, not surface syntax. This PR establishes the runtime substrate; no catch-builtin is shipped yet.
-
-**Deferred.** `KObject::Err` (errors as truly first-class values bindable via `LET`, passable as args) — would need the dispatcher to either short-circuit through error-typed slots or splice errors into them. Catch-builtins (`MATCH`, `OR_ELSE`-style) — likely require either a `KType::Result` extension or an `Argument.catches_errors` flag, which intersects with the user-defined-types work. A `RAISE "msg"` builtin to produce `KError::User` from in-language code. Source spans on `KExpression` so frames can name file:line instead of textual summaries. Continue-on-error after the first top-level failure (useful for a future REPL).
-
-One subtlety to know: TCO collapses frames. A user-fn whose body tail-calls another user-fn ends up with only the inner function in the trace, because the slot's `function` field is replaced at TCO time. Non-tail-call positions (e.g., a sub-Dispatch inside a parens-wrapped sub-expression) preserve the outer frame via the `frame_holding_slots` finalize path. This matches how other languages with TCO behave; future work could add per-step frame accumulation if traces lose too much detail in practice.
+- **KFuture conservative anchoring leaves room for tightening.**
+  [`lift_kobject`](src/execute/lift.rs)'s KFuture arm attaches the dying-frame Rc
+  unconditionally because we don't track which arena each of `KFuture.bundle.args` and
+  `KFuture.parsed.parts` came from. With per-descendant arena provenance this could become
+  a `needs_lift`-style targeted attach. Non-issue today (KFutures don't escape as values),
+  but worth revisiting alongside the async-features work that will make KFutures escape.
 
 ## Generalize `Scope::out` into monadic side-effect capture
 
-**Problem.** [`Scope::out`](src/dispatch/scope.rs) is a `Box<dyn Write>` sink that exists solely so [`PRINT`](src/dispatch/builtins/print.rs) has somewhere to send bytes and tests can swap stdout for a buffer. It is the only side-effect channel the runtime has, and it is hard-coded to one channel and one shape (write bytes). Every additional effect Koan eventually wants to support — file IO, time, randomness, network, environment access, even error reporting — would either grow `Scope` by another ad-hoc `Box<dyn ...>` field or get baked into `std::io` calls inside individual builtins.
+**Problem.** [`Scope::out`](src/dispatch/scope.rs) is a `Box<dyn Write>` sink that exists
+solely so [`PRINT`](src/dispatch/builtins/print.rs) has somewhere to send bytes and tests
+can swap stdout for a buffer. It is the only side-effect channel the runtime has, and it is
+hard-coded to one channel and one shape (write bytes). Every additional effect Koan
+eventually wants to support — file IO, time, randomness, network, environment access, even
+error reporting — would either grow `Scope` by another ad-hoc `Box<dyn ...>` field or get
+baked into `std::io` calls inside individual builtins.
 
-Meanwhile the [`Monadic`](src/dispatch/ktraits.rs) trait already exists, with `pure` + `bind` over a `Wrap<T>` GAT, and its doc comment says it is "intended as the abstraction Koan's deferred-task and error-handling combinators will share once they're fleshed out." Today it is implemented only for `Option` and threaded through nothing in the runtime. It is scaffolding without a building.
+Meanwhile the [`Monadic`](src/dispatch/ktraits.rs) trait already exists, with `pure` +
+`bind` over a `Wrap<T>` GAT, and its doc comment says it is "intended as the abstraction
+Koan's deferred-task and error-handling combinators will share once they're fleshed out."
+Today it is implemented only for `Option` and threaded through nothing in the runtime. It
+is scaffolding without a building.
 
 **Impact.**
 
-- *No effect inspection.* Tests can capture `PRINT` output by swapping the writer, but there is no equivalent for any other effect a builtin might want to perform. Each new effect requires its own bespoke testing seam.
-- *No mocking or replay.* A program's behavior is whatever the host system decides at the moment of the call. Deterministic replay of a Koan program (feed it a recorded effect trace, get the same output) is impossible without a uniform effect channel.
-- *No pure/effectful boundary.* The language has no way to know whether an expression is referentially transparent. Optimizations the scheduler could make (memoization, reordering, parallelism) are unsafe by default because any builtin might secretly write to a file or read the clock.
-- *Effect ordering is implicit.* Today, effects happen in whatever order the scheduler runs builtins. There is no declarative "this expression's effect is X, sequenced after Y" — it is all operational.
+- *No effect inspection.* Tests can capture `PRINT` output by swapping the writer, but
+  there is no equivalent for any other effect a builtin might want to perform. Each new
+  effect requires its own bespoke testing seam.
+- *No mocking or replay.* A program's behavior is whatever the host system decides at the
+  moment of the call. Deterministic replay of a Koan program (feed it a recorded effect
+  trace, get the same output) is impossible without a uniform effect channel.
+- *No pure/effectful boundary.* The language has no way to know whether an expression is
+  referentially transparent. Optimizations the scheduler could make (memoization,
+  reordering, parallelism) are unsafe by default because any builtin might secretly write
+  to a file or read the clock.
+- *Effect ordering is implicit.* Today, effects happen in whatever order the scheduler
+  runs builtins. There is no declarative "this expression's effect is X, sequenced after
+  Y" — it is all operational.
 
 **Directions.** None of these are decided.
 
-- *Effect type.* Probably an enum: `Effect::Output(Vec<u8>)`, `Effect::Read(handle)`, `Effect::Now`, `Effect::Random`, plus a catch-all for builtins to declare custom effects. Open question: enumerated (closed set, easy to handle exhaustively) vs trait-object (`Box<dyn Effect>`, extensible by user code if/when user-defined functions can declare their own effects).
-- *Carrier shape.* `BuiltinFn` returns not a bare `&'a KObject<'a>` (or `Result<...>` after the error-handling item lands) but an `Effectful<T>` carrier — a value paired with a list of pending effects. `Effectful` implements `Monadic`: `pure(v)` is `(v, [])`, `bind` concatenates effect lists. This is the long-promised second `Monadic` impl the trait's doc comment is waiting for.
-- *Handler in `Scope`.* `Scope::out` becomes `Scope::handler: Box<dyn EffectHandler>`. The handler decides what to do with each `Effect` as the interpreter drains them: a default handler actually performs them (write to stdout, read the clock); a test handler captures them into a vec; a replay handler feeds results from a pre-recorded trace.
-- *Drainage points.* Effects can either be performed eagerly (handler runs them as each builtin returns) or lazily (collected up the tree and run in batches at top-level expression boundaries). Eager is simpler and matches today's behavior; lazy unlocks reordering and is closer to the "monad transformer stack" shape this is converging on. Pick one explicitly rather than letting it emerge.
+- *Effect type.* Probably an enum: `Effect::Output(Vec<u8>)`, `Effect::Read(handle)`,
+  `Effect::Now`, `Effect::Random`, plus a catch-all for builtins to declare custom
+  effects. Open question: enumerated (closed set, easy to handle exhaustively) vs
+  trait-object (`Box<dyn Effect>`, extensible by user code if/when user-defined functions
+  can declare their own effects).
+- *Carrier shape.* `BuiltinFn` returns not a bare `&'a KObject<'a>` (or `Result<...>`
+  after the error-handling item) but an `Effectful<T>` carrier — a value paired with a
+  list of pending effects. `Effectful` implements `Monadic`: `pure(v)` is `(v, [])`,
+  `bind` concatenates effect lists. This is the long-promised second `Monadic` impl the
+  trait's doc comment is waiting for.
+- *Handler in `Scope`.* `Scope::out` becomes `Scope::handler: Box<dyn EffectHandler>`. The
+  handler decides what to do with each `Effect` as the interpreter drains them: a default
+  handler actually performs them (write to stdout, read the clock); a test handler
+  captures them into a vec; a replay handler feeds results from a pre-recorded trace.
+- *Drainage points.* Effects can either be performed eagerly (handler runs them as each
+  builtin returns) or lazily (collected up the tree and run in batches at top-level
+  expression boundaries). Eager is simpler and matches today's behavior; lazy unlocks
+  reordering and is closer to the "monad transformer stack" shape this is converging on.
+  Pick one explicitly rather than letting it emerge.
 
-**Sequencing.** `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the error item adds a second (`Result<BodyResult, KError>` or an `Err` variant) and this one adds a third (`Effectful<...>`). Three churning passes over every builtin in [builtins/](src/dispatch/builtins/) is meaningfully worse than one. Unless the effect story sharpens enough to fold into the same pass as ownership and errors, this should land last and accept that the prior two items are stepping stones rather than end states.
+**Sequencing.** `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the
+error item added a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three
+churning passes over every builtin in [builtins/](src/dispatch/builtins/) is meaningfully
+worse than one. Unless the effect story sharpens enough to fold into the same pass as
+ownership and errors, this should land last and accept that the prior two items are
+stepping stones rather than end states.
 
-## User-defined types and traits — substrate landed, user-declarable types pending
+## User-declarable types and traits
 
-**Status: substrate shipped.** Function return types are now non-optional and enforced at runtime, the parser distinguishes capitalized type names (`Number`, `KFunction`, `MyType`) from all-caps keywords (`LET`, `THEN`) and lowercase identifiers, [`KType`](src/dispatch/kfunction.rs) gained `KFunction`/`List`/`Dict`/`TypeRef` variants so every concrete `KObject` variant has a name, and [`KType::matches_value`](src/dispatch/kfunction.rs) + [`KObject::ktype`](src/dispatch/kobject.rs) close the loop on runtime checking. `FN` surface syntax is `FN (sig) -> ReturnType = (body)` with the type required; the scheduler injects a check at user-fn slot finalization that surfaces `KErrorKind::TypeMismatch` (with a `<return>` arg name and a frame naming the called function) on mismatch. Docs in [README.md](README.md) and [TUTORIAL.md](TUTORIAL.md) are updated.
+The substrate landed (see [DECISIONS.md](DECISIONS.md)). What's still open is the
+user-facing surface.
 
-Known runtime-check limitation: TCO collapses frames, so when A tail-calls B only B's return type is checked at runtime — the future static pass closes this gap. Builtins are also not runtime-checked (they return through `BodyResult::Value` with no slot frame); their declared return types are now honest (LET fixed from `Null` to `Any`, FN-registration fixed from `Null` to `KFunction`) and the static pass will check them uniformly.
-
-**Problem (still open).** [`KType`](src/dispatch/kfunction.rs) remains a *closed* enum — users still can't declare a record, a tagged union, or a trait. Its doc comment already flags the limitation: *"In the future this should not assume all types can be enumerated; the user should be able to define duck types."* [`KObject::UserDefined`](src/dispatch/kobject.rs) is still a unit-variant placeholder. Argument types in user-fn signatures are also still uniformly `Any` — per-param annotations are the natural next surface extension and reuse the parser's new `Type` token class.
+**Problem.** [`KType`](src/dispatch/kfunction.rs) remains a *closed* enum — users still
+can't declare a record, a tagged union, or a trait. Its doc comment already flags the
+limitation: *"In the future this should not assume all types can be enumerated; the user
+should be able to define duck types."* [`KObject::UserDefined`](src/dispatch/kobject.rs)
+is still a unit-variant placeholder. Argument types in user-fn signatures are also still
+uniformly `Any` — per-param annotations are the natural next surface extension and reuse
+the parser's new `Type` token class.
 
 **Impact.**
 
-- *User functions can only operate on built-in types.* Now that user-defined functions exist, the language can express a function over `Number` but not over a `Point` — `Point` has no surface syntax because user types don't exist. The function feature is operationally usable but stuck at scalars and the built-in `List`/`Dict`. There is no path from "the language has a function abstraction" to "the language has a record abstraction the function can operate on."
-- *No abstraction over types.* Writing a function over "anything that can be iterated" or "anything that can be compared" requires a trait or contract — Koan has no way to express either. The host-side [`ktraits.rs`](src/dispatch/ktraits.rs) (`Parseable`, `Iterable`, `Monadic`, etc.) gives the runtime its own vocabulary; user code is denied the analog and has to write per-concrete-type variants of every function.
-- *Dispatch priority is built on the wrong model if types land later.* With seven host types, signature specificity is a tiny finite-set comparison. With user types, specificity becomes a partial order over a lattice that grows as user code grows — subtyping, trait satisfaction, and structural matching each want different specificity rules. A priority comparator designed for the closed-enum case is not the same comparator needed for the open-lattice case.
+- *User functions can only operate on built-in types.* Now that user-defined functions
+  exist, the language can express a function over `Number` but not over a `Point` —
+  `Point` has no surface syntax because user types don't exist. The function feature is
+  operationally usable but stuck at scalars and the built-in `List`/`Dict`. There is no
+  path from "the language has a function abstraction" to "the language has a record
+  abstraction the function can operate on."
+- *No abstraction over types.* Writing a function over "anything that can be iterated" or
+  "anything that can be compared" requires a trait or contract — Koan has no way to
+  express either. The host-side [`ktraits.rs`](src/dispatch/ktraits.rs) (`Parseable`,
+  `Iterable`, `Monadic`, etc.) gives the runtime its own vocabulary; user code is denied
+  the analog and has to write per-concrete-type variants of every function.
+- *Dispatch priority is built on the wrong model if types land later.* With seven host
+  types, signature specificity is a tiny finite-set comparison. With user types,
+  specificity becomes a partial order over a lattice that grows as user code grows —
+  subtyping, trait satisfaction, and structural matching each want different specificity
+  rules. A priority comparator designed for the closed-enum case is not the same
+  comparator needed for the open-lattice case.
 
 **Directions.** None decided.
 
-- *Type representation.* Move `KType` from a closed enum to an extensible structure. Either add a `KType::User(TypeId)` variant alongside the existing host types and keep a `Scope`-level registry of definitions, or replace the enum entirely with a trait-object that host types and user types both implement uniformly. The first is incremental; the second is cleaner but a bigger refactor.
-- *Surface syntax.* Type definitions and trait definitions are themselves builtins — likely `TYPE Point = STRUCT x:Number y:Number` and `TRAIT Iterable = ...` shapes. Mechanically these are `KFunction`s with fixed signatures, so the surface design echoes (and likely shares machinery with) the FN signature work in the user-functions item.
-- *Traits.* A trait is a named bag of operation signatures that a type can claim to implement. Functions accept a trait-typed parameter and dispatch over any concrete type satisfying it. The dispatch machinery sees a trait the same way it sees a parent type in a subtyping hierarchy — a less-specific match that concrete types beat. The priority rules need a "concrete > trait > `Any`" hierarchy reserved in their design even if traits don't ship in the first cut.
-- *Wiring up `KObject::UserDefined`.* The placeholder variant becomes something like `UserDefined(TypeId, HashMap<String, KObject>)` — a tagged record carrying a type identifier and field values. Other `KObject` variants stay as-is; user types are an addition, not a replacement.
+- *Type representation.* Move `KType` from a closed enum to an extensible structure.
+  Either add a `KType::User(TypeId)` variant alongside the existing host types and keep a
+  `Scope`-level registry of definitions, or replace the enum entirely with a trait-object
+  that host types and user types both implement uniformly. The first is incremental; the
+  second is cleaner but a bigger refactor.
+- *Surface syntax.* Type definitions and trait definitions are themselves builtins —
+  likely `TYPE Point = STRUCT x:Number y:Number` and `TRAIT Iterable = ...` shapes.
+  Mechanically these are `KFunction`s with fixed signatures, so the surface design echoes
+  (and likely shares machinery with) the FN signature work in the user-functions item.
+- *Traits.* A trait is a named bag of operation signatures that a type can claim to
+  implement. Functions accept a trait-typed parameter and dispatch over any concrete type
+  satisfying it. The dispatch machinery sees a trait the same way it sees a parent type
+  in a subtyping hierarchy — a less-specific match that concrete types beat. The priority
+  rules need a "concrete > trait > `Any`" hierarchy reserved in their design even if
+  traits don't ship in the first cut.
+- *Wiring up `KObject::UserDefined`.* The placeholder variant becomes something like
+  `UserDefined(TypeId, HashMap<String, KObject>)` — a tagged record carrying a type
+  identifier and field values. Other `KObject` variants stay as-is; user types are an
+  addition, not a replacement.
+
+## Deprecate IF-THEN in favor of MATCH
+
+**Problem.** [MATCH](src/dispatch/builtins/match_case.rs) is strictly more expressive than
+[IF-THEN](src/dispatch/builtins/if_then.rs): `IF cond THEN value` is equivalent to
+`MATCH cond CASE true: value`. Keeping both gives the user two equivalent constructs to
+learn, keeps `if_then.rs` alive as the lone consumer of the parser's lazy-slot machinery
+(`lazy_candidate` is invoked nowhere else), and forces every future branching feature
+(pattern bindings, exhaustive-case checks) to be specified twice.
+
+**Directions.** The load-bearing design call is the runtime representation of `Bool`.
+
+- *Special-case MATCH on Bool.* Keep `KObject::Bool(bool)` as a primitive and teach MATCH
+  that `true`/`false` are valid case labels for it. IF-THEN desugars to `MATCH cond CASE
+  true: value` either at parse time or as a thin shim builtin. Smallest change.
+- *Promote Bool to a tagged union.* `true` and `false` become the two variants of a
+  built-in tagged union; MATCH dispatches over them via the same machinery as user tagged
+  unions. Cleaner uniformly but changes Bool's representation
+  (`KObject::Bool(bool)` → `KObject::Tagged { tag: "true"|"false", value: Null }`),
+  affects every type-checking call site, and costs one `Rc` per Bool value. Worth doing
+  only if other primitives are heading the same way (a bigger language-design question).
+- *Hybrid.* Keep `KObject::Bool(bool)` in storage; project to a synthetic tagged union
+  when MATCH consumes one. Compromise — keeps the cheap representation while letting
+  MATCH treat Bool uniformly with user tagged unions.
+
+**Sequencing.** Lands cleanest after user-defined types/tagged-unions hardens, when "is
+Bool a tagged union" is answerable in context. Mechanically the deprecation itself
+(delete `if_then.rs`, register the desugaring, remove the lazy-slot path if nothing else
+needs it) is a one-PR cleanup once the Bool question is settled.
+
+## Group-based operators
+
+**Problem.** Operators like `+`/`-` (additive group over Number), `*`/`/` (multiplicative
+group over Rationals), and `/`/`..` (path-join + parent-dir over filesystem paths) form
+*mathematical groups* — paired binary ops with an identity and an inverse. Today each
+operator is a flat builtin registered independently; the language has no concept that
+`+` and `-` come as a pair, that `Path` could declare its own group under different
+operators, or that a function over "anything that forms a group" could be written
+generically. Every new operator-bearing type duplicates registration and re-derives
+dispatch correctness in the user's head.
+
+**Directions.**
+
+- *Group as a trait.* On top of the user-defined-traits substrate, a `Group<T>` trait
+  declares the binary op, its inverse, and an identity. Registering `Number` as
+  `Group<Number>` under `+`/`-` is one trait impl; registering `Path` as `Group<Path>`
+  under `/`/`..` is another. Operator dispatch consults the trait when no concrete
+  overload matches. Most expressive option.
+- *Group as a syntax-level shorthand.* `GROUP + - OVER Number` (or similar) registers
+  both operators and links them in one declaration, without depending on the trait
+  machinery. Less powerful — no generic-over-groups functions — but unblocks "this type
+  wants a paired operator" without traits.
+- *Group laws.* Math groups have axioms (associativity, identity, inverse). The language
+  can either trust the declaration (cheap, possibly wrong) or sample-test it (expensive,
+  partial). Trusting is fine if violations only produce wrong answers, not crashes —
+  which is the case for a dispatch-only mechanism.
+- *Parser surface.* [operators.rs](src/parse/operators.rs)'s registry is flat today.
+  Group declarations would either feed it at runtime (slot allocation deferred to
+  dispatch) or extend a compile-time table (structural, rigid). User-definable groups
+  force the runtime path.
+
+**Sequencing.** Depends on user-defined types and traits. Without traits, the syntax-level
+shorthand still works but doesn't unlock the generic-function-over-groups payoff. Land
+alongside or after the trait machinery.
+
+## Other deferred surface items
+
+Smaller pieces called out in passing as the larger items shipped:
+
+- **Errors as first-class values.** `KObject::Err` would let errors bind via `LET` and pass
+  as args. Needs the dispatcher to either short-circuit through error-typed slots or
+  splice errors into them.
+- **Catch-builtins** (`MATCH`, `OR_ELSE`-style). Likely require either a `KType::Result`
+  extension or an `Argument.catches_errors` flag, which intersects with the user-defined-
+  types work above.
+- **`RAISE "msg"` builtin** to produce `KError::User` from in-language code.
+- **Source spans on `KExpression`** so error frames can name `file:line` instead of
+  textual summaries.
+- **Continue-on-error after the first top-level failure** (useful for a future REPL).
+- **Variadic argument signatures** — original "function body is a sequence of expressions"
+  sketch; the comparator's tiebreak rule for variadic-vs-fixed signatures is the
+  load-bearing question.
+- **Per-parameter type annotations** on user-fn signatures, which today are uniformly
+  `Any`. Reuses the parser's existing `Type` token class.
+
+## Refactor for cleaner abstractions
+
+**Standing item, exploratory.** The other roadmap entries add features; this one's job is
+to *remove* — places where the abstraction grew accidentally and a generalization has
+become visible. Examples worth a look when surrounding code next changes for unrelated
+reasons:
+
+- *Builtin registration patterns.* The `register_builtin` + signature-construction
+  skeleton repeats across [builtins/](src/dispatch/builtins/). Whether the duplication is
+  noise to factor or "deliberate so each builtin reads top-to-bottom on its own" is an
+  open call — the answer depends on how builtins evolve under monadic effects and
+  user-defined types.
+- *Parser pass boundaries.* [parse/](src/parse/)'s passes pipe strings between each
+  other (`quotes.rs` → `whitespace.rs` → `expression_tree.rs`). Typed outputs would
+  compose more cleanly. Low priority — current pipeline works.
+
+**When to act.** Refactor each only when the next feature would multiply the existing
+duplication. Don't refactor preemptively; the cost of churn outweighs the cost of
+carrying a small duplication that hasn't grown teeth yet.

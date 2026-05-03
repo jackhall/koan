@@ -417,7 +417,10 @@ impl Argument {
                 part,
                 ExpressionPart::ListLiteral(_) | ExpressionPart::Future(KObject::List(_))
             ),
-            KType::Dict => matches!(part, ExpressionPart::Future(KObject::Dict(_))),
+            KType::Dict => matches!(
+                part,
+                ExpressionPart::DictLiteral(_) | ExpressionPart::Future(KObject::Dict(_))
+            ),
             KType::KFunction => matches!(
                 part,
                 ExpressionPart::Future(KObject::KFunction(_, _))
@@ -426,6 +429,14 @@ impl Argument {
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
             KType::TypeRef => matches!(part, ExpressionPart::Type(_)),
+            KType::TaggedUnionType => matches!(
+                part,
+                ExpressionPart::Future(KObject::TaggedUnionType(_))
+            ),
+            KType::Tagged => matches!(
+                part,
+                ExpressionPart::Future(KObject::Tagged { .. })
+            ),
         }
     }
 }
@@ -451,6 +462,13 @@ pub enum KType {
     Identifier,
     KExpression,
     TypeRef,
+    /// First-class tagged-union schema. Built by `UNION`, consumed by `TAG` and the surface
+    /// construction paths (type-token call, identifier-bound type call) to validate tagged
+    /// values at construction time.
+    TaggedUnionType,
+    /// A tagged value — one variant of a tagged union, carrying its tag and inner payload.
+    /// Produced by `TAG`, consumed by `MATCH` to branch by tag.
+    Tagged,
     Any,
 }
 
@@ -476,6 +494,8 @@ impl KType {
             KType::Identifier => "Identifier",
             KType::KExpression => "KExpression",
             KType::TypeRef => "TypeRef",
+            KType::TaggedUnionType => "TaggedUnionType",
+            KType::Tagged => "Tagged",
             KType::Any => "Any",
         }
     }
@@ -494,6 +514,8 @@ impl KType {
             "Dict" => Some(KType::Dict),
             "KFunction" => Some(KType::KFunction),
             "KExpression" => Some(KType::KExpression),
+            "TaggedUnionType" => Some(KType::TaggedUnionType),
+            "Tagged" => Some(KType::Tagged),
             "Any" => Some(KType::Any),
             _ => None,
         }

@@ -87,6 +87,17 @@ Errors are first-class via [`KError`](src/dispatch/kerror.rs) — a `BodyResult:
 
 ## Source layout
 
+Inside [src/dispatch/](src/dispatch/), the `k`-prefix marks files built around a single
+eponymous Koan-runtime type: [kobject.rs](src/dispatch/kobject.rs) defines `KObject`,
+[kfunction.rs](src/dispatch/kfunction.rs) defines `KFunction`,
+[kerror.rs](src/dispatch/kerror.rs) defines `KError`, [kkey.rs](src/dispatch/kkey.rs)
+defines `KKey`, [ktraits.rs](src/dispatch/ktraits.rs) holds the `K*`-typed core traits.
+Files without the prefix are infrastructure that don't introduce a single namesake type:
+[arena.rs](src/dispatch/arena.rs) (allocation), [scope.rs](src/dispatch/scope.rs) (lexical
+environment), [builtins.rs](src/dispatch/builtins.rs) (registry),
+[monad.rs](src/dispatch/monad.rs) (trait impl on a foreign type),
+[tagged_union.rs](src/dispatch/tagged_union.rs) (shared structure).
+
 ```
 src/
 ├── main.rs              CLI entry point
@@ -96,29 +107,45 @@ src/
 │   ├── quotes.rs        mask string literals
 │   ├── whitespace.rs    indentation → parens
 │   ├── expression_tree.rs  build nested expressions; top-level parse()
+│   ├── expression_tree_tests.rs  tests for expression_tree.rs and parse()
+│   ├── dict_literal.rs  DictFrame state machine for `{k: v}` parsing
 │   ├── tokens.rs        classify tokens, compound-operator desugaring
 │   └── operators.rs     operator registry
 ├── dispatch.rs
 ├── dispatch/
 │   ├── kobject.rs       runtime value type
 │   ├── kerror.rs        KError, KErrorKind, Frame — structured runtime errors
-│   ├── ktraits.rs       Parseable / Executable / Iterable / Serializable / Monadic
 │   ├── kfunction.rs     KFunction, signatures, ArgumentBundle, KType
+│   ├── kkey.rs          KKey — hashable scalar wrapper for dict keys
+│   ├── ktraits.rs       Parseable / Executable / Iterable / Serializable / Monadic
+│   ├── arena.rs         RuntimeArena, CallArena — per-run and per-call allocation
 │   ├── scope.rs         Scope and KFuture
+│   ├── tagged_union.rs  shared tagged-union representation
+│   ├── monad.rs         Monadic impl for Option
 │   ├── builtins.rs      try_args!, register_builtin, default_scope()
-│   ├── builtins/        one file per builtin (body + register paired)
-│   │   ├── let_binding.rs
-│   │   ├── print.rs
-│   │   ├── value_lookup.rs
-│   │   ├── value_pass.rs
-│   │   └── if_then.rs
-│   └── monad.rs         Monadic impl for Option
+│   └── builtins/        one file per builtin (body + register paired)
+│       ├── let_binding.rs
+│       ├── print.rs
+│       ├── value_lookup.rs
+│       ├── value_pass.rs
+│       ├── if_then.rs
+│       ├── fn_def.rs
+│       ├── call_by_name.rs
+│       ├── match_case.rs
+│       ├── type_call.rs
+│       └── union.rs
 ├── execute.rs
 └── execute/
-    ├── scheduler.rs     DAG of KFutures, topo-sorted execution
+    ├── scheduler.rs     Scheduler struct, execute loop, KFunction::invoke bridge
+    ├── nodes.rs         node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
+    ├── run.rs           per-NodeWork-variant run_* methods (impl Scheduler)
+    ├── lift.rs          lift_kobject — rebuild values across per-call arena boundaries
+    ├── finalize.rs      finalize_ready_frames — promote forward-chain results out of
+    │                    dying per-call arenas
     └── interpret.rs     parse → dispatch → schedule → execute
 ```
 
 ## Roadmap
 
-Larger structural items are tracked in [ROADMAP.md](ROADMAP.md).
+Open structural items are tracked in [ROADMAP.md](ROADMAP.md); shipped ones are recorded
+in [DECISIONS.md](DECISIONS.md).

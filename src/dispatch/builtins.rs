@@ -8,7 +8,10 @@ pub mod call_by_name;
 mod fn_def;
 mod if_then;
 mod let_binding;
+mod match_case;
 mod print;
+mod type_call;
+mod union;
 mod value_lookup;
 mod value_pass;
 
@@ -155,6 +158,10 @@ pub fn default_scope<'a>(
     if_then::register(scope);
     fn_def::register(scope);
     call_by_name::register(scope);
+    union::register(scope);
+    super::tagged_union::register(scope);
+    type_call::register(scope);
+    match_case::register(scope);
 
     scope
 }

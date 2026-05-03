@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::dispatch::kfunction::{UntypedElement, UntypedKey};
+use crate::dispatch::kkey::KKey;
 use crate::dispatch::kobject::KObject;
-use crate::dispatch::ktraits::{Parseable, Executable};
+use crate::dispatch::ktraits::{Parseable, Executable, Serializable};
 
 /// Concrete literal kinds the parser recognizes; produced by `tokens::try_literal` and consumed
 /// when resolving an `ExpressionPart` into a runtime `KObject`.
@@ -38,6 +40,12 @@ pub enum ExpressionPart<'a> {
     /// before the parent is dispatched. The whole literal resolves to `KObject::List` at
     /// `resolve()` time.
     ListLiteral(Vec<ExpressionPart<'a>>),
+    /// A `{k: v, ...}` source-level dict. Each pair holds two `ExpressionPart`s; sub-expression
+    /// or bare-identifier sides are scheduled by the scheduler (mirroring `ListLiteral`'s path)
+    /// and the result materializes to `KObject::Dict`. Bare-identifier keys/values are wrapped
+    /// in a sub-`Dispatch` so they resolve via `value_lookup` (Python-like name resolution for
+    /// keys, a small extra wrapping cost for values that pays for itself in consistency).
+    DictLiteral(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
     Literal(KLiteral),
     Future(&'a KObject<'a>),
 }
@@ -50,6 +58,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
             ExpressionPart::Type(s) => f.debug_tuple("Type").field(s).finish(),
             ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
             ExpressionPart::ListLiteral(items) => f.debug_tuple("ListLiteral").field(items).finish(),
+            ExpressionPart::DictLiteral(pairs) => f.debug_tuple("DictLiteral").field(pairs).finish(),
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
             ExpressionPart::Future(obj) => write!(f, "Future({})", obj.summarize()),
         }
@@ -73,6 +82,13 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
                 format!("[{}]", inner.join(" "))
+            }
+            ExpressionPart::DictLiteral(pairs) => {
+                let inner: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize()))
+                    .collect();
+                format!("{{{}}}", inner.join(", "))
             }
             ExpressionPart::Literal(lit) => match lit {
                 KLiteral::Number(n) => n.to_string(),
@@ -100,6 +116,24 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::ListLiteral(items) => {
                 KObject::List(Rc::new(items.iter().map(|p| p.resolve()).collect()))
             }
+            // The scheduler ordinarily replaces sub-expression and bare-identifier dict
+            // entries with resolved values via `schedule_dict_literal` before this runs (see
+            // `Scheduler::schedule_dict_literal`); a raw non-scalar reaching here would
+            // fail the scalar-key conversion. Materialize what we can: each key part
+            // resolves to a `KObject` and is converted to a `KKey`. Panics if a key isn't a
+            // scalar — the scheduler is responsible for catching that earlier with a
+            // structured `ShapeError`.
+            ExpressionPart::DictLiteral(pairs) => {
+                let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
+                for (k, v) in pairs {
+                    let key_obj = k.resolve();
+                    let kkey = KKey::try_from_kobject(&key_obj).unwrap_or_else(|e| {
+                        panic!("DictLiteral::resolve: non-scalar key reached resolve(): {e}")
+                    });
+                    map.insert(Box::new(kkey), v.resolve());
+                }
+                KObject::Dict(Rc::new(map))
+            }
             // Preserve compound shapes (List, KExpression) by deep-cloning rather than
             // stringifying — a Future-borne List or KExpression must materialize back to its
             // structured form.
@@ -116,6 +150,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::Type(s) => ExpressionPart::Type(s.clone()),
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
+            ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
             ExpressionPart::Future(o) => ExpressionPart::Future(*o),
         }
