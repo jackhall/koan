@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crate::dispatch::arena::{CallArena, RuntimeArena};
@@ -6,118 +6,12 @@ use crate::dispatch::kerror::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::{
     ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
 };
-use crate::dispatch::kkey::KKey;
 use crate::dispatch::kobject::KObject;
-use crate::dispatch::ktraits::{Parseable, Serializable};
-use crate::dispatch::scope::{KFuture, Scope};
+use crate::dispatch::scope::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-/// What a scheduler node will produce when its work runs. `Value` is computed inline; `Forward`
-/// says "my result is whatever node `id` produces" — set when a `Dispatch` spawns a `Bind` for
-/// its sub-expression deps. `Err` says the work errored; dependents short-circuit and propagate
-/// it (with a frame appended for context). `read` and `is_result_ready` follow `Forward` chains
-/// until they land on a terminal `Value` or `Err`. Cycles are statically prevented because
-/// every `NodeId` produced by `add_*` is strictly greater than every `NodeId` it could forward
-/// to.
-enum NodeOutput<'a> {
-    Value(&'a KObject<'a>),
-    Forward(NodeId),
-    Err(KError),
-}
-
-/// What `run_dispatch`/`run_bind` tells the execute loop to do next. `Done(output)` stores the
-/// output at the current node's slot — the normal path. `Replace { work, frame, function }`
-/// is the tail-call path: rewrite the current node's `work` and re-enqueue the same `idx` so
-/// it runs again with the new work. When `frame` is `Some`, install it on the slot (its
-/// `scope()` becomes the slot's scope, its `arena()` owns the per-call allocations) — used
-/// by user-fn invocation. `None` keeps the existing frame and scope. `function` is an
-/// optional label used to append a `Frame` to any error that lands on this slot — set by
-/// user-fn invocation so an error inside a user-fn body carries the function's name in the
-/// trace; `None` for non-call replacements like `if_then`'s lazy slot. Constant memory
-/// across tail-call sequences because no fresh slot is allocated.
-enum NodeStep<'a> {
-    Done(NodeOutput<'a>),
-    Replace {
-        work: NodeWork<'a>,
-        frame: Option<Rc<CallArena>>,
-        function: Option<&'a KFunction<'a>>,
-    },
-}
-
-/// What a scheduler node will run.
-///
-/// - `Dispatch(expr)` is the entry point: walk the expression's parts, spawn `Dispatch` nodes
-///   for nested `Expression` (and `ListLiteral`) parts, and emit a `Bind` node depending on
-///   them. If there's no nesting, dispatch + invoke happen inline and the result is stored
-///   directly. Replaces the old "eager dispatch in `schedule_expr`" path.
-/// - `Bind { expr, subs }` is the old `Pending`: splice each dep's resolved value into `parts`
-///   as `Future(...)`, dispatch the resulting expression, invoke the bound future.
-/// - `Aggregate { elements }` materializes a list literal once each `Dep` element resolves.
-enum NodeWork<'a> {
-    Dispatch(KExpression<'a>),
-    Bind {
-        expr: KExpression<'a>,
-        subs: Vec<(usize, NodeId)>,
-    },
-    Aggregate {
-        elements: Vec<AggregateElement<'a>>,
-    },
-    /// Materializes a dict literal once each key/value `Dep` resolves. Mirrors `Aggregate`'s
-    /// shape but holds pairs and converts each resolved key to a `KKey` (rejecting non-scalar
-    /// keys with `KErrorKind::ShapeError`) before inserting into the runtime `HashMap`.
-    AggregateDict {
-        entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)>,
-    },
-}
-
-/// One slot in an `Aggregate` node. `Static` is an already-resolved value; `Dep` defers to a
-/// previously-scheduled node. The mix lets a list literal like `[1 (LET x = 5) z]` schedule
-/// only the sub-expression and inline the other two.
-enum AggregateElement<'a> {
-    Static(KObject<'a>),
-    Dep(NodeId),
-}
-
-/// One side of one pair in an `AggregateDict` node. Same `Static` / `Dep` split as
-/// `AggregateElement`; reused for both keys and values so a dict literal like
-/// `{(get_k): 1 a: (get_v)}` can defer the two sub-expression sides while inlining the
-/// scalar literal sides.
-enum AggregateDictElement<'a> {
-    Static(KObject<'a>),
-    Dep(NodeId),
-}
-
-struct Node<'a> {
-    work: NodeWork<'a>,
-    /// The scope this node executes against. Top-level nodes carry the run-root scope; nodes
-    /// spawned during a body's evaluation inherit their spawning node's scope; a user-fn's
-    /// tail-replace installs a per-call child scope here so the body's lookups resolve
-    /// parameters by name.
-    scope: &'a Scope<'a>,
-    /// Per-call frame this slot holds. `Some` for user-fn body slots, `None` for top-level
-    /// dispatch and sub-Dispatch/Bind/Aggregate slots. The Rc drops when the slot reaches
-    /// Done or is replaced; the underlying arena drops at that point only if no other Rc
-    /// (e.g., from a closure that captured this frame's scope and escaped) is held.
-    /// Lexical scoping (`KFunction::captured`) means each per-call child's `outer` is the
-    /// FN's captured scope (run-root for top-level FNs), so a frame holds no references
-    /// that a successor frame at the same slot needs — drop on TCO replace is immediate,
-    /// no `prev` chain.
-    frame: Option<Rc<CallArena>>,
-    /// User-fn reference installed by a TCO `Replace` whose body is `UserDefined`. The slot
-    /// reads it on Done for two purposes: (1) enforce the function's declared
-    /// `signature.return_type` against the produced value (the runtime return-type check),
-    /// and (2) on error, append a `Frame { function: f.summarize() }` to the resulting
-    /// `KError` so the call-stack trace names which user-fn the error happened inside.
-    /// `None` for builtin slots and for non-call replacements like `if_then`'s lazy slot.
-    /// Set in lockstep with `frame` (a per-call frame implies a user-fn entry).
-    ///
-    /// TCO note: when A tail-calls B, this field is rewritten to B at the `Replace` site
-    /// (lines around 275). The runtime check therefore only enforces the *tail-most*
-    /// function's return type — sound for "the value the user sees has the type the
-    /// outermost FN promised" only when intermediate frames' types agree, which the
-    /// future static pass will check at compile time. Documented limitation.
-    function: Option<&'a KFunction<'a>>,
-}
+use super::lift::lift_kobject;
+use super::nodes::{work_deps, Node, NodeOutput, NodeStep, NodeWork};
 
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
 /// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Aggregate`
@@ -131,15 +25,20 @@ struct Node<'a> {
 /// Each node carries the scope it should run against (`Node::scope`). Sub-nodes spawned by a
 /// running node default to the spawning node's scope; user-fn invocation installs a per-call
 /// child scope via `NodeStep::Replace { scope: Some(child) }`.
+///
+/// Implementation is split across sibling files: node types in [super::nodes], the
+/// per-node-kind run methods in [super::run], lifted-value rebuilding in [super::lift],
+/// and forward-chain finalization in [super::finalize]. This file holds the public API,
+/// the execute loop, and the dispatch→execute bridge (`KFunction::invoke`).
 pub struct Scheduler<'a> {
-    nodes: Vec<Option<Node<'a>>>,
-    results: Vec<Option<NodeOutput<'a>>>,
-    queue: VecDeque<usize>,
+    pub(super) nodes: Vec<Option<Node<'a>>>,
+    pub(super) results: Vec<Option<NodeOutput<'a>>>,
+    pub(super) queue: VecDeque<usize>,
     /// Slots that returned `Done(Forward(_))` while owning a per-call frame and are now
     /// waiting for their forward chain to resolve. `finalize_ready_frames` only scans this
     /// vec rather than all `nodes`, keeping the per-iteration cost proportional to the
     /// number of in-flight user-fn calls (typically tiny) instead of total scheduler size.
-    frame_holding_slots: Vec<usize>,
+    pub(super) frame_holding_slots: Vec<usize>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -163,7 +62,7 @@ impl<'a> Scheduler<'a> {
         self.add(NodeWork::Dispatch(expr), scope)
     }
 
-    fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
+    pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         let id = NodeId(self.nodes.len());
         self.nodes.push(Some(Node { work, scope, frame: None, function: None }));
         self.results.push(None);
@@ -234,7 +133,7 @@ impl<'a> Scheduler<'a> {
                                 .outer
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
-                            let lifted_obj = Self::lift_kobject(v, &frame);
+                            let lifted_obj = lift_kobject(v, &frame);
                             // Runtime return-type check: enforce the called function's
                             // declared `signature.return_type` against the produced value.
                             // `Any` is the no-op fast path (always satisfied). On mismatch,
@@ -265,12 +164,11 @@ impl<'a> Scheduler<'a> {
                         (NodeOutput::Forward(target), Some(frame)) => {
                             // Body forwarded into sub-slots whose scopes live in the
                             // per-call arena. Keep the frame alive on this slot until the
-                            // forward chain resolves; a finalize pass below promotes the
+                            // forward chain resolves; `finalize_ready_frames` promotes the
                             // chain's terminal Value into the captured arena and drops
                             // the frame. The slot is no longer in the queue, so its
                             // `work` is unused — store a stub. Track the slot so
-                            // `finalize_ready_frames` can find it without scanning all
-                            // nodes.
+                            // finalization can find it without scanning all nodes.
                             self.results[idx] = Some(NodeOutput::Forward(target));
                             self.nodes[idx] = Some(Node {
                                 work: NodeWork::Dispatch(KExpression { parts: Vec::new() }),
@@ -336,221 +234,17 @@ impl<'a> Scheduler<'a> {
             // see them. The hot path is the no-op early-return inside `drain_pending` (queue
             // is empty in the typical case); only the rare re-entrant-write path does work.
             scope.drain_pending();
-            // Finalize any frame-holding slots whose forward chain has now resolved:
-            // lift the terminal Value into the captured arena, store as Value at the
-            // slot, and drop the frame. Most iterations have nothing to do here; only
-            // user-fn slots that returned `Done(Forward)` carry frames awaiting resolution.
+            // Finalize any frame-holding slots whose forward chain has now resolved.
             self.finalize_ready_frames();
         }
         Ok(())
-    }
-
-    /// Lift a KObject value out of the dying frame's arena into the destination arena.
-    /// Owned variants (Number, KString, Bool, Null) `deep_clone` cleanly because their
-    /// content is owned. `KObject::KFunction(&f, frame)` is the special case: `&f` may
-    /// point into the dying frame's arena (an escaping closure). If so, we carry a clone
-    /// of the dying frame's `Rc<CallArena>` in the lifted value's frame field, so the
-    /// arena stays alive past the slot's frame drop and the `&f` reference remains valid.
-    /// If the function lives in a longer-lived arena (run-root or another live frame), no
-    /// Rc is needed and the lifted value's frame field stays `None`.
-    ///
-    /// `KObject::KFuture` is handled conservatively: any unanchored KFuture lifted from
-    /// the dying frame gets the dying-frame Rc attached, regardless of where its `function`
-    /// was defined. The KFuture's `bundle.args` and `parsed.parts`' `Future(&KObject)` refs
-    /// can independently point into the dying arena, and we have no per-descendant arena
-    /// tracking to tell us whether they do — anchoring unconditionally is safe and the
-    /// over-keep is theoretical until KFutures escape as values (they currently don't;
-    /// kept for the planned async features).
-    ///
-    /// Pre-existing `Some(rc)` on the input value is preserved (the value is already
-    /// keeping some arena alive; we don't overwrite that with the current dying frame's).
-    ///
-    /// Composite variants (`List`, `Dict`) recurse to find embedded closures that need an
-    /// Rc attach, but memoize via `needs_lift`: when no descendant needs lifting, the
-    /// payload's existing `Rc` is cloned instead of rebuilding the `Vec`/`HashMap`. This
-    /// makes a value's second-and-later lifts through a return chain O(N) walk + O(1)
-    /// rebuild for the unchanged composites — Koan's collection-immutability contract is
-    /// what makes the structural sharing safe.
-    ///
-    /// Whole-tree fast path: if the dying arena has zero `KFunction`s allocated in it, no
-    /// descendant `&KFunction` can point into it (per `alloc_function`'s invariant). This
-    /// is sound *today* because KFutures don't escape as values — the only way a lifted
-    /// `v` could need anchoring under this condition is via a KFuture descendant, and
-    /// none exist in current usage. When KFutures begin escaping (planned async), this
-    /// gate must add a no-unanchored-KFuture-descendant clause; the slow path's KFuture
-    /// arm is already correct. The check is one O(1) emptiness query on the arena.
-    fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
-        if dying_frame.arena().functions_is_empty() {
-            return v.deep_clone();
-        }
-        match v {
-            KObject::KFunction(f, existing) => {
-                let new_frame = if existing.is_some() {
-                    existing.clone()
-                } else {
-                    let dying_runtime: *const RuntimeArena = dying_frame.arena();
-                    let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
-                    if std::ptr::eq(captured_runtime, dying_runtime) {
-                        Some(Rc::clone(dying_frame))
-                    } else {
-                        None
-                    }
-                };
-                KObject::KFunction(*f, new_frame)
-            }
-            KObject::KFuture(t, existing) => {
-                let new_frame = existing.clone().or_else(|| Some(Rc::clone(dying_frame)));
-                KObject::KFuture(t.deep_clone(), new_frame)
-            }
-            KObject::List(items) => {
-                if items.iter().any(|x| Self::needs_lift(x, dying_frame)) {
-                    let lifted: Vec<KObject<'b>> = items
-                        .iter()
-                        .map(|x| Self::lift_kobject(x, dying_frame))
-                        .collect();
-                    KObject::List(Rc::new(lifted))
-                } else {
-                    KObject::List(Rc::clone(items))
-                }
-            }
-            KObject::Dict(entries) => {
-                if entries.values().any(|x| Self::needs_lift(x, dying_frame)) {
-                    let lifted: HashMap<_, _> = entries
-                        .iter()
-                        .map(|(k, v)| (k.clone_box(), Self::lift_kobject(v, dying_frame)))
-                        .collect();
-                    KObject::Dict(Rc::new(lifted))
-                } else {
-                    KObject::Dict(Rc::clone(entries))
-                }
-            }
-            KObject::Tagged { tag, value } => {
-                if Self::needs_lift(value, dying_frame) {
-                    KObject::Tagged {
-                        tag: tag.clone(),
-                        value: Rc::new(Self::lift_kobject(value, dying_frame)),
-                    }
-                } else {
-                    KObject::Tagged {
-                        tag: tag.clone(),
-                        value: Rc::clone(value),
-                    }
-                }
-            }
-            other => other.deep_clone(),
-        }
-    }
-
-    /// True iff lifting `v` against `dying_frame` would attach an `Rc` to some descendant.
-    /// Drives both `lift_kobject`'s top-level fast-path skip and the per-composite rebuild
-    /// decision: when this returns false, the existing `Rc<Vec>`/`Rc<HashMap>` can be cloned
-    /// instead of allocating a fresh one. Walks composites recursively but bottoms out on
-    /// the first match (`any`-style).
-    ///
-    /// `KFuture(_, None)` returns true unconditionally, mirroring `lift_kobject`'s
-    /// conservative anchor for KFutures — we can't cheaply tell whether the bundle/parsed
-    /// borrows reach into the dying arena, so we treat any unanchored KFuture as if they
-    /// might.
-    fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
-        match v {
-            KObject::KFunction(_, Some(_)) => false,
-            KObject::KFunction(f, None) => {
-                let dying_runtime: *const RuntimeArena = dying_frame.arena();
-                let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
-                std::ptr::eq(captured_runtime, dying_runtime)
-            }
-            KObject::KFuture(_, Some(_)) => false,
-            KObject::KFuture(_, None) => true,
-            KObject::List(items) => items.iter().any(|x| Self::needs_lift(x, dying_frame)),
-            KObject::Dict(entries) => entries.values().any(|x| Self::needs_lift(x, dying_frame)),
-            KObject::Tagged { value, .. } => Self::needs_lift(value, dying_frame),
-            _ => false,
-        }
-    }
-
-    /// Walk slots that returned `Done(Forward)` while owning a per-call frame; for each
-    /// whose forward chain has resolved to a Value, lift the Value into the captured arena
-    /// (the per-call scope's `outer.arena`) and drop the frame's slot-Rc. Called after
-    /// every iteration of `execute`'s main loop.
-    ///
-    /// Reads the sidecar `frame_holding_slots` rather than scanning all `nodes`. Slots
-    /// whose chain hasn't resolved yet stay in the sidecar for a future iteration; slots
-    /// that finalize get removed.
-    fn finalize_ready_frames(&mut self) {
-        let mut still_waiting: Vec<usize> = Vec::with_capacity(self.frame_holding_slots.len());
-        for idx in std::mem::take(&mut self.frame_holding_slots) {
-            if !self.is_result_ready(NodeId(idx)) {
-                still_waiting.push(idx);
-                continue;
-            }
-            match self.read_result(NodeId(idx)) {
-                Ok(value) => {
-                    let (dest, lifted_obj, function) = {
-                        let node = self.nodes[idx].as_ref().unwrap();
-                        let frame = node
-                            .frame
-                            .as_ref()
-                            .expect("frame_holding_slot must own a frame");
-                        let dest = node
-                            .scope
-                            .outer
-                            .expect("per-call scope must have an outer (its captured scope)")
-                            .arena;
-                        let lifted_obj = Self::lift_kobject(value, frame);
-                        (dest, lifted_obj, node.function)
-                    };
-                    // Runtime return-type check: same enforcement as the direct Done(Value)
-                    // path at line ~210. Forward-chain finalizers (a user-fn body that spawned
-                    // a Bind for a sub-expression) land here instead.
-                    if let Some(f) = function {
-                        let rt = f.signature.return_type;
-                        if !rt.matches_value(&lifted_obj) {
-                            let err = KError::new(KErrorKind::TypeMismatch {
-                                arg: "<return>".to_string(),
-                                expected: rt.name().to_string(),
-                                got: lifted_obj.ktype().name().to_string(),
-                            })
-                            .with_frame(Frame {
-                                function: f.summarize(),
-                                expression: f.summarize(),
-                            });
-                            self.results[idx] = Some(NodeOutput::Err(err));
-                            self.nodes[idx] = None;
-                            continue;
-                        }
-                    }
-                    let lifted = dest.alloc_object(lifted_obj);
-                    self.results[idx] = Some(NodeOutput::Value(lifted));
-                }
-                Err(e) => {
-                    // Forward chain ended in an error. Append this slot's function
-                    // frame (if any) so the trace records that the error happened
-                    // inside this user-fn — non-tail-call chains, where the body
-                    // forwards through a Bind, surface their function this way.
-                    let owned = e.clone_for_propagation();
-                    let with_frame = match self.nodes[idx].as_ref().unwrap().function {
-                        Some(f) => owned.with_frame(Frame {
-                            function: f.summarize(),
-                            expression: f.summarize(),
-                        }),
-                        None => owned,
-                    };
-                    self.results[idx] = Some(NodeOutput::Err(with_frame));
-                }
-            }
-            // Drop the slot's frame and clear the node. If the lifted value cloned an Rc,
-            // the per-call arena lives on (closure escape); otherwise this is the last
-            // strong reference and the arena frees.
-            self.nodes[idx] = None;
-        }
-        self.frame_holding_slots = still_waiting;
     }
 
     /// True iff `id`'s `Forward` chain ends in a stored terminal output (`Value` or `Err`).
     /// Used by the execute loop to decide whether a `Bind`/`Aggregate` whose subs depend on
     /// `id` is safe to run yet. An errored sub is "ready" — the parent will short-circuit
     /// on it during `run_bind`/`run_aggregate` rather than dispatch.
-    fn is_result_ready(&self, id: NodeId) -> bool {
+    pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
         let mut cur = id;
         loop {
             match self.results.get(cur.index()).and_then(|o| o.as_ref()) {
@@ -559,258 +253,6 @@ impl<'a> Scheduler<'a> {
                 Some(NodeOutput::Forward(next)) => cur = *next,
                 None => return false,
             }
-        }
-    }
-
-    /// Walk an unresolved expression. If `lazy_candidate` matches, only schedule the
-    /// eager-position `Expression` parts; the lazy positions ride through as `KExpression`
-    /// data into a builtin slot typed `KExpression` (`if_then`, `FN`). Otherwise schedule
-    /// every `Expression` (and `ListLiteral`) part as a sub-dispatch / aggregate dep.
-    /// Returns a `NodeStep`: `Done(Value)` for an inline-dispatched body that produced a
-    /// value, `Done(Forward(bind_id))` when it spawned a `Bind` to wait on subs, or
-    /// `Replace { work: Dispatch(expr), .. }` when the body was a tail call (the slot gets
-    /// rewritten in place by the execute loop).
-    fn run_dispatch(
-        &mut self,
-        expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
-    ) -> Result<NodeStep<'a>, KError> {
-        if let Some(eager_indices) = scope.lazy_candidate(&expr) {
-            let mut parts = expr.parts;
-            let mut subs = Vec::with_capacity(eager_indices.len());
-            for i in eager_indices {
-                let inner = match std::mem::replace(
-                    &mut parts[i],
-                    ExpressionPart::Identifier(String::new()),
-                ) {
-                    ExpressionPart::Expression(boxed) => *boxed,
-                    _ => unreachable!("lazy_candidate only flags Expression parts"),
-                };
-                let sub_id = self.add(NodeWork::Dispatch(inner), scope);
-                subs.push((i, sub_id));
-            }
-            let parent = KExpression { parts };
-            if subs.is_empty() {
-                let future = scope.dispatch(parent)?;
-                return Ok(self.invoke_to_step(future, scope));
-            }
-            let bind_id = self.add(NodeWork::Bind { expr: parent, subs }, scope);
-            return Ok(NodeStep::Done(NodeOutput::Forward(bind_id)));
-        }
-
-        let mut new_parts = Vec::with_capacity(expr.parts.len());
-        let mut subs: Vec<(usize, NodeId)> = Vec::new();
-        for (i, part) in expr.parts.into_iter().enumerate() {
-            match part {
-                ExpressionPart::Expression(boxed) => {
-                    let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
-                    subs.push((i, sub_id));
-                    // Placeholder — overwritten with `Future(result)` at Bind time.
-                    new_parts.push(ExpressionPart::Identifier(String::new()));
-                }
-                ExpressionPart::ListLiteral(items) => {
-                    let agg_id = self.schedule_list_literal(items, scope);
-                    subs.push((i, agg_id));
-                    new_parts.push(ExpressionPart::Identifier(String::new()));
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    let agg_id = self.schedule_dict_literal(pairs, scope);
-                    subs.push((i, agg_id));
-                    new_parts.push(ExpressionPart::Identifier(String::new()));
-                }
-                other => new_parts.push(other),
-            }
-        }
-        let new_expr = KExpression { parts: new_parts };
-        if subs.is_empty() {
-            let future = scope.dispatch(new_expr)?;
-            return Ok(self.invoke_to_step(future, scope));
-        }
-        let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
-        Ok(NodeStep::Done(NodeOutput::Forward(bind_id)))
-    }
-
-    fn run_bind(
-        &mut self,
-        mut expr: KExpression<'a>,
-        subs: Vec<(usize, NodeId)>,
-        scope: &'a Scope<'a>,
-    ) -> Result<NodeStep<'a>, KError> {
-        // Short-circuit if any sub errored: propagate that error rather than dispatch the
-        // parent. Append a frame naming the parent's expression so the trace reconstructs
-        // the call chain.
-        for (_, dep_id) in &subs {
-            if let Err(e) = self.read_result(*dep_id) {
-                let frame = Frame {
-                    function: "<bind>".to_string(),
-                    expression: expr.summarize(),
-                };
-                let propagated = e.clone_for_propagation().with_frame(frame);
-                return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
-            }
-        }
-        for (part_idx, dep_id) in subs {
-            let value = self.read(dep_id);
-            expr.parts[part_idx] = ExpressionPart::Future(value);
-        }
-        let future = scope.dispatch(expr)?;
-        Ok(self.invoke_to_step(future, scope))
-    }
-
-    fn run_aggregate(&self, elements: Vec<AggregateElement<'a>>, scope: &'a Scope<'a>) -> NodeOutput<'a> {
-        // Short-circuit on the first errored dep — propagate that error rather than build a
-        // partial list. Frame is generic ("<list>") because the aggregate has no signature
-        // text to carry.
-        let mut items: Vec<KObject<'a>> = Vec::with_capacity(elements.len());
-        for e in elements {
-            match e {
-                AggregateElement::Static(obj) => items.push(obj),
-                AggregateElement::Dep(dep) => match self.read_result(dep) {
-                    Ok(v) => items.push(v.deep_clone()),
-                    Err(err) => {
-                        let frame = Frame {
-                            function: "<list>".to_string(),
-                            expression: "list literal".to_string(),
-                        };
-                        return NodeOutput::Err(err.clone_for_propagation().with_frame(frame));
-                    }
-                },
-            }
-        }
-        let arena = scope.arena;
-        let allocated: &'a KObject<'a> = arena.alloc_object(KObject::List(Rc::new(items)));
-        NodeOutput::Value(allocated)
-    }
-
-    fn schedule_list_literal(&mut self, items: Vec<ExpressionPart<'a>>, scope: &'a Scope<'a>) -> NodeId {
-        let mut elements: Vec<AggregateElement<'a>> = Vec::with_capacity(items.len());
-        for item in items {
-            match item {
-                ExpressionPart::Expression(boxed) => {
-                    let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
-                    elements.push(AggregateElement::Dep(sub_id));
-                }
-                ExpressionPart::ListLiteral(inner) => {
-                    let nested_id = self.schedule_list_literal(inner, scope);
-                    elements.push(AggregateElement::Dep(nested_id));
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    let nested_id = self.schedule_dict_literal(pairs, scope);
-                    elements.push(AggregateElement::Dep(nested_id));
-                }
-                other => elements.push(AggregateElement::Static(other.resolve())),
-            }
-        }
-        self.add(NodeWork::Aggregate { elements }, scope)
-    }
-
-    /// Schedule each side of each pair in a dict literal. Sub-expressions, nested list/dict
-    /// literals, and bare identifiers (which need scope lookup for Python-like name
-    /// resolution on both keys and values) become `Dep` nodes; everything else inlines as
-    /// `Static`. Identifier wrapping happens here rather than at parse time so the AST
-    /// stays faithful to the source.
-    fn schedule_dict_literal(
-        &mut self,
-        pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
-        scope: &'a Scope<'a>,
-    ) -> NodeId {
-        let mut entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)> =
-            Vec::with_capacity(pairs.len());
-        for (k, v) in pairs {
-            entries.push((
-                self.schedule_dict_part(k, scope),
-                self.schedule_dict_part(v, scope),
-            ));
-        }
-        self.add(NodeWork::AggregateDict { entries }, scope)
-    }
-
-    fn schedule_dict_part(
-        &mut self,
-        part: ExpressionPart<'a>,
-        scope: &'a Scope<'a>,
-    ) -> AggregateDictElement<'a> {
-        match part {
-            ExpressionPart::Expression(boxed) => {
-                let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
-                AggregateDictElement::Dep(sub_id)
-            }
-            ExpressionPart::ListLiteral(items) => {
-                let id = self.schedule_list_literal(items, scope);
-                AggregateDictElement::Dep(id)
-            }
-            ExpressionPart::DictLiteral(inner) => {
-                let id = self.schedule_dict_literal(inner, scope);
-                AggregateDictElement::Dep(id)
-            }
-            // Bare identifier: wrap as a single-Identifier sub-expression so dispatch routes
-            // through `value_lookup`. Same treatment for keys and values — Python-like name
-            // resolution applies to both sides of a dict pair.
-            ExpressionPart::Identifier(name) => {
-                let expr = KExpression {
-                    parts: vec![ExpressionPart::Identifier(name)],
-                };
-                let sub_id = self.add(NodeWork::Dispatch(expr), scope);
-                AggregateDictElement::Dep(sub_id)
-            }
-            other => AggregateDictElement::Static(other.resolve()),
-        }
-    }
-
-    fn run_aggregate_dict(
-        &self,
-        entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)>,
-        scope: &'a Scope<'a>,
-    ) -> NodeOutput<'a> {
-        let dict_frame = || Frame {
-            function: "<dict>".to_string(),
-            expression: "dict literal".to_string(),
-        };
-        let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
-        for (k_el, v_el) in entries {
-            let key_obj = match k_el {
-                AggregateDictElement::Static(obj) => obj,
-                AggregateDictElement::Dep(dep) => match self.read_result(dep) {
-                    Ok(v) => v.deep_clone(),
-                    Err(err) => {
-                        return NodeOutput::Err(err.clone_for_propagation().with_frame(dict_frame()));
-                    }
-                },
-            };
-            let value_obj = match v_el {
-                AggregateDictElement::Static(obj) => obj,
-                AggregateDictElement::Dep(dep) => match self.read_result(dep) {
-                    Ok(v) => v.deep_clone(),
-                    Err(err) => {
-                        return NodeOutput::Err(err.clone_for_propagation().with_frame(dict_frame()));
-                    }
-                },
-            };
-            let kkey = match KKey::try_from_kobject(&key_obj) {
-                Ok(k) => k,
-                Err(e) => return NodeOutput::Err(e.with_frame(dict_frame())),
-            };
-            map.insert(Box::new(kkey), value_obj);
-        }
-        let arena = scope.arena;
-        let allocated: &'a KObject<'a> = arena.alloc_object(KObject::Dict(Rc::new(map)));
-        NodeOutput::Value(allocated)
-    }
-
-    /// Run a bound future's body and translate its `BodyResult` into a `NodeStep`. `Value`
-    /// becomes `Done(Value)` — the slot stores the result. `Tail { expr, scope }` becomes
-    /// `Replace { work: Dispatch(expr), scope }` — the execute loop rewrites the current
-    /// slot's work (and optionally rebinds scope) and re-runs it, producing the tail-call
-    /// slot reuse that keeps recursion at constant scheduler memory.
-    fn invoke_to_step(&mut self, future: KFuture<'a>, scope: &'a Scope<'a>) -> NodeStep<'a> {
-        match future.function.invoke(scope, self, future.bundle) {
-            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
-                work: NodeWork::Dispatch(expr),
-                frame,
-                function,
-            },
-            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }
 
@@ -848,36 +290,6 @@ impl<'a> Scheduler<'a> {
 
 impl<'a> Default for Scheduler<'a> {
     fn default() -> Self { Self::new() }
-}
-
-/// Dep `NodeId`s whose results a node needs to read before it can run, or `None` if the node
-/// can run with no resolved deps. `Dispatch` itself has none — its job is to *spawn* deps; it
-/// reads no results. `Bind` reads each `(_, dep)` in its subs; `Aggregate` reads each `Dep`
-/// element.
-fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
-    match work {
-        NodeWork::Dispatch(_) => None,
-        NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
-        NodeWork::Aggregate { elements } => Some(
-            elements
-                .iter()
-                .filter_map(|e| match e {
-                    AggregateElement::Dep(d) => Some(*d),
-                    AggregateElement::Static(_) => None,
-                })
-                .collect(),
-        ),
-        NodeWork::AggregateDict { entries } => Some(
-            entries
-                .iter()
-                .flat_map(|(k, v)| [k, v])
-                .filter_map(|e| match e {
-                    AggregateDictElement::Dep(d) => Some(*d),
-                    AggregateDictElement::Static(_) => None,
-                })
-                .collect(),
-        ),
-    }
 }
 
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
