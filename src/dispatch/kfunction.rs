@@ -429,13 +429,18 @@ impl Argument {
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
             KType::TypeRef => matches!(part, ExpressionPart::Type(_)),
-            KType::TaggedUnionType => matches!(
+            KType::Type => matches!(
                 part,
                 ExpressionPart::Future(KObject::TaggedUnionType(_))
+                    | ExpressionPart::Future(KObject::StructType { .. })
             ),
             KType::Tagged => matches!(
                 part,
                 ExpressionPart::Future(KObject::Tagged { .. })
+            ),
+            KType::Struct => matches!(
+                part,
+                ExpressionPart::Future(KObject::Struct { .. })
             ),
         }
     }
@@ -448,6 +453,11 @@ impl Argument {
 /// so the receiving builtin can choose when (or whether) to run it. `TypeRef` is a meta-type
 /// for argument slots that capture a parsed type-name token (`ExpressionPart::Type(_)`) —
 /// used by `FN`'s return-type annotation slot, not declarable in user code.
+///
+/// `Type` is the meta-type for any first-class type-value: a tagged-union schema produced by
+/// `UNION` or a struct schema produced by `STRUCT` are both `KType::Type` at runtime, so
+/// builtins that consume "a type" (construction primitives, future trait checks) can declare
+/// a single slot and accept either form.
 ///
 /// Future work: let users define duck types instead of an enum.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -462,13 +472,15 @@ pub enum KType {
     Identifier,
     KExpression,
     TypeRef,
-    /// First-class tagged-union schema. Built by `UNION`, consumed by `TAG` and the surface
-    /// construction paths (type-token call, identifier-bound type call) to validate tagged
-    /// values at construction time.
-    TaggedUnionType,
+    /// Meta-type for first-class type-values: `KObject::TaggedUnionType` and
+    /// `KObject::StructType` both report this. Consumed by construction primitives and any
+    /// builtin that takes "a type" as an argument.
+    Type,
     /// A tagged value — one variant of a tagged union, carrying its tag and inner payload.
     /// Produced by `TAG`, consumed by `MATCH` to branch by tag.
     Tagged,
+    /// A struct value — a record of named fields produced by a struct-type constructor.
+    Struct,
     Any,
 }
 
@@ -494,8 +506,9 @@ impl KType {
             KType::Identifier => "Identifier",
             KType::KExpression => "KExpression",
             KType::TypeRef => "TypeRef",
-            KType::TaggedUnionType => "TaggedUnionType",
+            KType::Type => "Type",
             KType::Tagged => "Tagged",
+            KType::Struct => "Struct",
             KType::Any => "Any",
         }
     }
@@ -514,8 +527,9 @@ impl KType {
             "Dict" => Some(KType::Dict),
             "KFunction" => Some(KType::KFunction),
             "KExpression" => Some(KType::KExpression),
-            "TaggedUnionType" => Some(KType::TaggedUnionType),
+            "Type" => Some(KType::Type),
             "Tagged" => Some(KType::Tagged),
+            "Struct" => Some(KType::Struct),
             "Any" => Some(KType::Any),
             _ => None,
         }

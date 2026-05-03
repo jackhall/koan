@@ -249,6 +249,44 @@ MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT "failed"))
 A non-exhaustive match (no branch for the actual tag) errors with
 `KErrorKind::ShapeError`.
 
+## Structs
+
+`STRUCT` declares a record type — an ordered list of named fields, each with
+a declared type. The form mirrors `UNION`:
+
+```
+STRUCT Point = (x: Number, y: Number)
+STRUCT User = (id: Number, name: Str, active: Bool)
+```
+
+Field declaration order is part of the contract: construction is positional,
+so the *i*-th value goes to the *i*-th field. The construction surface
+mirrors tagged unions:
+
+```
+LET p = (Point (3 4))
+LET u = (User (42 "alice" true))
+```
+
+Bare identifiers in the args list resolve through scope just like literals
+do — no extra parens needed:
+
+```
+LET vx = 7
+LET vy = 11
+LET q = (Point (vx vy))
+```
+
+Wrong arity or wrong field-type errors at construction time:
+
+```
+LET bad = (Point ("oops" 4))
+# error: type mismatch for argument 'x': expected Number, got Str
+```
+
+A struct's runtime type is `KType::Struct`; the schema itself is
+`KType::Type` (shared with `TaggedUnionType`).
+
 ## Errors
 
 Failures are first-class [`KError`](src/dispatch/kerror.rs) values with a
@@ -306,9 +344,10 @@ One line per surface form. Sources under
 | `IF <pred:Bool> THEN <expr>`                          | Lazy: dispatch `<expr>` only when `<pred>` is true. Wrap `<expr>` in parens.                    | [if_then.rs](src/dispatch/builtins/if_then.rs)                |
 | `FN <sig> -> <Type> = <body>`                         | Register a user function with signature `<sig>` and runtime-enforced return type. Returns the function. | [fn_def.rs](src/dispatch/builtins/fn_def.rs)          |
 | `UNION <Name> = (<schema>)` / `UNION (<schema>)`      | Declare a tagged-union type. Named form binds `<Name>` in scope.                                | [union.rs](src/dispatch/builtins/union.rs)                    |
+| `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/dispatch/builtins/struct_def.rs)          |
 | `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/dispatch/builtins/match_case.rs)          |
-| `<verb:TypeRef> (<args>)`                             | Construct a tagged value, e.g. `Maybe (some 42)`.                                               | [type_call.rs](src/dispatch/builtins/type_call.rs)            |
-| `<verb:Identifier> (<args>)`                          | Call a function or tagged-union type bound under `<verb>`.                                      | [call_by_name.rs](src/dispatch/builtins/call_by_name.rs)      |
+| `<verb:TypeRef> (<args>)`                             | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (3 4)`.                    | [type_call.rs](src/dispatch/builtins/type_call.rs)            |
+| `<verb:Identifier> (<args>)`                          | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/dispatch/builtins/call_by_name.rs)      |
 | `<v:Identifier>` (single-part)                        | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/dispatch/builtins/value_lookup.rs)      |
 | `<v>` (single-part literal/expr)                      | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/dispatch/builtins/value_pass.rs)          |
 
@@ -316,8 +355,10 @@ One line per surface form. Sources under
 
 Tracked in [ROADMAP.md](ROADMAP.md):
 
-- **No user-declarable record types or traits.** `UNION` is the only
-  user-facing type constructor. `KType` is otherwise a closed enum.
+- **No user-declarable traits, no field access on structs.** `UNION` and
+  `STRUCT` cover sum and product types, but there's no syntax yet for
+  reading a field off a struct value or for declaring a trait. `KType` is
+  otherwise a closed enum.
 - **No per-parameter type annotations** on user functions (uniformly `Any`).
 - **No arithmetic, comparison, or logical operators.** `1 + 1` doesn't parse
   as addition. The character-trigger registry only does syntactic desugaring.

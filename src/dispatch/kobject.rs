@@ -34,12 +34,21 @@ use super::scope::KFuture;
 /// `TaggedUnionType(Rc<HashMap<...>>)`: a first-class tagged-union schema, mapping tag
 /// names to the `KType` each tag's payload must satisfy. Built by the `UNION` builtin and
 /// consumed by `TAG` (and the surface-level type-token / call-by-name construction paths)
-/// to validate tagged values at construction time.
+/// to validate tagged values at construction time. Reports `KType::Type` so it slots into
+/// any "expects a type" position alongside `StructType`.
+///
+/// `StructType { name, fields }`: a first-class struct schema produced by the `STRUCT`
+/// builtin. `fields` is an ordered `Vec<(String, KType)>` (not a HashMap) because struct
+/// construction is positional — the declaration order is part of the contract. Reports
+/// `KType::Type` like `TaggedUnionType`.
 ///
 /// `Tagged { tag, value }`: a tagged value — one variant of a tagged union, carrying its
 /// tag name and inner payload. The payload is `Rc`-shared like `List`/`Dict` to keep
 /// `deep_clone` cheap and the lift-on-return walk able to skip allocation when no
 /// descendant `KFunction` is in flight.
+///
+/// `Struct { type_name, fields }`: a runtime struct value — a record of named fields. The
+/// `fields` map is `Rc`-shared with the same immutability contract as `Dict`/`List`.
 pub enum KObject<'a> {
     Number(f64),
     KString(String),
@@ -50,9 +59,17 @@ pub enum KObject<'a> {
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
     TaggedUnionType(Rc<HashMap<String, KType>>),
+    StructType {
+        name: String,
+        fields: Rc<Vec<(String, KType)>>,
+    },
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
+    },
+    Struct {
+        type_name: String,
+        fields: Rc<HashMap<String, KObject<'a>>>,
     },
     Null,
 }
@@ -73,8 +90,10 @@ impl<'a> KObject<'a> {
             KObject::KFunction(_, _) => KType::KFunction,
             KObject::KFuture(_, _) => KType::KFunction,
             KObject::KExpression(_) => KType::KExpression,
-            KObject::TaggedUnionType(_) => KType::TaggedUnionType,
+            KObject::TaggedUnionType(_) => KType::Type,
+            KObject::StructType { .. } => KType::Type,
             KObject::Tagged { .. } => KType::Tagged,
+            KObject::Struct { .. } => KType::Struct,
         }
     }
 
@@ -97,9 +116,17 @@ impl<'a> KObject<'a> {
             KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
             KObject::KFunction(f, frame) => KObject::KFunction(*f, frame.clone()),
             KObject::TaggedUnionType(schema) => KObject::TaggedUnionType(Rc::clone(schema)),
+            KObject::StructType { name, fields } => KObject::StructType {
+                name: name.clone(),
+                fields: Rc::clone(fields),
+            },
             KObject::Tagged { tag, value } => KObject::Tagged {
                 tag: tag.clone(),
                 value: Rc::clone(value),
+            },
+            KObject::Struct { type_name, fields } => KObject::Struct {
+                type_name: type_name.clone(),
+                fields: Rc::clone(fields),
             },
         }
     }
@@ -135,7 +162,21 @@ impl<'a> Parseable for KObject<'a> {
                     .collect();
                 format!("Union{{{}}}", parts.join(", "))
             }
+            KObject::StructType { name, fields } => {
+                let parts: Vec<String> = fields
+                    .iter()
+                    .map(|(field, ktype)| format!("{}: {}", field, ktype.name()))
+                    .collect();
+                format!("{}{{{}}}", name, parts.join(", "))
+            }
             KObject::Tagged { tag, value } => format!("{}({})", tag, value.summarize()),
+            KObject::Struct { type_name, fields } => {
+                let parts: Vec<String> = fields
+                    .iter()
+                    .map(|(field, value)| format!("{}: {}", field, value.summarize()))
+                    .collect();
+                format!("{}({})", type_name, parts.join(", "))
+            }
             KObject::Null => "null".to_string(),
         }
     }

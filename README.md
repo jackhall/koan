@@ -96,7 +96,9 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 [arena.rs](src/dispatch/arena.rs) (allocation), [scope.rs](src/dispatch/scope.rs) (lexical
 environment), [builtins.rs](src/dispatch/builtins.rs) (registry),
 [monad.rs](src/dispatch/monad.rs) (trait impl on a foreign type),
-[tagged_union.rs](src/dispatch/tagged_union.rs) (shared structure).
+[tagged_union.rs](src/dispatch/tagged_union.rs) (shared structure),
+[struct_value.rs](src/dispatch/struct_value.rs) (shared structure),
+[typed_field_list.rs](src/dispatch/typed_field_list.rs) (helper).
 
 ```
 src/
@@ -121,6 +123,8 @@ src/
 │   ├── arena.rs         RuntimeArena, CallArena — per-run and per-call allocation
 │   ├── scope.rs         Scope and KFuture
 │   ├── tagged_union.rs  shared tagged-union representation
+│   ├── struct_value.rs  shared struct-construction representation
+│   ├── typed_field_list.rs  shared parser for `(name: Type ...)` schemas
 │   ├── monad.rs         Monadic impl for Option
 │   ├── builtins.rs      try_args!, register_builtin, default_scope()
 │   └── builtins/        one file per builtin (body + register paired)
@@ -133,7 +137,8 @@ src/
 │       ├── call_by_name.rs
 │       ├── match_case.rs
 │       ├── type_call.rs
-│       └── union.rs
+│       ├── union.rs
+│       └── struct_def.rs
 ├── execute.rs
 └── execute/
     ├── scheduler.rs     Scheduler struct, execute loop, KFunction::invoke bridge

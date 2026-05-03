@@ -67,20 +67,24 @@ pub fn body<'a>(
     match scope.lookup_kfunction(&verb) {
         Some(f) => f.apply(args_expr.parts),
         None => {
-            // Identifier didn't resolve to a function. Two more cases:
+            // Identifier didn't resolve to a function. Three more cases:
             //   - unbound name → UnboundName
-            //   - bound to a TaggedUnionType → take the type-construction path, mirroring
-            //     `type_call` but reached through a LET-bound (lowercase) identifier rather
-            //     than a Type token. The synthesis helper lives in `type_call`.
+            //   - bound to a TaggedUnionType → take the tagged-union construction path,
+            //     mirroring `type_call` but reached through a LET-bound (lowercase)
+            //     identifier rather than a Type token.
+            //   - bound to a StructType → same idea but for struct construction.
             //   - bound to anything else → TypeMismatch on the verb's resolved value.
             match scope.lookup(&verb) {
                 None => err(KError::new(KErrorKind::UnboundName(verb))),
                 Some(obj @ KObject::TaggedUnionType(_)) => {
                     crate::dispatch::tagged_union::apply(obj, args_expr.parts)
                 }
+                Some(obj @ KObject::StructType { .. }) => {
+                    crate::dispatch::struct_value::apply(obj, args_expr.parts)
+                }
                 Some(obj) => err(KError::new(KErrorKind::TypeMismatch {
                     arg: "verb".to_string(),
-                    expected: "KFunction or TaggedUnionType".to_string(),
+                    expected: "KFunction or Type".to_string(),
                     got: obj.summarize(),
                 })),
             }
@@ -221,7 +225,7 @@ mod tests {
             matches!(
                 &err.kind,
                 KErrorKind::TypeMismatch { arg, expected, .. }
-                    if arg == "verb" && expected == "KFunction or TaggedUnionType"
+                    if arg == "verb" && expected == "KFunction or Type"
             ),
             "expected TypeMismatch on verb, got {err}",
         );
@@ -243,6 +247,27 @@ mod tests {
                 assert!(matches!(&**value, KObject::Number(n) if *n == 42.0));
             }
             other => panic!("expected Tagged, got {:?}", other.ktype()),
+        }
+    }
+
+    /// LET-bound StructType: same as the tagged-union case but for the struct path. The
+    /// outer `STRUCT` form registers the type token (`Pt`) in scope as a side effect AND
+    /// returns the `StructType` value, which LET captures under the lowercase alias. The
+    /// alias then routes through `call_by_name`.
+    #[test]
+    fn call_by_name_on_struct_type_constructs() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET pt = (STRUCT Pt = (x: Number, y: Number))");
+        let result = run_one(scope, parse_one("pt (3 4)"));
+        match result {
+            KObject::Struct { type_name, fields } => {
+                assert_eq!(type_name, "Pt");
+                assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
+                assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));
+            }
+            other => panic!("expected Struct, got {:?}", other.ktype()),
         }
     }
 

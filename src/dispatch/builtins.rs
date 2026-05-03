@@ -10,6 +10,7 @@ mod if_then;
 mod let_binding;
 mod match_case;
 mod print;
+mod struct_def;
 mod type_call;
 mod union;
 mod value_lookup;
@@ -160,6 +161,8 @@ pub fn default_scope<'a>(
     call_by_name::register(scope);
     union::register(scope);
     super::tagged_union::register(scope);
+    struct_def::register(scope);
+    super::struct_value::register(scope);
     type_call::register(scope);
     match_case::register(scope);
 

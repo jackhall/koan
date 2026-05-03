@@ -114,25 +114,25 @@ stepping stones rather than end states.
 
 ## User-declarable types and traits
 
-The substrate landed (see [DECISIONS.md](DECISIONS.md)). What's still open is the
-user-facing surface.
+The substrate landed and the surface for sum and product types ships
+(`UNION`, `STRUCT` — see [DECISIONS.md](DECISIONS.md)). What's still open is
+field access on structs, traits, and lifting `KType` out of its closed-enum
+shape so user code can extend it.
 
-**Problem.** [`KType`](src/dispatch/kfunction.rs) remains a *closed* enum — users still
-can't declare a record, a tagged union, or a trait. Its doc comment already flags the
-limitation: *"In the future this should not assume all types can be enumerated; the user
-should be able to define duck types."* [`KObject::UserDefined`](src/dispatch/kobject.rs)
-is still a unit-variant placeholder. Argument types in user-fn signatures are also still
-uniformly `Any` — per-param annotations are the natural next surface extension and reuse
-the parser's new `Type` token class.
+**Problem.** [`KType`](src/dispatch/kfunction.rs) remains a *closed* enum — users can
+declare records and tagged unions but they all reduce to the built-in `KObject::Struct`
+and `KObject::Tagged` variants under a single `KType::Type` meta-type. Its doc comment
+already flags the bigger limitation: *"In the future this should not assume all types
+can be enumerated; the user should be able to define duck types."* Field access (reading
+`p.x` off a `Point`) has no surface form yet. Argument types in user-fn signatures are
+also still uniformly `Any` — per-param annotations are the natural next surface extension
+and reuse the parser's `Type` token class.
 
 **Impact.**
 
-- *User functions can only operate on built-in types.* Now that user-defined functions
-  exist, the language can express a function over `Number` but not over a `Point` —
-  `Point` has no surface syntax because user types don't exist. The function feature is
-  operationally usable but stuck at scalars and the built-in `List`/`Dict`. There is no
-  path from "the language has a function abstraction" to "the language has a record
-  abstraction the function can operate on."
+- *No field access on structs.* `STRUCT Point = (x: Number, y: Number)` and
+  `LET p = (Point 3 4)` work, but there is no surface form to read `p`'s `x` field.
+  Users can construct struct values and pass them around but not introspect them.
 - *No abstraction over types.* Writing a function over "anything that can be iterated" or
   "anything that can be compared" requires a trait or contract — Koan has no way to
   express either. The host-side [`ktraits.rs`](src/dispatch/ktraits.rs) (`Parseable`,
@@ -152,20 +152,24 @@ the parser's new `Type` token class.
   `Scope`-level registry of definitions, or replace the enum entirely with a trait-object
   that host types and user types both implement uniformly. The first is incremental; the
   second is cleaner but a bigger refactor.
-- *Surface syntax.* Type definitions and trait definitions are themselves builtins —
-  likely `TYPE Point = STRUCT x:Number y:Number` and `TRAIT Iterable = ...` shapes.
-  Mechanically these are `KFunction`s with fixed signatures, so the surface design echoes
-  (and likely shares machinery with) the FN signature work in the user-functions item.
+- *Surface syntax.* `STRUCT Name = (...)` and `UNION Name = (...)` ship as the
+  product and sum surface forms. A `TRAIT Iterable = ...` form is the next
+  natural extension; mechanically it's a `KFunction` with a fixed signature
+  alongside `STRUCT`/`UNION`. Field access on a struct (likely a member-access
+  operator like `p.x` parsed via [tokens.rs](src/parse/tokens.rs)) is the
+  smaller follow-on.
 - *Traits.* A trait is a named bag of operation signatures that a type can claim to
   implement. Functions accept a trait-typed parameter and dispatch over any concrete type
   satisfying it. The dispatch machinery sees a trait the same way it sees a parent type
   in a subtyping hierarchy — a less-specific match that concrete types beat. The priority
   rules need a "concrete > trait > `Any`" hierarchy reserved in their design even if
   traits don't ship in the first cut.
-- *Wiring up `KObject::UserDefined`.* The placeholder variant becomes something like
-  `UserDefined(TypeId, HashMap<String, KObject>)` — a tagged record carrying a type
-  identifier and field values. Other `KObject` variants stay as-is; user types are an
-  addition, not a replacement.
+- *Going beyond the closed-enum carrier.* Today user types reduce to
+  `KObject::Struct { type_name, fields }` and `KObject::Tagged { tag, value }` —
+  closed variants that conflate every user type into one runtime shape. Lifting
+  this so each user type has its own `TypeId` and dispatch can specialize on it
+  (rather than just on the `KType::Struct` / `KType::Tagged` umbrellas) is the
+  bigger refactor that unlocks per-type method tables and trait dispatch.
 
 ## Deprecate IF-THEN in favor of MATCH
 

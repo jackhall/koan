@@ -10,10 +10,12 @@
 //! runs.
 //!
 //! The primitive builtin has no keyword in its signature — three typed slots
-//! (`TaggedUnionType`, `Identifier`, `Any`) are specific enough to claim its dispatch
-//! bucket unambiguously, and no user surface form spells the call directly. The user
-//! constructs via the type token (`Maybe (some 42)`) or a LET-bound identifier; both
-//! routes funnel through `apply`.
+//! (`Type`, `Identifier`, `Any`) are specific enough to claim its dispatch bucket
+//! unambiguously, and no user surface form spells the call directly. The user constructs
+//! via the type token (`Maybe (some 42)`) or a LET-bound identifier; both routes funnel
+//! through `apply`. The slot-0 `Type` is shared with the struct construction primitive
+//! (`src/dispatch/struct_value.rs`); they don't collide because struct construct is
+//! 2-slot, not 3-slot — different dispatch bucket.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -120,6 +122,10 @@ fn primitive_body<'a>(
             return BodyResult::Err(KError::new(KErrorKind::MissingArg("schema".to_string())));
         }
     };
+    // The `KType::Type` slot also accepts `KObject::StructType`; if a caller routed a
+    // struct schema into this 3-slot path (e.g. via a hand-built dispatch), the
+    // `KObject::TaggedUnionType` match above catches that — anything else falls into the
+    // TypeMismatch arm.
     let tag = match bundle.get("tag") {
         Some(KObject::KString(s)) => s.clone(),
         Some(other) => {
@@ -143,10 +149,9 @@ fn primitive_body<'a>(
     }
 }
 
-/// Register the construction primitive. No keyword in the signature — `TaggedUnionType` is
-/// a specific-enough first-slot type that the bucket `[Slot, Slot, Slot]` won't collide
-/// with other 3-arg signatures via the specificity tiebreak. Called from
-/// [`default_scope`](super::builtins::default_scope).
+/// Register the construction primitive. No keyword in the signature — `Type` in slot 0
+/// plus the 3-slot bucket `[Slot, Slot, Slot]` won't collide with other 3-arg signatures
+/// via the specificity tiebreak. Called from [`default_scope`](super::builtins::default_scope).
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
@@ -154,7 +159,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ExpressionSignature {
             return_type: KType::Tagged,
             elements: vec![
-                SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::TaggedUnionType }),
+                SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::Type }),
                 SignatureElement::Argument(Argument { name: "tag".into(),    ktype: KType::Identifier }),
                 SignatureElement::Argument(Argument { name: "value".into(),  ktype: KType::Any }),
             ],

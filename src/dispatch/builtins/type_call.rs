@@ -8,6 +8,7 @@ use crate::dispatch::kfunction::{
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::ktraits::Parseable;
 use crate::dispatch::scope::Scope;
+use crate::dispatch::struct_value;
 use crate::dispatch::tagged_union;
 use crate::parse::kexpression::KExpression;
 
@@ -16,10 +17,10 @@ use super::{err, register_builtin};
 /// `<verb:TypeRef> <args:KExpression>` — the type-token construction path.
 ///
 /// Mirrors [`call_by_name`](super::call_by_name) but for a leading type-token. Looks up
-/// `verb` in scope (registered by `UNION Maybe = ...`); if it resolves to a
-/// `KObject::TaggedUnionType`, hands off to [`tagged_union::apply`] which synthesizes the
-/// construction tail. The args expression must be `(<tag:Identifier> <value>)` — two parts
-/// inside the parens.
+/// `verb` in scope and routes by the resolved `KObject` variant: `TaggedUnionType` hands
+/// off to [`tagged_union::apply`] (constructs `(tag value)`-shaped tagged values);
+/// `StructType` hands off to [`struct_value::apply`] (constructs positional struct values
+/// from N field arguments). Anything else surfaces a `TypeMismatch`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -44,18 +45,16 @@ pub fn body<'a>(
             )));
         }
     };
-    let schema_obj = match scope.lookup(&verb) {
-        Some(obj @ KObject::TaggedUnionType(_)) => obj,
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "verb".to_string(),
-                expected: "TaggedUnionType".to_string(),
-                got: other.ktype().name().to_string(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::UnboundName(verb))),
-    };
-    tagged_union::apply(schema_obj, args_expr.parts)
+    match scope.lookup(&verb) {
+        Some(obj @ KObject::TaggedUnionType(_)) => tagged_union::apply(obj, args_expr.parts),
+        Some(obj @ KObject::StructType { .. }) => struct_value::apply(obj, args_expr.parts),
+        Some(other) => err(KError::new(KErrorKind::TypeMismatch {
+            arg: "verb".to_string(),
+            expected: "Type".to_string(),
+            got: other.ktype().name().to_string(),
+        })),
+        None => err(KError::new(KErrorKind::UnboundName(verb))),
+    }
 }
 
 fn extract_kexpression<'a>(

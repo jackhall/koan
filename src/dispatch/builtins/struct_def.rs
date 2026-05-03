@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::dispatch::kerror::{KError, KErrorKind};
@@ -13,76 +12,71 @@ use crate::parse::kexpression::KExpression;
 
 use super::{err, register_builtin};
 
-/// `UNION <name:TypeRef> = (<schema>)` (named) or `UNION (<schema>)` (anonymous).
+/// `STRUCT <name:TypeRef> = (<schema>)` — declare a named record type.
 ///
-/// The schema slot is `KType::KExpression` — the user writes a parens-wrapped expression
-/// of repeated `<tag:Identifier> : <type:Type>` triples
-/// (`UNION Maybe = (some: Number none: Null)`). The parens prevent the parts from being
-/// dispatched as their own expression, so identifier tag names ride through as
-/// `Identifier` parts and type tokens as `Type` parts. Same type-annotation shape that
-/// function-signature parameter declarations will use later.
+/// The schema slot is `KType::KExpression`: the user writes a parens-wrapped expression of
+/// repeated `<field:Identifier> : <type:Type>` triples (`STRUCT Point = (x: Number, y: Number)`).
+/// Same triple shape as `UNION` — both delegate to [`parse_typed_field_list`] so the parsing
+/// logic and error messages stay consistent.
 ///
-/// Type names must resolve via `KType::from_name`. Empty schemas are rejected with
-/// `ShapeError`; malformed shapes (parts not in groups of 3, missing `:`, non-Type RHS,
-/// etc.) all surface as `ShapeError` with the offending position called out.
+/// Unlike `UNION`, struct schemas preserve declaration order: positional construction
+/// (`Point (3 4)`) maps the i-th value to the i-th declared field, so the registered schema
+/// must be an ordered `Vec<(String, KType)>` rather than a `HashMap`.
 ///
-/// The named form additionally registers the type in the current scope so the type token
-/// (`Maybe`) can be used as a constructor downstream. Both forms return a
-/// `KObject::TaggedUnionType` carrying the parsed schema; that value reports `KType::Type`
-/// at runtime, sharing the meta-type with `STRUCT`-produced schemas.
+/// Empty schemas, unknown type names, duplicate field names, and malformed triples all
+/// surface as `ShapeError` with the offending position called out. The named form
+/// registers the type token (`Point`) in the current scope so it can be used as a
+/// constructor downstream via the type-call dispatch path.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
+    let name = match bundle.get("name") {
+        Some(KObject::KString(s)) => s.clone(),
+        Some(other) => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "name".to_string(),
+                expected: "TypeRef".to_string(),
+                got: other.ktype().name().to_string(),
+            }));
+        }
+        None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+    };
     let schema_expr = match extract_kexpression(&mut bundle, "schema") {
         Some(e) => e,
         None => {
             return err(KError::new(KErrorKind::ShapeError(
-                "UNION schema slot must be a parenthesized dict literal".to_string(),
+                "STRUCT schema slot must be a parenthesized expression".to_string(),
             )));
         }
     };
-    let fields = match parse_typed_field_list(&schema_expr, "UNION") {
+    let fields = match parse_typed_field_list(&schema_expr, "STRUCT") {
         Ok(f) => f,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
     if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
-            "UNION schema must have at least one tag".to_string(),
+            "STRUCT schema must have at least one field".to_string(),
         )));
     }
-    // UNION addresses by tag name and doesn't care about declaration order; flatten the
-    // ordered field list (which `parse_typed_field_list` shares with `STRUCT`) into a
-    // HashMap. Duplicate detection has already happened in the helper.
-    let schema: HashMap<String, KType> = fields.into_iter().collect();
     let arena = scope.arena;
-    let union_obj: &'a KObject<'a> =
-        arena.alloc_object(KObject::TaggedUnionType(Rc::new(schema)));
-    if let Some(name_obj) = bundle.get("name") {
-        let name = match name_obj {
-            KObject::KString(s) => s.clone(),
-            other => {
-                return err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "name".to_string(),
-                    expected: "TypeRef".to_string(),
-                    got: other.ktype().name().to_string(),
-                }));
-            }
-        };
-        scope.add(name, union_obj);
-    }
-    BodyResult::Value(union_obj)
+    let struct_obj: &'a KObject<'a> = arena.alloc_object(KObject::StructType {
+        name: name.clone(),
+        fields: Rc::new(fields),
+    });
+    scope.add(name, struct_obj);
+    BodyResult::Value(struct_obj)
 }
 
-/// Extract a `KExpression`-typed argument from the bundle. Mirrors the `Rc::try_unwrap`
-/// dance used by [`if_then`](super::if_then) and [`fn_def`](super::fn_def).
+/// Pull a `KExpression`-typed argument from the bundle. Mirrors the `Rc::try_unwrap` dance
+/// used by [`union`](super::union) and [`fn_def`](super::fn_def).
 fn extract_kexpression<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,
 ) -> Option<KExpression<'a>> {
     let rc = bundle.args.remove(name)?;
-    match std::rc::Rc::try_unwrap(rc) {
+    match Rc::try_unwrap(rc) {
         Ok(KObject::KExpression(e)) => Some(e),
         Ok(_) => None,
         Err(rc) => match &*rc {
@@ -93,29 +87,15 @@ fn extract_kexpression<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    // Named form: `UNION Maybe = (some: Number none: Null)`
     register_builtin(
         scope,
-        "UNION",
+        "STRUCT",
         ExpressionSignature {
             return_type: KType::Type,
             elements: vec![
-                SignatureElement::Keyword("UNION".into()),
+                SignatureElement::Keyword("STRUCT".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeRef }),
                 SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::KExpression }),
-            ],
-        },
-        body,
-    );
-    // Anonymous form: `LET maybe = (UNION (some: Number none: Null))`
-    register_builtin(
-        scope,
-        "UNION",
-        ExpressionSignature {
-            return_type: KType::Type,
-            elements: vec![
-                SignatureElement::Keyword("UNION".into()),
                 SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::KExpression }),
             ],
         },
@@ -179,47 +159,59 @@ mod tests {
     }
 
     #[test]
-    fn union_named_registers_type_in_scope() {
+    fn struct_named_registers_type_in_scope() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         let result = run_one(
             scope,
-            parse_one("UNION Maybe = (some: Number none: Null)"),
+            parse_one("STRUCT Point = (x: Number, y: Number)"),
         );
-        assert!(matches!(result, KObject::TaggedUnionType(_)));
-        let data = scope.data.borrow();
-        let entry = data.get("Maybe").expect("Maybe should be bound in scope");
-        match entry {
-            KObject::TaggedUnionType(schema) => {
-                assert_eq!(schema.get("some"), Some(&KType::Number));
-                assert_eq!(schema.get("none"), Some(&KType::Null));
-            }
-            other => panic!("expected TaggedUnionType, got {:?}", other.ktype()),
-        }
-    }
-
-    #[test]
-    fn union_anonymous_returns_type_value() {
-        let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
-        let result = run_one(scope, parse_one("UNION (ok: Number err: Str)"));
         match result {
-            KObject::TaggedUnionType(schema) => {
-                assert_eq!(schema.get("ok"), Some(&KType::Number));
-                assert_eq!(schema.get("err"), Some(&KType::Str));
+            KObject::StructType { name, fields } => {
+                assert_eq!(name, "Point");
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0], ("x".to_string(), KType::Number));
+                assert_eq!(fields[1], ("y".to_string(), KType::Number));
             }
-            other => panic!("expected TaggedUnionType, got {:?}", other.ktype()),
+            other => panic!("expected StructType, got {:?}", other.ktype()),
+        }
+        let data = scope.data.borrow();
+        let entry = data.get("Point").expect("Point should be bound in scope");
+        assert!(matches!(entry, KObject::StructType { .. }));
+    }
+
+    #[test]
+    fn struct_returns_type_value() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        let result = run_one(scope, parse_one("STRUCT Point = (x: Number, y: Number)"));
+        assert_eq!(result.ktype(), KType::Type);
+    }
+
+    #[test]
+    fn struct_preserves_field_order() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run_one(scope, parse_one("STRUCT Backwards = (b: Number, a: Number)"));
+        let data = scope.data.borrow();
+        match data.get("Backwards").unwrap() {
+            KObject::StructType { fields, .. } => {
+                assert_eq!(fields[0].0, "b", "first field should be `b` (declaration order)");
+                assert_eq!(fields[1].0, "a");
+            }
+            _ => panic!("expected StructType"),
         }
     }
 
     #[test]
-    fn union_rejects_unknown_type_name() {
+    fn struct_rejects_unknown_type_name() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let err = run_one_err(scope, parse_one("UNION (some: Bogus)"));
+        let err = run_one_err(scope, parse_one("STRUCT Bad = (a: Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
@@ -227,35 +219,35 @@ mod tests {
     }
 
     #[test]
-    fn union_rejects_empty_schema() {
+    fn struct_rejects_empty_schema() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let err = run_one_err(scope, parse_one("UNION ()"));
+        let err = run_one_err(scope, parse_one("STRUCT Empty = ()"));
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one tag")),
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one field")),
             "expected ShapeError on empty schema, got {err}",
         );
     }
 
     #[test]
-    fn union_rejects_duplicate_tag() {
+    fn struct_rejects_duplicate_field() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let err = run_one_err(scope, parse_one("UNION (some: Number some: Str)"));
+        let err = run_one_err(scope, parse_one("STRUCT Pair = (x: Number, x: Str)"));
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`some`")),
-            "expected ShapeError on duplicate tag, got {err}",
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
+            "expected ShapeError on duplicate field, got {err}",
         );
     }
 
     #[test]
-    fn union_rejects_missing_colon() {
+    fn struct_rejects_missing_colon() {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let err = run_one_err(scope, parse_one("UNION (some Number none: Null)"));
+        let err = run_one_err(scope, parse_one("STRUCT Pair = (x Number, y: Number)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("triple")),
             "expected ShapeError on missing colon, got {err}",
