@@ -1,382 +1,85 @@
 # Roadmap
 
-Open structural items that don't fit in a single PR. Each section names the problem, why it
-matters, and possible directions — not a fixed design.
+Open structural items that don't fit in a single PR. Each entry below names the problem,
+why it matters, and possible directions — not a fixed design. Per-item write-ups live in
+[roadmap/](roadmap/).
 
 The order matters. Sequencing is purely about technical and design dependencies — Koan has
 no users yet, so backward-compatibility costs play no role. The cost being optimized is
 engineering rework: doing one item before another it depends on means doing the dependent
-item twice.
+item twice. Each per-item file ends with a **Dependencies** section linking to its
+prerequisites and the items it unblocks.
 
 Shipped items live in [DECISIONS.md](DECISIONS.md). What's shipped so far: user-defined
 functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimization, the
 leak fix (with lexical closures + per-call arenas), structured error propagation, and the
 user-defined-types substrate (return-type enforcement at runtime). The next signature
-revision after error handling lands monadic side-effect capture; user-declarable types and
-traits unlock the items downstream (group-based operators, the IF-THEN→MATCH deprecation's
-Bool design call), so they sit in the middle of the sequence rather than last.
+revision after error handling lands monadic side-effect capture; the type/trait sequence
+(per-param annotations, container parameterization, methods, traits, trait inheritance)
+unlocks the items downstream (group-based operators, the IF-THEN→MATCH deprecation's Bool
+design call), so it sits in the middle of the sequence rather than last.
 
-## Transient-node reclamation
+## Next items
 
-**Problem.** TCO's slot reuse covers only the outermost user-fn frame.
-[`Scheduler`](src/execute/scheduler.rs)'s `nodes`/`results` vecs still grow per iteration
-whenever a body-internal sub-expression spawns a sub-`Dispatch`/`Bind`. Realistic recursion
-(the predicate computation in an `IF`-guarded base case, or a recursive call's argument
-expressions) accumulates entries. The `frame_holding_slots` sidecar added during the leak
-fix is one piece of the substrate, but full transient-node reclamation — detecting that a
-`Bind`/`Aggregate` and all its sub-`Dispatch`es are no longer reachable and reclaiming
-their vec slots — is unbuilt.
+Items with no unresolved roadmap-level prerequisites — any of these can be picked up
+without first landing something else:
 
-**Impact.** This gates true O(1) tail-recursive memory. Factorial, list walk, and similar
-patterns run in O(n) scheduler memory until it lands. It's the load-bearing remaining
-problem from the leak fix.
+- [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
+  — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
+  needs a uniform carrier.
+- [Per-parameter type annotations](roadmap/per-param-type-annotations.md) — user-fn
+  signatures collapse every arg to `Any`; first slice of the type/trait sequence.
+- [Deprecate IF-THEN in favor of MATCH](roadmap/deprecate-if-then.md) — `MATCH` already
+  subsumes `IF-THEN`; the load-bearing question is `Bool`'s representation.
+- [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
+  force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
+- [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
+  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error, variadics.
+- [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
+  only when the next feature would multiply existing duplication.
 
-**Sequencing.** Deserves its own roadmap entry once the surrounding `BuiltinFn` signature
-settles — the next pass for monadic effects revisits that signature, and folding
-reclamation into the same pass keeps the rewrite cheap.
+## Open items
 
-## Open issues from the leak-fix audit
+### Memory and runtime substrate
 
-Most leak-fix follow-ups landed (see [DECISIONS.md](DECISIONS.md)). Two remain:
+- [Transient-node reclamation](roadmap/transient-node-reclamation.md) — TCO covers only
+  the outermost frame; body-internal sub-dispatches still grow the scheduler's vecs per
+  iteration.
+- [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
+  — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
+  needs a uniform carrier.
+- [Open issues from the leak-fix audit](roadmap/leak-fix-audit.md) — Miri hasn't run, and
+  KFuture's conservative anchoring leaves room for tightening.
 
-- **Miri hasn't run.** `CallArena::new`'s heap-pin + lifetime-erasure transmutes match the
-  existing `RuntimeArena::alloc_*` pattern, but neither has been validated under Miri. The
-  closure-escape paths in particular cross several lifetime-erased boundaries; Miri is the
-  cheapest way to prove the unsafe blocks are settled.
+### Type system
 
-- **KFuture conservative anchoring leaves room for tightening.**
-  [`lift_kobject`](src/execute/lift.rs)'s KFuture arm attaches the dying-frame Rc
-  unconditionally because we don't track which arena each of `KFuture.bundle.args` and
-  `KFuture.parsed.parts` came from. With per-descendant arena provenance this could become
-  a `needs_lift`-style targeted attach. Non-issue today (KFutures don't escape as values),
-  but worth revisiting alongside the async-features work that will make KFutures escape.
+- [Per-parameter type annotations](roadmap/per-param-type-annotations.md) — user-fn
+  signatures collapse every arg to `Any`; first slice of the type/trait sequence.
+- [Container type parameterization](roadmap/container-type-parameterization.md) — `List`,
+  `Dict`, `Function`, `Future` carry no inner-type information today.
+- [Per-type identity for structs and methods](roadmap/per-type-identity.md) — every user
+  struct collapses to `KType::Struct`; methods can't attach to specific types.
+- [`TRAIT` builtin for structural typing](roadmap/traits.md) — no surface for "anything
+  that can be iterated"; user code redoes per-concrete-type variants.
+- [Trait inheritance](roadmap/trait-inheritance.md) — `Ord` extending `Eq` is the
+  standard layering; trait hierarchies are flat without it.
+- [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
+  but the language treats every operator as a flat independent builtin.
 
-## Generalize `Scope::out` into monadic side-effect capture
+### Surface and ergonomics
 
-**Problem.** [`Scope::out`](src/dispatch/scope.rs) is a `Box<dyn Write>` sink that exists
-solely so [`PRINT`](src/dispatch/builtins/print.rs) has somewhere to send bytes and tests
-can swap stdout for a buffer. It is the only side-effect channel the runtime has, and it is
-hard-coded to one channel and one shape (write bytes). Every additional effect Koan
-eventually wants to support — file IO, time, randomness, network, environment access, even
-error reporting — would either grow `Scope` by another ad-hoc `Box<dyn ...>` field or get
-baked into `std::io` calls inside individual builtins.
+- [Deprecate IF-THEN in favor of MATCH](roadmap/deprecate-if-then.md) — `MATCH` already
+  subsumes `IF-THEN`; the load-bearing question is `Bool`'s representation.
+- [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
+  force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
+- [Module system and directory layout](roadmap/module-system.md) — a Koan codebase is one
+  file; no import, no module path, no project-level entry point.
+- [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
+  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error, variadics.
 
-Meanwhile the [`Monadic`](src/dispatch/ktraits.rs) trait already exists, with `pure` +
-`bind` over a `Wrap<T>` GAT, and its doc comment says it is "intended as the abstraction
-Koan's deferred-task and error-handling combinators will share once they're fleshed out."
-Today it is implemented only for `Option` and threaded through nothing in the runtime. It
-is scaffolding without a building.
+### Future-facing
 
-**Impact.**
-
-- *No effect inspection.* Tests can capture `PRINT` output by swapping the writer, but
-  there is no equivalent for any other effect a builtin might want to perform. Each new
-  effect requires its own bespoke testing seam.
-- *No mocking or replay.* A program's behavior is whatever the host system decides at the
-  moment of the call. Deterministic replay of a Koan program (feed it a recorded effect
-  trace, get the same output) is impossible without a uniform effect channel.
-- *No pure/effectful boundary.* The language has no way to know whether an expression is
-  referentially transparent. Optimizations the scheduler could make (memoization,
-  reordering, parallelism) are unsafe by default because any builtin might secretly write
-  to a file or read the clock.
-- *Effect ordering is implicit.* Today, effects happen in whatever order the scheduler
-  runs builtins. There is no declarative "this expression's effect is X, sequenced after
-  Y" — it is all operational.
-
-**Directions.** None of these are decided.
-
-- *Effect type.* Probably an enum: `Effect::Output(Vec<u8>)`, `Effect::Read(handle)`,
-  `Effect::Now`, `Effect::Random`, plus a catch-all for builtins to declare custom
-  effects. Open question: enumerated (closed set, easy to handle exhaustively) vs
-  trait-object (`Box<dyn Effect>`, extensible by user code if/when user-defined functions
-  can declare their own effects).
-- *Carrier shape.* `BuiltinFn` returns not a bare `&'a KObject<'a>` (or `Result<...>`
-  after the error-handling item) but an `Effectful<T>` carrier — a value paired with a
-  list of pending effects. `Effectful` implements `Monadic`: `pure(v)` is `(v, [])`,
-  `bind` concatenates effect lists. This is the long-promised second `Monadic` impl the
-  trait's doc comment is waiting for.
-- *Handler in `Scope`.* `Scope::out` becomes `Scope::handler: Box<dyn EffectHandler>`. The
-  handler decides what to do with each `Effect` as the interpreter drains them: a default
-  handler actually performs them (write to stdout, read the clock); a test handler
-  captures them into a vec; a replay handler feeds results from a pre-recorded trace.
-- *Drainage points.* Effects can either be performed eagerly (handler runs them as each
-  builtin returns) or lazily (collected up the tree and run in batches at top-level
-  expression boundaries). Eager is simpler and matches today's behavior; lazy unlocks
-  reordering and is closer to the "monad transformer stack" shape this is converging on.
-  Pick one explicitly rather than letting it emerge.
-
-**Sequencing.** `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the
-error item added a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three
-churning passes over every builtin in [builtins/](src/dispatch/builtins/) is meaningfully
-worse than one. Unless the effect story sharpens enough to fold into the same pass as
-ownership and errors, this should land last and accept that the prior two items are
-stepping stones rather than end states.
-
-## User-declarable types and traits
-
-The substrate landed and the surface for sum and product types ships
-(`UNION`, `STRUCT` — see [DECISIONS.md](DECISIONS.md)). Field access on
-structs is now in via [ATTR](src/dispatch/builtins/attr.rs) (`p.x`). What's
-still open is traits, and lifting `KType` out of its closed-enum shape so
-user code can extend it.
-
-**Problem.** [`KType`](src/dispatch/kfunction.rs) remains a *closed* enum — users can
-declare records and tagged unions but they all reduce to the built-in `KObject::Struct`
-and `KObject::Tagged` variants under a single `KType::Type` meta-type. Its doc comment
-already flags the bigger limitation: *"In the future this should not assume all types
-can be enumerated; the user should be able to define duck types."* Argument types in
-user-fn signatures are also still uniformly `Any` — per-param annotations are the
-natural next surface extension and reuse the parser's `Type` token class.
-
-**Impact.**
-
-- *No abstraction over types.* Writing a function over "anything that can be iterated" or
-  "anything that can be compared" requires a trait or contract — Koan has no way to
-  express either. The host-side [`ktraits.rs`](src/dispatch/ktraits.rs) (`Parseable`,
-  `Iterable`, `Monadic`, etc.) gives the runtime its own vocabulary; user code is denied
-  the analog and has to write per-concrete-type variants of every function.
-- *Dispatch priority is built on the wrong model if types land later.* With seven host
-  types, signature specificity is a tiny finite-set comparison. With user types,
-  specificity becomes a partial order over a lattice that grows as user code grows —
-  subtyping, trait satisfaction, and structural matching each want different specificity
-  rules. A priority comparator designed for the closed-enum case is not the same
-  comparator needed for the open-lattice case.
-
-**Directions.** None decided.
-
-- *Type representation.* Move `KType` from a closed enum to an extensible structure.
-  Either add a `KType::User(TypeId)` variant alongside the existing host types and keep a
-  `Scope`-level registry of definitions, or replace the enum entirely with a trait-object
-  that host types and user types both implement uniformly. The first is incremental; the
-  second is cleaner but a bigger refactor.
-- *Surface syntax.* `STRUCT Name = (...)` and `UNION Name = (...)` ship as the
-  product and sum surface forms. A `TRAIT Iterable = ...` form is the next
-  natural extension; mechanically it's a `KFunction` with a fixed signature
-  alongside `STRUCT`/`UNION`. Field access on a struct (likely a member-access
-  operator like `p.x` parsed via [tokens.rs](src/parse/tokens.rs)) is the
-  smaller follow-on.
-- *Traits.* A trait is a named bag of operation signatures that a type can claim to
-  implement. Functions accept a trait-typed parameter and dispatch over any concrete type
-  satisfying it. The dispatch machinery sees a trait the same way it sees a parent type
-  in a subtyping hierarchy — a less-specific match that concrete types beat. The priority
-  rules need a "concrete > trait > `Any`" hierarchy reserved in their design even if
-  traits don't ship in the first cut.
-- *Going beyond the closed-enum carrier.* Today user types reduce to
-  `KObject::Struct { type_name, fields }` and `KObject::Tagged { tag, value }` —
-  closed variants that conflate every user type into one runtime shape. Lifting
-  this so each user type has its own `TypeId` and dispatch can specialize on it
-  (rather than just on the `KType::Struct` / `KType::Tagged` umbrellas) is the
-  bigger refactor that unlocks per-type method tables and trait dispatch.
-
-## Deprecate IF-THEN in favor of MATCH
-
-**Problem.** [MATCH](src/dispatch/builtins/match_case.rs) is strictly more expressive than
-[IF-THEN](src/dispatch/builtins/if_then.rs): `IF cond THEN value` is equivalent to
-`MATCH cond CASE true: value`. Keeping both gives the user two equivalent constructs to
-learn, keeps `if_then.rs` alive as the lone consumer of the parser's lazy-slot machinery
-(`lazy_candidate` is invoked nowhere else), and forces every future branching feature
-(pattern bindings, exhaustive-case checks) to be specified twice.
-
-**Directions.** The load-bearing design call is the runtime representation of `Bool`.
-
-- *Special-case MATCH on Bool.* Keep `KObject::Bool(bool)` as a primitive and teach MATCH
-  that `true`/`false` are valid case labels for it. IF-THEN desugars to `MATCH cond CASE
-  true: value` either at parse time or as a thin shim builtin. Smallest change.
-- *Promote Bool to a tagged union.* `true` and `false` become the two variants of a
-  built-in tagged union; MATCH dispatches over them via the same machinery as user tagged
-  unions. Cleaner uniformly but changes Bool's representation
-  (`KObject::Bool(bool)` → `KObject::Tagged { tag: "true"|"false", value: Null }`),
-  affects every type-checking call site, and costs one `Rc` per Bool value. Worth doing
-  only if other primitives are heading the same way (a bigger language-design question).
-- *Hybrid.* Keep `KObject::Bool(bool)` in storage; project to a synthetic tagged union
-  when MATCH consumes one. Compromise — keeps the cheap representation while letting
-  MATCH treat Bool uniformly with user tagged unions.
-
-**Sequencing.** Lands cleanest after user-defined types/tagged-unions hardens, when "is
-Bool a tagged union" is answerable in context. Mechanically the deprecation itself
-(delete `if_then.rs`, register the desugaring, remove the lazy-slot path if nothing else
-needs it) is a one-PR cleanup once the Bool question is settled.
-
-## Group-based operators
-
-**Problem.** Operators like `+`/`-` (additive group over Number), `*`/`/` (multiplicative
-group over Rationals), and `/`/`..` (path-join + parent-dir over filesystem paths) form
-*mathematical groups* — paired binary ops with an identity and an inverse. Today each
-operator is a flat builtin registered independently; the language has no concept that
-`+` and `-` come as a pair, that `Path` could declare its own group under different
-operators, or that a function over "anything that forms a group" could be written
-generically. Every new operator-bearing type duplicates registration and re-derives
-dispatch correctness in the user's head.
-
-**Directions.**
-
-- *Group as a trait.* On top of the user-defined-traits substrate, a `Group<T>` trait
-  declares the binary op, its inverse, and an identity. Registering `Number` as
-  `Group<Number>` under `+`/`-` is one trait impl; registering `Path` as `Group<Path>`
-  under `/`/`..` is another. Operator dispatch consults the trait when no concrete
-  overload matches. Most expressive option.
-- *Group as a syntax-level shorthand.* `GROUP + - OVER Number` (or similar) registers
-  both operators and links them in one declaration, without depending on the trait
-  machinery. Less powerful — no generic-over-groups functions — but unblocks "this type
-  wants a paired operator" without traits.
-- *Group laws.* Math groups have axioms (associativity, identity, inverse). The language
-  can either trust the declaration (cheap, possibly wrong) or sample-test it (expensive,
-  partial). Trusting is fine if violations only produce wrong answers, not crashes —
-  which is the case for a dispatch-only mechanism.
-- *Parser surface.* [operators.rs](src/parse/operators.rs)'s registry is flat today.
-  Group declarations would either feed it at runtime (slot allocation deferred to
-  dispatch) or extend a compile-time table (structural, rigid). User-definable groups
-  force the runtime path.
-
-**Sequencing.** Depends on user-defined types and traits. Without traits, the syntax-level
-shorthand still works but doesn't unlock the generic-function-over-groups payoff. Land
-alongside or after the trait machinery.
-
-## Module system and directory layout
-
-**Problem.** [`main.rs`](src/main.rs) reads one source string — a file path argument or
-stdin — and that is the entire Koan program. There is no way for one Koan source file to
-reference definitions in another: no import, no module path, no project-level entry point.
-A Koan codebase is one file. Realistic programs outgrow that long before they outgrow a
-few hundred lines, and the language cannot represent its own standard library as separate
-files because the standard library does not yet exist as Koan code at all.
-
-**Impact.**
-
-- *Decomposition is impossible.* Splitting a growing program into related groups of
-  functions and types is a basic readability move; Koan can't do it. Every function the
-  language ships at the user level — once it has any — has to live in the same file as
-  the user's program, or be a host-side builtin.
-- *No standard library in Koan itself.* A future "list utilities" or "string helpers"
-  module written in Koan can't ship until there's a way to load it. The only path today
-  is to bake everything into Rust as a builtin, which is the wrong layer for code that
-  would naturally be expressible in Koan.
-- *No private/exported boundary.* Every top-level definition is visible to every other
-  one in the same file. With one file, that's tolerable; with many, it forces every name
-  in the codebase to globally not collide. Per-file privacy is an obvious want but has no
-  syntactic anchor.
-- *Tests can't live alongside code.* A test file referencing the function it tests is the
-  default shape of a test suite in every other language. Koan can express neither side of
-  that.
-
-**Directions.** None decided.
-
-- *Filesystem layout.* Flat directory of `.koan` files, or a tree (`utils/list.koan`,
-  `utils/string.koan`)? Implicit entry point (`main.koan`) or explicit manifest file?
-  Single-file programs (today's shape) should keep working — directory mode is an
-  addition.
-- *Import surface.* An explicit `IMPORT "utils/list"` builtin that loads and registers
-  another file's definitions, vs. implicit "everything in the project directory is
-  visible". Explicit is more verbose but makes the dependency graph readable; implicit
-  is cheaper to write but couples every file to every other.
-- *Namespacing.* Qualified names (`list::map`) keep collisions controlled and signal where
-  a name comes from at the call site; flat naming with shadowing rules is simpler but
-  re-creates the global-scope problem at codebase scale. Trait/type names are the
-  load-bearing case — two modules each defining a `Point` type need a story.
-- *Definition vs side-effect at module load.* Does loading a module run its top-level
-  expressions (so importing has effects), or only register its `FN` and `TYPE`
-  definitions and leave expression evaluation to the entry-point file? The latter matches
-  most languages and dovetails with the monadic-effect work — effectful module
-  initialization wants the same handler machinery as effectful builtins.
-- *Circular imports.* Disallow (simplest, may force awkward splits), allow with
-  forward-declaration discipline, or resolve via the existing dispatch-as-node scheduler
-  by treating cross-module references as another deferred dependency.
-
-**Sequencing.** Wants user-defined types at least sketched, since "what can a module
-export" is the load-bearing design question and types are the awkward case. Mostly
-orthogonal to the effect and error work — the module loader uses whatever `BuiltinFn`
-signature exists at the time. Lands cleanly any time after types settle.
-
-## Quote and eval sigils
-
-Two prefix sigils that make the lazy/eager split between expressions and dict/list
-literals navigable from in-language code.
-
-**Problem.** Whether a sub-expression is evaluated or held as raw AST is determined by
-*context* today: a slot typed `KType::KExpression` consumes the raw `ExpressionPart`
-unevaluated, while a dict or list literal eagerly evaluates each entry. This works as
-long as those defaults match what the user wants. Two symmetric gaps remain:
-
-- *No way to force-evaluate a metaexpression in a `KExpression` slot.* If a value is a
-  `KObject::KExpression` (a "metaexpression" — produced by some computation, not
-  surface-typed at the parse site), there is no surface form that says "treat this as the
-  AST to consume," only positions that would consume the AST surface-statically.
-- *No way to suppress evaluation inside a dict or list literal.* The scheduler in
-  [src/execute/run.rs:205-213](src/execute/run.rs#L205-L213) wraps every bare-identifier
-  dict entry in a `value_lookup` dispatch — Python-like name resolution applies even on
-  the key side. There is no way to say "this identifier should remain a literal symbol
-  for the dict's purposes" or "this sub-expression should be captured as a
-  `KObject::KExpression` value." This is what blocks the otherwise-natural
-  `Point {x: 3, y: 4}` surface for struct construction (today shipped as
-  `Point (x: 3, y: 4)` with the named-arg refactor) — without quote, `x` and `y` get
-  scope-looked-up.
-
-**Impact.** Today the limitation is mostly invisible because the contexts that need it
-(meta-programming, dict-as-named-args, lazy struct fields) either don't exist yet or
-have been built around the gap. The named-args refactor inherits but does not regress
-this — it stays in expression-triple form (`(x: 3, y: 4)`) precisely because the dict
-form would trip on (2). As more meta-programming surface lands (effect handlers,
-trait method dispatch, user-extensible types, `EVAL`-style builtins), each one will
-either need the sigils or grow its own bespoke escape.
-
-**Direction (sketch, not committed).** A symmetric prefix-operator pair, sitting in the
-existing `OPERATORS` table in [src/parse/operators.rs](src/parse/operators.rs):
-
-- `` `expr `` — *quote*: the expression's AST is captured as a `KObject::KExpression`
-  value with no evaluation. Lets the user thread raw ASTs through eager-evaluating
-  contexts (dict values, list elements, function args).
-- `$expr` — *eval*: the expression resolves to a value and that value, if a
-  `KObject::KExpression`, is then evaluated as an AST in the current scope. Dual to
-  quote — lets the user thread KExpression values through lazy slots that would
-  otherwise consume the raw AST.
-
-Backtick is unused today and reads as "literal/raw" in most language traditions; `$`
-already carries shell template-substitution baggage so `$expr` parses as "value of."
-Both fit the existing prefix-operator pattern (one trigger char + the following compound
-token) so the parser change is a one-row add to the registry. The runtime side needs a
-`BuiltinFn`-shaped quote that wraps its argument in `KObject::KExpression` and an eval
-that pulls the inner AST out and re-dispatches.
-
-**Sequencing.** Cleanly ships any time. Useful immediately for the dict-as-struct-args
-ergonomic upgrade if/when that gets prioritized over today's expression-triple surface,
-and as the foundation for an in-language `EVAL` builtin and lazy struct field types.
-
-## Other deferred surface items
-
-Smaller pieces called out in passing as the larger items shipped:
-
-- **Errors as first-class values.** `KObject::Err` would let errors bind via `LET` and pass
-  as args. Needs the dispatcher to either short-circuit through error-typed slots or
-  splice errors into them.
-- **Catch-builtins** (`MATCH`, `OR_ELSE`-style). Likely require either a `KType::Result`
-  extension or an `Argument.catches_errors` flag, which intersects with the user-defined-
-  types work above.
-- **`RAISE "msg"` builtin** to produce `KError::User` from in-language code.
-- **Source spans on `KExpression`** so error frames can name `file:line` instead of
-  textual summaries.
-- **Continue-on-error after the first top-level failure** (useful for a future REPL).
-- **Variadic argument signatures** — original "function body is a sequence of expressions"
-  sketch; the comparator's tiebreak rule for variadic-vs-fixed signatures is the
-  load-bearing question.
-- **Per-parameter type annotations** on user-fn signatures, which today are uniformly
-  `Any`. Reuses the parser's existing `Type` token class.
-
-## Refactor for cleaner abstractions
-
-**Standing item, exploratory.** The other roadmap entries add features; this one's job is
-to *remove* — places where the abstraction grew accidentally and a generalization has
-become visible. Examples worth a look when surrounding code next changes for unrelated
-reasons:
-
-- *Builtin registration patterns.* The `register_builtin` + signature-construction
-  skeleton repeats across [builtins/](src/dispatch/builtins/). Whether the duplication is
-  noise to factor or "deliberate so each builtin reads top-to-bottom on its own" is an
-  open call — the answer depends on how builtins evolve under monadic effects and
-  user-defined types.
-- *Parser pass boundaries.* [parse/](src/parse/)'s passes pipe strings between each
-  other (`quotes.rs` → `whitespace.rs` → `expression_tree.rs`). Typed outputs would
-  compose more cleanly. Low priority — current pipeline works.
-
-**When to act.** Refactor each only when the next feature would multiply the existing
-duplication. Don't refactor preemptively; the cost of churn outweighs the cost of
-carrying a small duplication that hasn't grown teeth yet.
+- [Static type checking and JIT compilation](roadmap/static-typing-and-jit.md) — the
+  tooling and performance ceiling; both want a phase between parse and execution.
+- [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing item: remove
+  accidental abstraction when the next feature would multiply existing duplication.
