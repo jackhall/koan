@@ -269,24 +269,28 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                 let Frame::Dict(d) = stack.pop().unwrap() else { unreachable!() };
                 stack.last_mut().unwrap().push(ExpressionPart::DictLiteral(d.finish()?));
             }
-            // `:` is the key/value separator inside a dict frame. Errors anywhere else.
+            // `:` is the key/value separator inside a dict frame. Outside one, it emits
+            // a standalone `Keyword(":")` — the type-annotation separator (`x: Number`)
+            // consumed by builtins like `UNION` (and, future-tense, function-signature
+            // parameter declarations).
             ':' => {
                 flush_token(&mut stack, &mut buf)?;
-                match stack.last_mut() {
-                    Some(Frame::Dict(d)) => d.accept_colon()?,
-                    _ => return Err("unexpected ':' outside dict literal".to_string()),
+                match stack.last_mut().unwrap() {
+                    Frame::Dict(d) => d.accept_colon()?,
+                    frame => frame.push(ExpressionPart::Keyword(":".to_string())),
                 }
             }
-            // `,` is whitespace inside a list (no state to maintain) and a pair separator
-            // inside a dict (commits an in-progress pair via `DictFrame::accept_comma`).
-            // Errors anywhere else (top-level expressions, parens) since `,` has no meaning
-            // there.
+            // `,` is a pair separator inside a dict (commits an in-progress pair via
+            // `DictFrame::accept_comma`) and whitespace-equivalent everywhere else — no-op
+            // inside lists and expression frames. The expression-frame allowance lets
+            // type-annotation triples (`a: Number, b: Str`) and future function-signature
+            // parameter lists use commas as visual separators without changing the parsed
+            // shape.
             ',' => {
                 flush_token(&mut stack, &mut buf)?;
-                match stack.last_mut() {
-                    Some(Frame::List(_)) => {}
-                    Some(Frame::Dict(d)) => d.accept_comma()?,
-                    _ => return Err("unexpected ',' outside list or dict literal".to_string()),
+                match stack.last_mut().unwrap() {
+                    Frame::Dict(d) => d.accept_comma()?,
+                    Frame::List(_) | Frame::Expression(_) => {}
                 }
             }
             '\'' | '"' => {
@@ -887,13 +891,21 @@ mod tests {
     }
 
     #[test]
-    fn colon_outside_dict_errors() {
-        assert!(tree("a: 1").is_err());
+    fn colon_outside_dict_emits_keyword() {
+        // `:` outside a dict frame is the type-annotation separator and parses as
+        // a standalone `Keyword(":")`. UNION schemas (and, eventually, function
+        // signatures) consume the resulting `[Identifier, Keyword(":"), Type]` triples.
+        assert_eq!(tree("a: Number").unwrap(), "[t(a) t(:) T(Number)]");
     }
 
     #[test]
-    fn comma_outside_dict_errors() {
-        assert!(tree("a, b").is_err());
+    fn comma_in_expression_is_whitespace() {
+        // `,` inside an expression frame is a no-op — same parsed shape as whitespace.
+        // Lets type-annotation triples and future function-signature parameter lists
+        // use commas as visual separators without affecting the tree.
+        assert_eq!(tree("a, b").unwrap(), tree("a b").unwrap());
+        assert_eq!(tree("(a,, b)").unwrap(), tree("(a b)").unwrap());
+        assert_eq!(tree("(a: Number, b: Str)").unwrap(), tree("(a: Number b: Str)").unwrap());
     }
 
     #[test]

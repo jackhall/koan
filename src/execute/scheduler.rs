@@ -424,6 +424,19 @@ impl<'a> Scheduler<'a> {
                     KObject::Dict(Rc::clone(entries))
                 }
             }
+            KObject::Tagged { tag, value } => {
+                if Self::needs_lift(value, dying_frame) {
+                    KObject::Tagged {
+                        tag: tag.clone(),
+                        value: Rc::new(Self::lift_kobject(value, dying_frame)),
+                    }
+                } else {
+                    KObject::Tagged {
+                        tag: tag.clone(),
+                        value: Rc::clone(value),
+                    }
+                }
+            }
             other => other.deep_clone(),
         }
     }
@@ -450,6 +463,7 @@ impl<'a> Scheduler<'a> {
             KObject::KFuture(_, None) => true,
             KObject::List(items) => items.iter().any(|x| Self::needs_lift(x, dying_frame)),
             KObject::Dict(entries) => entries.values().any(|x| Self::needs_lift(x, dying_frame)),
+            KObject::Tagged { value, .. } => Self::needs_lift(value, dying_frame),
             _ => false,
         }
     }
@@ -936,7 +950,7 @@ impl<'a> KFunction<'a> {
 /// `(x)` correctly. `Keyword`, `Literal`, and `Future` parts pass through unchanged. Each
 /// substituted value is allocated via the arena (replacing the prior `Box::leak`-per-call
 /// model from before the leak fix).
-fn substitute_params<'a>(
+pub(crate) fn substitute_params<'a>(
     expr: KExpression<'a>,
     bundle: &ArgumentBundle<'a>,
     arena: &'a crate::dispatch::arena::RuntimeArena,

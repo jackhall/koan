@@ -600,4 +600,46 @@ mod tests {
             Ok(()) => panic!("expected error from undefined name in INNER"),
         }
     }
+
+    #[test]
+    fn tagged_union_full_program_via_type_token() {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        run(
+            "UNION Result = (ok: Str err: Str)\n\
+             LET r = (Result (ok \"all good\"))\n\
+             MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
+            &arena,
+            captured.clone(),
+        );
+        assert_eq!(captured.borrow().as_slice(), b"all good\n");
+    }
+
+    #[test]
+    fn tagged_union_full_program_via_let_bound_type() {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        run(
+            "LET result = (UNION (ok: Str err: Str))\n\
+             LET r = (result (err \"oops\"))\n\
+             MATCH (r) WITH (ok -> (PRINT \"good\") err -> (PRINT it))",
+            &arena,
+            captured.clone(),
+        );
+        assert_eq!(captured.borrow().as_slice(), b"oops\n");
+    }
+
+    #[test]
+    fn tagged_union_none_branch_runs() {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        run(
+            "UNION Maybe = (some: Number none: Null)\n\
+             LET m = (Maybe (none null))\n\
+             MATCH (m) WITH (some -> (PRINT \"some-branch\") none -> (PRINT \"none-branch\"))",
+            &arena,
+            captured.clone(),
+        );
+        assert_eq!(captured.borrow().as_slice(), b"none-branch\n");
+    }
 }

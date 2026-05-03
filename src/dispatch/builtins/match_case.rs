@@ -1,0 +1,293 @@
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use crate::dispatch::arena::{CallArena, RuntimeArena};
+use crate::dispatch::kerror::{KError, KErrorKind};
+use crate::dispatch::kfunction::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
+    SignatureElement,
+};
+use crate::dispatch::kobject::KObject;
+use crate::dispatch::scope::Scope;
+use crate::execute::scheduler::substitute_params;
+use crate::parse::kexpression::{ExpressionPart, KExpression};
+
+use super::{err, register_builtin};
+
+/// `MATCH <value:Tagged> WITH <branches:KExpression>` — branch by tag.
+///
+/// `branches` is the parens-wrapped body whose parts are repeated `<tag:Identifier> ->
+/// <body:Expression>` triples (arrow-pair syntax). The body of the first branch whose tag
+/// matches `value.tag` is dispatched as a tail expression; the others are never touched.
+/// `it` is bound to the inner value in a per-MATCH child scope (and substituted into
+/// Identifier-typed positions of the body), modeled on `KFunction::invoke`'s per-call
+/// frame so the binding doesn't leak into the surrounding scope.
+///
+/// No matching branch → `ShapeError("inexhaustive match: no branch for `X`")`. Malformed
+/// branch shape (not `<tag> -> <body>` triples) → `ShapeError`.
+pub fn body<'a>(
+    scope: &'a Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
+    mut bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    let (tag, value) = match bundle.get("value") {
+        Some(KObject::Tagged { tag, value }) => (tag.clone(), Rc::clone(value)),
+        Some(other) => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "value".to_string(),
+                expected: "Tagged".to_string(),
+                got: other.ktype().name().to_string(),
+            }));
+        }
+        None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
+    };
+    let branches_expr = match extract_kexpression(&mut bundle, "branches") {
+        Some(e) => e,
+        None => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "MATCH branches slot must be a parenthesized expression".to_string(),
+            )));
+        }
+    };
+    let branch_body = match find_branch_body(&branches_expr, &tag) {
+        Ok(Some(body)) => body,
+        Ok(None) => {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "inexhaustive match: no branch for `{}`",
+                tag
+            ))));
+        }
+        Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
+    };
+    // Per-MATCH frame for the `it` binding — same pattern as `KFunction::invoke`. The
+    // child scope's `outer` is the MATCH call site, so free names in the branch body
+    // resolve against the surrounding scope. `it` is bound only in the child, so it
+    // disappears when the frame drops.
+    let frame: Rc<CallArena> = CallArena::new(scope);
+    let arena_ptr: *const RuntimeArena = frame.arena();
+    let scope_ptr: *const Scope<'_> = frame.scope();
+    // SAFETY: heap-pinning makes both pointers valid for the Rc's lifetime. The
+    // re-borrow ends before the `frame` move into `BodyResult::Tail`.
+    let inner_arena: &'a RuntimeArena = unsafe { &*(arena_ptr as *const _) };
+    let child: &'a Scope<'a> = unsafe { &*(scope_ptr as *const _) };
+    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(value.deep_clone());
+    child.add("it".to_string(), it_obj);
+    let mut it_bundle = ArgumentBundle { args: HashMap::new() };
+    it_bundle.args.insert("it".to_string(), Rc::new(value.deep_clone()));
+    let substituted = substitute_params(branch_body, &it_bundle, inner_arena);
+    // Construct the Tail variant directly. `tail_with_frame` requires a `&KFunction` for
+    // return-type enforcement and error-frame attribution; MATCH has no meaningful
+    // function to attach (declared return is `Any`, so the check would be a no-op).
+    BodyResult::Tail { expr: substituted, frame: Some(frame), function: None }
+}
+
+/// Walk the branches KExpression's parts as repeated `<Identifier(t)> <Keyword("->")>
+/// <Expression(body)>` triples. Return the body for the first triple whose tag matches
+/// `target_tag`, `Ok(None)` if no triple matches, or `Err` on shape mismatch.
+fn find_branch_body<'a>(
+    branches: &KExpression<'a>,
+    target_tag: &str,
+) -> Result<Option<KExpression<'a>>, String> {
+    let parts = &branches.parts;
+    if parts.len() % 3 != 0 {
+        return Err(format!(
+            "MATCH branches must be `<tag> -> <body>` triples; got {} parts (not a multiple of 3)",
+            parts.len()
+        ));
+    }
+    let mut i = 0;
+    while i < parts.len() {
+        let tag_part = &parts[i];
+        let arrow_part = &parts[i + 1];
+        let body_part = &parts[i + 2];
+        let tag_name = match tag_part {
+            ExpressionPart::Identifier(s) => s.clone(),
+            other => {
+                return Err(format!(
+                    "MATCH branch tag must be a bare identifier, got {}",
+                    other.summarize()
+                ));
+            }
+        };
+        match arrow_part {
+            ExpressionPart::Keyword(k) if k == "->" => {}
+            other => {
+                return Err(format!(
+                    "MATCH branch separator must be `->`, got {}",
+                    other.summarize()
+                ));
+            }
+        }
+        let body_expr = match body_part {
+            ExpressionPart::Expression(e) => (**e).clone(),
+            other => {
+                return Err(format!(
+                    "MATCH branch body must be a parenthesized expression, got {}",
+                    other.summarize()
+                ));
+            }
+        };
+        if tag_name == target_tag {
+            return Ok(Some(body_expr));
+        }
+        i += 3;
+    }
+    Ok(None)
+}
+
+fn extract_kexpression<'a>(
+    bundle: &mut ArgumentBundle<'a>,
+    name: &str,
+) -> Option<KExpression<'a>> {
+    let rc = bundle.args.remove(name)?;
+    match Rc::try_unwrap(rc) {
+        Ok(KObject::KExpression(e)) => Some(e),
+        Ok(_) => None,
+        Err(rc) => match &*rc {
+            KObject::KExpression(e) => Some(e.clone()),
+            _ => None,
+        },
+    }
+}
+
+pub fn register<'a>(scope: &'a Scope<'a>) {
+    register_builtin(
+        scope,
+        "MATCH",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("MATCH".into()),
+                SignatureElement::Argument(Argument { name: "value".into(),    ktype: KType::Tagged }),
+                SignatureElement::Keyword("WITH".into()),
+                SignatureElement::Argument(Argument { name: "branches".into(), ktype: KType::KExpression }),
+            ],
+        },
+        body,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    use crate::dispatch::arena::RuntimeArena;
+    use crate::dispatch::builtins::default_scope;
+    use crate::dispatch::kerror::KErrorKind;
+    use crate::dispatch::scope::Scope;
+    use crate::execute::scheduler::Scheduler;
+    use crate::parse::expression_tree::parse;
+    use crate::parse::kexpression::KExpression;
+
+    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
+    impl Write for SharedBuf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+
+    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
+        default_scope(arena, Box::new(SharedBuf(captured)))
+    }
+
+    fn parse_one(src: &str) -> KExpression<'static> {
+        let mut exprs = parse(src).expect("parse should succeed");
+        assert_eq!(exprs.len(), 1, "test helper expects a single expression");
+        exprs.remove(0)
+    }
+
+    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
+        let exprs = parse(source).expect("parse should succeed");
+        let mut sched = Scheduler::new();
+        for expr in exprs {
+            sched.add_dispatch(expr, scope);
+        }
+        sched.execute().expect("scheduler should succeed");
+    }
+
+    fn run_one_err<'a>(
+        scope: &'a Scope<'a>,
+        expr: KExpression<'a>,
+    ) -> crate::dispatch::kerror::KError {
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(expr, scope);
+        sched.execute().expect("scheduler should not surface errors directly");
+        match sched.read_result(id) {
+            Ok(_) => panic!("expected error"),
+            Err(e) => e.clone(),
+        }
+    }
+
+    fn run_program(source: &str) -> Vec<u8> {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured.clone());
+        run(scope, source);
+        let bytes = captured.borrow().clone();
+        bytes
+    }
+
+    #[test]
+    fn match_dispatches_branch_for_matching_tag() {
+        let bytes = run_program(
+            "UNION Maybe = (some: Number none: Null)\n\
+             LET m = (Maybe (some 42))\n\
+             MATCH (m) WITH (some -> (PRINT \"got\") none -> (PRINT \"no\"))",
+        );
+        assert_eq!(bytes, b"got\n");
+    }
+
+    #[test]
+    fn match_binds_inner_value_to_it() {
+        // `it` is substituted into Identifier-typed positions; here PRINT's `msg:Str` slot
+        // wants a Str literal or Future, and substitution rewrites the `it` Identifier into
+        // a `Future(value)` so the bind succeeds.
+        let bytes = run_program(
+            "UNION Result = (ok: Str err: Str)\n\
+             LET r = (Result (ok \"all good\"))\n\
+             MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
+        );
+        assert_eq!(bytes, b"all good\n");
+    }
+
+    #[test]
+    fn match_does_not_run_unmatched_branches() {
+        // Lazy: the `none` branch's PRINT must not fire when the value is `some`.
+        let bytes = run_program(
+            "UNION Maybe = (some: Number none: Null)\n\
+             LET m = (Maybe (some 1))\n\
+             MATCH (m) WITH (some -> (PRINT \"yes\") none -> (PRINT \"NO_SHOULD_NOT_APPEAR\"))",
+        );
+        assert_eq!(bytes, b"yes\n");
+    }
+
+    #[test]
+    fn match_inexhaustive_errors() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(
+            scope,
+            "UNION Maybe = (some: Number none: Null)\nLET m = (Maybe (none null))",
+        );
+        let err = run_one_err(scope, parse_one("MATCH (m) WITH (some -> (PRINT \"yes\"))"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains("`none`")),
+            "expected inexhaustive ShapeError, got {err}",
+        );
+    }
+
+    #[test]
+    fn match_other_branch_runs_when_tag_matches() {
+        let bytes = run_program(
+            "UNION Maybe = (some: Number none: Null)\n\
+             LET m = (Maybe (none null))\n\
+             MATCH (m) WITH (some -> (PRINT \"yes\") none -> (PRINT \"nothing\"))",
+        );
+        assert_eq!(bytes, b"nothing\n");
+    }
+}

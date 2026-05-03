@@ -11,10 +11,22 @@
 /// lines. A single delta counter handles `[`/`]` and `{`/`}` together — `build_tree`'s frame
 /// stack catches any cross-pairing (`[1 2}`). Strings are already masked at this point, so
 /// brackets inside them don't reach this function.
+///
+/// **Trailing-comma continuations.** A line whose trimmed content ends in `,` declares that
+/// the expression continues on the next non-blank line — the same suspend-indentation path
+/// the bracket case uses. This lets `UNION Maybe = (some: Number,\n  none: Null)` and bare
+/// multi-line calls like `add 1,\n  2,\n  3` parse as one expression instead of siblings.
+/// Parens (`(`) are intentionally *not* tracked the same way — they're already used to wrap
+/// sub-expressions inside indent-structured blocks, so making them suspend indentation would
+/// change the meaning of existing programs. The trailing comma is opt-in: lines that don't
+/// end in `,` keep their old sibling-boundary behavior. Blank lines preserve the
+/// continuation flag (they're skipped before the suspend check fires), so a blank line
+/// between two comma-joined fragments doesn't break the chain.
 pub fn collapse_whitespace(input: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut stack: Vec<usize> = Vec::new();
     let mut delim_depth: i32 = 0;
+    let mut continuing: bool = false;
 
     for (lineno, raw) in input.lines().enumerate() {
         let stripped = raw.trim_start();
@@ -25,13 +37,14 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
             continue;
         }
 
-        if delim_depth > 0 {
-            // Inside an open list/dict span: append the line as continuation content. Skip the
-            // indent / paren-wrapping pass — the line is logically part of the bracket
-            // expression, not a sibling block.
+        if delim_depth > 0 || continuing {
+            // Inside an open list/dict span or a trailing-comma continuation: append the line
+            // as continuation content. Skip the indent / paren-wrapping pass — the line is
+            // logically part of the open expression, not a sibling block.
             out.push(' ');
             out.push_str(content);
             delim_depth += line_delim_delta(content);
+            continuing = content.ends_with(',');
             continue;
         }
 
@@ -61,6 +74,7 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
         out.push_str(content);
         stack.push(indent);
         delim_depth += line_delim_delta(content);
+        continuing = content.ends_with(',');
     }
 
     while stack.pop().is_some() {
@@ -256,5 +270,60 @@ mod tests {
             collapse_whitespace("[\n  {a: 1\n   b: 2}\n]").unwrap(),
             "([ {a: 1 b: 2} ])",
         );
+    }
+
+    // --- Trailing-comma line continuation ---
+
+    #[test]
+    fn trailing_comma_continues_expression() {
+        // The `,` at end of line 1 suspends indentation handling; line 2 appends to the open
+        // group instead of becoming a child block.
+        assert_eq!(
+            collapse_whitespace("add 1,\n    2").unwrap(),
+            "(add 1, 2)",
+        );
+    }
+
+    #[test]
+    fn trailing_comma_chain_across_three_lines() {
+        // Continuation persists as long as each line keeps ending in `,`.
+        assert_eq!(
+            collapse_whitespace("foo 1,\n    2,\n    3").unwrap(),
+            "(foo 1, 2, 3)",
+        );
+    }
+
+    #[test]
+    fn trailing_comma_inside_paren_expression() {
+        // The motivating UNION shape: open paren on line 1, comma signals continuation,
+        // close paren on line 2.
+        assert_eq!(
+            collapse_whitespace("UNION Maybe = (some: Number,\n               none: Null)")
+                .unwrap(),
+            "(UNION Maybe = (some: Number, none: Null))",
+        );
+    }
+
+    #[test]
+    fn trailing_comma_continuation_through_blank_line() {
+        // Blank lines are skipped before the continuation check, so they don't break a
+        // comma chain — same shape Python uses inside bracket continuations.
+        assert_eq!(
+            collapse_whitespace("add 1,\n\n    2").unwrap(),
+            "(add 1, 2)",
+        );
+    }
+
+    #[test]
+    fn dangling_trailing_comma_at_eof() {
+        // No following line to consume the continuation; the `,` rides through unchanged.
+        // `build_tree` drops it as a no-op once it sees an expression-frame `,`.
+        assert_eq!(collapse_whitespace("foo,").unwrap(), "(foo,)");
+    }
+
+    #[test]
+    fn no_trailing_comma_keeps_sibling_boundary() {
+        // Guard: lines that don't end in `,` still produce sibling groups.
+        assert_eq!(collapse_whitespace("foo\nbar").unwrap(), "(foo) (bar)");
     }
 }

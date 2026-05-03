@@ -7,3 +7,4 @@ pub mod kobject;
 pub mod ktraits;
 pub mod monad;
 pub mod scope;
+pub mod tagged_union;
