@@ -1,6 +1,6 @@
 # Open issues from the leak-fix audit
 
-Most leak-fix follow-ups landed (see [DECISIONS.md](../DECISIONS.md)). Two remain,
+Most leak-fix follow-ups landed (see [design/memory-model.md](../design/memory-model.md)). Two remain,
 deferred until after per-type identity ships because that refactor will likely reshape
 the memory model — signing off on the current model before then would mean redoing the
 audit.

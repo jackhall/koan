@@ -10,7 +10,9 @@ engineering rework: doing one item before another it depends on means doing the 
 item twice. Each per-item file ends with a **Dependencies** section linking to its
 prerequisites and the items it unblocks.
 
-Shipped items live in [DECISIONS.md](DECISIONS.md). What's shipped so far: user-defined
+Design rationale for what's already in the language lives in [design/](design/) — six
+topical docs covering the execution model, memory model, functional programming, type
+system, expressions and parsing, and error handling. What's shipped so far: user-defined
 functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimization, the
 leak fix (with lexical closures + per-call arenas), structured error propagation, and the
 user-defined-types substrate (return-type enforcement at runtime). The next signature

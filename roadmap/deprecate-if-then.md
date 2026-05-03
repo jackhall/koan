@@ -25,7 +25,7 @@ feature (pattern bindings, exhaustive-case checks) to be specified twice.
 ## Dependencies
 
 Lands cleanest after the user-defined tagged-unions substrate hardens (already shipped —
-see [DECISIONS.md](../DECISIONS.md)), when "is Bool a tagged union" is answerable in
+see [design/type-system.md](../design/type-system.md)), when "is Bool a tagged union" is answerable in
 context. Mechanically the deprecation itself (delete `if_then.rs`, register the
 desugaring, remove the lazy-slot path if nothing else needs it) is a one-PR cleanup once
 the Bool question is settled.

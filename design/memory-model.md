@@ -1,0 +1,111 @@
+# Memory model and scoping rules
+
+Every `KObject` lives in a [`RuntimeArena`](../src/dispatch/arena.rs). Top-level
+work allocates into the **run-root arena**; each user-fn call gets its own
+**per-call `RuntimeArena`** owned by [`CallArena`](../src/dispatch/arena.rs),
+freed when the call's slot finalizes. `Box::leak` is gone from production code
+— one occurrence remains in [scope.rs](../src/dispatch/scope.rs) as a test-only
+sentinel for the dispatch-specificity unit tests, not a runtime allocation.
+
+## Scoping: lexical
+
+Free names in a user-fn body resolve through the function's **definition**
+scope, carried on [`KFunction.captured`](../src/dispatch/kfunction.rs) — not the
+call-site scope. Top-level `FN` definitions capture the run-root, so behavior
+matches the old dynamic-scoping model for currently-expressible programs, while
+nested `FN`s correctly close over their enclosing locals.
+
+Lexical scoping is what makes the F_{k+1}→F_k chain in tail-recursive code O(1)
+memory. Without it, a recursive call would resolve the recursive name through
+the call-site scope and pin every prior frame's bindings alive.
+
+## Closure escape: per-call arenas + `Rc`
+
+When a per-call value gets lifted out of its dying frame (typically: a closure
+returned from a body, or any value depending on closure-internal state),
+[`lift_kobject`](../src/execute/lift.rs) rebuilds it in the destination arena.
+Two `KObject` variants carry an optional `Rc<CallArena>` that anchors the
+underlying per-call arena alive when needed:
+
+- `KObject::KFunction(&fn, Option<Rc<CallArena>>)` — the closure itself.
+  `lift_kobject` compares the lifted function's `captured_scope().arena` pointer
+  to the dying frame's arena pointer; match → carry an `Rc` clone, mismatch → no
+  `Rc`.
+- `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` — `KFuture`s embed
+  `&KFunction` plus a bundle and a parsed `KExpression` whose `Future(&KObject)`
+  parts can independently point into the dying arena. `lift_kobject` anchors any
+  unanchored KFuture descendant conservatively (we don't track per-descendant
+  arena provenance). KFutures don't escape as values today, so the over-keep is
+  theoretical until async surfaces them.
+
+Composite variants (`List`, `Dict`) recurse with a `needs_lift` short-circuit:
+when no descendant needs anchoring, the existing `Rc<Vec>`/`Rc<HashMap>` is
+cloned in place rather than rebuilt. Koan's collection-immutability contract is
+what makes the structural sharing safe.
+
+## Fast path
+
+If a dying arena allocated zero `KFunction`s
+([`functions_is_empty`](../src/dispatch/arena.rs)), no descendant `&KFunction`
+can point into it, and `lift_kobject` collapses to a plain `deep_clone`. Owned
+variants (`Number`, `KString`, `Bool`, `Null`) `deep_clone` unconditionally —
+mildly wasteful for the "value already in dest arena" case, which would need
+full arena-provenance tracking to eliminate.
+
+## Re-entrant `Scope::add`
+
+[`Scope::add`](../src/dispatch/scope.rs) tries `try_borrow_mut` on
+`data`/`functions` and falls back to a `pending` queue when a borrow is already
+held; the scheduler drains the queue between dispatch nodes via
+[`drain_pending`](../src/dispatch/scope.rs). The hot path (no concurrent borrow)
+is the same direct insert as before — no measured overhead. Re-entrant writes
+that would have panicked now queue silently and become visible after the
+iterating borrow releases, with snapshot-iteration semantics for the iterator.
+
+## Invariants made structural
+
+The leak-fix audit promoted several "must hold" rules from runtime checks into
+type-system invariants:
+
+- `Scope::arena: &'a RuntimeArena` (was `Option`); `test_sink()` takes a
+  caller-supplied arena.
+- `KFunction::captured_scope() -> &'a Scope<'a>` (was `Option`). The
+  `unwrap_or(scope)` fallback is gone.
+- The running scope is passed through `SchedulerHandle::add_dispatch(expr,
+  scope)` directly; the previous `active_scope: Option<*const Scope<'a>>` raw
+  pointer dance and unsafe transmute are gone.
+- [`RuntimeArena::alloc_function`](../src/dispatch/arena.rs) `debug_assert`s
+  arena-identity between the function and its captured scope. Catches a
+  KFunction being allocated into a different arena than its captured scope at
+  the allocation site rather than later as a use-after-free in `lift_kobject`'s
+  fast path.
+
+## Performance notes
+
+`finalize_ready_frames` previously walked the whole scheduler vec per finalize
+(O(n²) over scheduler size). It now uses a sidecar
+`frame_holding_slots: Vec<usize>` in `Scheduler`, updated on stash/finalize.
+
+## Verification
+
+- The leak-fix regression test
+  [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/dispatch/builtins/fn_def.rs)
+  confirms 50 ECHO calls grow the run-root arena by exactly 50 (one lifted
+  return value per call), down from 250+ pre-fix.
+- Closure-escape tests
+  ([`closure_escapes_outer_call_and_remains_invocable`](../src/dispatch/builtins/call_by_name.rs),
+  [`escaped_closure_with_param_returns_body_value`](../src/dispatch/builtins/call_by_name.rs))
+  confirm the previously-UAF closure-escape pattern works.
+- [`add_during_active_data_borrow_queues_and_drains`](../src/dispatch/scope.rs)
+  holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms the
+  queued write applied — pre-fix would have panicked at the second
+  `borrow_mut`.
+
+## Open work
+
+- [Open issues from the leak-fix audit](../roadmap/leak-fix-audit.md) — Miri
+  hasn't run; KFuture's conservative anchoring leaves room for tightening.
+- [Transient-node reclamation](../roadmap/transient-node-reclamation.md) —
+  sub-`Dispatch`/`Bind` nodes in body-internal expressions are never reclaimed,
+  so realistic recursive code is O(n) scheduler memory even when its data
+  footprint is O(1).

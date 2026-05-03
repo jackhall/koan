@@ -150,7 +150,9 @@ src/
     └── interpret.rs     parse → dispatch → schedule → execute
 ```
 
-## Roadmap
+## Design and roadmap
 
-Open structural items are tracked in [ROADMAP.md](ROADMAP.md); shipped ones are recorded
-in [DECISIONS.md](DECISIONS.md).
+Design rationale for what's already in the language lives in [design/](design/) — six
+topical docs: execution model, memory model, functional programming, type system,
+expressions and parsing, and error handling. Open structural items are tracked in
+[ROADMAP.md](ROADMAP.md).
