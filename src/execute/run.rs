@@ -15,8 +15,8 @@ use super::scheduler::Scheduler;
 impl<'a> Scheduler<'a> {
     /// Walk an unresolved expression. If `lazy_candidate` matches, only schedule the
     /// eager-position `Expression` parts; the lazy positions ride through as `KExpression`
-    /// data into a builtin slot typed `KExpression` (`if_then`, `FN`). Otherwise schedule
-    /// every `Expression` (and `ListLiteral`) part as a sub-dispatch / aggregate dep.
+    /// data into a builtin slot typed `KExpression` (`FN`, `MATCH`, `UNION`). Otherwise
+    /// schedule every `Expression` (and `ListLiteral`) part as a sub-dispatch / aggregate dep.
     /// Returns a `NodeStep`: `Done(Value)` for an inline-dispatched body that produced a
     /// value, `Done(Forward(bind_id))` when it spawned a `Bind` to wait on subs, or
     /// `Replace { work: Dispatch(expr), .. }` when the body was a tail call (the slot gets

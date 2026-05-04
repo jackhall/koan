@@ -14,12 +14,13 @@ Design rationale for what's already in the language lives in [design/](design/) 
 topical docs covering the execution model, memory model, functional programming, type
 system, expressions and parsing, and error handling. What's shipped so far: user-defined
 functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimization, the
-leak fix (with lexical closures + per-call arenas), structured error propagation, and the
-user-defined-types substrate (return-type enforcement at runtime). The next signature
-revision after error handling lands monadic side-effect capture; the type/trait sequence
-(per-param annotations, container parameterization, methods, traits, trait inheritance)
-unlocks the items downstream (group-based operators, the IF-THEN→MATCH deprecation's Bool
-design call), so it sits in the middle of the sequence rather than last.
+leak fix (with lexical closures + per-call arenas), structured error propagation, the
+user-defined-types substrate (return-type enforcement at runtime), and the IF-THEN→MATCH
+consolidation (`MATCH` accepts `Bool` directly via projection at entry). The next
+signature revision after error handling lands monadic side-effect capture; the type/trait
+sequence (per-param annotations, container parameterization, methods, traits, trait
+inheritance) unlocks the items downstream (group-based operators), so it sits in the
+middle of the sequence rather than last.
 
 ## Next items
 
@@ -31,8 +32,6 @@ without first landing something else:
   needs a uniform carrier.
 - [Per-parameter type annotations](roadmap/per-param-type-annotations.md) — user-fn
   signatures collapse every arg to `Any`; first slice of the type/trait sequence.
-- [Deprecate IF-THEN in favor of MATCH](roadmap/deprecate-if-then.md) — `MATCH` already
-  subsumes `IF-THEN`; the load-bearing question is `Bool`'s representation.
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
@@ -70,8 +69,6 @@ without first landing something else:
 
 ### Surface and ergonomics
 
-- [Deprecate IF-THEN in favor of MATCH](roadmap/deprecate-if-then.md) — `MATCH` already
-  subsumes `IF-THEN`; the load-bearing question is `Bool`'s representation.
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Module system and directory layout](roadmap/module-system.md) — a Koan codebase is one

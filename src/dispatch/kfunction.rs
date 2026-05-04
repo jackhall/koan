@@ -77,7 +77,8 @@ pub trait SchedulerHandle<'a> {
 /// `Dispatch(expr)` and re-runs the same slot. `frame = Some(f)` installs the per-call
 /// `CallArena` `f` in the slot — its scope becomes the slot's scope and its arena owns the
 /// per-call allocations. Used by `KFunction::invoke` for user-defined bodies. `frame = None`
-/// keeps the slot's existing frame and scope (used by `if_then` for its lazy `value` slot).
+/// keeps the slot's existing frame and scope (used by builtins whose tail expression
+/// evaluates in the same frame as the call site).
 /// A chain of tail calls reuses one slot rather than allocating a new one per step; a TCO
 /// replace with `frame = Some` drops the slot's previous frame immediately because lexical
 /// scoping means the new frame's child scope's `outer` is the FN's captured scope, not the
@@ -92,16 +93,16 @@ pub enum BodyResult<'a> {
         /// reads `signature.return_type` to enforce the declared return type at runtime, and
         /// (2) on error, `function.summarize()` becomes the appended `Frame`'s function name
         /// so the call-stack trace identifies which user-fn the error happened inside.
-        /// `Some(f)` for `KFunction::invoke`'s UserDefined path; `None` for builtin tails like
-        /// `if_then`'s lazy slot, which is just deferred-eval continuation, not a call.
+        /// `Some(f)` for `KFunction::invoke`'s UserDefined path; `None` for builtin tails
+        /// that are deferred-eval continuations, not calls.
         function: Option<&'a KFunction<'a>>,
     },
     Err(KError),
 }
 
 impl<'a> BodyResult<'a> {
-    /// Tail return that keeps the slot's existing frame and scope. Used by builtins like
-    /// `if_then` whose lazy slot evaluates in the same frame as the IF call.
+    /// Tail return that keeps the slot's existing frame and scope. Used by builtins whose
+    /// tail expression evaluates in the same frame as the call site.
     pub fn tail(expr: KExpression<'a>) -> Self {
         BodyResult::Tail { expr, frame: None, function: None }
     }

@@ -1,4 +1,3 @@
-use super::arena::null_singleton;
 use super::kerror::KError;
 use super::kfunction::{Body, BodyResult, BuiltinFn, ExpressionSignature, KFunction};
 use super::kobject::KObject;
@@ -7,7 +6,6 @@ use super::scope::Scope;
 mod attr;
 pub mod call_by_name;
 mod fn_def;
-mod if_then;
 mod let_binding;
 mod match_case;
 mod print;
@@ -17,24 +15,8 @@ mod union;
 mod value_lookup;
 mod value_pass;
 
-/// `&'static KObject::Null` singleton, for sites that need a literal value reference. Most
-/// early-return sites want `null()` instead, which wraps this in `BodyResult::Value`. The
-/// singleton lives in [`arena.rs`](super::arena) and is reused — no allocation per call.
-pub(crate) fn null_kobject<'a>() -> &'a KObject<'a> {
-    null_singleton()
-}
-
-/// `BodyResult::Value(null_kobject())` — the canonical "no useful return value" early-exit for
-/// builtins. Used for *intentional* nulls only, e.g. an `IF false THEN x` skipping its lazy
-/// slot. Failure paths (type mismatches, missing args, unbound names, shape errors) return
-/// `err(...)` instead so the scheduler can short-circuit and the CLI can report what went wrong.
-pub(crate) fn null<'a>() -> BodyResult<'a> {
-    BodyResult::Value(null_kobject())
-}
-
-/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. Replaces the prior
-/// pattern of returning `null()` from every failure path. The error propagates through the
-/// scheduler's Forward chain and short-circuits any dependent node.
+/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The error propagates
+/// through the scheduler's Forward chain and short-circuits any dependent node.
 pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
     BodyResult::Err(e)
 }
@@ -71,9 +53,9 @@ pub(crate) fn register_builtin<'a>(
 ///
 /// // Override form: the caller supplies the early-return expression. Used when the
 /// // builtin wants to return something other than the structured TypeMismatch error
-/// // (e.g., an intentional null on a benign mismatch — currently no in-tree call site
-/// // does this, but the override stays available).
-/// try_args!(bundle, return null(); name: KString);
+/// // on a benign mismatch — currently no in-tree call site does this, but the
+/// // override stays available.
+/// try_args!(bundle, return BodyResult::Value(some_obj); name: KString);
 /// ```
 ///
 /// Each `name: Variant` pair becomes a `let name = ...` binding extracted from
@@ -156,7 +138,6 @@ pub fn default_scope<'a>(
     print::register(scope);
     value_lookup::register(scope);
     value_pass::register(scope);
-    if_then::register(scope);
     fn_def::register(scope);
     call_by_name::register(scope);
     union::register(scope);

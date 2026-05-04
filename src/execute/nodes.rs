@@ -28,7 +28,7 @@ pub(super) enum NodeOutput<'a> {
 /// by user-fn invocation. `None` keeps the existing frame and scope. `function` is an
 /// optional label used to append a `Frame` to any error that lands on this slot — set by
 /// user-fn invocation so an error inside a user-fn body carries the function's name in the
-/// trace; `None` for non-call replacements like `if_then`'s lazy slot. Constant memory
+/// trace; `None` for non-call replacements (deferred-eval continuations). Constant memory
 /// across tail-call sequences because no fresh slot is allocated.
 pub(super) enum NodeStep<'a> {
     Done(NodeOutput<'a>),
@@ -103,7 +103,7 @@ pub(super) struct Node<'a> {
     /// `signature.return_type` against the produced value (the runtime return-type check),
     /// and (2) on error, append a `Frame { function: f.summarize() }` to the resulting
     /// `KError` so the call-stack trace names which user-fn the error happened inside.
-    /// `None` for builtin slots and for non-call replacements like `if_then`'s lazy slot.
+    /// `None` for builtin slots and for non-call replacements (deferred-eval continuations).
     /// Set in lockstep with `frame` (a per-call frame implies a user-fn entry).
     ///
     /// TCO note: when A tail-calls B, this field is rewritten to B at the `Replace` site.

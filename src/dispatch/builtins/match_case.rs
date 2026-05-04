@@ -10,21 +10,32 @@ use crate::dispatch::kfunction::{
 use crate::dispatch::kobject::KObject;
 use crate::dispatch::scope::Scope;
 use crate::execute::scheduler::substitute_params;
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
 use super::{err, register_builtin};
 
-/// `MATCH <value:Tagged> WITH <branches:KExpression>` — branch by tag.
+/// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.
 ///
-/// `branches` is the parens-wrapped body whose parts are repeated `<tag:Identifier> ->
-/// <body:Expression>` triples (arrow-pair syntax). The body of the first branch whose tag
-/// matches `value.tag` is dispatched as a tail expression; the others are never touched.
-/// `it` is bound to the inner value in a per-MATCH child scope (and substituted into
-/// Identifier-typed positions of the body), modeled on `KFunction::invoke`'s per-call
-/// frame so the binding doesn't leak into the surrounding scope.
+/// `value` may be a `Tagged` (user-defined tagged union) or a `Bool`. For `Bool`, the
+/// value is projected at entry into a synthetic `(tag, value)` pair where `tag` is
+/// `"true"` or `"false"` and the inner value is `Null`; the rest of the branch-walking
+/// machinery is the same path used by `Tagged`. Other input types are a `TypeMismatch`.
 ///
-/// No matching branch → `ShapeError("inexhaustive match: no branch for `X`")`. Malformed
-/// branch shape (not `<tag> -> <body>` triples) → `ShapeError`.
+/// `branches` is the parens-wrapped body whose parts are repeated `<tag> -> <body>`
+/// triples (arrow-pair syntax). The tag part is normally a bare identifier; for `Bool`
+/// matches it is the literal `true` or `false` (which the parser tokenizes as
+/// `KLiteral::Boolean`, accepted here in the same position). The body of the first
+/// branch whose tag matches `value.tag` is dispatched as a tail expression; the others
+/// are never touched. `it` is bound to the inner value in a per-MATCH child scope
+/// (and substituted into Identifier-typed positions of the body), modeled on
+/// `KFunction::invoke`'s per-call frame so the binding doesn't leak into the
+/// surrounding scope. For `Bool` matches `it` is `Null` — accurate, since there is no
+/// payload.
+///
+/// No matching branch → `ShapeError("inexhaustive match: no branch for `X`")` — same
+/// rule for `Bool` as for `Tagged`, so `MATCH cond WITH (true -> ...)` against a
+/// `false` value is an error rather than a silent null. Malformed branch shape (not
+/// `<tag> -> <body>` triples) → `ShapeError`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -32,10 +43,14 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     let (tag, value) = match bundle.get("value") {
         Some(KObject::Tagged { tag, value }) => (tag.clone(), Rc::clone(value)),
+        Some(KObject::Bool(b)) => (
+            if *b { "true".to_string() } else { "false".to_string() },
+            Rc::new(KObject::Null),
+        ),
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "value".to_string(),
-                expected: "Tagged".to_string(),
+                expected: "Tagged or Bool".to_string(),
                 got: other.ktype().name().to_string(),
             }));
         }
@@ -102,9 +117,15 @@ fn find_branch_body<'a>(
         let body_part = &parts[i + 2];
         let tag_name = match tag_part {
             ExpressionPart::Identifier(s) => s.clone(),
+            // `true`/`false` are `KLiteral::Boolean` from the parser, not identifiers,
+            // but they're the natural tag form for `MATCH` on a `Bool` value. Accept
+            // them here so users can write `(true -> ... false -> ...)` directly.
+            ExpressionPart::Literal(KLiteral::Boolean(b)) => {
+                if *b { "true".to_string() } else { "false".to_string() }
+            }
             other => {
                 return Err(format!(
-                    "MATCH branch tag must be a bare identifier, got {}",
+                    "MATCH branch tag must be a bare identifier or boolean literal, got {}",
                     other.summarize()
                 ));
             }
@@ -158,7 +179,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Any,
             elements: vec![
                 SignatureElement::Keyword("MATCH".into()),
-                SignatureElement::Argument(Argument { name: "value".into(),    ktype: KType::Tagged }),
+                SignatureElement::Argument(Argument { name: "value".into(),    ktype: KType::Any }),
                 SignatureElement::Keyword("WITH".into()),
                 SignatureElement::Argument(Argument { name: "branches".into(), ktype: KType::KExpression }),
             ],
@@ -289,5 +310,33 @@ mod tests {
              MATCH (m) WITH (some -> (PRINT \"yes\") none -> (PRINT \"nothing\"))",
         );
         assert_eq!(bytes, b"nothing\n");
+    }
+
+    #[test]
+    fn match_on_bool_true_takes_true_branch() {
+        let bytes = run_program(
+            "MATCH true WITH (true -> (PRINT \"yes\") false -> (PRINT \"no\"))",
+        );
+        assert_eq!(bytes, b"yes\n");
+    }
+
+    #[test]
+    fn match_on_bool_false_takes_false_branch() {
+        let bytes = run_program(
+            "MATCH false WITH (true -> (PRINT \"yes\") false -> (PRINT \"no\"))",
+        );
+        assert_eq!(bytes, b"no\n");
+    }
+
+    #[test]
+    fn match_on_bool_inexhaustive_errors() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        let err = run_one_err(scope, parse_one("MATCH true WITH (false -> (PRINT \"x\"))"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains("`true`")),
+            "expected inexhaustive ShapeError for missing true branch, got {err}",
+        );
     }
 }

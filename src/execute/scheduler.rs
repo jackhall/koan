@@ -16,8 +16,8 @@ use super::nodes::{work_deps, Node, NodeOutput, NodeStep, NodeWork};
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
 /// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Aggregate`
 /// nodes, and a builtin body that holds `&mut dyn SchedulerHandle` can also add `Dispatch`
-/// nodes (used by `if_then` for its lazy `value` and by `KFunction::invoke` for user-defined
-/// bodies). The execute loop pops from a FIFO queue; a `Bind` whose subs forward through to a
+/// nodes (used by `KFunction::invoke` for user-defined bodies). The execute loop pops from a
+/// FIFO queue; a `Bind` whose subs forward through to a
 /// not-yet-run node gets re-queued at the back. Cycles are statically prevented because every
 /// new node's `NodeId` is strictly greater than every node it can reach, so the queue is
 /// guaranteed to drain.
@@ -207,8 +207,7 @@ impl<'a> Scheduler<'a> {
                         None => (scope, None),
                     };
                     // Inherit prev_function when the replacement doesn't supply its own —
-                    // a Tail without a fresh frame is staying in the same call (e.g.,
-                    // if_then's lazy slot keeps the IF's frame).
+                    // a Tail without a fresh frame is staying in the same call.
                     let next_function = new_function.or(prev_function);
                     self.nodes[idx] = Some(Node {
                         work: new_work,
@@ -283,7 +282,7 @@ impl<'a> Default for Scheduler<'a> {
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     /// Schedule a fresh `Dispatch` node against `scope`. Used by builtin bodies that want
     /// to spawn sub-work — currently no in-tree builtin reaches for it (TCO covers the
-    /// prior `if_then` use), but the lever is preserved.
+    /// cases where this would otherwise be needed), but the lever is preserved.
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add(self, NodeWork::Dispatch(expr), scope)
     }
@@ -464,24 +463,19 @@ mod tests {
 
     #[test]
     fn tail_call_reuses_node_slot_in_place() {
-        // `IF true THEN ("hi")` returns `BodyResult::Tail(value_expr)`. The scheduler
-        // should rewrite if_then's slot to a `Dispatch` and re-run, not spawn a fresh
-        // slot. Expect `len() == 1` (slot reused) rather than `2`.
+        // `MATCH true WITH (true -> ("hi") false -> ("no"))` returns `BodyResult::Tail`
+        // for the matched branch. The scheduler should rewrite MATCH's slot to a
+        // `Dispatch` of the branch body and re-run in place, not spawn a fresh slot.
+        // Expect `len() == 1` (slot reused) rather than `2`.
         let arena = RuntimeArena::new();
         let root = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();
-        let value = KExpression {
-            parts: vec![ExpressionPart::Literal(KLiteral::String("hi".into()))],
-        };
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("IF".into()),
-                ExpressionPart::Literal(KLiteral::Boolean(true)),
-                ExpressionPart::Keyword("THEN".into()),
-                ExpressionPart::Expression(Box::new(value)),
-            ],
-        };
-        let id = sched.add_dispatch(expr, root);
+        let exprs = crate::parse::expression_tree::parse(
+            "MATCH true WITH (true -> (\"hi\") false -> (\"no\"))",
+        )
+        .expect("parse should succeed");
+        assert_eq!(exprs.len(), 1);
+        let id = sched.add_dispatch(exprs.into_iter().next().unwrap(), root);
 
         sched.execute().unwrap();
 
@@ -489,8 +483,8 @@ mod tests {
         assert_eq!(
             sched.len(),
             1,
-            "tail-call slot reuse: the if_then's original slot should have been rewritten \
-             to evaluate `(\"hi\")`, not allocate a new slot",
+            "tail-call slot reuse: the MATCH's original slot should have been rewritten \
+             to evaluate the matched branch's body, not allocate a new slot",
         );
     }
 }

@@ -91,7 +91,7 @@ order:
   a math group but the language treats every operator as flat-independent.
 
 The type/trait sequence sits in the middle of the roadmap because it unblocks
-group-based operators and the IF-THEN→MATCH deprecation's `Bool`-design call.
+group-based operators.
 
 Future-facing:
 [Static type checking and JIT compilation](../roadmap/static-typing-and-jit.md)

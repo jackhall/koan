@@ -93,39 +93,27 @@ mod tests {
     }
 
     #[test]
-    fn interprets_if_then_via_print() {
+    fn interprets_match_via_print() {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        run(r#"PRINT (IF true THEN ("yes"))"#, &arena, captured.clone());
+        run(
+            r#"PRINT (MATCH true WITH (true -> ("yes") false -> ("no")))"#,
+            &arena,
+            captured.clone(),
+        );
         assert_eq!(captured.borrow().as_slice(), b"yes\n");
     }
 
     #[test]
-    fn if_then_false_does_not_run_lazy_expression() {
-        let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        run(r#"IF false THEN (PRINT "should not appear")"#, &arena, captured.clone());
-        assert!(
-            captured.borrow().is_empty(),
-            "lazy expression must not execute when predicate is false; got {:?}",
-            String::from_utf8_lossy(&captured.borrow()),
-        );
-    }
-
-    #[test]
-    fn if_then_true_runs_lazy_expression() {
-        let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        run(r#"IF true THEN (PRINT "ran")"#, &arena, captured.clone());
-        assert_eq!(captured.borrow().as_slice(), b"ran\n");
-    }
-
-    #[test]
-    fn if_then_lazy_value_lookup_resolves_name() {
+    fn match_branch_resolves_outer_name() {
+        // The branch body's lazy slot evaluates in the surrounding scope, so a name bound
+        // before the MATCH (`greeting`) resolves through the outer chain at branch-dispatch
+        // time. Integration-level coverage of the lazy-slot/closure-capture machinery from
+        // a koan program (the `match_case` unit tests exercise it via test scaffolding).
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         run(
-            "LET greeting = \"hi\"\nPRINT (IF true THEN (greeting))\n",
+            "LET greeting = \"hi\"\nPRINT (MATCH true WITH (true -> (greeting) false -> (\"no\")))\n",
             &arena,
             captured.clone(),
         );
@@ -133,15 +121,18 @@ mod tests {
     }
 
     #[test]
-    fn if_then_false_skips_let_side_effect() {
+    fn match_unmatched_branch_skips_let_side_effect() {
+        // The unmatched branch's body is never dispatched, so its `LET y = 1` must not
+        // execute and `y` must remain unbound. Verifies the lazy-slot guarantee end-to-end:
+        // unmatched branches are inert.
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run(
-            "IF false THEN (LET y = 1)\nPRINT \"after\"\n",
+            "MATCH false WITH (true -> (LET y = 1) false -> (null))\nPRINT \"after\"\n",
             &arena,
             captured.clone(),
         );
-        assert!(scope.data.borrow().get("y").is_none(), "lazy LET must not have bound y");
+        assert!(scope.data.borrow().get("y").is_none(), "unmatched branch's LET must not have bound y");
         assert_eq!(captured.borrow().as_slice(), b"after\n");
     }
 
@@ -530,38 +521,24 @@ mod tests {
 
     /// A type-mismatched argument that fits the bucket shape but fails dispatch's
     /// per-slot type check surfaces as `KError::DispatchFailed` (no overload matches).
-    /// `IF` requires `predicate: Bool` and `value: KExpression`; passing a string
-    /// predicate doesn't match the only IF signature, so dispatch finds zero candidates.
-    /// Type mismatches that DO reach `bind` (only possible with an overload set richer
-    /// than today's) would surface as `TypeMismatch` from the bind step.
+    /// `MATCH` requires `branches: KExpression`; passing a string literal in that slot
+    /// fits the bucket shape (4 parts: `MATCH _ WITH _`) but fails the slot-type check,
+    /// so dispatch finds zero candidates. Type mismatches that DO reach `bind` (only
+    /// possible with an overload set richer than today's) would surface as
+    /// `TypeMismatch` from the bind step.
     #[test]
     fn type_mismatch_at_dispatch_surfaces_as_dispatch_failed() {
         let result = interpret_with_writer(
-            "IF \"not_a_bool\" THEN (\"x\")",
+            "MATCH true WITH \"not_an_expression\"",
             Box::new(std::io::sink()),
         );
         match result {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::DispatchFailed { .. }),
-                "expected DispatchFailed for unmatchable IF call, got {e}",
+                "expected DispatchFailed for unmatchable MATCH call, got {e}",
             ),
-            Ok(()) => panic!("expected dispatch failure on IF with non-Bool predicate"),
+            Ok(()) => panic!("expected dispatch failure on MATCH with non-KExpression branches"),
         }
-    }
-
-    /// Sanity check the intentional-vs-error split: `IF false THEN ("nope")` returns Null
-    /// (intentional skip), not an error. `PRINT "x"` writes its arg and returns the rendered
-    /// string; both should let the program exit 0.
-    #[test]
-    fn intentional_null_paths_do_not_surface_as_errors() {
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let buf = SharedBuf(captured.clone());
-        let result = interpret_with_writer(
-            "IF false THEN (\"nope\")\nPRINT \"hello\"",
-            Box::new(buf),
-        );
-        assert!(result.is_ok(), "intentional-null paths should not error: {result:?}");
-        assert_eq!(captured.borrow().as_slice(), b"hello\n");
     }
 
     /// Frame chain walks user-fn calls: an error in INNER, called from OUTER (via a

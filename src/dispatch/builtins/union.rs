@@ -76,7 +76,7 @@ pub fn body<'a>(
 }
 
 /// Extract a `KExpression`-typed argument from the bundle. Mirrors the `Rc::try_unwrap`
-/// dance used by [`if_then`](super::if_then) and [`fn_def`](super::fn_def).
+/// dance used by [`fn_def`](super::fn_def) and [`match_case`](super::match_case).
 fn extract_kexpression<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,

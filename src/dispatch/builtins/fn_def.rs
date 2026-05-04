@@ -132,7 +132,7 @@ fn parse_signature_elements<'a>(signature: &KExpression<'a>) -> Option<Vec<Signa
 }
 
 /// Pull a `KType::KExpression`-typed argument out of the bundle and return the inner
-/// `KExpression`. Mirrors the `Rc::try_unwrap` shape `if_then::body` uses to avoid cloning
+/// `KExpression`. Mirrors the `Rc::try_unwrap` shape `match_case::body` uses to avoid cloning
 /// when the bundle holds the only reference.
 fn extract_kexpression<'a>(
     bundle: &mut ArgumentBundle<'a>,
@@ -554,8 +554,8 @@ mod tests {
     }
 
     /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a
-    /// callable handle via `LET f = (FN ...)`. Pre-change, `FN` returned `null()`. Calling
-    /// the captured handle is tested in [`call_by_name`](super::super::call_by_name).
+    /// callable handle via `LET f = (FN ...)`. Calling the captured handle is tested in
+    /// [`call_by_name`](super::super::call_by_name).
     #[test]
     fn fn_def_returns_the_registered_kfunction() {
         let arena = RuntimeArena::new();
