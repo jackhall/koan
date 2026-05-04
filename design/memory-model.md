@@ -1,8 +1,8 @@
 # Memory model and scoping rules
 
-Every `KObject` lives in a [`RuntimeArena`](../src/dispatch/arena.rs). Top-level
+Every `KObject` lives in a [`RuntimeArena`](../src/dispatch/runtime/arena.rs). Top-level
 work allocates into the **run-root arena**; each user-fn call gets its own
-**per-call `RuntimeArena`** owned by [`CallArena`](../src/dispatch/arena.rs),
+**per-call `RuntimeArena`** owned by [`CallArena`](../src/dispatch/runtime/arena.rs),
 freed when the call's slot finalizes.
 
 ## Scoping: lexical
@@ -44,7 +44,7 @@ what makes the structural sharing safe.
 ## Fast path
 
 If a dying arena allocated zero `KFunction`s
-([`functions_is_empty`](../src/dispatch/arena.rs)), no descendant `&KFunction`
+([`functions_is_empty`](../src/dispatch/runtime/arena.rs)), no descendant `&KFunction`
 can point into it, and `lift_kobject` collapses to a plain `deep_clone`. Owned
 variants (`Number`, `KString`, `Bool`, `Null`) `deep_clone` unconditionally —
 mildly wasteful for the "value already in dest arena" case, which would need
@@ -52,10 +52,10 @@ full arena-provenance tracking to eliminate.
 
 ## Re-entrant `Scope::add`
 
-[`Scope::add`](../src/dispatch/scope.rs) tries `try_borrow_mut` on
+[`Scope::add`](../src/dispatch/runtime/scope.rs) tries `try_borrow_mut` on
 `data`/`functions` and falls back to a `pending` queue when a borrow is already
 held; the scheduler drains the queue between dispatch nodes via
-[`drain_pending`](../src/dispatch/scope.rs). The hot path (no concurrent borrow)
+[`drain_pending`](../src/dispatch/runtime/scope.rs). The hot path (no concurrent borrow)
 is the same direct insert as before — no measured overhead. Re-entrant writes
 that would have panicked now queue silently and become visible after the
 iterating borrow releases, with snapshot-iteration semantics for the iterator.
@@ -69,7 +69,7 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 - `KFunction::captured_scope() -> &'a Scope<'a>` is non-optional.
 - The running scope passes through `SchedulerHandle::add_dispatch(expr, scope)`
   directly, so dispatch sites carry their scope explicitly.
-- [`RuntimeArena::alloc_function`](../src/dispatch/arena.rs) `debug_assert`s
+- [`RuntimeArena::alloc_function`](../src/dispatch/runtime/arena.rs) `debug_assert`s
   arena-identity between the function and its captured scope, catching a
   misallocated KFunction at the allocation site rather than later as a
   use-after-free in `lift_kobject`'s fast path.
@@ -101,7 +101,7 @@ nested user-fn frames each handle their own subtree at their own finalize.
   ([`closure_escapes_outer_call_and_remains_invocable`](../src/dispatch/builtins/call_by_name.rs),
   [`escaped_closure_with_param_returns_body_value`](../src/dispatch/builtins/call_by_name.rs))
   confirm a closure returned from its defining frame remains invocable.
-- [`add_during_active_data_borrow_queues_and_drains`](../src/dispatch/scope.rs)
+- [`add_during_active_data_borrow_queues_and_drains`](../src/dispatch/runtime/scope.rs)
   holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms
   the queued write applied — exercising the conditional-defer path.
 

@@ -26,8 +26,7 @@ own right.
   binary doesn't hit it; reproducible only through `cargo test` (with any writer:
   `std::io::sink()`, `Box::new(std::io::stdout())`, or a `SharedBuf`). Not a stack
   overflow — `RUST_MIN_STACK=33554432` doesn't help. Found while writing tests for
-  [transient-node reclamation](transient-node-reclamation.md) but predates that work
-  (confirmed on master).
+  transient-node reclamation but predates that work (confirmed on master).
 
   Minimal reproducer (in `cargo test`, segfaults; in the binary, prints "done"):
   ```
