@@ -36,7 +36,7 @@ use super::{err, register_builtin};
 /// `<tag> -> <body>` triples) → `ShapeError`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (tag, value) = match bundle.get("value") {
@@ -75,8 +75,12 @@ pub fn body<'a>(
     // Per-MATCH frame for the `it` binding — same pattern as `KFunction::invoke`. The
     // child scope's `outer` is the MATCH call site, so free names in the branch body
     // resolve against the surrounding scope. `it` is bound only in the child, so it
-    // disappears when the frame drops.
-    let frame: Rc<CallArena> = CallArena::new(scope);
+    // disappears when the frame drops. The call-site frame Rc is chained onto the new
+    // frame's `outer_frame`: the call-site scope lives in *some* arena, and if that arena
+    // is per-call (e.g., MATCH inside a user-fn body), it must stay alive while the new
+    // frame's child scope's `outer` pointer is in use. `current_frame` returns `None` when
+    // the call site is run-root (which outlives the run, so no chain needed).
+    let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
     let arena_ptr: *const RuntimeArena = frame.arena();
     let scope_ptr: *const Scope<'_> = frame.scope();
     // SAFETY: heap-pinning makes both pointers valid for the Rc's lifetime. The
@@ -324,6 +328,27 @@ mod tests {
             "MATCH false WITH (true -> (PRINT \"yes\") false -> (PRINT \"no\"))",
         );
         assert_eq!(bytes, b"no\n");
+    }
+
+    #[test]
+    fn recursive_tagged_match_no_uaf() {
+        // Regression: a recursive HOP through a tagged value triggered a use-after-free
+        // during writer drop. Root cause was structural in the scheduler/MATCH frame
+        // chain: MATCH built a per-call `CallArena` whose child scope's `outer` pointed
+        // into the call-site (the per-call arena of the enclosing user-fn). The
+        // enclosing-fn frame was dropped on TCO replace before MATCH's forward chain
+        // finalized, so the lift in `finalize_ready_frames` read `scope.outer.arena`
+        // through a freed pointer. Fixed by chaining the call-site frame's Rc onto the
+        // new `CallArena` via `SchedulerHandle::current_frame` + `outer_frame`.
+        let bytes = run_program(
+            "UNION Bit = (one: Null zero: Null)\n\
+             FN (HOP b: Tagged) -> Any = (MATCH (b) WITH (\
+                 one -> (HOP (Bit (zero null)))\
+                 zero -> (PRINT \"done\")\
+             ))\n\
+             HOP (Bit (one null))",
+        );
+        assert_eq!(bytes, b"done\n");
     }
 
     #[test]

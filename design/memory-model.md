@@ -31,15 +31,46 @@ underlying per-call arena alive when needed:
   `Rc`.
 - `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` — `KFuture`s embed
   `&KFunction` plus a bundle and a parsed `KExpression` whose `Future(&KObject)`
-  parts can independently point into the dying arena. `lift_kobject` anchors any
-  unanchored KFuture descendant conservatively (we don't track per-descendant
-  arena provenance). KFutures don't escape as values today, so the over-keep is
-  theoretical until async surfaces them.
+  parts can independently point into the dying arena. `lift_kobject` runs a
+  targeted membership walk (`kfuture_borrows_dying_arena`) that asks the dying
+  arena's `owns_object` side-table whether each embedded `Future(&KObject)`
+  borrow points into it, recursing through nested expressions, list/dict
+  literals, and bundle arg values; the function reference is checked via the
+  same captured-scope-arena equality test the `KFunction` arm uses. Anchor only
+  fires when at least one descendant actually borrows into the dying arena.
+  `RuntimeArena` records every allocated `KObject`'s stable address (typed-arena
+  allocations don't move) in an addresses-only `Vec<usize>` so the membership
+  query is a single linear scan with no deref or borrow.
 
 Composite variants (`List`, `Dict`) recurse with a `needs_lift` short-circuit:
 when no descendant needs anchoring, the existing `Rc<Vec>`/`Rc<HashMap>` is
 cloned in place rather than rebuilt. Koan's collection-immutability contract is
 what makes the structural sharing safe.
+
+## Per-call-frame chaining for builtin-built frames
+
+A user-fn call's per-call frame is anchored by lexical scoping: the new frame's
+child scope's `outer` is the FN's *captured* scope (run-root for top-level FNs),
+which outlives every per-call frame. Builtins that build their own per-call
+frame don't always have that property —
+[MATCH](../src/dispatch/builtins/match_case.rs) constructs a frame whose child
+scope's `outer` is the **call-site** scope, so free names in the branch body
+resolve against the surrounding call. When the call site itself lives in a
+per-call arena (MATCH inside a user-fn body), the new frame's `outer` pointer
+borrows into that arena, and a TCO replace that drops the call-site frame
+leaves the new frame with a dangling `outer`.
+
+The fix is a frame-chain Rc on
+[`CallArena`](../src/dispatch/runtime/arena.rs): `outer_frame:
+Option<Rc<CallArena>>` keeps the parent frame alive whenever the child's
+`outer` points into per-call memory. The scheduler exposes the active slot's
+frame Rc through
+[`SchedulerHandle::current_frame`](../src/dispatch/kfunction.rs), which MATCH
+clones into its `CallArena::new` call. `Scheduler::active_frame` is set per
+slot run and inherited by `add()` so spawned sub-dispatch / sub-bind /
+sub-aggregate slots also see the right ancestor. Top-level FN invokes pass
+`None` (their captured chain ends in run-root, which outlives the run, so no
+chain is needed and TCO recursion stays bounded).
 
 ## Fast path
 
@@ -104,8 +135,17 @@ nested user-fn frames each handle their own subtree at their own finalize.
 - [`add_during_active_data_borrow_queues_and_drains`](../src/dispatch/runtime/scope.rs)
   holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms
   the queued write applied — exercising the conditional-defer path.
+- [`recursive_tagged_match_no_uaf`](../src/dispatch/builtins/match_case.rs)
+  runs a user-fn that recurses through a `Tagged` parameter via MATCH, exercising
+  the `outer_frame` chain that keeps the call-site arena alive across TCO replace.
+- [`unanchored_kfuture_no_arena_borrow_does_not_anchor`](../src/execute/lift.rs)
+  and
+  [`unanchored_kfuture_with_arena_borrow_does_anchor`](../src/execute/lift.rs)
+  cover both sides of the targeted KFuture anchor: a KFuture whose descendants
+  don't borrow into the dying arena lifts with `frame: None`, while one with a
+  `Future(&KObject)` allocated in the dying arena anchors with `frame: Some(rc)`.
 
 ## Open work
 
 - [Open issues from the leak-fix audit](../roadmap/leak-fix-audit.md) — Miri
-  hasn't run; KFuture's conservative anchoring leaves room for tightening.
+  hasn't run on the heap-pin + lifetime-erasure transmutes.

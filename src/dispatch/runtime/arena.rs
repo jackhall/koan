@@ -27,6 +27,14 @@ pub struct RuntimeArena {
     objects: Arena<KObject<'static>>,
     functions: Arena<KFunction<'static>>,
     scopes: Arena<Scope<'static>>,
+    /// Addresses (as `usize`) of every `KObject` ever allocated into `objects`. Used by
+    /// `owns_object` so `lift_kobject`'s KFuture arm can ask "does this `&KObject` borrow
+    /// point into my arena?" without a full traversal — answer is a single linear scan over
+    /// addresses (no deref, no borrow). Addresses go in once at `alloc_object` and never
+    /// move (typed-arena allocations are stable for the arena's life), so the membership
+    /// check is sound for the arena's lifetime. Stored as `usize` rather than `*const _` so
+    /// the field is `Send`/`Sync`-neutral and lifetime-erased like the rest of the arena.
+    allocated_objects: RefCell<Vec<usize>>,
 }
 
 impl RuntimeArena {
@@ -35,6 +43,7 @@ impl RuntimeArena {
             objects: Arena::new(),
             functions: Arena::new(),
             scopes: Arena::new(),
+            allocated_objects: RefCell::new(Vec::new()),
         }
     }
 
@@ -43,7 +52,24 @@ impl RuntimeArena {
             std::mem::transmute::<KObject<'a>, KObject<'static>>(obj)
         };
         let stored: &'a mut KObject<'static> = self.objects.alloc(static_obj);
+        // Record the stable address so `owns_object` can answer membership queries from
+        // `lift_kobject`'s KFuture arm. Address is stable for the arena's life because
+        // `typed_arena::Arena` never moves an allocated value.
+        self.allocated_objects
+            .borrow_mut()
+            .push(stored as *const _ as usize);
         unsafe { std::mem::transmute::<&'a mut KObject<'static>, &'a KObject<'a>>(stored) }
+    }
+
+    /// Whether `ptr` was returned by a prior `alloc_object` on this arena. Used by
+    /// `lift_kobject`'s KFuture arm to decide whether an unanchored KFuture's bundle/parsed
+    /// borrows reach into the dying arena: if any embedded `Future(&KObject)` answers `true`
+    /// here, the lift attaches a chain Rc; otherwise it leaves `frame: None`. Linear scan
+    /// over `allocated_objects` — typically tens to hundreds of entries per per-call arena,
+    /// dwarfed by the lift's recursion cost.
+    pub fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
+        let target = ptr as *const KObject<'static> as usize;
+        self.allocated_objects.borrow().iter().any(|&p| p == target)
     }
 
     /// INVARIANT: callers must allocate a `KFunction` into the same `RuntimeArena` that owns
@@ -139,35 +165,46 @@ pub fn false_singleton<'a>() -> &'a KObject<'a> {
 /// no other Rc is held, the arena drops at that moment (matching the pre-Rc behavior). If
 /// a closure carries a clone of the Rc, the arena lives until that closure is gone.
 ///
-/// No `prev` chain: lexical scoping (closure capture in `KFunction::captured`) means each
-/// per-call child's `outer` is the FN's *captured* scope (run-root for top-level FNs), not
-/// the previous call's per-call scope. So previous frames hold no references the current
-/// frame's child needs, and they can drop immediately on TCO replace.
+/// `outer_frame` keeps the parent frame's `Rc<CallArena>` alive when the child scope's
+/// `outer` points into a per-call arena (rather than run-root). User-fn invokes whose
+/// captured scope is run-root pass `None` here — the captured chain ends in run-root, which
+/// outlives the run, so no chain Rc is needed and TCO recursion stays bounded. MATCH-style
+/// builtins whose new frame's outer is the call-site (per-call) scope MUST pass the call-
+/// site frame's Rc here, so the call-site arena stays alive while the new frame's `outer`
+/// pointer is in use. Closure-captured scopes that themselves live in a per-call arena will
+/// pass that arena's Rc here when the planned closure-escape support lands.
 ///
 /// SAFETY: `CallArena` is only ever heap-pinned via `Rc` (which boxes its inner). The
 /// `arena` field's heap address is stable for the Rc's life, so the `scope_ptr` (which
 /// points into `arena.scopes`) stays valid as long as the Rc is alive. Accessors `scope()`
 /// and `arena()` re-attach lifetimes anchored to the borrow of `&CallArena`. Field
 /// declaration order keeps `arena` first so the auto-derived `Drop` runs `arena`'s cleanup
-/// before any later field — matches "inner allocations die before outer pointers."
+/// before any later field — matches "inner allocations die before outer pointers." The
+/// `outer_frame` Rc declared last drops after `arena`, releasing the parent only after this
+/// arena (and any scopes it owns) are already torn down.
 pub struct CallArena {
     arena: RuntimeArena,
     scope_ptr: *const Scope<'static>,
+    outer_frame: Option<Rc<CallArena>>,
 }
 
 impl CallArena {
     /// Build a fresh per-call frame whose child `Scope` uses `outer` as its `outer` link.
     /// `outer` is the FN's captured definition scope (or, for callers that don't have a
-    /// captured scope, the call-site scope as a fallback). The returned `Rc` owns the arena
-    /// and the child scope; `Node::frame` takes one clone, and any closure that escapes the
-    /// call may take additional clones (Stages 2 & 3).
-    pub fn new<'p>(outer: &'p Scope<'p>) -> Rc<CallArena> {
+    /// captured scope, the call-site scope as a fallback). `outer_frame` is the parent
+    /// frame's `Rc<CallArena>` when the parent is per-call (must keep its arena alive while
+    /// this child's `outer` pointer is in use); `None` when the parent is run-root (which
+    /// outlives every per-call frame). The returned `Rc` owns the arena and the child
+    /// scope; `Node::frame` takes one clone, and any closure that escapes the call may take
+    /// additional clones (Stages 2 & 3).
+    pub fn new<'p>(outer: &'p Scope<'p>, outer_frame: Option<Rc<CallArena>>) -> Rc<CallArena> {
         // `Rc::new` heap-pins, so the inner `arena`'s address is stable for the Rc's
         // lifetime. Mutate `scope_ptr` after allocation via `Rc::get_mut` while we still
         // hold the unique reference (no clones yet).
         let mut rc = Rc::new(CallArena {
             arena: RuntimeArena::new(),
             scope_ptr: std::ptr::null(),
+            outer_frame,
         });
         let arena_ptr: *const RuntimeArena = &rc.arena;
         // SAFETY: heap-pinning keeps `arena_ptr` valid for the Rc's lifetime, which exceeds

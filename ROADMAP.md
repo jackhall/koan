@@ -18,9 +18,13 @@ leak fix (with lexical closures + per-call arenas), structured error propagation
 user-defined-types substrate (return-type enforcement at runtime), the IF-THEN→MATCH
 consolidation (`MATCH` accepts `Bool` directly via projection at entry), per-parameter
 type annotations on user-fn signatures, container type parameterization (`List<T>`,
-`Dict<K, V>`, `Function<(args) -> R>`), and transient-node reclamation (Bind/Aggregate
+`Dict<K, V>`, `Function<(args) -> R>`), transient-node reclamation (Bind/Aggregate
 sub-trees recycled via a per-slot deps sidecar + free-list, keeping repeated-call
-scheduler memory near-constant). The next signature revision after error handling
+scheduler memory near-constant), per-call-frame chaining for builtin-built frames
+(MATCH's child-scope `outer` no longer dangles when a TCO replace drops the
+call-site frame), and a targeted KFuture lift anchor (an addresses-only side-table
+on `RuntimeArena` answers a precise membership query, replacing the previous
+always-anchor conservative path). The next signature revision after error handling
 lands monadic side-effect capture; the remaining type/trait sequence (methods, traits,
 trait inheritance) unlocks the items downstream (group-based operators), so it sits in
 the middle of the sequence rather than last.
@@ -51,8 +55,8 @@ without first landing something else:
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier.
-- [Open issues from the leak-fix audit](roadmap/leak-fix-audit.md) — Miri hasn't run, and
-  KFuture's conservative anchoring leaves room for tightening.
+- [Open issues from the leak-fix audit](roadmap/leak-fix-audit.md) — Miri hasn't run on the
+  per-call-arena transmutes.
 
 ### Type system
 

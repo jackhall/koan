@@ -52,6 +52,13 @@ pub struct Scheduler<'a> {
     /// so transient-node reclamation lands as constant scheduler memory across tail-
     /// recursive bodies that spawn body-internal sub-`Dispatch`/`Bind` work each iteration.
     pub(super) free_list: Vec<usize>,
+    /// Frame Rc of the slot currently being executed. Set by the execute loop right before
+    /// calling `run_dispatch`/`run_bind` and cleared after; read by builtins via
+    /// `SchedulerHandle::current_frame` so a frame-creating builtin (MATCH) can chain the
+    /// caller's frame Rc onto its own new frame. Without that chain, a new frame whose child
+    /// scope's `outer` lives in the caller's per-call arena dangles the moment the caller's
+    /// frame is dropped on TCO replace.
+    pub(super) active_frame: Option<Rc<CallArena>>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -63,6 +70,7 @@ impl<'a> Scheduler<'a> {
             frame_holding_slots: Vec::new(),
             node_dependencies: Vec::new(),
             free_list: Vec::new(),
+            active_frame: None,
         }
     }
 
@@ -79,19 +87,25 @@ impl<'a> Scheduler<'a> {
 
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         let deps = work_dep_indices(&work);
+        // Inherit the active slot's frame (if any) so sub-dispatch / sub-bind / sub-aggregate
+        // slots spawned during a user-fn body's run keep that body's per-call arena alive
+        // until they finalize. The Rc clone is what makes `current_frame()` available to
+        // builtins like MATCH whose own frame's child scope's `outer` lives in the per-call
+        // arena. Top-level adds (`add_dispatch` from outside `execute`) inherit `None`.
+        let frame = self.active_frame.clone();
         let idx = match self.free_list.pop() {
             Some(i) => {
                 // Reclaimed slot: overwrite the cleared entries in place. `nodes[i]` was
                 // set to `None` by `free`; `results[i]` was cleared; `node_dependencies[i]`
                 // was drained. The fresh `work`/`deps` populate them now.
-                self.nodes[i] = Some(Node { work, scope, frame: None, function: None });
+                self.nodes[i] = Some(Node { work, scope, frame, function: None });
                 self.results[i] = None;
                 self.node_dependencies[i] = deps;
                 i
             }
             None => {
                 let i = self.nodes.len();
-                self.nodes.push(Some(Node { work, scope, frame: None, function: None }));
+                self.nodes.push(Some(Node { work, scope, frame, function: None }));
                 self.results.push(None);
                 self.node_dependencies.push(deps);
                 i
@@ -141,6 +155,11 @@ impl<'a> Scheduler<'a> {
                     continue;
                 }
             }
+            // Expose the slot's frame to builtins via `SchedulerHandle::current_frame` for
+            // the duration of this slot's run. Restored on exit so nested re-entry through
+            // the trait (none today, but the lever is preserved) sees the right ancestor.
+            let prev_active = self.active_frame.take();
+            self.active_frame = prev_frame.clone();
             let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
@@ -149,6 +168,7 @@ impl<'a> Scheduler<'a> {
                     NodeStep::Done(self.run_aggregate_dict(entries, scope, idx))
                 }
             };
+            self.active_frame = prev_active;
             match step {
                 NodeStep::Done(output) => {
                     match (output, prev_frame) {
@@ -353,6 +373,15 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add(self, NodeWork::Dispatch(expr), scope)
     }
+
+    /// Active slot's frame `Rc<CallArena>` (if any). Set by `execute` for the duration of
+    /// each slot's `run_dispatch`/`run_bind` and cleared when control returns to the loop.
+    /// Builtins like MATCH that build a new `CallArena` whose child scope's `outer` is the
+    /// call site clone this Rc into the new frame so the call-site arena stays alive while
+    /// the new frame is in use.
+    fn current_frame(&self) -> Option<Rc<CallArena>> {
+        self.active_frame.clone()
+    }
 }
 
 impl<'a> KFunction<'a> {
@@ -388,9 +417,13 @@ impl<'a> KFunction<'a> {
                 // Build a fresh per-call frame whose arena owns the per-call allocations
                 // (child scope, parameter clones, substituted body's Future rewrites).
                 // `outer` is the FN's captured definition scope (lexical scoping); for top-
-                // level FNs that's run-root.
+                // level FNs that's run-root, which outlives every per-call frame, so the
+                // chain Rc is `None`. Closure escapes whose captured scope lives in a per-
+                // call arena are kept alive externally via the lifted `KFunction(&fn,
+                // Some(Rc))` on the user-bound value; the closure-escape coverage tests
+                // (`closure_escapes_outer_call_and_remains_invocable`) lean on that.
                 let outer = self.captured_scope();
-                let frame: Rc<CallArena> = CallArena::new(outer);
+                let frame: Rc<CallArena> = CallArena::new(outer, None);
                 // Re-borrow through raw pointers so the borrow ends before the `frame` move
                 // below. SAFETY: heap-pinning makes `arena_ptr` and `scope_ptr` valid for
                 // the box's life; allocations into the arena live until `frame` drops.

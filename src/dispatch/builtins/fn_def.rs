@@ -513,11 +513,13 @@ mod tests {
     /// finalize collapses the Bind itself, so the per-call transient pool gets
     /// recycled by `add()` on the next call's spawns.
     ///
-    /// (A truly recursive variant where the body tail-calls itself triggers a
-    /// pre-existing UAF in the test rig's `Drop` order — printed output is correct
-    /// but a `Box<dyn Write>` boxed `SharedBuf` segfaults during teardown. That bug
-    /// is independent of this work; this test stays non-recursive to keep the
-    /// reclamation assertion isolated from it.)
+    /// The truly-recursive variant (the body tail-calls itself) used to UAF on writer
+    /// teardown — MATCH built a per-call frame whose child scope's `outer` pointed into
+    /// the caller's per-call arena, but the caller's frame was dropped on TCO replace
+    /// before MATCH's frame finished its forward-chain. The fix wires
+    /// `SchedulerHandle::current_frame` so MATCH chains the caller's frame Rc onto its
+    /// own (`CallArena`'s `outer_frame`); the recursive case is exercised by
+    /// `match_case::tests::recursive_tagged_match_no_uaf`.
     #[test]
     fn tail_recursive_match_keeps_scheduler_bounded() {
         let arena = RuntimeArena::new();

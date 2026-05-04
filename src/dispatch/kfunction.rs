@@ -30,13 +30,17 @@ impl NodeId {
 /// Side-channel a builtin body uses to spawn additional `Dispatch` nodes during the scheduler's
 /// run. Defined in `dispatch` (rather than as inherent methods on `Scheduler`) so `BuiltinFn`
 /// can reference it without dragging the whole scheduler module into `dispatch`'s import graph.
-/// `Scheduler` impls this trait in `execute/scheduler.rs`. The single method is intentional —
-/// a builtin's lever into the scheduler is "schedule this expression for late dispatch in the
-/// given scope, and give me back a NodeId to forward my result through"; nothing else. The
-/// scope is passed explicitly rather than read from a thread-local, so callers can spawn work
-/// in any scope they hold (typically their own).
+/// `Scheduler` impls this trait in `execute/scheduler.rs`. Two methods: `add_dispatch` is the
+/// classic lever ("schedule this expression for late dispatch in the given scope, give me a
+/// NodeId"). `current_frame` returns the active slot's `Rc<CallArena>` (if any) so a builtin
+/// that builds its own per-call frame whose child scope's `outer` points into the call site
+/// can chain that Rc onto the new frame — keeping the call-site arena alive while the new
+/// frame is in use. Without this, MATCH-style builtins (whose new frame's outer is a per-call
+/// scope, not a captured lexical scope) hand out a frame whose `outer` becomes dangling the
+/// moment the slot's old frame is dropped on TCO replace.
 pub trait SchedulerHandle<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId;
+    fn current_frame(&self) -> Option<Rc<CallArena>>;
 }
 
 /// What a builtin's body returns. `Value` is the common case — the body computed its result
@@ -48,10 +52,14 @@ pub trait SchedulerHandle<'a> {
 /// keeps the slot's existing frame and scope (used by builtins whose tail expression
 /// evaluates in the same frame as the call site).
 /// A chain of tail calls reuses one slot rather than allocating a new one per step; a TCO
-/// replace with `frame = Some` drops the slot's previous frame immediately because lexical
-/// scoping means the new frame's child scope's `outer` is the FN's captured scope, not the
-/// previous frame's. `Err(KError)` propagates a structured failure; the scheduler short-
-/// circuits any node whose dependency errored, appending a `Frame` as the error walks up.
+/// replace with `frame = Some` drops the slot's previous frame immediately. For user-fn
+/// invokes that's safe by lexical scoping (the new frame's child scope's `outer` is the
+/// FN's captured scope, not the previous frame's). For builtins that build a frame whose
+/// child scope's `outer` IS the call site (MATCH), the new frame holds the previous
+/// frame's Rc via `CallArena::outer_frame` so dropping the slot's prev_frame here doesn't
+/// free memory the new frame still references. `Err(KError)` propagates a structured
+/// failure; the scheduler short-circuits any node whose dependency errored, appending a
+/// `Frame` as the error walks up.
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
     Tail {
