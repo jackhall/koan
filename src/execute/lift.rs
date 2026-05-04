@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::arena::{CallArena, RuntimeArena};
-use crate::dispatch::kobject::KObject;
+use crate::dispatch::runtime::{CallArena, RuntimeArena};
+use crate::dispatch::values::KObject;
 
 /// Lift a KObject value out of the dying frame's arena into the destination arena.
 /// Owned variants (Number, KString, Bool, Null) `deep_clone` cleanly because their

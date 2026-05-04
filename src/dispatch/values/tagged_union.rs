@@ -10,24 +10,22 @@
 //! runs.
 //!
 //! The primitive builtin has no keyword in its signature — three typed slots
-//! (`TaggedUnionType`, `Identifier`, `Any`) are specific enough to claim its dispatch
-//! bucket unambiguously, and no user surface form spells the call directly. The user
-//! constructs via the type token (`Maybe (some 42)`) or a LET-bound identifier; both
-//! routes funnel through `apply`.
+//! (`Type`, `Identifier`, `Any`) are specific enough to claim its dispatch bucket
+//! unambiguously, and no user surface form spells the call directly. The user constructs
+//! via the type token (`Maybe (some 42)`) or a LET-bound identifier; both routes funnel
+//! through `apply`. The slot-0 `Type` is shared with the struct construction primitive
+//! (`src/dispatch/struct_value.rs`); they don't collide because struct construct is
+//! 2-slot, not 3-slot — different dispatch bucket.
 
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::kerror::{KError, KErrorKind};
-use crate::dispatch::kfunction::{
-    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
-    SignatureElement,
-};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::builtins::register_builtin;
+use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::dispatch::runtime::{KError, KErrorKind, Scope};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::values::KObject;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
-
-use super::builtins::register_builtin;
 
 /// Mirror of [`KFunction::apply`](super::kfunction::KFunction::apply): take the args parts
 /// captured at the call site and produce a `BodyResult::Tail` re-dispatching through the
@@ -77,7 +75,7 @@ pub fn construct<'a>(
     value: &KObject<'a>,
 ) -> Result<KObject<'a>, KError> {
     let expected = match schema.get(&tag) {
-        Some(t) => *t,
+        Some(t) => t.clone(),
         None => {
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "tag `{}` not in union (known: {})",
@@ -120,6 +118,10 @@ fn primitive_body<'a>(
             return BodyResult::Err(KError::new(KErrorKind::MissingArg("schema".to_string())));
         }
     };
+    // The `KType::Type` slot also accepts `KObject::StructType`; if a caller routed a
+    // struct schema into this 3-slot path (e.g. via a hand-built dispatch), the
+    // `KObject::TaggedUnionType` match above catches that — anything else falls into the
+    // TypeMismatch arm.
     let tag = match bundle.get("tag") {
         Some(KObject::KString(s)) => s.clone(),
         Some(other) => {
@@ -143,10 +145,9 @@ fn primitive_body<'a>(
     }
 }
 
-/// Register the construction primitive. No keyword in the signature — `TaggedUnionType` is
-/// a specific-enough first-slot type that the bucket `[Slot, Slot, Slot]` won't collide
-/// with other 3-arg signatures via the specificity tiebreak. Called from
-/// [`default_scope`](super::builtins::default_scope).
+/// Register the construction primitive. No keyword in the signature — `Type` in slot 0
+/// plus the 3-slot bucket `[Slot, Slot, Slot]` won't collide with other 3-arg signatures
+/// via the specificity tiebreak. Called from [`default_scope`](super::builtins::default_scope).
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
@@ -154,7 +155,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ExpressionSignature {
             return_type: KType::Tagged,
             elements: vec![
-                SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::TaggedUnionType }),
+                SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::Type }),
                 SignatureElement::Argument(Argument { name: "tag".into(),    ktype: KType::Identifier }),
                 SignatureElement::Argument(Argument { name: "value".into(),  ktype: KType::Any }),
             ],
@@ -169,11 +170,9 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::dispatch::arena::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::kerror::KErrorKind;
-    use crate::dispatch::kobject::KObject;
-    use crate::dispatch::scope::Scope;
+    use crate::dispatch::runtime::{KErrorKind, RuntimeArena, Scope};
+    use crate::dispatch::values::KObject;
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
     use crate::parse::kexpression::KExpression;
@@ -216,7 +215,7 @@ mod tests {
     fn run_one_err<'a>(
         scope: &'a Scope<'a>,
         expr: KExpression<'a>,
-    ) -> crate::dispatch::kerror::KError {
+    ) -> crate::dispatch::runtime::KError {
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
         sched.execute().expect("scheduler should not surface errors directly");

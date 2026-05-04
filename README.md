@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `IF <predicate> THEN <value>`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). Note: the scheduler eagerly evaluates every nested `(...)` before its parent dispatches, so `IF`/`THEN` is a post-hoc selector, not a lazy short-circuit.
+The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The known types are `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `KFunction`, `KExpression`, and `Any`.
 
@@ -31,7 +31,7 @@ Example:
 ```
 LET x = 42
 PRINT "hello"
-FN (ECHO x) -> Number = (x)
+FN (ECHO x: Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
@@ -96,7 +96,9 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 [arena.rs](src/dispatch/arena.rs) (allocation), [scope.rs](src/dispatch/scope.rs) (lexical
 environment), [builtins.rs](src/dispatch/builtins.rs) (registry),
 [monad.rs](src/dispatch/monad.rs) (trait impl on a foreign type),
-[tagged_union.rs](src/dispatch/tagged_union.rs) (shared structure).
+[tagged_union.rs](src/dispatch/tagged_union.rs) (shared structure),
+[struct_value.rs](src/dispatch/struct_value.rs) (shared structure),
+[typed_field_list.rs](src/dispatch/typed_field_list.rs) (helper).
 
 ```
 src/
@@ -121,6 +123,8 @@ src/
 │   ├── arena.rs         RuntimeArena, CallArena — per-run and per-call allocation
 │   ├── scope.rs         Scope and KFuture
 │   ├── tagged_union.rs  shared tagged-union representation
+│   ├── struct_value.rs  shared struct-construction representation
+│   ├── typed_field_list.rs  shared parser for `(name: Type ...)` schemas
 │   ├── monad.rs         Monadic impl for Option
 │   ├── builtins.rs      try_args!, register_builtin, default_scope()
 │   └── builtins/        one file per builtin (body + register paired)
@@ -128,12 +132,13 @@ src/
 │       ├── print.rs
 │       ├── value_lookup.rs
 │       ├── value_pass.rs
-│       ├── if_then.rs
+│       ├── attr.rs
 │       ├── fn_def.rs
 │       ├── call_by_name.rs
 │       ├── match_case.rs
 │       ├── type_call.rs
-│       └── union.rs
+│       ├── union.rs
+│       └── struct_def.rs
 ├── execute.rs
 └── execute/
     ├── scheduler.rs     Scheduler struct, execute loop, KFunction::invoke bridge
@@ -145,7 +150,17 @@ src/
     └── interpret.rs     parse → dispatch → schedule → execute
 ```
 
-## Roadmap
+## Design and roadmap
 
-Open structural items are tracked in [ROADMAP.md](ROADMAP.md); shipped ones are recorded
-in [DECISIONS.md](DECISIONS.md).
+Design rationale for what's already in the language — one topical doc each:
+
+- [design/execution-model.md](design/execution-model.md) — scheduler, deferred dispatch, per-call arenas.
+- [design/memory-model.md](design/memory-model.md) — value ownership, lifting, lexical closures.
+- [design/type-system.md](design/type-system.md) — `KType`, dispatch by signature, structs and tagged unions.
+- [design/functional-programming.md](design/functional-programming.md) — function values, tail calls, signature-driven evaluation.
+- [design/expressions-and-parsing.md](design/expressions-and-parsing.md) — the parse pipeline and `KExpression` shape.
+- [design/error-handling.md](design/error-handling.md) — `KError`, propagation, and frame attribution.
+
+Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
+`Unblocks:` cross-links. [ROADMAP.md](ROADMAP.md) keeps the curated ordering and the
+"Next items" grouping for picking up work.

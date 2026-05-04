@@ -1,3 +1,10 @@
+//! Second parse pass: collapse indentation-based blocks into parenthesized form, so the
+//! downstream tree builder only has to deal with explicit `(...)` grouping. Reads the
+//! masked output of `quotes` and produces a paren-structured string consumed by
+//! `expression_tree::build_tree`. Detailed semantics live on `collapse_whitespace` below.
+//!
+//! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
+
 /// Convert indentation-based block structure into parenthesized form, so the downstream
 /// `build_tree` only has to deal with `(...)` grouping. Each non-blank line becomes a `(...)`
 /// group, deeper indents nest inside their parent, and dedents close the matching groups.

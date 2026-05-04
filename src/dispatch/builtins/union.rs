@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::kerror::{KError, KErrorKind};
-use crate::dispatch::kfunction::{
-    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
-    SignatureElement,
-};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::dispatch::runtime::{KError, KErrorKind};
+use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
+use crate::dispatch::types::parse_typed_field_list;
+use crate::parse::kexpression::KExpression;
 
 use super::{err, register_builtin};
 
@@ -27,7 +26,8 @@ use super::{err, register_builtin};
 ///
 /// The named form additionally registers the type in the current scope so the type token
 /// (`Maybe`) can be used as a constructor downstream. Both forms return a
-/// `KObject::TaggedUnionType` carrying the parsed schema.
+/// `KObject::TaggedUnionType` carrying the parsed schema; that value reports `KType::Type`
+/// at runtime, sharing the meta-type with `STRUCT`-produced schemas.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -41,15 +41,19 @@ pub fn body<'a>(
             )));
         }
     };
-    let schema = match extract_arrow_triples(&schema_expr) {
-        Ok(s) => s,
+    let fields = match parse_typed_field_list(&schema_expr, "UNION") {
+        Ok(f) => f,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
-    if schema.is_empty() {
+    if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
         )));
     }
+    // UNION addresses by tag name and doesn't care about declaration order; flatten the
+    // ordered field list (which `parse_typed_field_list` shares with `STRUCT`) into a
+    // HashMap. Duplicate detection has already happened in the helper.
+    let schema: HashMap<String, KType> = fields.into_iter().collect();
     let arena = scope.arena;
     let union_obj: &'a KObject<'a> =
         arena.alloc_object(KObject::TaggedUnionType(Rc::new(schema)));
@@ -70,7 +74,7 @@ pub fn body<'a>(
 }
 
 /// Extract a `KExpression`-typed argument from the bundle. Mirrors the `Rc::try_unwrap`
-/// dance used by [`if_then`](super::if_then) and [`fn_def`](super::fn_def).
+/// dance used by [`fn_def`](super::fn_def) and [`match_case`](super::match_case).
 fn extract_kexpression<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,
@@ -86,71 +90,13 @@ fn extract_kexpression<'a>(
     }
 }
 
-/// Walk the schema KExpression's parts as repeated `<Identifier(tag)> <Keyword(":")>
-/// <Type(name)>` triples and assemble the resulting `tag -> KType` map. Errors with a
-/// `ShapeError`-string on any malformed triple, unknown type name, or duplicate tag.
-fn extract_arrow_triples<'a>(
-    expr: &KExpression<'a>,
-) -> Result<HashMap<String, KType>, String> {
-    let parts = &expr.parts;
-    if parts.len() % 3 != 0 {
-        return Err(format!(
-            "UNION schema must be `<tag>: <Type>` triples; got {} parts (not a multiple of 3)",
-            parts.len()
-        ));
-    }
-    let mut schema: HashMap<String, KType> = HashMap::with_capacity(parts.len() / 3);
-    let mut i = 0;
-    while i < parts.len() {
-        let tag = match &parts[i] {
-            ExpressionPart::Identifier(s) => s.clone(),
-            other => {
-                return Err(format!(
-                    "UNION schema tag must be a bare identifier, got {}",
-                    other.summarize()
-                ));
-            }
-        };
-        match &parts[i + 1] {
-            ExpressionPart::Keyword(k) if k == ":" => {}
-            other => {
-                return Err(format!(
-                    "UNION schema separator must be `:`, got {}",
-                    other.summarize()
-                ));
-            }
-        }
-        let type_name = match &parts[i + 2] {
-            ExpressionPart::Type(s) => s.clone(),
-            other => {
-                return Err(format!(
-                    "UNION schema type for tag `{}` must be a type name token, got {}",
-                    tag,
-                    other.summarize()
-                ));
-            }
-        };
-        let ktype = KType::from_name(&type_name).ok_or_else(|| {
-            format!(
-                "unknown type name `{}` in UNION schema for tag `{}`",
-                type_name, tag
-            )
-        })?;
-        if schema.insert(tag.clone(), ktype).is_some() {
-            return Err(format!("duplicate tag `{}` in UNION schema", tag));
-        }
-        i += 3;
-    }
-    Ok(schema)
-}
-
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Named form: `UNION Maybe = (some: Number none: Null)`
     register_builtin(
         scope,
         "UNION",
         ExpressionSignature {
-            return_type: KType::TaggedUnionType,
+            return_type: KType::Type,
             elements: vec![
                 SignatureElement::Keyword("UNION".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeRef }),
@@ -165,7 +111,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "UNION",
         ExpressionSignature {
-            return_type: KType::TaggedUnionType,
+            return_type: KType::Type,
             elements: vec![
                 SignatureElement::Keyword("UNION".into()),
                 SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::KExpression }),
@@ -181,12 +127,12 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::dispatch::arena::RuntimeArena;
+    use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::kerror::KErrorKind;
-    use crate::dispatch::kfunction::KType;
-    use crate::dispatch::kobject::KObject;
-    use crate::dispatch::scope::Scope;
+    use crate::dispatch::runtime::KErrorKind;
+    use crate::dispatch::types::KType;
+    use crate::dispatch::values::KObject;
+    use crate::dispatch::runtime::Scope;
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
     use crate::parse::kexpression::KExpression;
@@ -220,7 +166,7 @@ mod tests {
     fn run_one_err<'a>(
         scope: &'a Scope<'a>,
         expr: KExpression<'a>,
-    ) -> crate::dispatch::kerror::KError {
+    ) -> crate::dispatch::runtime::KError {
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
         sched.execute().expect("scheduler should not surface errors directly");

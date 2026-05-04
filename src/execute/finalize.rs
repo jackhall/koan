@@ -1,4 +1,4 @@
-use crate::dispatch::kerror::{Frame, KError, KErrorKind};
+use crate::dispatch::runtime::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::NodeId;
 
 use super::lift::lift_kobject;
@@ -41,12 +41,12 @@ impl<'a> Scheduler<'a> {
                     // path in `execute`. Forward-chain finalizers (a user-fn body that
                     // spawned a Bind for a sub-expression) land here instead.
                     if let Some(f) = function {
-                        let rt = f.signature.return_type;
+                        let rt = &f.signature.return_type;
                         if !rt.matches_value(&lifted_obj) {
                             let err = KError::new(KErrorKind::TypeMismatch {
                                 arg: "<return>".to_string(),
-                                expected: rt.name().to_string(),
-                                got: lifted_obj.ktype().name().to_string(),
+                                expected: rt.name(),
+                                got: lifted_obj.ktype().name(),
                             })
                             .with_frame(Frame {
                                 function: f.summarize(),

@@ -1,3 +1,9 @@
+//! Unit tests for the parse module. Each test parses a source snippet through
+//! `expression_tree::parse` and compares the result against an expected shape string
+//! produced by the local `describe` helper, which renders an `ExpressionPart` tree as a
+//! compact `t(...)` / `T(...)` / `e(...)` notation — terser to read and diff than the
+//! full `KExpression` debug output.
+
 use super::expression_tree::{build_tree, parse};
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::quotes::mask_quotes;
@@ -7,7 +13,7 @@ fn describe(e: &KExpression<'_>) -> String {
         match p {
             ExpressionPart::Keyword(s) => format!("t({})", s),
             ExpressionPart::Identifier(s) => format!("t({})", s),
-            ExpressionPart::Type(s) => format!("T({})", s),
+            ExpressionPart::Type(t) => format!("T({})", t.render()),
             ExpressionPart::Expression(e) => describe(e),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(describe_part).collect();
@@ -535,5 +541,183 @@ fn multiline_dict_via_top_level_pipeline() {
     assert_eq!(
         top("LET d = {\n  a: 1\n  b: 2\n}").unwrap(),
         vec!["[t(LET) t(d) t(=) D{t(a): n(1), t(b): n(2)}]"],
+    );
+}
+
+// --- Parameterized type tests (angle-bracket TypeFrame) ---
+
+#[test]
+fn type_with_one_param() {
+    // `List<Number>` parses as one Type part with one nested param. The describe helper
+    // renders TypeExpr via `render()`, so the structural distinction is visible.
+    assert_eq!(tree("List<Number>").unwrap(), "[T(List<Number>)]");
+}
+
+#[test]
+fn type_with_two_params() {
+    assert_eq!(
+        tree("Dict<String, Number>").unwrap(),
+        "[T(Dict<String, Number>)]"
+    );
+}
+
+#[test]
+fn type_with_two_params_no_comma() {
+    // Whitespace-only separation is also legal — `,` is a no-op inside expression frames,
+    // and the same precedent applies inside TypeFrames.
+    assert_eq!(
+        tree("Dict<String Number>").unwrap(),
+        tree("Dict<String, Number>").unwrap(),
+    );
+}
+
+#[test]
+fn type_nested_two_levels() {
+    assert_eq!(
+        tree("List<Dict<String, Number>>").unwrap(),
+        "[T(List<Dict<String, Number>>)]"
+    );
+}
+
+#[test]
+fn function_type_unary() {
+    // Function args are always parenthesized — `Function<(arg) -> ret>` for one arg,
+    // `Function<() -> ret>` for nullary.
+    assert_eq!(
+        tree("Function<(Number) -> Str>").unwrap(),
+        "[T(Function<(Number) -> Str>)]"
+    );
+}
+
+#[test]
+fn function_type_nullary() {
+    assert_eq!(
+        tree("Function<() -> Number>").unwrap(),
+        "[T(Function<() -> Number>)]"
+    );
+}
+
+#[test]
+fn function_type_multi_arg() {
+    assert_eq!(
+        tree("Function<(Number, Bool) -> Number>").unwrap(),
+        "[T(Function<(Number, Bool) -> Number>)]"
+    );
+}
+
+#[test]
+fn function_type_multi_arg_no_comma() {
+    // Inside the `(...)` arg group, commas are no-ops just like elsewhere in expression
+    // frames — whitespace alone separates args.
+    assert_eq!(
+        tree("Function<(Number Bool) -> Number>").unwrap(),
+        tree("Function<(Number, Bool) -> Number>").unwrap(),
+    );
+}
+
+#[test]
+fn function_type_bare_arrow_no_parens_errors() {
+    // `Function<-> R>` is rejected — the user must use the explicit `()` for nullary.
+    assert!(tree("Function<-> Number>").is_err());
+}
+
+#[test]
+fn function_type_unparenthesized_args_errors() {
+    // `Function<A -> R>` (no parens) is rejected so the syntax stays uniform: args are
+    // ALWAYS parenthesized, even for the single-arg case.
+    assert!(tree("Function<Number -> Str>").is_err());
+    assert!(tree("Function<Number, Bool -> Str>").is_err());
+}
+
+#[test]
+fn function_type_arg_nested_parameterized() {
+    // Args themselves can be parameterized types — the inner TypeFrame closes before the
+    // outer Function frame's args expression closes.
+    assert_eq!(
+        tree("Function<(List<Number>, Str) -> Bool>").unwrap(),
+        "[T(Function<(List<Number>, Str) -> Bool>)]"
+    );
+}
+
+#[test]
+fn lt_after_non_type_with_whitespace_emits_keyword() {
+    // `<` not preceded by a Type part — and properly whitespace-separated — emits a
+    // standalone keyword, available for a future less-than builtin to dispatch on.
+    assert_eq!(tree("a < b").unwrap(), "[t(a) t(<) t(b)]");
+}
+
+#[test]
+fn lt_glued_to_non_type_errors() {
+    // `<` glued to a non-Type token is rejected as a glue error, by symmetry with the
+    // existing `[` and `{` adjacency rules.
+    assert!(tree("a<b").is_err());
+    assert!(tree("foo<Number>").is_err());
+}
+
+#[test]
+fn gt_outside_type_frame_with_whitespace_emits_keyword() {
+    // `>` whitespace-separated outside a TypeFrame emits a keyword. The `prev=='-'` rule
+    // still keeps `->` contiguous so `a -> b` continues to tokenize as one keyword.
+    assert_eq!(tree("a > b").unwrap(), "[t(a) t(>) t(b)]");
+    assert_eq!(tree("Number > 0").unwrap(), "[T(Number) t(>) n(0)]");
+    assert_eq!(tree("a -> b").unwrap(), "[t(a) t(->) t(b)]");
+}
+
+#[test]
+fn gt_glued_to_token_errors() {
+    // `>` immediately following a token (no opening `<` to make it a closer) is rejected.
+    assert!(tree("Number>").is_err());
+    assert!(tree("a>b").is_err());
+}
+
+#[test]
+fn type_token_with_invalid_char_errors() {
+    // The token classifier rejects non-alphanumeric chars inside a type name.
+    assert!(tree("Foo$Bar").is_err());
+    assert!(tree("Foo+Bar").is_err());
+}
+
+#[test]
+fn identifier_token_with_invalid_char_errors() {
+    // Identifiers reject everything except letters, digits, and `_`.
+    assert!(tree("a+b").is_err());
+    assert!(tree("foo@bar").is_err());
+}
+
+#[test]
+fn identifier_underscore_allowed() {
+    assert_eq!(tree("my_var another_one").unwrap(), "[t(my_var) t(another_one)]");
+}
+
+#[test]
+fn unclosed_angle_bracket_errors() {
+    assert!(tree("List<Number").is_err());
+}
+
+#[test]
+fn function_arrow_in_non_function_type_errors() {
+    assert!(tree("List<Number -> Str>").is_err());
+}
+
+#[test]
+fn double_arrow_in_function_type_errors() {
+    assert!(tree("Function<A -> B -> C>").is_err());
+}
+
+#[test]
+fn type_with_lt_separated_still_starts_typeframe() {
+    // Whitespace between `List` and `<` — flush makes Type("List") the most recent part,
+    // so `<` still opens a TypeFrame (the check is part-level, not character-level).
+    assert_eq!(tree("List <Number>").unwrap(), "[T(List<Number>)]");
+}
+
+#[test]
+fn comma_outside_type_frame_unchanged_inside_paren() {
+    // Sanity: signatures like `(xs: List<Number>, ys: List<Str>)` still parse — the comma
+    // is a no-op inside the expression frame, and `>` followed by `,` then `ys` flushes
+    // and continues normally.
+    assert_eq!(
+        tree("(xs: List<Number>, ys: List<Str>)").unwrap(),
+        "[[t(xs) t(:) T(List<Number>) t(ys) t(:) T(List<Str>)]]",
     );
 }

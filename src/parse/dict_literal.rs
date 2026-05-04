@@ -1,3 +1,9 @@
+//! Dict-literal sub-state-machine factored out of `expression_tree::build_tree`. Owns
+//! the in-progress key/value pair so the surrounding character handlers can delegate to
+//! `accept_colon`, `accept_comma`, and `finish` instead of pattern-matching the dict
+//! state inline. Multi-part keys/values collapse into a sub-expression via
+//! `single_or_wrapped`.
+
 use crate::parse::kexpression::ExpressionPart;
 
 /// In-progress dict literal: completed pairs plus the state of the current pair. Owns its

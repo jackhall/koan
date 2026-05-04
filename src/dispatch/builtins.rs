@@ -1,39 +1,22 @@
-use super::arena::null_singleton;
-use super::kerror::KError;
-use super::kfunction::{Body, BodyResult, BuiltinFn, ExpressionSignature, KFunction};
-use super::kobject::KObject;
-use super::scope::Scope;
+use super::kfunction::{Body, BodyResult, BuiltinFn, KFunction};
+use super::runtime::{KError, Scope};
+use super::types::ExpressionSignature;
+use super::values::KObject;
 
+mod attr;
 pub mod call_by_name;
 mod fn_def;
-mod if_then;
 mod let_binding;
 mod match_case;
 mod print;
+mod struct_def;
 mod type_call;
 mod union;
 mod value_lookup;
 mod value_pass;
 
-/// `&'static KObject::Null` singleton, for sites that need a literal value reference. Most
-/// early-return sites want `null()` instead, which wraps this in `BodyResult::Value`. The
-/// singleton lives in [`arena.rs`](super::arena) and is reused — no allocation per call.
-pub(crate) fn null_kobject<'a>() -> &'a KObject<'a> {
-    null_singleton()
-}
-
-/// `BodyResult::Value(null_kobject())` — the canonical "no useful return value" early-exit for
-/// builtins. Used for *intentional* nulls only: an `IF false THEN x` skipping its lazy slot,
-/// `PRINT`'s no-useful-return value. Failure paths (type mismatches, missing args, unbound
-/// names, shape errors) return `err(...)` instead so the scheduler can short-circuit and the
-/// CLI can report what went wrong.
-pub(crate) fn null<'a>() -> BodyResult<'a> {
-    BodyResult::Value(null_kobject())
-}
-
-/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. Replaces the prior
-/// pattern of returning `null()` from every failure path. The error propagates through the
-/// scheduler's Forward chain and short-circuits any dependent node.
+/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The error propagates
+/// through the scheduler's Forward chain and short-circuits any dependent node.
 pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
     BodyResult::Err(e)
 }
@@ -70,9 +53,9 @@ pub(crate) fn register_builtin<'a>(
 ///
 /// // Override form: the caller supplies the early-return expression. Used when the
 /// // builtin wants to return something other than the structured TypeMismatch error
-/// // (e.g., an intentional null on a benign mismatch — currently no in-tree call site
-/// // does this, but the override stays available).
-/// try_args!(bundle, return null(); name: KString);
+/// // on a benign mismatch — currently no in-tree call site does this, but the
+/// // override stays available.
+/// try_args!(bundle, return BodyResult::Value(some_obj); name: KString);
 /// ```
 ///
 /// Each `name: Variant` pair becomes a `let name = ...` binding extracted from
@@ -96,7 +79,7 @@ macro_rules! try_args {
     ) => {
         $(
             let $name = match $bundle.get(stringify!($name)) {
-                Some($crate::dispatch::kobject::KObject::$variant(v)) =>
+                Some($crate::dispatch::values::KObject::$variant(v)) =>
                     $crate::try_args!(@extract $variant, v),
                 _ => return $err,
             };
@@ -109,16 +92,16 @@ macro_rules! try_args {
     ) => {
         $(
             let $name = match $bundle.get(stringify!($name)) {
-                Some($crate::dispatch::kobject::KObject::$variant(v)) =>
+                Some($crate::dispatch::values::KObject::$variant(v)) =>
                     $crate::try_args!(@extract $variant, v),
                 other => return $crate::dispatch::builtins::err(
-                    $crate::dispatch::kerror::KError::new(
-                        $crate::dispatch::kerror::KErrorKind::TypeMismatch {
+                    $crate::dispatch::runtime::KError::new(
+                        $crate::dispatch::runtime::KErrorKind::TypeMismatch {
                             arg: stringify!($name).to_string(),
                             expected: stringify!($variant).to_string(),
                             got: match other {
                                 Some(o) => {
-                                    use $crate::dispatch::ktraits::Parseable;
+                                    use $crate::dispatch::types::Parseable;
                                     o.summarize()
                                 }
                                 None => "(missing)".to_string(),
@@ -146,7 +129,7 @@ macro_rules! try_args {
 /// `Identifier` is more specific than `Any`. Re-ordering the calls below should leave behavior
 /// unchanged — the test suite is the authority.
 pub fn default_scope<'a>(
-    arena: &'a super::arena::RuntimeArena,
+    arena: &'a super::runtime::RuntimeArena,
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
     let scope = arena.alloc_scope(Scope::run_root(arena, None, out));
@@ -155,13 +138,15 @@ pub fn default_scope<'a>(
     print::register(scope);
     value_lookup::register(scope);
     value_pass::register(scope);
-    if_then::register(scope);
     fn_def::register(scope);
     call_by_name::register(scope);
     union::register(scope);
-    super::tagged_union::register(scope);
+    super::values::tagged_union::register(scope);
+    struct_def::register(scope);
+    super::values::struct_value::register(scope);
     type_call::register(scope);
     match_case::register(scope);
+    attr::register(scope);
 
     scope
 }

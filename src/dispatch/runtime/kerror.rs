@@ -41,7 +41,7 @@ pub enum KErrorKind {
 }
 
 /// One entry in an error's call-stack trace. `function` is the registered function's
-/// `summarize()` (e.g. `fn(IF <predicate> THEN <value>)`); `expression` is the expression
+/// `summarize()` (e.g. `fn(MATCH <value> WITH <branches>)`); `expression` is the expression
 /// being evaluated when the error surfaced (`KExpression::summarize`). Source spans aren't
 /// available — `KExpression` doesn't carry them yet — so both fields are textual summaries.
 /// Adding spans later is non-breaking because `Frame` is a struct.

@@ -1,11 +1,19 @@
 use std::hash::{Hash, Hasher};
 
+use super::ktype::KType;
+
 /// Base trait for everything that participates in the language: values, expressions, and
 /// functions all carry a canonical string `summarize` and a structural `equal`. Used widely as
 /// `&dyn Parseable` for heterogeneous collections of language objects.
+///
+/// `ktype` returns the `KType` tag for this value. For containers (List, Dict) the impl walks
+/// elements to project the parameterized type — see `KObject::ktype` for the semantics. For
+/// dict-key types (`KKey`) the result is the appropriate scalar tag, used by `KObject::Dict`'s
+/// `ktype` to infer `Dict<K, V>`.
 pub trait Parseable {
     fn equal(&self, other: &dyn Parseable) -> bool;
     fn summarize(&self) -> String;
+    fn ktype(&self) -> KType;
 }
 
 /// A `Parseable` that can be invoked with arguments. Implemented by `KExpression` so a parsed

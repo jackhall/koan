@@ -1,13 +1,13 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::dispatch::arena::{CallArena, RuntimeArena};
-use crate::dispatch::kerror::{Frame, KError, KErrorKind};
+use crate::dispatch::runtime::{CallArena, RuntimeArena};
+use crate::dispatch::runtime::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::{
     ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
 };
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::lift::lift_kobject;
@@ -16,8 +16,8 @@ use super::nodes::{work_deps, Node, NodeOutput, NodeStep, NodeWork};
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
 /// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Aggregate`
 /// nodes, and a builtin body that holds `&mut dyn SchedulerHandle` can also add `Dispatch`
-/// nodes (used by `if_then` for its lazy `value` and by `KFunction::invoke` for user-defined
-/// bodies). The execute loop pops from a FIFO queue; a `Bind` whose subs forward through to a
+/// nodes (used by `KFunction::invoke` for user-defined bodies). The execute loop pops from a
+/// FIFO queue; a `Bind` whose subs forward through to a
 /// not-yet-run node gets re-queued at the back. Cycles are statically prevented because every
 /// new node's `NodeId` is strictly greater than every node it can reach, so the queue is
 /// guaranteed to drain.
@@ -122,30 +122,24 @@ impl<'a> Scheduler<'a> {
                 NodeStep::Done(output) => {
                     match (output, prev_frame) {
                         (NodeOutput::Value(v), Some(frame)) => {
-                            // Body produced a Value directly — lift into the captured
-                            // arena. By lexical scoping, the per-call scope's `outer` IS
-                            // the captured scope (run-root for top-level FNs), whose arena
-                            // outlives the call. If the lifted value carries a KFunction
-                            // reference into the dying frame's arena, `lift_kobject`
-                            // attaches an Rc clone so the arena stays alive past the
-                            // slot's frame drop.
+                            // Body produced a Value — lift into the captured arena
+                            // (= per-call scope's `outer` by lexical scoping). See
+                            // design/memory-model.md for the Rc<CallArena> anchoring story.
                             let dest = scope
                                 .outer
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let lifted_obj = lift_kobject(v, &frame);
-                            // Runtime return-type check: enforce the called function's
-                            // declared `signature.return_type` against the produced value.
-                            // `Any` is the no-op fast path (always satisfied). On mismatch,
-                            // synthesize a TypeMismatch error with the function's frame
-                            // attached and skip the alloc.
+                            // Runtime return-type check against the function's declared
+                            // `signature.return_type`. `Any` short-circuits; mismatch
+                            // synthesizes a TypeMismatch with the function's frame.
                             if let Some(f) = prev_function {
-                                let rt = f.signature.return_type;
+                                let rt = &f.signature.return_type;
                                 if !rt.matches_value(&lifted_obj) {
                                     let err = KError::new(KErrorKind::TypeMismatch {
                                         arg: "<return>".to_string(),
-                                        expected: rt.name().to_string(),
-                                        got: lifted_obj.ktype().name().to_string(),
+                                        expected: rt.name(),
+                                        got: lifted_obj.ktype().name(),
                                     })
                                     .with_frame(Frame {
                                         function: f.summarize(),
@@ -162,13 +156,10 @@ impl<'a> Scheduler<'a> {
                             // the per-call arena frees.
                         }
                         (NodeOutput::Forward(target), Some(frame)) => {
-                            // Body forwarded into sub-slots whose scopes live in the
-                            // per-call arena. Keep the frame alive on this slot until the
-                            // forward chain resolves; `finalize_ready_frames` promotes the
-                            // chain's terminal Value into the captured arena and drops
-                            // the frame. The slot is no longer in the queue, so its
-                            // `work` is unused — store a stub. Track the slot so
-                            // finalization can find it without scanning all nodes.
+                            // Body forwarded into sub-slots; keep the frame alive until
+                            // the chain resolves. `finalize_ready_frames` then promotes
+                            // the terminal value and drops the frame. Slot is out of the
+                            // queue so `work` is a stub.
                             self.results[idx] = Some(NodeOutput::Forward(target));
                             self.nodes[idx] = Some(Node {
                                 work: NodeWork::Dispatch(KExpression { parts: Vec::new() }),
@@ -216,8 +207,7 @@ impl<'a> Scheduler<'a> {
                         None => (scope, None),
                     };
                     // Inherit prev_function when the replacement doesn't supply its own —
-                    // a Tail without a fresh frame is staying in the same call (e.g.,
-                    // if_then's lazy slot keeps the IF's frame).
+                    // a Tail without a fresh frame is staying in the same call.
                     let next_function = new_function.or(prev_function);
                     self.nodes[idx] = Some(Node {
                         work: new_work,
@@ -228,11 +218,8 @@ impl<'a> Scheduler<'a> {
                     self.queue.push_front(idx);
                 }
             }
-            // Drain `scope`'s pending writes — `Scope::add` queues writes that hit a borrow
-            // conflict (a builtin iterating `data`/`functions` while a re-entrant write tries
-            // to mutate). Drain runs here, between dispatch nodes, so the next node's reads
-            // see them. The hot path is the no-op early-return inside `drain_pending` (queue
-            // is empty in the typical case); only the rare re-entrant-write path does work.
+            // Drain `scope`'s pending re-entrant writes between dispatch nodes so the next
+            // node's reads see them. See design/memory-model.md § Re-entrant `Scope::add`.
             scope.drain_pending();
             // Finalize any frame-holding slots whose forward chain has now resolved.
             self.finalize_ready_frames();
@@ -295,7 +282,7 @@ impl<'a> Default for Scheduler<'a> {
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     /// Schedule a fresh `Dispatch` node against `scope`. Used by builtin bodies that want
     /// to spawn sub-work — currently no in-tree builtin reaches for it (TCO covers the
-    /// prior `if_then` use), but the lever is preserved.
+    /// cases where this would otherwise be needed), but the lever is preserved.
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add(self, NodeWork::Dispatch(expr), scope)
     }
@@ -360,12 +347,11 @@ impl<'a> KFunction<'a> {
 /// `Future(value)` carrying that arg's arena-allocated value. Recurses into nested
 /// `Expression` and `ListLiteral` parts so a body like `(PRINT (x))` substitutes the inner
 /// `(x)` correctly. `Keyword`, `Literal`, and `Future` parts pass through unchanged. Each
-/// substituted value is allocated via the arena (replacing the prior `Box::leak`-per-call
-/// model from before the leak fix).
+/// substituted value is allocated via the arena.
 pub(crate) fn substitute_params<'a>(
     expr: KExpression<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::arena::RuntimeArena,
+    arena: &'a crate::dispatch::runtime::RuntimeArena,
 ) -> KExpression<'a> {
     KExpression {
         parts: expr
@@ -379,7 +365,7 @@ pub(crate) fn substitute_params<'a>(
 fn substitute_part<'a>(
     part: ExpressionPart<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::arena::RuntimeArena,
+    arena: &'a crate::dispatch::runtime::RuntimeArena,
 ) -> ExpressionPart<'a> {
     match part {
         ExpressionPart::Identifier(name) => match bundle.get(&name) {
@@ -416,7 +402,7 @@ fn substitute_part<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::arena::RuntimeArena;
+    use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
@@ -477,26 +463,19 @@ mod tests {
 
     #[test]
     fn tail_call_reuses_node_slot_in_place() {
-        // `IF true THEN ("hi")` — when the predicate is true, `if_then` returns
-        // `BodyResult::Tail(value_expr)`. The scheduler should rewrite the if_then's own
-        // slot to a `Dispatch(value_expr)` and re-run, NOT spawn a fresh slot and forward.
-        // Without TCO this would land at len() == 2 (one slot for if_then, one for the
-        // value evaluation). With TCO, len() == 1 — the if_then's slot was reused.
+        // `MATCH true WITH (true -> ("hi") false -> ("no"))` returns `BodyResult::Tail`
+        // for the matched branch. The scheduler should rewrite MATCH's slot to a
+        // `Dispatch` of the branch body and re-run in place, not spawn a fresh slot.
+        // Expect `len() == 1` (slot reused) rather than `2`.
         let arena = RuntimeArena::new();
         let root = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();
-        let value = KExpression {
-            parts: vec![ExpressionPart::Literal(KLiteral::String("hi".into()))],
-        };
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("IF".into()),
-                ExpressionPart::Literal(KLiteral::Boolean(true)),
-                ExpressionPart::Keyword("THEN".into()),
-                ExpressionPart::Expression(Box::new(value)),
-            ],
-        };
-        let id = sched.add_dispatch(expr, root);
+        let exprs = crate::parse::expression_tree::parse(
+            "MATCH true WITH (true -> (\"hi\") false -> (\"no\"))",
+        )
+        .expect("parse should succeed");
+        assert_eq!(exprs.len(), 1);
+        let id = sched.add_dispatch(exprs.into_iter().next().unwrap(), root);
 
         sched.execute().unwrap();
 
@@ -504,8 +483,8 @@ mod tests {
         assert_eq!(
             sched.len(),
             1,
-            "tail-call slot reuse: the if_then's original slot should have been rewritten \
-             to evaluate `(\"hi\")`, not allocate a new slot",
+            "tail-call slot reuse: the MATCH's original slot should have been rewritten \
+             to evaluate the matched branch's body, not allocate a new slot",
         );
     }
 }

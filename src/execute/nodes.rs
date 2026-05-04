@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
-use crate::dispatch::arena::CallArena;
-use crate::dispatch::kerror::KError;
+use crate::dispatch::runtime::CallArena;
+use crate::dispatch::runtime::KError;
 use crate::dispatch::kfunction::{KFunction, NodeId};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::KExpression;
 
 /// What a scheduler node will produce when its work runs. `Value` is computed inline; `Forward`
@@ -28,7 +28,7 @@ pub(super) enum NodeOutput<'a> {
 /// by user-fn invocation. `None` keeps the existing frame and scope. `function` is an
 /// optional label used to append a `Frame` to any error that lands on this slot — set by
 /// user-fn invocation so an error inside a user-fn body carries the function's name in the
-/// trace; `None` for non-call replacements like `if_then`'s lazy slot. Constant memory
+/// trace; `None` for non-call replacements (deferred-eval continuations). Constant memory
 /// across tail-call sequences because no fresh slot is allocated.
 pub(super) enum NodeStep<'a> {
     Done(NodeOutput<'a>),
@@ -44,9 +44,9 @@ pub(super) enum NodeStep<'a> {
 /// - `Dispatch(expr)` is the entry point: walk the expression's parts, spawn `Dispatch` nodes
 ///   for nested `Expression` (and `ListLiteral`) parts, and emit a `Bind` node depending on
 ///   them. If there's no nesting, dispatch + invoke happen inline and the result is stored
-///   directly. Replaces the old "eager dispatch in `schedule_expr`" path.
-/// - `Bind { expr, subs }` is the old `Pending`: splice each dep's resolved value into `parts`
-///   as `Future(...)`, dispatch the resulting expression, invoke the bound future.
+///   directly.
+/// - `Bind { expr, subs }`: splice each dep's resolved value into `parts` as `Future(...)`,
+///   dispatch the resulting expression, invoke the bound future.
 /// - `Aggregate { elements }` materializes a list literal once each `Dep` element resolves.
 pub(super) enum NodeWork<'a> {
     Dispatch(KExpression<'a>),
@@ -103,7 +103,7 @@ pub(super) struct Node<'a> {
     /// `signature.return_type` against the produced value (the runtime return-type check),
     /// and (2) on error, append a `Frame { function: f.summarize() }` to the resulting
     /// `KError` so the call-stack trace names which user-fn the error happened inside.
-    /// `None` for builtin slots and for non-call replacements like `if_then`'s lazy slot.
+    /// `None` for builtin slots and for non-call replacements (deferred-eval continuations).
     /// Set in lockstep with `frame` (a per-call frame implies a user-fn entry).
     ///
     /// TCO note: when A tail-calls B, this field is rewritten to B at the `Replace` site.

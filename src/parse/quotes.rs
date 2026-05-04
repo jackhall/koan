@@ -1,3 +1,10 @@
+//! First parse pass: replace quoted-string contents with placeholder markers so that later
+//! tokenization stages don't re-interpret characters inside string literals. Produces a
+//! masked source string plus a lookup table; `expression_tree::resolve_literal` reads the
+//! table back when it needs the original literal text. Output feeds `whitespace`.
+//!
+//! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
+
 use std::collections::HashMap;
 
 pub const QUOTE_PLACEHOLDER: char = '\u{001F}';
