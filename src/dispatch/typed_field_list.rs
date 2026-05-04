@@ -42,8 +42,10 @@ pub fn parse_typed_field_list(
                 ));
             }
         }
-        let type_name = match &parts[i + 2] {
-            ExpressionPart::Type(s) => s.clone(),
+        let ktype = match &parts[i + 2] {
+            ExpressionPart::Type(t) => KType::from_type_expr(t).map_err(|e| {
+                format!("{e} in {context} schema for `{}`", name)
+            })?,
             other => {
                 return Err(format!(
                     "{context} schema type for `{}` must be a type name token, got {}",
@@ -52,12 +54,6 @@ pub fn parse_typed_field_list(
                 ));
             }
         };
-        let ktype = KType::from_name(&type_name).ok_or_else(|| {
-            format!(
-                "unknown type name `{}` in {context} schema for `{}`",
-                type_name, name
-            )
-        })?;
         if fields.iter().any(|(n, _)| n == &name) {
             return Err(format!("duplicate name `{}` in {context} schema", name));
         }

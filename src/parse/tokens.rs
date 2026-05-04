@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::dispatch::kfunction::is_keyword_token;
-use crate::parse::kexpression::{ExpressionPart, KLiteral};
+use crate::parse::kexpression::{ExpressionPart, KLiteral, TypeExpr};
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
@@ -58,17 +58,34 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
 /// then `Keyword` if it has no lowercase letters (per `is_keyword_token`), then `Type` if it
 /// starts uppercase and has at least one lowercase character (covers both `Camelcased` and
 /// `CamelCased`), otherwise `Identifier`. Used by `read_atom`.
-fn classify_atom<'a>(tok: &str) -> ExpressionPart<'a> {
+///
+/// Type and Identifier tokens are validated for character content: Types accept only ASCII
+/// letters and digits; Identifiers also accept `_`. Anything else (e.g. `Number>`, `a@b`) is
+/// rejected as a glue error so symbols can't sneak into a name. Keywords are exempt since
+/// `=`, `->`, and `+` are legitimate keyword shapes.
+fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
     if let Some(part) = try_literal(tok) {
-        return part;
+        return Ok(part);
     }
     if is_keyword_token(tok) {
-        ExpressionPart::Keyword(tok.to_string())
-    } else if is_type_name(tok) {
-        ExpressionPart::Type(tok.to_string())
-    } else {
-        ExpressionPart::Identifier(tok.to_string())
+        return Ok(ExpressionPart::Keyword(tok.to_string()));
     }
+    if is_type_name(tok) {
+        if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric()) {
+            return Err(format!(
+                "type name `{tok}` contains invalid character {bad:?}; \
+                 type names use only letters and digits",
+            ));
+        }
+        return Ok(ExpressionPart::Type(TypeExpr::leaf(tok.to_string())));
+    }
+    if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric() && *c != '_') {
+        return Err(format!(
+            "identifier `{tok}` contains invalid character {bad:?}; \
+             identifiers use letters, digits, and `_`",
+        ));
+    }
+    Ok(ExpressionPart::Identifier(tok.to_string()))
 }
 
 /// True iff `tok` looks like a type name: first char ASCII-uppercase plus at least one
@@ -131,7 +148,7 @@ fn read_atom<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, Stri
     if s.is_empty() {
         return Err(format!("expected identifier, got {:?}", chars.peek()));
     }
-    Ok(classify_atom(&s))
+    classify_atom(&s)
 }
 
 #[cfg(test)]
@@ -143,7 +160,7 @@ mod tests {
         match p {
             ExpressionPart::Keyword(s) => format!("t({})", s),
             ExpressionPart::Identifier(s) => format!("t({})", s),
-            ExpressionPart::Type(s) => format!("T({})", s),
+            ExpressionPart::Type(t) => format!("T({})", t.render()),
             ExpressionPart::Expression(e) => {
                 let inner: Vec<String> = e.parts.iter().map(describe).collect();
                 format!("[{}]", inner.join(" "))

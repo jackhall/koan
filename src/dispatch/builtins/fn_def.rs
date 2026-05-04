@@ -142,10 +142,8 @@ fn parse_signature_elements<'a>(
                 let ty = parts.get(i + 2);
                 match (colon, ty) {
                     (Some(ExpressionPart::Keyword(c)), Some(ExpressionPart::Type(t))) if c == ":" => {
-                        let ktype = KType::from_name(t).ok_or_else(|| {
-                            format!(
-                                "unknown type name `{t}` in FN signature for parameter `{name}`",
-                            )
+                        let ktype = KType::from_type_expr(t).map_err(|e| {
+                            format!("{e} in FN signature for parameter `{name}`")
                         })?;
                         elements.push(SignatureElement::Argument(Argument {
                             name: name.clone(),
@@ -163,7 +161,8 @@ fn parse_signature_elements<'a>(
             }
             ExpressionPart::Type(t) => {
                 return Err(format!(
-                    "FN signature has a stray type `{t}` outside a `<name>: <Type>` triple",
+                    "FN signature has a stray type `{}` outside a `<name>: <Type>` triple",
+                    t.render(),
                 ));
             }
             other => {

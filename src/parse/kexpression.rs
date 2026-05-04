@@ -22,6 +22,54 @@ pub enum KLiteral {
     Null,
 }
 
+/// Surface representation of a type token. Leaf types like `Number` carry `TypeParams::None`;
+/// container types like `List<Number>` and `Function<A, B -> R>` carry their inner types in
+/// the structured `TypeParams` variant. Built by `expression_tree::build_tree`'s `Frame::Type`
+/// when a `<...>` group closes, and consumed by the KType-construction layer
+/// (`KType::from_type_expr`) at signature-parse time.
+#[derive(Debug, Clone)]
+pub struct TypeExpr {
+    pub name: String,
+    pub params: TypeParams,
+}
+
+/// Inner-type carrier on a `TypeExpr`. The variant split bakes the `Function` arrow rule
+/// into the *shape* — downstream consumers don't have to know that `Function` is special.
+#[derive(Debug, Clone)]
+pub enum TypeParams {
+    /// Leaf type (`Number`, `Str`, `Any`) or an unparameterized container (`List`).
+    None,
+    /// Comma/whitespace-separated list of params: `List<X>`, `Dict<K, V>`. Arity validation
+    /// (e.g. `List` needs exactly one) lives at the KType-construction layer, not here.
+    List(Vec<TypeExpr>),
+    /// `Function<A, B, ... -> R>` — the `->` arrow distinguishes args from return type.
+    Function { args: Vec<TypeExpr>, ret: Box<TypeExpr> },
+}
+
+impl TypeExpr {
+    /// Bare leaf — no parameters. Used by `tokens::classify_atom` for plain type tokens.
+    pub fn leaf(name: String) -> TypeExpr {
+        TypeExpr { name, params: TypeParams::None }
+    }
+
+    /// Render this type expression in the surface syntax (`List<Number>`, `Function<-> R>`).
+    /// Used by `ExpressionPart::summarize` and Display so error messages and debug output
+    /// read naturally.
+    pub fn render(&self) -> String {
+        match &self.params {
+            TypeParams::None => self.name.clone(),
+            TypeParams::List(items) => {
+                let inner: Vec<String> = items.iter().map(|t| t.render()).collect();
+                format!("{}<{}>", self.name, inner.join(", "))
+            }
+            TypeParams::Function { args, ret } => {
+                let inner: Vec<String> = args.iter().map(|t| t.render()).collect();
+                format!("{}<({}) -> {}>", self.name, inner.join(", "), ret.render())
+            }
+        }
+    }
+}
+
 /// One element of a parsed expression. The parser classifies each source token into one of:
 /// `Keyword` (all-caps fixed tokens like `LET`/`=`/`THEN`; see `is_keyword_token`), `Type`
 /// (capitalized type names like `Number`/`MyType`/`KFunction` — first char uppercase plus at
@@ -35,11 +83,12 @@ pub enum ExpressionPart<'a> {
     /// Name slot bound to an `Argument` whose `KType` is `Identifier` or `Any`. Contributes
     /// `UntypedElement::Slot` to the bucket key — same shape as a literal or expression slot.
     Identifier(String),
-    /// A type-name reference like `Number` or `KFunction`. Used in surface positions that name
-    /// a type (e.g. the return-type slot of `FN (sig) -> Type = (body)`). Contributes
-    /// `UntypedElement::Slot` to the bucket key; an `Argument` whose `ktype` is `KType::TypeRef`
-    /// matches this part.
-    Type(String),
+    /// A type-name reference like `Number`, `KFunction`, or `List<Number>`. Used in surface
+    /// positions that name a type (e.g. the return-type slot of `FN (sig) -> Type = (body)`).
+    /// Contributes `UntypedElement::Slot` to the bucket key; an `Argument` whose `ktype` is
+    /// `KType::TypeRef` matches this part. The `TypeExpr` carries any nested parameters
+    /// (`List<Number>` etc.); leaf types use `TypeParams::None`.
+    Type(TypeExpr),
     Expression(Box<KExpression<'a>>),
     /// A `[a b c]` source-level list. Each element is itself an `ExpressionPart`; sub-expression
     /// elements (`ExpressionPart::Expression`) are scheduled as deps and replaced with `Future`s
@@ -61,7 +110,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
         match self {
             ExpressionPart::Keyword(s) => f.debug_tuple("Keyword").field(s).finish(),
             ExpressionPart::Identifier(s) => f.debug_tuple("Identifier").field(s).finish(),
-            ExpressionPart::Type(s) => f.debug_tuple("Type").field(s).finish(),
+            ExpressionPart::Type(t) => f.debug_tuple("Type").field(t).finish(),
             ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
             ExpressionPart::ListLiteral(items) => f.debug_tuple("ListLiteral").field(items).finish(),
             ExpressionPart::DictLiteral(pairs) => f.debug_tuple("DictLiteral").field(pairs).finish(),
@@ -83,7 +132,7 @@ impl<'a> ExpressionPart<'a> {
         match self {
             ExpressionPart::Keyword(s) => s.clone(),
             ExpressionPart::Identifier(s) => s.clone(),
-            ExpressionPart::Type(s) => s.clone(),
+            ExpressionPart::Type(t) => t.render(),
             ExpressionPart::Expression(e) => e.summarize(),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
@@ -110,7 +159,7 @@ impl<'a> ExpressionPart<'a> {
         match self {
             ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
             ExpressionPart::Identifier(s) => KObject::KString(s.clone()),
-            ExpressionPart::Type(s) => KObject::KString(s.clone()),
+            ExpressionPart::Type(t) => KObject::KString(t.render()),
             ExpressionPart::Literal(KLiteral::Number(n)) => KObject::Number(*n),
             ExpressionPart::Literal(KLiteral::String(s)) => KObject::KString(s.clone()),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
@@ -153,7 +202,7 @@ impl<'a> Clone for ExpressionPart<'a> {
         match self {
             ExpressionPart::Keyword(s) => ExpressionPart::Keyword(s.clone()),
             ExpressionPart::Identifier(s) => ExpressionPart::Identifier(s.clone()),
-            ExpressionPart::Type(s) => ExpressionPart::Type(s.clone()),
+            ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),

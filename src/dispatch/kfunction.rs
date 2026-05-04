@@ -4,7 +4,7 @@ use std::rc::Rc;
 // (CallArena is reference-counted via std::rc::Rc — re-exporting here for `BodyResult::Tail`
 // users.)
 
-use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral, TypeExpr, TypeParams};
 
 use super::arena::CallArena;
 use super::kerror::{KError, KErrorKind};
@@ -569,6 +569,22 @@ impl KType {
             "Struct" => Some(KType::Struct),
             "Any" => Some(KType::Any),
             _ => None,
+        }
+    }
+
+    /// Convert a parser `TypeExpr` into a `KType`. This is the surface-level type-parsing
+    /// boundary used by FN signatures, FN return-type slots, and UNION/STRUCT field types.
+    /// Phase 1 of container type parameterization handles only leaves — anything with
+    /// non-empty `TypeParams` surfaces a deferred-feature error rather than corrupting the
+    /// type tag. Phase 2 will replace this stub with structured KType variants.
+    pub fn from_type_expr(t: &TypeExpr) -> Result<KType, String> {
+        match &t.params {
+            TypeParams::None => KType::from_name(&t.name)
+                .ok_or_else(|| format!("unknown type name `{}`", t.name)),
+            TypeParams::List(_) | TypeParams::Function { .. } => Err(format!(
+                "parameterized type `{}` is not yet supported at the KType layer (phase 1: parser only)",
+                t.render()
+            )),
         }
     }
 
