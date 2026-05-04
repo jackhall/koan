@@ -31,16 +31,25 @@ without quoting. `FN (x: Number) -> Str = (...)` works because `Number` and
 checking: every value has a queryable type, and any declared type can be checked
 against it.
 
-## Function return types
+## Function signatures
 
-`FN` syntax requires a return type:
+`FN` syntax requires both per-parameter types and a return type:
 
 ```
 FN (sig) -> ReturnType = (body)
 ```
 
-The type is non-optional and runtime-enforced. The scheduler injects a check at
-user-fn slot finalization that surfaces
+Each parameter slot in `<sig>` is written as `name: Type`. A bare identifier
+without `: Type` is a parse error — there is no implicit `Any` default. Use
+`: Any` to opt a slot out of type-checking. Parameter types are checked at
+dispatch via the same `Argument::matches` path as builtins, so a call whose
+arguments don't satisfy the signature surfaces as
+[`KErrorKind::DispatchFailed`](../src/dispatch/kerror.rs); the same call shape
+with different parameter types routes to a different overload by
+slot-specificity (see below).
+
+The return type is non-optional and runtime-enforced. The scheduler injects a
+check at user-fn slot finalization that surfaces
 [`KErrorKind::TypeMismatch`](../src/dispatch/kerror.rs) (with a `<return>` arg
 name and a frame naming the called function) on mismatch. `Any` is the
 no-enforcement fast path for sites that genuinely don't care.
@@ -66,8 +75,6 @@ specificity scores against.
   with no slot frame, so the runtime check has nowhere to attach. Their
   declared return types are honest but unenforced; the static pass will check
   them uniformly.
-- **No per-parameter type annotations yet.** All slots in user-fn signatures
-  collapse to `Any`. See open work below.
 - **No container parameterization.** `List`, `Dict`, `KFunction`, `Future`
   carry no inner-type information today.
 
@@ -76,8 +83,6 @@ specificity scores against.
 The type/trait sequence is the longest open arc in the language. In dependency
 order:
 
-- [Per-parameter type annotations](../roadmap/per-param-type-annotations.md) —
-  first slice; gives signatures real types in the slot positions.
 - [Container type parameterization](../roadmap/container-type-parameterization.md)
   — `List<Number>`, `Dict<Str, Any>`, etc.
 - [Per-type identity for structs and methods](../roadmap/per-type-identity.md)

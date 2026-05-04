@@ -43,9 +43,8 @@ substrate to be designed against a real consumer.
 ## Dependencies
 
 **Requires:**
-- [Per-parameter type annotations](per-param-type-annotations.md) — method signatures
-  carry the same typed surface as free functions.
-- [Container type parameterization](container-type-parameterization.md) — same.
+- [Container type parameterization](container-type-parameterization.md) — method
+  signatures will need parameterized container types in the same slots free functions do.
 
 **Unblocks:**
 - [Open issues from the leak-fix audit](leak-fix-audit.md)

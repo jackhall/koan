@@ -72,7 +72,7 @@ in place).
 Users add what look like new keyword forms by writing `FN` definitions.
 
 ```
-FN (LOOP body) -> Any = (...)
+FN (LOOP body: KExpression) -> Any = (...)
 ```
 
 defines a new dispatchable signature: keyword `LOOP`, slot `body`. The parser

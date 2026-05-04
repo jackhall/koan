@@ -15,6 +15,6 @@ Smaller pieces called out in passing as the larger items shipped:
 
 ## Dependencies
 
-No hard prerequisites. The catch-builtins entry intersects with the type-system items
-([Per-parameter type annotations](per-param-type-annotations.md) onward) but does not
-strictly require them.
+No hard prerequisites. The catch-builtins entry intersects with the open type-system
+items ([container type parameterization](container-type-parameterization.md) onward)
+but does not strictly require them.

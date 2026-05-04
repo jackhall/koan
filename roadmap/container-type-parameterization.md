@@ -36,9 +36,8 @@ nested types so the four parameterizable host types stop being opaque.
 
 ## Dependencies
 
-**Requires:**
-- [Per-parameter type annotations](per-param-type-annotations.md) — uses the same parser
-  hook, extended to read nested types.
+**Requires:** none. Per-parameter type annotations are landed; this work extends the same
+parser hook to read nested types.
 
 **Unblocks:**
 - [Per-type identity for structs and methods](per-type-identity.md)

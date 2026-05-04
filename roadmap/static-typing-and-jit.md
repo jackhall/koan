@@ -53,7 +53,6 @@ is the same phase emitting code.
 - [Open issues from the leak-fix audit](leak-fix-audit.md) — without a stable memory
   model, both the checker's understanding of value lifetimes and the JIT's codegen
   contract have nothing solid to target.
-- [Per-parameter type annotations](per-param-type-annotations.md)
 - [Container type parameterization](container-type-parameterization.md)
 - [Per-type identity for structs and methods](per-type-identity.md)
 - [`TRAIT` builtin for structural typing](traits.md)

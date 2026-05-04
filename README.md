@@ -31,7 +31,7 @@ Example:
 ```
 LET x = 42
 PRINT "hello"
-FN (ECHO x) -> Number = (x)
+FN (ECHO x: Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 

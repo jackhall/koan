@@ -172,31 +172,37 @@ want a runtime check.
 
 `FN <signature> -> <ReturnType> = <body>` registers a function. The signature
 is a parens-wrapped expression mixing fixed `Keyword` tokens (the dispatch
-shape) and `Identifier` parameter slots. The body is a parens-wrapped
-expression evaluated at call time.
+shape) and typed parameter slots written as `name: Type`. The body is a
+parens-wrapped expression evaluated at call time.
 
 ```
-FN (DOUBLE x) -> Number = (x)
-FN (a SAID) -> Null = (PRINT a)         # infix-shaped — keyword in non-leading position
-FN (FIRST x y) -> Null = (PRINT x)      # multiple params
+FN (DOUBLE x: Number) -> Number = (x)
+FN (a: Str SAID) -> Null = (PRINT a)            # infix-shaped — keyword in non-leading position
+FN (FIRST x: Str y: Str) -> Null = (PRINT x)    # multiple params
+FN (ADD x: Number, y: Number) -> Number = (x)   # commas optional, same shape
 
 DOUBLE 21        # → 21
 "hi" SAID        # prints "hi"
 FIRST "a" "b"    # prints "a"
 ```
 
-The return type is **non-optional** and **enforced at runtime**. A body whose
-result doesn't match the declared type fails with
-`KErrorKind::TypeMismatch { arg: "<return>", … }`. Use `-> Any` to opt out.
+Both the parameter types and the return type are **non-optional**. A bare
+`x` without `: Type` is a parse error. Calls whose argument types don't satisfy
+the signature fail at dispatch (`KErrorKind::DispatchFailed`); the same call
+shape with different parameter types routes to a different overload by
+slot-specificity. Use `: Any` to opt a slot out of type checking.
+
+The return type is **enforced at runtime**. A body whose result doesn't match
+the declared type fails with `KErrorKind::TypeMismatch { arg: "<return>", … }`.
+Use `-> Any` to opt out.
 
 A signature must contain at least one `Keyword` (the dispatch token); otherwise
-it would shadow `value_lookup`/`value_pass`. Type-name parts inside a signature
-are rejected — types live only in the `-> Type` slot.
+it would shadow `value_lookup`/`value_pass`.
 
 `FN` returns the registered `KFunction`, so you can capture it as a value:
 
 ```
-LET f = (FN (DOUBLE x) -> Number = (x))
+LET f = (FN (DOUBLE x: Number) -> Number = (x))
 f (x: 21)        # → 21, via call_by_name (named arguments)
 ```
 
@@ -205,7 +211,7 @@ introduced by its parameter name and a colon. Order is independent of the
 declaration:
 
 ```
-LET pair = (FN (a TIMES b) -> Number = (a))
+LET pair = (FN (a: Number TIMES b: Number) -> Number = (a))
 pair (a: 3, b: 4)        # → 3
 pair (b: 4, a: 3)        # → 3 (same call, different argument order)
 ```
@@ -354,7 +360,7 @@ short-circuit to the top level. Intentional `null` values (`IF false THEN x`,
 ```
 UNION Greeting = (formal: Str casual: Str)
 
-FN (SAY msg) -> Null = (PRINT msg)
+FN (SAY msg: Str) -> Null = (PRINT msg)
 
 LET hello = (Greeting (casual "hey"))
 
@@ -366,7 +372,7 @@ MATCH (hello) WITH
 What runs:
 
 1. `UNION Greeting = ...` registers a tagged-union type with two variants.
-2. `FN (SAY msg) -> Null = (PRINT msg)` defines a one-arg function over
+2. `FN (SAY msg: Str) -> Null = (PRINT msg)` defines a one-arg function over
    strings.
 3. `LET hello = (Greeting (casual "hey"))` builds a `Tagged` value with tag
    `casual` and payload `"hey"`, and binds it as `hello`.
@@ -383,7 +389,7 @@ One line per surface form. Sources under
 | `LET <name> = <value>`                                | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/dispatch/builtins/let_binding.rs)        |
 | `PRINT <msg:Str>`                                     | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/dispatch/builtins/print.rs)                    |
 | `IF <pred:Bool> THEN <expr>`                          | Lazy: dispatch `<expr>` only when `<pred>` is true. Wrap `<expr>` in parens.                    | [if_then.rs](src/dispatch/builtins/if_then.rs)                |
-| `FN <sig> -> <Type> = <body>`                         | Register a user function with signature `<sig>` and runtime-enforced return type. Returns the function. | [fn_def.rs](src/dispatch/builtins/fn_def.rs)          |
+| `FN <sig> -> <Type> = <body>`                         | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/dispatch/builtins/fn_def.rs)          |
 | `UNION <Name> = (<schema>)` / `UNION (<schema>)`      | Declare a tagged-union type. Named form binds `<Name>` in scope.                                | [union.rs](src/dispatch/builtins/union.rs)                    |
 | `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/dispatch/builtins/struct_def.rs)          |
 | `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/dispatch/builtins/match_case.rs)          |
@@ -400,7 +406,6 @@ Tracked in [ROADMAP.md](ROADMAP.md):
 - **No user-declarable traits.** `UNION` and `STRUCT` cover sum and product
   types and `.` reads fields off a struct value, but there's no syntax yet
   for declaring a trait. `KType` is otherwise a closed enum.
-- **No per-parameter type annotations** on user functions (uniformly `Any`).
 - **No arithmetic, comparison, or logical operators.** `1 + 1` doesn't parse
   as addition. The character-trigger registry only does syntactic desugaring.
 - **No loops.** Recursion is the iteration model; tail calls collapse cleanly.

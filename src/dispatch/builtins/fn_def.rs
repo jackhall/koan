@@ -21,13 +21,15 @@ use super::{err, register_builtin};
 /// at call time.
 ///
 /// Signature shape: each `Keyword` part becomes a `SignatureElement::Keyword` (a fixed token
-/// in the call site); each `Identifier` part becomes an `Argument` of type `Any` named after
-/// the identifier (a slot the caller supplies). At least one `Keyword` is required so the
-/// signature has a fixed token to dispatch on — a signature of all-Identifier slots would
-/// shadow `value_lookup`/`value_pass`. Type-name parts inside the signature itself are
-/// rejected — types appear only in the `-> Type` return slot, not in parameter positions
-/// (per-param annotations are a deferred roadmap item). Other shapes (literals, nested
-/// expressions in the signature) are rejected with a `ShapeError`.
+/// in the call site); each `Identifier` must be followed by `: Type` to form an `Argument`
+/// triple, producing a typed parameter slot the caller supplies. Per-param types are
+/// dispatch-checked via `Argument::matches`, so a call whose argument types don't satisfy
+/// the signature surfaces as `DispatchFailed: no matching function` (same path as builtins);
+/// overloads on different parameter types route to the right body via slot-specificity.
+/// At least one `Keyword` is required so the signature has a fixed token to dispatch on —
+/// a signature of all-Argument slots would shadow `value_lookup`/`value_pass`. Bare
+/// identifiers (without `: Type`), stray type tokens, literals, and nested expressions in
+/// the signature are rejected with a `ShapeError`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -67,14 +69,8 @@ pub fn body<'a>(
     };
 
     let elements = match parse_signature_elements(&signature_expr) {
-        Some(es) => es,
-        None => {
-            return err(KError::new(KErrorKind::ShapeError(
-                "FN signature must contain only Keyword and Identifier parts \
-                 (type names appear in `-> ReturnType`, not in parameter slots)"
-                    .to_string(),
-            )));
-        }
+        Ok(es) => es,
+        Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
     // Pick the first Keyword as the data-table key. `scope.functions` does the load-bearing
     // dispatch lookup by signature; `scope.data` is mostly for discoverability and
@@ -116,19 +112,69 @@ pub fn body<'a>(
     BodyResult::Value(obj)
 }
 
-/// Convert the captured signature `KExpression` into a list of `SignatureElement`s.
-/// `Keyword(s)` → fixed `Keyword(s)` token. `Identifier(s)` → `Argument { name: s, ktype: Any }`.
-/// Any other variant (`Literal`, `Expression`, `ListLiteral`, `Future`) means the user wrote
-/// something that isn't a valid signature shape — return `None` and let the caller bail.
-fn parse_signature_elements<'a>(signature: &KExpression<'a>) -> Option<Vec<SignatureElement>> {
-    signature.parts.iter().map(|part| match part {
-        ExpressionPart::Keyword(s) => Some(SignatureElement::Keyword(s.clone())),
-        ExpressionPart::Identifier(s) => Some(SignatureElement::Argument(Argument {
-            name: s.clone(),
-            ktype: KType::Any,
-        })),
-        _ => None,
-    }).collect()
+/// Convert the captured signature `KExpression` into a list of `SignatureElement`s. Walks
+/// the parts left-to-right, consuming bare `Keyword` parts as fixed tokens and
+/// `Identifier(name) Keyword(":") Type(t)` triples as typed `Argument` slots. Bare
+/// identifiers without a `: Type` annotation, unknown type names, stray `:` or `Type`
+/// parts, and any other variant (`Literal`, `Expression`, `ListLiteral`, `DictLiteral`,
+/// `Future`) yield an `Err(message)` for the caller to wrap in `ShapeError`. The colon
+/// keyword is consumed only as part of a triple — a stray `:` outside that shape is a
+/// shape error.
+fn parse_signature_elements<'a>(
+    signature: &KExpression<'a>,
+) -> Result<Vec<SignatureElement>, String> {
+    let parts = &signature.parts;
+    let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
+    let mut i = 0;
+    while i < parts.len() {
+        match &parts[i] {
+            ExpressionPart::Keyword(s) if s == ":" => {
+                return Err(
+                    "FN signature has a stray `:` outside a `<name>: <Type>` triple".to_string(),
+                );
+            }
+            ExpressionPart::Keyword(s) => {
+                elements.push(SignatureElement::Keyword(s.clone()));
+                i += 1;
+            }
+            ExpressionPart::Identifier(name) => {
+                let colon = parts.get(i + 1);
+                let ty = parts.get(i + 2);
+                match (colon, ty) {
+                    (Some(ExpressionPart::Keyword(c)), Some(ExpressionPart::Type(t))) if c == ":" => {
+                        let ktype = KType::from_name(t).ok_or_else(|| {
+                            format!(
+                                "unknown type name `{t}` in FN signature for parameter `{name}`",
+                            )
+                        })?;
+                        elements.push(SignatureElement::Argument(Argument {
+                            name: name.clone(),
+                            ktype,
+                        }));
+                        i += 3;
+                    }
+                    _ => {
+                        return Err(format!(
+                            "FN signature parameter `{name}` requires a `: Type` annotation \
+                             (e.g. `{name}: Number`)",
+                        ));
+                    }
+                }
+            }
+            ExpressionPart::Type(t) => {
+                return Err(format!(
+                    "FN signature has a stray type `{t}` outside a `<name>: <Type>` triple",
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "FN signature part `{}` is not a Keyword, Identifier, or `<name>: <Type>` triple",
+                    other.summarize(),
+                ));
+            }
+        }
+    }
+    Ok(elements)
 }
 
 /// Pull a `KType::KExpression`-typed argument out of the bundle and return the inner
@@ -363,7 +409,7 @@ mod tests {
     #[test]
     fn fn_with_single_param_substitutes_at_call_site() {
         let bytes = capture_program_output(
-            "FN (SAY x) -> Null = (PRINT x)\n\
+            "FN (SAY x: Str) -> Null = (PRINT x)\n\
              SAY \"hello\"",
         );
         assert_eq!(bytes, b"hello\n");
@@ -372,7 +418,7 @@ mod tests {
     #[test]
     fn fn_with_two_params_binds_each_by_name() {
         let bytes = capture_program_output(
-            "FN (FIRST x y) -> Null = (PRINT x)\n\
+            "FN (FIRST x: Str y: Str) -> Null = (PRINT x)\n\
              FIRST \"one\" \"two\"",
         );
         assert_eq!(bytes, b"one\n");
@@ -381,7 +427,7 @@ mod tests {
     #[test]
     fn fn_with_infix_shape_dispatches_on_keyword_position() {
         let bytes = capture_program_output(
-            "FN (a SAID) -> Null = (PRINT a)\n\
+            "FN (a: Str SAID) -> Null = (PRINT a)\n\
              \"hi\" SAID",
         );
         assert_eq!(bytes, b"hi\n");
@@ -391,7 +437,7 @@ mod tests {
     fn fn_param_shadows_outer_binding_at_call_site() {
         let bytes = capture_program_output(
             "LET msg = \"outer\"\n\
-             FN (SAY msg) -> Null = (PRINT msg)\n\
+             FN (SAY msg: Str) -> Null = (PRINT msg)\n\
              SAY \"param wins\"",
         );
         assert_eq!(bytes, b"param wins\n");
@@ -400,7 +446,7 @@ mod tests {
     #[test]
     fn fn_param_substitutes_inside_nested_subexpression() {
         let bytes = capture_program_output(
-            "FN (WRAP x) -> Null = (PRINT (x))\n\
+            "FN (WRAP x: Str) -> Null = (PRINT (x))\n\
              WRAP \"wrapped\"",
         );
         assert_eq!(bytes, b"wrapped\n");
@@ -411,7 +457,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (ECHO v) -> Number = (v)");
+        run(scope, "FN (ECHO v: Number) -> Number = (v)");
 
         let result = run_one(scope, parse_one("ECHO 7"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
@@ -422,7 +468,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (x) -> Null = (PRINT \"oops\")");
+        run(scope, "FN (x: Number) -> Null = (PRINT \"oops\")");
         let data = scope.data.borrow();
         assert!(data.get("x").is_none());
     }
@@ -438,7 +484,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (ECHO v) -> Number = (v)");
+        run(scope, "FN (ECHO v: Number) -> Number = (v)");
         let baseline = arena.alloc_count();
         for _ in 0..50 {
             let _ = run_one(scope, parse_one("ECHO 7"));
@@ -463,7 +509,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (DOUBLE x) -> Number = (x)");
+        run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
 
         let data = scope.data.borrow();
         let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
@@ -482,7 +528,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let exprs = parse("FN (DOUBLE x) = (PRINT \"x\")").expect("parse should succeed");
+        let exprs = parse("FN (DOUBLE x: Number) = (PRINT \"x\")").expect("parse should succeed");
         let mut sched = Scheduler::new();
         for expr in exprs {
             sched.add_dispatch(expr, scope);
@@ -500,7 +546,7 @@ mod tests {
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(parse_one("FN (DOUBLE x) -> Bogus = (x)"), scope);
+        let id = sched.add_dispatch(parse_one("FN (DOUBLE x: Number) -> Bogus = (x)"), scope);
         sched.execute().expect("execute does not surface per-slot errors");
         let err = match sched.read_result(id) {
             Err(e) => e,
@@ -561,10 +607,139 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let result = run_one(scope, parse_one("FN (DOUBLE x) -> Number = (x)"));
+        let result = run_one(scope, parse_one("FN (DOUBLE x: Number) -> Number = (x)"));
         assert!(
             matches!(result, KObject::KFunction(_, _)),
             "FN should return its registered KFunction",
         );
+    }
+
+    /// A typed parameter records its declared `KType` on the registered signature, rather
+    /// than collapsing to `Any` as it did before per-param annotations existed.
+    #[test]
+    fn fn_typed_param_records_ktype_on_signature() {
+        use crate::dispatch::kfunction::{Argument, KType};
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
+
+        let data = scope.data.borrow();
+        let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
+        let f = match entry {
+            KObject::KFunction(f, _) => *f,
+            _ => panic!("expected DOUBLE to bind a KFunction"),
+        };
+        match f.signature.elements.as_slice() {
+            [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
+                assert_eq!(kw, "DOUBLE");
+                assert_eq!(name, "x");
+                assert_eq!(*ktype, KType::Number);
+            }
+            _ => panic!("expected signature shape [Keyword(\"DOUBLE\"), Argument(x: Number)]"),
+        }
+    }
+
+    /// A call whose argument satisfies the parameter type dispatches into the body.
+    #[test]
+    fn fn_typed_param_dispatches_on_matching_call() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
+        let result = run_one(scope, parse_one("DOUBLE 7"));
+        assert!(matches!(result, KObject::Number(n) if *n == 7.0));
+    }
+
+    /// A call whose argument doesn't satisfy the parameter type fails at dispatch with
+    /// `DispatchFailed` (the per-slot type check filters out the only candidate, so the
+    /// scope chain runs out without a match). Same path as builtins.
+    #[test]
+    fn fn_typed_param_rejects_mismatched_call() {
+        use crate::dispatch::kerror::KErrorKind;
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
+        // The dispatch failure surfaces via `execute()` here (the queue can't make
+        // progress past the unmatchable call). The other shape — `execute() -> Ok` plus
+        // a per-slot Err — is what return-type mismatches use; this case is different.
+        let err = sched.execute().expect_err("DOUBLE \"hi\" should fail dispatch");
+        assert!(
+            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+            "expected DispatchFailed for type-mismatched DOUBLE call, got {err}",
+        );
+    }
+
+    /// Two FNs sharing a shape but differing on parameter type both register, and dispatch
+    /// routes each call to the body whose type signature matches. Exercises the existing
+    /// slot-specificity path now that user-fns can carry concrete types.
+    #[test]
+    fn fn_overloads_dispatch_by_param_type() {
+        let bytes = capture_program_output(
+            "FN (DESCRIBE x: Number) -> Null = (PRINT \"number\")\n\
+             FN (DESCRIBE x: Str) -> Null = (PRINT \"string\")\n\
+             DESCRIBE 7\n\
+             DESCRIBE \"hi\"",
+        );
+        assert_eq!(bytes, b"number\nstring\n");
+    }
+
+    /// A bare identifier without `: Type` in a parameter slot is rejected with a
+    /// `ShapeError` naming the offending parameter.
+    #[test]
+    fn fn_param_without_annotation_is_rejected() {
+        use crate::dispatch::kerror::KErrorKind;
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
+        sched.execute().expect("execute does not surface per-slot errors");
+        let err = match sched.read_result(id) {
+            Err(e) => e,
+            Ok(_) => panic!("untyped parameter should error"),
+        };
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`x`")),
+            "expected ShapeError mentioning `x`, got {err}",
+        );
+        let data = scope.data.borrow();
+        assert!(data.get("DOUBLE").is_none(), "DOUBLE should not register");
+    }
+
+    /// An unknown type name in a parameter slot surfaces as a `ShapeError` mentioning the
+    /// bad name, mirroring the return-type case.
+    #[test]
+    fn fn_param_with_unknown_type_name_is_rejected() {
+        use crate::dispatch::kerror::KErrorKind;
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(parse_one("FN (DOUBLE x: Bogus) -> Number = (x)"), scope);
+        sched.execute().expect("execute does not surface per-slot errors");
+        let err = match sched.read_result(id) {
+            Err(e) => e,
+            Ok(_) => panic!("unknown param type should error"),
+        };
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
+            "expected ShapeError mentioning `Bogus`, got {err}",
+        );
+    }
+
+    /// Comma-separated parameter triples parse the same as whitespace-separated ones —
+    /// the parser strips commas inside expression frames, so `(x: Number, y: Number)`
+    /// and `(x: Number y: Number)` are interchangeable.
+    #[test]
+    fn fn_comma_separated_typed_params_register() {
+        let bytes = capture_program_output(
+            "FN (FIRST x: Number, y: Number) -> Number = (x)\n\
+             PRINT (FIRST 1 2)",
+        );
+        assert_eq!(bytes, b"1\n");
     }
 }

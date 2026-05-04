@@ -184,7 +184,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
+        run(scope, "LET f = (FN (DOUBLE x: Number) -> Number = (x))");
         let result = run_one(scope, parse_one("f (x: 7)"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
@@ -196,7 +196,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
+        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
         let result = run_one(scope, parse_one("f (a: 1, b: 2)"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
@@ -209,7 +209,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
+        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
         let result = run_one(scope, parse_one("f (b: 2, a: 1)"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
@@ -220,7 +220,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
+        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
         let err = run_one_err(scope, parse_one("f (a: 1)"));
         assert!(
             matches!(&err.kind, KErrorKind::MissingArg(name) if name == "b"),
@@ -236,7 +236,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (a PICK b) -> Number = (a))");
+        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
         let err = run_one_err(scope, parse_one("f (a: 1, b: 2, c: 3)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown name") && msg.contains("`c`")),
@@ -251,7 +251,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
+        run(scope, "LET f = (FN (DOUBLE x: Number) -> Number = (x))");
         let err = run_one_err(scope, parse_one("f (a 1)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("separator") || msg.contains("triples")),
@@ -265,7 +265,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET f = (FN (DOUBLE x) -> Number = (x))");
+        run(scope, "LET f = (FN (DOUBLE x: Number) -> Number = (x))");
         let err = run_one_err(scope, parse_one("f (x: 1, x: 2)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
@@ -384,7 +384,7 @@ mod tests {
         let scope = build_scope(&arena, captured);
         run(
             scope,
-            "FN (MAKE) -> KFunction = (FN (ECHO x) -> Number = (x))\n\
+            "FN (MAKE) -> KFunction = (FN (ECHO x: Number) -> Number = (x))\n\
              LET f = (MAKE)",
         );
         let result = run_one(scope, parse_one("f (x: 42)"));
@@ -402,7 +402,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "FN (MAKE) -> List = ([(FN (ECHO x) -> Number = (x))])");
+        run(scope, "FN (MAKE) -> List = ([(FN (ECHO x: Number) -> Number = (x))])");
         let result = run_one(scope, parse_one("(MAKE)"));
         let items = match result {
             KObject::List(items) => items,

@@ -15,14 +15,15 @@ FN (<signature>) -> ReturnType = (<body>)
 ```
 
 The signature is itself a [`KExpression`](../src/parse/kexpression.rs) mixing
-fixed `Keyword` tokens and `Identifier` slots. Identifier slots bind as
-`Any`-typed `Argument`s; keyword tokens are part of the dispatch key. The body
-is a `KExpression` evaluated at call time.
+fixed `Keyword` tokens and `name: Type` parameter triples. The triple form is
+required — a bare identifier without `: Type` is a parse error; use `: Any` to
+opt out of type-checking for a slot. Keyword tokens are part of the dispatch
+key. The body is a `KExpression` evaluated at call time.
 
 Example:
 
 ```
-FN (ECHO x) -> Number = (x)
+FN (ECHO x: Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
@@ -84,7 +85,7 @@ for how this lets users add what look like new keyword forms.
 
 ## Open work
 
-- **Per-parameter type annotations** —
-  [per-param-type-annotations.md](../roadmap/per-param-type-annotations.md).
-  All slots are currently `Any`-typed; first slice of the type/trait sequence
-  ([type-system.md](type-system.md)).
+The next type-system slice is
+[container type parameterization](../roadmap/container-type-parameterization.md)
+— `List<Number>`, `Dict<Str, Any>`, etc. See
+[type-system.md](type-system.md) for the full type/trait sequence.
