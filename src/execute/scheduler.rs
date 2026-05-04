@@ -134,12 +134,12 @@ impl<'a> Scheduler<'a> {
                             // `signature.return_type`. `Any` short-circuits; mismatch
                             // synthesizes a TypeMismatch with the function's frame.
                             if let Some(f) = prev_function {
-                                let rt = f.signature.return_type;
+                                let rt = &f.signature.return_type;
                                 if !rt.matches_value(&lifted_obj) {
                                     let err = KError::new(KErrorKind::TypeMismatch {
                                         arg: "<return>".to_string(),
-                                        expected: rt.name().to_string(),
-                                        got: lifted_obj.ktype().name().to_string(),
+                                        expected: rt.name(),
+                                        got: lifted_obj.ktype().name(),
                                     })
                                     .with_frame(Frame {
                                         function: f.summarize(),

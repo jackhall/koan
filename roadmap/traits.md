@@ -50,8 +50,10 @@ the comparator has no rule to break the tie.
 **Requires:**
 - [Per-type identity for structs and methods](per-type-identity.md) — without it a trait
   can be implemented "for `Struct`" but not "for `Point` specifically."
-- [Container type parameterization](container-type-parameterization.md) — `Iterable<T>`
-  and `Group<T>` are not expressible without inner-type slots.
+
+Container type parameterization is shipped — `Iterable<T>` and `Group<T>` are now
+expressible at the signature layer; this work needs to add the trait surface that uses
+them.
 
 **Unblocks:**
 - [Trait inheritance](trait-inheritance.md)

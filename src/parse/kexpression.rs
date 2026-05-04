@@ -155,6 +155,19 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
+    /// Slot-aware resolve. Identical to `resolve` for every variant except `Type`: when the
+    /// receiving slot is `KType::TypeExprRef`, the structured `TypeExpr` is preserved as a
+    /// `KObject::TypeExprValue` rather than flattened to a name string. Used by `KFunction::bind`
+    /// so FN's return-type slot can recover parameterized types like `List<Number>`.
+    pub fn resolve_for(&self, slot: &crate::dispatch::kfunction::KType) -> KObject<'a> {
+        if let (ExpressionPart::Type(t), crate::dispatch::kfunction::KType::TypeExprRef) =
+            (self, slot)
+        {
+            return KObject::TypeExprValue(t.clone());
+        }
+        self.resolve()
+    }
+
     pub fn resolve(&self) -> KObject<'a> {
         match self {
             ExpressionPart::Keyword(s) => KObject::KString(s.clone()),
@@ -249,6 +262,7 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 
 impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
+    fn ktype(&self) -> crate::dispatch::kfunction::KType { crate::dispatch::kfunction::KType::KExpression }
     fn summarize(&self) -> String {
         self.parts.iter()
             .map(|p| p.summarize())

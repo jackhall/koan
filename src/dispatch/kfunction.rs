@@ -1,10 +1,19 @@
+//! `KFunction` and the scheduler-facing types it depends on. A `KFunction` carries an
+//! `ExpressionSignature` (its call shape — defined in `signature.rs`), a `Body` (builtin
+//! `fn` pointer or captured user-defined `KExpression`), and a captured scope for lexical
+//! lookup of free names. The `bind` / `apply` methods produce a `KFuture` (positional) or a
+//! tail-rewriting `BodyResult` (named-argument) that the scheduler runs.
+//!
+//! Sibling modules: [`ktype`](super::ktype) owns the `KType` enum and its specificity /
+//! validation logic; [`signature`](super::signature) owns `ExpressionSignature`,
+//! `SignatureElement`, `Argument`, `Specificity`, and the `UntypedKey` machinery.
+//! `kfunction` re-exports the public names from those modules so callers that wrote
+//! `use crate::dispatch::kfunction::{KType, Argument, ...}` keep working unchanged.
+
 use std::collections::HashMap;
 use std::rc::Rc;
 
-// (CallArena is reference-counted via std::rc::Rc — re-exporting here for `BodyResult::Tail`
-// users.)
-
-use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral, TypeExpr, TypeParams};
+use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::arena::CallArena;
 use super::kerror::{KError, KErrorKind};
@@ -12,42 +21,13 @@ use super::kobject::KObject;
 use super::ktraits::Parseable;
 use super::scope::{KFuture, Scope};
 
-/// One position in a function's structural shape: a `Keyword` (fixed token) or a typeless
-/// `Slot`. A sequence of these is the dispatch bucket key; overloads sharing a shape compete
-/// on `KType` specificity within the bucket.
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub enum UntypedElement {
-    Keyword(String),
-    Slot,
-}
-
-/// Bucket key produced by `ExpressionSignature::untyped_key` and `KExpression::untyped_key`.
-/// They MUST agree on the same key for any signature/expression that should match. The parser
-/// classifies source tokens into `ExpressionPart::Keyword` vs `ExpressionPart::Identifier` up
-/// front using `is_keyword_token`; signatures map every `SignatureElement::Token` to
-/// `Keyword`. `ExpressionSignature::normalize` uppercases lowercase registered tokens so the
-/// two sides agree on the spelling.
-pub type UntypedKey = Vec<UntypedElement>;
-
-/// True iff `s` is a keyword (fixed token) rather than an identifier when classifying a source
-/// token: no lowercase ASCII letters. `LET`, `=`, `THEN` qualify; `x`, `foo`, `Foo` don't.
-/// Used by the parser's `classify_atom` and by `ExpressionSignature::normalize` to keep the
-/// two ends of the dispatch contract aligned.
-pub fn is_keyword_token(s: &str) -> bool {
-    !s.chars().any(|c| c.is_ascii_lowercase())
-}
-
-/// Result of comparing two signatures' specificity. Returned by
-/// `ExpressionSignature::specificity_vs`. `Equal` means "identical slot types"; `Incomparable`
-/// means "neither dominates" — e.g. `<Number> <Any>` vs `<Any> <Number>` for an input that
-/// matches both.
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum Specificity {
-    StrictlyMore,
-    StrictlyLess,
-    Equal,
-    Incomparable,
-}
+// Re-exports so `use crate::dispatch::kfunction::{KType, Argument, ExpressionSignature, ...}`
+// in 30+ existing call sites keeps working after the split.
+pub use super::ktype::KType;
+pub use super::signature::{
+    is_keyword_token, Argument, ExpressionSignature, SignatureElement, Specificity,
+    UntypedElement, UntypedKey,
+};
 
 /// Stable handle to a node in the scheduler's DAG. Lives here (rather than `execute/scheduler`)
 /// so `BodyResult::Defer` can name a node without `dispatch` having to import from `execute` —
@@ -229,11 +209,11 @@ impl<'a> KFunction<'a> {
                     if !arg.matches(part) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: arg.name.clone(),
-                            expected: arg.ktype.name().to_string(),
+                            expected: arg.ktype.name(),
                             got: part.summarize(),
                         }));
                     }
-                    args.insert(arg.name.clone(), Rc::new(part.resolve()));
+                    args.insert(arg.name.clone(), Rc::new(part.resolve_for(&arg.ktype)));
                 }
             }
         }
@@ -340,260 +320,3 @@ impl<'a> ArgumentBundle<'a> {
         }
     }
 }
-
-/// The shape a function expects: an ordered mix of fixed `Token`s and typed `Argument` slots.
-/// `Scope::dispatch` walks each registered function's signature looking for one whose
-/// `matches` returns true for an incoming `KExpression`.
-pub struct ExpressionSignature {
-    pub return_type: KType,
-    pub elements: Vec<SignatureElement>,
-}
-
-impl ExpressionSignature {
-    pub fn matches(&self, expr: &KExpression<'_>) -> bool {
-        if self.elements.len() != expr.parts.len() {
-            return false;
-        }
-        self.elements.iter().zip(&expr.parts).all(|(el, part)| match (el, part) {
-            (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
-            (SignatureElement::Keyword(_), _) => false,
-            (SignatureElement::Argument(arg), part) => arg.matches(part),
-        })
-    }
-
-    /// Bucket key for this signature: keyword tokens become `Keyword(s)`, argument slots become
-    /// `Slot`. Slot types are erased — same shape with different types lives in the same bucket
-    /// and competes on specificity at dispatch time.
-    pub fn untyped_key(&self) -> UntypedKey {
-        self.elements
-            .iter()
-            .map(|el| match el {
-                SignatureElement::Keyword(s) => UntypedElement::Keyword(s.clone()),
-                SignatureElement::Argument(_) => UntypedElement::Slot,
-            })
-            .collect()
-    }
-
-    /// Registration-time fixup: uppercase any lowercase fixed `Token` so its bucket key matches
-    /// what dispatch will compute from incoming expressions. TODO(monadic-effects): once
-    /// effects exist, emit a warning here instead of silently rewriting — rejecting would lose
-    /// the "drop in a builtin without thinking about caps" affordance.
-    pub fn normalize(&mut self) {
-        for el in &mut self.elements {
-            if let SignatureElement::Keyword(s) = el {
-                if s.chars().any(|c| c.is_ascii_lowercase()) {
-                    *s = s.to_ascii_uppercase();
-                }
-            }
-        }
-    }
-
-    /// Partial-order specificity comparison for overload tiebreaking. Assumes `self` and
-    /// `other` share an `UntypedKey` (caller's responsibility) — only argument slots
-    /// contribute, since fixed-token positions are equal by construction.
-    pub fn specificity_vs(&self, other: &ExpressionSignature) -> Specificity {
-        let mut any_more = false;
-        let mut any_less = false;
-        for (a, b) in self.elements.iter().zip(other.elements.iter()) {
-            if let (SignatureElement::Argument(aa), SignatureElement::Argument(bb)) = (a, b) {
-                if aa.ktype.is_more_specific_than(bb.ktype) {
-                    any_more = true;
-                } else if bb.ktype.is_more_specific_than(aa.ktype) {
-                    any_less = true;
-                }
-            }
-        }
-        match (any_more, any_less) {
-            (true, false) => Specificity::StrictlyMore,
-            (false, true) => Specificity::StrictlyLess,
-            (false, false) => Specificity::Equal,
-            (true, true) => Specificity::Incomparable,
-        }
-    }
-}
-
-/// One slot in an `ExpressionSignature`: a literal `Token` that must match by string equality,
-/// or a typed `Argument` whose value is captured into the `ArgumentBundle`.
-pub enum SignatureElement {
-    Keyword(String),
-    Argument(Argument),
-}
-
-/// A typed parameter slot in a signature. `name` keys it in the `ArgumentBundle`; `ktype` gates
-/// what `ExpressionPart`s it accepts.
-pub struct Argument {
-    pub name: String,
-    pub ktype: KType,
-}
-
-impl Argument {
-    /// Per-part type check.
-    pub fn matches(&self, part: &ExpressionPart<'_>) -> bool {
-        match self.ktype {
-            KType::Any => true,
-            KType::Number => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::Number(_))
-                    | ExpressionPart::Future(KObject::Number(_))
-            ),
-            KType::Str => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::String(_))
-                    | ExpressionPart::Future(KObject::KString(_))
-            ),
-            KType::Bool => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::Boolean(_))
-                    | ExpressionPart::Future(KObject::Bool(_))
-            ),
-            KType::Null => matches!(
-                part,
-                ExpressionPart::Literal(KLiteral::Null) | ExpressionPart::Future(KObject::Null)
-            ),
-            KType::List => matches!(
-                part,
-                ExpressionPart::ListLiteral(_) | ExpressionPart::Future(KObject::List(_))
-            ),
-            KType::Dict => matches!(
-                part,
-                ExpressionPart::DictLiteral(_) | ExpressionPart::Future(KObject::Dict(_))
-            ),
-            KType::KFunction => matches!(
-                part,
-                ExpressionPart::Future(KObject::KFunction(_, _))
-                    | ExpressionPart::Future(KObject::KFuture(_, _))
-            ),
-            KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
-            KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
-            KType::TypeRef => matches!(part, ExpressionPart::Type(_)),
-            KType::Type => matches!(
-                part,
-                ExpressionPart::Future(KObject::TaggedUnionType(_))
-                    | ExpressionPart::Future(KObject::StructType { .. })
-            ),
-            KType::Tagged => matches!(
-                part,
-                ExpressionPart::Future(KObject::Tagged { .. })
-            ),
-            KType::Struct => matches!(
-                part,
-                ExpressionPart::Future(KObject::Struct { .. })
-            ),
-        }
-    }
-}
-
-/// Type tags used by `Argument::matches` at dispatch time, by user-facing return-type
-/// annotations on functions, and by the scheduler's runtime return-type check.
-///
-/// `KExpression` is the lazy slot: it accepts an unevaluated `ExpressionPart::Expression`
-/// so the receiving builtin can choose when (or whether) to run it. `TypeRef` is a meta-type
-/// for argument slots that capture a parsed type-name token (`ExpressionPart::Type(_)`) —
-/// used by `FN`'s return-type annotation slot, not declarable in user code.
-///
-/// `Type` is the meta-type for any first-class type-value: a tagged-union schema produced by
-/// `UNION` or a struct schema produced by `STRUCT` are both `KType::Type` at runtime, so
-/// builtins that consume "a type" (construction primitives, future trait checks) can declare
-/// a single slot and accept either form.
-///
-/// Future work: let users define duck types instead of an enum.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum KType {
-    Number,
-    Str,
-    Bool,
-    Null,
-    List,
-    Dict,
-    KFunction,
-    Identifier,
-    KExpression,
-    TypeRef,
-    /// Meta-type for first-class type-values: `KObject::TaggedUnionType` and
-    /// `KObject::StructType` both report this. Consumed by construction primitives and any
-    /// builtin that takes "a type" as an argument.
-    Type,
-    /// A tagged value — one variant of a tagged union, carrying its tag and inner payload.
-    /// Produced by `TAG`, consumed by `MATCH` to branch by tag.
-    Tagged,
-    /// A struct value — a record of named fields produced by a struct-type constructor.
-    Struct,
-    Any,
-}
-
-impl KType {
-    /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`; concrete-vs-
-    /// concrete is incomparable (mutually exclusive — a `Number` slot won't match a `Str`
-    /// literal anyway). Returns `false` for equal types — strict, not reflexive.
-    pub fn is_more_specific_than(self, other: KType) -> bool {
-        !matches!(self, KType::Any) && matches!(other, KType::Any)
-    }
-
-    /// Short human-readable name for this type — used by error formatters and parsed back by
-    /// `from_name` for surface-level annotations.
-    pub fn name(self) -> &'static str {
-        match self {
-            KType::Number => "Number",
-            KType::Str => "Str",
-            KType::Bool => "Bool",
-            KType::Null => "Null",
-            KType::List => "List",
-            KType::Dict => "Dict",
-            KType::KFunction => "KFunction",
-            KType::Identifier => "Identifier",
-            KType::KExpression => "KExpression",
-            KType::TypeRef => "TypeRef",
-            KType::Type => "Type",
-            KType::Tagged => "Tagged",
-            KType::Struct => "Struct",
-            KType::Any => "Any",
-        }
-    }
-
-    /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
-    /// `KFunction`). Returns `None` for unknown names. `Identifier` and `TypeRef` are
-    /// dispatch-time meta-types — not surface-declarable, since no `KObject` value carries
-    /// them, so a function declaring such a return type could never satisfy its contract.
-    pub fn from_name(name: &str) -> Option<KType> {
-        match name {
-            "Number" => Some(KType::Number),
-            "Str" => Some(KType::Str),
-            "Bool" => Some(KType::Bool),
-            "Null" => Some(KType::Null),
-            "List" => Some(KType::List),
-            "Dict" => Some(KType::Dict),
-            "KFunction" => Some(KType::KFunction),
-            "KExpression" => Some(KType::KExpression),
-            "Type" => Some(KType::Type),
-            "Tagged" => Some(KType::Tagged),
-            "Struct" => Some(KType::Struct),
-            "Any" => Some(KType::Any),
-            _ => None,
-        }
-    }
-
-    /// Convert a parser `TypeExpr` into a `KType`. This is the surface-level type-parsing
-    /// boundary used by FN signatures, FN return-type slots, and UNION/STRUCT field types.
-    /// Phase 1 of container type parameterization handles only leaves — anything with
-    /// non-empty `TypeParams` surfaces a deferred-feature error rather than corrupting the
-    /// type tag. Phase 2 will replace this stub with structured KType variants.
-    pub fn from_type_expr(t: &TypeExpr) -> Result<KType, String> {
-        match &t.params {
-            TypeParams::None => KType::from_name(&t.name)
-                .ok_or_else(|| format!("unknown type name `{}`", t.name)),
-            TypeParams::List(_) | TypeParams::Function { .. } => Err(format!(
-                "parameterized type `{}` is not yet supported at the KType layer (phase 1: parser only)",
-                t.render()
-            )),
-        }
-    }
-
-    /// True iff a runtime `KObject` value satisfies this declared type. `Any` matches
-    /// everything; otherwise compare against the value's `ktype()`. Used by the scheduler's
-    /// post-call return-type check.
-    pub fn matches_value(self, obj: &KObject<'_>) -> bool {
-        matches!(self, KType::Any) || self == obj.ktype()
-    }
-}
-
-

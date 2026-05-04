@@ -16,11 +16,12 @@ system, expressions and parsing, and error handling. What's shipped so far: user
 functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimization, the
 leak fix (with lexical closures + per-call arenas), structured error propagation, the
 user-defined-types substrate (return-type enforcement at runtime), the IF-THEN→MATCH
-consolidation (`MATCH` accepts `Bool` directly via projection at entry), and per-parameter
-type annotations on user-fn signatures. The next signature revision after error handling
-lands monadic side-effect capture; the remaining type/trait sequence (container
-parameterization, methods, traits, trait inheritance) unlocks the items downstream
-(group-based operators), so it sits in the middle of the sequence rather than last.
+consolidation (`MATCH` accepts `Bool` directly via projection at entry), per-parameter
+type annotations on user-fn signatures, and container type parameterization (`List<T>`,
+`Dict<K, V>`, `Function<(args) -> R>`). The next signature revision after error handling
+lands monadic side-effect capture; the remaining type/trait sequence (methods, traits,
+trait inheritance) unlocks the items downstream (group-based operators), so it sits in
+the middle of the sequence rather than last.
 
 ## Next items
 
@@ -30,9 +31,9 @@ without first landing something else:
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier.
-- [Container type parameterization](roadmap/container-type-parameterization.md) — `List`,
-  `Dict`, `Function`, `Future` carry no inner-type information today; next slice of the
-  type/trait sequence after per-param annotations.
+- [Per-type identity for structs and methods](roadmap/per-type-identity.md) — every user
+  struct collapses to `KType::Struct`; methods can't attach to specific types. Next slice
+  of the type/trait sequence after container type parameterization.
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
@@ -55,8 +56,6 @@ without first landing something else:
 
 ### Type system
 
-- [Container type parameterization](roadmap/container-type-parameterization.md) — `List`,
-  `Dict`, `Function`, `Future` carry no inner-type information today.
 - [Per-type identity for structs and methods](roadmap/per-type-identity.md) — every user
   struct collapses to `KType::Struct`; methods can't attach to specific types.
 - [`TRAIT` builtin for structural typing](roadmap/traits.md) — no surface for "anything

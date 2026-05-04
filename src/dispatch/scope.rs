@@ -310,7 +310,7 @@ fn lazy_eager_indices(f: &KFunction<'_>, expr: &KExpression<'_>) -> Option<Vec<u
         match (el, part) {
             (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
             (SignatureElement::Keyword(_), _) => return None,
-            (SignatureElement::Argument(arg), part) => match (arg.ktype, part) {
+            (SignatureElement::Argument(arg), part) => match (&arg.ktype, part) {
                 (KType::KExpression, ExpressionPart::Expression(_)) => {
                     has_lazy_slot = true;
                 }

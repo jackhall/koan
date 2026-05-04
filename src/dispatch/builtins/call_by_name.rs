@@ -362,7 +362,7 @@ mod tests {
         // (INNER) in MAKE's per-call scope, then is returned (FN's value).
         run(
             scope,
-            "FN (MAKE) -> KFunction = (FN (INNER) -> Str = (\"hi\"))\n\
+            "FN (MAKE) -> Function<() -> Str> = (FN (INNER) -> Str = (\"hi\"))\n\
              LET f = (MAKE)",
         );
         // After MAKE's frame drops, the Rc on the lifted KFunction is the only thing
@@ -384,7 +384,7 @@ mod tests {
         let scope = build_scope(&arena, captured);
         run(
             scope,
-            "FN (MAKE) -> KFunction = (FN (ECHO x: Number) -> Number = (x))\n\
+            "FN (MAKE) -> Function<(Number) -> Number> = (FN (ECHO x: Number) -> Number = (x))\n\
              LET f = (MAKE)",
         );
         let result = run_one(scope, parse_one("f (x: 42)"));

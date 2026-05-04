@@ -53,10 +53,12 @@ is the same phase emitting code.
 - [Open issues from the leak-fix audit](leak-fix-audit.md) — without a stable memory
   model, both the checker's understanding of value lifetimes and the JIT's codegen
   contract have nothing solid to target.
-- [Container type parameterization](container-type-parameterization.md)
 - [Per-type identity for structs and methods](per-type-identity.md)
 - [`TRAIT` builtin for structural typing](traits.md)
 - [Trait inheritance](trait-inheritance.md)
+
+Container type parameterization is shipped, so the checker has parameterized
+containers to target.
 
 The type system has to be structurally complete (concrete types, parameterized
 containers, per-type identity, traits, inheritance) before the checker is designed

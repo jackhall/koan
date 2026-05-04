@@ -42,9 +42,8 @@ substrate to be designed against a real consumer.
 
 ## Dependencies
 
-**Requires:**
-- [Container type parameterization](container-type-parameterization.md) — method
-  signatures will need parameterized container types in the same slots free functions do.
+**Requires:** none. Container type parameterization is shipped — method signatures get
+parameterized containers in the same slots free functions do.
 
 **Unblocks:**
 - [Open issues from the leak-fix audit](leak-fix-audit.md)

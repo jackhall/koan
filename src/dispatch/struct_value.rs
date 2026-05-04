@@ -181,7 +181,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Struct,
             elements: vec![
                 SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::Type }),
-                SignatureElement::Argument(Argument { name: "values".into(), ktype: KType::List }),
+                SignatureElement::Argument(Argument { name: "values".into(), ktype: KType::List(Box::new(KType::Any)) }),
             ],
         },
         primitive_body,

@@ -1,6 +1,7 @@
 use std::hash::Hasher;
 
 use super::kerror::{KError, KErrorKind};
+use super::kfunction::KType;
 use super::kobject::KObject;
 use super::ktraits::{Parseable, Serializable};
 
@@ -40,6 +41,14 @@ impl KKey {
 impl Parseable for KKey {
     fn equal(&self, other: &dyn Parseable) -> bool {
         self.summarize() == other.summarize()
+    }
+
+    fn ktype(&self) -> KType {
+        match self {
+            KKey::String(_) => KType::Str,
+            KKey::Number(_) => KType::Number,
+            KKey::Bool(_) => KType::Bool,
+        }
     }
 
     /// String keys are quoted in the rendering so a `{"1": x}` and a `{1: x}` look distinct

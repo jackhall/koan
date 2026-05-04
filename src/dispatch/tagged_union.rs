@@ -79,7 +79,7 @@ pub fn construct<'a>(
     value: &KObject<'a>,
 ) -> Result<KObject<'a>, KError> {
     let expected = match schema.get(&tag) {
-        Some(t) => *t,
+        Some(t) => t.clone(),
         None => {
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "tag `{}` not in union (known: {})",

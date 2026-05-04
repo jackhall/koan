@@ -86,6 +86,8 @@ for how this lets users add what look like new keyword forms.
 ## Open work
 
 The next type-system slice is
-[container type parameterization](../roadmap/container-type-parameterization.md)
-— `List<Number>`, `Dict<Str, Any>`, etc. See
-[type-system.md](type-system.md) for the full type/trait sequence.
+[per-type identity for structs and methods](../roadmap/per-type-identity.md)
+— every user struct currently collapses to `KType::Struct`; methods can't
+attach to specific types. Container type parameterization (`List<Number>`,
+`Function<(args) -> R>`, etc.) is shipped; see
+[type-system.md](type-system.md) for that and the full type/trait sequence.

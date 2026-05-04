@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::parse::kexpression::KExpression;
+use crate::parse::kexpression::{KExpression, TypeExpr};
 use super::arena::CallArena;
 use super::ktraits::{Parseable, Serializable};
-use super::kfunction::{KFunction, KType};
+use super::kfunction::{KFunction, KType, SignatureElement};
 use super::scope::KFuture;
 
 /// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
@@ -71,6 +71,12 @@ pub enum KObject<'a> {
         type_name: String,
         fields: Rc<HashMap<String, KObject<'a>>>,
     },
+    /// A first-class type expression — produced by `ExpressionPart::resolve_for` when the
+    /// receiving slot is `KType::TypeExprRef`. The structured `TypeExpr` survives the parser
+    /// → dispatch boundary intact so consumers like FN's return-type slot can recover the
+    /// full parameterized form (`List<Number>`, `Function<(N) -> S>`, ...) rather than just
+    /// the bare type name. Internal-only — no user-facing operation produces this variant.
+    TypeExprValue(TypeExpr),
     Null,
 }
 
@@ -85,15 +91,23 @@ impl<'a> KObject<'a> {
             KObject::KString(_) => KType::Str,
             KObject::Bool(_) => KType::Bool,
             KObject::Null => KType::Null,
-            KObject::List(_) => KType::List,
-            KObject::Dict(_) => KType::Dict,
-            KObject::KFunction(_, _) => KType::KFunction,
-            KObject::KFuture(_, _) => KType::KFunction,
+            KObject::List(items) => {
+                let elem = KType::join_iter(items.iter().map(|i| i.ktype()));
+                KType::List(Box::new(elem))
+            }
+            KObject::Dict(map) => {
+                let k = KType::join_iter(map.keys().map(|k| k.ktype()));
+                let v = KType::join_iter(map.values().map(|v| v.ktype()));
+                KType::Dict(Box::new(k), Box::new(v))
+            }
+            KObject::KFunction(f, _) => function_value_ktype(f),
+            KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
             KObject::TaggedUnionType(_) => KType::Type,
             KObject::StructType { .. } => KType::Type,
             KObject::Tagged { .. } => KType::Tagged,
             KObject::Struct { .. } => KType::Struct,
+            KObject::TypeExprValue(_) => KType::TypeExprRef,
         }
     }
 
@@ -128,13 +142,34 @@ impl<'a> KObject<'a> {
                 type_name: type_name.clone(),
                 fields: Rc::clone(fields),
             },
+            KObject::TypeExprValue(t) => KObject::TypeExprValue(t.clone()),
         }
     }
+}
+
+/// Project a parameterized `KType::KFunction { args, ret }` from a function value's signature.
+/// Used by `KObject::ktype` for both `KFunction` and `KFuture` — both report the same
+/// structural type since a `KFuture` is a bound-but-unrun thunk over the same `KFunction`.
+fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {
+    let args: Vec<KType> = f
+        .signature
+        .elements
+        .iter()
+        .filter_map(|el| match el {
+            SignatureElement::Argument(a) => Some(a.ktype.clone()),
+            _ => None,
+        })
+        .collect();
+    let ret = Box::new(f.signature.return_type.clone());
+    KType::KFunction { args, ret }
 }
 
 impl<'a> Parseable for KObject<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool {
         self.summarize() == other.summarize()
+    }
+    fn ktype(&self) -> KType {
+        KObject::ktype(self)
     }
     fn summarize(&self) -> String {
         match self {
@@ -178,6 +213,98 @@ impl<'a> Parseable for KObject<'a> {
                 format!("{}({})", type_name, parts.join(", "))
             }
             KObject::Null => "null".to_string(),
+            KObject::TypeExprValue(t) => t.render(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dispatch::kkey::KKey;
+    use std::collections::HashMap;
+
+    #[test]
+    fn ktype_of_homogeneous_number_list() {
+        let l: KObject<'_> =
+            KObject::List(Rc::new(vec![KObject::Number(1.0), KObject::Number(2.0)]));
+        assert_eq!(l.ktype(), KType::List(Box::new(KType::Number)));
+    }
+
+    #[test]
+    fn ktype_of_mixed_list_is_list_any() {
+        let l: KObject<'_> = KObject::List(Rc::new(vec![
+            KObject::Number(1.0),
+            KObject::KString("x".into()),
+        ]));
+        assert_eq!(l.ktype(), KType::List(Box::new(KType::Any)));
+    }
+
+    #[test]
+    fn ktype_of_empty_list_is_list_any() {
+        let l: KObject<'_> = KObject::List(Rc::new(vec![]));
+        assert_eq!(l.ktype(), KType::List(Box::new(KType::Any)));
+    }
+
+    #[test]
+    fn ktype_of_nested_list() {
+        let inner: KObject<'_> = KObject::List(Rc::new(vec![KObject::Number(1.0)]));
+        let outer: KObject<'_> = KObject::List(Rc::new(vec![inner]));
+        assert_eq!(
+            outer.ktype(),
+            KType::List(Box::new(KType::List(Box::new(KType::Number))))
+        );
+    }
+
+    #[test]
+    fn ktype_of_dict_string_number() {
+        let mut map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
+        map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
+        map.insert(Box::new(KKey::String("b".into())), KObject::Number(2.0));
+        let d: KObject<'_> = KObject::Dict(Rc::new(map));
+        assert_eq!(
+            d.ktype(),
+            KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
+        );
+    }
+
+    #[test]
+    fn ktype_of_empty_dict_is_dict_any_any() {
+        let map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
+        let d: KObject<'_> = KObject::Dict(Rc::new(map));
+        assert_eq!(
+            d.ktype(),
+            KType::Dict(Box::new(KType::Any), Box::new(KType::Any))
+        );
+    }
+
+    #[test]
+    fn matches_value_list_number_rejects_string_element() {
+        let t = KType::List(Box::new(KType::Number));
+        let bad: KObject<'_> = KObject::List(Rc::new(vec![
+            KObject::Number(1.0),
+            KObject::KString("x".into()),
+        ]));
+        assert!(!t.matches_value(&bad));
+    }
+
+    #[test]
+    fn matches_value_list_number_accepts_all_numbers() {
+        let t = KType::List(Box::new(KType::Number));
+        let good: KObject<'_> = KObject::List(Rc::new(vec![
+            KObject::Number(1.0),
+            KObject::Number(2.0),
+        ]));
+        assert!(t.matches_value(&good));
+    }
+
+    #[test]
+    fn matches_value_list_any_accepts_any_list() {
+        let t = KType::List(Box::new(KType::Any));
+        let mixed: KObject<'_> = KObject::List(Rc::new(vec![
+            KObject::Number(1.0),
+            KObject::KString("x".into()),
+        ]));
+        assert!(t.matches_value(&mixed));
     }
 }

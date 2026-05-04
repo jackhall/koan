@@ -146,27 +146,31 @@ current block.
 
 Every value in Koan has a type. The names you can write in source are:
 
-| Type      | What it is                                         | How to write a value                         |
-|-----------|----------------------------------------------------|----------------------------------------------|
-| `Number`  | 64-bit float                                       | `42`, `3.14`                                 |
-| `Str`     | string                                             | `"hi"`, `'hi'`                               |
-| `Bool`    | boolean                                            | `true`, `false`                              |
-| `Null`    | the null value                                     | `null`                                       |
-| `List`    | ordered sequence                                   | `[1, 2, 3]`                                  |
-| `Dict`    | scalar-keyed map                                   | `{a: 1, b: 2}`                               |
-| `Tagged`  | a value of a tagged union                          | `Maybe (some 42)` (see `UNION` below)        |
-| `Any`     | wildcard — accepts any value                       | (used in annotations only)                   |
+| Type                       | What it is                          | How to write a value                  |
+|----------------------------|-------------------------------------|---------------------------------------|
+| `Number`                   | 64-bit float                        | `42`, `3.14`                          |
+| `Str`                      | string                              | `"hi"`, `'hi'`                        |
+| `Bool`                     | boolean                             | `true`, `false`                       |
+| `Null`                     | the null value                      | `null`                                |
+| `List<T>`                  | ordered sequence                    | `[1, 2, 3]`                           |
+| `Dict<K, V>`               | scalar-keyed map                    | `{a: 1, b: 2}`                        |
+| `Function<(args) -> R>`    | callable function value             | `(FN (DOUBLE x: Number) -> Number = (x))` |
+| `Tagged`                   | a value of a tagged union           | `Maybe (some 42)` (see `UNION` below) |
+| `Any`                      | wildcard — accepts any value        | (used in annotations only)            |
 
-A type name appears wherever you annotate something: the return type on a
-function (`-> Number`), the type of a tagged-union variant (`some: Number`).
-You'll also see `KFunction` (the type of a function value), `KExpression`
-(an unevaluated parenthesized expression carried as data), and `Tagged`
-referenced in error messages — they're real types, but you rarely write
-them yourself.
+A type name appears wherever you annotate something: the type of a parameter
+slot (`x: List<Number>`), the return type on a function (`-> Number`), the
+type of a tagged-union variant (`some: Number`). Container types are always
+parameterized — bare `List` lowers to `List<Any>`, bare `Dict` to
+`Dict<Any, Any>`. There is no bare `Function`; write
+`Function<(args) -> R>` for a typed function or `Any` for an unconstrained
+value (a function with no signature has nothing to dispatch on).
 
-Per-parameter type annotations on user functions don't exist yet —
-parameter slots accept any type. Use `Any` as a return type when you don't
-want a runtime check.
+You'll also see `KExpression` (an unevaluated parenthesized expression carried
+as data) referenced in builtin signatures and error messages — it's a real
+type, but you rarely write it yourself. List/dict literal types are inferred
+as the join of element types: `[1, 2, 3]` is `List<Number>`, `[1, "x"]` is
+`List<Any>`, `[]` is `List<Any>`.
 
 ## User-defined functions
 
@@ -180,6 +184,8 @@ FN (DOUBLE x: Number) -> Number = (x)
 FN (a: Str SAID) -> Null = (PRINT a)            # infix-shaped — keyword in non-leading position
 FN (FIRST x: Str y: Str) -> Null = (PRINT x)    # multiple params
 FN (ADD x: Number, y: Number) -> Number = (x)   # commas optional, same shape
+FN (HEAD xs: List<Number>) -> Number = (1)      # parameterized container in a slot
+FN (NUMS) -> List<Number> = ([1 2 3])           # parameterized return type
 
 DOUBLE 21        # → 21
 "hi" SAID        # prints "hi"
@@ -190,16 +196,19 @@ Both the parameter types and the return type are **non-optional**. A bare
 `x` without `: Type` is a parse error. Calls whose argument types don't satisfy
 the signature fail at dispatch (`KErrorKind::DispatchFailed`); the same call
 shape with different parameter types routes to a different overload by
-slot-specificity. Use `: Any` to opt a slot out of type checking.
+slot-specificity (more specific wins — `List<Number>` beats `List<Any>` beats
+`Any`). Use `: Any` to opt a slot out of type checking.
 
 The return type is **enforced at runtime**. A body whose result doesn't match
 the declared type fails with `KErrorKind::TypeMismatch { arg: "<return>", … }`.
-Use `-> Any` to opt out.
+For parameterized container returns, the check walks elements: a function
+declared `-> List<Number>` whose body returns `[1, "x"]` errors with
+`expected List<Number>, got List<Any>`. Use `-> Any` to opt out.
 
 A signature must contain at least one `Keyword` (the dispatch token); otherwise
 it would shadow `value_lookup`/`value_pass`.
 
-`FN` returns the registered `KFunction`, so you can capture it as a value:
+`FN` returns the registered function value, so you can capture it as a value:
 
 ```
 LET f = (FN (DOUBLE x: Number) -> Number = (x))
