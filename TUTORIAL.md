@@ -98,8 +98,8 @@ Evaluation order: a nested `(...)` whose result feeds a *value* slot is
 evaluated **eagerly**, before its parent dispatches — the parent sees the
 computed value. A `(...)` that feeds an *expression* slot is **lazy** — it
 rides through to the parent as data, and the parent decides whether (and
-when) to dispatch it. `IF ... THEN`, `MATCH ... WITH`, the body of `FN`, and
-the schemas of `UNION` are the cases where laziness shows up today.
+when) to dispatch it. `MATCH ... WITH`, the body of `FN`, and the schemas of
+`UNION` are the cases where laziness shows up today.
 
 ### Compound-token operators
 
@@ -361,7 +361,7 @@ error: type mismatch for argument '<return>': expected Number, got Str
 Variants you can hit today: `TypeMismatch`, `MissingArg`, `UnboundName`,
 `ArityMismatch`, `AmbiguousDispatch`, `DispatchFailed`, `ShapeError`,
 `ParseError`, `User`. There's no in-language try/catch yet — errors
-short-circuit to the top level. Intentional `null` values (`IF false THEN x`,
+short-circuit to the top level. Intentional `null` values (the `null` literal,
 `PRINT`'s return) are not errors.
 
 ## Putting it together
@@ -397,7 +397,6 @@ One line per surface form. Sources under
 |-------------------------------------------------------|-------------------------------------------------------------------------------------------------|---------------------------------------------------------------|
 | `LET <name> = <value>`                                | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/dispatch/builtins/let_binding.rs)        |
 | `PRINT <msg:Str>`                                     | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/dispatch/builtins/print.rs)                    |
-| `IF <pred:Bool> THEN <expr>`                          | Lazy: dispatch `<expr>` only when `<pred>` is true. Wrap `<expr>` in parens.                    | [if_then.rs](src/dispatch/builtins/if_then.rs)                |
 | `FN <sig> -> <Type> = <body>`                         | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/dispatch/builtins/fn_def.rs)          |
 | `UNION <Name> = (<schema>)` / `UNION (<schema>)`      | Declare a tagged-union type. Named form binds `<Name>` in scope.                                | [union.rs](src/dispatch/builtins/union.rs)                    |
 | `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/dispatch/builtins/struct_def.rs)          |

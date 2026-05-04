@@ -43,29 +43,31 @@ sigils) evaluate it on demand.
 
 ## Eager evaluation by default
 
-The scheduler evaluates every nested `(...)` before its parent dispatches. So:
+The scheduler evaluates every nested `(...)` before its parent dispatches. So
+without further machinery,
 
 ```
-IF p THEN x
+MATCH cond WITH (true -> (a) false -> (b))
 ```
 
-is a **post-hoc selector**, not a short-circuit — `x` is evaluated whether or
-not `p` is true, and then `IF/THEN` chooses what to return. This is a
-deliberate consequence of the graph-based execution model: the parent slot's
-arguments are dependencies in the DAG, and the topological order of execute
-makes them ready before the parent runs. See
-[execution-model.md](execution-model.md).
+would evaluate both `(a)` and `(b)` regardless of `cond`, and `MATCH` would
+just be a post-hoc selector picking one of the two already-computed values.
+This is a deliberate consequence of the graph-based execution model: the
+parent slot's arguments are dependencies in the DAG, and the topological order
+of execute makes them ready before the parent runs. See
+[execution-model.md](execution-model.md). To get real branching behavior,
+`MATCH` opts its branch slots into laziness — the next section.
 
 ## Lazy slots
 
 A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
-`Dispatch` for the chosen branch only. Historically `if_then`'s lazy slot used
-[`SchedulerHandle::add_dispatch`](../src/dispatch/scope.rs); today
-[`BodyResult::Tail`](../src/dispatch/kfunction.rs) is the standard mechanism (a
-deferring builtin tail-returns the chosen branch and the scheduler dispatches it
-in place).
+`Dispatch` for the chosen branch only. Two mechanisms exist:
+[`SchedulerHandle::add_dispatch`](../src/dispatch/scope.rs) submits a child
+node directly, while [`BodyResult::Tail`](../src/dispatch/kfunction.rs) — used
+by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
+place.
 
 ## Extending the surface
 

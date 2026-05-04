@@ -45,8 +45,8 @@ resolves.
 [`BodyResult::Tail(KExpression)`](../src/dispatch/kfunction.rs) makes a tail
 return rewrite the **current scheduler slot's work** to a fresh
 `Dispatch(expr)` and re-run in place. No new node allocated, no `Forward` chain.
-Both deferring builtins (`if_then`, `KFunction::invoke` for user-fns) are tail
-by construction. A chain of tail calls (`A → B → PRINT`, or unbounded
+Both deferring builtins (`match_case`, `KFunction::invoke` for user-fns) are
+tail by construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count assertions
 in the test suite.
 
