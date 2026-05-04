@@ -12,9 +12,6 @@ Smaller pieces called out in passing as the larger items shipped:
 - **Source spans on `KExpression`** so error frames can name `file:line` instead of
   textual summaries.
 - **Continue-on-error after the first top-level failure** (useful for a future REPL).
-- **Variadic argument signatures** — original "function body is a sequence of
-  expressions" sketch; the comparator's tiebreak rule for variadic-vs-fixed signatures
-  is the load-bearing question.
 
 ## Dependencies
 

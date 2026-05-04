@@ -1,3 +1,9 @@
+//! AST node types shared across the parse module. `KExpression` is a function-call node
+//! (head plus ordered and named arguments). `ExpressionPart` is one element inside such
+//! a call — atoms (literals, identifiers, types, keywords), collection literals (lists,
+//! dicts), and nested expressions. `KLiteral` enumerates the concrete literal kinds the
+//! lexer can produce. Produced by `tokens` and assembled into trees by `expression_tree`.
+
 use std::collections::HashMap;
 use std::rc::Rc;
 

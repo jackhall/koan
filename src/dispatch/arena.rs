@@ -111,10 +111,10 @@ static TRUE_HOLDER: StaticKObject = StaticKObject(KObject::Bool(true));
 static FALSE_HOLDER: StaticKObject = StaticKObject(KObject::Bool(false));
 
 /// Singleton `&KObject::Null`. Returned by `null_kobject()` for every type-mismatch /
-/// missing-arg / lookup-miss path; previously each such site `Box::leak`'d a fresh `Null`.
-/// `KObject<'a>` is invariant in `'a`, so the `&'static`-typed singleton is reinterpreted to
-/// the caller's `'a` via `transmute`. SAFETY: `KObject::Null` is a unit variant — no
-/// references inside, so the lifetime parameter is purely phantom.
+/// missing-arg / lookup-miss path. `KObject<'a>` is invariant in `'a`, so the
+/// `&'static`-typed singleton is reinterpreted to the caller's `'a` via `transmute`.
+/// SAFETY: `KObject::Null` is a unit variant — no references inside, so the lifetime
+/// parameter is purely phantom.
 pub fn null_singleton<'a>() -> &'a KObject<'a> {
     unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(&NULL_HOLDER.0) }
 }
@@ -162,11 +162,9 @@ impl CallArena {
     /// and the child scope; `Node::frame` takes one clone, and any closure that escapes the
     /// call may take additional clones (Stages 2 & 3).
     pub fn new<'p>(outer: &'p Scope<'p>) -> Rc<CallArena> {
-        // Build the CallArena directly into the Rc allocation. `Rc::new` heap-pins, so the
-        // inner `arena`'s address is stable for the Rc's lifetime — the same property the
-        // previous `Box`-based design relied on. We need to mutate `scope_ptr` after
-        // allocation; do this via `Rc::get_mut` while we still hold the unique reference
-        // (no clones have been made yet).
+        // `Rc::new` heap-pins, so the inner `arena`'s address is stable for the Rc's
+        // lifetime. Mutate `scope_ptr` after allocation via `Rc::get_mut` while we still
+        // hold the unique reference (no clones yet).
         let mut rc = Rc::new(CallArena {
             arena: RuntimeArena::new(),
             scope_ptr: std::ptr::null(),

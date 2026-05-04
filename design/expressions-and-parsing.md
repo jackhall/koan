@@ -28,7 +28,7 @@ system.
 
 Output is one [`KExpression`](../src/parse/kexpression.rs) per top-level line:
 an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
-nested `Expression`, `ListLiteral`, or typed `Literal`.
+nested `Expression`, `ListLiteral`, `DictLiteral`, or typed `Literal`.
 
 The `Keyword`-vs-slot split is the parser's contract with dispatch:
 

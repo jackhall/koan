@@ -1,3 +1,8 @@
+//! Operator table driving compound-atom desugaring inside `tokens::parse_compound`. Each
+//! entry pairs a trigger character with an `OperatorKind` (prefix / infix / suffix) and a
+//! builder that wraps the surrounding operands into the appropriate nested
+//! `ExpressionPart`. Lookup is by character via `find_prefix` / `find_suffix`.
+
 use crate::parse::kexpression::ExpressionPart;
 
 type Builder = for<'a> fn(Vec<ExpressionPart<'a>>) -> ExpressionPart<'a>;

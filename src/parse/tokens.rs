@@ -1,3 +1,11 @@
+//! Token classification: turn each whitespace-delimited word into an `ExpressionPart`.
+//! Recognizes literals (numbers, strings, booleans, `null`), classifies non-literal atoms
+//! into keywords / types / identifiers, and desugars compound atoms — member access
+//! (`a.b`), indexing (`a[i]`), and prefix negation — into nested `ExpressionPart`s using
+//! the `operators` table. Consumed by `expression_tree::build_tree`.
+//!
+//! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
+
 use std::iter::Peekable;
 use std::str::Chars;
 use std::sync::LazyLock;

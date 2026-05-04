@@ -21,16 +21,7 @@ The scheduler models dispatch itself as a node type — `Dispatch(KExpression)`.
 node per top-level expression"; the rest is dynamic. At run time a `Dispatch`
 walks its expression's parts, spawns sub-`Dispatch`/`Bind`/`Aggregate` nodes for
 nested sub-expressions, and a builtin body holding `&mut dyn SchedulerHandle`
-can also add `Dispatch` nodes (used internally before TCO landed; today
-[`BodyResult::Tail`](../src/dispatch/kfunction.rs) is the standard path).
-
-Before this refactor the codebase had three independent dispatch paths
-(schedule-time eager, execute-time `Pending`, inline-in-builtin via
-`scope.dispatch`) — three workarounds for one missing abstraction. The
-graph-as-node model collapsed them into one: only the schedule-time path used to
-compose with sub-expression evaluation, so user-fn bodies with nested
-expressions silently nulled and forward references to user-fns required a
-try-eager-then-fallback hack. After the refactor, both go through the same node.
+can also add `Dispatch` nodes.
 
 ## `BodyResult` — the three return shapes
 

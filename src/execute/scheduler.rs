@@ -122,23 +122,17 @@ impl<'a> Scheduler<'a> {
                 NodeStep::Done(output) => {
                     match (output, prev_frame) {
                         (NodeOutput::Value(v), Some(frame)) => {
-                            // Body produced a Value directly — lift into the captured
-                            // arena. By lexical scoping, the per-call scope's `outer` IS
-                            // the captured scope (run-root for top-level FNs), whose arena
-                            // outlives the call. If the lifted value carries a KFunction
-                            // reference into the dying frame's arena, `lift_kobject`
-                            // attaches an Rc clone so the arena stays alive past the
-                            // slot's frame drop.
+                            // Body produced a Value — lift into the captured arena
+                            // (= per-call scope's `outer` by lexical scoping). See
+                            // design/memory-model.md for the Rc<CallArena> anchoring story.
                             let dest = scope
                                 .outer
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let lifted_obj = lift_kobject(v, &frame);
-                            // Runtime return-type check: enforce the called function's
-                            // declared `signature.return_type` against the produced value.
-                            // `Any` is the no-op fast path (always satisfied). On mismatch,
-                            // synthesize a TypeMismatch error with the function's frame
-                            // attached and skip the alloc.
+                            // Runtime return-type check against the function's declared
+                            // `signature.return_type`. `Any` short-circuits; mismatch
+                            // synthesizes a TypeMismatch with the function's frame.
                             if let Some(f) = prev_function {
                                 let rt = f.signature.return_type;
                                 if !rt.matches_value(&lifted_obj) {
@@ -162,13 +156,10 @@ impl<'a> Scheduler<'a> {
                             // the per-call arena frees.
                         }
                         (NodeOutput::Forward(target), Some(frame)) => {
-                            // Body forwarded into sub-slots whose scopes live in the
-                            // per-call arena. Keep the frame alive on this slot until the
-                            // forward chain resolves; `finalize_ready_frames` promotes the
-                            // chain's terminal Value into the captured arena and drops
-                            // the frame. The slot is no longer in the queue, so its
-                            // `work` is unused — store a stub. Track the slot so
-                            // finalization can find it without scanning all nodes.
+                            // Body forwarded into sub-slots; keep the frame alive until
+                            // the chain resolves. `finalize_ready_frames` then promotes
+                            // the terminal value and drops the frame. Slot is out of the
+                            // queue so `work` is a stub.
                             self.results[idx] = Some(NodeOutput::Forward(target));
                             self.nodes[idx] = Some(Node {
                                 work: NodeWork::Dispatch(KExpression { parts: Vec::new() }),
@@ -228,11 +219,8 @@ impl<'a> Scheduler<'a> {
                     self.queue.push_front(idx);
                 }
             }
-            // Drain `scope`'s pending writes — `Scope::add` queues writes that hit a borrow
-            // conflict (a builtin iterating `data`/`functions` while a re-entrant write tries
-            // to mutate). Drain runs here, between dispatch nodes, so the next node's reads
-            // see them. The hot path is the no-op early-return inside `drain_pending` (queue
-            // is empty in the typical case); only the rare re-entrant-write path does work.
+            // Drain `scope`'s pending re-entrant writes between dispatch nodes so the next
+            // node's reads see them. See design/memory-model.md § Re-entrant `Scope::add`.
             scope.drain_pending();
             // Finalize any frame-holding slots whose forward chain has now resolved.
             self.finalize_ready_frames();
@@ -360,8 +348,7 @@ impl<'a> KFunction<'a> {
 /// `Future(value)` carrying that arg's arena-allocated value. Recurses into nested
 /// `Expression` and `ListLiteral` parts so a body like `(PRINT (x))` substitutes the inner
 /// `(x)` correctly. `Keyword`, `Literal`, and `Future` parts pass through unchanged. Each
-/// substituted value is allocated via the arena (replacing the prior `Box::leak`-per-call
-/// model from before the leak fix).
+/// substituted value is allocated via the arena.
 pub(crate) fn substitute_params<'a>(
     expr: KExpression<'a>,
     bundle: &ArgumentBundle<'a>,
@@ -477,11 +464,9 @@ mod tests {
 
     #[test]
     fn tail_call_reuses_node_slot_in_place() {
-        // `IF true THEN ("hi")` — when the predicate is true, `if_then` returns
-        // `BodyResult::Tail(value_expr)`. The scheduler should rewrite the if_then's own
-        // slot to a `Dispatch(value_expr)` and re-run, NOT spawn a fresh slot and forward.
-        // Without TCO this would land at len() == 2 (one slot for if_then, one for the
-        // value evaluation). With TCO, len() == 1 — the if_then's slot was reused.
+        // `IF true THEN ("hi")` returns `BodyResult::Tail(value_expr)`. The scheduler
+        // should rewrite if_then's slot to a `Dispatch` and re-run, not spawn a fresh
+        // slot. Expect `len() == 1` (slot reused) rather than `2`.
         let arena = RuntimeArena::new();
         let root = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();

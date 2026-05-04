@@ -44,9 +44,9 @@ pub(super) enum NodeStep<'a> {
 /// - `Dispatch(expr)` is the entry point: walk the expression's parts, spawn `Dispatch` nodes
 ///   for nested `Expression` (and `ListLiteral`) parts, and emit a `Bind` node depending on
 ///   them. If there's no nesting, dispatch + invoke happen inline and the result is stored
-///   directly. Replaces the old "eager dispatch in `schedule_expr`" path.
-/// - `Bind { expr, subs }` is the old `Pending`: splice each dep's resolved value into `parts`
-///   as `Future(...)`, dispatch the resulting expression, invoke the bound future.
+///   directly.
+/// - `Bind { expr, subs }`: splice each dep's resolved value into `parts` as `Future(...)`,
+///   dispatch the resulting expression, invoke the bound future.
 /// - `Aggregate { elements }` materializes a list literal once each `Dep` element resolves.
 pub(super) enum NodeWork<'a> {
     Dispatch(KExpression<'a>),

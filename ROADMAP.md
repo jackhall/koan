@@ -36,7 +36,7 @@ without first landing something else:
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
-  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error, variadics.
+  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error.
 - [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
   only when the next feature would multiply existing duplication.
 
@@ -77,7 +77,7 @@ without first landing something else:
 - [Module system and directory layout](roadmap/module-system.md) — a Koan codebase is one
   file; no import, no module path, no project-level entry point.
 - [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
-  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error, variadics.
+  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error.
 
 ### Future-facing
 

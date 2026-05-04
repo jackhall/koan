@@ -368,11 +368,10 @@ mod tests {
         assert!(scope.dispatch(expr).is_err());
     }
 
-    /// Re-entrant `add` while a `data` borrow is held would have panicked under the old
-    /// unconditional `borrow_mut`. Conditional-defer routes the write to `pending` instead;
-    /// after the borrow drops, `drain_pending` applies it. The held iteration sees the
-    /// pre-write snapshot (snapshot-iteration semantics), and the post-drain state has the
-    /// new entry visible — this is the foreach-binding pattern that motivated the change.
+    /// Re-entrant `add` while a `data` borrow is held: conditional-defer routes the write
+    /// to `pending`; `drain_pending` applies it after the borrow drops. The held iteration
+    /// sees the pre-write snapshot (snapshot-iteration semantics), and the post-drain
+    /// state has the new entry visible — the foreach-binding pattern.
     #[test]
     fn add_during_active_data_borrow_queues_and_drains() {
         let arena = RuntimeArena::new();
@@ -385,7 +384,7 @@ mod tests {
             // Hold an immutable borrow of `data` (simulates a builtin iterating bindings).
             let snapshot = scope.data.borrow();
             assert!(snapshot.contains_key("pre"));
-            // Re-entrant write: would have panicked pre-fix. Now queues silently.
+            // Re-entrant write: queues silently.
             scope.add("during".to_string(), new_entry);
             // Iteration sees the pre-write snapshot only.
             assert!(!snapshot.contains_key("during"));

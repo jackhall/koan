@@ -21,6 +21,11 @@ use super::{err, register_builtin};
 /// to a non-function, args slot misshapen, missing/unknown/duplicate name) return
 /// structured `KError` variants the CLI reports verbatim.
 ///
+/// **Type-construction shortcut.** When `verb` resolves to a `TaggedUnionType` or
+/// `StructType` rather than a function, the body delegates to the corresponding
+/// construction path — mirroring `type_call`, but reached through a LET-bound lowercase
+/// identifier rather than a `Type` token.
+///
 /// Body intentionally thin: the synthesis logic lives on [`KFunction::apply`] alongside the
 /// rest of "how to call a function," keeping this builtin a clean dispatch consumer rather
 /// than a peer that pokes at signature internals.
@@ -69,13 +74,8 @@ pub fn body<'a>(
     match scope.lookup_kfunction(&verb) {
         Some(f) => f.apply(args_expr.parts),
         None => {
-            // Identifier didn't resolve to a function. Three more cases:
-            //   - unbound name → UnboundName
-            //   - bound to a TaggedUnionType → take the tagged-union construction path,
-            //     mirroring `type_call` but reached through a LET-bound (lowercase)
-            //     identifier rather than a Type token.
-            //   - bound to a StructType → same idea but for struct construction.
-            //   - bound to anything else → TypeMismatch on the verb's resolved value.
+            // Verb isn't a KFunction: route TaggedUnion/Struct types to their construction
+            // paths, surface UnboundName for missing bindings, TypeMismatch otherwise.
             match scope.lookup(&verb) {
                 None => err(KError::new(KErrorKind::UnboundName(verb))),
                 Some(obj @ KObject::TaggedUnionType(_)) => {
@@ -365,12 +365,8 @@ mod tests {
             "FN (MAKE) -> KFunction = (FN (INNER) -> Str = (\"hi\"))\n\
              LET f = (MAKE)",
         );
-        // After MAKE's call frame drops, only the lifted KObject::KFunction (carrying the
-        // Rc) is keeping MAKE's per-call arena alive. Invoking the inner FN must still
-        // succeed without UAF. INNER takes no args, so we call it with empty parens — this
-        // returns "hi" as a normal value. The point of this test is that we get a
-        // structured outcome (a real KString, not a UAF crash), which proves the reference
-        // and arena are alive.
+        // After MAKE's frame drops, the Rc on the lifted KFunction is the only thing
+        // keeping its arena alive. A `KString("hi")` return proves no UAF.
         let result = run_one(scope, parse_one("f ()"));
         assert!(
             matches!(result, KObject::KString(s) if s == "hi"),

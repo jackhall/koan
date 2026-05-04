@@ -255,9 +255,8 @@ impl<'a> KFunction<'a> {
     /// than "you have a stray `c`".
     ///
     /// Returns `BodyResult::Tail` whose expression matches this function's keyword-bucketed
-    /// signature on re-dispatch — same final shape as the old positional path, just
-    /// reordered by name. Errors map to `ShapeError` (malformed pair shape), `MissingArg`,
-    /// or `ArityMismatch` as appropriate.
+    /// signature on re-dispatch (positional values reordered by name). Errors map to
+    /// `ShapeError` (malformed pair shape), `MissingArg`, or `ArityMismatch` as appropriate.
     ///
     /// Used by the [`call_by_name`](super::builtins::call_by_name) builtin's body to wire
     /// `f (a: 1)` to the underlying function's call. Lives on `KFunction` so the builtin's

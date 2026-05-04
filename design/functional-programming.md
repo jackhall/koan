@@ -75,12 +75,15 @@ function isn't just a callable value; the dispatch table is the language's
 extension mechanism. See [expressions-and-parsing.md](expressions-and-parsing.md)
 for how this lets users add what look like new keyword forms.
 
+## Non-goals
+
+- **Variadic signatures.** Functions take a fixed argument set determined by
+  their signature. Variadic argument support won't ship — the comparator's
+  tiebreak rule for variadic-vs-fixed overloads has no clean answer, and the
+  surface use cases are covered by passing a list as one argument.
+
 ## Open work
 
-- **Variadics** — [deferred-surface-items.md](../roadmap/deferred-surface-items.md).
-  The original "function body is a sequence of expressions" sketch wanted
-  variadic argument support. The load-bearing question is the comparator's
-  tiebreak rule for variadic-vs-fixed signatures.
 - **Per-parameter type annotations** —
   [per-param-type-annotations.md](../roadmap/per-param-type-annotations.md).
   All slots are currently `Any`-typed; first slice of the type/trait sequence

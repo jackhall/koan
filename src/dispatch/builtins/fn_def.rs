@@ -427,13 +427,12 @@ mod tests {
         assert!(data.get("x").is_none());
     }
 
-    /// The leak-fix regression test: a parameterized user-fn called many times must not
-    /// grow the run-root arena per call. Pre-fix, every call leaked a child Scope, a param
-    /// clone, the substituted body's identifier->Future rewrites, and value_pass's clone —
-    /// 5+ allocations per call into run-root. Post-fix, those land in the per-call arena
-    /// and free at call return; only the lift-on-return value persists in run-root (one
-    /// `KObject::Number` per call). The bound used here (~3 allocations/call) tolerates
-    /// the lift while rejecting the old linear leak.
+    /// A parameterized user-fn called many times must not grow the run-root arena per
+    /// call: per-call allocations (child scope, param clones, body rewrites, value_pass
+    /// clones) belong in the per-call arena, leaving only the lifted return value in
+    /// run-root — one `KObject::Number` per call here. The bound (~3 allocations/call)
+    /// tolerates the lift while catching any future regression that re-introduces a
+    /// per-call leak into run-root.
     #[test]
     fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
         let arena = RuntimeArena::new();
@@ -446,10 +445,9 @@ mod tests {
         }
         let after = arena.alloc_count();
         let growth = after - baseline;
-        // Measured at exactly 50 (one `KObject::Number(7)` lifted per call). Old behavior
-        // would have been 250-350+: child Scope, param clone, substituted-Future, value_pass
-        // clone, and the value_pass dispatch's Bind value, all per call. The < 150 bound
-        // tolerates the lift while rejecting the old linear leak.
+        // Measured at exactly 50 (one `KObject::Number(7)` lifted per call). The < 150
+        // bound tolerates that and catches any regression that re-introduces a per-call
+        // leak into run-root.
         assert!(
             growth < 50 * 3,
             "per-call leak regression: {growth} new run-root allocations across 50 \

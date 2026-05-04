@@ -1,3 +1,9 @@
+//! Unit tests for the parse module. Each test parses a source snippet through
+//! `expression_tree::parse` and compares the result against an expected shape string
+//! produced by the local `describe` helper, which renders an `ExpressionPart` tree as a
+//! compact `t(...)` / `T(...)` / `e(...)` notation — terser to read and diff than the
+//! full `KExpression` debug output.
+
 use super::expression_tree::{build_tree, parse};
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::quotes::mask_quotes;

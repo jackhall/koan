@@ -1,9 +1,9 @@
 # Error handling
 
 Errors in Koan are values that propagate implicitly through the scheduler.
-There is no in-language try/catch — "catching" is for builtins to do, not
-surface syntax. The runtime substrate is in place; no catch-builtin has shipped
-yet.
+There's no in-language try/catch yet — the runtime substrate is in place but
+no catch-builtin has shipped, and the choice between a catch-builtin and an
+in-language try/catch surface is still open.
 
 ## `BodyResult::Err` and `KError`
 
@@ -54,19 +54,12 @@ builtin bodies. The override form `try_args!(bundle, return $err; ...)` is
 preserved for the rare site that wants something custom (e.g., a `ShapeError`
 for an out-of-bounds index, or a `MissingArg` with a hand-crafted message).
 
-## `null()` is intentional-only
+## Current state: no surface for handling
 
-Before this work, builtin bodies returned `null()` as a "something went wrong"
-sentinel. After: `null()` means *intentional* null only. The two surviving call
-sites are `IF false THEN x` skipping its lazy slot and `PRINT`'s no-useful-
-return value. Every other former `null()` site became `err(KError::...)`.
-
-## Design constraint: no in-language try/catch
-
-The user-explicit constraint is that errors are values that propagate
-implicitly, and "catching" is for builtins to do, not surface syntax. The
-runtime substrate is established; the catch-builtin shape is intentionally
-deferred until the type system has the surface to express it (see open work).
+Errors propagate implicitly today; nothing in the language sees them. What's
+deferred is the surface form — whether a catch-builtin (`MATCH`, `OR_ELSE`-style)
+or an in-language try/catch is the right shape, and the type-system surface
+that would let a catch site name what it accepts. See open work.
 
 ## Subtlety: TCO collapses frames
 

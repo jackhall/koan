@@ -1,3 +1,12 @@
+//! Top-level parser: runs the full `quote-mask → whitespace-collapse → tokenize →
+//! tree-build` pipeline and returns a `KExpression`. `build_tree` walks the
+//! paren-structured input one character at a time, maintaining a stack of frames
+//! (expression, list, dict). Tokens between paren transitions are classified by
+//! `tokens::classify_token`; dict-pair state lives on `dict_literal::DictFrame` so the
+//! `:` / `,` / `}` arms here stay one-liners.
+//!
+//! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
+
 use std::collections::HashMap;
 
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};

@@ -152,7 +152,15 @@ src/
 
 ## Design and roadmap
 
-Design rationale for what's already in the language lives in [design/](design/) — six
-topical docs: execution model, memory model, functional programming, type system,
-expressions and parsing, and error handling. Open structural items are tracked in
-[ROADMAP.md](ROADMAP.md).
+Design rationale for what's already in the language — one topical doc each:
+
+- [design/execution-model.md](design/execution-model.md) — scheduler, deferred dispatch, per-call arenas.
+- [design/memory-model.md](design/memory-model.md) — value ownership, lifting, lexical closures.
+- [design/type-system.md](design/type-system.md) — `KType`, dispatch by signature, structs and tagged unions.
+- [design/functional-programming.md](design/functional-programming.md) — function values, tail calls, signature-driven evaluation.
+- [design/expressions-and-parsing.md](design/expressions-and-parsing.md) — the parse pipeline and `KExpression` shape.
+- [design/error-handling.md](design/error-handling.md) — `KError`, propagation, and frame attribution.
+
+Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
+`Unblocks:` cross-links. [ROADMAP.md](ROADMAP.md) keeps the curated ordering and the
+"Next items" grouping for picking up work.

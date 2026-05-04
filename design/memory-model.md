@@ -3,9 +3,7 @@
 Every `KObject` lives in a [`RuntimeArena`](../src/dispatch/arena.rs). Top-level
 work allocates into the **run-root arena**; each user-fn call gets its own
 **per-call `RuntimeArena`** owned by [`CallArena`](../src/dispatch/arena.rs),
-freed when the call's slot finalizes. `Box::leak` is gone from production code
-— one occurrence remains in [scope.rs](../src/dispatch/scope.rs) as a test-only
-sentinel for the dispatch-specificity unit tests, not a runtime allocation.
+freed when the call's slot finalizes.
 
 ## Scoping: lexical
 
@@ -62,44 +60,38 @@ is the same direct insert as before — no measured overhead. Re-entrant writes
 that would have panicked now queue silently and become visible after the
 iterating borrow releases, with snapshot-iteration semantics for the iterator.
 
-## Invariants made structural
+## Structural invariants
 
-The leak-fix audit promoted several "must hold" rules from runtime checks into
-type-system invariants:
+Several "must hold" rules are encoded in types rather than checked at runtime:
 
-- `Scope::arena: &'a RuntimeArena` (was `Option`); `test_sink()` takes a
+- `Scope::arena: &'a RuntimeArena` is non-optional; `test_sink()` takes a
   caller-supplied arena.
-- `KFunction::captured_scope() -> &'a Scope<'a>` (was `Option`). The
-  `unwrap_or(scope)` fallback is gone.
-- The running scope is passed through `SchedulerHandle::add_dispatch(expr,
-  scope)` directly; the previous `active_scope: Option<*const Scope<'a>>` raw
-  pointer dance and unsafe transmute are gone.
+- `KFunction::captured_scope() -> &'a Scope<'a>` is non-optional.
+- The running scope passes through `SchedulerHandle::add_dispatch(expr, scope)`
+  directly, so dispatch sites carry their scope explicitly.
 - [`RuntimeArena::alloc_function`](../src/dispatch/arena.rs) `debug_assert`s
-  arena-identity between the function and its captured scope. Catches a
-  KFunction being allocated into a different arena than its captured scope at
-  the allocation site rather than later as a use-after-free in `lift_kobject`'s
-  fast path.
+  arena-identity between the function and its captured scope, catching a
+  misallocated KFunction at the allocation site rather than later as a
+  use-after-free in `lift_kobject`'s fast path.
 
 ## Performance notes
 
-`finalize_ready_frames` previously walked the whole scheduler vec per finalize
-(O(n²) over scheduler size). It now uses a sidecar
-`frame_holding_slots: Vec<usize>` in `Scheduler`, updated on stash/finalize.
+`finalize_ready_frames` uses a sidecar `frame_holding_slots: Vec<usize>` on
+`Scheduler` to find slots needing finalization in O(in-flight calls) rather
+than O(scheduler size).
 
 ## Verification
 
-- The leak-fix regression test
-  [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/dispatch/builtins/fn_def.rs)
-  confirms 50 ECHO calls grow the run-root arena by exactly 50 (one lifted
-  return value per call), down from 250+ pre-fix.
+- [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/dispatch/builtins/fn_def.rs)
+  asserts 50 ECHO calls grow the run-root arena by exactly 50 — one lifted
+  return value per call, with all per-call scaffolding freed at call return.
 - Closure-escape tests
   ([`closure_escapes_outer_call_and_remains_invocable`](../src/dispatch/builtins/call_by_name.rs),
   [`escaped_closure_with_param_returns_body_value`](../src/dispatch/builtins/call_by_name.rs))
-  confirm the previously-UAF closure-escape pattern works.
+  confirm a closure returned from its defining frame remains invocable.
 - [`add_during_active_data_borrow_queues_and_drains`](../src/dispatch/scope.rs)
-  holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms the
-  queued write applied — pre-fix would have panicked at the second
-  `borrow_mut`.
+  holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms
+  the queued write applied — exercising the conditional-defer path.
 
 ## Open work
 
