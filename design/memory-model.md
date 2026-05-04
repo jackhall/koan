@@ -80,6 +80,18 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 `Scheduler` to find slots needing finalization in O(in-flight calls) rather
 than O(scheduler size).
 
+Transient-node reclamation extends the substrate with two more sidecars:
+`node_dependencies: Vec<Vec<usize>>` (1:1 with `nodes`, capturing each
+Bind/Aggregate slot's owned sub-slot indices at `add()` time before `take()`
+consumes the work) and `free_list: Vec<usize>` (LIFO of recyclable indices that
+`add()` pulls from before extending). `Scheduler::free` walks `Forward` chain
+links and drains the dep sidecar recursively, defensively skipping any
+still-live slot. Two trigger points: `run_bind`/`run_aggregate*` free their deps
+right after the splice/copy step, and `finalize_ready_frames` chain-frees the
+collapsed `Forward(target)` once it has been replaced with the lifted Value.
+Reclamation stops at frame holders (their `nodes[i].is_some()` check trips), so
+nested user-fn frames each handle their own subtree at their own finalize.
+
 ## Verification
 
 - [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/dispatch/builtins/fn_def.rs)
@@ -97,7 +109,3 @@ than O(scheduler size).
 
 - [Open issues from the leak-fix audit](../roadmap/leak-fix-audit.md) — Miri
   hasn't run; KFuture's conservative anchoring leaves room for tightening.
-- [Transient-node reclamation](../roadmap/transient-node-reclamation.md) —
-  sub-`Dispatch`/`Bind` nodes in body-internal expressions are never reclaimed,
-  so realistic recursive code is O(n) scheduler memory even when its data
-  footprint is O(1).

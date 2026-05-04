@@ -54,12 +54,13 @@ is scaffolding without a building.
 
 ## Dependencies
 
-**Unblocks:**
-- [Transient-node reclamation](transient-node-reclamation.md)
+No hard prerequisites; no remaining items downstream. Transient-node reclamation
+(originally listed as downstream of this work) shipped independently — the
+reclamation work was scheduler-internal and didn't need to share a `BuiltinFn`
+signature pass.
 
 `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the error item added
 a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three churning passes
 over every builtin in [builtins/](../src/dispatch/builtins/) is meaningfully worse than
-one. Unless the effect story sharpens enough to fold into the same pass as ownership and
-errors, this should land last and accept that the prior two items are stepping stones
-rather than end states.
+one — but with reclamation already landed, the only remaining lever is folding effects
+into the eventual static-typing/JIT pass if their schedules align.

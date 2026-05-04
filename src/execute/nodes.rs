@@ -143,3 +143,14 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
         ),
     }
 }
+
+/// Same as `work_deps` but returns owned `usize` slot indices and an empty vec (rather than
+/// `None`) for `Dispatch`. Used by `Scheduler::add` to populate the `node_dependencies`
+/// sidecar at slot-creation time so reclamation can walk a Bind/Aggregate's owned sub-tree
+/// after its `NodeWork` has been consumed by `execute()`.
+pub(super) fn work_dep_indices<'a>(work: &NodeWork<'a>) -> Vec<usize> {
+    match work_deps(work) {
+        Some(ids) => ids.into_iter().map(|d| d.index()).collect(),
+        None => Vec::new(),
+    }
+}

@@ -86,10 +86,12 @@ impl<'a> Scheduler<'a> {
         mut expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
         scope: &'a Scope<'a>,
+        idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         // Short-circuit if any sub errored: propagate that error rather than dispatch the
         // parent. Append a frame naming the parent's expression so the trace reconstructs
-        // the call chain.
+        // the call chain. The sub slots stay in `node_dependencies[idx]` for the chain-free
+        // at finalize to reclaim — eager free is the success-path optimization.
         for (_, dep_id) in &subs {
             if let Err(e) = self.read_result(*dep_id) {
                 let frame = Frame {
@@ -100,28 +102,45 @@ impl<'a> Scheduler<'a> {
                 return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
             }
         }
+        let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
         for (part_idx, dep_id) in subs {
             let value = self.read(dep_id);
             expr.parts[part_idx] = ExpressionPart::Future(value);
+        }
+        // Reclaim sub-Dispatch slots: their results are now spliced into `expr.parts` as
+        // `Future(&'a KObject)`. The underlying objects live in arenas (lexical-scope
+        // invariant), so the splice references survive `results[dep] = None`. Done before
+        // `scope.dispatch` so any fresh `add()` inside the dispatched body's invoke can
+        // recycle the indices immediately.
+        self.node_dependencies[idx].clear();
+        for d in dep_indices {
+            self.free(d);
         }
         let future = scope.dispatch(expr)?;
         Ok(self.invoke_to_step(future, scope))
     }
 
     pub(super) fn run_aggregate(
-        &self,
+        &mut self,
         elements: Vec<AggregateElement<'a>>,
         scope: &'a Scope<'a>,
+        idx: usize,
     ) -> NodeOutput<'a> {
         // Short-circuit on the first errored dep — propagate that error rather than build a
         // partial list. Frame is generic ("<list>") because the aggregate has no signature
-        // text to carry.
+        // text to carry. On error we leave `node_dependencies[idx]` populated so the
+        // chain-free at finalize reclaims the deps; the eager-free path below is the
+        // success-case optimization.
         let mut items: Vec<KObject<'a>> = Vec::with_capacity(elements.len());
+        let mut dep_indices: Vec<usize> = Vec::new();
         for e in elements {
             match e {
                 AggregateElement::Static(obj) => items.push(obj),
                 AggregateElement::Dep(dep) => match self.read_result(dep) {
-                    Ok(v) => items.push(v.deep_clone()),
+                    Ok(v) => {
+                        items.push(v.deep_clone());
+                        dep_indices.push(dep.index());
+                    }
                     Err(err) => {
                         let frame = Frame {
                             function: "<list>".to_string(),
@@ -131,6 +150,12 @@ impl<'a> Scheduler<'a> {
                     }
                 },
             }
+        }
+        // Reclaim Dep slots: their values are already deep-cloned into `items` so freeing
+        // the result-slot pointers is unambiguously safe.
+        self.node_dependencies[idx].clear();
+        for d in dep_indices {
+            self.free(d);
         }
         let arena = scope.arena;
         let allocated: &'a KObject<'a> = arena.alloc_object(KObject::List(Rc::new(items)));
@@ -217,20 +242,26 @@ impl<'a> Scheduler<'a> {
     }
 
     pub(super) fn run_aggregate_dict(
-        &self,
+        &mut self,
         entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)>,
         scope: &'a Scope<'a>,
+        idx: usize,
     ) -> NodeOutput<'a> {
         let dict_frame = || Frame {
             function: "<dict>".to_string(),
             expression: "dict literal".to_string(),
         };
         let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
+        let mut dep_indices: Vec<usize> = Vec::new();
         for (k_el, v_el) in entries {
             let key_obj = match k_el {
                 AggregateDictElement::Static(obj) => obj,
                 AggregateDictElement::Dep(dep) => match self.read_result(dep) {
-                    Ok(v) => v.deep_clone(),
+                    Ok(v) => {
+                        let cloned = v.deep_clone();
+                        dep_indices.push(dep.index());
+                        cloned
+                    }
                     Err(err) => {
                         return NodeOutput::Err(err.clone_for_propagation().with_frame(dict_frame()));
                     }
@@ -239,7 +270,11 @@ impl<'a> Scheduler<'a> {
             let value_obj = match v_el {
                 AggregateDictElement::Static(obj) => obj,
                 AggregateDictElement::Dep(dep) => match self.read_result(dep) {
-                    Ok(v) => v.deep_clone(),
+                    Ok(v) => {
+                        let cloned = v.deep_clone();
+                        dep_indices.push(dep.index());
+                        cloned
+                    }
                     Err(err) => {
                         return NodeOutput::Err(err.clone_for_propagation().with_frame(dict_frame()));
                     }
@@ -250,6 +285,12 @@ impl<'a> Scheduler<'a> {
                 Err(e) => return NodeOutput::Err(e.with_frame(dict_frame())),
             };
             map.insert(Box::new(kkey), value_obj);
+        }
+        // Reclaim Dep slots: values are deep-cloned into `map`. Errors above leave deps
+        // for chain-free at finalize.
+        self.node_dependencies[idx].clear();
+        for d in dep_indices {
+            self.free(d);
         }
         let arena = scope.arena;
         let allocated: &'a KObject<'a> = arena.alloc_object(KObject::Dict(Rc::new(map)));
