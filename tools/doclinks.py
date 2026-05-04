@@ -114,19 +114,46 @@ def cmd_check(_args: argparse.Namespace) -> int:
     return 0
 
 
-# ---------- deps ----------
+# ---------- header helpers ----------
 
-DEP_HEADER_RE = re.compile(r"^\*\*(Requires|Unblocks):\*\*\s*$")
+# `## Heading` line — CommonMark-strict on the space after `##`. Trailing colons
+# and whitespace are tolerated when matching a specific header name.
+H2_HEADER_RE = re.compile(r"^\s*##\s+\S")
+
+
+def is_h2_header_line(line: str) -> bool:
+    """True if `line` is any level-2 markdown header. Used to detect section ends."""
+    return bool(H2_HEADER_RE.match(line))
+
+
+def matches_h2_header(line: str, name: str) -> bool:
+    """True if `line` is `## <name>` (case-insensitive, allowing optional trailing
+    colon and whitespace). Rejects partial-word matches like `## Dependencies blah`.
+    """
+    m = re.match(r"^\s*##\s+(.*?)\s*$", line)
+    if not m:
+        return False
+    return m.group(1).rstrip(":").strip().lower() == name.lower()
+
+
+# Inline bold labels: `**Requires:**`, `**Requires**:`, `__Unblocks:__`, etc.
+# Tolerates colon inside or outside the bold delimiters, the `__` underscore form,
+# case variations, and trailing whitespace. Rejects content after the label.
+DEP_HEADER_RE = re.compile(
+    r"^\s*(\*\*|__)(Requires|Unblocks)(?::?\1|\1:?)\s*$",
+    re.IGNORECASE,
+)
 NONE_RE = re.compile(r"\bnone\b", re.IGNORECASE)
 
+
+# ---------- deps ----------
 
 def parse_dep_section(path: Path) -> tuple[set[str], set[str]]:
     """Return (requires, unblocks) — sets of roadmap basenames (e.g. 'traits.md').
 
-    Reads only the **Dependencies** section. A section ends at the next blank line
-    that is followed by non-list content, or at the next `**Header:**` line, or EOF.
-    Targets outside roadmap/ (e.g. design/foo.md) are ignored — only intra-roadmap
-    edges have a symmetric partner.
+    Reads only the **Dependencies** section. A section ends at the next h2 header
+    (`## ...`) or EOF. Targets outside roadmap/ (e.g. design/foo.md) are ignored —
+    only intra-roadmap edges have a symmetric partner.
     """
     requires: set[str] = set()
     unblocks: set[str] = set()
@@ -135,22 +162,19 @@ def parse_dep_section(path: Path) -> tuple[set[str], set[str]]:
     in_deps = False
     current: set[str] | None = None
     for line in text.splitlines():
-        if line.strip().lower().startswith("## dependencies"):
+        if matches_h2_header(line, "dependencies"):
             in_deps = True
             continue
         if not in_deps:
             continue
-        # next top-level header ends the section
-        if line.startswith("## "):
+        if is_h2_header_line(line):
             break
-        m = DEP_HEADER_RE.match(line.strip())
+        m = DEP_HEADER_RE.match(line)
         if m:
-            kind = m.group(1).lower()
+            kind = m.group(2).lower()
             current = requires if kind == "requires" else unblocks
             continue
         if current is None:
-            # text on the **Requires:** / **Unblocks:** line itself, e.g.
-            # "**Requires:** none." — handle by re-scanning the line.
             continue
         for m in LINK_RE.finditer(line):
             target = m.group(2).split("#", 1)[0]
@@ -251,15 +275,14 @@ BULLET_RE = re.compile(r"^(\s*)[-*]\s+")
 
 def find_section(lines: list[str], header: str) -> tuple[int, int] | None:
     """Locate a `## <header>` section. Returns (start, end) where start is the
-    header line and end is exclusive (next `## ` or EOF). Case-insensitive on the
-    header text.
+    header line and end is exclusive (next h2 or EOF). Tolerates case, trailing
+    colon, and trailing whitespace on the header line.
     """
-    target = f"## {header}".lower()
     n = len(lines)
     for i, line in enumerate(lines):
-        if line.strip().lower().startswith(target):
+        if matches_h2_header(line, header):
             j = i + 1
-            while j < n and not lines[j].startswith("## "):
+            while j < n and not is_h2_header_line(lines[j]):
                 j += 1
             return (i, j)
     return None
@@ -485,12 +508,13 @@ def cmd_rm_roadmap(args: argparse.Namespace) -> int:
         target.unlink()
     print(f"{delete_verb} {rel(target)}")
 
-    if not args.dry_run:
-        print("\nNote: design-doc 'Open work' entries, source comments, and the "
-              "'What's shipped so far' paragraph are not auto-handled.")
-        print("Run `python3 tools/doclinks.py check` to find any remaining stale "
-              "references.")
-    return 0
+    if args.dry_run:
+        return 0
+
+    print("\nNote: design-doc 'Open work' entries, source comments, and the "
+          "'What's shipped so far' paragraph are not auto-handled. Running "
+          "`check` to surface any remaining stale references:\n")
+    return cmd_check(argparse.Namespace())
 
 
 def main(argv: list[str] | None = None) -> int:

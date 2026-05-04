@@ -24,7 +24,7 @@ You handle the doc-update phase of a koan PR. Your inputs are:
 
 3. **Apply the partition rules to this PR's delta:**
 
-   - **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, and strips the entry from `ROADMAP.md`'s "Next items" / "Open items". Then run `python3 tools/doclinks.py refs roadmap/<item>.md` to confirm what remains — anything still listed is your job: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections.
+   - **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `ROADMAP.md`'s "Next items" / "Open items", and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections.
    - **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph if the item warrants mention. (`rm-roadmap` only touches the bullet lists.)
    - **Update `design/*.md`:** if a design doc's "Open work" section pointed to the deleted roadmap item, replace with either a body section describing what shipped (when there's explanatory value) or remove the bullet (when the body already covers it). If the design doc's invariants changed, update them in place.
    - **Update `README.md` / `TUTORIAL.md`** if the work changes user-facing surface or directory layout.

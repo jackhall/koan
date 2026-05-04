@@ -106,7 +106,7 @@ python3 tools/doclinks.py rewrite --from-file dispatch-refactor.txt
 
 ### `rm-roadmap <roadmap/item.md>` — delete a roadmap item with cleanup
 
-When a roadmap item ships, this command deletes the file *and* prunes its inbound bullets in a single pass: every `**Requires:**` / `**Unblocks:**` bullet in other `roadmap/*.md` items that links to it, plus any bullet under `## Next items` or `## Open items` in `ROADMAP.md`. Continuation lines belonging to a removed bullet are dropped too. The tool does **not** touch the `What's shipped so far` paragraph, design-doc "Open work" sections, or source-file comments — those need a judgment call. Use `--dry-run` to preview.
+When a roadmap item ships, this command deletes the file *and* prunes its inbound bullets in a single pass: every `**Requires:**` / `**Unblocks:**` bullet in other `roadmap/*.md` items that links to it, plus any bullet under `## Next items` or `## Open items` in `ROADMAP.md`. Continuation lines belonging to a removed bullet are dropped too. After the delete it runs `check` automatically and propagates its exit code, so any remaining stale references (design-doc "Open work" sections, source-file comments, prose mentions inside Dependencies sections) surface immediately. The tool does **not** touch the `What's shipped so far` paragraph or those remaining-reference sites — those need a judgment call. Use `--dry-run` to preview.
 
 ```sh
 python3 tools/doclinks.py rm-roadmap --dry-run roadmap/transient-node-reclamation.md
