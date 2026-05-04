@@ -11,7 +11,7 @@ use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::lift::lift_kobject;
-use super::nodes::{work_deps, Node, NodeOutput, NodeStep, NodeWork};
+use super::nodes::{work_dep_indices, work_deps, Node, NodeOutput, NodeStep, NodeWork};
 
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
 /// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Aggregate`
@@ -39,6 +39,26 @@ pub struct Scheduler<'a> {
     /// vec rather than all `nodes`, keeping the per-iteration cost proportional to the
     /// number of in-flight user-fn calls (typically tiny) instead of total scheduler size.
     pub(super) frame_holding_slots: Vec<usize>,
+    /// 1:1 with `nodes`: each entry is the list of sub-slot indices owned by that slot. A
+    /// `Bind`'s entry holds its `subs` indices; an `Aggregate`/`AggregateDict`'s holds its
+    /// `Dep` indices; a `Dispatch`'s entry is empty. Populated at `add()` time and consumed
+    /// when the slot's run reads its deps (`run_bind`/`run_aggregate*` clear it after
+    /// freeing each dep). The sidecar exists because `NodeWork` is moved out by `take()` in
+    /// the execute loop, so the dep list isn't otherwise recoverable for transitive
+    /// reclamation.
+    pub(super) node_dependencies: Vec<Vec<usize>>,
+    /// LIFO stack of slot indices whose `nodes`/`results`/`node_dependencies` entries are
+    /// cleared and ready to be reused. `add()` pulls from here before extending the vecs,
+    /// so transient-node reclamation lands as constant scheduler memory across tail-
+    /// recursive bodies that spawn body-internal sub-`Dispatch`/`Bind` work each iteration.
+    pub(super) free_list: Vec<usize>,
+    /// Frame Rc of the slot currently being executed. Set by the execute loop right before
+    /// calling `run_dispatch`/`run_bind` and cleared after; read by builtins via
+    /// `SchedulerHandle::current_frame` so a frame-creating builtin (MATCH) can chain the
+    /// caller's frame Rc onto its own new frame. Without that chain, a new frame whose child
+    /// scope's `outer` lives in the caller's per-call arena dangles the moment the caller's
+    /// frame is dropped on TCO replace.
+    pub(super) active_frame: Option<Rc<CallArena>>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -48,6 +68,9 @@ impl<'a> Scheduler<'a> {
             results: Vec::new(),
             queue: VecDeque::new(),
             frame_holding_slots: Vec::new(),
+            node_dependencies: Vec::new(),
+            free_list: Vec::new(),
+            active_frame: None,
         }
     }
 
@@ -63,11 +86,33 @@ impl<'a> Scheduler<'a> {
     }
 
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
-        let id = NodeId(self.nodes.len());
-        self.nodes.push(Some(Node { work, scope, frame: None, function: None }));
-        self.results.push(None);
-        self.queue.push_back(id.index());
-        id
+        let deps = work_dep_indices(&work);
+        // Inherit the active slot's frame (if any) so sub-dispatch / sub-bind / sub-aggregate
+        // slots spawned during a user-fn body's run keep that body's per-call arena alive
+        // until they finalize. The Rc clone is what makes `current_frame()` available to
+        // builtins like MATCH whose own frame's child scope's `outer` lives in the per-call
+        // arena. Top-level adds (`add_dispatch` from outside `execute`) inherit `None`.
+        let frame = self.active_frame.clone();
+        let idx = match self.free_list.pop() {
+            Some(i) => {
+                // Reclaimed slot: overwrite the cleared entries in place. `nodes[i]` was
+                // set to `None` by `free`; `results[i]` was cleared; `node_dependencies[i]`
+                // was drained. The fresh `work`/`deps` populate them now.
+                self.nodes[i] = Some(Node { work, scope, frame, function: None });
+                self.results[i] = None;
+                self.node_dependencies[i] = deps;
+                i
+            }
+            None => {
+                let i = self.nodes.len();
+                self.nodes.push(Some(Node { work, scope, frame, function: None }));
+                self.results.push(None);
+                self.node_dependencies.push(deps);
+                i
+            }
+        };
+        self.queue.push_back(idx);
+        NodeId(idx)
     }
 
     /// Drain the FIFO queue. A `Bind`/`Aggregate` whose subs forward through to a not-yet-
@@ -110,14 +155,20 @@ impl<'a> Scheduler<'a> {
                     continue;
                 }
             }
+            // Expose the slot's frame to builtins via `SchedulerHandle::current_frame` for
+            // the duration of this slot's run. Restored on exit so nested re-entry through
+            // the trait (none today, but the lever is preserved) sees the right ancestor.
+            let prev_active = self.active_frame.take();
+            self.active_frame = prev_frame.clone();
             let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope)?,
-                NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope)?,
-                NodeWork::Aggregate { elements } => NodeStep::Done(self.run_aggregate(elements, scope)),
+                NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
+                NodeWork::Aggregate { elements } => NodeStep::Done(self.run_aggregate(elements, scope, idx)),
                 NodeWork::AggregateDict { entries } => {
-                    NodeStep::Done(self.run_aggregate_dict(entries, scope))
+                    NodeStep::Done(self.run_aggregate_dict(entries, scope, idx))
                 }
             };
+            self.active_frame = prev_active;
             match step {
                 NodeStep::Done(output) => {
                     match (output, prev_frame) {
@@ -227,6 +278,42 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
+    /// Reclaim slot `idx` and the Bind/Aggregate sub-tree it owns. Walks `Forward` chain
+    /// links and `node_dependencies` recursively, clearing `results` and pushing each freed
+    /// index onto `free_list` for `add()` to reuse.
+    ///
+    /// Safe to call only on slots whose work has finished — `nodes[idx]` must be `None`.
+    /// The defensive check at the top early-continues for any still-live slot (queued, in
+    /// `frame_holding_slots`, or currently being processed) so a misfire doesn't corrupt
+    /// active state.
+    ///
+    /// Idempotent: the (results-is-none && deps-empty) guard early-continues when the slot
+    /// was already reclaimed by an earlier path. A freshly-reused slot pulled from the
+    /// free-list has `deps` repopulated by `add()` and won't be mistaken for already-freed.
+    ///
+    /// References handed out by `read(dep_id)` (the `&'a KObject` spliced into a parent's
+    /// `expr.parts` as `Future(value)`) survive `free` because the underlying `KObject`
+    /// lives in an arena; clearing `results[idx]` only drops the `NodeOutput::Value` enum
+    /// wrapper, not the value it points at.
+    pub(super) fn free(&mut self, idx: usize) {
+        let mut stack = vec![idx];
+        while let Some(i) = stack.pop() {
+            if self.nodes[i].is_some() { continue; }
+            if self.results[i].is_none() && self.node_dependencies[i].is_empty() {
+                continue;
+            }
+            if let Some(NodeOutput::Forward(t)) = self.results[i].as_ref() {
+                stack.push(t.index());
+            }
+            let deps = std::mem::take(&mut self.node_dependencies[i]);
+            for d in deps {
+                stack.push(d);
+            }
+            self.results[i] = None;
+            self.free_list.push(i);
+        }
+    }
+
     /// True iff `id`'s `Forward` chain ends in a stored terminal output (`Value` or `Err`).
     /// Used by the execute loop to decide whether a `Bind`/`Aggregate` whose subs depend on
     /// `id` is safe to run yet. An errored sub is "ready" — the parent will short-circuit
@@ -286,6 +373,15 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add(self, NodeWork::Dispatch(expr), scope)
     }
+
+    /// Active slot's frame `Rc<CallArena>` (if any). Set by `execute` for the duration of
+    /// each slot's `run_dispatch`/`run_bind` and cleared when control returns to the loop.
+    /// Builtins like MATCH that build a new `CallArena` whose child scope's `outer` is the
+    /// call site clone this Rc into the new frame so the call-site arena stays alive while
+    /// the new frame is in use.
+    fn current_frame(&self) -> Option<Rc<CallArena>> {
+        self.active_frame.clone()
+    }
 }
 
 impl<'a> KFunction<'a> {
@@ -321,9 +417,13 @@ impl<'a> KFunction<'a> {
                 // Build a fresh per-call frame whose arena owns the per-call allocations
                 // (child scope, parameter clones, substituted body's Future rewrites).
                 // `outer` is the FN's captured definition scope (lexical scoping); for top-
-                // level FNs that's run-root.
+                // level FNs that's run-root, which outlives every per-call frame, so the
+                // chain Rc is `None`. Closure escapes whose captured scope lives in a per-
+                // call arena are kept alive externally via the lifted `KFunction(&fn,
+                // Some(Rc))` on the user-bound value; the closure-escape coverage tests
+                // (`closure_escapes_outer_call_and_remains_invocable`) lean on that.
                 let outer = self.captured_scope();
-                let frame: Rc<CallArena> = CallArena::new(outer);
+                let frame: Rc<CallArena> = CallArena::new(outer, None);
                 // Re-borrow through raw pointers so the borrow ends before the `frame` move
                 // below. SAFETY: heap-pinning makes `arena_ptr` and `scope_ptr` valid for
                 // the box's life; allocations into the arena live until `frame` drops.
@@ -459,6 +559,78 @@ mod tests {
         sched.execute().unwrap();
         let data = root.data.borrow();
         assert!(matches!(data.get("b"), Some(KObject::Number(n)) if *n == 10.0));
+    }
+
+    #[test]
+    fn free_reclaims_bind_subtree_and_forward_chain() {
+        // Build a synthetic scheduler state representing:
+        //   slot 0: parent Bind with subs [1]
+        //   slot 1: sub-Dispatch whose result is Forward(2)
+        //   slot 2: nested Bind with subs [3]; result Value
+        //   slot 3: leaf Dispatch with Value
+        // After `free(1)` (the typical run_bind eager-free case), slots 1, 2, 3 should
+        // be reclaimed onto `free_list`; slot 0 stays untouched. A subsequent `add()`
+        // pulls from `free_list` rather than extending the vec.
+        let arena = RuntimeArena::new();
+        let root = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let value: &KObject = arena.alloc_object(KObject::Number(42.0));
+        // Allocate four slots by adding placeholder Dispatches.
+        let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
+        let s0 = sched.add(mk_dispatch(), root).index();
+        let s1 = sched.add(mk_dispatch(), root).index();
+        let s2 = sched.add(mk_dispatch(), root).index();
+        let s3 = sched.add(mk_dispatch(), root).index();
+        // Simulate post-run state: clear nodes (work consumed by `take()`), wire the
+        // ownership/forward graph by hand.
+        for i in [s0, s1, s2, s3] {
+            sched.nodes[i] = None;
+        }
+        sched.results[s1] = Some(NodeOutput::Forward(NodeId(s2)));
+        sched.results[s2] = Some(NodeOutput::Value(value));
+        sched.results[s3] = Some(NodeOutput::Value(value));
+        sched.node_dependencies[s0] = vec![s1];
+        sched.node_dependencies[s2] = vec![s3];
+
+        sched.free(s1);
+
+        // s1, s2, s3 reclaimed; s0 untouched.
+        assert!(sched.results[s1].is_none(), "s1 result cleared");
+        assert!(sched.results[s2].is_none(), "s2 result cleared");
+        assert!(sched.results[s3].is_none(), "s3 result cleared");
+        assert!(sched.node_dependencies[s2].is_empty(), "s2 deps drained");
+        assert_eq!(sched.node_dependencies[s0], vec![s1], "s0 deps untouched");
+        let mut freed: Vec<usize> = sched.free_list.iter().copied().collect();
+        freed.sort();
+        assert_eq!(freed, vec![s1, s2, s3]);
+
+        // Reuse: next `add()` pulls from free_list (LIFO; last-pushed reused first).
+        let reused = sched.add(mk_dispatch(), root).index();
+        assert!(sched.free_list.len() == 2, "one slot popped from free_list");
+        assert!([s1, s2, s3].contains(&reused), "reused index came from free_list");
+    }
+
+    #[test]
+    fn free_skips_live_slot_and_is_idempotent() {
+        let arena = RuntimeArena::new();
+        let root = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
+        let s = sched.add(mk_dispatch(), root).index();
+        // Live slot: nodes[s] = Some. free should be a no-op.
+        sched.free(s);
+        assert!(sched.nodes[s].is_some());
+        assert!(sched.free_list.is_empty());
+
+        // Now mark complete and free.
+        sched.nodes[s] = None;
+        let value: &KObject = arena.alloc_object(KObject::Number(1.0));
+        sched.results[s] = Some(NodeOutput::Value(value));
+        sched.free(s);
+        assert_eq!(sched.free_list, vec![s]);
+        // Idempotent: second free is a no-op (already-freed early-continue).
+        sched.free(s);
+        assert_eq!(sched.free_list, vec![s], "no duplicate free");
     }
 
     #[test]

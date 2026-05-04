@@ -1,7 +1,7 @@
 # Support for functional programming
 
 Functions are first-class values in Koan. `KFunction` is a `KObject` variant
-([kobject.rs](../src/dispatch/kobject.rs)), so a function can be returned from a
+([kobject.rs](../src/dispatch/values/kobject.rs)), so a function can be returned from a
 body, bound via `LET`, looked up by name, and invoked via
 [`call_by_name`](../src/dispatch/builtins/call_by_name.rs) or by appearing in a
 position the dispatcher resolves.

@@ -17,8 +17,14 @@ functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimiza
 leak fix (with lexical closures + per-call arenas), structured error propagation, the
 user-defined-types substrate (return-type enforcement at runtime), the IF-THEN→MATCH
 consolidation (`MATCH` accepts `Bool` directly via projection at entry), per-parameter
-type annotations on user-fn signatures, and container type parameterization (`List<T>`,
-`Dict<K, V>`, `Function<(args) -> R>`). The next signature revision after error handling
+type annotations on user-fn signatures, container type parameterization (`List<T>`,
+`Dict<K, V>`, `Function<(args) -> R>`), transient-node reclamation (Bind/Aggregate
+sub-trees recycled via a per-slot deps sidecar + free-list, keeping repeated-call
+scheduler memory near-constant), per-call-frame chaining for builtin-built frames
+(MATCH's child-scope `outer` no longer dangles when a TCO replace drops the
+call-site frame), and a targeted KFuture lift anchor (an addresses-only side-table
+on `RuntimeArena` answers a precise membership query, replacing the previous
+always-anchor conservative path). The next signature revision after error handling
 lands monadic side-effect capture; the remaining type/trait sequence (methods, traits,
 trait inheritance) unlocks the items downstream (group-based operators), so it sits in
 the middle of the sequence rather than last.
@@ -30,7 +36,8 @@ without first landing something else:
 
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
-  needs a uniform carrier.
+  needs a uniform carrier. (Previously a soft prerequisite of transient-node reclamation;
+  now decoupled — reclamation shipped without touching `BuiltinFn`.)
 - [Per-type identity for structs and methods](roadmap/per-type-identity.md) — every user
   struct collapses to `KType::Struct`; methods can't attach to specific types. Next slice
   of the type/trait sequence after container type parameterization.
@@ -45,14 +52,11 @@ without first landing something else:
 
 ### Memory and runtime substrate
 
-- [Transient-node reclamation](roadmap/transient-node-reclamation.md) — TCO covers only
-  the outermost frame; body-internal sub-dispatches still grow the scheduler's vecs per
-  iteration.
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier.
-- [Open issues from the leak-fix audit](roadmap/leak-fix-audit.md) — Miri hasn't run, and
-  KFuture's conservative anchoring leaves room for tightening.
+- [Open issues from the leak-fix audit](roadmap/leak-fix-audit.md) — Miri hasn't run on the
+  per-call-arena transmutes.
 
 ### Type system
 

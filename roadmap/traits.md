@@ -3,7 +3,7 @@
 **Problem.** Writing a function over "anything that can be iterated" or "anything that
 can be compared" requires a trait — a named bag of operation signatures that a type can
 claim to implement. Koan has no surface for this. The host-side
-[`ktraits.rs`](../src/dispatch/ktraits.rs) (`Parseable`, `Iterable`, `Monadic`) gives the
+[`ktraits.rs`](../src/dispatch/types/ktraits.rs) (`Parseable`, `Iterable`, `Monadic`) gives the
 runtime its own vocabulary; user code is denied the analog and has to write
 per-concrete-type variants of every function.
 

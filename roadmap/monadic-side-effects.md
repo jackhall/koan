@@ -1,6 +1,6 @@
 # Generalize `Scope::out` into monadic side-effect capture
 
-**Problem.** [`Scope::out`](../src/dispatch/scope.rs) is a `Box<dyn Write>` sink that
+**Problem.** [`Scope::out`](../src/dispatch/runtime/scope.rs) is a `Box<dyn Write>` sink that
 exists solely so [`PRINT`](../src/dispatch/builtins/print.rs) has somewhere to send bytes
 and tests can swap stdout for a buffer. It is the only side-effect channel the runtime
 has, and it is hard-coded to one channel and one shape (write bytes). Every additional
@@ -8,7 +8,7 @@ effect Koan eventually wants to support — file IO, time, randomness, network,
 environment access, even error reporting — would either grow `Scope` by another ad-hoc
 `Box<dyn ...>` field or get baked into `std::io` calls inside individual builtins.
 
-Meanwhile the [`Monadic`](../src/dispatch/ktraits.rs) trait already exists, with `pure` +
+Meanwhile the [`Monadic`](../src/dispatch/types/ktraits.rs) trait already exists, with `pure` +
 `bind` over a `Wrap<T>` GAT, and its doc comment says it is "intended as the abstraction
 Koan's deferred-task and error-handling combinators will share once they're fleshed out."
 Today it is implemented only for `Option` and threaded through nothing in the runtime. It
@@ -54,12 +54,13 @@ is scaffolding without a building.
 
 ## Dependencies
 
-**Unblocks:**
-- [Transient-node reclamation](transient-node-reclamation.md)
+No hard prerequisites; no remaining items downstream. Transient-node reclamation
+(originally listed as downstream of this work) shipped independently — the
+reclamation work was scheduler-internal and didn't need to share a `BuiltinFn`
+signature pass.
 
 `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the error item added
 a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three churning passes
 over every builtin in [builtins/](../src/dispatch/builtins/) is meaningfully worse than
-one. Unless the effect story sharpens enough to fold into the same pass as ownership and
-errors, this should land last and accept that the prior two items are stepping stones
-rather than end states.
+one — but with reclamation already landed, the only remaining lever is folding effects
+into the eventual static-typing/JIT pass if their schedules align.

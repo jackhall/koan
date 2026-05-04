@@ -14,7 +14,7 @@
 //! unambiguously, and no user surface form spells the call directly. The user constructs
 //! via the type token (`Maybe (some 42)`) or a LET-bound identifier; both routes funnel
 //! through `apply`. The slot-0 `Type` is shared with the struct construction primitive
-//! (`src/dispatch/struct_value.rs`); they don't collide because struct construct is
+//! (`src/dispatch/values/struct_value.rs`); they don't collide because struct construct is
 //! 2-slot, not 3-slot — different dispatch bucket.
 
 use std::collections::HashMap;

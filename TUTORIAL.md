@@ -17,7 +17,7 @@ echo 'PRINT "hello"' | cargo run
 
 A program is a sequence of top-level expressions, one per (logical) line. Each
 runs in submission order against the same scope; failures surface as structured
-[`KError`](src/dispatch/kerror.rs) values printed to stderr.
+[`KError`](src/dispatch/runtime/kerror.rs) values printed to stderr.
 
 ## Source structure
 
@@ -345,7 +345,7 @@ LET wat = (5).x
 
 ## Errors
 
-Failures are first-class [`KError`](src/dispatch/kerror.rs) values with a
+Failures are first-class [`KError`](src/dispatch/runtime/kerror.rs) values with a
 `kind` and a chain of frames showing where it came from. The CLI prints them
 to stderr:
 

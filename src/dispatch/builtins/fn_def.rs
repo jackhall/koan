@@ -504,6 +504,74 @@ mod tests {
         );
     }
 
+    /// Repeated calls to a user-fn whose body has an internal sub-expression reuse
+    /// scheduler slots. The body of `LOOK` evaluates `MATCH (b) WITH …`; the `(b)`
+    /// is a sub-expression that spawns a sub-`Dispatch` and a parent `Bind` per call.
+    /// Without transient-node reclamation those slots would accumulate one set per
+    /// call, growing `nodes.len()` proportional to call count. With reclamation,
+    /// `run_bind` frees the sub-`Dispatch` after splicing and the chain-free at
+    /// finalize collapses the Bind itself, so the per-call transient pool gets
+    /// recycled by `add()` on the next call's spawns.
+    ///
+    /// The truly-recursive variant (the body tail-calls itself) used to UAF on writer
+    /// teardown — MATCH built a per-call frame whose child scope's `outer` pointed into
+    /// the caller's per-call arena, but the caller's frame was dropped on TCO replace
+    /// before MATCH's frame finished its forward-chain. The fix wires
+    /// `SchedulerHandle::current_frame` so MATCH chains the caller's frame Rc onto its
+    /// own (`CallArena`'s `outer_frame`); the recursive case is exercised by
+    /// `match_case::tests::recursive_tagged_match_no_uaf`.
+    #[test]
+    fn tail_recursive_match_keeps_scheduler_bounded() {
+        let arena = RuntimeArena::new();
+        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured.clone());
+
+        run(
+            scope,
+            "UNION Bit = (one: Null zero: Null)\n\
+             FN (LOOK b: Tagged) -> Any = (MATCH (b) WITH (\
+                 one -> (PRINT \"one\")\
+                 zero -> (PRINT \"zero\")\
+             ))",
+        );
+
+        // Drive one call at a time so each call's transient sub-Dispatches/Binds get
+        // reclaimed before the next call's spawns. With reclamation, the second through
+        // Nth calls reuse free-list indices instead of extending `nodes`.
+        let calls = 10;
+        let mut sched = Scheduler::new();
+        for i in 0..calls {
+            let src = if i % 2 == 0 { "LOOK (Bit (one null))" } else { "LOOK (Bit (zero null))" };
+            sched.add_dispatch(parse_one(src), scope);
+            sched.execute().expect("LOOK should run");
+        }
+
+        // Each call prints once.
+        assert_eq!(
+            captured.borrow().iter().filter(|&&b| b == b'\n').count(),
+            calls,
+            "expected one PRINT per LOOK call, got {:?}",
+            String::from_utf8_lossy(&captured.borrow()),
+        );
+
+        // Bound: `calls` persistent top-level slots + the persistent forward-target Bind
+        // each call lifts into (currently never reclaimed because top-level Forward
+        // chains have no finalize trigger to collapse them). The transient sub-
+        // Dispatches/Binds spawned during each body iteration get reclaimed and the
+        // free-list recycles them across calls, so the slot count grows linearly with
+        // call count, not multiplicatively. Without reclamation, each LOOK call would
+        // leave ~5-7 transient slots behind in addition to the persistent pair, so
+        // `nodes.len()` would be ~70+ at calls=10.
+        // Empirically: ~22 slots at calls=10. Without reclamation: 70+ (~7 slots/call).
+        let bound = 2 * calls + 8;
+        assert!(
+            sched.len() <= bound,
+            "transient-node reclamation: {calls} LOOK calls should keep scheduler \
+             vec bounded by {bound}, got {}",
+            sched.len(),
+        );
+    }
+
     /// `FN` parses the declared return type from the `-> Type` slot and stores it on the
     /// registered function's signature.
     #[test]

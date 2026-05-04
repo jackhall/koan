@@ -10,7 +10,7 @@ in-language try/catch surface is still open.
 A builtin body returns one of `Value`, `Tail`, or `Err(KError)` (see
 [execution-model.md](execution-model.md)).
 
-[`KError`](../src/dispatch/kerror.rs) is a struct:
+[`KError`](../src/dispatch/runtime/kerror.rs) is a struct:
 
 ```rust
 struct KError {
@@ -38,7 +38,7 @@ The scheduler walks errors through `Forward` chains, short-circuiting any
 Errors flow to the top level; the CLI formats them to stderr with the frame
 chain via `KError`'s `Display` impl.
 
-[`Scope::dispatch`](../src/dispatch/scope.rs) and `KFunction::bind` return
+[`Scope::dispatch`](../src/dispatch/runtime/scope.rs) and `KFunction::bind` return
 `Result<KFuture, KError>` — dispatch failures (no match, ambiguous overload,
 arity mismatch in bind) flow through the same channel as builtin errors.
 [`Scheduler::execute`](../src/execute/scheduler.rs) and

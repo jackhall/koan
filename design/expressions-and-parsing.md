@@ -64,7 +64,7 @@ A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
-[`SchedulerHandle::add_dispatch`](../src/dispatch/scope.rs) submits a child
+[`SchedulerHandle::add_dispatch`](../src/dispatch/runtime/scope.rs) submits a child
 node directly, while [`BodyResult::Tail`](../src/dispatch/kfunction.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.

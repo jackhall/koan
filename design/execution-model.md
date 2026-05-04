@@ -9,7 +9,7 @@ source ──▶ parse ──▶ dispatch ──▶ execute
 
 Dispatch and execution are deliberately separate stages. **Dispatch** does
 name-resolution and signature-matching: given a `KExpression` and a `Scope`, it
-returns a [`KFuture`](../src/dispatch/scope.rs) — the resolved `&KFunction` plus
+returns a [`KFuture`](../src/dispatch/runtime/scope.rs) — the resolved `&KFunction` plus
 its `ArgumentBundle`, ready to run but not yet executed. **Execution** is what
 the [`Scheduler`](../src/execute/scheduler.rs) does: it owns a DAG of deferred
 work, decides when each `KFuture` runs, and hands its body the live scope.
@@ -56,15 +56,48 @@ than growing the Rust call stack — that property is structural, not optimizing
 What `Tail` adds is constant **scheduler-vec** memory across the tail-call
 chain.
 
+## Transient-node reclamation
+
+`Tail` reuses the outermost slot but bodies typically have internal
+sub-expressions — the predicate of an `IF`/`MATCH` guard, the argument
+expressions of a recursive call, list/dict literal elements. Each spawns a
+sub-`Dispatch` and a parent `Bind`/`Aggregate` slot. Without reclamation those
+slots accumulate per body iteration, so realistic recursive code is O(n)
+scheduler memory even when its data footprint is O(1).
+
+Reclamation runs in two places:
+
+- **Eager free at end of `run_bind` / `run_aggregate*`.** Once a Bind has read
+  its dep results and spliced them into `expr.parts` as `Future(value)` (or an
+  Aggregate has deep-cloned each element into the materialized list/dict), the
+  dep slots are unreachable — Forward chains never target sub-`Dispatch`
+  slots, and a sub-Dispatch is read by exactly one Bind/Aggregate. Free walks
+  recursively, recycling each dep's own forward chain and dep tree.
+- **Chain-free at finalize.** When `finalize_ready_frames` collapses a
+  frame-holder's `Forward(target)` into the lifted `Value`, the chain target
+  is freed. Free's `nodes[i].is_some()` guard makes the recursion stop at any
+  still-live slot — frame holders, queued Binds — so each in-flight user-fn
+  call handles its own subtree at its own finalize.
+
+The net effect: recursive bodies whose only persistent state is the call
+result run in O(1) scheduler memory across iterations, with the per-iteration
+fanout (the body's transient sub-Dispatches/Binds) recycled through a
+free-list of slot indices that `add()` pulls from before extending the vecs.
+Bookkeeping lives in two `Scheduler` sidecars: `node_dependencies:
+Vec<Vec<usize>>` (each Bind/Aggregate slot's owned sub-slot indices, captured
+at `add()` time before `take()` consumes the work) and `free_list:
+Vec<usize>`. See also [memory-model.md § Performance notes](memory-model.md).
+
+A known limitation: each top-level dispatch retains two persistent slots —
+the entry slot returned to the user and the Bind it forwards to (which the
+user-fn body's lift writes its terminal `Value` into). Top-level forward
+chains have no finalize trigger that would collapse them into a direct
+`Value`, so each `add_dispatch` costs a small constant rather than one slot.
+Linear in call count, not multiplicative in body size; closing it would need
+either path compression in `read_result` or a post-execute pass.
+
 ## Open work
 
-- **Transient-node reclamation**
-  ([roadmap/transient-node-reclamation.md](../roadmap/transient-node-reclamation.md)).
-  `Tail` covers the outermost frame, but body-internal sub-expressions — the
-  predicate of an `IF`-guarded base case, the argument expressions to a
-  recursive call — still allocate sub-`Dispatch` + `Bind` nodes per iteration,
-  and those nodes are never reclaimed. Realistic recursive patterns (factorial,
-  list walk) run in O(n) scheduler memory until this lands.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

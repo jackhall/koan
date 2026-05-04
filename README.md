@@ -73,11 +73,11 @@ The output is one [`KExpression`](src/parse/kexpression.rs) per top-level line: 
 
 ### dispatch — `KExpression` → `KFuture` against a `Scope`
 
-A [`Scope`](src/dispatch/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. `Scope::dispatch` scans registered functions for one whose [`ExpressionSignature`](src/dispatch/kfunction.rs) matches the incoming expression — signatures are an ordered mix of fixed `Token`s and typed `Argument` slots — then `bind`s the expression into a [`KFuture`](src/dispatch/scope.rs): the resolved function plus its `ArgumentBundle`, ready to run but not yet executed.
+A [`Scope`](src/dispatch/runtime/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. `Scope::dispatch` scans registered functions for one whose [`ExpressionSignature`](src/dispatch/kfunction.rs) matches the incoming expression — signatures are an ordered mix of fixed `Token`s and typed `Argument` slots — then `bind`s the expression into a [`KFuture`](src/dispatch/runtime/scope.rs): the resolved function plus its `ArgumentBundle`, ready to run but not yet executed.
 
-Runtime values are [`KObject`](src/dispatch/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/dispatch/ktraits.rs). Builtins are registered in [builtins.rs](src/dispatch/builtins.rs) and produce the default root scope.
+Runtime values are [`KObject`](src/dispatch/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/dispatch/types/ktraits.rs). Builtins are registered in [builtins.rs](src/dispatch/builtins.rs) and produce the default root scope.
 
-Errors are first-class via [`KError`](src/dispatch/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) up the scheduler's Forward chain, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
+Errors are first-class via [`KError`](src/dispatch/runtime/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) up the scheduler's Forward chain, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
 
 ### execute — run the DAG
 
@@ -88,17 +88,17 @@ Errors are first-class via [`KError`](src/dispatch/kerror.rs) — a `BodyResult:
 ## Source layout
 
 Inside [src/dispatch/](src/dispatch/), the `k`-prefix marks files built around a single
-eponymous Koan-runtime type: [kobject.rs](src/dispatch/kobject.rs) defines `KObject`,
+eponymous Koan-runtime type: [kobject.rs](src/dispatch/values/kobject.rs) defines `KObject`,
 [kfunction.rs](src/dispatch/kfunction.rs) defines `KFunction`,
-[kerror.rs](src/dispatch/kerror.rs) defines `KError`, [kkey.rs](src/dispatch/kkey.rs)
-defines `KKey`, [ktraits.rs](src/dispatch/ktraits.rs) holds the `K*`-typed core traits.
+[kerror.rs](src/dispatch/runtime/kerror.rs) defines `KError`, [kkey.rs](src/dispatch/values/kkey.rs)
+defines `KKey`, [ktraits.rs](src/dispatch/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
-[arena.rs](src/dispatch/arena.rs) (allocation), [scope.rs](src/dispatch/scope.rs) (lexical
+[arena.rs](src/dispatch/runtime/arena.rs) (allocation), [scope.rs](src/dispatch/runtime/scope.rs) (lexical
 environment), [builtins.rs](src/dispatch/builtins.rs) (registry),
-[monad.rs](src/dispatch/monad.rs) (trait impl on a foreign type),
-[tagged_union.rs](src/dispatch/tagged_union.rs) (shared structure),
-[struct_value.rs](src/dispatch/struct_value.rs) (shared structure),
-[typed_field_list.rs](src/dispatch/typed_field_list.rs) (helper).
+[monad.rs](src/dispatch/types/monad.rs) (trait impl on a foreign type),
+[tagged_union.rs](src/dispatch/values/tagged_union.rs) (shared structure),
+[struct_value.rs](src/dispatch/values/struct_value.rs) (shared structure),
+[typed_field_list.rs](src/dispatch/types/typed_field_list.rs) (helper).
 
 ```
 src/

@@ -21,6 +21,16 @@ impl<'a> Scheduler<'a> {
                 still_waiting.push(idx);
                 continue;
             }
+            // Capture the immediate `Forward` target before the lift overwrites
+            // `results[idx]` with the terminal Value/Err. `Scheduler::free` recurses
+            // through Forward chain links and dep trees, naturally stopping at any
+            // still-live slot (queued, frame-holding, or freshly reused) via its
+            // `nodes[i].is_some()` guard. Top-level dispatch slots are unreachable from
+            // any chain (Forward only targets internal Binds), so they're never visited.
+            let chain_target = match self.results[idx].as_ref() {
+                Some(NodeOutput::Forward(t)) => Some(t.index()),
+                _ => None,
+            };
             match self.read_result(NodeId(idx)) {
                 Ok(value) => {
                     let (dest, lifted_obj, function) = {
@@ -40,7 +50,7 @@ impl<'a> Scheduler<'a> {
                     // Runtime return-type check: same enforcement as the direct Done(Value)
                     // path in `execute`. Forward-chain finalizers (a user-fn body that
                     // spawned a Bind for a sub-expression) land here instead.
-                    if let Some(f) = function {
+                    let typecheck_failed = if let Some(f) = function {
                         let rt = &f.signature.return_type;
                         if !rt.matches_value(&lifted_obj) {
                             let err = KError::new(KErrorKind::TypeMismatch {
@@ -53,12 +63,17 @@ impl<'a> Scheduler<'a> {
                                 expression: f.summarize(),
                             });
                             self.results[idx] = Some(NodeOutput::Err(err));
-                            self.nodes[idx] = None;
-                            continue;
+                            true
+                        } else {
+                            false
                         }
+                    } else {
+                        false
+                    };
+                    if !typecheck_failed {
+                        let lifted = dest.alloc_object(lifted_obj);
+                        self.results[idx] = Some(NodeOutput::Value(lifted));
                     }
-                    let lifted = dest.alloc_object(lifted_obj);
-                    self.results[idx] = Some(NodeOutput::Value(lifted));
                 }
                 Err(e) => {
                     // Forward chain ended in an error. Append this slot's function
@@ -80,6 +95,13 @@ impl<'a> Scheduler<'a> {
             // the per-call arena lives on (closure escape); otherwise this is the last
             // strong reference and the arena frees.
             self.nodes[idx] = None;
+            // Reclaim the now-collapsed Forward chain (and any dep sub-trees those links
+            // own). `free` walks recursively and skips frame-holders/queued slots, so a
+            // chain that dives into another in-flight user-fn call leaves that subtree
+            // for that call's own finalize iteration.
+            if let Some(t) = chain_target {
+                self.free(t);
+            }
         }
         self.frame_holding_slots = still_waiting;
     }

@@ -21,11 +21,9 @@ Top-level structs and free functions come with comments explaining their purpose
 - For pattern-dispatch / signature work, confirm the user's syntax intent before proposing new KType variants.
 
 ## Documentation
-- Keep documentation updated and as concise as possible. 
+- Keep documentation updated and as concise as possible.
 - Do not sacrifice grammar for brevity.
-- There are several kinds of documentation that should be kept up-to-date.
-  - README: introduce a new user or developer to the project. Link to other docs, and explain the directory structure.
-  - Design markdown docs in `/design`: describe core language features, architecture, and cross-cutting concerns. Update these after each PR is code-complete and tested, but only if we made a design decision. If deleting or downsizing a file, make sure references to that file get updated.
-  - Roadmap markdown docs in ROADMAP.md and `/roadmap`: describe future work in manageable chunks. Each file in `/roadmap` is a work item. Each work item can have dependency links to other work item files. Keep work items as orthogonal as possible. ROADMAP.md is a curated index. Update these after each PR is code-complete and tested.
-  - Top-of-file comments: explain the code in the file, assumptions it makes, and how it's related to the code in other files. Link to design docs where needed. Update these as you go. After each PR is code-complete and tested, check to see if any of this info belongs in design docs or the roadmap instead.
+- For work touching `README.md`, `TUTORIAL.md`, `ROADMAP.md`, `design/*.md`, or `roadmap/*.md`, invoke the **documentation skill** — it owns the doc-tree partition rules, deletion-vs-edit semantics for shipped roadmap items, and the doclinks gating triple.
+- Source-file comments stay here because they're maintained during implementation, not at the doc-update phase:
+  - Top-of-file comments: explain the code in the file, assumptions it makes, and how it's related to the code in other files. Link to design docs where needed. Update these as you go. After each PR is code-complete and tested, check to see if any of this info belongs in design docs or the roadmap instead — if it does, the documentation skill handles the move.
   - Inline comments: keep these to 3-4 lines. Extra content should go in the top-of-file comments or in design docs; link when needed. Update these as you go.
