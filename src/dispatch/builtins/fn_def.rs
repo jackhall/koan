@@ -667,7 +667,7 @@ mod tests {
         let scope = build_scope(&arena, captured);
         run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
+        let _ = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
         // The dispatch failure surfaces via `execute()` here (the queue can't make
         // progress past the unmatchable call). The other shape — `execute() -> Ok` plus
         // a per-slot Err — is what return-type mismatches use; this case is different.
