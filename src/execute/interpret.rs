@@ -1,6 +1,6 @@
-use crate::dispatch::arena::RuntimeArena;
+use crate::dispatch::runtime::RuntimeArena;
 use crate::dispatch::builtins::default_scope;
-use crate::dispatch::kerror::{KError, KErrorKind};
+use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::execute::scheduler::Scheduler;
 use crate::parse::expression_tree::parse;
 
@@ -53,9 +53,9 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::dispatch::kerror::KErrorKind;
-    use crate::dispatch::kobject::KObject;
-    use crate::dispatch::scope::Scope;
+    use crate::dispatch::runtime::KErrorKind;
+    use crate::dispatch::values::KObject;
+    use crate::dispatch::runtime::Scope;
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 
@@ -234,8 +234,8 @@ mod tests {
 
     // --- Dict literal integration tests ---
 
-    use crate::dispatch::kkey::KKey;
-    use crate::dispatch::ktraits::Serializable;
+    use crate::dispatch::values::KKey;
+    use crate::dispatch::types::Serializable;
 
     fn lookup_string_key<'a, 'b>(
         d: &'b std::collections::HashMap<Box<dyn Serializable + 'a>, KObject<'a>>,

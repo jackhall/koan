@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
-use crate::dispatch::arena::CallArena;
-use crate::dispatch::kerror::KError;
+use crate::dispatch::runtime::CallArena;
+use crate::dispatch::runtime::KError;
 use crate::dispatch::kfunction::{KFunction, NodeId};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::KExpression;
 
 /// What a scheduler node will produce when its work runs. `Value` is computed inline; `Forward`

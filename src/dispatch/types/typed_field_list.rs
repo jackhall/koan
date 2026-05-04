@@ -2,7 +2,7 @@
 //! `UNION` (which discards order and converts the result to a `HashMap<tag, KType>`) and
 //! `STRUCT` (which keeps the ordered list because positional construction depends on it).
 
-use crate::dispatch::kfunction::KType;
+use super::ktype::KType;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 /// Walk the schema KExpression's parts as repeated `<Identifier(name)> <Keyword(":")>

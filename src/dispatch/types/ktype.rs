@@ -24,7 +24,7 @@
 
 use crate::parse::kexpression::{ExpressionPart, KLiteral, TypeExpr, TypeParams};
 
-use super::kobject::KObject;
+use crate::dispatch::values::KObject;
 use super::signature::{ExpressionSignature, SignatureElement};
 
 #[derive(Clone, PartialEq, Eq, Debug)]

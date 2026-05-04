@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::parse::kexpression::{KExpression, TypeExpr};
-use super::arena::CallArena;
-use super::ktraits::{Parseable, Serializable};
-use super::kfunction::{KFunction, KType, SignatureElement};
-use super::scope::KFuture;
+use crate::dispatch::kfunction::KFunction;
+use crate::dispatch::runtime::{CallArena, KFuture};
+use crate::dispatch::types::{KType, Parseable, Serializable, SignatureElement};
 
 /// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
 /// reference to a function in some scope. The universal value type that `KFunction`s consume
@@ -221,7 +220,7 @@ impl<'a> Parseable for KObject<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::kkey::KKey;
+    use crate::dispatch::values::KKey;
     use std::collections::HashMap;
 
     #[test]

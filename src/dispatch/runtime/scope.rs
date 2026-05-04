@@ -4,13 +4,11 @@ use std::io::Write;
 
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
+use crate::dispatch::kfunction::{ArgumentBundle, KFunction};
+use crate::dispatch::types::{KType, Parseable, SignatureElement, Specificity, UntypedKey};
+use crate::dispatch::values::KObject;
 use super::arena::RuntimeArena;
 use super::kerror::{KError, KErrorKind};
-use super::kfunction::{
-    ArgumentBundle, KFunction, KType, SignatureElement, Specificity, UntypedKey,
-};
-use super::kobject::KObject;
-use super::ktraits::Parseable;
 
 /// A function call that has been resolved but not yet executed: the original parsed expression,
 /// the chosen `KFunction`, and the `ArgumentBundle` produced by `KFunction::bind`. Carried
@@ -333,8 +331,7 @@ fn lazy_eager_indices(f: &KFunction<'_>, expr: &KExpression<'_>) -> Option<Vec<u
 
 #[cfg(test)]
 mod tests {
-    use super::Scope;
-    use crate::dispatch::arena::RuntimeArena;
+    use super::{RuntimeArena, Scope};
     use crate::dispatch::builtins::default_scope;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
@@ -399,11 +396,9 @@ mod tests {
     // --- specificity / bucketing / shadowing tests for the dispatch refactor ---
 
     use crate::dispatch::builtins::register_builtin;
-    use crate::dispatch::kfunction::{
-        Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
-        SignatureElement,
-    };
-    use crate::dispatch::kobject::KObject;
+    use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+    use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+    use crate::dispatch::values::KObject;
     use crate::execute::scheduler::Scheduler;
 
     // Sentinel-returning bodies. Each produces a distinct `KString` so a test can tell which
@@ -515,7 +510,7 @@ mod tests {
         let result = scope.dispatch(expr);
         match result {
             Err(e) => assert!(
-                matches!(e.kind, crate::dispatch::kerror::KErrorKind::AmbiguousDispatch { .. }),
+                matches!(e.kind, crate::dispatch::runtime::KErrorKind::AmbiguousDispatch { .. }),
                 "expected ambiguity error, got: {e}",
             ),
             Ok(_) => panic!("equally-specific overloads should produce an ambiguity error"),

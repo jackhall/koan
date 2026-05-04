@@ -1,13 +1,13 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::dispatch::arena::{CallArena, RuntimeArena};
-use crate::dispatch::kerror::{Frame, KError, KErrorKind};
+use crate::dispatch::runtime::{CallArena, RuntimeArena};
+use crate::dispatch::runtime::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::{
     ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
 };
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::lift::lift_kobject;
@@ -351,7 +351,7 @@ impl<'a> KFunction<'a> {
 pub(crate) fn substitute_params<'a>(
     expr: KExpression<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::arena::RuntimeArena,
+    arena: &'a crate::dispatch::runtime::RuntimeArena,
 ) -> KExpression<'a> {
     KExpression {
         parts: expr
@@ -365,7 +365,7 @@ pub(crate) fn substitute_params<'a>(
 fn substitute_part<'a>(
     part: ExpressionPart<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::arena::RuntimeArena,
+    arena: &'a crate::dispatch::runtime::RuntimeArena,
 ) -> ExpressionPart<'a> {
     match part {
         ExpressionPart::Identifier(name) => match bundle.get(&name) {
@@ -402,7 +402,7 @@ fn substitute_part<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::arena::RuntimeArena;
+    use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 

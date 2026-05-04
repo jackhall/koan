@@ -1,13 +1,11 @@
 use std::rc::Rc;
 
-use crate::dispatch::kerror::{KError, KErrorKind};
-use crate::dispatch::kfunction::{
-    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
-    SignatureElement,
-};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
-use crate::dispatch::typed_field_list::parse_typed_field_list;
+use crate::dispatch::runtime::{KError, KErrorKind};
+use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
+use crate::dispatch::types::parse_typed_field_list;
 use crate::parse::kexpression::KExpression;
 
 use super::{err, register_builtin};
@@ -111,12 +109,12 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::dispatch::arena::RuntimeArena;
+    use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::kerror::KErrorKind;
-    use crate::dispatch::kfunction::KType;
-    use crate::dispatch::kobject::KObject;
-    use crate::dispatch::scope::Scope;
+    use crate::dispatch::runtime::KErrorKind;
+    use crate::dispatch::types::KType;
+    use crate::dispatch::values::KObject;
+    use crate::dispatch::runtime::Scope;
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
     use crate::parse::kexpression::KExpression;
@@ -150,7 +148,7 @@ mod tests {
     fn run_one_err<'a>(
         scope: &'a Scope<'a>,
         expr: KExpression<'a>,
-    ) -> crate::dispatch::kerror::KError {
+    ) -> crate::dispatch::runtime::KError {
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
         sched.execute().expect("scheduler should not surface errors directly");

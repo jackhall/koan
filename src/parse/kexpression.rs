@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::kfunction::{UntypedElement, UntypedKey};
-use crate::dispatch::kkey::KKey;
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::ktraits::{Parseable, Executable, Serializable};
+use crate::dispatch::types::{UntypedElement, UntypedKey};
+use crate::dispatch::values::KKey;
+use crate::dispatch::values::KObject;
+use crate::dispatch::types::{Parseable, Executable, Serializable};
 
 /// Concrete literal kinds the parser recognizes; produced by `tokens::try_literal` and consumed
 /// when resolving an `ExpressionPart` into a runtime `KObject`.
@@ -159,8 +159,8 @@ impl<'a> ExpressionPart<'a> {
     /// receiving slot is `KType::TypeExprRef`, the structured `TypeExpr` is preserved as a
     /// `KObject::TypeExprValue` rather than flattened to a name string. Used by `KFunction::bind`
     /// so FN's return-type slot can recover parameterized types like `List<Number>`.
-    pub fn resolve_for(&self, slot: &crate::dispatch::kfunction::KType) -> KObject<'a> {
-        if let (ExpressionPart::Type(t), crate::dispatch::kfunction::KType::TypeExprRef) =
+    pub fn resolve_for(&self, slot: &crate::dispatch::types::KType) -> KObject<'a> {
+        if let (ExpressionPart::Type(t), crate::dispatch::types::KType::TypeExprRef) =
             (self, slot)
         {
             return KObject::TypeExprValue(t.clone());
@@ -262,7 +262,7 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 
 impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
-    fn ktype(&self) -> crate::dispatch::kfunction::KType { crate::dispatch::kfunction::KType::KExpression }
+    fn ktype(&self) -> crate::dispatch::types::KType { crate::dispatch::types::KType::KExpression }
     fn summarize(&self) -> String {
         self.parts.iter()
             .map(|p| p.summarize())

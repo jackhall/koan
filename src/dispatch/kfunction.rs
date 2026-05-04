@@ -1,33 +1,21 @@
 //! `KFunction` and the scheduler-facing types it depends on. A `KFunction` carries an
-//! `ExpressionSignature` (its call shape — defined in `signature.rs`), a `Body` (builtin
-//! `fn` pointer or captured user-defined `KExpression`), and a captured scope for lexical
-//! lookup of free names. The `bind` / `apply` methods produce a `KFuture` (positional) or a
-//! tail-rewriting `BodyResult` (named-argument) that the scheduler runs.
+//! `ExpressionSignature` (its call shape — defined in [`super::types::signature`]), a
+//! `Body` (builtin `fn` pointer or captured user-defined `KExpression`), and a captured
+//! scope for lexical lookup of free names. The `bind` / `apply` methods produce a `KFuture`
+//! (positional) or a tail-rewriting `BodyResult` (named-argument) that the scheduler runs.
 //!
-//! Sibling modules: [`ktype`](super::ktype) owns the `KType` enum and its specificity /
-//! validation logic; [`signature`](super::signature) owns `ExpressionSignature`,
-//! `SignatureElement`, `Argument`, `Specificity`, and the `UntypedKey` machinery.
-//! `kfunction` re-exports the public names from those modules so callers that wrote
-//! `use crate::dispatch::kfunction::{KType, Argument, ...}` keep working unchanged.
+//! Sits at the dispatch root because it integrates all three layers: [`super::types`] for
+//! `KType` / `ExpressionSignature` / `Argument`, [`super::values`] for the `KObject`s it
+//! produces and consumes, and [`super::runtime`] for the arena / scope / error plumbing.
 
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use super::arena::CallArena;
-use super::kerror::{KError, KErrorKind};
-use super::kobject::KObject;
-use super::ktraits::Parseable;
-use super::scope::{KFuture, Scope};
-
-// Re-exports so `use crate::dispatch::kfunction::{KType, Argument, ExpressionSignature, ...}`
-// in 30+ existing call sites keeps working after the split.
-pub use super::ktype::KType;
-pub use super::signature::{
-    is_keyword_token, Argument, ExpressionSignature, SignatureElement, Specificity,
-    UntypedElement, UntypedKey,
-};
+use super::runtime::{CallArena, KError, KErrorKind, KFuture, Scope};
+use super::types::{ExpressionSignature, Parseable, SignatureElement};
+use super::values::KObject;
 
 /// Stable handle to a node in the scheduler's DAG. Lives here (rather than `execute/scheduler`)
 /// so `BodyResult::Defer` can name a node without `dispatch` having to import from `execute` —
@@ -245,7 +233,7 @@ impl<'a> KFunction<'a> {
     /// to call a function."
     pub fn apply<'b>(&self, args: Vec<ExpressionPart<'b>>) -> BodyResult<'b> {
         let tmp_expr = KExpression { parts: args };
-        let pairs = match super::named_pairs::parse_named_value_pairs(&tmp_expr, "function call") {
+        let pairs = match super::values::parse_named_value_pairs(&tmp_expr, "function call") {
             Ok(p) => p,
             Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
         };

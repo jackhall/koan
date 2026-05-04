@@ -1,11 +1,8 @@
-use crate::dispatch::kerror::{KError, KErrorKind};
-use crate::dispatch::kfunction::{
-    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
-    SignatureElement,
-};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::ktraits::Parseable;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::runtime::{KError, KErrorKind};
+use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
 
 use super::{err, register_builtin};
 

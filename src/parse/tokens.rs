@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::dispatch::kfunction::is_keyword_token;
+use crate::dispatch::types::is_keyword_token;
 use crate::parse::kexpression::{ExpressionPart, KLiteral, TypeExpr};
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
 

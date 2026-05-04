@@ -4,8 +4,8 @@ use std::rc::Rc;
 
 use typed_arena::Arena;
 
-use super::kfunction::KFunction;
-use super::kobject::KObject;
+use crate::dispatch::kfunction::KFunction;
+use crate::dispatch::values::KObject;
 use super::scope::Scope;
 
 /// Run-lifetime allocator. Constructed by `interpret`, lives for one program run, dropped at

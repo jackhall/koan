@@ -1,12 +1,10 @@
 use std::rc::Rc;
 
-use crate::dispatch::kerror::{KError, KErrorKind};
-use crate::dispatch::kfunction::{
-    Argument, ArgumentBundle, Body, BodyResult, ExpressionSignature, KFunction, KType,
-    SchedulerHandle, SignatureElement,
-};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::runtime::{KError, KErrorKind};
+use crate::dispatch::kfunction::{ArgumentBundle, Body, BodyResult, KFunction, SchedulerHandle};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::values::KObject;
+use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression, TypeExpr};
 
 use super::{err, register_builtin};
@@ -243,11 +241,11 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::dispatch::arena::RuntimeArena;
+    use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::kfunction::SignatureElement;
-    use crate::dispatch::kobject::KObject;
-    use crate::dispatch::scope::Scope;
+    use crate::dispatch::types::SignatureElement;
+    use crate::dispatch::values::KObject;
+    use crate::dispatch::runtime::Scope;
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
     use crate::parse::kexpression::KExpression;
@@ -510,7 +508,7 @@ mod tests {
     /// registered function's signature.
     #[test]
     fn fn_parses_declared_return_type_onto_signature() {
-        use crate::dispatch::kfunction::KType;
+        use crate::dispatch::types::KType;
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
@@ -546,7 +544,7 @@ mod tests {
     /// Unknown type name in the return slot surfaces as a `ShapeError`.
     #[test]
     fn fn_with_unknown_return_type_name_errors() {
-        use crate::dispatch::kerror::KErrorKind;
+        use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
@@ -566,7 +564,7 @@ mod tests {
     /// Runtime return-type check fires when the body produces a value of the wrong type.
     #[test]
     fn user_fn_return_type_mismatch_surfaces_as_kerror() {
-        use crate::dispatch::kerror::KErrorKind;
+        use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
@@ -623,7 +621,7 @@ mod tests {
     /// than collapsing to `Any` as it did before per-param annotations existed.
     #[test]
     fn fn_typed_param_records_ktype_on_signature() {
-        use crate::dispatch::kfunction::{Argument, KType};
+        use crate::dispatch::types::{Argument, KType};
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
@@ -661,7 +659,7 @@ mod tests {
     /// scope chain runs out without a match). Same path as builtins.
     #[test]
     fn fn_typed_param_rejects_mismatched_call() {
-        use crate::dispatch::kerror::KErrorKind;
+        use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
@@ -696,7 +694,7 @@ mod tests {
     /// `ShapeError` naming the offending parameter.
     #[test]
     fn fn_param_without_annotation_is_rejected() {
-        use crate::dispatch::kerror::KErrorKind;
+        use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
@@ -719,7 +717,7 @@ mod tests {
     /// bad name, mirroring the return-type case.
     #[test]
     fn fn_param_with_unknown_type_name_is_rejected() {
-        use crate::dispatch::kerror::KErrorKind;
+        use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);

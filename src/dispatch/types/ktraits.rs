@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use super::kfunction::KType;
+use super::ktype::KType;
 
 /// Base trait for everything that participates in the language: values, expressions, and
 /// functions all carry a canonical string `summarize` and a structural `equal`. Used widely as

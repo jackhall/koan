@@ -1,4 +1,4 @@
-use crate::dispatch::kerror::{Frame, KError, KErrorKind};
+use crate::dispatch::runtime::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::NodeId;
 
 use super::lift::lift_kobject;

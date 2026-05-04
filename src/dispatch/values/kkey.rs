@@ -1,9 +1,8 @@
 use std::hash::Hasher;
 
-use super::kerror::{KError, KErrorKind};
-use super::kfunction::KType;
+use crate::dispatch::runtime::{KError, KErrorKind};
+use crate::dispatch::types::{KType, Parseable, Serializable};
 use super::kobject::KObject;
-use super::ktraits::{Parseable, Serializable};
 
 /// Concrete dict-key type. The `KObject::Dict` runtime variant stores keys as
 /// `Box<dyn Serializable>`; this enum is the implementor that fills that slot. Restricted to

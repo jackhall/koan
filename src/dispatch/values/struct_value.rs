@@ -19,17 +19,12 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::kerror::{KError, KErrorKind};
-use crate::dispatch::kfunction::{
-    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KType, SchedulerHandle,
-    SignatureElement,
-};
-use crate::dispatch::kobject::KObject;
-use crate::dispatch::named_pairs::parse_named_value_pairs;
-use crate::dispatch::scope::Scope;
+use crate::dispatch::builtins::register_builtin;
+use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::dispatch::runtime::{KError, KErrorKind, Scope};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::values::{KObject, parse_named_value_pairs};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
-
-use super::builtins::register_builtin;
 
 /// Parse the inner expression of a `Point (x: 3, y: 4)` form as named pairs, validate the
 /// names match the schema, reorder the values into schema declaration order, and synthesize
@@ -194,11 +189,9 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::dispatch::arena::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::kerror::KErrorKind;
-    use crate::dispatch::kobject::KObject;
-    use crate::dispatch::scope::Scope;
+    use crate::dispatch::runtime::{KErrorKind, RuntimeArena, Scope};
+    use crate::dispatch::values::KObject;
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
     use crate::parse::kexpression::KExpression;
@@ -241,7 +234,7 @@ mod tests {
     fn run_one_err<'a>(
         scope: &'a Scope<'a>,
         expr: KExpression<'a>,
-    ) -> crate::dispatch::kerror::KError {
+    ) -> crate::dispatch::runtime::KError {
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(expr, scope);
         sched.execute().expect("scheduler should not surface errors directly");
@@ -394,7 +387,7 @@ mod tests {
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)");
         let result = run_one(scope, parse_one("Point (x: 3, y: 4)"));
-        let summary = crate::dispatch::ktraits::Parseable::summarize(result);
+        let summary = crate::dispatch::types::Parseable::summarize(result);
         assert!(summary.starts_with("Point("), "summary should start with Point(, got {summary}");
         assert!(summary.contains("x: 3"), "summary should include x: 3, got {summary}");
         assert!(summary.contains("y: 4"), "summary should include y: 4, got {summary}");
