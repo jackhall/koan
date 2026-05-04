@@ -1,0 +1,49 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check *)",
+      "Bash(cargo test *)",
+      "Bash(cargo run *)",
+      "Bash(cargo build *)",
+      "Bash(./target/debug/koan)",
+      "Bash(./target/release/koan)",
+      "Bash(grep *)",
+      "Bash(egrep *)",
+      "Bash(fgrep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(echo *)",
+      "Bash(ls *)",
+      "Bash(pwd)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(cut *)",
+      "Bash(tr *)",
+      "Bash(diff *)",
+      "Bash(which *)",
+      "Bash(type *)",
+      "Bash(file *)",
+      "Bash(stat *)",
+      "Bash(realpath *)",
+      "Bash(readlink *)",
+      "Bash(basename *)",
+      "Bash(dirname *)",
+      "Bash(env)",
+      "Bash(printenv *)",
+      "Bash(tree *)"
+    ],
+    "deny": [
+      "Bash(find * -delete*)",
+      "Bash(find * -exec*)",
+      "Bash(find * -ok*)",
+      "Bash(find * -fprint*)",
+      "Bash(find * -fls*)",
+      "Bash(sort * -o*)",
+      "Bash(sort -o*)"
+    ]
+  }
+}
