@@ -34,7 +34,11 @@
       "Bash(dirname *)",
       "Bash(env)",
       "Bash(printenv *)",
-      "Bash(tree *)"
+      "Bash(tree *)",
+      "Bash(python tools/doclinks.py *)",
+      "Bash(python3 tools/doclinks.py *)",
+      "Bash(git -C /var/home/jack/Code/koan show *)",
+      "Bash(git -C /var/home/jack/Code/koan log *)"
     ],
     "deny": [
       "Bash(find * -delete*)",
