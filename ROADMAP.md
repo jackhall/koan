@@ -25,9 +25,11 @@ signatures, container type parameterization (`List<T>`, `Dict<K, V>`,
 recycled via a per-slot deps sidecar + free-list, keeping repeated-call scheduler
 memory near-constant), per-call-frame chaining for builtin-built frames (MATCH's
 child-scope `outer` no longer dangles when a TCO replace drops the call-site frame),
-and a targeted KFuture lift anchor (an addresses-only side-table on `RuntimeArena`
+a targeted KFuture lift anchor (an addresses-only side-table on `RuntimeArena`
 answers a precise membership query, replacing the previous always-anchor conservative
-path). The next signature revision after error handling lands monadic side-effect
+path), and the leak-fix audit sign-off (a cycle gate on per-call `alloc_object`
+redirects self-anchored values to the outer arena, closing out the audit slate at 0
+leaks and 0 UB under Miri tree borrows). The next signature revision after error handling lands monadic side-effect
 capture; the type-system arc runs through the module-system stages — foundation in
 stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 
@@ -58,8 +60,8 @@ without first landing something else:
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier.
-- [Open issues from the leak-fix audit](roadmap/leak-fix-audit.md) — Miri hasn't run on the
-  per-call-arena transmutes.
+- [Post-stage-1 Miri audit redo](roadmap/post-stage-1-audit-redo.md) — re-run the
+  audit slate after module-system stage 1 reshapes the memory model.
 
 ### Module system
 

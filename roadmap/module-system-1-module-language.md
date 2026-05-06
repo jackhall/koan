@@ -62,4 +62,6 @@ design doc describes a system whose only realization is the doc itself.
 - [Stage 2 — Functors](module-system-2-functors.md)
 - [Stage 4 — Property testing and axioms](module-system-4-axioms-and-generators.md)
 - [Files and imports](files-and-imports.md)
-- [Open issues from the leak-fix audit](leak-fix-audit.md)
+- [Post-stage-1 Miri audit redo](post-stage-1-audit-redo.md) — the type-identity
+  carrier and per-scope module registry reshape the memory model the audit signs
+  off on, so the slate gets re-run after this stage ships.

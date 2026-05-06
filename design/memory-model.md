@@ -47,6 +47,30 @@ when no descendant needs anchoring, the existing `Rc<Vec>`/`Rc<HashMap>` is
 cloned in place rather than rebuilt. Koan's collection-immutability contract is
 what makes the structural sharing safe.
 
+## Cycle gate on `alloc_object`
+
+The `Rc<CallArena>` escape mechanism creates a self-referential shape if a
+composite carrying an escaping closure is re-allocated into the same per-call
+arena it already anchors to: the arena's storage holds the composite, the
+composite holds the `Rc<CallArena>`, and the `Rc` holds the arena. Neither
+side can drop. The case shows up when a body returns a List/Dict/Tagged/Struct
+holding a closure — the lift-on-return machinery attaches the per-call frame's
+`Rc` to the closure, then a re-allocation of the composite (via `value_pass`,
+`Aggregate`, etc.) lands the composite back in the per-call arena.
+
+[`RuntimeArena`](../src/dispatch/runtime/arena.rs) carries an
+`escape: Option<*const RuntimeArena>` set by `CallArena::new` to the outer
+scope's arena address. `alloc_object` walks the incoming value's composite
+tree (`obj_anchors_to`, mirroring `KObject::deep_clone`'s shape) and, on
+finding any `Rc<CallArena>` whose `arena()` is `self`, redirects the
+allocation up to the escape arena — where the same `Rc` is no longer
+self-referential. The redirect is a single `Option`-check on every per-call
+`alloc_object`; run-root has `escape: None` and short-circuits, since the
+`Rc<CallArena>` shapes the gate looks for can only point at per-call arenas
+by construction. The escape pointer is stable for the per-call arena's life
+because `CallArena::new` heap-pins the outer arena via `Rc`, and the outer
+always outlives this inner per the lexical-scoping invariant.
+
 ## Per-call-frame chaining for builtin-built frames
 
 A user-fn call's per-call frame is anchored by lexical scoping: the new frame's
@@ -144,8 +168,18 @@ nested user-fn frames each handle their own subtree at their own finalize.
   cover both sides of the targeted KFuture anchor: a KFuture whose descendants
   don't borrow into the dying arena lifts with `frame: None`, while one with a
   `Future(&KObject)` allocated in the dying arena anchors with `frame: Some(rc)`.
+- [`alloc_object_redirects_self_anchored_value_to_escape_arena`](../src/dispatch/runtime/arena.rs)
+  locks in the cycle gate: a value carrying an `Rc<CallArena>` whose `arena()`
+  is the receiving arena allocates into the escape arena instead, with the
+  per-call arena's storage left untouched.
+- The audit slate runs cycle-free: 16 closure-escape, KFuture-anchor, and
+  arena-unsafe-site tests plus the cycle-gate regression all pass under
+  `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit leaks,
+  signing off the memory model as it stands today. The
+  [post-stage-1 audit redo](../roadmap/post-stage-1-audit-redo.md) re-runs the
+  slate once module-system stage 1 reshapes the runtime.
 
 ## Open work
 
-- [Open issues from the leak-fix audit](../roadmap/leak-fix-audit.md) — Miri
-  hasn't run on the heap-pin + lifetime-erasure transmutes.
+- [Post-stage-1 Miri audit redo](../roadmap/post-stage-1-audit-redo.md) — re-run
+  the audit slate after module-system stage 1 reshapes the memory model.

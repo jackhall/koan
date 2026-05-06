@@ -50,9 +50,10 @@ is the same phase emitting code.
 ## Dependencies
 
 **Requires:**
-- [Open issues from the leak-fix audit](leak-fix-audit.md) — without a stable memory
-  model, both the checker's understanding of value lifetimes and the JIT's codegen
-  contract have nothing solid to target.
+- [Post-stage-1 Miri audit redo](post-stage-1-audit-redo.md) — module-system
+  stage 1 reshapes the memory model, and the post-stage-1 audit redo is what
+  re-establishes the sign-off the checker's lifetime story and the JIT's
+  codegen contract both want to target.
 - [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
   the type system has to be structurally complete before the checker is designed
   against it. Stage 5 is the latest stage that introduces new shapes the checker has
