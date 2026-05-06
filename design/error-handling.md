@@ -65,8 +65,8 @@ languages with TCO behave.
 
 ## Open work
 
-[deferred-surface-items.md](../roadmap/deferred-surface-items.md) tracks several
-related items:
+[Error-handling surface follow-ups](../roadmap/error-handling.md) tracks
+the related items:
 
 - **Errors-as-values** — promote `KError` to a `KObject` variant so user code
   can hold and inspect them.

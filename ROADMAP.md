@@ -48,7 +48,7 @@ without first landing something else:
   surgery there stays local.
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
-- [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
+- [Error-handling surface follow-ups](roadmap/error-handling.md) — errors-as-values,
   catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error.
 - [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
   only when the next feature would multiply existing duplication.
@@ -101,7 +101,7 @@ the seven stages below land it incrementally, each producing a usable end state.
 - [Files and imports](roadmap/files-and-imports.md) — a Koan codebase is one file;
   no way for a `.koan` file to reach into another, and no story for how files become
   modules.
-- [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
+- [Error-handling surface follow-ups](roadmap/error-handling.md) — errors-as-values,
   catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error.
 
 ### Future-facing

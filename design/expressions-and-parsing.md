@@ -109,5 +109,5 @@ substitutes parameters and what `BodyResult::Tail` does at the slot.
   dict/list literal. Closes the gap between "`KExpression` is a first-class
   value" and "user code can manipulate expressions ergonomically".
 - Source spans on `KExpression`
-  ([deferred-surface-items.md](../roadmap/deferred-surface-items.md)) — error
+  ([Error-handling surface follow-ups](../roadmap/error-handling.md)) — error
   frames currently can't point to a line/column in source.
