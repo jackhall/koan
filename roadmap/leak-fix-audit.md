@@ -16,13 +16,14 @@ before then would mean redoing the audit.
   that captures a scope inside that arena, or a frame-holding slot whose forward chain
   never resolves and so the slot's frame never drops. Needs a per-test triage pass — run
   one test at a time and read the allocation site stacks to attribute each leak.
-- **`arena.rs` unsafe sites: no UB observed but not exhaustively exercised.** Miri now
-  reaches the six sites the original audit named
-  (`RuntimeArena::alloc_object` / `_function` / `_scope`, the `*_singleton` helpers,
-  `CallArena::new`, `CallArena::scope`) without aborting. The audit slate doesn't drive
-  every code path through them, so they're not exonerated — they're just no longer the
-  leading cause of audit failure. Sign-off needs targeted tests for the singleton
-  helpers and the `CallArena::scope` re-borrow shape.
+- **`arena.rs` unsafe sites: no UB observed under targeted Miri tests.** The singleton
+  helpers (`null_singleton`, `true_singleton`, `false_singleton`) and `CallArena::scope`'s
+  re-borrow shape — including the raw-pointer round-trip from
+  [match_case](../src/dispatch/builtins/match_case.rs) and the re-anchor-into-struct
+  shape from [scheduler](../src/execute/scheduler.rs) — now have direct tests in
+  [`dispatch::runtime::arena::tests`](../src/dispatch/runtime/arena.rs) that drive each
+  unsafe site under `MIRIFLAGS=-Zmiri-tree-borrows`. All 16 audit-slate tests pass with
+  zero UB; only the process-exit leaks remain (see first bullet).
 
 The Miri command of record:
 
@@ -33,7 +34,17 @@ MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --quiet -- \
     list_of_closures_escapes_outer_call_with_rc_attached \
     recursive_tagged_match_no_uaf \
     unanchored_kfuture_no_arena_borrow_does_not_anchor \
-    unanchored_kfuture_with_arena_borrow_does_anchor
+    unanchored_kfuture_with_arena_borrow_does_anchor \
+    null_singleton_returns_null_kobject \
+    bool_singletons_return_correct_values \
+    singleton_ref_independent_of_arena_lifetime \
+    singletons_aliasable \
+    call_arena_scope_survives_subsequent_alloc \
+    call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip \
+    call_arena_scope_repeated_calls_alias \
+    call_arena_chained_outer_frame_walkable \
+    call_arena_scope_re_anchored_into_struct_alongside_rc \
+    runtime_arena_alloc_while_prior_ref_live
 ```
 
 ## Dependencies

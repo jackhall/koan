@@ -238,3 +238,142 @@ impl CallArena {
 
     pub fn arena<'a>(&'a self) -> &'a RuntimeArena { &self.arena }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Targeted Miri coverage for arena.rs unsafe sites. Each test pins down a specific
+    //! shape (singleton transmute, `CallArena::scope` re-borrow, interleaved alloc) under
+    //! `MIRIFLAGS="-Zmiri-tree-borrows"`. Logical assertions are deliberately minimal —
+    //! the values are deterministic; the tests fail when Miri reports UB, not on values.
+
+    use super::*;
+    use crate::dispatch::builtins::default_scope;
+
+    #[test]
+    fn null_singleton_returns_null_kobject() {
+        let n = null_singleton();
+        assert!(matches!(n, KObject::Null));
+    }
+
+    #[test]
+    fn bool_singletons_return_correct_values() {
+        let t = true_singleton();
+        let f = false_singleton();
+        assert!(matches!(t, KObject::Bool(true)));
+        assert!(matches!(f, KObject::Bool(false)));
+    }
+
+    /// The unsafe `'static`→`'a` re-annotation must be sound on its own, with no
+    /// `RuntimeArena` in scope at all — the singleton's storage is the static `NULL_HOLDER`.
+    #[test]
+    fn singleton_ref_independent_of_arena_lifetime() {
+        let n: &KObject<'_> = null_singleton();
+        assert!(matches!(n, KObject::Null));
+    }
+
+    /// Tree-borrows shared-read aliasing check: two simultaneous `&KObject` refs from
+    /// the same singleton, both readable.
+    #[test]
+    fn singletons_aliasable() {
+        let a = null_singleton();
+        let b = null_singleton();
+        assert!(matches!(a, KObject::Null));
+        assert!(matches!(b, KObject::Null));
+    }
+
+    /// `CallArena::scope`'s re-borrow stays valid when the arena is mutated through a
+    /// sibling pointer afterward. The frame's `arena` field is heap-pinned by the Rc, so
+    /// `frame.scope()` and `frame.arena().alloc_object(...)` must coexist soundly under
+    /// tree borrows.
+    #[test]
+    fn call_arena_scope_survives_subsequent_alloc() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let frame = CallArena::new(scope, None);
+        let s = frame.scope();
+        let _new = frame.arena().alloc_object(KObject::Number(1.0));
+        assert!(std::ptr::eq(s.arena, frame.arena()));
+    }
+
+    /// Mirror of match_case.rs:83-94: `*const RuntimeArena` and `*const Scope<'_>` are
+    /// extracted via `frame.arena()` / `frame.scope()`, transmuted via `&*ptr` to
+    /// lifetime-anchored refs, then `inner_arena.alloc_object(...)` mutates while the
+    /// child scope ref is still held; afterwards the child is read. This is the strict
+    /// shape the indirect MATCH program tests already exercise — pinned in isolation here.
+    #[test]
+    fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let frame: Rc<CallArena> = CallArena::new(scope, None);
+        let arena_ptr: *const RuntimeArena = frame.arena();
+        let scope_ptr: *const Scope<'_> = frame.scope();
+        let inner_arena: &RuntimeArena = unsafe { &*(arena_ptr as *const _) };
+        let child: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
+        let it_obj: &KObject<'_> = inner_arena.alloc_object(KObject::Number(42.0));
+        child.add("it".to_string(), it_obj);
+        assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
+    }
+
+    /// Repeated `frame.scope()` calls produce aliasing shared refs that must be
+    /// concurrently readable.
+    #[test]
+    fn call_arena_scope_repeated_calls_alias() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let frame = CallArena::new(scope, None);
+        let s1 = frame.scope();
+        let s2 = frame.scope();
+        let s3 = frame.scope();
+        assert!(std::ptr::eq(s1, s2));
+        assert!(std::ptr::eq(s2, s3));
+        assert!(s1.outer.is_some());
+    }
+
+    /// Two-deep `outer_frame` chain. Drop the local `outer` Rc handle before reading
+    /// through `inner.scope().outer.unwrap()` — at that point only `inner.outer_frame`
+    /// keeps the outer arena alive.
+    #[test]
+    fn call_arena_chained_outer_frame_walkable() {
+        let arena = RuntimeArena::new();
+        let run_scope = default_scope(&arena, Box::new(std::io::sink()));
+        let outer = CallArena::new(run_scope, None);
+        let inner = CallArena::new(outer.scope(), Some(outer.clone()));
+        drop(outer);
+        let outer_scope = inner.scope().outer.expect("inner.scope().outer must be Some");
+        assert!(std::ptr::eq(outer_scope.arena, inner.scope().outer.unwrap().arena));
+        assert!(outer_scope.outer.is_some());
+    }
+
+    /// Mirror of scheduler.rs:251-263: re-anchor `frame.scope()` via transmute, move it
+    /// into a struct alongside the frame's Rc, drop the local Rc handle, then read the
+    /// re-anchored ref through the struct field. The Rc inside `Holder` keeps the arena
+    /// alive; `h.s` is anchored to the holder's lifetime.
+    #[test]
+    fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
+        struct Holder<'a> { s: &'a Scope<'a>, _f: Rc<CallArena> }
+
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let h = {
+            let f = CallArena::new(scope, None);
+            let s: &Scope<'_> = unsafe {
+                std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope())
+            };
+            Holder { s, _f: f }
+        };
+        assert!(h.s.outer.is_some());
+    }
+
+    /// `RuntimeArena::alloc_object` does `RefCell::borrow_mut` on `allocated_objects`
+    /// while a prior `&KObject` from the same arena is shared-borrowed. Typed-arena
+    /// promises stable addresses, but tree borrows is sensitive to interleaved mutation
+    /// under live shared borrows — pin the shape down.
+    #[test]
+    fn runtime_arena_alloc_while_prior_ref_live() {
+        let a = RuntimeArena::new();
+        let r1 = a.alloc_object(KObject::Number(1.0));
+        let r2 = a.alloc_object(KObject::Number(2.0));
+        assert!(matches!(r1, KObject::Number(n) if *n == 1.0));
+        assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
+    }
+}
