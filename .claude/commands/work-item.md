@@ -16,13 +16,13 @@ Steps 3, 4, and 5 each end with a user approval gate. They all follow the same s
 **Procedure:**
 
 1. Emit `agent_output` to the user as your user-facing text, complete and verbatim. Do not summarize, paraphrase, condense, bullet-ify, or extract "key picks." The user cannot see sub-agent output directly — your text is their only window into it. If it's long, emit it anyway. Summarizing here is a workflow failure.
-2. In the same turn, call AskUserQuestion with three options:
+2. In the same turn, call AskUserQuestion with exactly two explicit options. **Iterate is the built-in "Other" channel**, not its own option — AskUserQuestion always exposes "Other" with a free-text input, and adding an explicit "Iterate" alongside it splits the iterate path (some users click it without typing, then have to be prompted again).
    - **Accept** — `accept_label`.
-   - **Iterate** — `iterate_action`. The option description must tell the user to type their feedback in the **notes** field on this option. Cap at 3 iterations; after that, ask whether to continue or abort.
    - **Abort** — `abort_consequence`.
-3. When the response comes back, read `annotations[<question text>].notes` for the iterate feedback — that's the user's text-box input, no separate prompt needed. If Iterate is chosen with empty notes, ask once for the feedback before re-spawning (don't re-spawn with nothing).
+   The question text itself must point users at Other, e.g. "How do you want to proceed? (Pick Other to give feedback for another iteration.)" — that tells the user how to use the channel.
+3. When the response comes back: if the answer is "Accept", advance. If "Abort", run the abort consequence. Otherwise (the user picked "Other" with custom text — or any other variant), treat the response text as iterate feedback and re-spawn `iterate_action` with that feedback appended. Cap iterate cycles at 3; after that, ask in plain text whether to continue or abort.
 
-Do **not** present an agent's output and ask "should I proceed?" via text — always use AskUserQuestion.
+Do **not** present an agent's output and ask "should I proceed?" via text — always use AskUserQuestion. Do **not** add an explicit "Iterate" option — Other already serves that role.
 
 ## Workflow
 
