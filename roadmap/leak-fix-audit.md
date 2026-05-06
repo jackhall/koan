@@ -5,9 +5,9 @@ A first Miri pass under tree borrows ran the closure-escape, recursive-tagged-MA
 unanchored-KFuture tests; it caught a use-after-free before clearing the `arena.rs` sites
 the original audit listed, so neither the new finding nor those sites are settled yet.
 
-The follow-up is deferred until after per-type identity ships because that refactor will
-likely reshape the memory model — signing off on the current model before then would
-mean redoing the audit.
+The follow-up is deferred until after module-system stage 1 ships because that
+refactor will likely reshape the memory model — signing off on the current model
+before then would mean redoing the audit.
 
 - **`Scheduler::execute` Replace path UAF (Miri-caught).** The local `scope` at
   [scheduler.rs:140](../src/execute/scheduler.rs) is captured from the previous frame.
@@ -42,9 +42,9 @@ MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --quiet -- \
 ## Dependencies
 
 **Requires:**
-- [Per-type identity for structs and methods](per-type-identity.md) — that refactor will
-  likely reshape the memory model, so signing off on the current model first would mean
-  redoing the audit.
+- [Module system stage 1 — Module language](module-system-1-module-language.md) — the
+  type-identity carrier and per-scope module registry land there, and that surgery
+  will likely reshape the memory model the audit is signing off on.
 
 **Unblocks:**
 - [Static type checking and JIT compilation](static-typing-and-jit.md)

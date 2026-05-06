@@ -29,8 +29,9 @@ lazy slots that would otherwise consume raw AST. The dict-as-struct-args surface
 (`Point {x: 3, y: 4}`) becomes safe because `x` and `y` no longer scope-look-up — the
 named-args refactor stays in expression-triple form (`(x: 3, y: 4)`) today precisely
 because the dict form trips on (2), and that unblocks. Downstream meta-programming
-features (effect handlers, trait method dispatch, user-extensible types, `EVAL`-style
-builtins) reach for the sigils instead of growing their own bespoke escapes.
+features (effect handlers, signature axioms quantifying over user-supplied properties,
+user-extensible types, `EVAL`-style builtins) reach for the sigils instead of growing
+their own bespoke escapes.
 
 **Direction (sketch, not committed).** A symmetric prefix-operator pair, sitting in the
 existing `OPERATORS` table in [src/parse/operators.rs](../src/parse/operators.rs):

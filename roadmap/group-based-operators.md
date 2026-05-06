@@ -11,19 +11,23 @@ dispatch correctness in the user's head.
 
 **Directions.**
 
-- *Group as a trait.* On top of the user-defined-traits substrate, a `Group<T>` trait
-  declares the binary op, its inverse, and an identity. Registering `Number` as
-  `Group<Number>` under `+`/`-` is one trait impl; registering `Path` as `Group<Path>`
-  under `/`/`..` is another. Operator dispatch consults the trait when no concrete
-  overload matches. Most expressive option.
+- *Group as a signature.* A `GROUP` signature declares the binary op, its inverse, and
+  an identity over an abstract type `t`. `IntAdd : GROUP with type t = Number` ascribes
+  one structure under `+`/`-`; `PathJoin : GROUP with type t = Path` ascribes another
+  under `/`/`..`. Modular implicits resolve which group module a given operator call
+  uses, so a function over "anything that forms a group" is just one with a
+  `{G : GROUP}` implicit parameter. Most expressive option, and falls out of the
+  module system without operator-specific machinery.
 - *Group as a syntax-level shorthand.* `GROUP + - OVER Number` (or similar) registers
-  both operators and links them in one declaration, without depending on the trait
-  machinery. Less powerful — no generic-over-groups functions — but unblocks "this type
-  wants a paired operator" without traits.
-- *Group laws.* Math groups have axioms (associativity, identity, inverse). The language
-  can either trust the declaration (cheap, possibly wrong) or sample-test it (expensive,
-  partial). Trusting is fine if violations only produce wrong answers, not crashes —
-  which is the case for a dispatch-only mechanism.
+  both operators and links them in one declaration, without depending on modular
+  implicits. Less powerful — no generic-over-groups functions — but unblocks "this
+  type wants a paired operator" before stage 5 lands.
+- *Group laws.* Math groups have axioms (associativity, identity, inverse). The
+  signature variant slots into the property-testing engine from
+  [stage 4](module-system-4-axioms-and-generators.md) — the laws become axioms checked
+  at ascription. The shorthand variant has to trust the declaration, which is fine if
+  violations only produce wrong answers, not crashes (the case for a dispatch-only
+  mechanism).
 - *Parser surface.* [operators.rs](../src/parse/operators.rs)'s registry is flat today.
   Group declarations would either feed it at runtime (slot allocation deferred to
   dispatch) or extend a compile-time table (structural, rigid). User-definable groups
@@ -32,7 +36,7 @@ dispatch correctness in the user's head.
 ## Dependencies
 
 **Requires:**
-- [`TRAIT` builtin for structural typing](traits.md) — without traits, the syntax-level
-  shorthand still works but doesn't unlock the generic-function-over-groups payoff.
-
-Land alongside or after the trait machinery.
+- [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
+  for the generic-over-groups payoff. The syntax-level shorthand could ship earlier
+  against stage 1's signature surface, but the most expressive variant needs implicit
+  resolution.

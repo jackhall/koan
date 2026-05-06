@@ -13,6 +13,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import bisect
 import os
 import re
 import sys
@@ -73,12 +74,29 @@ def iter_src_files() -> list[Path]:
     return sorted(set(files))
 
 
+def _accept_link(path: Path, target: str, is_rust: bool) -> Path | None:
+    """Resolve a raw `[text](target)` target to a filesystem path, or return None
+    if it's not a path-style link the checker should follow (URLs, mail, rustdoc
+    intra-doc references)."""
+    fs_part = target.split("#", 1)[0].split("?", 1)[0]
+    if not fs_part or fs_part.startswith(("http://", "https://", "mailto:")):
+        return None
+    if is_rust and "::" in fs_part:
+        return None
+    return (path.parent / fs_part).resolve()
+
+
 def extract_links(path: Path) -> list[Link]:
     """Pull every [text](target) link out of a file.
 
-    For .rs files we only consider lines that look like doc comments (`//!` or `///`)
-    or ordinary `//` comments — code-string literals containing `[x](y)` are rare and
-    not worth special-casing.
+    For markdown the regex runs over the whole file so links whose `[text]` wraps
+    across lines are caught — the prose convention is to wrap long sentences, and
+    the original line-by-line scan silently skipped those.
+
+    For .rs files we keep the per-line scan and only consider lines that look like
+    doc comments (`//!` or `///`) or ordinary `//` comments — code-string literals
+    containing `[x](y)` are rare and not worth special-casing, and multi-line
+    rustdoc links across `///` continuations are uncommon enough to defer.
     """
     out: list[Link] = []
     is_rust = path.suffix == ".rs"
@@ -86,20 +104,34 @@ def extract_links(path: Path) -> list[Link]:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return out
-    for lineno, line in enumerate(text.splitlines(), start=1):
-        if is_rust and "//" not in line:
+
+    if is_rust:
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if "//" not in line:
+                continue
+            for m in LINK_RE.finditer(line):
+                resolved = _accept_link(path, m.group(2), is_rust=True)
+                if resolved is None:
+                    continue
+                out.append(Link(path, lineno, m.group(1), m.group(2), resolved))
+        return out
+
+    # Markdown: scan the whole file so wrapped links are caught. `[^\]]+` already
+    # spans newlines (negated character classes ignore DOTALL), and `[^)\s]+` for
+    # the target excludes whitespace, so the (...) portion stays single-line.
+    line_starts = [0]
+    for idx, ch in enumerate(text):
+        if ch == "\n":
+            line_starts.append(idx + 1)
+    for m in LINK_RE.finditer(text):
+        resolved = _accept_link(path, m.group(2), is_rust=False)
+        if resolved is None:
             continue
-        for m in LINK_RE.finditer(line):
-            text_part, target = m.group(1), m.group(2)
-            # strip URL fragment and query for filesystem resolution
-            fs_part = target.split("#", 1)[0].split("?", 1)[0]
-            if not fs_part or fs_part.startswith(("http://", "https://", "mailto:")):
-                continue
-            # rustdoc intra-doc links (`super::foo`, `crate::a::b`) aren't paths.
-            if is_rust and "::" in fs_part:
-                continue
-            resolved = (path.parent / fs_part).resolve()
-            out.append(Link(path, lineno, text_part, target, resolved))
+        # bisect_right(line_starts, offset) returns the 1-indexed line containing
+        # offset: it counts the line starts at-or-before offset, which equals the
+        # line number.
+        lineno = bisect.bisect_right(line_starts, m.start())
+        out.append(Link(path, lineno, m.group(1), m.group(2), resolved))
     return out
 
 

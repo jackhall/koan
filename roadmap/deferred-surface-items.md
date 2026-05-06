@@ -15,6 +15,6 @@ Smaller pieces called out in passing as the larger items shipped:
 
 ## Dependencies
 
-No hard prerequisites. The catch-builtins entry intersects with the open type-system
-items ([per-type identity](per-type-identity.md) onward) but does not strictly require
-them.
+No hard prerequisites. The catch-builtins entry intersects with the
+[module system](../design/module-system.md) — a `Result`-shaped signature would be the
+natural carrier for the catch surface — but does not strictly require it.

@@ -53,16 +53,15 @@ is the same phase emitting code.
 - [Open issues from the leak-fix audit](leak-fix-audit.md) — without a stable memory
   model, both the checker's understanding of value lifetimes and the JIT's codegen
   contract have nothing solid to target.
-- [Per-type identity for structs and methods](per-type-identity.md)
-- [`TRAIT` builtin for structural typing](traits.md)
-- [Trait inheritance](trait-inheritance.md)
+- [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
+  the type system has to be structurally complete before the checker is designed
+  against it. Stage 5 is the latest stage that introduces new shapes the checker has
+  to handle (modules, functors, first-class modules, implicit resolution); stages 6
+  and 7 are additive.
 
 Container type parameterization is shipped, so the checker has parameterized
 containers to target.
 
-The type system has to be structurally complete (concrete types, parameterized
-containers, per-type identity, traits, inheritance) before the checker is designed
-against it, or the checker gets reworked as the type system grows. The "if/when" is
-genuinely open — Koan may stay an interpreter forever and ship a checker as tooling-only,
-or commit to a JIT eventually. Recording the option here so design choices upstream don't
-accidentally close off either path.
+The "if/when" is genuinely open — Koan may stay an interpreter forever and ship a
+checker as tooling-only, or commit to a JIT eventually. Recording the option here so
+design choices upstream don't accidentally close off either path.

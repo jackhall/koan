@@ -23,8 +23,9 @@ design doc describes a system whose only realization is the doc itself.
 - *Per-module type identity has a carrier.* A `KType::ModuleType { module_path,
   name }` (or analog) variant lands alongside the existing host types in
   [`KType`](../src/dispatch/types/ktype.rs), plus a per-scope module registry
-  so the type system can talk about "the `t` inside module `M`." Subsumes the
-  [per-type-identity](per-type-identity.md) work for structs.
+  so the type system can talk about "the `t` inside module `M`." This is also
+  the dispatch hook that lets methods attach per-type rather than as
+  globally-unique free functions.
 
 **Directions.** None decided.
 
@@ -34,13 +35,11 @@ design doc describes a system whose only realization is the doc itself.
   stage. The design doc uses OCaml-style placeholders.
 - *File-to-module mapping.* The simplest rule is "one source file is one
   module, named after its filename"; nested modules inside the file use the
-  in-language syntax. This converges with [the existing module-system
-  entry](module-system.md)'s file-layout questions, which can be answered
-  concretely as part of this stage.
+  in-language syntax. The remaining file-layout questions are owned by
+  [files and imports](files-and-imports.md), which depends on this stage.
 - *Type identity carrier.* Add a `KType::ModuleType { module_path, name }`
   (or similar) variant alongside the existing host types, plus a per-scope
-  module registry. Subsumes the [per-type-identity](per-type-identity.md)
-  work for structs.
+  module registry.
 - *Inference-as-scheduler-node.* The compiler's type-checking infrastructure
   starts here. Decide the scheduler's phase boundary (when type-checking ends
   and evaluation begins) and how multi-target unification is modeled
@@ -50,13 +49,6 @@ design doc describes a system whose only realization is the doc itself.
 - *What ascription enforces.* Transparent ascription is name- and
   shape-checking; opaque ascription is the same plus representation hiding.
   Type identity for opaquely-ascribed types is the load-bearing decision.
-
-The new design **supersedes** [per-type identity for structs and
-methods](per-type-identity.md), [`TRAIT` builtin for structural
-typing](traits.md), and [trait inheritance](trait-inheritance.md). Those items
-will be retired when stage 1 lands, since structures-and-signatures cover
-their motivating cases. The supersession is narrative, not a formal
-dependency edge.
 
 ## Dependencies
 
@@ -70,3 +62,4 @@ dependency edge.
 - [Stage 2 — Functors](module-system-2-functors.md)
 - [Stage 4 — Property testing and axioms](module-system-4-axioms-and-generators.md)
 - [Files and imports](files-and-imports.md)
+- [Open issues from the leak-fix audit](leak-fix-audit.md)

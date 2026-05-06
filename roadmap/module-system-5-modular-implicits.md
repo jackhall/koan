@@ -17,10 +17,10 @@ ergonomic payoff of the design.
 - *Natural standard-library shape.* `sort`, `min`, `intersect`, `==` take
   their dictionary of operations implicitly and ship as ordinary generic
   Koan code rather than as verbose explicit-module functions or builtins.
-- *Multi-parameter dispatch.* The binary-operator-dispatch tie the earlier
-  trait roadmap left unresolved (`+`, `==`, `intersect`) is handled
-  natively — a multi-type implicit signature dispatches on all types
-  simultaneously.
+- *Multi-parameter dispatch.* Binary operators (`+`, `==`, `intersect`) and other
+  multi-type predicates dispatch natively — a multi-type implicit signature
+  dispatches on all of its abstract types simultaneously rather than needing a
+  partial-order tiebreak between single-type candidates.
 
 **Directions.** None decided.
 
@@ -64,6 +64,8 @@ ergonomic payoff of the design.
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](module-system-7-syntax-tuning.md)
+- [Group-based operators](group-based-operators.md)
+- [Static type checking and JIT compilation](static-typing-and-jit.md)
 
 Stage 4 (axioms) is not a hard prerequisite — modular implicits can ship
 without axiom checking — but the cross-implicit equivalence story (stage 6)

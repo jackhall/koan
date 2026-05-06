@@ -14,24 +14,22 @@ Design rationale for what's already in the language lives in [design/](design/) 
 topical docs covering the execution model, memory model, functional programming, type
 system, expressions and parsing, and error handling. One forward-looking design doc,
 [design/module-system.md](design/module-system.md), captures the agreed module-based
-abstraction system that will replace the previously-planned trait sequence; it spans
-the seven `module-system-*` roadmap items below. What's shipped so far: user-defined
-functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimization, the
-leak fix (with lexical closures + per-call arenas), structured error propagation, the
-user-defined-types substrate (return-type enforcement at runtime), the IF-THEN→MATCH
-consolidation (`MATCH` accepts `Bool` directly via projection at entry), per-parameter
-type annotations on user-fn signatures, container type parameterization (`List<T>`,
-`Dict<K, V>`, `Function<(args) -> R>`), transient-node reclamation (Bind/Aggregate
-sub-trees recycled via a per-slot deps sidecar + free-list, keeping repeated-call
-scheduler memory near-constant), per-call-frame chaining for builtin-built frames
-(MATCH's child-scope `outer` no longer dangles when a TCO replace drops the
-call-site frame), and a targeted KFuture lift anchor (an addresses-only side-table
-on `RuntimeArena` answers a precise membership query, replacing the previous
-always-anchor conservative path). The next signature revision after error handling
-lands monadic side-effect capture; the type-system arc switches from the trait sequence
-to the module-system stages (foundation in stage 1, ergonomic generic dispatch in
-stage 5, coherence in stage 6), with the previously-listed per-type-identity, traits,
-and trait-inheritance entries superseded by stage 1 once it lands.
+abstraction system; it spans the seven `module-system-*` roadmap items below. What's
+shipped so far: user-defined functions, the dispatch-as-node scheduler refactor,
+first-cut tail-call optimization, the leak fix (with lexical closures + per-call
+arenas), structured error propagation, the user-defined-types substrate (return-type
+enforcement at runtime), the IF-THEN→MATCH consolidation (`MATCH` accepts `Bool`
+directly via projection at entry), per-parameter type annotations on user-fn
+signatures, container type parameterization (`List<T>`, `Dict<K, V>`,
+`Function<(args) -> R>`), transient-node reclamation (Bind/Aggregate sub-trees
+recycled via a per-slot deps sidecar + free-list, keeping repeated-call scheduler
+memory near-constant), per-call-frame chaining for builtin-built frames (MATCH's
+child-scope `outer` no longer dangles when a TCO replace drops the call-site frame),
+and a targeted KFuture lift anchor (an addresses-only side-table on `RuntimeArena`
+answers a precise membership query, replacing the previous always-anchor conservative
+path). The next signature revision after error handling lands monadic side-effect
+capture; the type-system arc runs through the module-system stages — foundation in
+stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 
 ## Next items
 
@@ -66,9 +64,7 @@ without first landing something else:
 ### Module system
 
 The agreed design is captured in [design/module-system.md](design/module-system.md);
-the seven stages below land it incrementally, each producing a usable end state. The
-sequence supersedes the previously-planned trait sequence (the per-type-identity,
-traits, and trait-inheritance items below retire when stage 1 lands).
+the seven stages below land it incrementally, each producing a usable end state.
 
 - [Stage 0 — Pre-module cleanup](roadmap/module-system-0-cleanup.md) — vestigial-tag
   removal, ordered struct values, centralized constructor dispatch, scope-aware type
@@ -90,21 +86,11 @@ traits, and trait-inheritance items below retire when stage 1 lands).
   — disambiguation sugar designed against patterns from real stage-5 code, plus opt-in
   witness types.
 
-### Superseded by the module system (to retire when stage 1 lands)
-
-- [Per-type identity for structs and methods](roadmap/per-type-identity.md) —
-  generative functor application provides per-type identity; structures replace
-  method-bearing structs.
-- [`TRAIT` builtin for structural typing](roadmap/traits.md) — signatures replace
-  traits; modular implicits provide the dispatch.
-- [Trait inheritance](roadmap/trait-inheritance.md) — signature refinement
-  (`include`, `with type`) replaces trait inheritance.
-
 ### Type system
 
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
-  but the language treats every operator as a flat independent builtin. Substrate
-  switches from traits to signatures once the module system lands.
+  but the language treats every operator as a flat independent builtin. Generic
+  dispatch over groups arrives with the module system's modular implicits.
 
 ### Surface and ergonomics
 
