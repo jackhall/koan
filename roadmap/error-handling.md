@@ -1,24 +1,77 @@
 # Error-handling surface follow-ups
 
 Surface-level error-handling work deferred while the dispatcher's structured
-`KError` plumbing landed. Each bullet is a small, mostly-independent item; they
-share this file because the type-system and dispatcher decisions for one
-constrain the others. See [design/error-handling.md](../design/error-handling.md)
-for the shipped behavior these extend.
+`KError` plumbing landed. Several related items share this file because the
+type-system and dispatcher decisions for one constrain the others. See
+[design/error-handling.md](../design/error-handling.md) for the shipped
+substrate and the privilege-boundary principle.
 
-- **Errors as first-class values.** `KObject::Err` would let errors bind via `LET` and
-  pass as args. Needs the dispatcher to either short-circuit through error-typed slots
-  or splice errors into them.
-- **Catch-builtins** (`MATCH`, `OR_ELSE`-style). Likely require either a `KType::Result`
-  extension or an `Argument.catches_errors` flag, which intersects with user-defined
-  types in the module system.
-- **`RAISE "msg"` builtin** to produce `KError::User` from in-language code.
-- **Source spans on `KExpression`** so error frames can name `file:line` instead of
-  textual summaries.
-- **Continue-on-error after the first top-level failure** (useful for a future REPL).
+**Problem.** Today's `KError` channel propagates every error kind
+uniformly, but user code has no way to construct, hold, or handle errors.
+The `User` `KErrorKind` arm is a placeholder with no constructor and no
+matcher. There is no typed surface for "which user errors may this
+function raise."
+
+**Impact.**
+
+- *In-language error handling.* User code recovers from runtime errors and
+  resumes execution.
+- *Typed user-error returns.* A function's signature carries which
+  user-error values it may raise via `Result<T, E>`, so callers reason
+  locally and the type system enforces the discipline.
+- *Privilege boundary.* User code cannot impersonate runtime errors; the
+  bridge from builtin to user is explicit catch-and-reraise inside a match
+  arm.
+- *Locatable error frames.* Frames carry `file:line` rather than textual
+  summaries.
+- *REPL ergonomics.* A top-level failure no longer ends the session; the
+  next expression still runs.
+
+**Directions.** The user-side shape is decided:
+
+- *Two tiers with a privilege boundary.* Builtin errors (every
+  `KErrorKind` except `User`) are constructed only by the runtime; user
+  code cannot raise them. They propagate ambiently through the existing
+  `Forward` chain. `KErrorKind` is a closed set; `User` is the only
+  variant whose payload is user-extensible.
+- *Typed user errors via `Result<T, E>`.* A function that may raise user
+  errors returns `Result<T, E>` for a user-defined error type `E`.
+  `RAISE` produces a value of `E`; the runtime carries it as
+  `KErrorKind::User(KObject)` through the propagation channel above.
+- *Catch as non-exhaustive match.* Arms cover whichever builtin kinds and
+  user-error variants the caller wants to handle; anything else continues
+  to propagate. A catch arm may construct a user-error value and reraise —
+  the only mechanism by which a builtin error is lifted into the type
+  system.
+
+The remaining open items are scoped sub-tasks rather than open design
+options:
+
+- *Errors as first-class values.* `KObject::Err` lets errors bind via
+  `LET` and pass as args. Substrate for the typed surface; needs the
+  dispatcher to either short-circuit through error-typed slots or splice
+  errors into them.
+- *`Result<T, E>` as a functor.* Lives with [stage 2](module-system-2-functors.md);
+  the typed user-error work is gated on it shipping.
+- *Catch-builtins.* The match-form surface. Pattern arms over selected
+  `KErrorKind` variants and over the user-error type's variants, with
+  unmatched arms propagating. Requires errors-as-values and `Result<T, E>`.
+- *`RAISE expr` builtin* to construct a `KErrorKind::User(KObject)` from
+  a user-error value. Requires errors-as-values and `Result<T, E>` so the
+  value has a typed home.
+- *Source spans on `KExpression`* so frames carry `file:line`. Independent
+  of the type-system work and can ship before stage 2.
+- *Continue-on-error after the first top-level failure*, useful for a
+  future REPL. Independent of the type-system work and can ship before
+  stage 2.
 
 ## Dependencies
 
-No hard prerequisites. The catch-builtins entry intersects with the
-[module system](../design/module-system.md) — a `Result`-shaped signature would be the
-natural carrier for the catch surface — but does not strictly require it.
+**Requires:**
+- [Stage 2 — Functors](module-system-2-functors.md) — `Result<T, E>` is a
+  functor-produced module; the catch-builtin and `RAISE` items consume it.
+  Errors-as-values, source spans, and continue-on-error can ship before
+  stage 2.
+
+**Unblocks:**
+- (none)

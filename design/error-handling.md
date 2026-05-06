@@ -63,16 +63,46 @@ e.g., a sub-`Dispatch` inside a parens-wrapped sub-expression — preserve the
 outer frame via the `frame_holding_slots` finalize path. This matches how other
 languages with TCO behave.
 
+## User-side surface (in progress)
+
+The substrate above gives the runtime a structured error channel; the
+in-language surface for *raising* and *handling* errors is roadmap work
+(see [Open work](#open-work)). The decided shape splits the channel into
+two tiers with a hard privilege boundary:
+
+- **Builtin errors** (every `KErrorKind` except `User`) are constructed
+  only by the runtime. User code cannot raise them. They propagate
+  ambiently through the existing `Forward` chain.
+- **User errors** are typed values. A function that may raise them returns
+  `Result<T, E>` for a user-defined error type `E` — the carrier from
+  [module system stage 2](../roadmap/module-system-2-functors.md). `RAISE`
+  produces a value of `E`; the runtime carries it as
+  `KErrorKind::User(KObject)` through the same propagation channel.
+- **Catch is a non-exhaustive match-form.** Arms cover the builtin kinds
+  and user-error variants the caller chooses to handle; anything else
+  continues to propagate. The catch arm may construct a user-error value
+  from a caught builtin and reraise — the only mechanism by which a
+  builtin error is lifted into the type system.
+
+The asymmetry is forced by koan's dispatch model: with multiple dispatch
+plus open extension, no signature can statically guarantee the absence of
+`DispatchFailed`, so builtin errors stay ambient while user errors carry
+the type discipline. `KErrorKind` itself is a closed set; `User` is the
+only variant whose payload is user-extensible.
+
 ## Open work
 
 [Error-handling surface follow-ups](../roadmap/error-handling.md) tracks
 the related items:
 
-- **Errors-as-values** — promote `KError` to a `KObject` variant so user code
-  can hold and inspect them.
-- **Catch-builtin** — the surface form for handling errors. Depends on
-  errors-as-values and on the type system having the right surface.
-- **`RAISE`** — user-side error construction; populates the `User` arm.
+- **Errors-as-values** — promote `KError` to a `KObject` variant so user
+  code can hold and inspect them.
+- **`Result<T, E>` as a functor** — the carrier for user-typed function
+  returns; lands with module-system stage 2.
+- **Catch-builtin** — the non-exhaustive match-form surface for handling
+  errors.
+- **`RAISE`** — user-side error construction; produces a typed
+  `KErrorKind::User(KObject)`.
 - **Source spans on `KExpression`** — frames currently can't point to a
   line/column in source.
 - **Continue-on-error** — top-level continuation past a single failed

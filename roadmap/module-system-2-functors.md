@@ -49,3 +49,5 @@ modules) every concrete `Set<T>` would be hand-written.
 
 **Unblocks:**
 - [Stage 3 — First-class modules](module-system-3-first-class-modules.md)
+- [Error-handling surface follow-ups](error-handling.md) — `Result<T, E>`
+  is the functor-produced carrier for user-typed errors.

@@ -48,8 +48,6 @@ without first landing something else:
   surgery there stays local.
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
-- [Error-handling surface follow-ups](roadmap/error-handling.md) — errors-as-values,
-  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error.
 - [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
   only when the next feature would multiply existing duplication.
 
@@ -102,7 +100,8 @@ the seven stages below land it incrementally, each producing a usable end state.
   no way for a `.koan` file to reach into another, and no story for how files become
   modules.
 - [Error-handling surface follow-ups](roadmap/error-handling.md) — errors-as-values,
-  catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error.
+  source spans on `KExpression`, continue-on-error (independent), plus typed
+  user errors and the catch surface (gated on module-system stage 2).
 
 ### Future-facing
 
