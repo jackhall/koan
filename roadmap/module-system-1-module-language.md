@@ -13,17 +13,18 @@ design doc describes a system whose only realization is the doc itself.
 
 **Impact.**
 
-- *No abstraction barrier.* Today every value's representation is fully
-  visible to any code with access to the value. There is no way to say "this
-  is *some* type with these operations; you don't get to see how it's built."
-- *No namespacing.* Top-level definitions share one global scope. A `Set.add`
-  and `List.add` cannot coexist as bare names — every method has to be a
-  globally-unique free function.
-- *Per-module type identity has no carrier.* The design requires that types
-  defined inside an opaquely-ascribed module are distinct nominal types.
-  [`KType::Struct`](../src/dispatch/types/ktype.rs) is closed and
-  undifferentiated; the type registry has no notion of "the `t` inside module
-  `M`."
+- *Abstraction barriers.* Modules hide their representation behind a
+  signature — consumers see only the operations the signature exposes, and
+  an opaquely-ascribed `IntOrd.t` is genuinely distinct from `Number` even
+  when its underlying definition is `Number`.
+- *Namespacing.* `Set.add` and `List.add` coexist as bare names; methods no
+  longer have to be globally-unique free functions in one shared top-level
+  scope.
+- *Per-module type identity has a carrier.* A `KType::ModuleType { module_path,
+  name }` (or analog) variant lands alongside the existing host types in
+  [`KType`](../src/dispatch/types/ktype.rs), plus a per-scope module registry
+  so the type system can talk about "the `t` inside module `M`." Subsumes the
+  [per-type-identity](per-type-identity.md) work for structs.
 
 **Directions.** None decided.
 

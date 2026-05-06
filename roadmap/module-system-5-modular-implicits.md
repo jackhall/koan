@@ -10,17 +10,17 @@ ergonomic payoff of the design.
 
 **Impact.**
 
-- *Generic code is verbose.* Every generic function requires an explicit
-  module argument. `MakeSet(IntOrd)` and `sort(IntOrd, xs)` clutter call
-  sites that could be `MakeSet()` and `sort(xs)`.
-- *Standard-library design suffers.* The natural form for `sort`, `min`,
-  `intersect`, `==` is "function takes the dictionary of operations
-  implicitly." Without modular implicits these stay verbose or become
-  builtins.
-- *No multi-parameter dispatch.* The earlier trait roadmap left
-  binary-operator dispatch (`+`, `==`, `intersect`) as an unresolved
-  partial-order tie. With modular implicits, a multi-type signature handles
-  it natively — implicit search dispatches on all types simultaneously.
+- *Concise generic code.* `sort(xs)` and `MakeSet()` replace
+  `sort(IntOrd, xs)` and `MakeSet(IntOrd)`. The compiler resolves which
+  module to thread in by searching scope, so call sites stop carrying the
+  dictionary by hand.
+- *Natural standard-library shape.* `sort`, `min`, `intersect`, `==` take
+  their dictionary of operations implicitly and ship as ordinary generic
+  Koan code rather than as verbose explicit-module functions or builtins.
+- *Multi-parameter dispatch.* The binary-operator-dispatch tie the earlier
+  trait roadmap left unresolved (`+`, `==`, `intersect`) is handled
+  natively — a multi-type implicit signature dispatches on all types
+  simultaneously.
 
 **Directions.** None decided.
 

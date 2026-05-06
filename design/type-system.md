@@ -38,7 +38,7 @@ against it.
 ## Container type parameterization
 
 `List<T>`, `Dict<K, V>`, and `Function<(args) -> ret>` carry their inner types
-on the variant directly. `Copy` is gone from `KType`; structural payloads are
+on the variant directly. `KType` is not `Copy`; structural payloads are
 `Box`ed where the variant would otherwise be self-referential.
 
 **Surface syntax** is angle brackets. The parser treats `<...>` as an intratoken
@@ -55,10 +55,8 @@ Variance is split across the parameterized constructors. `List` and `Dict` are
 covariant in their parameter positions; `Function` is invariant in args and
 return. The split falls out of the underlying check in each case rather than
 being a deliberate design dial — both choices are the natural one given how
-the constructor's values are matched. A future static pass (or a real use case)
-may revisit `Function` toward proper subtype-aware matching (contravariant
-args, covariant ret); for now the conservative invariant rule keeps dispatch
-unambiguous.
+the constructor's values are matched, and the conservative `Function`-invariant
+rule keeps dispatch unambiguous.
 
 Three sites consume parameterized types, and each has its own behavior:
 
@@ -117,7 +115,8 @@ recursing into containers (a list literal `[1, "x"]` returned where
 `List<Number>` was declared fails with a structured `TypeMismatch` naming both
 types). Argument-position element validation is shape-only at dispatch — an
 `[x, y]` literal with sub-expression elements can't be type-checked until the
-elements evaluate. Future work.
+elements evaluate. See open work for the static-pass-driven closure of this
+gap.
 
 **Arity is enforced at FN-definition time** by `KType::from_type_expr`:
 `List<A, B>` rejects with a precise error before the function is ever called.
@@ -165,11 +164,10 @@ check at user-fn slot finalization that surfaces
 name and a frame naming the called function) on mismatch. `Any` is the
 no-enforcement fast path for sites that genuinely don't care.
 
-This was the "make function shapes honest" choice. Builtin signatures got
-audited at the same time: `LET` was fixed from `Null` to `Any`. FN itself
-registers with a return type of `Any` — there's no "any function" KType to
-declare, since a function with no signature has nothing to dispatch on; the
-constructed function's projected `ktype()` carries the real shape at runtime.
+FN itself registers with a return type of `Any` — there's no "any function"
+KType to declare, since a function with no signature has nothing to dispatch
+on; the constructed function's projected `ktype()` carries the real shape at
+runtime.
 
 ## Dispatch and slot-specificity
 
@@ -182,16 +180,16 @@ specificity scores against.
 ## Known limitations
 
 - **TCO collapses frames.** When A tail-calls B, only B's return type is
-  checked at runtime — the slot's `function` field is replaced at TCO time. The
-  future static pass will close this gap.
+  checked at runtime — the slot's `function` field is replaced at TCO time.
 - **Builtins are not runtime-checked.** They return through `BodyResult::Value`
   with no slot frame, so the runtime check has nowhere to attach. Their
-  declared return types are honest but unenforced; the static pass will check
-  them uniformly.
+  declared return types are honest but unenforced.
 - **Argument-position element validation is shape-only.** Container slots
   accept any list/dict at dispatch; element types are checked only on
   returns. Lifting this needs literal-element peeking for fully-literal
   collections plus a deferred check for sub-expression elements.
+
+The static-typing-and-jit work in open work closes the first two uniformly.
 
 ## Open work
 

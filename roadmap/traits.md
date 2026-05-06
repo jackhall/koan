@@ -15,15 +15,15 @@ the comparator has no rule to break the tie.
 
 **Impact.**
 
-- *No abstraction over types.* Every function that wants to be polymorphic either falls
-  back to `Any` (losing all type information) or duplicates per concrete type.
-- *Operators can't generalize.* Group-based operators (next roadmap section) need a trait
-  for `Group<T>` to declare paired ops over arbitrary types. Without traits, the operator
-  registry stays flat.
-- *Dispatch ambiguity has no rule.* If `Point` implements both `Iterable` and
-  `Comparable` and a function has two overloads — one taking `Iterable`, one taking
-  `Comparable` — the dispatcher has no principled answer today. Spelling out the rule
-  before the first ambiguous case ships is cheaper than retrofitting it later.
+- *Abstraction over types.* A polymorphic function ships as "anything that satisfies trait
+  `T`" instead of falling back to `Any` (losing type information) or duplicating per
+  concrete type.
+- *Generalized operators.* Group-based operators (next roadmap section) get a `Group<T>`
+  trait declaring paired ops over arbitrary types — the operator registry stops being
+  flat.
+- *Principled dispatch priority.* The `concrete > trait > Any` ordering plus a tie-break
+  for unrelated traits lands with the first ambiguous case rather than as a retrofit, so
+  later overload combinations have a uniform rule the dispatcher can apply.
 
 **Directions.** None decided.
 

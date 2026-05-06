@@ -16,19 +16,17 @@ is scaffolding without a building.
 
 **Impact.**
 
-- *No effect inspection.* Tests can capture `PRINT` output by swapping the writer, but
-  there is no equivalent for any other effect a builtin might want to perform. Each new
-  effect requires its own bespoke testing seam.
-- *No mocking or replay.* A program's behavior is whatever the host system decides at the
-  moment of the call. Deterministic replay of a Koan program (feed it a recorded effect
-  trace, get the same output) is impossible without a uniform effect channel.
-- *No pure/effectful boundary.* The language has no way to know whether an expression is
-  referentially transparent. Optimizations the scheduler could make (memoization,
-  reordering, parallelism) are unsafe by default because any builtin might secretly write
-  to a file or read the clock.
-- *Effect ordering is implicit.* Today, effects happen in whatever order the scheduler
-  runs builtins. There is no declarative "this expression's effect is X, sequenced after
-  Y" — it is all operational.
+- *Uniform effect inspection.* One channel captures every kind of effect a builtin
+  performs — file IO, time, randomness, network access — instead of each new effect
+  requiring its own bespoke testing seam the way `PRINT`'s writer-swap does today.
+- *Mocking and replay.* A test or replay handler feeds recorded effect results back to
+  a program, making deterministic replay (feed a recorded trace, get the same output)
+  mechanically possible.
+- *Pure/effectful boundary.* The language can tell whether an expression is referentially
+  transparent — unlocking memoization, reordering, and parallelism for the scheduler in
+  cases where no effect is in play.
+- *Explicit effect ordering.* Effects become declarative — "this expression's effect is
+  X, sequenced after Y" — rather than dropping out of the scheduler's operational order.
 
 **Directions.** None of these are decided.
 

@@ -9,9 +9,9 @@ freed when the call's slot finalizes.
 
 Free names in a user-fn body resolve through the function's **definition**
 scope, carried on [`KFunction.captured`](../src/dispatch/kfunction.rs) — not the
-call-site scope. Top-level `FN` definitions capture the run-root, so behavior
-matches the old dynamic-scoping model for currently-expressible programs, while
-nested `FN`s correctly close over their enclosing locals.
+call-site scope. Top-level `FN` definitions capture the run-root, so their free
+names resolve through it; nested `FN`s correctly close over their enclosing
+locals.
 
 Lexical scoping is what makes the F_{k+1}→F_k chain in tail-recursive code O(1)
 memory. Without it, a recursive call would resolve the recursive name through
@@ -78,8 +78,8 @@ If a dying arena allocated zero `KFunction`s
 ([`functions_is_empty`](../src/dispatch/runtime/arena.rs)), no descendant `&KFunction`
 can point into it, and `lift_kobject` collapses to a plain `deep_clone`. Owned
 variants (`Number`, `KString`, `Bool`, `Null`) `deep_clone` unconditionally —
-mildly wasteful for the "value already in dest arena" case, which would need
-full arena-provenance tracking to eliminate.
+mildly wasteful for the "value already in dest arena" case, which the design
+accepts in exchange for not maintaining full arena-provenance tracking.
 
 ## Re-entrant `Scope::add`
 

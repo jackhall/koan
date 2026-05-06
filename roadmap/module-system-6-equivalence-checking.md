@@ -15,20 +15,21 @@ Property-tested coherence is a third option.
 
 **Impact.**
 
-- *Stage 5 over-errors.* Two `Ord` instances that agree on every input still
-  trigger ambiguity errors. The user has to manually disambiguate even when
-  the choice doesn't matter.
-- *No protection against silent inconsistency in scoped designs.* Without
-  global orphan rules, a program can have two scopes each pick a different
-  but valid implicit, and values built under one ordering get queried under
-  another — silent wrong answers. Property-tested equivalence is the
-  mechanical safety net.
-- *Hash-style operations.* Two `Hash` implementations always disagree on
-  most inputs (different hash functions are different functions). Property
-  testing flags this immediately; the design treats it as a feature —
-  disagreement is the signal that mixing the two breaks `HashMap`
-  correctness, regardless of whether each implementation is individually
-  valid.
+- *Silent ambiguity when it's safe.* Two `Ord` instances that agree on every
+  input no longer force the user to disambiguate manually — agreement under
+  property testing means the choice doesn't matter and the resolver picks
+  silently.
+- *Mechanical safety net for scoped implicits.* Without global orphan rules,
+  two scopes could each pick a different-but-valid implicit and produce
+  silent wrong answers when values built under one ordering get queried
+  under another. Property-tested equivalence catches this — disagreement
+  becomes a counterexample-bearing error instead of a silent corruption.
+- *Hash-style operations get the right error.* Two `Hash` implementations
+  always disagree on most inputs (different hash functions are different
+  functions). Property testing flags this immediately; the design treats it
+  as a feature — disagreement is the signal that mixing the two breaks
+  `HashMap` correctness, regardless of whether each implementation is
+  individually valid.
 
 **Directions.** None decided.
 

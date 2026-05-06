@@ -8,16 +8,16 @@ This is the substrate stage 5 (modular implicits) builds on.
 
 **Impact.**
 
-- *No dynamic module dispatch.* A function cannot take "any module satisfying
-  signature S" as an argument; it can only take a value. Plugin systems,
-  runtime polymorphism, and ad-hoc strategy patterns all want
+- *Dynamic module dispatch.* A function can take "any module satisfying
+  signature S" as an argument; plugin systems, runtime polymorphism, and
+  ad-hoc strategy patterns become expressible as ordinary
   modules-as-values.
-- *Stage 5 has no substrate.* Modular implicits work by the compiler
-  implicitly threading a module value to a function that declared an implicit
-  module parameter. Without first-class modules there is nothing to thread.
-- *No module-as-data idioms.* Configuration objects, capability objects, and
-  other "bundle of typed operations passed at runtime" patterns require
-  values that carry a signature.
+- *Substrate for stage 5.* Modular implicits work by the compiler
+  threading a module value into a function that declared an implicit module
+  parameter — first-class modules give that mechanism something to thread.
+- *Module-as-data idioms.* Configuration objects, capability objects, and
+  other "bundle of typed operations passed at runtime" patterns become
+  natural — values carry their signature.
 
 **Directions.** None decided.
 

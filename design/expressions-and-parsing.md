@@ -38,8 +38,7 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
   on type specificity (see [type-system.md](type-system.md)).
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
-unevaluated expression as a value, pass it around, and (eventually, with quote
-sigils) evaluate it on demand.
+unevaluated expression as a value, pass it around, and evaluate it on demand.
 
 ## Eager evaluation by default
 

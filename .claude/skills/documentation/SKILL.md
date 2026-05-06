@@ -22,6 +22,35 @@ Each tier has a job. Keeping them disjoint is what lets a reader pick the right 
 - **`ROADMAP.md`**. A curated index of `roadmap/*.md` items. The "What's shipped so far" prose paragraph is the running record of completed work; the bulleted "Open items" sections list active items.
 - **Source-file doc comments**. Top-of-file comments explain a file's purpose, assumptions, and links to design docs. Inline comments stay 3–4 lines max; longer rationales belong in design docs. These are kept up-to-date during implementation, not at the doc-update phase — see Claude.md for the implementation-time rules.
 
+## Section structure
+
+Within a roadmap or design file, each named section has a specific job. Mixing the jobs is the most common drift mode — a "Problem" that lists payoffs, an "Impact" that re-states the problem in different words. Keep them disjoint.
+
+### Roadmap files (`roadmap/*.md`)
+
+Standard skeleton (sections may be omitted when they have nothing to say, but their meanings are fixed):
+
+- **`# Title`** — Names the work item. Short noun phrase, not a sentence.
+- **Optional one-line lede** — A single sentence framing the item. Skip if the title is self-evident.
+- **`**Problem.**`** — The status quo and what's broken or missing about it. Present-tense description of *today's* state, with concrete pointers to the code or doc surface that exhibits the gap. This is the only section that talks about today's pain. If this section starts feeling like a list of payoffs, those belong under Impact.
+- **`**Impact.**`** — What shipping this work *buys* the language when done. Frame each bullet as a capability that becomes available, not a limitation that exists today. Read every bullet as completing the sentence "After this ships, …". Cross-stage substrate ("substrate for stage N") and downstream-unblocking effects belong here too. If a bullet starts with "No …" or "… can't …", it's drifted into Problem framing — flip it.
+- **`**Directions.**`** — Open design options for how to ship the work, usually with "None decided" as the lede. Each bullet names a choice with its trade-offs so the design conversation has a starting point. Decisions made earlier (in design docs or prior roadmap items) get noted as decided rather than re-litigated. This is the only section where alternatives proliferate; Problem and Impact are about the *what* and *why*, Directions is about the *how*.
+- **`## Dependencies`** — Two labelled bullet lists:
+  - **`Requires:`** — Prerequisites: roadmap items that must ship first, or shipped substrate the work depends on. Each bullet is a markdown link plus an optional inline rationale.
+  - **`Unblocks:`** — Downstream items this work makes possible. Symmetric with Requires across files (`A.md` listing `B.md` under Requires obliges `B.md` to list `A.md` under Unblocks). The doclinks `deps` subcommand verifies the symmetry.
+
+  Either list may be absent or "none" when the item is a foundation or a leaf. A trailing prose paragraph can capture nuance the bullets can't carry (soft prerequisites, ordering preferences).
+
+### Design files (`design/*.md`)
+
+Design files describe **the design** — shipped or aspirational — in whatever section shape the topic wants. There is no fixed section order, but the framing rules are strict:
+
+- **Body prose describes the design as it is or as it will be.** Architecture, invariants, decisions and their rationale, code pointers. Aspirational design is fine: a design doc can land before its implementation, capturing the shape the work will take. The doc reads as a single coherent picture of "this is how it works (or will work)" — present-tense or future-tense, never both side-by-side.
+- **No historical narrative.** Design docs never reference past designs, prior approaches, or earlier states the language passed through. "Used to be X, now is Y" comparisons belong in `git log` and PR descriptions, not in the doc tree. If a body section starts re-litigating a superseded design, delete the comparison and keep only the current shape.
+- **Future work points to roadmap, always.** A `## Open work` (or `## Open issues`, `## Outstanding`) section at the bottom is the only place a design doc looks forward beyond its own design statement, and every entry there is a link to a `roadmap/*.md` item. No inline TODOs, no "we should eventually" prose elsewhere — open-ended future work is roadmap territory by partition.
+
+The partition rule: **design docs explain the design; roadmap docs explain the work to do.** When a roadmap item ships, its narrative content (if any) migrates into a design doc body section as part of the existing design — not as an "Open work" entry, and not as a "previously this didn't exist" historical note.
+
 ## Workflow rules
 
 These are the rules that don't survive on vibes; they need explicit tool gates.
@@ -42,6 +71,7 @@ The work item is no longer future work, so it leaves `roadmap/`.
 After the edit:
 - `python3 tools/doclinks.py check` — find broken links.
 - `python3 tools/doclinks.py deps` — verify roadmap `Requires`/`Unblocks` symmetry if you touched a `## Dependencies` section.
+- **Audit the edited file against [§ Section structure](#section-structure).** For a `roadmap/*.md` file, confirm Problem describes today's state (not payoffs), Impact reads as "what shipping this buys" (no "No …" / "… can't …" bullets), Directions lists alternatives, and `## Dependencies` has both edges where they apply. For a `design/*.md` file, confirm the body has no historical narrative ("was fixed," "old behavior," "previously," "earlier designs called …") and no forward-looking prose outside `## Open work` (`## Open work` is the only place future work appears, and every entry links to a `roadmap/*.md` item). Fix any drift in the same edit; partition violations compound silently.
 
 ### Before deleting or renaming any doc
 

@@ -9,21 +9,16 @@ as separate files because the standard library does not yet exist as Koan code a
 
 **Impact.**
 
-- *Decomposition is impossible.* Splitting a growing program into related groups of
-  functions and types is a basic readability move; Koan can't do it. Every function the
-  language ships at the user level — once it has any — has to live in the same file as
-  the user's program, or be a host-side builtin.
-- *No standard library in Koan itself.* A future "list utilities" or "string helpers"
-  module written in Koan can't ship until there's a way to load it. The only path today
-  is to bake everything into Rust as a builtin, which is the wrong layer for code that
-  would naturally be expressible in Koan.
-- *No private/exported boundary.* Every top-level definition is visible to every other
-  one in the same file. With one file, that's tolerable; with many, it forces every name
-  in the codebase to globally not collide. Per-file privacy is an obvious want but has no
-  syntactic anchor.
-- *Tests can't live alongside code.* A test file referencing the function it tests is the
-  default shape of a test suite in every other language. Koan can express neither side of
-  that.
+- *Decomposition.* Programs split across multiple files — related groups of functions
+  and types live in their own modules — instead of cramming everything into one file or
+  pushing it down into Rust as a builtin.
+- *Standard library in Koan itself.* "List utilities," "string helpers," and other
+  naturally-Koan-expressible modules ship as `.koan` files rather than Rust builtins,
+  putting the right code at the right layer.
+- *Private/exported boundary.* Per-file privacy gets a syntactic anchor; names stop
+  having to globally not collide across the whole codebase.
+- *Tests live alongside code.* A test file referencing the function it tests becomes
+  expressible — the default shape of a test suite in every other language.
 
 **Directions.** None decided.
 

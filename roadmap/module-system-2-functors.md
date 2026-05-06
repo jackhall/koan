@@ -8,17 +8,18 @@ modules) every concrete `Set<T>` would be hand-written.
 
 **Impact.**
 
-- *No generic data structures.* `IntSet`, `StringSet`, `PointSet` would each
-  be a separate hand-written module, duplicating the data-structure logic
-  across every element type that wants it.
-- *No standard library shape.* The natural form for collections, ordered
-  maps, hash tables, etc. is `MakeX(Element)`. Without functors that pattern
-  is unavailable and the standard library has to fall back to per-concrete-type
-  duplication.
-- *Stage 5 has nothing meaningful to dispatch on.* Modular implicits (stage 5)
-  typically resolve to functor applications — the compiler chooses
-  `MakeSet(IntOrd)` when inferring a `Set<Number>`. Without functors, implicit
-  search reduces to "pick a hand-written module" and the win shrinks.
+- *Generic data structures.* `MakeSet(Element)` and `MakeMap(Key)(Value)`
+  write a data structure once and instantiate it against any element type
+  with the required operations — no per-element-type duplication of
+  `IntSet`, `StringSet`, `PointSet`.
+- *Standard library gets its natural shape.* Collections, ordered maps,
+  hash tables, and other parameterized abstractions ship in their canonical
+  `MakeX(Element)` form rather than as per-concrete-type duplicates or
+  builtins.
+- *Substrate for stage 5.* Modular implicits resolve to functor
+  applications — the compiler chooses `MakeSet(IntOrd)` when inferring a
+  `Set<Number>`. Stage 5 has something meaningful to dispatch on rather
+  than reducing to "pick a hand-written module."
 
 **Directions.** None decided.
 

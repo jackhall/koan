@@ -12,14 +12,20 @@ independent of signatures.
 
 **Impact.**
 
-- *Invalid implementations slip through.* A non-transitive `compare`, a hash
-  that disagrees with its own equality, a monoid whose identity isn't — these
-  are common bug shapes that no current mechanism catches.
-- *No mechanical contract checking.* Signature documentation that says "this
-  must be transitive" is convention-only; the compiler can't verify.
-- *Stage 6 has no substrate.* Cross-implicit equivalence checking (stage 6)
-  reuses the same engine — different axiom shape, same machinery. Without
-  the engine, stage 6 has nothing to call into.
+- *Invalid implementations are caught at the ascription site.* A
+  non-transitive `compare`, a hash that disagrees with its own equality, a
+  monoid whose identity isn't — common bug shapes that no other mechanism
+  catches surface as ascription errors with reported counterexamples instead
+  of silent runtime wrongness.
+- *Mechanical contract checking.* Signature documentation that says "this
+  must be transitive" stops being convention-only; the compiler verifies
+  the property at the ascription site.
+- *Substrate for stage 6.* Cross-implicit equivalence checking reuses the
+  same engine with a different axiom shape; stage 6 has something to call
+  into.
+- *General testing tool, beyond signatures.* The same engine doubles as a
+  property-testing tool for ordinary Koan code, useful even where no
+  signature is involved.
 
 **Directions.** None decided.
 

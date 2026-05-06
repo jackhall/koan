@@ -20,13 +20,13 @@ is the same phase emitting code.
 
 **Impact.**
 
-- *Tooling ceiling.* Without a checker, an editor integration can't show types, jump to
-  dispatch targets, or surface errors before run. Every IDE-tier feature mature languages
-  take for granted requires the checker as substrate.
-- *Performance ceiling.* Tree-walking interpreters land near Python's interpreted speed.
-  For Koan to ever be competitive on a real workload, hot paths need specialization. Not
-  a problem today (no production users, no benchmark target) but it caps the language's
-  eventual reach.
+- *Tooling substrate.* Editor integrations get types, jump-to-dispatch-target, and
+  pre-run error surfacing — the IDE-tier features mature languages take for granted
+  unlock once the checker exists as substrate.
+- *Performance ceiling lifts.* Hot paths get specialization — a chain of fully-typed
+  dispatches collapses into straight-line operations instead of paying the tree-walker's
+  per-node overhead. Not load-bearing today (no production users, no benchmark target)
+  but the option opens for when it matters.
 
 **Directions.** None decided.
 

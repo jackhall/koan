@@ -22,13 +22,15 @@ long as those defaults match what the user wants. Two symmetric gaps remain:
   `Point (x: 3, y: 4)` with the named-arg refactor) — without quote, `x` and `y` get
   scope-looked-up.
 
-**Impact.** Today the limitation is mostly invisible because the contexts that need it
-(meta-programming, dict-as-named-args, lazy struct fields) either don't exist yet or have
-been built around the gap. The named-args refactor inherits but does not regress this —
-it stays in expression-triple form (`(x: 3, y: 4)`) precisely because the dict form
-would trip on (2). As more meta-programming surface lands (effect handlers, trait method
-dispatch, user-extensible types, `EVAL`-style builtins), each one will either need the
-sigils or grow its own bespoke escape.
+**Impact.** The sigils give meta-programming surface a single uniform escape: the quote
+form threads raw ASTs through eager-evaluating contexts (dict values, list elements,
+function args), and the eval form threads `KObject::KExpression` values back through
+lazy slots that would otherwise consume raw AST. The dict-as-struct-args surface
+(`Point {x: 3, y: 4}`) becomes safe because `x` and `y` no longer scope-look-up — the
+named-args refactor stays in expression-triple form (`(x: 3, y: 4)`) today precisely
+because the dict form trips on (2), and that unblocks. Downstream meta-programming
+features (effect handlers, trait method dispatch, user-extensible types, `EVAL`-style
+builtins) reach for the sigils instead of growing their own bespoke escapes.
 
 **Direction (sketch, not committed).** A symmetric prefix-operator pair, sitting in the
 existing `OPERATORS` table in [src/parse/operators.rs](../src/parse/operators.rs):

@@ -1,9 +1,9 @@
 # Error handling
 
 Errors in Koan are values that propagate implicitly through the scheduler.
-There's no in-language try/catch yet — the runtime substrate is in place but
-no catch-builtin has shipped, and the choice between a catch-builtin and an
-in-language try/catch surface is still open.
+The runtime substrate handles structured propagation through `Forward` chains
+and surfaces errors at the top level; the in-language surface for *handling*
+errors is open work — see the bottom.
 
 ## `BodyResult::Err` and `KError`
 
@@ -29,7 +29,7 @@ with these `KErrorKind` variants:
 - `DispatchFailed` — no function matched.
 - `ShapeError` — list/dict shape didn't fit (e.g., index out of bounds).
 - `ParseError` — produced by the parser, propagated through the same channel.
-- `User` — landing pad for a future `RAISE`-style builtin.
+- `User` — landing pad for user-side error construction; see open work.
 
 ## Propagation
 
@@ -54,13 +54,6 @@ builtin bodies. The override form `try_args!(bundle, return $err; ...)` is
 preserved for the rare site that wants something custom (e.g., a `ShapeError`
 for an out-of-bounds index, or a `MissingArg` with a hand-crafted message).
 
-## Current state: no surface for handling
-
-Errors propagate implicitly today; nothing in the language sees them. What's
-deferred is the surface form — whether a catch-builtin (`MATCH`, `OR_ELSE`-style)
-or an in-language try/catch is the right shape, and the type-system surface
-that would let a catch site name what it accepts. See open work.
-
 ## Subtlety: TCO collapses frames
 
 A user-fn whose body tail-calls another user-fn ends up with only the inner
@@ -68,8 +61,7 @@ function in the trace, because the slot's `function` field is replaced at TCO
 time (see [execution-model.md](execution-model.md)). Non-tail-call positions —
 e.g., a sub-`Dispatch` inside a parens-wrapped sub-expression — preserve the
 outer frame via the `frame_holding_slots` finalize path. This matches how other
-languages with TCO behave; future work could add per-step frame accumulation if
-traces lose too much detail in practice.
+languages with TCO behave.
 
 ## Open work
 

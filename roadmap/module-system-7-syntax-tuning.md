@@ -12,17 +12,16 @@ breaks no existing programs.
 
 **Impact.**
 
-- *Disambiguation is verbose.* Stage 5 leaves explicit-application syntax
-  as the lowest-level form. Routine disambiguation in real code wants
-  block-scoped binding, module-level priority, or selective imports.
-  Without sugar this is a tax on the cases where coherence checking can't
-  silently pick.
-- *Property-tested coherence has limits.* It is probabilistic; an
-  adversarial pair of modules that agree on the test distribution but
-  disagree elsewhere passes. Some users want deductive certainty.
-  Witness types deliver it by reflecting the implicit's identity in the
-  abstract type — distinct phantoms produce distinct types, and the type
-  system enforces non-mixing.
+- *Concise disambiguation.* Block-scoped binding, module-level priority,
+  and selective imports — sugar designed against the patterns that actually
+  emerged in real stage-5 code — replace the deliberately ugly stage-5
+  placeholder. Routine disambiguation stops being a tax on the cases where
+  coherence checking can't silently pick.
+- *Deductive coherence as an opt-in.* Witness types reflect the implicit's
+  identity as a phantom on the abstract type — distinct phantoms produce
+  distinct types, and the type system enforces non-mixing. Users who want
+  stronger-than-probabilistic certainty get it, at the cost of a slightly
+  more verbose type, while everyone else keeps stage 6's behavior.
 
 **Directions.** None decided.
 

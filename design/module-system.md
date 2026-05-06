@@ -8,13 +8,9 @@ what's described below is shipped yet. The doc lives in `design/` because
 modules are a cross-cutting language concern that several roadmap items will
 share, and capturing the shape up front keeps the staged work coherent.
 
-The module system **replaces** the separate trait system that earlier roadmap
-entries planned for. Structures behind signatures express trait-shaped
-abstractions; modular implicits give them the ergonomics that traits would have
-provided. The motivation is uniformity: multi-parameter dispatch, higher-kinded
-abstraction, and representation hiding all fall out of one mechanism instead of
-sitting in three. See [Why modules and not
-traits](#why-modules-and-not-traits) for the full comparison.
+The motivation is uniformity: multi-parameter dispatch, higher-kinded
+abstraction, and representation hiding all fall out of one mechanism rather
+than sitting in three.
 
 ## Structures and signatures
 
@@ -72,8 +68,8 @@ functor MakeSet (E : ORDERED) -> SET with type elt = E.t = (...)
 
 Functor application is **generative**: each call produces a fresh abstract
 type. `MakeSet(IntOrd)` applied twice yields two distinct `Set` types that
-cannot be confused. This is the mechanism for type-level identity that earlier
-designs called "per-type identity."
+cannot be confused. This is the mechanism by which the type system gives
+distinct types to distinct module instantiations.
 
 ## First-class modules
 
@@ -268,57 +264,29 @@ What it requires the scheduler to grow into:
 | Higher-order implicits | Disallowed. Implicit modules cannot take implicit parameters. |
 | Disambiguation primitive | Explicit module application; surface syntax TBD, decided alongside the stage-5 implementation. |
 
-## Why modules and not traits
-
-A module-with-implicit-dispatch is strictly more general than a trait system
-and resolves several open questions that the trait roadmap left for later:
+## Properties of this design
 
 - **Multi-parameter dispatch is native.** A signature can declare multiple
-  abstract types; implicit search dispatches on all of them. The earlier
-  trait design left binary-operator dispatch (`+`, `==`, `intersect`) as an
-  unresolved partial-order tie.
+  abstract types; implicit search dispatches on all of them, so binary-operator
+  dispatch (`+`, `==`, `intersect`) and other multi-type predicates have a
+  uniform mechanism rather than a partial-order tiebreak.
 - **Higher-kinded abstraction is native.** Signatures can declare type
-  constructors (`type 'a t`); functors can take and return them. The trait
-  design had no analog.
+  constructors (`type 'a t`); functors can take and return them.
 - **Representation hiding is principled.** Opaque ascription is the
-  abstraction barrier. The trait design relied on newtype-with-private-fields,
-  which is heavier and entangles privacy with the abstraction story.
+  abstraction barrier — privacy is an outcome of the type system rather than
+  a separate visibility mechanism.
 - **Coherence is scoped, not global.** Two libraries can ship different
   implicits for the same signature and types, coexisting in the program as
   long as they don't meet at a call site. Property-tested equivalence catches
-  the cases where they do meet and disagree. The trait design needed orphan
-  rules; this design needs only a soft lint.
+  the cases where they do meet and disagree. A soft lint replaces the global
+  orphan rule a strict trait system would need.
 - **Versioning is natural.** Different modules can hold different
-  implementations of the same abstraction; users select by import. The trait
-  design needed newtype-wrapping for the same flexibility.
+  implementations of the same abstraction; users select by import.
 
 The cost is a larger conceptual surface — a module language layered over the
 value language — and a more sophisticated implicit-resolution algorithm. The
 seven-stage plan is structured so each stage produces a usable end state,
 absorbing the conceptual cost incrementally.
-
-## Relationship to existing roadmap items
-
-- **[Per-type identity](../roadmap/per-type-identity.md)** is subsumed.
-  Generative functor application gives types fresh identity; `MakeSet(Int)`
-  twice produces two `Set`s that can't mix. This was the load-bearing
-  motivation for the per-type-identity work; modules deliver it for free.
-- **[`TRAIT` builtin](../roadmap/traits.md)** and
-  **[Trait inheritance](../roadmap/trait-inheritance.md)** are superseded.
-  Signatures replace traits; signature refinement (`include` and `with type`)
-  replaces trait inheritance. These items will be retired once stage 1 lands.
-- **[Group-based operators](../roadmap/group-based-operators.md)** still
-  applies but its substrate is now signatures, not traits. The work itself
-  (declaring paired operators in one place) is unchanged in shape.
-- **[Module system and directory layout](../roadmap/module-system.md)** is
-  about source-file organization — a separate, smaller concern. It converges
-  with stage 1 (the in-language module syntax also serves as the file-layout
-  primitive) but its open questions about imports, namespacing, and
-  side-effect-on-load remain orthogonal.
-- **[Static type checking and JIT](../roadmap/static-typing-and-jit.md)**
-  becomes more concrete: the static type checker *is* the inference and
-  implicit-search subsystem of stages 1-6, and the JIT (if pursued) consumes
-  its output.
 
 ## Open work
 

@@ -7,11 +7,12 @@ depends on, and the dispatcher cannot infer that any `Ord` value also satisfies 
 
 **Impact.**
 
-- *Trait hierarchies are flat.* Every trait stands alone; relationships between them have
-  to be re-stated at each use site (`FN sort (xs: List<T>) WHERE T: Ord AND T: Eq`).
-- *Dispatch can't follow the chain.* A function that takes an `Eq` value can't accept an
-  `Ord` value even though `Ord` would conceptually subsume `Eq`. Each trait is a separate
-  satisfaction predicate.
+- *Layered trait hierarchies.* `Ord EXTENDS Eq` (or the colon-form analog) declares the
+  relationship once; `FN sort (xs: List<T>) WHERE T: Ord` no longer has to re-state the
+  `Eq` requirement at every use site.
+- *Dispatch follows the chain.* A function that takes an `Eq` value also accepts an `Ord`
+  value — the dispatcher walks the inheritance chain to satisfy the predicate rather
+  than treating each trait as a wholly separate carrier.
 
 **Directions.** None decided.
 

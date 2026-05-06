@@ -15,13 +15,14 @@ substrate to be designed against a real consumer.
 
 **Impact.**
 
-- *No type-local namespace.* A `Point.translate` and a `Vector.translate` cannot coexist
-  as bare names — every method has to be a globally-unique free function.
-- *Field access works, behavior does not.* [ATTR](../src/dispatch/builtins/attr.rs) gives
-  `p.x` (field read); the symmetric `p.method()` requires per-type dispatch that the
-  closed-enum carrier blocks.
-- *Trait dispatch can't specialize.* Once traits land, they want to dispatch on "is this
-  specifically a `Point`?" — which the umbrella `KType::Struct` prevents.
+- *Type-local namespace.* `Point.translate` and `Vector.translate` coexist as bare names;
+  methods land per-type rather than as globally-unique free functions.
+- *Behavior alongside fields.* [ATTR](../src/dispatch/builtins/attr.rs) gives `p.x` (field
+  read); `p.method()` becomes the symmetric story once per-type dispatch has a carrier
+  to attach method tables to.
+- *Substrate for trait dispatch.* The trait work that follows wants to dispatch on "is
+  this specifically a `Point`?" — the per-type identity introduced here is what makes
+  that specialization expressible.
 
 **Directions.** None decided.
 

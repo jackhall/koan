@@ -67,8 +67,8 @@ without first landing something else:
 
 The agreed design is captured in [design/module-system.md](design/module-system.md);
 the seven stages below land it incrementally, each producing a usable end state. The
-sequence supersedes the previous trait-based plan — see the design doc for the
-comparison.
+sequence supersedes the previously-planned trait sequence (the per-type-identity,
+traits, and trait-inheritance items below retire when stage 1 lands).
 
 - [Stage 1 — Module language](roadmap/module-system-1-module-language.md) — structures,
   signatures, transparent and opaque ascription, per-module type identity.
