@@ -94,6 +94,56 @@ mechanism. Two consequences:
 See [functional-programming.md](functional-programming.md) for how the body
 substitutes parameters and what `BodyResult::Tail` does at the slot.
 
+## Quote and eval sigils
+
+Two prefix sigils give surface to the lazy/eager split: `#(expr)` *quotes* —
+captures the body's AST as a `KObject::KExpression` value with no evaluation —
+and `$(expr)` *evals* — resolves its operand and, if the result is a
+`KObject::KExpression`, dispatches the captured AST. Together they let user
+code thread raw ASTs through eager-evaluating contexts (dict values, list
+elements, function args) and thread `KExpression` values back through lazy
+slots that would otherwise consume raw AST.
+
+The sigils are **expression-level operators** in
+[expression_tree.rs](../src/parse/expression_tree.rs), not entries in the
+compound-operator registry. The parser keeps a `pending_sigil` flag while it
+walks the input; consuming `#` or `$` sets the flag, and only the immediately
+following `(` clears it by opening an `Expression` frame tagged with the head
+keyword. On frame-close, the body is wrapped in an inner `Expression` part and
+prepended with the head, producing the AST shape `(QUOTE <body>)` /
+`(EVAL <body>)` that the QUOTE / EVAL builtins dispatch on. The
+[QUOTE](../src/dispatch/builtins/quote.rs) builtin's signature consumes a
+`KExpression`-typed slot and returns the captured AST as a value;
+[EVAL](../src/dispatch/builtins/eval.rs)'s slot is `Any` so the scheduler
+eagerly evaluates the operand first, after which the body checks the result is
+a `KExpression` and tail-dispatches the inner AST in a fresh `CallArena`
+(mirroring `MATCH`'s per-call frame so free names resolve against the
+surrounding lexical scope but body-introduced bindings don't leak). EVAL
+returns whatever the inner AST evaluates to; a non-`KExpression` operand
+produces a structured `TypeMismatch`.
+
+From the user's point of view, two surface forms are available. On its own
+line — whether top-level or as the body of an indent-introduced block — `#expr`
+and `$expr` work, with the operand running to end-of-line: `LET x =\n  #3`
+binds `x` to the quoted AST of `3`. Inside a comma-continuation or a
+bracket/dict-continuation, the bare form is unavailable and the user must
+write `#(expr)` / `$(expr)` explicitly; a bare `#sym` in those contexts
+errors. The asymmetry follows from where line-collapse runs: a sigil at the
+head of an indent-led continuation gets wrapped to `<sigil>(<rest>)` before
+the parser sees it, while comma- and bracket-continuation lines are appended
+verbatim with no rewrite, so the bare sigil reaches the parser unchanged.
+Tests lock both halves of the contract — explicit `#(2)` works in every
+continuation form, bare `#2` works only under indent.
+
+At the `build_tree` layer the rule is uniformly paren-only: any character
+following `#` or `$` other than `(` is a parse error
+(`expected '(' after '#', found <c>`), which is why the indent-collapse
+rewrite in [whitespace.rs](../src/parse/whitespace.rs) is what makes the
+bare-line surface possible. The bare `QUOTE` and `EVAL` keyword forms that
+the desugaring produces happen to dispatch (the parser classifies all-caps
+tokens as keywords, and the dispatch table matches), but they are not
+documented surface — user code goes through the sigils.
+
 ## Open work
 
 - [Module system stage 1 — Module language](../roadmap/module-system-1-module-language.md)
@@ -104,10 +154,6 @@ substitutes parameters and what `BodyResult::Tail` does at the slot.
   table remains the extension point — module declarations register new
   dispatchable shapes the same way `FN` does. See
   [module-system.md](module-system.md).
-- [Quote and eval sigils](../roadmap/quote-and-eval-sigils.md) — no surface
-  form to force-evaluate a metaexpression or suppress evaluation inside a
-  dict/list literal. Closes the gap between "`KExpression` is a first-class
-  value" and "user code can manipulate expressions ergonomically".
 - Source spans on `KExpression`
   ([Error-handling surface follow-ups](../roadmap/error-handling.md)) — error
   frames currently can't point to a line/column in source.

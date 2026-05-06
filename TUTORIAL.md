@@ -343,6 +343,40 @@ LET wat = (5).x
 # error: type mismatch for argument 's': expected Struct, got Number
 ```
 
+## Quoting and evaluating expressions
+
+Two prefix sigils give you surface control over when an expression evaluates.
+`#(expr)` *quotes*: the parenthesized body is captured as a `KExpression`
+value with no evaluation. `$(expr)` *evals*: the operand is resolved to a
+value, and if that value is a `KExpression` the captured AST is dispatched
+in the surrounding scope.
+
+```
+LET q = #(PRINT "hi")     # q is a KExpression value; PRINT does not run
+$(q)                      # runs the captured AST — prints "hi"
+```
+
+Together they let user code thread raw ASTs through eager-evaluating
+positions (dict values, list elements, function arguments) and thread
+`KExpression` values back through the lazy slots that would otherwise consume
+raw AST. EVAL returns whatever the inner AST evaluates to; an EVAL of any
+non-`KExpression` value errors with `KErrorKind::TypeMismatch`.
+
+The surface is paren-only: the sigil and its `(` must be adjacent. `#foo`,
+`# (foo)`, `#42`, and `#}` all parse-error with `expected '(' after '#',
+found <c>`. The indent-driven block syntax has one exception — a sigil-led
+continuation line collapses through the wrap rule, so
+
+```
+LET q =
+  #(1)
+```
+
+is equivalent to `LET q = #(1)`. Comma-continuation and bracket/dict
+continuation lines do not get this rewrite — a bare `#sym` reaches the
+parser unchanged and fails the sigil-adjacency rule, so spell out the parens
+explicitly when continuing into a list, dict, or trailing-comma chain.
+
 ## Errors
 
 Failures are first-class [`KError`](src/dispatch/runtime/kerror.rs) values with a
@@ -406,6 +440,8 @@ One line per surface form. Sources under
 | `<s>.<field>` (`ATTR <s> <field>`)                    | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/dispatch/builtins/attr.rs)                      |
 | `<v:Identifier>` (single-part)                        | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/dispatch/builtins/value_lookup.rs)      |
 | `<v>` (single-part literal/expr)                      | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/dispatch/builtins/value_pass.rs)          |
+| `#(<expr>)`                                           | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/dispatch/builtins/quote.rs)                    |
+| `$(<expr>)`                                           | Eval: resolve `<expr>`; if the result is a `KExpression`, dispatch the captured AST.             | [eval.rs](src/dispatch/builtins/eval.rs)                      |
 
 ## What's not in the language yet
 

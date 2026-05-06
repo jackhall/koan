@@ -27,9 +27,12 @@ memory near-constant), per-call-frame chaining for builtin-built frames (MATCH's
 child-scope `outer` no longer dangles when a TCO replace drops the call-site frame),
 a targeted KFuture lift anchor (an addresses-only side-table on `RuntimeArena`
 answers a precise membership query, replacing the previous always-anchor conservative
-path), and the leak-fix audit sign-off (a cycle gate on per-call `alloc_object`
+path), the leak-fix audit sign-off (a cycle gate on per-call `alloc_object`
 redirects self-anchored values to the outer arena, closing out the audit slate at 0
-leaks and 0 UB under Miri tree borrows). The next signature revision after error handling lands monadic side-effect
+leaks and 0 UB under Miri tree borrows), and the quote/eval sigils (`#(expr)` and
+`$(expr)` — surface forms that capture an AST as a `KExpression` value or evaluate a
+`KExpression` value as code, closing the gap between "`KExpression` is first-class"
+and "user code can manipulate expressions ergonomically"). The next signature revision after error handling lands monadic side-effect
 capture; the type-system arc runs through the module-system stages — foundation in
 stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 
@@ -46,8 +49,6 @@ without first landing something else:
   — vestigial-tag removal, ordered struct values, centralized constructor dispatch,
   scope-aware type resolution. Foundation cleanup before stage 1 so the type-identity
   surgery there stays local.
-- [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
-  force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
   only when the next feature would multiply existing duplication.
 
@@ -94,8 +95,6 @@ the seven stages below land it incrementally, each producing a usable end state.
 
 ### Surface and ergonomics
 
-- [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
-  force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Files and imports](roadmap/files-and-imports.md) — a Koan codebase is one file;
   no way for a `.koan` file to reach into another, and no story for how files become
   modules.

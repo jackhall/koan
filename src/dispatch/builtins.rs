@@ -5,10 +5,12 @@ use super::values::KObject;
 
 mod attr;
 pub mod call_by_name;
+mod eval;
 mod fn_def;
 mod let_binding;
 mod match_case;
 mod print;
+mod quote;
 mod struct_def;
 mod type_call;
 mod union;
@@ -147,6 +149,8 @@ pub fn default_scope<'a>(
     type_call::register(scope);
     match_case::register(scope);
     attr::register(scope);
+    quote::register(scope);
+    eval::register(scope);
 
     scope
 }

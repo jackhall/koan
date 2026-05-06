@@ -77,8 +77,19 @@ pub fn collapse_whitespace(input: &str) -> Result<String, String> {
         if !out.is_empty() {
             out.push(' ');
         }
+        // Sigil-led lines (`#…`, `$…`) place the wrapping paren *after* the sigil, so a
+        // continuation like `#3` collapses to `#(3)` not `(#3)`. The latter would put the
+        // sigil immediately before a non-paren character inside the wrapping group, which
+        // `expression_tree` rejects under its sigil-adjacency rule. The closing `)` is still
+        // emitted on dedent/EOF (one per stack entry), so the operand-rest of the line
+        // (plus any deeper-indented children) ends up correctly inside the sigil's group.
+        let (head, rest) = match content.as_bytes().first() {
+            Some(&b'#') | Some(&b'$') => content.split_at(1),
+            _ => ("", content),
+        };
+        out.push_str(head);
         out.push('(');
-        out.push_str(content);
+        out.push_str(rest);
         stack.push(indent);
         delim_depth += line_delim_delta(content);
         continuing = content.ends_with(',');
@@ -332,5 +343,106 @@ mod tests {
     fn no_trailing_comma_keeps_sibling_boundary() {
         // Guard: lines that don't end in `,` still produce sibling groups.
         assert_eq!(collapse_whitespace("foo\nbar").unwrap(), "(foo) (bar)");
+    }
+
+    // --- Sigil-led continuation lines ---
+
+    #[test]
+    fn quote_sigil_continuation_wraps_outside_paren() {
+        // `#3` on a continuation line must collapse to `#(3)`, not `(#3)` — the latter
+        // violates `expression_tree`'s sigil-adjacency rule (sigil glued to a non-paren).
+        assert_eq!(
+            collapse_whitespace("LET x =\n  #3").unwrap(),
+            "(LET x = #(3))",
+        );
+    }
+
+    #[test]
+    fn eval_sigil_continuation_wraps_outside_paren() {
+        // Symmetric case for `$`: `$q` collapses to `$(q)` so the parser sees the sigil
+        // immediately followed by `(`.
+        assert_eq!(
+            collapse_whitespace("foo\n  $q").unwrap(),
+            "(foo $(q))",
+        );
+    }
+
+    #[test]
+    fn quote_sigil_at_top_level_wraps_outside_paren() {
+        // The same rule applies even when the sigil-led line is itself the root of the
+        // collapse (no parent expression). `#3` collapses to `#(3)`.
+        assert_eq!(collapse_whitespace("#3").unwrap(), "#(3)");
+    }
+
+    #[test]
+    fn sigil_with_paren_operand_still_legal() {
+        // `#(3)` written on a continuation line collapses to `#((3))`. The double wrapping
+        // is harmless: `peel_redundant` in `build_tree` strips extra single-`Expression`
+        // wrappers downstream.
+        assert_eq!(
+            collapse_whitespace("foo\n  #(3)").unwrap(),
+            "(foo #((3)))",
+        );
+    }
+
+    #[test]
+    fn sigil_continuation_with_deeper_children() {
+        // Deeper-indented children of a sigil-led line live inside the sigil's group, so
+        // the sigil applies to the whole sub-block.
+        assert_eq!(
+            collapse_whitespace("foo\n  #bar\n    baz").unwrap(),
+            "(foo #(bar (baz)))",
+        );
+    }
+
+    // --- Sigils on comma- and bracket-continuation lines (no wrap-operand fix) ---
+    //
+    // The wrap-outside-paren rewrite only runs on the indent-driven path. Lines consumed by
+    // the comma-continuation or open-bracket/dict continuation path are appended verbatim,
+    // so a bare `#sym` on those lines stays bare and reaches `build_tree` to be rejected by
+    // the sigil-adjacency rule. These tests lock that contract in: the user gets a clear
+    // parse error and must spell out `#(sym)` explicitly when continuing into a list/dict
+    // literal or trailing-comma chain.
+
+    #[test]
+    fn comma_continuation_with_bare_sigil_stays_bare() {
+        assert_eq!(
+            collapse_whitespace("add 1,\n  #2").unwrap(),
+            "(add 1, #2)",
+        );
+    }
+
+    #[test]
+    fn comma_continuation_with_paren_sigil_passes_through() {
+        assert_eq!(
+            collapse_whitespace("add 1,\n  #(2)").unwrap(),
+            "(add 1, #(2))",
+        );
+    }
+
+    #[test]
+    fn bracket_continuation_with_bare_sigil_stays_bare() {
+        assert_eq!(
+            collapse_whitespace("LET xs = [\n  #3\n]").unwrap(),
+            "(LET xs = [ #3 ])",
+        );
+    }
+
+    #[test]
+    fn bracket_continuation_with_paren_sigils_passes_through() {
+        assert_eq!(
+            collapse_whitespace("LET xs = [\n  #(3)\n  #(4)\n]").unwrap(),
+            "(LET xs = [ #(3) #(4) ])",
+        );
+    }
+
+    #[test]
+    fn dict_continuation_with_paren_sigils_passes_through() {
+        // The motivating dict-as-struct shape from the roadmap: each value is a `#(...)`
+        // QUOTE that the struct constructor will dispatch on later.
+        assert_eq!(
+            collapse_whitespace("LET d = {\n  x: #(foo)\n  y: #(bar)\n}").unwrap(),
+            "(LET d = { x: #(foo) y: #(bar) })",
+        );
     }
 }

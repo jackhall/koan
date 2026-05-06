@@ -140,7 +140,9 @@ src/
 │   │   ├── match_case.rs
 │   │   ├── type_call.rs
 │   │   ├── union.rs
-│   │   └── struct_def.rs
+│   │   ├── struct_def.rs
+│   │   ├── quote.rs       # surface form `#(expr)`
+│   │   └── eval.rs        # surface form `$(expr)`
 │   ├── kfunction.rs     KFunction, Body, ArgumentBundle — bind/apply at the dispatch root
 │   ├── runtime.rs
 │   ├── runtime/
