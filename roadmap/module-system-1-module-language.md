@@ -60,7 +60,11 @@ dependency edge.
 
 ## Dependencies
 
-**Requires:** none. This is the foundation stage.
+**Requires:**
+- [Stage 0 — Pre-module cleanup](module-system-0-cleanup.md) — vestigial-tag
+  removal, ordered struct values, centralized constructor dispatch, and a
+  scope-aware type-resolution path. Doing them up front keeps the
+  type-identity-carrier change here local rather than broad-rewrite.
 
 **Unblocks:**
 - [Stage 2 — Functors](module-system-2-functors.md)

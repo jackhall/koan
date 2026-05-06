@@ -42,10 +42,10 @@ without first landing something else:
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier. (Previously a soft prerequisite of transient-node reclamation;
   now decoupled — reclamation shipped without touching `BuiltinFn`.)
-- [Module system stage 1 — Module language](roadmap/module-system-1-module-language.md)
-  — structures, signatures, opaque ascription, and per-module type identity. Foundation
-  of the [module-system design](design/module-system.md); supersedes the previously-listed
-  per-type-identity, traits, and trait-inheritance entries.
+- [Module system stage 0 — Pre-module cleanup](roadmap/module-system-0-cleanup.md)
+  — vestigial-tag removal, ordered struct values, centralized constructor dispatch,
+  scope-aware type resolution. Foundation cleanup before stage 1 so the type-identity
+  surgery there stays local.
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
@@ -70,6 +70,9 @@ the seven stages below land it incrementally, each producing a usable end state.
 sequence supersedes the previously-planned trait sequence (the per-type-identity,
 traits, and trait-inheritance items below retire when stage 1 lands).
 
+- [Stage 0 — Pre-module cleanup](roadmap/module-system-0-cleanup.md) — vestigial-tag
+  removal, ordered struct values, centralized constructor dispatch, scope-aware type
+  resolution. Engineering housekeeping before stage 1 starts.
 - [Stage 1 — Module language](roadmap/module-system-1-module-language.md) — structures,
   signatures, transparent and opaque ascription, per-module type identity.
 - [Stage 2 — Functors](roadmap/module-system-2-functors.md) — parametric modules with

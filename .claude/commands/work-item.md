@@ -26,6 +26,16 @@ Do **not** present an agent's output and ask "should I proceed?" via text — al
 
 ## Workflow
 
+### Preflight: clean working tree
+
+Before any other step, verify the git working tree is clean:
+
+```bash
+git status --porcelain
+```
+
+If output is non-empty, stop. Tell the user to commit or stash their changes, then re-run the command. Do not proceed — pre-existing changes would be mixed with the implementer's output, breaking the stash-on-abort flow in step 4 and confusing the audit in step 6.
+
 ### 1. Read the roadmap item
 
 ```

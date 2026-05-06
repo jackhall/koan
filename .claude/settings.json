@@ -45,5 +45,18 @@
       "Bash(sort * -o*)",
       "Bash(sort -o*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/doc-skill-reminder.sh"
+          }
+        ]
+      }
+    ]
   }
 }
