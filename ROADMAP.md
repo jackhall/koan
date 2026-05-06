@@ -12,7 +12,10 @@ prerequisites and the items it unblocks.
 
 Design rationale for what's already in the language lives in [design/](design/) — six
 topical docs covering the execution model, memory model, functional programming, type
-system, expressions and parsing, and error handling. What's shipped so far: user-defined
+system, expressions and parsing, and error handling. One forward-looking design doc,
+[design/module-system.md](design/module-system.md), captures the agreed module-based
+abstraction system that will replace the previously-planned trait sequence; it spans
+the seven `module-system-*` roadmap items below. What's shipped so far: user-defined
 functions, the dispatch-as-node scheduler refactor, first-cut tail-call optimization, the
 leak fix (with lexical closures + per-call arenas), structured error propagation, the
 user-defined-types substrate (return-type enforcement at runtime), the IF-THEN→MATCH
@@ -25,9 +28,10 @@ scheduler memory near-constant), per-call-frame chaining for builtin-built frame
 call-site frame), and a targeted KFuture lift anchor (an addresses-only side-table
 on `RuntimeArena` answers a precise membership query, replacing the previous
 always-anchor conservative path). The next signature revision after error handling
-lands monadic side-effect capture; the remaining type/trait sequence (methods, traits,
-trait inheritance) unlocks the items downstream (group-based operators), so it sits in
-the middle of the sequence rather than last.
+lands monadic side-effect capture; the type-system arc switches from the trait sequence
+to the module-system stages (foundation in stage 1, ergonomic generic dispatch in
+stage 5, coherence in stage 6), with the previously-listed per-type-identity, traits,
+and trait-inheritance entries superseded by stage 1 once it lands.
 
 ## Next items
 
@@ -38,9 +42,10 @@ without first landing something else:
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier. (Previously a soft prerequisite of transient-node reclamation;
   now decoupled — reclamation shipped without touching `BuiltinFn`.)
-- [Per-type identity for structs and methods](roadmap/per-type-identity.md) — every user
-  struct collapses to `KType::Struct`; methods can't attach to specific types. Next slice
-  of the type/trait sequence after container type parameterization.
+- [Module system stage 1 — Module language](roadmap/module-system-1-module-language.md)
+  — structures, signatures, opaque ascription, and per-module type identity. Foundation
+  of the [module-system design](design/module-system.md); supersedes the previously-listed
+  per-type-identity, traits, and trait-inheritance entries.
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
 - [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
@@ -58,16 +63,45 @@ without first landing something else:
 - [Open issues from the leak-fix audit](roadmap/leak-fix-audit.md) — Miri hasn't run on the
   per-call-arena transmutes.
 
+### Module system
+
+The agreed design is captured in [design/module-system.md](design/module-system.md);
+the seven stages below land it incrementally, each producing a usable end state. The
+sequence supersedes the previous trait-based plan — see the design doc for the
+comparison.
+
+- [Stage 1 — Module language](roadmap/module-system-1-module-language.md) — structures,
+  signatures, transparent and opaque ascription, per-module type identity.
+- [Stage 2 — Functors](roadmap/module-system-2-functors.md) — parametric modules with
+  explicit application and sharing constraints.
+- [Stage 3 — First-class modules](roadmap/module-system-3-first-class-modules.md) —
+  modules as values; pack, unpack, dynamic module dispatch.
+- [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
+  — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
+  signatures with compile-time checking on ascription.
+- [Stage 5 — Modular implicits](roadmap/module-system-5-modular-implicits.md) —
+  implicit module parameters with lexical resolution and strict-on-ambiguity.
+- [Stage 6 — Equivalence-checked coherence](roadmap/module-system-6-equivalence-checking.md)
+  — cross-implicit equivalence testing; the differentiating coherence story.
+- [Stage 7 — Syntax tuning and witness types](roadmap/module-system-7-syntax-tuning.md)
+  — disambiguation sugar designed against patterns from real stage-5 code, plus opt-in
+  witness types.
+
+### Superseded by the module system (to retire when stage 1 lands)
+
+- [Per-type identity for structs and methods](roadmap/per-type-identity.md) —
+  generative functor application provides per-type identity; structures replace
+  method-bearing structs.
+- [`TRAIT` builtin for structural typing](roadmap/traits.md) — signatures replace
+  traits; modular implicits provide the dispatch.
+- [Trait inheritance](roadmap/trait-inheritance.md) — signature refinement
+  (`include`, `with type`) replaces trait inheritance.
+
 ### Type system
 
-- [Per-type identity for structs and methods](roadmap/per-type-identity.md) — every user
-  struct collapses to `KType::Struct`; methods can't attach to specific types.
-- [`TRAIT` builtin for structural typing](roadmap/traits.md) — no surface for "anything
-  that can be iterated"; user code redoes per-concrete-type variants.
-- [Trait inheritance](roadmap/trait-inheritance.md) — `Ord` extending `Eq` is the
-  standard layering; trait hierarchies are flat without it.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
-  but the language treats every operator as a flat independent builtin.
+  but the language treats every operator as a flat independent builtin. Substrate
+  switches from traits to signatures once the module system lands.
 
 ### Surface and ergonomics
 

@@ -161,6 +161,13 @@ Design rationale for what's already in the language — one topical doc each:
 - [design/expressions-and-parsing.md](design/expressions-and-parsing.md) — the parse pipeline and `KExpression` shape.
 - [design/error-handling.md](design/error-handling.md) — `KError`, propagation, and frame attribution.
 
+One forward-looking design doc captures an agreed cross-cutting design ahead of
+implementation, since it spans several roadmap items:
+
+- [design/module-system.md](design/module-system.md) — modules, signatures, functors,
+  first-class modules, modular implicits, axiom-checked signatures, and equivalence-checked
+  coherence. Implementation runs in seven stages under `roadmap/module-system-*.md`.
+
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. [ROADMAP.md](ROADMAP.md) keeps the curated ordering and the
 "Next items" grouping for picking up work.
