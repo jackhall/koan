@@ -71,7 +71,7 @@ The work item is no longer future work, so it leaves `roadmap/`.
 After the edit:
 - `python3 tools/doclinks.py check` — find broken links.
 - `python3 tools/doclinks.py deps` — verify roadmap `Requires`/`Unblocks` symmetry if you touched a `## Dependencies` section.
-- **Audit the edited file against [§ Section structure](#section-structure).** For a `roadmap/*.md` file, confirm Problem describes today's state (not payoffs), Impact reads as "what shipping this buys" (no "No …" / "… can't …" bullets), Directions lists alternatives, and `## Dependencies` has both edges where they apply. For a `design/*.md` file, confirm the body has no historical narrative ("was fixed," "old behavior," "previously," "earlier designs called …") and no forward-looking prose outside `## Open work` (`## Open work` is the only place future work appears, and every entry links to a `roadmap/*.md` item). Fix any drift in the same edit; partition violations compound silently.
+- **Audit the edited file against the Section structure rules above.** For a `roadmap/*.md` file, confirm Problem describes today's state (not payoffs), Impact reads as "what shipping this buys" (no "No …" / "… can't …" bullets), Directions lists alternatives, and `## Dependencies` has both edges where they apply. For a `design/*.md` file, confirm the body has no historical narrative ("was fixed," "old behavior," "previously," "earlier designs called …") and no forward-looking prose outside `## Open work` (`## Open work` is the only place future work appears, and every entry links to a `roadmap/*.md` item). Fix any drift in the same edit; partition violations compound silently.
 
 ### Before deleting or renaming any doc
 
