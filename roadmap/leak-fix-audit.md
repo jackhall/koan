@@ -1,31 +1,28 @@
 # Open issues from the leak-fix audit
 
 Most leak-fix follow-ups landed (see [design/memory-model.md](../design/memory-model.md)).
-Miri under tree borrows still aborts on a use-after-free in `Scheduler::execute` before
-reaching the `arena.rs` sites the original audit listed, so neither the scheduler finding
-nor those sites are settled yet.
+The `Scheduler::execute` UAFs are fixed; the audit slate now runs to completion under Miri
+tree borrows with no undefined behavior. Miri's leak detector reports 18 leaks at process
+exit, so the memory model isn't signed off yet.
 
 The follow-up is deferred until after module-system stage 1 ships because that
 refactor will likely reshape the memory model — signing off on the current model
 before then would mean redoing the audit.
 
-- **`Scheduler::execute` Done-path UAF (Miri-caught).** The local `scope` at
-  [scheduler.rs:140](../src/execute/scheduler.rs) is anchored to `prev_frame`. In the
-  `NodeStep::Done` arms at [scheduler.rs:175-208](../src/execute/scheduler.rs) and
-  [scheduler.rs:223-236](../src/execute/scheduler.rs), `frame` (or `_frame`) is moved
-  into the arm and dropped at arm end. The loop tail at
-  [scheduler.rs:278](../src/execute/scheduler.rs) (`scope.drain_pending()`) then reads
-  through the dangling reference. Surfaced by the closure-escape Miri tests after the
-  Replace-path fix landed. Note that for a finishing slot there is no "next node" that
-  needs the drained writes — the per-call scope dies with the frame — so the drain in
-  this path is both unnecessary and unsafe. Fix shape: skip `drain_pending` when the
-  slot completed and the scope died (or move drain inside each Done arm before the
-  frame-drop point, mirroring the Replace fix). Re-run the full Miri slate afterwards.
-- **`arena.rs` unsafe sites not yet validated.** Miri aborted on the scheduler UAF
-  before reaching the six `arena.rs` sites the original audit named
+- **18 process-exit leaks reported by Miri across the audit slate.** With the scheduler
+  UAFs gone, Miri completes every test in the slate but reports leaks at exit. Sample
+  allocations span `Rc::new` (alloc/rc.rs:426), `RawVec` growth, and the per-call arena
+  storage. Plausibly: `Rc<CallArena>` cycles between a frame and a lifted `KFunction`
+  that captures a scope inside that arena, or a frame-holding slot whose forward chain
+  never resolves and so the slot's frame never drops. Needs a per-test triage pass — run
+  one test at a time and read the allocation site stacks to attribute each leak.
+- **`arena.rs` unsafe sites: no UB observed but not exhaustively exercised.** Miri now
+  reaches the six sites the original audit named
   (`RuntimeArena::alloc_object` / `_function` / `_scope`, the `*_singleton` helpers,
-  `CallArena::new`, `CallArena::scope`). They aren't exonerated — they were just never
-  reached. Re-run after the scheduler fix.
+  `CallArena::new`, `CallArena::scope`) without aborting. The audit slate doesn't drive
+  every code path through them, so they're not exonerated — they're just no longer the
+  leading cause of audit failure. Sign-off needs targeted tests for the singleton
+  helpers and the `CallArena::scope` re-borrow shape.
 
 The Miri command of record:
 
