@@ -1,26 +1,26 @@
 # Open issues from the leak-fix audit
 
 Most leak-fix follow-ups landed (see [design/memory-model.md](../design/memory-model.md)).
-A first Miri pass under tree borrows ran the closure-escape, recursive-tagged-MATCH, and
-unanchored-KFuture tests; it caught a use-after-free before clearing the `arena.rs` sites
-the original audit listed, so neither the new finding nor those sites are settled yet.
+Miri under tree borrows still aborts on a use-after-free in `Scheduler::execute` before
+reaching the `arena.rs` sites the original audit listed, so neither the scheduler finding
+nor those sites are settled yet.
 
 The follow-up is deferred until after module-system stage 1 ships because that
 refactor will likely reshape the memory model — signing off on the current model
 before then would mean redoing the audit.
 
-- **`Scheduler::execute` Replace path UAF (Miri-caught).** The local `scope` at
-  [scheduler.rs:140](../src/execute/scheduler.rs) is captured from the previous frame.
-  The `NodeStep::Replace` arm at
-  [scheduler.rs:242-270](../src/execute/scheduler.rs) drops `prev_frame` and installs
-  `next_scope` on `self.nodes[idx]` for the next iteration, but never updates the local
-  `scope` binding. The loop tail at
-  [scheduler.rs:274](../src/execute/scheduler.rs) (`scope.drain_pending()`) then reads
-  through the dangling reference. Tree-borrows reports it as a
-  use-after-free on the previous frame's `Scope`. Stable tests pass because the freed
-  memory hasn't been reused yet — the bug is latent. Fix shape: refresh the local
-  `scope` to `next_scope` on the Replace path (or move `drain_pending` ahead of the
-  drop). Re-running the full Miri slate after the fix is part of the audit.
+- **`Scheduler::execute` Done-path UAF (Miri-caught).** The local `scope` at
+  [scheduler.rs:140](../src/execute/scheduler.rs) is anchored to `prev_frame`. In the
+  `NodeStep::Done` arms at [scheduler.rs:175-208](../src/execute/scheduler.rs) and
+  [scheduler.rs:223-236](../src/execute/scheduler.rs), `frame` (or `_frame`) is moved
+  into the arm and dropped at arm end. The loop tail at
+  [scheduler.rs:278](../src/execute/scheduler.rs) (`scope.drain_pending()`) then reads
+  through the dangling reference. Surfaced by the closure-escape Miri tests after the
+  Replace-path fix landed. Note that for a finishing slot there is no "next node" that
+  needs the drained writes — the per-call scope dies with the frame — so the drain in
+  this path is both unnecessary and unsafe. Fix shape: skip `drain_pending` when the
+  slot completed and the scope died (or move drain inside each Done arm before the
+  frame-drop point, mirroring the Replace fix). Re-run the full Miri slate afterwards.
 - **`arena.rs` unsafe sites not yet validated.** Miri aborted on the scheduler UAF
   before reaching the six `arena.rs` sites the original audit named
   (`RuntimeArena::alloc_object` / `_function` / `_scope`, the `*_singleton` helpers,

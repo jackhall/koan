@@ -137,7 +137,7 @@ impl<'a> Scheduler<'a> {
             let node = self.nodes[idx]
                 .take()
                 .expect("scheduler must not revisit a completed node");
-            let scope = node.scope;
+            let mut scope = node.scope;
             let work = node.work;
             let prev_frame = node.frame;
             let prev_function = node.function;
@@ -267,6 +267,10 @@ impl<'a> Scheduler<'a> {
                         function: next_function,
                     });
                     self.queue.push_front(idx);
+                    // Refresh the local `scope` to the just-installed one. The previous
+                    // `scope` was anchored to `prev_frame`, which we just dropped — reading
+                    // through it (e.g. in `drain_pending` below) would be a use-after-free.
+                    scope = next_scope;
                 }
             }
             // Drain `scope`'s pending re-entrant writes between dispatch nodes so the next
