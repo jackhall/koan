@@ -15,14 +15,12 @@ Steps 3, 4, and 5 each end with a user approval gate. They all follow the same s
 
 **Procedure:**
 
-1. Emit `agent_output` to the user as your user-facing text, complete and verbatim. Do not summarize, paraphrase, condense, bullet-ify, or extract "key picks." The user cannot see sub-agent output directly — your text is their only window into it. If it's long, emit it anyway. Summarizing here is a workflow failure.
-2. In the same turn, call AskUserQuestion with exactly two explicit options. **Iterate is the built-in "Other" channel**, not its own option — AskUserQuestion always exposes "Other" with a free-text input, and adding an explicit "Iterate" alongside it splits the iterate path (some users click it without typing, then have to be prompted again).
+1. Emit `agent_output` to the user as your user-facing text, complete and verbatim. Do not summarize, paraphrase, condense, or bullet-ify. The user cannot see sub-agent output directly — your text is their only window into it.
+2. In the same turn, call AskUserQuestion with exactly two explicit options. **Iterate is the built-in "Other" channel**, not its own option — AskUserQuestion always exposes "Other" with a free-text input, and adding an explicit "Iterate" alongside it splits the iterate path.
    - **Accept** — `accept_label`.
    - **Abort** — `abort_consequence`.
-   The question text itself must point users at Other, e.g. "How do you want to proceed? (Pick Other to give feedback for another iteration.)" — that tells the user how to use the channel.
+   The question text itself must point users at Other, e.g. "How do you want to proceed? (Pick Other to give feedback for another iteration.)"
 3. When the response comes back: if the answer is "Accept", advance. If "Abort", run the abort consequence. Otherwise (the user picked "Other" with custom text — or any other variant), treat the response text as iterate feedback and re-spawn `iterate_action` with that feedback appended. Cap iterate cycles at 3; after that, ask in plain text whether to continue or abort.
-
-Do **not** present an agent's output and ask "should I proceed?" via text — always use AskUserQuestion. Do **not** add an explicit "Iterate" option — Other already serves that role.
 
 Individual steps may override the second explicit option (Abort) with a domain-specific exit when the gate's context calls for it (see Step 3 — the Plan gate replaces Abort with **Discuss language design**). The two-explicit-options-plus-Other-as-iterate shape is preserved.
 
@@ -132,18 +130,9 @@ Use AskUserQuestion:
 
 Never open a PR from this command, even if the user asks mid-flow. PRs are out of scope.
 
-## Hard rules for the orchestrator
-
-- **You do not write code.** That's the implementer.
-- **You do not write docs.** That's the doc-shepherd.
-- **You do not propose plans.** That's the Plan agent.
-- **You do gate on user approval explicitly via AskUserQuestion**, not via text questions.
-- **You do re-audit** with `cargo test` and `doclinks check` after sub-agents return. Trust but verify.
-- **You do show the user each agent's output** so they can sanity-check before the next phase.
-
 ## When to bail
 
 - Plan agent returns something that doesn't match the roadmap item's actual ask. Show the user and let them steer.
-- Implementer returns a summary whose "Verification run" shows test failures. Don't proceed to docs; show the user.
+- Implementer's "Verification run" shows test failures. Don't proceed to docs; show the user.
 - doc-shepherd's final `doclinks check` returns non-zero. Show the user the output and stop.
 - Any sub-agent reports "I couldn't do this" — surface verbatim, don't paper over.

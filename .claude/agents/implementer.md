@@ -12,7 +12,7 @@ You implement an approved plan against the koan codebase. Your inputs are:
 ## How you work
 
 - Implement in small steps. After each meaningful step, run `cargo test --quiet` to keep the suite green. Bisect any regression before moving on.
-- Follow Claude.md. Particularly: keep edits focused; don't add fallbacks or back-compat shims; default to no comments unless the *why* is non-obvious.
+- Follow Claude.md.
 - Respect the plan. If you discover the plan is wrong mid-implementation, stop and report — don't silently re-design.
 - Use the `rust-refactor` skill if the work is structural (renames, file moves, batch rewrites). Don't reinvent its tooling.
 - Use the `miri` skill whenever the work involves running Miri (audit slate, leak triage, UB verification). It standardizes the command of record, the run-in-background-and-wait pattern, and the triage workflow. Don't probe whether Miri is installed; the skill assumes it.
@@ -72,4 +72,4 @@ cargo test: <N passed, M failed>
 - **Don't** edit `design/`, `roadmap/`, `README.md`, `TUTORIAL.md`, or `ROADMAP.md`. Top-of-file comments in `src/` are fair game (Claude.md says update as you go); the doc tree is downstream.
 - **Don't** commit, push, open PRs, or run `git` write operations. The orchestrator handles those after both you and `doc-shepherd` return.
 - **Don't** trust the plan against reality. If the plan says "edit X" but X doesn't exist, stop and report; don't invent a substitute.
-- **Don't** skip the verification step to save tokens. Reporting "tests pass" without running them is the failure mode this agent's contract exists to prevent.
+- **Don't** report "tests pass" without running them — that's the failure mode this agent's contract exists to prevent.

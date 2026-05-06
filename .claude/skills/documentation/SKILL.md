@@ -149,11 +149,8 @@ python3 tools/doclinks.py rm-roadmap roadmap/transient-node-reclamation.md
 
 ## Anti-patterns
 
-- **Don't `grep` for cross-references when `doclinks refs` would do it correctly.** `grep` doesn't resolve relative paths (`../` from a `design/` file vs. a repo-root path), doesn't catch asymmetric `Requires`/`Unblocks` edges, doesn't catch rustdoc-style links in source comments, and doesn't surface orphans. Every minute saved by reaching for `grep` is paid back fivefold by the silent breakage that survives.
-- **Don't keep a roadmap entry "as a record" of shipped work.** That's what `git log` plus `design/` is for. The roadmap is for future work.
-- **Don't add forward-compatibility shims, migration notes, or backward-compatibility hedges.** Koan is pre-release with no users; deprecation paths and version-N-to-N+1 notes are pure overhead.
-- **Don't sacrifice grammar for brevity.** Concise prose still uses complete sentences.
-- **Don't mark a roadmap item "— shipped" instead of deleting it.** Same partition violation as keeping it as a record.
+- **Don't `grep` for cross-references when `doclinks refs` would do it correctly.** `grep` doesn't resolve relative paths, doesn't catch asymmetric `Requires`/`Unblocks` edges, doesn't catch rustdoc-style links in source comments, and doesn't surface orphans.
+- **Don't keep a roadmap entry "as a record" of shipped work** — including marking it "— shipped" or rewriting it as a resolution summary. That's what `git log` plus `design/` is for.
 
 ## Notes
 

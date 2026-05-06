@@ -69,13 +69,3 @@ On **Accept**:
 Tell the user what changed in one or two lines.
 
 If `/design` was reached via a `/work-item` exit, also remind them: "Re-run `/work-item <path>` once you're satisfied with the captured doc."
-
-## Hard rules
-
-- **You do not modify code, tests, or build files.** This is a doc-only workflow.
-- **You do not run `cargo`** — there is no implementation to verify here.
-- **You do not commit.** Leave changes uncommitted for the user.
-- **You do not spawn the `Plan`, `implementer`, or `doc-shepherd` agents.** Those belong to `/work-item`.
-- **You do apply the documentation-skill partition rules** — design docs describe the design as-is, roadmap docs describe future work, shipped work leaves `roadmap/`.
-- **You do gate on user approval explicitly via `AskUserQuestion`** at the synthesis step, not via text questions.
-- **You do not read koan docs preemptively.** Pull them up only when the conversation needs them.

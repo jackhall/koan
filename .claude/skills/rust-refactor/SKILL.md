@@ -23,8 +23,6 @@ Assumes `ast-grep` and `cargo clippy` are on PATH.
 | Moving an item between files/modules | move by hand, then `cargo build` + `cargo fix` |
 | Anything touching types, lifetimes, or trait bounds | finish with `cargo build` to verify |
 
-CLAUDE.md is explicit: run `cargo build` after each step, not in batches. The recipes below follow that.
-
 ## Recipes
 
 ### 1. Apply compiler and lint suggestions
@@ -102,5 +100,3 @@ Then delete what's truly dead, or mark `#[allow(dead_code)]` deliberately for th
 
 - `ast-grep` is syntactic, not type-aware. It cannot disambiguate two `foo`s in different modules — scope by path or do the rewrite in stages.
 - Don't stack `cargo clippy --fix` on top of uncommitted `ast-grep` rewrites in the same pass. Commit between phases so a bad rewrite is easy to revert.
-- `--update-all` writes to disk. Always run the same command without it first to preview matches.
-- After any rewrite that touches types or lifetimes, `cargo build` immediately. Type errors compound when batched.

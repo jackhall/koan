@@ -46,12 +46,8 @@ You handle the doc-update phase of a koan PR. Your inputs are:
 
 ## Anti-patterns
 
-These are explicit don'ts. They're the failure modes that prompted this agent's existence.
+The documentation skill covers the general doc anti-patterns (grep vs `doclinks refs`, keeping shipped roadmap entries, migration notes, grammar-for-brevity). Two are specific to this agent:
 
-- **Don't `grep` for cross-references when `doclinks refs` would do it correctly.** Same reasoning as in the documentation skill: relative paths, asymmetric edges, source comments, orphans — `grep` misses them all.
-- **Don't keep a roadmap entry "as a record" of shipped work** by editing it to "— shipped" or rewriting it as a resolution summary. The roadmap is for future work; shipped behavior lives in `design/` and `git log`.
-- **Don't add migration notes, deprecation paths, or back-compat hedges** to design docs. Koan is pre-release with no users.
-- **Don't sacrifice grammar for brevity.** Concise prose still uses complete sentences.
 - **Don't trust the implementer's summary over the diff.** Summaries describe intent; diffs describe reality. If they disagree, the diff wins and you flag the divergence.
 - **Don't touch source code.** Your tool list includes `Edit`/`Write` because top-of-file comments in `src/` may need link updates, but actual code logic is out of scope. If the diff suggests code needs changing too, flag it and stop.
 
