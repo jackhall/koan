@@ -64,20 +64,19 @@ The work item is no longer future work, so it leaves `roadmap/`.
 3. Update each remaining callsite. A `design/` doc whose "Open work" pointed to the item gets either a body section describing what shipped, or the open-work bullet removed.
 4. If the shipped behavior has explanatory value not already captured, **move that narrative into the relevant `design/*.md`** as a body section (not as an "Open work" entry — that section is for what's still future).
 5. **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph naming what landed. (The tool only touches the bullet lists.)
-6. **Re-run the gating triple** (below).
+6. **Re-run `doclinks check`** (below).
 
 ### When editing any doc
 
 After the edit:
-- `python3 tools/doclinks.py check` — find broken links.
-- `python3 tools/doclinks.py deps` — verify roadmap `Requires`/`Unblocks` symmetry if you touched a `## Dependencies` section.
+- `python3 tools/doclinks.py check` — runs the four audits in one pass: broken links, roadmap `Requires`/`Unblocks` symmetry, orphaned docs, and the informational source-tree-changes report.
 - **Audit the edited file against the Section structure rules above.** For a `roadmap/*.md` file, confirm Problem describes today's state (not payoffs), Impact reads as "what shipping this buys" (no "No …" / "… can't …" bullets), Directions lists alternatives, and `## Dependencies` has both edges where they apply. For a `design/*.md` file, confirm the body has no historical narrative ("was fixed," "old behavior," "previously," "earlier designs called …") and no forward-looking prose outside `## Open work` (`## Open work` is the only place future work appears, and every entry links to a `roadmap/*.md` item). Fix any drift in the same edit; partition violations compound silently.
 
 ### Before deleting or renaming any doc
 
 Even non-roadmap docs:
 1. `python3 tools/doclinks.py refs <path>` to find every file that links to it.
-2. Update each callsite. For bulk renames, `python3 tools/doclinks.py rewrite OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments in one pass; pass `--dry-run` to preview, or `--from-file` for a list.
+2. Update each callsite. For bulk renames, `python3 tools/doclinks.py fix-refs OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments in one pass; pass `--dry-run` to preview, or `--from-file` for a list.
 3. Move/delete the file.
 4. `python3 tools/doclinks.py check` to confirm zero new broken links.
 
@@ -86,34 +85,39 @@ Even non-roadmap docs:
 1. Create `roadmap/<new-item>.md` with a `## Dependencies` section listing `Requires:` and/or `Unblocks:` edges.
 2. Add a bullet to `ROADMAP.md` under the right "Open items" subsection.
 3. If the new item is unblocked by something, add a back-edge `Unblocks: <new-item>` in that prerequisite item's Dependencies.
-4. Run `python3 tools/doclinks.py deps` to confirm bidirectional symmetry.
-5. Run `python3 tools/doclinks.py orphans` to confirm the new file is wired in.
+4. Run `python3 tools/doclinks.py check` to confirm bidirectional dependency symmetry and that the new file is wired in (the orphans section will flag an unreferenced doc).
 
 ### PR-end audit
 
-The three exit-coded gates, all must pass:
+A single command runs every audit:
 
 ```sh
-python3 tools/doclinks.py check && python3 tools/doclinks.py deps && python3 tools/doclinks.py orphans
+python3 tools/doclinks.py check
 ```
 
 Run this even on PRs that "didn't touch docs" — a renamed source file can break a top-of-file link from a design doc.
+
+The command prints four sections under `##` headers: broken links, roadmap dependency symmetry, orphaned docs, and source-tree changes vs `master`. The first three are gates — any failure flips the exit code. The source-tree section is informational: it lists every `src/**/*.rs` file added, modified, deleted, or renamed since `master`, annotated with every inbound doc link, so the caller can decide which changed files warrant a `README.md` "Source layout" update or a design-doc edit. Pass `--base <ref>` to diff against something other than `master`.
 
 ## doclinks CLI
 
 A Python CLI at `tools/doclinks.py`. Run with `python3 tools/doclinks.py <subcommand>` from the repo root.
 
-### `check` — find broken links
+### `check` — run all four audits
 
-Scans every `*.md` file plus comments in `src/**/*.rs` for `[text](path)` links and reports any whose target doesn't exist on disk. URL fragments (`#anchor`) and rustdoc intra-doc links (`super::foo`, `crate::a::b`) are filtered out. Exits non-zero if any link is broken.
+Prints four sections under `##` headers and returns a single exit code. The first three are gates; the fourth is informational.
 
-### `deps` — verify roadmap dependency symmetry
+- **broken links.** Scans every `*.md` file plus `//` comments in `src/**/*.rs` for `[text](path)` links and reports any whose target doesn't exist on disk. URL fragments (`#anchor`) and rustdoc intra-doc links (`super::foo`, `crate::a::b`) are filtered out.
+- **roadmap dependencies.** Parses the `## Dependencies` section of every `roadmap/*.md` file and confirms every edge is bidirectional: `A.md` listing `B.md` under **Requires:** obliges `B.md` to list `A.md` under **Unblocks:**, and vice versa. Catches the easy mistake of updating one side of a dependency edge.
+- **orphaned design/ + roadmap/ docs.** Every `design/*.md` and `roadmap/*.md` file that no other doc, comment, or source file links to. An orphan is usually either a new doc that needs an entry in `README.md` / `ROADMAP.md`, or a stale doc that should be deleted.
+- **source-tree changes vs the base ref** (informational, never gates). Every `src/**/*.rs` file added, modified, deleted, or renamed since the base, annotated with each inbound doc link. The working tree is compared to the base, so committed and uncommitted edits surface in one pass. Renames show inbound links to *both* the old path (broken until rewritten) and the new path. Use this to spot source files that may need a `README.md` "Source layout" entry, a design-doc reference, or a `fix-refs` pass to fix renamed-path links — the caller decides which warrant action.
 
-Parses the `## Dependencies` section of every `roadmap/*.md` file and confirms every edge is bidirectional: if `A.md` lists `B.md` under **Requires:**, then `B.md` must list `A.md` under **Unblocks:** (and vice versa). Catches the easy mistake of updating one side of a dependency edge and forgetting the other. Exits non-zero on any asymmetry.
+The exit code is non-zero if any of the three gating sections flags an issue. Pass `--base <ref>` to change what the source-tree section diffs against (default: `master`).
 
-### `orphans` — find unreferenced docs
-
-Lists every `design/*.md` and `roadmap/*.md` file that no other doc, comment, or source file links to. An orphan is usually either a new doc that needs an entry in `README.md` / `ROADMAP.md`, or a stale doc that should be deleted.
+```sh
+python3 tools/doclinks.py check
+python3 tools/doclinks.py check --base HEAD~5
+```
 
 ### `refs <path>` — list everything that links to a file
 
@@ -124,14 +128,14 @@ python3 tools/doclinks.py refs design/execution-model.md
 python3 tools/doclinks.py refs roadmap/traits.md
 ```
 
-### `rewrite OLD=NEW [...]` — apply path-mapping rewrites
+### `fix-refs OLD=NEW [...]` — fix inbound references after a file move
 
 Bulk-fix broken links after a file move or rename. Each `OLD=NEW` is a pair of repo-relative paths; the tool finds every link whose target resolves to `OLD` (across markdown and rust `//` comments) and rewrites it to point at `NEW`, preserving any `#fragment` or `?query` suffix. By default, **the visible `[text]` is also rewritten** to match `NEW`'s `# Heading` H1 title whenever the two differ — this fixes the common case of a renamed doc whose callsites still carry the old title. Pass `--keep-text` to preserve every link's existing text instead. Refuses to run if any `NEW` doesn't exist on disk. Use `--dry-run` to preview; the dry-run output annotates each text rewrite as `(text: 'old' -> 'new')` so in-prose links (e.g., "see [our spec](path)") that should *not* take the H1 are easy to spot before commit. Pass `--from-file mapping.txt` for a long list (one `OLD=NEW` per line, blank lines and `#` comments allowed). Mappings apply against the original resolved target only — chained mappings (`A=B`, `B=C`) need to be expressed as the final target.
 
 ```sh
-python3 tools/doclinks.py rewrite --dry-run \
+python3 tools/doclinks.py fix-refs --dry-run \
   src/dispatch/scope.rs=src/dispatch/runtime/scope.rs
-python3 tools/doclinks.py rewrite --from-file dispatch-refactor.txt
+python3 tools/doclinks.py fix-refs --from-file dispatch-refactor.txt
 ```
 
 ### `rm-roadmap <roadmap/item.md>` — delete a roadmap item with cleanup

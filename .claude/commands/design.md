@@ -56,15 +56,13 @@ On **Accept**:
 
 1. Apply the edits via `Edit` / `Write`.
 2. Invoke the `documentation` skill via the `Skill` tool to load partition rules fresh, then sanity-check the edits comply: design docs describe shipped behavior (no historical narrative, no forward-looking prose outside `## Open work`); roadmap docs describe future work; every `## Open work` bullet links to a `roadmap/*.md`.
-3. Run the doclinks triple:
+3. Run the doclinks gate:
 
    ```bash
    python3 tools/doclinks.py check
-   python3 tools/doclinks.py deps
-   python3 tools/doclinks.py orphans
    ```
 
-4. If any gate fails, fix the underlying issue (likely a missing `Unblocks:` pair, a stale link, or a partition violation) or roll the edit back. Do not leave the docs in a broken state.
+4. If any of the three gating sections (broken links, roadmap dependencies, orphaned docs) fails, fix the underlying issue (likely a missing `Unblocks:` pair, a stale link, or a partition violation) or roll the edit back. Do not leave the docs in a broken state. The fourth section (source-tree changes vs `master`) is informational only.
 
 ### 4. Hand back
 

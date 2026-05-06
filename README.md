@@ -87,14 +87,26 @@ Errors are first-class via [`KError`](src/dispatch/runtime/kerror.rs) — a `Bod
 
 ## Source layout
 
-Inside [src/dispatch/](src/dispatch/), the `k`-prefix marks files built around a single
+Inside [src/dispatch/](src/dispatch/), code is grouped into three sub-modules:
+[types/](src/dispatch/types/) holds the type system (`KType`, signatures, traits),
+[values/](src/dispatch/values/) holds runtime data (`KObject`, `KKey`, struct/union
+construction), and [runtime/](src/dispatch/runtime/) holds execution machinery
+(arenas, `Scope`, `KError`). [kfunction.rs](src/dispatch/kfunction.rs) and
+[builtins.rs](src/dispatch/builtins.rs) sit at the dispatch root because they tie
+the three sub-modules together.
+
+Within those sub-modules, the `k`-prefix marks files built around a single
 eponymous Koan-runtime type: [kobject.rs](src/dispatch/values/kobject.rs) defines `KObject`,
 [kfunction.rs](src/dispatch/kfunction.rs) defines `KFunction`,
-[kerror.rs](src/dispatch/runtime/kerror.rs) defines `KError`, [kkey.rs](src/dispatch/values/kkey.rs)
-defines `KKey`, [ktraits.rs](src/dispatch/types/ktraits.rs) holds the `K*`-typed core traits.
+[kerror.rs](src/dispatch/runtime/kerror.rs) defines `KError`,
+[kkey.rs](src/dispatch/values/kkey.rs) defines `KKey`,
+[ktype.rs](src/dispatch/types/ktype.rs) defines `KType`,
+[ktraits.rs](src/dispatch/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
-[arena.rs](src/dispatch/runtime/arena.rs) (allocation), [scope.rs](src/dispatch/runtime/scope.rs) (lexical
-environment), [builtins.rs](src/dispatch/builtins.rs) (registry),
+[arena.rs](src/dispatch/runtime/arena.rs) (allocation),
+[scope.rs](src/dispatch/runtime/scope.rs) (lexical environment),
+[signature.rs](src/dispatch/types/signature.rs) (dispatch shapes and specificity),
+[builtins.rs](src/dispatch/builtins.rs) (registry),
 [monad.rs](src/dispatch/types/monad.rs) (trait impl on a foreign type),
 [tagged_union.rs](src/dispatch/values/tagged_union.rs) (shared structure),
 [struct_value.rs](src/dispatch/values/struct_value.rs) (shared structure),
@@ -111,34 +123,43 @@ src/
 │   ├── expression_tree.rs  build nested expressions; top-level parse()
 │   ├── expression_tree_tests.rs  tests for expression_tree.rs and parse()
 │   ├── dict_literal.rs  DictFrame state machine for `{k: v}` parsing
+│   ├── type_frame.rs    Frame::Type sub-state for `<...>` type-parameter groups
 │   ├── tokens.rs        classify tokens, compound-operator desugaring
 │   └── operators.rs     operator registry
 ├── dispatch.rs
 ├── dispatch/
-│   ├── kobject.rs       runtime value type
-│   ├── kerror.rs        KError, KErrorKind, Frame — structured runtime errors
-│   ├── kfunction.rs     KFunction, signatures, ArgumentBundle, KType
-│   ├── kkey.rs          KKey — hashable scalar wrapper for dict keys
-│   ├── ktraits.rs       Parseable / Executable / Iterable / Serializable / Monadic
-│   ├── arena.rs         RuntimeArena, CallArena — per-run and per-call allocation
-│   ├── scope.rs         Scope and KFuture
-│   ├── tagged_union.rs  shared tagged-union representation
-│   ├── struct_value.rs  shared struct-construction representation
-│   ├── typed_field_list.rs  shared parser for `(name: Type ...)` schemas
-│   ├── monad.rs         Monadic impl for Option
 │   ├── builtins.rs      try_args!, register_builtin, default_scope()
-│   └── builtins/        one file per builtin (body + register paired)
-│       ├── let_binding.rs
-│       ├── print.rs
-│       ├── value_lookup.rs
-│       ├── value_pass.rs
-│       ├── attr.rs
-│       ├── fn_def.rs
-│       ├── call_by_name.rs
-│       ├── match_case.rs
-│       ├── type_call.rs
-│       ├── union.rs
-│       └── struct_def.rs
+│   ├── builtins/        one file per builtin (body + register paired)
+│   │   ├── let_binding.rs
+│   │   ├── print.rs
+│   │   ├── value_lookup.rs
+│   │   ├── value_pass.rs
+│   │   ├── attr.rs
+│   │   ├── fn_def.rs
+│   │   ├── call_by_name.rs
+│   │   ├── match_case.rs
+│   │   ├── type_call.rs
+│   │   ├── union.rs
+│   │   └── struct_def.rs
+│   ├── kfunction.rs     KFunction, Body, ArgumentBundle — bind/apply at the dispatch root
+│   ├── runtime.rs
+│   ├── runtime/
+│   │   ├── arena.rs     RuntimeArena, CallArena — per-run and per-call allocation
+│   │   ├── kerror.rs    KError, KErrorKind, Frame — structured runtime errors
+│   │   └── scope.rs     Scope and KFuture
+│   ├── types.rs
+│   ├── types/
+│   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+│   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
+│   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
+│   │   ├── monad.rs           Monadic impl for Option
+│   │   └── typed_field_list.rs  shared parser for `(name: Type ...)` schemas
+│   ├── values.rs
+│   └── values/
+│       ├── kobject.rs         runtime value type
+│       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
+│       ├── struct_value.rs    shared struct-construction representation
+│       └── tagged_union.rs    shared tagged-union representation
 ├── execute.rs
 └── execute/
     ├── scheduler.rs     Scheduler struct, execute loop, KFunction::invoke bridge

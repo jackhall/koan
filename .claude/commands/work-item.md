@@ -103,7 +103,7 @@ On Accept from step 4:
 Agent(subagent_type=doc-shepherd, prompt=<implementer summary + git diff main...HEAD + $ARGUMENTS>)
 ```
 
-`git diff main...HEAD` is ground truth — pass it verbatim. The agent returns a list of doc edits applied + the doclinks gate state.
+`git diff main...HEAD` is ground truth — pass it verbatim. The agent returns a list of doc edits applied + the `doclinks check` state.
 
 Then apply the **Approval gate template** with:
 
@@ -118,10 +118,10 @@ Don't trust either sub-agent's "tests pass" / "links resolve" claim. Re-run:
 
 ```bash
 cargo test --quiet
-python3 tools/doclinks.py check && python3 tools/doclinks.py deps && python3 tools/doclinks.py orphans
+python3 tools/doclinks.py check
 ```
 
-If anything fails, report the failure and stop. Don't try to fix it yourself — either re-spawn the relevant agent with the failure as input, or hand back to the user.
+If anything fails (cargo tests, or any of the three gating sections of `doclinks check`), report the failure and stop. Don't try to fix it yourself — either re-spawn the relevant agent with the failure as input, or hand back to the user. The source-tree-changes section of `check` is informational and never fails the gate; it's there as decision input for the doc-shepherd.
 
 ### 7. Final disposition
 
@@ -138,12 +138,12 @@ Never open a PR from this command, even if the user asks mid-flow. PRs are out o
 - **You do not write docs.** That's the doc-shepherd.
 - **You do not propose plans.** That's the Plan agent.
 - **You do gate on user approval explicitly via AskUserQuestion**, not via text questions.
-- **You do re-audit** with `cargo test` and the doclinks triple after sub-agents return. Trust but verify.
+- **You do re-audit** with `cargo test` and `doclinks check` after sub-agents return. Trust but verify.
 - **You do show the user each agent's output** so they can sanity-check before the next phase.
 
 ## When to bail
 
 - Plan agent returns something that doesn't match the roadmap item's actual ask. Show the user and let them steer.
 - Implementer returns a summary whose "Verification run" shows test failures. Don't proceed to docs; show the user.
-- doc-shepherd's final doclinks gates fail. Show the user the output and stop.
+- doc-shepherd's final `doclinks check` returns non-zero. Show the user the output and stop.
 - Any sub-agent reports "I couldn't do this" — surface verbatim, don't paper over.

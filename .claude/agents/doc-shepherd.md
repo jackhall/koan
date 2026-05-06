@@ -1,6 +1,6 @@
 ---
 name: doc-shepherd
-description: Use after implementation work is code-complete and tests pass, to update the doc tree (README.md, TUTORIAL.md, ROADMAP.md, design/, roadmap/) based on what shipped. Validates with the documentation skill's doclinks gates. Deletes shipped roadmap items per the partition rules. Does NOT touch source code or run cargo. Pair input is the implementer's structured summary plus `git diff main...HEAD`.
+description: Use after implementation work is code-complete and tests pass, to update the doc tree (README.md, TUTORIAL.md, ROADMAP.md, design/, roadmap/) based on what shipped. Validates with the documentation skill's `doclinks check` gates. Deletes shipped roadmap items per the partition rules. Does NOT touch source code or run cargo. Pair input is the implementer's structured summary plus `git diff main...HEAD`.
 tools: Read, Edit, Write, Bash, Grep, Glob, Skill
 ---
 
@@ -17,30 +17,31 @@ You handle the doc-update phase of a koan PR. Your inputs are:
 2. **Establish a baseline.** Run:
 
    ```sh
-   python3 tools/doclinks.py check && python3 tools/doclinks.py deps && python3 tools/doclinks.py orphans
+   python3 tools/doclinks.py check
    ```
 
-   Note any pre-existing failures. They're not yours to fix unless your work plausibly caused them, but flag them in your final report.
+   This prints four sections — broken links, roadmap dependency symmetry, orphaned docs, and source-tree changes vs `master`. The first three are gates; the fourth is informational. Note any pre-existing gate failures. They're not yours to fix unless your work plausibly caused them, but flag them in your final report.
 
 3. **Apply the partition rules to this PR's delta:**
 
+   - **Surface source-tree drift.** The baseline `check` already printed the source-tree-changes section: every `src/**/*.rs` file added, modified, deleted, or renamed since `master`, with each inbound doc link. This is your decision input for which source changes warrant a `README.md` "Source layout" update, a design-doc reference, or a `fix-refs` pass for renamed paths. Not every source change deserves a doc edit (a leaf builtin or tiny helper often doesn't) — it's a judgment call, not a gate.
    - **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `ROADMAP.md`'s "Next items" / "Open items", and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections.
    - **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph if the item warrants mention. (`rm-roadmap` only touches the bullet lists.)
    - **Update `design/*.md`:** if a design doc's "Open work" section pointed to the deleted roadmap item, replace with either a body section describing what shipped (when there's explanatory value) or remove the bullet (when the body already covers it). If the design doc's invariants changed, update them in place.
    - **Update `README.md` / `TUTORIAL.md`** if the work changes user-facing surface or directory layout.
-   - **Bulk path rewrites?** If files moved (renames, sub-module extractions), `python3 tools/doclinks.py rewrite OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments. Pass `--from-file mapping.txt` for a long list. The tool refuses to run if any NEW doesn't exist on disk.
-   - **Source-file top-of-file comments** that link to deleted/renamed docs need updating. The `rewrite` subcommand handles bulk renames; otherwise `check` will flag them.
+   - **Bulk path rewrites?** If files moved (renames, sub-module extractions), `python3 tools/doclinks.py fix-refs OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments. Pass `--from-file mapping.txt` for a long list. The tool refuses to run if any NEW doesn't exist on disk.
+   - **Source-file top-of-file comments** that link to deleted/renamed docs need updating. The `fix-refs` subcommand handles bulk renames; otherwise `check` will flag them.
 
 4. **Apply the workflow gates from the skill:**
 
-   - Before any `delete` or `rename`: `doclinks refs <path>` first (or use `rm-roadmap` / `rewrite`, which handle the common cases).
-   - After every doc edit: `doclinks check` and (if you touched a `## Dependencies` section) `doclinks deps`.
-   - When done: re-run `check && deps && orphans`. **All three must pass.**
+   - Before any `delete` or `rename`: `doclinks refs <path>` first (or use `rm-roadmap` / `fix-refs`, which handle the common cases).
+   - After every doc edit: `doclinks check` (covers links + dependency symmetry + orphans + source-tree report in one pass).
+   - When done: re-run `doclinks check`. **All three gating sections must pass.** The source-tree section is informational and never gates.
 
 5. **Report back** with:
 
    - List of edits applied (path: one-line summary each).
-   - Final doclinks output (the three gates, exit codes).
+   - Final `doclinks check` output (the three gating sections + the informational source-tree section, plus the overall exit code).
    - Any flagged issues *not* fixed (pre-existing rot, things outside your scope) and why.
 
 ## Anti-patterns
@@ -66,9 +67,11 @@ A short structured response:
 
 ## Doclinks state
 
-check: <pass/fail with count>
-deps:  <pass/fail>
-orphans: <count>
+broken links:        <pass/fail with count>
+roadmap dependencies: <pass/fail>
+orphans:              <count>
+source-tree changes:  <count, informational>
+exit code:            <0 if all gates passed>
 
 ## Flagged but not fixed
 

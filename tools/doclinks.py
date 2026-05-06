@@ -2,11 +2,16 @@
 """Maintain links between docs and source for the koan repo.
 
 Subcommands:
-  check                report markdown links whose target does not exist
-  deps                 report Requires/Unblocks asymmetries in roadmap/
-  orphans              report design/ and roadmap/ files no other file links to
+  check                run all four audits in one pass: broken links, roadmap
+                       Requires/Unblocks symmetry, orphaned design/ + roadmap/
+                       docs, and src/**/*.rs files changed vs a git ref. Exits
+                       non-zero if any of the first three (the gates) fail; the
+                       source-tree section is informational so the caller can
+                       decide which changed files warrant a doc update.
   refs <path>          list every file that links to <path>
-  rewrite OLD=NEW ...  apply path-mapping rewrites to every matching link
+  fix-refs OLD=NEW ... rewrite every link that resolves to OLD so it points at
+                       NEW instead — used to fix inbound references after a
+                       file move or rename
   rm-roadmap <path>    delete a roadmap/*.md file and prune inbound bullets
 """
 
@@ -16,6 +21,7 @@ import argparse
 import bisect
 import os
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -37,7 +43,7 @@ H1_RE = re.compile(r"^#\s+(.*?)\s*$")
 def read_h1_title(path: Path) -> str | None:
     """Return the text of the first `# Heading` line in `path`, or None.
 
-    Used by `rewrite` to learn the canonical title of a renamed doc so it can
+    Used by `fix-refs` to learn the canonical title of a renamed doc so it can
     update visible link text alongside the path.
     """
     try:
@@ -149,9 +155,9 @@ def rel(p: Path) -> str:
         return str(p)
 
 
-# ---------- check ----------
+# ---------- check (orchestrator + per-section helpers) ----------
 
-def cmd_check(_args: argparse.Namespace) -> int:
+def _check_links() -> int:
     broken = []
     for link in all_links():
         if not link.resolved.exists():
@@ -237,7 +243,7 @@ def parse_dep_section(path: Path) -> tuple[set[str], set[str]]:
     return requires, unblocks
 
 
-def cmd_deps(_args: argparse.Namespace) -> int:
+def _check_deps() -> int:
     roadmap_dir = REPO / "roadmap"
     items = sorted(roadmap_dir.glob("*.md"))
     deps: dict[str, tuple[set[str], set[str]]] = {}
@@ -275,7 +281,7 @@ def cmd_deps(_args: argparse.Namespace) -> int:
 
 # ---------- orphans ----------
 
-def cmd_orphans(_args: argparse.Namespace) -> int:
+def _check_orphans() -> int:
     targets: list[Path] = []
     for sub in ("design", "roadmap"):
         targets.extend((REPO / sub).glob("*.md"))
@@ -399,7 +405,7 @@ def remove_matching_bullets(
     return kept, removed
 
 
-# ---------- rewrite ----------
+# ---------- fix-refs ----------
 
 def _split_target(target: str) -> tuple[str, str]:
     """Split `path#frag` or `path?q=v` into (path, suffix-including-separator)."""
@@ -420,7 +426,7 @@ def _parse_mapping(arg: str) -> tuple[str, str]:
     return old, new
 
 
-def cmd_rewrite(args: argparse.Namespace) -> int:
+def cmd_fix_refs(args: argparse.Namespace) -> int:
     raw_pairs: list[str] = list(args.mapping or [])
     if args.from_file:
         for raw_line in Path(args.from_file).read_text(encoding="utf-8").splitlines():
@@ -575,6 +581,143 @@ def cmd_rm_roadmap(args: argparse.Namespace) -> int:
     return cmd_check(argparse.Namespace())
 
 
+# ---------- src-changes ----------
+
+# `git diff --name-status -M` rows look like one of:
+#   M\tpath
+#   A\tpath
+#   D\tpath
+#   R<score>\told\tnew
+#   C<score>\told\tnew
+# We only inspect the leading letter and the path columns.
+def _changed_src_files(base: str) -> list[tuple[str, Path, Path | None]]:
+    """Run `git diff --name-status -M <base> -- src` and return rows for `.rs`
+    files only. Each row is (status, current_path, old_path), where old_path is
+    set for renames/copies and for deletions (so callers can look up inbound
+    links to the path that no longer exists)."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO), "diff", "--name-status", "-M",
+             base, "--", "src"],
+            capture_output=True, text=True, check=True,
+        )
+    except FileNotFoundError:
+        print("error: git not found on PATH", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        msg = e.stderr.strip() or f"git diff exited {e.returncode}"
+        print(f"error: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    rows: list[tuple[str, Path, Path | None]] = []
+    for raw in proc.stdout.splitlines():
+        parts = raw.split("\t")
+        if len(parts) < 2:
+            continue
+        code = parts[0][:1]
+        if code in ("R", "C") and len(parts) >= 3:
+            old, new = parts[1], parts[2]
+            if not new.endswith(".rs"):
+                continue
+            rows.append((code, REPO / new, REPO / old))
+        elif code == "D":
+            path = parts[1]
+            if not path.endswith(".rs"):
+                continue
+            rows.append((code, REPO / path, REPO / path))
+        else:
+            path = parts[1]
+            if not path.endswith(".rs"):
+                continue
+            rows.append((code, REPO / path, None))
+    return rows
+
+
+def _report_src_changes(base: str) -> int:
+    rows = _changed_src_files(base)
+
+    # Index every doc link by resolved target so we can look up inbound links
+    # for both the current and (for renames/deletions) the prior path.
+    inbound: dict[Path, list[Link]] = defaultdict(list)
+    for link in all_links():
+        inbound[link.resolved].append(link)
+
+    if not rows:
+        print(f"No src/**/*.rs files changed vs {base}.")
+        return 0
+
+    status_word = {"A": "added", "M": "modified", "D": "deleted",
+                   "R": "renamed", "C": "copied", "T": "type-changed"}
+
+    for code, path, old_path in rows:
+        word = status_word.get(code, code)
+        if code in ("R", "C") and old_path is not None:
+            print(f"{code}  {rel(old_path)} -> {rel(path)}  ({word})")
+        else:
+            print(f"{code}  {rel(path)}  ({word})")
+
+        new_links = sorted(inbound.get(path.resolve(), []),
+                           key=lambda l: (rel(l.source), l.line))
+        old_links = []
+        if old_path is not None and old_path != path:
+            old_links = sorted(inbound.get(old_path.resolve(), []),
+                               key=lambda l: (rel(l.source), l.line))
+
+        if code == "D":
+            broken = old_links or new_links
+            if broken:
+                for link in broken:
+                    print(f"     {rel(link.source)}:{link.line} (broken)")
+            else:
+                print("     no inbound doc links")
+        elif code in ("R", "C"):
+            if old_links:
+                print(f"     old path inbound links (broken until rewritten):")
+                for link in old_links:
+                    print(f"       {rel(link.source)}:{link.line}")
+            if new_links:
+                print(f"     new path inbound links:")
+                for link in new_links:
+                    print(f"       {rel(link.source)}:{link.line}")
+            if not old_links and not new_links:
+                print("     no inbound doc links")
+        else:
+            if new_links:
+                for link in new_links:
+                    print(f"     {rel(link.source)}:{link.line}")
+            else:
+                print("     no inbound doc links")
+
+    print(f"\n{len(rows)} source file(s) changed vs {base}. "
+          f"Caller decides which warrant a doc/README update.")
+    return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Run all four audits in one pass. The first three (links, deps, orphans)
+    are gates: if any of them flag an issue, we exit non-zero. The source-tree
+    section is informational — the caller decides which changed files warrant a
+    doc update — so it never affects the exit code."""
+    base = getattr(args, "base", "master")
+
+    print("## broken links")
+    rc_links = _check_links()
+    print()
+
+    print("## roadmap dependencies")
+    rc_deps = _check_deps()
+    print()
+
+    print("## orphaned design/ + roadmap/ docs")
+    rc_orphans = _check_orphans()
+    print()
+
+    print(f"## source-tree changes vs {base}")
+    _report_src_changes(base)
+
+    return max(rc_links, rc_deps, rc_orphans)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="doclinks",
@@ -582,39 +725,47 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("check", help="report markdown links whose target does not exist") \
-        .set_defaults(func=cmd_check)
-    sub.add_parser("deps", help="report Requires/Unblocks asymmetries in roadmap/") \
-        .set_defaults(func=cmd_deps)
-    sub.add_parser("orphans", help="report design/ and roadmap/ files no other file links to") \
-        .set_defaults(func=cmd_orphans)
+    p_check = sub.add_parser(
+        "check",
+        help="run all four audits: broken links, roadmap dep symmetry, "
+             "orphaned docs, and src-tree changes vs a git ref",
+    )
+    p_check.add_argument(
+        "--base", default="master",
+        help="git ref the source-tree section diffs against (default: master). "
+             "The working tree is compared to this ref, so both committed and "
+             "uncommitted edits are surfaced in one pass. Only affects the "
+             "informational source-tree section, not the gating sections.",
+    )
+    p_check.set_defaults(func=cmd_check)
 
     p_refs = sub.add_parser("refs", help="list every file that links to <path>")
     p_refs.add_argument("path", help="file path (absolute or relative to cwd)")
     p_refs.set_defaults(func=cmd_refs)
 
-    p_rewrite = sub.add_parser(
-        "rewrite",
-        help="apply OLD=NEW path mappings to every link that resolves to OLD",
+    p_fix_refs = sub.add_parser(
+        "fix-refs",
+        help="rewrite every link that resolves to OLD so it points at NEW "
+             "instead — used after a file move or rename",
     )
-    p_rewrite.add_argument(
+    p_fix_refs.add_argument(
         "mapping", nargs="*",
         help="one or more OLD=NEW pairs (repo-relative paths)",
     )
-    p_rewrite.add_argument(
+    p_fix_refs.add_argument(
         "--from-file", help="read additional OLD=NEW mappings from a file "
                             "(blank lines and '#' comments allowed)",
     )
-    p_rewrite.add_argument(
+    p_fix_refs.add_argument(
         "--dry-run", action="store_true",
         help="report rewrites without writing any files",
     )
-    p_rewrite.add_argument(
+    p_fix_refs.add_argument(
         "--keep-text", action="store_true",
         help="preserve each link's visible text; otherwise the visible text is "
              "replaced with the new file's H1 title when the two differ",
     )
-    p_rewrite.set_defaults(func=cmd_rewrite)
+    p_fix_refs.set_defaults(func=cmd_fix_refs)
 
     p_rm = sub.add_parser(
         "rm-roadmap",
