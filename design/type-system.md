@@ -193,23 +193,27 @@ The static-typing-and-jit work in open work closes the first two uniformly.
 
 ## Open work
 
-The type/trait sequence is the longest open arc in the language. In dependency
-order:
+The abstraction-over-types story is the [module
+system](module-system.md) — structures and signatures, opaque ascription as
+the type-abstraction primitive, functors for parametric types, and modular
+implicits for inferred dispatch. The seven implementation stages live under
+[`roadmap/module-system-*.md`](../roadmap/module-system-1-module-language.md);
+stage 1 introduces a `KType::ModuleType { module_path, name }` carrier
+alongside the variants documented above, giving per-module type identity
+(opaque ascription) the runtime substrate the existing `KType::Struct` lacks.
 
-- [Per-type identity for structs and methods](../roadmap/per-type-identity.md)
-  — every user struct currently collapses to `KType::Struct`; methods can't
-  attach to specific types.
-- [`TRAIT` builtin for structural typing](../roadmap/traits.md) — "anything
-  iterable", "anything orderable".
-- [Trait inheritance](../roadmap/trait-inheritance.md) — `Ord` extending `Eq`
-  is the standard layering.
-- [Group-based operators](../roadmap/group-based-operators.md) — `+`/`-` form
-  a math group but the language treats every operator as flat-independent.
-
-The type/trait sequence sits in the middle of the roadmap because it unblocks
-group-based operators.
-
-Future-facing:
-[Static type checking and JIT compilation](../roadmap/static-typing-and-jit.md)
-— closes the TCO and builtin runtime-check gaps uniformly, and is the language's
-performance ceiling.
+- [Module system stage 1 — Module language](../roadmap/module-system-1-module-language.md)
+  — structures, signatures, transparent and opaque ascription, per-module
+  type identity. The first slice that adds module-shaped variants to the
+  runtime type system.
+- [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
+  — inferred dispatch on signatures. Lands the multi-parameter dispatch the
+  current slot-specificity ranking can't express on its own.
+- [Group-based operators](../roadmap/group-based-operators.md) — paired
+  operators like `+`/`-` as a single algebraic declaration. Lands on top of
+  the module-system substrate.
+- [Static type checking and JIT compilation](../roadmap/static-typing-and-jit.md)
+  — closes the TCO and builtin runtime-check gaps uniformly, and is the
+  language's performance ceiling. The module system's compile-time
+  scheduling (`Infer` and `ImplicitSearch` scheduler nodes) is the substrate
+  this work builds on.

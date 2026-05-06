@@ -96,6 +96,14 @@ substitutes parameters and what `BodyResult::Tail` does at the slot.
 
 ## Open work
 
+- [Module system stage 1 — Module language](../roadmap/module-system-1-module-language.md)
+  — adds new top-level forms (structures, signatures, ascription) that fit
+  into the existing parser via the keyword convention: `MODULE`, `SIG`, and
+  `STRUCT` are all-caps (so they classify as `Keyword` parts), and module
+  member access reuses the existing `.`-compound operator. The dispatch
+  table remains the extension point — module declarations register new
+  dispatchable shapes the same way `FN` does. See
+  [module-system.md](module-system.md).
 - [Quote and eval sigils](../roadmap/quote-and-eval-sigils.md) — no surface
   form to force-evaluate a metaexpression or suppress evaluation inside a
   dict/list literal. Closes the gap between "`KExpression` is a first-class
