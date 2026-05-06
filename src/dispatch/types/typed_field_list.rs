@@ -3,16 +3,20 @@
 //! `STRUCT` (which keeps the ordered list because positional construction depends on it).
 
 use super::ktype::KType;
+use super::resolver::TypeResolver;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 /// Walk the schema KExpression's parts as repeated `<Identifier(name)> <Keyword(":")>
 /// <Type(name)>` triples and assemble the resulting ordered list. Errors with a
 /// `ShapeError`-string on any malformed triple, unknown type name, or duplicate field name.
 /// `context` is the surface-form name (`UNION`, `STRUCT`) used in error messages so the
-/// caller's diagnostic stays grounded in user-facing syntax.
+/// caller's diagnostic stays grounded in user-facing syntax. `resolver` is forwarded into
+/// `KType::from_type_expr` so module-local / user-defined names can resolve before the
+/// builtin name table.
 pub fn parse_typed_field_list(
     expr: &KExpression<'_>,
     context: &str,
+    resolver: &dyn TypeResolver,
 ) -> Result<Vec<(String, KType)>, String> {
     let parts = &expr.parts;
     if parts.len() % 3 != 0 {
@@ -43,7 +47,7 @@ pub fn parse_typed_field_list(
             }
         }
         let ktype = match &parts[i + 2] {
-            ExpressionPart::Type(t) => KType::from_type_expr(t).map_err(|e| {
+            ExpressionPart::Type(t) => KType::from_type_expr(t, resolver).map_err(|e| {
                 format!("{e} in {context} schema for `{}`", name)
             })?,
             other => {

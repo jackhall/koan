@@ -8,11 +8,14 @@
 mod ktraits;
 mod ktype;
 mod monad;
+mod resolver;
 mod signature;
 mod typed_field_list;
 
 pub use ktraits::{Executable, Parseable, Serializable};
 pub use ktype::KType;
+#[allow(unused_imports)]
+pub use resolver::{NoopResolver, TypeResolver};
 pub use signature::{
     Argument, ExpressionSignature, SignatureElement, Specificity, UntypedElement, UntypedKey,
     is_keyword_token,

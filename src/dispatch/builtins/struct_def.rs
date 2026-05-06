@@ -2,15 +2,15 @@ use std::rc::Rc;
 
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, NoopResolver, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::types::parse_typed_field_list;
-use crate::parse::kexpression::KExpression;
+use crate::parse::kexpression::{KExpression, TypeParams};
 
 use super::{err, register_builtin};
 
-/// `STRUCT <name:TypeRef> = (<schema>)` — declare a named record type.
+/// `STRUCT <name:TypeExprRef> = (<schema>)` — declare a named record type.
 ///
 /// The schema slot is `KType::KExpression`: the user writes a parens-wrapped expression of
 /// repeated `<field:Identifier> : <type:Type>` triples (`STRUCT Point = (x: Number, y: Number)`).
@@ -32,12 +32,22 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
+    // `TypeExprRef`-typed slot resolves to `KObject::TypeExprValue(t)`. The name slot wants
+    // a bare leaf — reject parameterized forms like `Point<X>` at definition time.
     let name = match bundle.get("name") {
-        Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::TypeExprValue(t)) => match &t.params {
+            TypeParams::None => t.name.clone(),
+            _ => {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "STRUCT name must be a bare type name, got `{}`",
+                    t.render(),
+                ))));
+            }
+        },
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
-                expected: "TypeRef".to_string(),
+                expected: "TypeExprRef".to_string(),
                 got: other.ktype().name().to_string(),
             }));
         }
@@ -51,7 +61,7 @@ pub fn body<'a>(
             )));
         }
     };
-    let fields = match parse_typed_field_list(&schema_expr, "STRUCT") {
+    let fields = match parse_typed_field_list(&schema_expr, "STRUCT", &NoopResolver) {
         Ok(f) => f,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
@@ -94,7 +104,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Type,
             elements: vec![
                 SignatureElement::Keyword("STRUCT".into()),
-                SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeRef }),
+                SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeExprRef }),
                 SignatureElement::Keyword("=".into()),
                 SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::KExpression }),
             ],

@@ -16,8 +16,9 @@
 //! values before the primitive sees the assembled `KObject::List`. The primitive then
 //! validates per-field types against the schema and emits a `KObject::Struct`.
 
-use std::collections::HashMap;
 use std::rc::Rc;
+
+use indexmap::IndexMap;
 
 use crate::dispatch::builtins::register_builtin;
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
@@ -107,7 +108,9 @@ pub fn construct<'a>(
             got: values.len(),
         }));
     }
-    let mut map: HashMap<String, KObject<'a>> = HashMap::with_capacity(fields.len());
+    // Insert in declaration order so iteration (via PRINT / summarize) matches the schema.
+    // IndexMap preserves insertion order while keeping O(1) keyed lookup.
+    let mut map: IndexMap<String, KObject<'a>> = IndexMap::with_capacity(fields.len());
     for ((field_name, expected), value) in fields.iter().zip(values.iter()) {
         if !expected.matches_value(value) {
             return Err(KError::new(KErrorKind::TypeMismatch {
@@ -376,6 +379,36 @@ mod tests {
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "Bogus"),
             "expected UnboundName(\"Bogus\"), got {err}",
+        );
+    }
+
+    /// Regression: struct values iterate (and therefore PRINT/`summarize` render) in
+    /// declaration order. Pre-Phase-1 this used a `HashMap`, so the surface output sat at
+    /// hash-iteration order — which differed from the schema and surprised users. The order
+    /// `z, a, m` is chosen to differ from any alphabetical / hash-stable ordering on a small
+    /// set of single-letter keys.
+    #[test]
+    fn struct_value_iterates_in_declaration_order() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "STRUCT Triple = (z: Number, a: Number, m: Number)");
+        let result = run_one(scope, parse_one("Triple (a: 2, m: 3, z: 1)"));
+        match result {
+            KObject::Struct { fields, .. } => {
+                let keys: Vec<&str> = fields.keys().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    keys,
+                    vec!["z", "a", "m"],
+                    "struct fields should iterate in declaration order, not call-site order",
+                );
+            }
+            other => panic!("expected Struct, got {:?}", other.ktype()),
+        }
+        let summary = crate::dispatch::types::Parseable::summarize(result);
+        assert_eq!(
+            summary, "Triple(z: 1, a: 2, m: 3)",
+            "summary must emit fields in declaration order"
         );
     }
 

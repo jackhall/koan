@@ -86,7 +86,7 @@ pub enum ExpressionPart<'a> {
     /// A type-name reference like `Number`, `KFunction`, or `List<Number>`. Used in surface
     /// positions that name a type (e.g. the return-type slot of `FN (sig) -> Type = (body)`).
     /// Contributes `UntypedElement::Slot` to the bucket key; an `Argument` whose `ktype` is
-    /// `KType::TypeRef` matches this part. The `TypeExpr` carries any nested parameters
+    /// `KType::TypeExprRef` matches this part. The `TypeExpr` carries any nested parameters
     /// (`List<Number>` etc.); leaf types use `TypeParams::None`.
     Type(TypeExpr),
     Expression(Box<KExpression<'a>>),

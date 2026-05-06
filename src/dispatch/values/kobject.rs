@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use indexmap::IndexMap;
+
 use crate::parse::kexpression::{KExpression, TypeExpr};
 use crate::dispatch::kfunction::KFunction;
 use crate::dispatch::runtime::{CallArena, KFuture};
@@ -47,7 +49,9 @@ use crate::dispatch::types::{KType, Parseable, Serializable, SignatureElement};
 /// descendant `KFunction` is in flight.
 ///
 /// `Struct { type_name, fields }`: a runtime struct value — a record of named fields. The
-/// `fields` map is `Rc`-shared with the same immutability contract as `Dict`/`List`.
+/// `fields` map is `Rc`-shared with the same immutability contract as `Dict`/`List`. Stored
+/// as an `IndexMap` so iteration order matches the schema's declaration order — PRINT and
+/// `summarize` emit fields in the order the user wrote them, and `.get(name)` is still O(1).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),
@@ -68,7 +72,7 @@ pub enum KObject<'a> {
     },
     Struct {
         type_name: String,
-        fields: Rc<HashMap<String, KObject<'a>>>,
+        fields: Rc<IndexMap<String, KObject<'a>>>,
     },
     /// A first-class type expression — produced by `ExpressionPart::resolve_for` when the
     /// receiving slot is `KType::TypeExprRef`. The structured `TypeExpr` survives the parser

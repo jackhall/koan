@@ -29,12 +29,18 @@ a targeted KFuture lift anchor (an addresses-only side-table on `RuntimeArena`
 answers a precise membership query, replacing the previous always-anchor conservative
 path), the leak-fix audit sign-off (a cycle gate on per-call `alloc_object`
 redirects self-anchored values to the outer arena, closing out the audit slate at 0
-leaks and 0 UB under Miri tree borrows), and the quote/eval sigils (`#(expr)` and
+leaks and 0 UB under Miri tree borrows), the quote/eval sigils (`#(expr)` and
 `$(expr)` — surface forms that capture an AST as a `KExpression` value or evaluate a
 `KExpression` value as code, closing the gap between "`KExpression` is first-class"
-and "user code can manipulate expressions ergonomically"). The next signature revision after error handling lands monadic side-effect
-capture; the type-system arc runs through the module-system stages — foundation in
-stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
+and "user code can manipulate expressions ergonomically"), and the module-system
+stage 0 cleanup (vestigial `KType::TypeRef` removed in favor of the unified
+`TypeExprRef` slot kind, struct values now `IndexMap`-backed so PRINT emits fields
+in declaration order, constructor dispatch funneled through a single
+`dispatch_constructor` helper, and a `TypeResolver` trait threaded through
+`KType::from_type_expr` ready for stage 1's module-aware resolver). The next
+signature revision after error handling lands monadic side-effect capture; the
+type-system arc runs through the module-system stages — foundation in stage 1,
+ergonomic generic dispatch in stage 5, coherence in stage 6.
 
 ## Next items
 
@@ -45,10 +51,6 @@ without first landing something else:
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier. (Previously a soft prerequisite of transient-node reclamation;
   now decoupled — reclamation shipped without touching `BuiltinFn`.)
-- [Module system stage 0 — Pre-module cleanup](roadmap/module-system-0-cleanup.md)
-  — vestigial-tag removal, ordered struct values, centralized constructor dispatch,
-  scope-aware type resolution. Foundation cleanup before stage 1 so the type-identity
-  surgery there stays local.
 - [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
   only when the next feature would multiply existing duplication.
 
@@ -67,9 +69,6 @@ without first landing something else:
 The agreed design is captured in [design/module-system.md](design/module-system.md);
 the seven stages below land it incrementally, each producing a usable end state.
 
-- [Stage 0 — Pre-module cleanup](roadmap/module-system-0-cleanup.md) — vestigial-tag
-  removal, ordered struct values, centralized constructor dispatch, scope-aware type
-  resolution. Engineering housekeeping before stage 1 starts.
 - [Stage 1 — Module language](roadmap/module-system-1-module-language.md) — structures,
   signatures, transparent and opaque ascription, per-module type identity.
 - [Stage 2 — Functors](roadmap/module-system-2-functors.md) — parametric modules with

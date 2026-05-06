@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, Body, BodyResult, KFunction, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, NoopResolver, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression, TypeExpr};
@@ -51,7 +51,7 @@ pub fn body<'a>(
             )));
         }
     };
-    let return_type = match KType::from_type_expr(&return_type_expr) {
+    let return_type = match KType::from_type_expr(&return_type_expr, &NoopResolver) {
         Ok(t) => t,
         Err(msg) => {
             return err(KError::new(KErrorKind::ShapeError(format!(
@@ -142,7 +142,7 @@ fn parse_signature_elements<'a>(
                 let ty = parts.get(i + 2);
                 match (colon, ty) {
                     (Some(ExpressionPart::Keyword(c)), Some(ExpressionPart::Type(t))) if c == ":" => {
-                        let ktype = KType::from_type_expr(t).map_err(|e| {
+                        let ktype = KType::from_type_expr(t, &NoopResolver).map_err(|e| {
                             format!("{e} in FN signature for parameter `{name}`")
                         })?;
                         elements.push(SignatureElement::Argument(Argument {

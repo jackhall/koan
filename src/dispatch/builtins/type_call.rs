@@ -5,13 +5,12 @@ use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
-use crate::dispatch::values::struct_value;
-use crate::dispatch::values::tagged_union;
-use crate::parse::kexpression::KExpression;
+use crate::dispatch::values::dispatch_constructor;
+use crate::parse::kexpression::{KExpression, TypeParams};
 
 use super::{err, register_builtin};
 
-/// `<verb:TypeRef> <args:KExpression>` — the type-token construction path.
+/// `<verb:TypeExprRef> <args:KExpression>` — the type-token construction path.
 ///
 /// Mirrors [`call_by_name`](super::call_by_name) but for a leading type-token. Looks up
 /// `verb` in scope and routes by the resolved `KObject` variant: `TaggedUnionType` hands
@@ -23,12 +22,23 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
+    // The verb slot is `TypeExprRef`, so its resolved value is `KObject::TypeExprValue(t)`.
+    // The name slot wants the bare type name; reject parameterized forms (`List<Number>` as
+    // a constructor verb makes no sense here).
     let verb = match bundle.get("verb") {
-        Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::TypeExprValue(t)) => match &t.params {
+            TypeParams::None => t.name.clone(),
+            _ => {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "type-call verb must be a bare type name, got `{}`",
+                    t.render(),
+                ))));
+            }
+        },
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
-                expected: "TypeRef".to_string(),
+                expected: "TypeExprRef".to_string(),
                 got: other.summarize(),
             }));
         }
@@ -43,13 +53,14 @@ pub fn body<'a>(
         }
     };
     match scope.lookup(&verb) {
-        Some(obj @ KObject::TaggedUnionType(_)) => tagged_union::apply(obj, args_expr.parts),
-        Some(obj @ KObject::StructType { .. }) => struct_value::apply(obj, args_expr.parts),
-        Some(other) => err(KError::new(KErrorKind::TypeMismatch {
-            arg: "verb".to_string(),
-            expected: "Type".to_string(),
-            got: other.ktype().name().to_string(),
-        })),
+        Some(obj) => match dispatch_constructor(obj, args_expr.parts) {
+            Some(result) => result,
+            None => err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "Type".to_string(),
+                got: obj.ktype().name().to_string(),
+            })),
+        },
         None => err(KError::new(KErrorKind::UnboundName(verb))),
     }
 }
@@ -76,7 +87,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
-                SignatureElement::Argument(Argument { name: "verb".into(), ktype: KType::TypeRef }),
+                SignatureElement::Argument(Argument { name: "verb".into(), ktype: KType::TypeExprRef }),
                 SignatureElement::Argument(Argument { name: "args".into(), ktype: KType::KExpression }),
             ],
         },

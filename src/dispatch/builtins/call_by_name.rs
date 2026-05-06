@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
-use crate::dispatch::values::KObject;
+use crate::dispatch::values::{KObject, dispatch_constructor};
 use crate::dispatch::runtime::Scope;
 
 use super::{err, register_builtin};
@@ -71,21 +71,20 @@ pub fn body<'a>(
     match scope.lookup_kfunction(&verb) {
         Some(f) => f.apply(args_expr.parts),
         None => {
-            // Verb isn't a KFunction: route TaggedUnion/Struct types to their construction
-            // paths, surface UnboundName for missing bindings, TypeMismatch otherwise.
+            // Verb isn't a KFunction: route any constructible Type through the shared
+            // `dispatch_constructor` helper, surface UnboundName for missing bindings, and
+            // emit a "KFunction or Type" TypeMismatch otherwise (the wider expected-set
+            // is what differentiates this site from `type_call`'s "Type"-only error).
             match scope.lookup(&verb) {
                 None => err(KError::new(KErrorKind::UnboundName(verb))),
-                Some(obj @ KObject::TaggedUnionType(_)) => {
-                    crate::dispatch::values::tagged_union::apply(obj, args_expr.parts)
-                }
-                Some(obj @ KObject::StructType { .. }) => {
-                    crate::dispatch::values::struct_value::apply(obj, args_expr.parts)
-                }
-                Some(obj) => err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "verb".to_string(),
-                    expected: "KFunction or Type".to_string(),
-                    got: obj.summarize(),
-                })),
+                Some(obj) => match dispatch_constructor(obj, args_expr.parts) {
+                    Some(result) => result,
+                    None => err(KError::new(KErrorKind::TypeMismatch {
+                        arg: "verb".to_string(),
+                        expected: "KFunction or Type".to_string(),
+                        got: obj.summarize(),
+                    })),
+                },
             }
         }
     }

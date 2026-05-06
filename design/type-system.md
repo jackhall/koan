@@ -35,7 +35,7 @@ module-qualified `IntOrd.t` in type position parses as a single structured
   `KFunction { args: Vec<KType>, ret: Box<KType> }`. Always parameterized; see
   [the next section](#container-type-parameterization).
 - Other function-like: `KExpression` (a captured-but-unevaluated expression).
-- Meta-types for type-position slots: `TypeRef` and `TypeExprRef` — see
+- Meta-type for type-position slots: `TypeExprRef` — see
   [Type-position slot kinds](#type-position-slot-kinds).
 - First-class type values: `Type` (a tagged-union or struct schema), `Tagged`
   (a tagged-union variant value), `Struct` (a struct value).
@@ -141,16 +141,14 @@ shape at runtime.
 
 ## Type-position slot kinds
 
-Two `KType` variants are meta-types for argument slots that capture a parsed
-type-name token (`ExpressionPart::Type(_)`):
-
-- `TypeRef` flattens the parsed type to a `KString(name)` in the bundle —
-  the legacy "type name only" slot kind. No remaining users post-parameterization,
-  but kept in the enum for any future builtin that genuinely wants the name
-  string only.
-- `TypeExprRef` preserves the full structured `TypeExpr` through the bundle as
-  a `KObject::TypeExprValue`. Used by FN's return-type slot so parameterized
-  types like `List<Number>` survive the parser → dispatch boundary intact.
+`TypeExprRef` is the meta-type for argument slots that capture a parsed type-name
+token (`ExpressionPart::Type(_)`). The slot resolves to a
+`KObject::TypeExprValue(t)` carrying the full structured `TypeExpr` — name plus
+any nested parameters — so parameterized types like `List<Number>` survive the
+parser → dispatch boundary intact. Used by FN's return-type slot, by STRUCT and
+UNION's name slots, and by `type_call`'s verb slot. Slots that want only a bare
+name (STRUCT/UNION) check `TypeParams::None` on the inner expr and read `t.name`;
+the validation lives at the consuming builtin rather than at the slot kind.
 
 ## Function signatures
 

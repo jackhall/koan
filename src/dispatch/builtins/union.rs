@@ -3,15 +3,15 @@ use std::rc::Rc;
 
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, NoopResolver, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::types::parse_typed_field_list;
-use crate::parse::kexpression::KExpression;
+use crate::parse::kexpression::{KExpression, TypeParams};
 
 use super::{err, register_builtin};
 
-/// `UNION <name:TypeRef> = (<schema>)` (named) or `UNION (<schema>)` (anonymous).
+/// `UNION <name:TypeExprRef> = (<schema>)` (named) or `UNION (<schema>)` (anonymous).
 ///
 /// The schema slot is `KType::KExpression` — the user writes a parens-wrapped expression
 /// of repeated `<tag:Identifier> : <type:Type>` triples
@@ -41,7 +41,7 @@ pub fn body<'a>(
             )));
         }
     };
-    let fields = match parse_typed_field_list(&schema_expr, "UNION") {
+    let fields = match parse_typed_field_list(&schema_expr, "UNION", &NoopResolver) {
         Ok(f) => f,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
@@ -58,12 +58,22 @@ pub fn body<'a>(
     let union_obj: &'a KObject<'a> =
         arena.alloc_object(KObject::TaggedUnionType(Rc::new(schema)));
     if let Some(name_obj) = bundle.get("name") {
+        // `TypeExprRef`-typed slot resolves to `KObject::TypeExprValue(t)`. The name slot
+        // wants a bare leaf — reject parameterized forms like `Maybe<X>` here.
         let name = match name_obj {
-            KObject::KString(s) => s.clone(),
+            KObject::TypeExprValue(t) => match &t.params {
+                TypeParams::None => t.name.clone(),
+                _ => {
+                    return err(KError::new(KErrorKind::ShapeError(format!(
+                        "UNION name must be a bare type name, got `{}`",
+                        t.render(),
+                    ))));
+                }
+            },
             other => {
                 return err(KError::new(KErrorKind::TypeMismatch {
                     arg: "name".to_string(),
-                    expected: "TypeRef".to_string(),
+                    expected: "TypeExprRef".to_string(),
                     got: other.ktype().name().to_string(),
                 }));
             }
@@ -99,7 +109,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Type,
             elements: vec![
                 SignatureElement::Keyword("UNION".into()),
-                SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeRef }),
+                SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeExprRef }),
                 SignatureElement::Keyword("=".into()),
                 SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::KExpression }),
             ],

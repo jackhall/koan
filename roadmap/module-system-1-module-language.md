@@ -52,11 +52,11 @@ design doc describes a system whose only realization is the doc itself.
 
 ## Dependencies
 
-**Requires:**
-- [Stage 0 — Pre-module cleanup](module-system-0-cleanup.md) — vestigial-tag
-  removal, ordered struct values, centralized constructor dispatch, and a
-  scope-aware type-resolution path. Doing them up front keeps the
-  type-identity-carrier change here local rather than broad-rewrite.
+**Requires:** none. The pre-module cleanup (vestigial `KType::TypeRef` removal,
+ordered struct values, centralized constructor dispatch, and the `TypeResolver`
+trait threaded through `KType::from_type_expr`) is shipped substrate; the
+type-identity-carrier change here is now an additive change at the resolution
+path and dispatch table rather than a broad rewrite.
 
 **Unblocks:**
 - [Stage 2 — Functors](module-system-2-functors.md)
