@@ -15,6 +15,17 @@ This split is what lets the language reserve a syntactic slot for type names
 without quoting. `FN (x: Number) -> Str = (...)` works because `Number` and
 `Str` are recognizable as types from their shape alone.
 
+The [module system](module-system.md) widens the second class without adding
+a fourth: module names (`IntOrd`, `MakeSet`) and signature names (`Ordered`,
+`Showable`) are both capitalized-with-lowercase, so they share the
+type-reference class. The discrimination between "host type", "module", and
+"signature" happens at scope resolution, not at lex time — a `.`-compound on
+a module-class token resolves to module member access the same way a
+`.`-compound on a struct value resolves to a field read, and a
+module-qualified `IntOrd.t` in type position parses as a single structured
+`TypeExpr`. The new keywords stage 1 introduces (`MODULE`, `SIG`, `STRUCT`,
+`END`, etc.) stay in the all-caps class.
+
 ## `KType` — the runtime type system
 
 [`KType`](../src/dispatch/types/ktype.rs) has a variant for every concrete `KObject`:

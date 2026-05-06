@@ -107,8 +107,9 @@ traits, and trait-inheritance items below retire when stage 1 lands).
 
 - [Quote and eval sigils](roadmap/quote-and-eval-sigils.md) — no surface form to
   force-evaluate a metaexpression or suppress evaluation inside a dict/list literal.
-- [Module system and directory layout](roadmap/module-system.md) — a Koan codebase is one
-  file; no import, no module path, no project-level entry point.
+- [Files and imports](roadmap/files-and-imports.md) — a Koan codebase is one file;
+  no way for a `.koan` file to reach into another, and no story for how files become
+  modules.
 - [Other deferred surface items](roadmap/deferred-surface-items.md) — errors-as-values,
   catch-builtins, `RAISE`, source spans on `KExpression`, continue-on-error.
 

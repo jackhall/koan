@@ -49,7 +49,6 @@ parameterized containers in the same slots free functions do.
 **Unblocks:**
 - [Open issues from the leak-fix audit](leak-fix-audit.md)
 - [`TRAIT` builtin for structural typing](traits.md)
-- [Module system and directory layout](module-system.md)
 - [Static type checking and JIT compilation](static-typing-and-jit.md)
 
 Per-type identity is the prerequisite for the trait entries — methods are the natural

@@ -29,6 +29,26 @@ SRC_GLOBS = ("src/**/*.rs",)
 # no whitespace, no '#' fragment included in the resolved path.
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
+# `# Heading` — top-of-file H1, used to derive the canonical title of a doc.
+H1_RE = re.compile(r"^#\s+(.*?)\s*$")
+
+
+def read_h1_title(path: Path) -> str | None:
+    """Return the text of the first `# Heading` line in `path`, or None.
+
+    Used by `rewrite` to learn the canonical title of a renamed doc so it can
+    update visible link text alongside the path.
+    """
+    try:
+        with path.open(encoding="utf-8") as f:
+            for raw in f:
+                m = H1_RE.match(raw.rstrip("\r\n"))
+                if m:
+                    return m.group(1)
+    except (OSError, UnicodeDecodeError):
+        return None
+    return None
+
 
 @dataclass(frozen=True)
 class Link:
@@ -381,7 +401,7 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
 
-    by_resolved: dict[Path, tuple[Path, str, str]] = {}
+    by_resolved: dict[Path, tuple[Path, str, str, str | None]] = {}
     for raw in raw_pairs:
         try:
             old_disp, new_disp = _parse_mapping(raw)
@@ -396,22 +416,25 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
         if old_resolved in by_resolved:
             print(f"error: duplicate mapping for {old_disp}", file=sys.stderr)
             return 1
-        by_resolved[old_resolved] = (new_abs, old_disp, new_disp)
+        new_title = None if args.keep_text else read_h1_title(new_abs)
+        by_resolved[old_resolved] = (new_abs, old_disp, new_disp, new_title)
 
-    edits: dict[Path, list[tuple[int, str, str, str, str]]] = defaultdict(list)
+    edits: dict[Path, list[tuple[int, str, str, str, str, str, str]]] = defaultdict(list)
     for link in all_links():
         if link.resolved not in by_resolved:
             continue
-        new_abs, old_disp, new_disp = by_resolved[link.resolved]
+        new_abs, old_disp, new_disp, new_title = by_resolved[link.resolved]
         new_path_part = os.path.relpath(new_abs, link.source.parent)
         _, suffix = _split_target(link.target)
         new_raw = new_path_part + suffix
+        new_text = new_title if (new_title and new_title != link.text) else link.text
         old_substr = f"[{link.text}]({link.target})"
-        new_substr = f"[{link.text}]({new_raw})"
+        new_substr = f"[{new_text}]({new_raw})"
         if old_substr == new_substr:
             continue
         edits[link.source].append(
-            (link.line, old_substr, new_substr, old_disp, new_disp)
+            (link.line, old_substr, new_substr, old_disp, new_disp,
+             link.text, new_text)
         )
 
     if not edits:
@@ -423,13 +446,16 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
         items = edits[f]
         text = f.read_text(encoding="utf-8")
         lines = text.splitlines(keepends=True)
-        for lineno, old_sub, new_sub, _, _ in items:
+        for lineno, old_sub, new_sub, *_ in items:
             lines[lineno - 1] = lines[lineno - 1].replace(old_sub, new_sub, 1)
         if not args.dry_run:
             f.write_text("".join(lines), encoding="utf-8")
         verb = "would rewrite" if args.dry_run else "rewrote"
-        for lineno, _, _, old_disp, new_disp in items:
-            print(f"{rel(f)}:{lineno}: {verb} {old_disp} -> {new_disp}")
+        for lineno, _, _, old_disp, new_disp, old_text, new_text in items:
+            line = f"{rel(f)}:{lineno}: {verb} {old_disp} -> {new_disp}"
+            if old_text != new_text:
+                line += f" (text: {old_text!r} -> {new_text!r})"
+            print(line)
         total += len(items)
 
     suffix = " (dry-run)" if args.dry_run else ""
@@ -550,6 +576,11 @@ def main(argv: list[str] | None = None) -> int:
     p_rewrite.add_argument(
         "--dry-run", action="store_true",
         help="report rewrites without writing any files",
+    )
+    p_rewrite.add_argument(
+        "--keep-text", action="store_true",
+        help="preserve each link's visible text; otherwise the visible text is "
+             "replaced with the new file's H1 title when the two differ",
     )
     p_rewrite.set_defaults(func=cmd_rewrite)
 

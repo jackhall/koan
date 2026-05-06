@@ -65,3 +65,4 @@ dependency edge.
 **Unblocks:**
 - [Stage 2 — Functors](module-system-2-functors.md)
 - [Stage 4 — Property testing and axioms](module-system-4-axioms-and-generators.md)
+- [Files and imports](files-and-imports.md)
