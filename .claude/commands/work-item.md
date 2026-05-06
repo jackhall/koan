@@ -24,6 +24,8 @@ Steps 3, 4, and 5 each end with a user approval gate. They all follow the same s
 
 Do **not** present an agent's output and ask "should I proceed?" via text — always use AskUserQuestion. Do **not** add an explicit "Iterate" option — Other already serves that role.
 
+Individual steps may override the second explicit option (Abort) with a domain-specific exit when the gate's context calls for it (see Step 3 — the Plan gate replaces Abort with **Discuss language design**). The two-explicit-options-plus-Other-as-iterate shape is preserved.
+
 ## Workflow
 
 ### Preflight: clean working tree
@@ -60,12 +62,14 @@ Send: the roadmap item text + the doclinks refs output + paths to any `Requires:
 Agent(subagent_type=Plan, prompt=<above>)
 ```
 
-Then apply the **Approval gate template** with:
+Then apply the **Approval gate template** with one Step-3-specific override: at this gate the second explicit option is **Discuss language design** instead of Abort. Use:
 
 - `agent_output` = the Plan agent's full returned text.
 - `accept_label` = "proceed to implementation."
 - `iterate_action` = "re-spawn Plan with the user's feedback appended."
-- `abort_consequence` = "exit cleanly. Leave the plan file as a record."
+- Second explicit option = **Discuss language design** with consequence "exit cleanly and recommend running `/design $ARGUMENTS`. The roadmap item stays as-is; the user re-runs `/work-item $ARGUMENTS` after the design discussion captures the resolved direction."
+
+When the user picks **Discuss language design**: emit a one-line recommendation (`Run /design $ARGUMENTS to discuss, then re-run /work-item $ARGUMENTS once docs are updated.`) as your user-facing text and stop. Do not stash, do not commit, do not advance to step 4. Rationale: at the Plan gate no work has been done yet, so the original "exit cleanly, leave the plan file as a record" abort consequence is functionally identical to the design-escape exit — the user gets back to a clean state either way. Steps 4 and 5 keep their Abort options unchanged because those gates wrap real implementation/doc work that needs an explicit abort path.
 
 ### 4. Spawn the implementer agent
 
