@@ -48,11 +48,14 @@ thread in by searching scope. This is the ergonomic payoff of the design.
   error. Specificity rule: most-specific-wins, with unrelated ties as
   errors. See [the design doc's resolution dials
   table](../design/module-system.md#resolution-and-coherence-the-design-dials).
-- *Inference and search interleaving.* Modeled as `Infer` and
-  `ImplicitSearch` scheduler node types per the design doc. Stage 5 is where
-  the cross-language phase boundary stabilizes — inference produces type
-  refinements that search consumes; search produces module choices that
-  refine types other inference tasks are waiting on.
+- *Inference and search interleaving.* Modeled as scheduler work that
+  interleaves with dispatch and execution per
+  [design/module-system.md § Inference and search](../design/module-system.md#inference-and-search-as-scheduler-work);
+  whether the work ships as new node kinds (`Infer`, `ImplicitSearch`) or
+  reduces to existing `Execute` / `Dispatch` is resolved upstream by stage
+  1.5. Inference produces type refinements that search consumes; search
+  produces module choices that refine types other inference tasks are
+  waiting on.
 - *Higher-order restriction.* Implicit modules cannot themselves take
   implicit parameters. Decided up front; documented and enforced in this
   stage. This is the architectural simplification that keeps resolution
@@ -69,9 +72,10 @@ thread in by searching scope. This is the ergonomic payoff of the design.
 ## Dependencies
 
 **Requires:**
-- [Stage 1.5 — Scheduler integration](module-system-1.5-scheduler.md) —
-  modular implicits is the work that forces the `Infer` / `ImplicitSearch`
-  scheduler-node story stage 1.5 lands; this stage builds on top of it.
+- [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md) —
+  modular implicits ride on the dispatch and execution of module values that
+  stage 2 lands, and on the new-node-kinds-vs-reduction question stage 2
+  resolves for inference and implicit search.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)

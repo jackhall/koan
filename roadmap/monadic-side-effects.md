@@ -51,9 +51,11 @@ is scaffolding without a building.
 ## Dependencies
 
 **Requires:**
-- [Module system stage 2 — Functors](module-system-2-functors.md) — the in-language
-  `Monad` signature's `Wrap` slot is a higher-kinded abstract type, expressible only
-  with functor support.
+- [Module system stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
+  — the in-language `Monad` signature's `Wrap` slot is a higher-kinded
+  abstract type, expressible only with functor support.
+- [Standard library](standard-library.md) — the standard effect modules
+  (`Random`, `IO`, `Time`) ship as stdlib entries.
 
 **Unblocks:**
 - [Module system stage 4 — Property testing and axioms](module-system-4-axioms-and-generators.md)

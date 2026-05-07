@@ -93,10 +93,10 @@ module parameter, and the compiler infers and inserts a satisfying module at
 each call site. `sort {M : ORDERED} (xs: List<M.t>)` is an ordinary `FN` in
 the value language whose `M` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
-([stage 2](../roadmap/module-system-2-functors.md)) give the *module*
+([stage 2](../roadmap/module-system-2-scheduler.md)) give the *module*
 language the analog of the higher-order story this doc covers — a module
 parameterized by another module, applied generatively to produce fresh
 abstract types. See [module-system.md](module-system.md) for the full
-seven-stage plan; container type parameterization (`List<Number>`,
+plan; container type parameterization (`List<Number>`,
 `Function<(args) -> R>`, etc.) is shipped today and is documented in
 [type-system.md](type-system.md).

@@ -57,9 +57,10 @@ in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Stage 1.5 — Scheduler integration](roadmap/module-system-1.5-scheduler.md) —
-  `Infer` and `ImplicitSearch` scheduler nodes, the type-checking phase boundary,
-  multi-target unification, and a post-stage-1 Miri audit slate re-run.
+- [Stage 2 — Module values and functors through the scheduler](roadmap/module-system-2-scheduler.md) —
+  make module expressions, type expressions (with incremental refinement), and
+  functors full participants in the scheduler's free-execution model; carries
+  forward the post-stage-1 Miri audit slate.
 - [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
   — extend the `KType::ModuleType` per-declaration identity carrier to `STRUCT` and
   `UNION` so two distinct declarations report distinct types.
@@ -85,11 +86,10 @@ stage 1 shipped (the module language: `MODULE`/`SIG` declarators, `:|`/`:!`
 ascription, per-module type identity), and the remaining stages below land
 the rest incrementally, each producing a usable end state.
 
-- [Stage 1.5 — Scheduler integration](roadmap/module-system-1.5-scheduler.md) —
-  `Infer` and `ImplicitSearch` scheduler nodes, the type-checking phase boundary,
-  multi-target unification, and a post-stage-1 Miri audit slate re-run.
-- [Stage 2 — Functors](roadmap/module-system-2-functors.md) — parametric modules with
-  explicit application and sharing constraints.
+- [Stage 2 — Module values and functors through the scheduler](roadmap/module-system-2-scheduler.md) —
+  make module expressions, type expressions (with incremental refinement), and
+  functors full participants in the scheduler's free-execution model; carries
+  forward the post-stage-1 Miri audit slate.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.
@@ -119,6 +119,10 @@ the rest incrementally, each producing a usable end state.
 - [Error-handling surface follow-ups](roadmap/error-handling.md) — errors-as-values,
   source spans on `KExpression`, continue-on-error (independent), plus typed
   user errors and the catch surface (gated on module-system stage 2).
+- [Standard library](roadmap/standard-library.md) — collections (`Set`, `Map`,
+  …) and standard effect modules (`Random`, `IO`, `Time`) ship as Koan-source
+  functor FNs across multiple `.koan` files; doubles as the canonical example
+  of idiomatic module / signature / functor / import composition.
 
 ### Future-facing
 

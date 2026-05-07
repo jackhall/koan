@@ -228,7 +228,7 @@ the type-abstraction primitive, functors for parametric types, and modular
 implicits for inferred dispatch. Stage 1 (the module language and per-module
 type identity via `KType::ModuleType`) shipped and is described in the body
 above; the remaining stages live under
-[`roadmap/module-system-*.md`](../roadmap/module-system-2-functors.md).
+[`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
 - [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — inferred dispatch on signatures. Lands the multi-parameter dispatch the

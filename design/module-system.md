@@ -324,49 +324,55 @@ observation-declaration syntax are all decided alongside the stage-5 and
 stage-6 implementations — see
 [the syntax-tuning stage](../roadmap/module-system-7-syntax-tuning.md).
 
-## Compile-time scheduling
+## Inference and search as scheduler work
 
-Type inference and implicit search interleave: an implicit search needs the
-constrained types resolved before it can run, and the resolved implicit may
-in turn refine type variables that other inferences are waiting on. Both are
-modeled as **node types in the existing scheduler**, alongside the runtime
-`Dispatch` node described in [execution-model.md](execution-model.md):
+Type inference and implicit search interleave with dispatch and execution
+in the same scheduler. Inference of an expression may need an implicit
+search to resolve a parameter; the search may refine type variables that
+other inferences are waiting on; sub-expressions are dispatched and
+executed by the same engine. There is no separate type-checking pass.
+See [execution-model.md § Pegged and free execution](execution-model.md#pegged-and-free-execution) —
+build-time and run-time are the same engine, differing only in which nodes
+are pegged.
 
-- `Infer(expr, ctx)` — infers a type, may spawn sub-`Infer` nodes for
-  sub-expressions and `ImplicitSearch` nodes for implicit parameters.
-- `ImplicitSearch(sig, types, scope)` — finds an implicit module, depends on
-  `Infer` nodes for its constrained types, may itself refine type variables.
+Whether inference and search ship as **new node kinds** or **reduce to
+existing kinds** is open:
 
-This is the **weak metacircular** form: the same scheduler engine that runs
-Koan value-language work runs the type checker. The Rust code for `Infer` and
-`ImplicitSearch` node bodies is distinct from `Dispatch`'s, but the
-scheduling, dependency tracking, and cycle detection are shared. The strong
-form (compile-time tasks written in Koan and executed by the scheduler) is
-not a goal; the architecture leaves the door open without paying its
-bootstrapping cost.
+- *New node kinds.* `Infer(expr, ctx)` produces a type; `ImplicitSearch(sig,
+  types, scope)` produces a module choice. Distinct Rust bodies; shared
+  scheduling, dependency tracking, and cycle detection.
+- *Reduction to existing kinds.* `Infer` collapses to Execute against a
+  type-valued expression; `ImplicitSearch` collapses to Dispatch with an
+  implicit-aware candidate rule. The module language is value-language
+  reused, and the reduction would extend that reuse from the surface forms
+  to the inference engine itself.
 
-What this buys:
+The reduction is appealing for uniformity but needs more thought —
+particularly how Dispatch's candidate rule generalizes to "find a module
+satisfying this signature in lexical scope" without disturbing its
+value-dispatch behavior.
+
+What both options share:
 
 - **Cycle detection is uniform.** A cycle in implicit resolution and a
   runtime infinite loop are the same kind of bug to the scheduler.
-- **Topological ordering falls out.** "When is enough inference done to run
-  search?" is just "when this search task's dependencies have completed."
-- **Incremental compilation is a side effect.** If the scheduler memoizes
-  task results (a separate decision), recompilation only re-runs tasks
-  whose dependencies changed.
+- **Topological ordering falls out.** "When is enough inference done to
+  run search?" is just "when this search task's dependencies have
+  completed."
+- **Multi-target refinement.** A single inference task may refine many
+  type variables that downstream tasks are waiting on. Either thread a
+  shared substitution out-of-band, or model type variables as their own
+  scheduler nodes that get refined and woken up.
+- **Failure isolation.** When an inference or search fails, dependents
+  fail too — but independent subtrees still finish so the user sees
+  multiple errors per build rather than one at a time. Falls out of the
+  existing scheduler's error-propagation rules.
 
-What it requires the scheduler to grow into:
-
-- **Multi-target unification.** A single inference task may refine many type
-  variables that downstream tasks are waiting on. Either thread a shared
-  substitution out-of-band, or model type variables as their own nodes that
-  get refined and woken up.
-- **Phase boundary.** Type-checking must complete before evaluation begins
-  for a compilation unit. Whether this is one batch boundary or finer-grained
-  per-definition phase tracking is a design choice for stage 1.
-- **Failure isolation.** When an inference or search fails, dependents fail
-  too — but independent subtrees should still finish so the user sees
-  multiple errors per compile rather than one-at-a-time.
+This is the **weak metacircular** form: the same scheduler engine that
+runs Koan value-language work runs the type checker. The strong form
+(compile-time tasks written in Koan and executed by the scheduler) is not
+a goal; the architecture leaves the door open without paying its
+bootstrapping cost.
 
 ## Resolution and coherence: the design dials
 
@@ -414,16 +420,15 @@ flows through `LET` and ATTR like any other value, so a separate pack/unpack
 construct isn't needed; the remaining first-class-modules work folds into
 later stages — signature-bound dispatch (modules-as-values typed against a
 specific signature) is part of stage 5, and the static-signature-at-use-site
-obligation for the type checker is part of stage 1.5.)
+obligation for the type checker is part of stage 2.)
 
-- [Stage 1.5 — Scheduler integration](../roadmap/module-system-1.5-scheduler.md)
-  — `Infer` and `ImplicitSearch` scheduler nodes, the type-checking phase
-  boundary, and multi-target unification. Re-runs the
-  [memory-model audit slate](memory-model.md#verification) against
-  the post-stage-1 runtime plus the new scheduler nodes.
-- [Stage 2 — Functors](../roadmap/module-system-2-functors.md) — parametric
-  modules with explicit application and sharing constraints. Ships generic
-  data structures.
+- [Stage 2 — Module values and functors through the scheduler](../roadmap/module-system-2-scheduler.md)
+  — make module expressions, type expressions (with incremental refinement),
+  and functors full participants in the scheduler's free-execution model;
+  resolves the new-node-kinds-vs-reduction question above. Ships parametric
+  modules with explicit application and sharing constraints. Re-runs the
+  [memory-model audit slate](memory-model.md#verification) against the
+  post-stage-1 runtime plus any new unsafe sites this work introduces.
 - [Stage 4 — Property testing and axioms](../roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom
   syntax in signatures (`AXIOM #(...)` over quoted bool predicates);

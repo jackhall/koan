@@ -51,8 +51,9 @@ options:
   `LET` and pass as args. Substrate for the typed surface; needs the
   dispatcher to either short-circuit through error-typed slots or splice
   errors into them.
-- *`Result<T, E>` as a functor.* Lives with [stage 2](module-system-2-functors.md);
-  the typed user-error work is gated on it shipping.
+- *`Result<T, E>` as a functor.* Lives with
+  [stage 2](module-system-2-scheduler.md); the typed user-error work is
+  gated on it shipping.
 - *Catch-builtins.* The match-form surface. Pattern arms over selected
   `KErrorKind` variants and over the user-error type's variants, with
   unmatched arms propagating. Requires errors-as-values and `Result<T, E>`.
@@ -68,10 +69,10 @@ options:
 ## Dependencies
 
 **Requires:**
-- [Stage 2 — Functors](module-system-2-functors.md) — `Result<T, E>` is a
-  functor-produced module; the catch-builtin and `RAISE` items consume it.
-  Errors-as-values, source spans, and continue-on-error can ship before
-  stage 2.
+- [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
+  — `Result<T, E>` is a functor-produced module; the catch-builtin and
+  `RAISE` items consume it. Errors-as-values, source spans, and
+  continue-on-error can ship before stage 2.
 
 **Unblocks:**
 - (none)

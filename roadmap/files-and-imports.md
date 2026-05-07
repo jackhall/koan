@@ -70,10 +70,11 @@ another. This item closes that gap.
 
 **Requires:**
 
-**Unblocks:** none directly — this item is about wiring source files into
-the language, and downstream features (effects, the eventual checker) use
-whatever loader exists at the time.
+**Unblocks:**
+- [Standard library](standard-library.md) — the stdlib lives across
+  multiple `.koan` files; user code needs an import surface to load them.
 
-Mostly orthogonal to the effect and error work — the file loader uses
-whatever `BuiltinFn` signature exists at the time. Lands cleanly any time
-after the module language is in place.
+Otherwise mostly orthogonal to the effect and error work — the file loader
+uses whatever `BuiltinFn` signature exists at the time, and downstream
+features (effects, the eventual checker) use whatever loader exists at
+the time. Lands cleanly any time after the module language is in place.

@@ -96,22 +96,49 @@ chains have no finalize trigger that would collapse them into a direct
 Linear in call count, not multiplicative in body size; closing it would need
 either path compression in `read_result` or a post-execute pass.
 
+## Pegged and free execution
+
+Koan code is built once and run many times, but build-time and run-time are
+the same engine — the scheduler from this document runs both. The only
+difference is that some nodes' results depend on data or effects unavailable
+at build time, and those nodes are **pegged** — held without execution
+until the data or effect arrives. Build-time runs the scheduler against
+the full DAG; nodes that are not pegged execute (and produce values, refine
+types, spawn dependents) freely; the run halts at the pegged frontier.
+Run-time supplies the inputs and effects, unblocks the pegged nodes, and
+the scheduler resumes — same machinery, no new pass.
+
+- **Nodes pegged at build time:** user-supplied input; source files for
+  plugins not available at build time; syscalls in builtins; network calls.
+- **Nodes that execute freely at build time:** source files available at
+  build time; entropy/randomness used for property-test axiom checking and
+  cross-implicit equivalence checking.
+
+The intermediate representation is the **stalled DAG state** — the
+scheduler's `nodes` / `results` arrays at the free-execution fixed point,
+plus the identifiers of pegged nodes. Run-time consumes that state
+directly: skip parsing, supply the pegged inputs and effects, continue
+running the scheduler.
+
+There is no separate type-checking phase preceding evaluation. Inference,
+dispatch, and execution interleave in one DAG; build-time is the same
+engine running before pegged inputs are unblocked.
+
 ## Open work
 
-- **Compile-time scheduling for the type checker**
-  ([module-system.md § Compile-time scheduling](module-system.md#compile-time-scheduling)).
-  The [module system](module-system.md) adds two new node types alongside
-  `Dispatch` — `Infer(expr, ctx)` for type inference and
-  `ImplicitSearch(sig, types, scope)` for modular-implicit resolution.
-  Inference and search interleave (search needs constrained types resolved;
-  resolved implicits refine type variables that other inferences are waiting
-  on), and the existing scheduler's dependency tracking and cycle detection
-  carry both. Module-system stage 1 shipped the surface forms (`MODULE`,
-  `SIG`, opaque/transparent ascription) without the inference scheduler;
+- **Inference and search as scheduler work**
+  ([module-system.md § Inference and search](module-system.md#inference-and-search-as-scheduler-work)).
+  The [module system](module-system.md) needs a story for how type
+  inference and modular-implicit resolution interleave with dispatch and
+  execution. Both must be expressible in the same scheduler that runs
+  value-language work. Whether they ship as new node kinds (`Infer`,
+  `ImplicitSearch`) or reduce to existing kinds — `Infer` collapsing to
+  Execute against type-valued expressions, `ImplicitSearch` collapsing to
+  Dispatch with an implicit-aware candidate rule — is open. Module-system
+  stage 1 shipped the surface forms (`MODULE`, `SIG`, opaque/transparent
+  ascription) without inference;
   [Stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
-  is where the scheduler grows multi-target unification and a
-  type-check-vs-evaluation phase boundary, since implicit resolution is what
-  forces the question.
+  is what forces a concrete answer.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

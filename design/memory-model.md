@@ -176,13 +176,14 @@ nested user-fn frames each handle their own subtree at their own finalize.
   arena-unsafe-site tests plus the cycle-gate regression all pass under
   `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit leaks,
   signing off the memory model as it stands today.
-  [Module-system stage 1.5](../roadmap/module-system-1.5-scheduler.md) re-runs
-  the slate once the scheduler grows `Infer` and `ImplicitSearch` nodes, since
-  stage 1 plus those new nodes reshape the runtime that the slate signed off
-  against.
+  [Module-system stage 2](../roadmap/module-system-2-scheduler.md) re-runs
+  the slate once the module language and functors flow through the scheduler
+  end-to-end, since the new unsafe sites that work introduces reshape the
+  runtime that the slate signed off against.
 
 ## Open work
 
-- [Module system stage 1.5 — Scheduler integration](../roadmap/module-system-1.5-scheduler.md)
-  — re-run the audit slate after module-system stage 1 plus the new
-  `Infer` / `ImplicitSearch` scheduler nodes reshape the memory model.
+- [Module system stage 2 — Module values and functors through the scheduler](../roadmap/module-system-2-scheduler.md)
+  — re-run the audit slate against the post-stage-1 runtime plus any new
+  unsafe sites that landing modules-and-functors through the scheduler
+  introduces.

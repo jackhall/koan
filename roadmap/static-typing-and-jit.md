@@ -50,11 +50,13 @@ is the same phase emitting code.
 ## Dependencies
 
 **Requires:**
-- [Module system stage 1.5 — Scheduler integration](module-system-1.5-scheduler.md)
-  — module-system stage 1 plus stage 1.5's `Infer` / `ImplicitSearch` scheduler
-  nodes reshape the memory model, and the stage-1.5 audit slate re-run is what
-  re-establishes the sign-off the checker's lifetime story and the JIT's
-  codegen contract both want to target.
+- [Module system stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
+  — module-system stage 1 plus stage 2's module-and-functor work reshapes the
+  memory model, and the stage-2 audit slate re-run is what re-establishes the
+  sign-off the checker's lifetime story and the JIT's codegen contract both
+  want to target. Stage 2 also resolves the new-node-kinds-vs-reduction
+  question for inference and implicit search, which the checker's IR shape
+  depends on.
 - [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
   the type system has to be structurally complete before the checker is designed
   against it. Stage 5 is the latest stage that introduces new shapes the checker has
