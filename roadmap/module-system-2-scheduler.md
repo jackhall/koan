@@ -10,13 +10,13 @@ substrate now lands too: scheduled type-constructor builtins (`LIST_OF`,
 use, and a [`ScopeResolver`](../src/dispatch/types/resolver.rs) lowers
 `TypeExprValue` bindings in `Scope::data` so a `LET MyList = (LIST_OF Number)`
 binding makes `MyList` available as a type name in subsequent FN signatures.
-What this substrate does not yet support: FN-def's parameter-list parser still
-treats type-position parts as `ExpressionPart::Type` tokens at parse time
-rather than as scheduled sub-expressions, so a top-level `LET MyType =
-(LIST_OF Number)` followed by `FN (USE xs: MyType)` doesn't work end-to-end —
-the FN dispatches before the LET's Bind resolves, and parameterized type
-expressions can't be assembled by sub-expression evaluation inside FN's
-parameter list. Functors aren't dispatchable end-to-end at all: there is no
+What this substrate does not yet support: parens-wrapped type expressions
+in FN parameter positions (`xs: (LIST_OF Number)`) aren't sub-dispatched,
+and FN-def's `ScopeResolver` lookup gives up rather than deferring when a
+type identifier isn't yet bound — so a non-LET-wrapped FN that references
+an earlier `LET MyType = (LIST_OF Number)` fails, and a signature-typed
+parameter naming a SIG that's only in scope at the call site has no path
+to resolve. Functors aren't dispatchable end-to-end at all: there is no
 `KType::SignatureBound` slot kind, no `KType::TypeConstructor`, no
 `TypeParams::Named` for sharing constraints, and no generative-application
 semantics that mints fresh abstract types per call. Meanwhile the
@@ -74,25 +74,26 @@ sub-Dispatches. Functor surface and sharing-constraint syntax are
 decided in the design doc; the remaining functor implementation choices
 are below.
 
-- *Aggregate-of-type-expressions in FN-def — open.* The type-builtin
-  substrate (`LIST_OF`, `DICT_OF`, `FUNCTION_OF`, `MODULE_TYPE_OF` plus
-  `ScopeResolver`) lets a parameterized type expression be assembled by
-  sub-dispatch in any context that already evaluates expressions. FN-def's
-  parameter-list parser, however, still consumes type-position parts as
-  `ExpressionPart::Type` tokens at parse time. Closing the gap requires
-  FN-def to schedule each parameter type as an Aggregate-of-type-
-  expressions sub-task whose result is a `KType` and whose Bind tightens
-  the parameter slot once the sub-task completes. Once landed, an
-  `elaborate_type_expr` helper falls out as the shared entry point.
-- *Top-level statement ordering for type-dependent declarations.* A
-  top-level `LET MyType = (LIST_OF Number)` followed by `FN (USE xs:
-  MyType)` doesn't work today because the LET becomes a Bind waiting on a
-  sub-Dispatch and the next top-level statement (the FN) runs before the
-  Bind resolves. Two directions: sequence top-level statements as
-  scheduler dependencies of one another, or hoist parameterized type-
-  expression evaluation ahead of FN-body execution. Either threads through
-  the Aggregate-of-type-expressions item above; pick the one whose shape
-  generalizes to functor-body type expressions.
+- *Type resolution in FN signatures — decided.* No new top-level
+  sequencing primitive, no parallel type-resolution pass. The existing
+  FIFO + `Bind` discipline that gives `LET x = ...; PRINT x` source-order
+  semantics for values gives the same for types, *if* FN-def's signature
+  elaboration rides on the same machinery. Two changes:
+  - **Parens-wrapped type expressions sub-dispatch.** A parameter
+    position written `xs: (LIST_OF MyType)` schedules the parens-wrapped
+    part as a sub-Dispatch; its `KObject::TypeExprValue` result splices
+    in via the standard `Bind` path. An `elaborate_type_expr` helper in
+    `src/dispatch/types/resolver.rs` is the shared entry point.
+  - **Bare type identifiers resolve hybrid.** FN-def attempts synchronous
+    resolution at body time via the existing `ScopeResolver`. Resolved
+    slots land in the resulting `KFunction` as ordinary `KType`s.
+    Unresolved slots carry the original `TypeExpr` on the KFunction; the
+    first call re-runs resolution against the FN's captured scope and
+    memoizes the result (one `OnceCell<KType>` per slot, sound because
+    the captured scope is lexically fixed). This covers the realistic
+    LET-wrapped FN cases (resolution succeeds at body time via FIFO) and
+    the late-binding cases — signature-typed parameters, mutually
+    recursive type references — without a new scheduler primitive.
 - *Functor declaration syntax — decided.* Functors are FNs whose
   parameters are signature-typed and whose body returns a `MODULE`
   expression. No `FUNCTOR` keyword.
