@@ -12,10 +12,12 @@ prerequisites and the items it unblocks.
 
 Design rationale for what's already in the language lives in [design/](design/) — six
 topical docs covering the execution model, memory model, functional programming, type
-system, expressions and parsing, and error handling. A seventh design doc,
-[design/module-system.md](design/module-system.md), captures the module-based
-abstraction system end-to-end; stage 1 (the module language) shipped, and the
-remaining six stages live as `module-system-*` roadmap items below. What's
+system, expressions and parsing, and error handling. Two further design docs capture
+cross-cutting work in flight: [design/module-system.md](design/module-system.md) — the
+module-based abstraction system end-to-end (stage 1 shipped, remaining stages tracked
+as `module-system-*` roadmap items below) — and [design/effects.md](design/effects.md)
+— in-language monadic side effects (implementation tracked in
+[roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md)). What's
 shipped so far: user-defined functions, the dispatch-as-node scheduler refactor,
 first-cut tail-call optimization, the leak fix (with lexical closures + per-call
 arenas), structured error propagation, the user-defined-types substrate (return-type
@@ -55,10 +57,14 @@ in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
-  — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
-  needs a uniform carrier. (Previously a soft prerequisite of transient-node reclamation;
-  now decoupled — reclamation shipped without touching `BuiltinFn`.)
+- [Stage 1.5 — Scheduler integration](roadmap/module-system-1.5-scheduler.md) —
+  `Infer` and `ImplicitSearch` scheduler nodes, the type-checking phase boundary,
+  multi-target unification, and a post-stage-1 Miri audit slate re-run.
+- [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
+  — extend the `KType::ModuleType` per-declaration identity carrier to `STRUCT` and
+  `UNION` so two distinct declarations report distinct types.
+- [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
+  codebase can span more than one source file and files become modules.
 - [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
   only when the next feature would multiply existing duplication.
 
@@ -67,8 +73,10 @@ without first landing something else:
 ### Memory and runtime substrate
 
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
-  — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
-  needs a uniform carrier.
+  — replace the ad-hoc `Box<dyn Write>` with an in-language `Monad` signature
+  (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
+  ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
+  stage 2's functor support so the `Wrap` slot can be higher-kinded.
 
 ### Module system
 

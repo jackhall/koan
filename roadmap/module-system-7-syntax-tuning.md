@@ -18,8 +18,10 @@ breaks no existing programs.
   placeholder. Routine disambiguation stops being a tax on the cases where
   coherence checking can't silently pick.
 - *Deductive coherence as an opt-in.* Witness types reflect the implicit's
-  identity as a phantom on the abstract type — distinct phantoms produce
-  distinct types, and the type system enforces non-mixing. Users who want
+  identity as a module-kind slot on the type constructor (see
+  [design/module-system.md](../design/module-system.md#parameterized-type-expressions))
+  — distinct module values bound to that slot produce distinct types, and
+  the type system enforces non-mixing. Users who want
   stronger-than-probabilistic certainty get it, at the cost of a slightly
   more verbose type, while everyone else keeps stage 6's behavior.
 
@@ -34,11 +36,12 @@ breaks no existing programs.
   fixes the form against the patterns of use. May coincide with the
   block-scoped binding form (block applies to many calls; explicit applies
   to one).
-- *Witness type encoding.* Reflect the implicit's identity as a phantom
-  type parameter on the abstract type — `Set<Number>` becomes
-  `Set<Number, IntOrd>` when `IntOrd` is the implicit used. Distinct
-  phantoms means distinct types means cannot mix. Type inference must
-  elide the phantom in source so users only write it when they want.
+- *Witness type encoding.* The type constructor declares a module-kind
+  slot whose value carries through type identity — `Set<Elt: Number>`
+  becomes `Set<Elt: Number, Ord: IntOrd>` when `IntOrd` is the implicit
+  used. Distinct module values means distinct types means cannot mix.
+  Type inference must elide the module-kind slot in source so users only
+  write it when they want.
 - *Opt-in mechanism for witness types.* Witness types are not the default.
   A signature marks itself as participating (concrete syntax tbd) and
   consumers of that signature carry the phantom. The decision is

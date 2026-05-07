@@ -16,46 +16,48 @@ is scaffolding without a building.
 
 **Impact.**
 
-- *Uniform effect inspection.* One channel captures every kind of effect a builtin
-  performs — file IO, time, randomness, network access — instead of each new effect
-  requiring its own bespoke testing seam the way `PRINT`'s writer-swap does today.
-- *Mocking and replay.* A test or replay handler feeds recorded effect results back to
-  a program, making deterministic replay (feed a recorded trace, get the same output)
-  mechanically possible.
-- *Pure/effectful boundary.* The language can tell whether an expression is referentially
-  transparent — unlocking memoization, reordering, and parallelism for the scheduler in
-  cases where no effect is in play.
-- *Explicit effect ordering.* Effects become declarative — "this expression's effect is
-  X, sequenced after Y" — rather than dropping out of the scheduler's operational order.
+- *Uniform effect interface in-language.* Koan code expresses every effect through one
+  `Monad` signature ([design/effects.md](../design/effects.md)) rather than each effect
+  having its own bespoke surface.
+- *Mocking and replay become a module swap.* A test feeds an alternate `Random` or `IO`
+  module; deterministic replay (recorded trace, identical re-run) drops out
+  mechanically.
+- *Pure/effectful boundary is visible.* A function whose parameter list contains no
+  `Monad`-kind module is referentially transparent — unlocking memoization, reordering,
+  and parallelism for the scheduler in cases where no effect is in play.
+- *Substrate for stage 4.* Module-system stage 4's generators thread randomness via the
+  `Random` effect module; this work is what makes that possible.
 
-**Directions.** None of these are decided.
+**Directions.** None decided.
 
-- *Effect type.* Probably an enum: `Effect::Output(Vec<u8>)`, `Effect::Read(handle)`,
-  `Effect::Now`, `Effect::Random`, plus a catch-all for builtins to declare custom
-  effects. Open question: enumerated (closed set, easy to handle exhaustively) vs
-  trait-object (`Box<dyn Effect>`, extensible by user code if/when user-defined functions
-  can declare their own effects).
-- *Carrier shape.* `BuiltinFn` returns not a bare `&'a KObject<'a>` (or `Result<...>`
-  after the error-handling item) but an `Effectful<T>` carrier — a value paired with a
-  list of pending effects. `Effectful` implements `Monadic`: `pure(v)` is `(v, [])`,
-  `bind` concatenates effect lists. This is the long-promised second `Monadic` impl the
-  trait's doc comment is waiting for.
-- *Handler in `Scope`.* `Scope::out` becomes `Scope::handler: Box<dyn EffectHandler>`. The
-  handler decides what to do with each `Effect` as the interpreter drains them: a default
-  handler actually performs them (write to stdout, read the clock); a test handler
-  captures them into a vec; a replay handler feeds results from a pre-recorded trace.
-- *Drainage points.* Effects can either be performed eagerly (handler runs them as each
-  builtin returns) or lazily (collected up the tree and run in batches at top-level
-  expression boundaries). Eager is simpler and matches today's behavior; lazy unlocks
-  reordering and is closer to the "monad transformer stack" shape this is converging on.
-  Pick one explicitly rather than letting it emerge.
+- *In-language `Monad` signature.* Defined in [design/effects.md](../design/effects.md).
+  Implementation lands the signature, the `Wrap` higher-kinded slot, and `pure` /
+  `bind`. Requires module-system stage 2's functor support so `Wrap` can be a
+  higher-kinded abstract type slot.
+- *Standard effect modules.* `Random`, `IO`, `Time`, plus existing `PRINT`-emitting
+  builtins folded into `IO`. Each ascribes the `Monad` signature plus per-effect
+  operations.
+- *Runtime carrier.* `BuiltinFn` returns an `Effectful<T>` carrier — a value paired with
+  pending effects. `Effectful` is the second `Monadic` impl the trait's doc comment is
+  waiting for, and it bridges the in-language `Monad` signature and the runtime's
+  effect drainage path.
+- *Handler in `Scope`.* `Scope::out` becomes `Scope::handler: Box<dyn EffectHandler>`.
+  Handlers decide what to do with each pending `Effect`: default performs them, test
+  captures them into a vec, replay feeds from a pre-recorded trace.
+- *Drainage points.* Eager (handler runs effects as each builtin returns) or lazy
+  (collected up the tree, run at top-level boundaries). Eager is simpler; lazy unlocks
+  reordering. Pick one explicitly.
 
 ## Dependencies
 
-No hard prerequisites; no remaining items downstream. Transient-node reclamation
-(originally listed as downstream of this work) shipped independently — the
-reclamation work was scheduler-internal and didn't need to share a `BuiltinFn`
-signature pass.
+**Requires:**
+- [Module system stage 2 — Functors](module-system-2-functors.md) — the in-language
+  `Monad` signature's `Wrap` slot is a higher-kinded abstract type, expressible only
+  with functor support.
+
+**Unblocks:**
+- [Module system stage 4 — Property testing and axioms](module-system-4-axioms-and-generators.md)
+  — generators thread randomness via the `Random` effect module.
 
 `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the error item added
 a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three churning passes

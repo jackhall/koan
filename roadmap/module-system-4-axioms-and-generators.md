@@ -27,25 +27,31 @@ independent of signatures.
   property-testing tool for ordinary Koan code, useful even where no
   signature is involved.
 
-**Directions.** None decided.
+**Directions.** Surface syntax decided in
+[design/module-system.md](../design/module-system.md#axioms-and-property-testing);
+implementation choices below.
 
 - *Engine location.* Rust-side, structured as a self-contained subsystem
   separate from the dispatcher and scheduler. Two reasons for the separation:
   the engine is reusable as a general testing tool, and keeping it out of
-  dispatch keeps the dispatcher and scheduler simple. The engine sees axioms
-  and types but not modules per se — invocation at ascription is the
-  integration point, not a coupling at the implementation level.
-- *Axiom syntax in signatures.* `axiom name : forall x. property` is the
-  shape; concrete syntax follows stage 1's keyword conventions.
-- *Generators are not part of signatures.* The design deliberately keeps
-  generators out of the module language. The engine ships generators for
-  built-ins (`Number`, `Str`, `Bool`, `List<T>`, `Dict<K, V>`, etc.) by
-  composition; user-type generators are registered alongside the type via the
-  engine's public surface, not via signature declarations.
-- *Missing-generator policy.* When a signature axiom quantifies over a type
-  with no available generator, axiom checking is skipped with a diagnostic.
-  Whether this is a warning (default) or an error (opt-in stricter mode) is a
-  design dial.
+  dispatch keeps the dispatcher and scheduler simple. The engine sees
+  quoted axioms and the module's `gen` slot — invocation at ascription is
+  the integration point, not a coupling at the implementation level.
+- *Axiom syntax — decided.* `(AXIOM #(quoted bool predicate))` inside a
+  `SIG` body. The engine evaluates each quote under a scope it builds by
+  drawing samples from the module's `gen` slot for every free identifier;
+  variable types resolve through the surrounding signature scope. The
+  `IMPLIES` combinator handles conditional axioms via discard.
+- *Generators live in modules — decided.* A `LET gen = (FN ...)` slot in a
+  signature body is a structural obligation. Every ascribing module must
+  supply a generator for the abstract type. No sidecar generator registry.
+  Generators compose through functor application: a functor body builds
+  the result module's `gen` from its parameter's `gen`.
+- *Built-in type generators.* The engine ships `Random`-using generators
+  for `Number`, `Str`, `Bool`, `List<T>`, `Dict<K, V>`, etc. — these are
+  the leaves of the composition story.
+- *Missing-generator policy.* The structural-conformance check at
+  ascription rejects modules without a `gen` slot; nothing to skip silently.
 - *Counterexample shrinking.* The engine should shrink to a minimal failing
   case where the generator infrastructure permits. Standard
   property-testing technique; pick a shrinking algorithm.
@@ -56,10 +62,13 @@ independent of signatures.
 ## Dependencies
 
 **Requires:**
+- [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
+  — generators thread randomness via the `Random` effect module rather than
+  ambient entropy.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
 
 The engine is independent of implicit dispatch and could be developed in
-parallel with stages 2-3 — its integration point is the module language's
+parallel with stage 5 — its integration point is the module language's
 ascription site, which is already in place.

@@ -70,70 +70,127 @@ newtype-with-private-fields pattern that a trait system would need.
 
 ## Functors
 
-A **functor** is a module parameterized by another module — the mechanism for
-generic data structures:
+A **functor** is a module parameterized by another module — a function from
+modules to modules. Since modules are first-class values, functors are
+ordinary FNs whose parameters are signature-typed and whose body returns a
+`MODULE` expression:
 
 ```
-functor MakeSet (E : ORDERED) -> SET = struct
-  type elt = E.t
-  type t   = ...
-  ...
-end
+LET MakeSet = (FN (MAKESET E: OrderedSig) -> SetSig = (
+  MODULE Result = (
+    (LET Type = ...)
+    (LET insert = (FN (INSERT s: Type x: E.Type) -> Type = ...))
+    ...
+  )
+))
 
-module IntSet = MakeSet(IntOrd)
+LET IntSet = (MAKESET IntOrd)
 ```
 
-Functors are applied **explicitly** at this layer; modular implicits at the
-later layer make most applications implicit. Sharing constraints (`with type`)
-let a signature refine an abstract type at the use site:
+`MODULE Name = (...)` is itself an expression: it both binds `Name` in the
+enclosing per-call scope and evaluates to the module value, so the functor
+body needs no separate "anonymous structure" form. The bound name (`Result`
+above) lives only inside the call frame.
 
-```
-functor MakeSet (E : ORDERED) -> SET with type elt = E.t = (...)
-```
+Functor application is **generative**: each call evaluates the body afresh,
+and any inner `:|` mints fresh `KType::ModuleType` slots. `(MAKESET IntOrd)`
+applied twice yields two distinct `Set` types that cannot be confused.
+Generativity is a consequence of `:|`-per-call, not a separate mechanism.
 
-Functor application is **generative**: each call produces a fresh abstract
-type. `MakeSet(IntOrd)` applied twice yields two distinct `Set` types that
-cannot be confused. This is the mechanism by which the type system gives
-distinct types to distinct module instantiations.
+Sharing constraints — pinning a functor's output abstract type to its input
+— ride on the named-slot syntax for parameterized type expressions described
+in [Parameterized type expressions](#parameterized-type-expressions). A
+functor whose return type is `SetSig<Elt: E.Type>` declares the constraint
+at the FN's return slot. There is no separate `with type` keyword.
+
+Multi-argument functors are ordinary multi-parameter FNs. Currying is just
+nested FNs.
 
 ## First-class modules
 
-Modules are values: they can be packed into a value of module type, passed to
-functions, returned from functions, and unpacked back into the module language.
-This is what the rest of the design rests on — the substrate for modular
-implicits is "modules can be passed around as values."
+Modules are values: `KObject::KModule` flows through `LET`, ATTR, and
+function calls like any other value. There is no separate pack/unpack form,
+no `(module M)` construction syntax, and no `(val m)` projection. A module
+named in expression position evaluates to its value, and `m.compare` is
+ordinary attribute access.
+
+Module-typed bindings reuse the existing ascription operators:
 
 ```
-let m : (module ORDERED with type t = Number) = (module IntOrd)
-let module M = (val m) in M.compare(1, 2)
+LET m = (IntOrd :! OrderedSig)   -- transparent: m.Type ≡ Number
+LET m = (IntOrd :| OrderedSig)   -- opaque:      m.Type is fresh
 ```
 
-The unpacked types are abstract and fresh on each unpack, just as with
-generative functor application.
+`:!` and `:|` are the typing primitives. There is no third
+`LET m: OrderedSig = IntOrd` form — it would express only the transparent
+case and would be strictly less expressive than the operators that already
+exist.
+
+FN parameters and return types accept signature names directly. The
+constrained-signature case (`OrderedSig<Type: Number>`) uses the named-slot
+machinery in [Parameterized type expressions](#parameterized-type-expressions).
+
+## Parameterized type expressions
+
+The `<>` machinery shipped for `List<T>`, `Dict<K, V>`, and
+`Function<(args) -> R>` extends to carry sharing constraints, signature
+constraints on implicit-parameter types, and witness-typed instantiations.
+Three extensions to the shipped surface
+([type-system.md](type-system.md#container-type-parameterization)):
+
+- **Named slots.** `OrderedSig<Type: Number>` pins the abstract `Type` slot
+  of a signature to `Number`. `Set<Elt: Number, Ord: IntOrd>` does the same
+  for a parameterized type constructor with multiple slots. Named binding
+  uses the same `name: value` shape FN parameters use, just inside `<>`.
+  Positional fill is accepted when slot order is unambiguous.
+- **Type-valued expressions.** `<>` slots accept any expression that
+  evaluates to a `KType` or `KModule`, not only bare type-name tokens.
+  `List<M.Type>` is an ATTR access yielding the abstract type of module
+  `M`. The slot's declared kind decides what the engine expects.
+- **Module-kind slots.** Type constructors can declare slots that take
+  modules. `Set<Elt: Number, Ord: IntOrd>` works because `Set`'s second
+  slot is declared `OrderedSig`-kind. Distinct module values bound to the
+  same slot give distinct concrete types — the mechanism behind witness
+  types in stage 7.
+
+Sharing constraints, modular-implicit signature constraints, and witness
+types share this one notation. The implicit *marker* itself (which
+parameter is implicit) is orthogonal — see
+[Modular implicits](#modular-implicits).
 
 ## Modular implicits
 
 A function can declare an **implicit module parameter**:
 
 ```
-fun sort {M : ORDERED} (xs: List<M.t>) -> List<M.t> = (...)
+LET sort = (FN (SORT xs: List<M.Type> {M: OrderedSig}) -> List<M.Type> = (...))
 ```
 
-At a call site `sort([3, 1, 2])`, the compiler infers `M.t = Number`, searches
-in scope for a module satisfying `ORDERED with type t = Number`, and inserts
-it. Searching is **lexical**: the candidate set is the implicit modules
-defined in the current module plus those explicitly imported. Nothing leaks
-through transitive dependencies.
+At a call site `(SORT [3, 1, 2])`, the compiler infers `M.Type = Number`,
+searches in scope for a module satisfying `OrderedSig<Type: Number>`, and
+inserts it. Searching is **lexical**: the candidate set is the implicit
+modules defined in the current module plus those explicitly imported.
+Nothing leaks through transitive dependencies.
 
-Specificity is the standard rule: more-specific candidates beat less-specific
-ones; ties between unrelated candidates are an error. The disambiguation
-primitive when ambiguity arises is **explicit module application** at the
-call site — the user names which candidate to use. Surface syntax for both
-implicit-parameter declaration and explicit application is TBD; a placeholder
-form (`{...}`) is used in this doc for illustration only and is decided
-alongside the stage-5 implementation. Sugar (block-scoped binding, module
-priority, selective imports) lands later, after enough real code has been
-written to know which patterns are common. See
+Specificity is the standard rule: more-specific candidates beat
+less-specific ones; ties between unrelated candidates are an error. The
+disambiguation primitive when ambiguity arises is **explicit module
+application** at the call site — the user names which candidate to use.
+
+Two surface forms remain TBD and are decided alongside the stage-5
+implementation: the implicit-parameter marker (`{...}` is a placeholder
+above) and the **explicit-application form** — the lowest-level surface
+for naming a candidate at the call site to break an ambiguity. No
+strawman has been picked; examples below and in the
+[equivalence-checking section](#cross-implicit-equivalence-checking) that
+read OCaml-shaped (`with type t = ...`, `module type ... = sig ... end`,
+`observation ... via ...`) are pre-Koan placeholders awaiting design.
+The constraint half — the signature expression to the right of `:` —
+uses the named-slot machinery described in
+[Parameterized type expressions](#parameterized-type-expressions). Sugar
+(block-scoped binding, module priority, selective imports) lands later,
+after enough real code has been written to know which patterns are
+common. See
 [the syntax-tuning stage](../roadmap/module-system-7-syntax-tuning.md).
 
 ### Higher-order restriction
@@ -149,43 +206,69 @@ modular-implicits proposal.
 
 ## Axioms and property testing
 
-A signature can carry **axioms** — propositional contracts on its operations:
+A signature can carry **axioms** — propositional contracts on its
+operations:
 
 ```
-module type ORDERED = sig
-  type t
-  val compare : (t, t) -> Number
+SIG OrderedSig = (
+  (LET Type = ...)
+  (LET compare = (FN (COMPARE x: Type y: Type) -> Number = ...))
+  (LET gen = (FN (GEN r: Random) -> Type = ...))
 
-  axiom reflexive    : forall x.     compare(x, x) = 0
-  axiom antisymmetric: forall x y.   sign(compare(x, y)) = -sign(compare(y, x))
-  axiom transitive   : forall x y z.
-    compare(x, y) <= 0 -> compare(y, z) <= 0 -> compare(x, z) <= 0
-end
+  (AXIOM #((compare x x) = 0))
+  (AXIOM #((sign (compare x y)) = (- (sign (compare y x)))))
+  (AXIOM #(IMPLIES (and (<= (compare x y) 0) (<= (compare y z) 0))
+                   (<= (compare x z) 0)))
+)
 ```
 
-When a structure ascribes a signature with axioms, the compiler runs each
-axiom against random samples. Failures are ascription errors with a reported
-counterexample (and shrunk to a minimal case where the engine permits). This
-catches *invalid* implementations mechanically — non-transitive comparisons,
-hashes that disagree with their own equality, monoids whose identity isn't.
+Each `AXIOM` carries a quoted bool expression — the `#(...)` sigil produces
+a `KExpression` value. At ascription time, the engine evaluates each
+axiom's quote under a scope it builds by drawing samples from the module's
+`gen` slot for every free identifier the quote references. Variable types
+are resolved through the surrounding signature scope: `x`, `y`, `z` above
+take type `Type` because `compare`'s parameters fix that kind.
+
+`IMPLIES` is the engine's discard combinator — when the antecedent is
+false, the sample is dropped without counting against the test budget,
+matching standard property-based-testing practice for conditional axioms.
+
+When a structure ascribes a signature with axioms, the engine runs each
+axiom against random samples. Failures are ascription errors with a
+reported counterexample (and shrunk to a minimal case where the engine
+permits). This catches *invalid* implementations mechanically —
+non-transitive comparisons, hashes that disagree with their own equality,
+monoids whose identity isn't.
+
+**Generators live in modules; the signature requires them.** A
+`LET gen = (FN ...)` slot in a signature body is an obligation: every
+ascribing module must supply a generator for the abstract type. This folds
+generator presence into the existing structural-conformance check —
+ascription of a module without a `gen` slot fails with the same
+"missing field" error as any other unsupplied operation. There is no
+sidecar generator registry.
+
+**Generators compose through functor application.** A functor body that
+constructs the result module's `gen` from the parameter's `gen` —
+`MakeSet(E)`'s `gen` builds set samples by drawing from `E.gen` — gives
+the composed module its generator mechanically. Composition is a
+module-language property; the engine just calls `M.gen` like any other
+operation.
 
 The **property-testing engine** is a Rust-side subsystem of the compiler,
-deliberately disjoint from the dispatcher and the scheduler. Two reasons for
-the separation: (a) the engine is reusable as a general testing tool against
-ordinary Koan code, not only against signature axioms; (b) keeping it out of
-the dispatcher and scheduler keeps both simple. The engine's job is to take
-an axiom, generate samples for its quantified variables, and report
-counterexamples; nothing in the engine knows about modules or implicits per
-se.
+deliberately disjoint from the dispatcher and the scheduler. Two reasons
+for the separation: (a) the engine is reusable as a general testing tool
+against ordinary Koan code, not only against signature axioms; (b) keeping
+it out of the dispatcher and scheduler keeps both simple. The engine's job
+is to take a quoted axiom, generate samples for the variables it binds via
+the module's `gen`, evaluate the quote, and report counterexamples;
+nothing in the engine knows about modules or implicits per se.
 
-**Generators are not required to live in signatures.** A signature declares
-the axioms; the engine provides generators for built-in types
-(`Number`, `Str`, `Bool`, `List<T>`, `Dict<K, V>`, etc.) by composition. For
-user-defined types, generators are registered alongside the type — the
-mechanism is part of the engine's public surface, not part of the module
-language. When a signature's axioms quantify over a type for which no
-generator is available, axiom checking is skipped with a diagnostic; this is
-a warning, not an ascription error.
+**Randomness threads as a monadic effect.** Generators take a `Random`
+parameter rather than consuming raw entropy ambiently — see
+[design/effects.md](effects.md). Until stage 5 lands modular implicits,
+the engine threads the random module through generator calls explicitly.
+This is why stage 4 depends on the in-language monadic-effect surface.
 
 ## Cross-implicit equivalence checking
 
@@ -232,6 +315,14 @@ in the syntax-tuning stage) reflect the implicit's identity in the abstract
 type itself — `Set<Number, IntOrd>` and `Set<Number, IntOrdReverse>` become
 distinct types that cannot mix. Ergonomic but verbose; a tool for the cases
 where probabilistic coherence isn't enough.
+
+The OCaml-shaped fragments in this section (the `with type t = ...`
+ambiguity-error message and the `module type ORDERED = sig ... observation
+compare via sign end` observation declaration) are placeholders. The
+explicit-disambiguation form, the ambiguity-error rendering, and the
+observation-declaration syntax are all decided alongside the stage-5 and
+stage-6 implementations — see
+[the syntax-tuning stage](../roadmap/module-system-7-syntax-tuning.md).
 
 ## Compile-time scheduling
 
@@ -334,10 +425,13 @@ obligation for the type checker is part of stage 1.5.)
   modules with explicit application and sharing constraints. Ships generic
   data structures.
 - [Stage 4 — Property testing and axioms](../roadmap/module-system-4-axioms-and-generators.md)
-  — Rust-side property-testing engine kept disjoint from dispatch, axiom
-  syntax in signatures, compile-time axiom checking on ascription. Catches
-  invalid signature implementations mechanically. Independent of implicit
-  dispatch.
+  — Rust-side property-testing engine kept disjoint from dispatch; axiom
+  syntax in signatures (`AXIOM #(...)` over quoted bool predicates);
+  generators-as-required-signature-slots; compile-time axiom checking on
+  ascription. Generators thread randomness via the monadic effect surface
+  ([design/effects.md](effects.md)), so this stage requires
+  [monadic-side-effects](../roadmap/monadic-side-effects.md). Independent
+  of stage 5's implicit dispatch.
 - [Stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — implicit module parameters, lexical resolution, strict-on-ambiguity
   policy, explicit-application disambiguation. The "real" generic-code

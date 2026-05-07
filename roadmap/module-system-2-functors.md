@@ -9,39 +9,44 @@ hand-written.
 
 **Impact.**
 
-- *Generic data structures.* `MakeSet(Element)` and `MakeMap(Key)(Value)`
-  write a data structure once and instantiate it against any element type
-  with the required operations — no per-element-type duplication of
-  `IntSet`, `StringSet`, `PointSet`.
+- *Generic data structures.* `(MAKESET Element)` and curried
+  `((MAKEMAP Key) Value)` write a data structure once and instantiate it
+  against any element type with the required operations — no
+  per-element-type duplication of `IntSet`, `StringSet`, `PointSet`.
 - *Standard library gets its natural shape.* Collections, ordered maps,
-  hash tables, and other parameterized abstractions ship in their canonical
-  `MakeX(Element)` form rather than as per-concrete-type duplicates or
-  builtins.
+  hash tables, and other parameterized abstractions ship as functor FNs
+  rather than as per-concrete-type duplicates or builtins.
 - *Substrate for stage 5.* Modular implicits resolve to functor
-  applications — the compiler chooses `MakeSet(IntOrd)` when inferring a
-  `Set<Number>`. Stage 5 has something meaningful to dispatch on rather
-  than reducing to "pick a hand-written module."
+  applications — the compiler chooses `(MAKESET IntOrd)` when inferring a
+  `Set<Elt: Number>`. Stage 5 has something meaningful to dispatch on
+  rather than reducing to "pick a hand-written module."
 
-**Directions.** None decided.
+**Directions.** Surface syntax decided in
+[design/module-system.md](../design/module-system.md#functors); implementation
+choices below.
 
-- *Functor declaration syntax.* Following stage 1's choice of module/signature
-  surface form. The functor takes one or more named module arguments and
-  returns a structure ascribed to a signature.
-- *Sharing constraints.* `with type elt = E.t` lets a functor's output
-  signature refine its abstract type to match the input. Mechanically a
-  constraint on the output's signature; needs to thread through the type
-  checker.
+- *Functor declaration syntax — decided.* Functors are FNs whose parameters
+  are signature-typed and whose body returns a `MODULE` expression. No
+  `FUNCTOR` keyword.
+- *Sharing constraints — decided.* Pinning a functor's output abstract type
+  to its input rides on named-slot syntax for parameterized type expressions
+  (`<Type: E.Type>`), not a separate `with type` keyword. See
+  [design/module-system.md](../design/module-system.md#parameterized-type-expressions).
 - *Generative vs applicative semantics.* Generative — each application
   produces a fresh abstract type — is simpler to specify and provides the
-  per-type identity property the design relies on. Applicative — same
-  arguments yield the same output type — is more ergonomic when functors are
-  re-applied. Recommended: generative for v1, revisit later. The decision
-  lives here.
-- *Multi-argument functors.* `MakeMap(Key)(Value)`. Curried application is the
-  natural form; concrete syntax follows stage 1's conventions.
-- *Type identity through functor application.* `MakeSet(IntOrd)` applied
+  per-type identity property the design relies on, and falls out of
+  `:|`-per-call evaluation. Applicative — same arguments yield the same
+  output type — is more ergonomic when functors are re-applied. Recommended:
+  generative for v1, revisit later. The decision lives here.
+- *Multi-argument functors.* Ordinary multi-parameter FNs; currying is just
+  nested FNs. No special multi-application form.
+- *Type identity through functor application.* `(MAKESET IntOrd)` applied
   twice yields two distinct `Set` types. The implementation extends stage 1's
   module-type identity carrier to include the application context.
+- *Higher-kinded abstract type slots.* Signatures need to declare type
+  constructors (a `Wrap` slot taking a type parameter) so monads and other
+  parametric abstractions are expressible. Required by
+  [monadic-side-effects](monadic-side-effects.md).
 
 ## Dependencies
 
@@ -53,3 +58,6 @@ hand-written.
 **Unblocks:**
 - [Error-handling surface follow-ups](error-handling.md) — `Result<T, E>`
   is the functor-produced carrier for user-typed errors.
+- [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
+  — the in-language `Monad` signature's `Wrap` slot is higher-kinded,
+  expressible only with functor support.
