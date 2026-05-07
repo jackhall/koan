@@ -328,51 +328,72 @@ stage-6 implementations — see
 
 Type inference and implicit search interleave with dispatch and execution
 in the same scheduler. Inference of an expression may need an implicit
-search to resolve a parameter; the search may refine type variables that
+search to resolve a parameter; the search may refine type slots that
 other inferences are waiting on; sub-expressions are dispatched and
 executed by the same engine. There is no separate type-checking pass.
 See [execution-model.md § Pegged and free execution](execution-model.md#pegged-and-free-execution) —
 build-time and run-time are the same engine, differing only in which nodes
 are pegged.
 
-Whether inference and search ship as **new node kinds** or **reduce to
-existing kinds** is open:
+**Inference and search reduce to the existing `Dispatch` and `Bind`
+machinery.** Type expressions are evaluated by the same engine values
+are. There is no `Infer` node kind; there is no `ImplicitSearch` node
+kind; there is no `KType::TypeVar`; there is no parallel
+type-registration table; there is no `Scope::types` field. Type bindings
+live in `Scope::data` alongside value bindings.
 
-- *New node kinds.* `Infer(expr, ctx)` produces a type; `ImplicitSearch(sig,
-  types, scope)` produces a module choice. Distinct Rust bodies; shared
-  scheduling, dependency tracking, and cycle detection.
-- *Reduction to existing kinds.* `Infer` collapses to Execute against a
-  type-valued expression; `ImplicitSearch` collapses to Dispatch with an
-  implicit-aware candidate rule. The module language is value-language
-  reused, and the reduction would extend that reuse from the surface forms
-  to the inference engine itself.
+The mechanism:
 
-The reduction is appealing for uniformity but needs more thought —
-particularly how Dispatch's candidate rule generalizes to "find a module
-satisfying this signature in lexical scope" without disturbing its
-value-dispatch behavior.
+- **Type-returning builtins are ordinary builtins.** `LIST_OF`,
+  `DICT_OF`, `FUNCTION_OF`, `MODULE_TYPE_OF` and the like dispatch and
+  execute on the value path; their result is a type carried in
+  `KObject::TypeExprValue`. A [`ScopeResolver`](../src/dispatch/types/resolver.rs)
+  lowers `TypeExprValue` bindings so a `LET MyList = (LIST_OF Number)`
+  binding makes `MyList` available as a type name in subsequent FN
+  signatures.
+- **Type expressions in source position re-elaborate to a synthesized
+  call.** A parameter or return type written as `(LIST_OF Number)` (or
+  `List<Number>`) is dispatched directly as a sub-expression whose value
+  is a `KType`.
+- **Refinement rides on `Bind`.** A `Bind` waiting for its sub-Dispatches
+  to complete is the existing wake-up mechanism; a type expression that
+  tightens later (e.g. as functor application reaches the body) wakes
+  its dependents through the same path.
+- **Stage 5 implicit search is a single new builtin `SEARCH_IMPLICIT`,
+  not a new node kind.** Implicit resolution becomes a Dispatch against
+  that builtin with the candidate set assembled from lexical scope; the
+  result is a module value, threaded into the call site like any other
+  argument.
 
-What both options share:
+Rejected: a parallel `Infer` / `ImplicitSearch` node-kind track, with
+its own substitution table and `KType::TypeVar`. It would duplicate
+scheduling, dependency tracking, cycle detection, and error
+propagation that `Dispatch` and `Bind` already provide, and it would
+fork the module language away from the value language at exactly the
+point — inference — where the metacircular reuse is most valuable.
+
+Properties this preserves:
 
 - **Cycle detection is uniform.** A cycle in implicit resolution and a
   runtime infinite loop are the same kind of bug to the scheduler.
-- **Topological ordering falls out.** "When is enough inference done to
-  run search?" is just "when this search task's dependencies have
-  completed."
-- **Multi-target refinement.** A single inference task may refine many
-  type variables that downstream tasks are waiting on. Either thread a
-  shared substitution out-of-band, or model type variables as their own
-  scheduler nodes that get refined and woken up.
-- **Failure isolation.** When an inference or search fails, dependents
-  fail too — but independent subtrees still finish so the user sees
-  multiple errors per build rather than one at a time. Falls out of the
-  existing scheduler's error-propagation rules.
+- **Topological ordering falls out.** Dependency-driven wake-up is the
+  scheduler's job; type tasks ride the same edges value tasks do.
+- **Failure isolation.** Inference and search failures propagate to
+  dependents through the existing error-propagation rules; independent
+  subtrees still finish, so the user sees multiple errors per build.
 
 This is the **weak metacircular** form: the same scheduler engine that
 runs Koan value-language work runs the type checker. The strong form
 (compile-time tasks written in Koan and executed by the scheduler) is not
 a goal; the architecture leaves the door open without paying its
 bootstrapping cost.
+
+The cost-side concession: the design ships first-time-ready refinement
+(a type tightens before its dependents fire), not tighten-after-the-fact
+(a type tightens after its dependents have already run). If a future
+stage — most plausibly stage 5 implicit search — needs the latter, that
+motivates a future scheduler primitive; it is not a stage-2 blocker.
+See [Open work](#open-work).
 
 ## Resolution and coherence: the design dials
 
@@ -424,8 +445,8 @@ obligation for the type checker is part of stage 2.)
 
 - [Stage 2 — Module values and functors through the scheduler](../roadmap/module-system-2-scheduler.md)
   — make module expressions, type expressions (with incremental refinement),
-  and functors full participants in the scheduler's free-execution model;
-  resolves the new-node-kinds-vs-reduction question above. Ships parametric
+  and functors full participants in the scheduler's free-execution model
+  via the `Dispatch`/`Bind` reduction described above. Ships parametric
   modules with explicit application and sharing constraints. Re-runs the
   [memory-model audit slate](memory-model.md#verification) against the
   post-stage-1 runtime plus any new unsafe sites this work introduces.

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, NoopResolver, SignatureElement};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, ScopeResolver, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::types::parse_typed_field_list;
@@ -41,7 +41,8 @@ pub fn body<'a>(
             )));
         }
     };
-    let fields = match parse_typed_field_list(&schema_expr, "UNION", &NoopResolver) {
+    let resolver = ScopeResolver::new(scope);
+    let fields = match parse_typed_field_list(&schema_expr, "UNION", &resolver) {
         Ok(f) => f,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };

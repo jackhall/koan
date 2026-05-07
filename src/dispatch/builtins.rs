@@ -16,6 +16,7 @@ mod quote;
 mod sig_def;
 mod struct_def;
 mod type_call;
+mod type_ops;
 mod union;
 mod value_lookup;
 mod value_pass;
@@ -157,6 +158,7 @@ pub fn default_scope<'a>(
     module_def::register(scope);
     sig_def::register(scope);
     ascribe::register(scope);
+    type_ops::register(scope);
 
     scope
 }

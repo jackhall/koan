@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, Body, BodyResult, KFunction, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, NoopResolver, SignatureElement};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, ScopeResolver, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression, TypeExpr};
@@ -51,7 +51,11 @@ pub fn body<'a>(
             )));
         }
     };
-    let return_type = match KType::from_type_expr(&return_type_expr, &NoopResolver) {
+    // ScopeResolver walks the surrounding scope's bindings first so user-defined types
+    // (`LET MyList = (LIST_OF Number)`) shadow builtins. Stage-2 substrate per the
+    // [module-system stage 2 plan](../../../roadmap/module-system-2-scheduler.md).
+    let resolver = ScopeResolver::new(scope);
+    let return_type = match KType::from_type_expr(&return_type_expr, &resolver) {
         Ok(t) => t,
         Err(msg) => {
             return err(KError::new(KErrorKind::ShapeError(format!(
@@ -68,7 +72,7 @@ pub fn body<'a>(
         }
     };
 
-    let elements = match parse_signature_elements(&signature_expr) {
+    let elements = match parse_fn_param_list(&signature_expr, &resolver) {
         Ok(es) => es,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
@@ -112,16 +116,22 @@ pub fn body<'a>(
     BodyResult::Value(obj)
 }
 
-/// Convert the captured signature `KExpression` into a list of `SignatureElement`s. Walks
-/// the parts left-to-right, consuming bare `Keyword` parts as fixed tokens and
-/// `Identifier(name) Keyword(":") Type(t)` triples as typed `Argument` slots. Bare
-/// identifiers without a `: Type` annotation, unknown type names, stray `:` or `Type`
-/// parts, and any other variant (`Literal`, `Expression`, `ListLiteral`, `DictLiteral`,
-/// `Future`) yield an `Err(message)` for the caller to wrap in `ShapeError`. The colon
-/// keyword is consumed only as part of a triple — a stray `:` outside that shape is a
-/// shape error.
-fn parse_signature_elements<'a>(
+/// Convert the captured FN-parameter-list `KExpression` into a list of `SignatureElement`s.
+/// (Module signatures — `Signature`, declared via `SIG` — are a different concept; this
+/// function only handles the FN parameter list.) Walks the parts left-to-right, consuming
+/// bare `Keyword` parts as fixed tokens and `Identifier(name) Keyword(":") Type(t)` triples
+/// as typed `Argument` slots. Bare identifiers without a `: Type` annotation, unknown type
+/// names, stray `:` or `Type` parts, and any other variant (`Literal`, `Expression`,
+/// `ListLiteral`, `DictLiteral`, `Future`) yield an `Err(message)` for the caller to wrap
+/// in `ShapeError`. The colon keyword is consumed only as part of a triple — a stray `:`
+/// outside that shape is a shape error.
+///
+/// The `resolver` is forwarded into `KType::from_type_expr` for each parameter type so
+/// user-defined types in the surrounding scope can shadow builtins. Stage-2 substrate per
+/// the [module-system stage 2 plan](../../../roadmap/module-system-2-scheduler.md).
+fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
+    resolver: &dyn crate::dispatch::types::TypeResolver,
 ) -> Result<Vec<SignatureElement>, String> {
     let parts = &signature.parts;
     let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
@@ -142,7 +152,7 @@ fn parse_signature_elements<'a>(
                 let ty = parts.get(i + 2);
                 match (colon, ty) {
                     (Some(ExpressionPart::Keyword(c)), Some(ExpressionPart::Type(t))) if c == ":" => {
-                        let ktype = KType::from_type_expr(t, &NoopResolver).map_err(|e| {
+                        let ktype = KType::from_type_expr(t, resolver).map_err(|e| {
                             format!("{e} in FN signature for parameter `{name}`")
                         })?;
                         elements.push(SignatureElement::Argument(Argument {
@@ -936,5 +946,57 @@ mod tests {
         // behavior here: argument-level element checks are deferred to a later phase.
         assert!(sched.execute().is_ok(),
                 "phase 2 only checks element types on return values, not arguments");
+    }
+
+    // -------------------- Module-system stage 2: ScopeResolver --------------------
+
+    /// Verify that `LET MyList = (LIST_OF Number)` binds a `TypeExprValue` carrying the
+    /// surface `List` form. The bound value can then be lowered to `KType::List(Number)`
+    /// via `KType::from_type_expr` — the ScopeResolver path uses exactly that.
+    #[test]
+    fn list_of_let_binding_is_type_expr_value() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET MyList = (LIST_OF Number)");
+        let data = scope.data.borrow();
+        let entry = data.get("MyList").expect("MyList should be bound");
+        match entry {
+            KObject::TypeExprValue(t) => {
+                assert_eq!(t.name, "List");
+            }
+            other => panic!("expected TypeExprValue, got ktype={}", other.ktype().name()),
+        }
+    }
+
+    /// `ScopeResolver` lowers a `TypeExprValue` binding to a `KType` when consulted by
+    /// `from_type_expr`. Direct unit test of the resolver's contract — independent of the
+    /// scheduler's top-level-statement ordering (see caveat below).
+    ///
+    /// **Caveat — top-level statement ordering.** Today `LET MyList = (LIST_OF Number)`
+    /// followed by `FN (USE xs: MyList) ...` doesn't work end-to-end because the LET's
+    /// `value` slot is an `Expression` (the `(LIST_OF Number)` sub-expression), so the LET
+    /// becomes a Bind waiting on a sub-Dispatch — and the next top-level statement (the
+    /// FN) runs before the Bind resolves. Sequencing this requires either ordering top-
+    /// level statements as deps of one another or hoisting type-expression evaluation
+    /// ahead of FN-body execution. Tracked as a stage-2 follow-up; the resolver itself
+    /// already does the right thing once the binding is present.
+    #[test]
+    fn scope_resolver_lowers_type_expr_value_binding() {
+        use crate::dispatch::types::{KType, ScopeResolver, TypeResolver};
+        use crate::parse::kexpression::{TypeExpr, TypeParams};
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "LET MyList = (LIST_OF Number)");
+        let resolver = ScopeResolver::new(scope);
+        // MyList resolves through the scope.
+        let resolved = resolver.resolve("MyList").expect("MyList should resolve");
+        assert_eq!(resolved, KType::List(Box::new(KType::Number)));
+        // from_type_expr forwards to the resolver before falling back to from_name; so
+        // `Number` (a builtin) still resolves, and `MyList` resolves via scope.
+        let mylist_te = TypeExpr { name: "MyList".into(), params: TypeParams::None };
+        let kt = KType::from_type_expr(&mylist_te, &resolver).expect("from_type_expr ok");
+        assert_eq!(kt, KType::List(Box::new(KType::Number)));
     }
 }

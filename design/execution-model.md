@@ -128,17 +128,15 @@ engine running before pegged inputs are unblocked.
 
 - **Inference and search as scheduler work**
   ([module-system.md § Inference and search](module-system.md#inference-and-search-as-scheduler-work)).
-  The [module system](module-system.md) needs a story for how type
-  inference and modular-implicit resolution interleave with dispatch and
-  execution. Both must be expressible in the same scheduler that runs
-  value-language work. Whether they ship as new node kinds (`Infer`,
-  `ImplicitSearch`) or reduce to existing kinds — `Infer` collapsing to
-  Execute against type-valued expressions, `ImplicitSearch` collapsing to
-  Dispatch with an implicit-aware candidate rule — is open. Module-system
-  stage 1 shipped the surface forms (`MODULE`, `SIG`, opaque/transparent
-  ascription) without inference;
-  [Stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
-  is what forces a concrete answer.
+  Type inference and modular-implicit resolution reduce to the existing
+  `Dispatch` and `Bind` machinery — type-returning builtins on the value
+  path, `Bind` as the refinement-and-wake-up mechanism, and stage 5
+  implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
+  node kind. Module-system
+  [stage 2](../roadmap/module-system-2-scheduler.md) lands the type-builtin
+  substrate end-to-end through FN signatures;
+  [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
+  implicit search on top.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

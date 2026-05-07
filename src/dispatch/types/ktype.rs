@@ -306,7 +306,10 @@ impl KType {
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
-            KType::TypeExprRef => matches!(part, ExpressionPart::Type(_)),
+            KType::TypeExprRef => matches!(
+                part,
+                ExpressionPart::Type(_) | ExpressionPart::Future(KObject::TypeExprValue(_))
+            ),
             KType::Type => matches!(
                 part,
                 ExpressionPart::Future(KObject::TaggedUnionType(_))

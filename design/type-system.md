@@ -239,5 +239,7 @@ above; the remaining stages live under
 - [Static type checking and JIT compilation](../roadmap/static-typing-and-jit.md)
   — closes the TCO and builtin runtime-check gaps uniformly, and is the
   language's performance ceiling. The module system's compile-time
-  scheduling (`Infer` and `ImplicitSearch` scheduler nodes) is the substrate
-  this work builds on.
+  scheduling — type-returning builtins dispatched and bound through the
+  same `Dispatch`/`Bind` machinery values use, with stage 5 implicit
+  search layered as a `SEARCH_IMPLICIT` builtin — is the substrate this
+  work builds on.

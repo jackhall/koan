@@ -8,6 +8,13 @@
 //! candidates within a bucket. `is_keyword_token` is the parser-side classifier that decides
 //! whether a source token is a `Keyword` or `Identifier`; both ends of dispatch (signature
 //! registration and source-expression matching) rely on it agreeing with itself.
+//!
+//! **Terminology — "expression-signature" vs "module-signature".** This file holds the
+//! **expression-signature** machinery: the FN-parameter-list type used by dispatch
+//! (`ExpressionSignature`, `Argument`, `SignatureElement`). The **module-signature** type
+//! (`SIG`-declared) lives in [`crate::dispatch::values::module::Signature`]. The two are
+//! distinct concepts; do not conflate. Module-system stage 2 introduced the `SIG` declarator;
+//! this file's types predate it and continue to govern function-call dispatch.
 
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 

@@ -2,6 +2,12 @@
 //! builtins. See [design/module-system.md](../../../design/module-system.md) for the
 //! cross-cutting design.
 //!
+//! **Terminology — "module-signature" vs "expression-signature".** `Signature` here is the
+//! **module-signature** type (`SIG`-declared) — an interface a module can be ascribed to
+//! via `:|` / `:!`. The **expression-signature** machinery — the FN-parameter-list type used
+//! by dispatch (`ExpressionSignature`, `Argument`, `SignatureElement`) — lives in
+//! [`crate::dispatch::types::signature`]. The two are distinct concepts; do not conflate.
+//!
 //! A `Module` bundles a child `Scope` (where the body's `LET`/`FN` bindings landed during
 //! evaluation) with a textual `path` and a per-module type-members table. The path is the
 //! lexical-source label (`"IntOrd"`, `"Outer.Inner"`); the type-members table maps the
