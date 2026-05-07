@@ -12,7 +12,10 @@ Subcommands:
   fix-refs OLD=NEW ... rewrite every link that resolves to OLD so it points at
                        NEW instead — used to fix inbound references after a
                        file move or rename
-  rm-roadmap <path>    delete a roadmap/*.md file and prune inbound bullets
+  rm-roadmap <path>    delete a roadmap/*.md file and prune inbound/outbound bullets
+  dag                  emit a Graphviz DOT digraph of the roadmap/*.md
+                       Requires/Unblocks edges — pipe to `dot -Tpng > dag.png` or
+                       paste into an online viewer
 """
 
 from __future__ import annotations
@@ -581,6 +584,53 @@ def cmd_rm_roadmap(args: argparse.Namespace) -> int:
     return cmd_check(argparse.Namespace())
 
 
+# ---------- dag ----------
+
+def cmd_dag(args: argparse.Namespace) -> int:
+    """Emit a Graphviz DOT digraph of intra-roadmap Requires/Unblocks edges.
+
+    Edges point prerequisite -> dependent (`A -> B` means "do A first"). The
+    Requires and Unblocks halves of each pair are unioned: `check` already
+    gates symmetry, but during in-flight edits the two sides may briefly
+    disagree, and surfacing both edges is more useful than silently dropping
+    one.
+    """
+    roadmap_dir = REPO / "roadmap"
+    items = sorted(roadmap_dir.glob("*.md"))
+
+    titles: dict[str, str] = {}
+    edges: set[tuple[str, str]] = set()
+    for f in items:
+        titles[f.name] = read_h1_title(f) or f.stem
+    for f in items:
+        req, unb = parse_dep_section(f)
+        for r in req:
+            if r in titles:
+                edges.add((r, f.name))
+        for u in unb:
+            if u in titles:
+                edges.add((f.name, u))
+
+    def node_id(name: str) -> str:
+        return "n_" + re.sub(r"[^A-Za-z0-9]", "_", name[:-3] if name.endswith(".md") else name)
+
+    def esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    print("digraph roadmap {")
+    print("  rankdir=LR;")
+    print("  node [shape=box, style=\"rounded,filled\", fillcolor=\"#f5f5f5\", "
+          "fontname=\"Helvetica\"];")
+    print("  edge [color=\"#555555\"];")
+    for name in sorted(titles):
+        print(f'  {node_id(name)} [label="{esc(titles[name])}", '
+              f'tooltip="{esc(name)}", URL="{esc(name)}"];')
+    for src, dst in sorted(edges):
+        print(f"  {node_id(src)} -> {node_id(dst)};")
+    print("}")
+    return 0
+
+
 # ---------- src-changes ----------
 
 # `git diff --name-status -M` rows look like one of:
@@ -778,6 +828,12 @@ def main(argv: list[str] | None = None) -> int:
         help="report edits and the deletion without writing any files",
     )
     p_rm.set_defaults(func=cmd_rm_roadmap)
+
+    p_dag = sub.add_parser(
+        "dag",
+        help="emit a Graphviz DOT digraph of roadmap Requires/Unblocks edges",
+    )
+    p_dag.set_defaults(func=cmd_dag)
 
     args = parser.parse_args(argv)
     return args.func(args)
