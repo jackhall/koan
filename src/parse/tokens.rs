@@ -54,10 +54,16 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
     None
 }
 
-/// Classify a sub-token (the piece between operators inside a compound token): literal first,
-/// then `Keyword` if it has no lowercase letters (per `is_keyword_token`), then `Type` if it
-/// starts uppercase and has at least one lowercase character (covers both `Camelcased` and
-/// `CamelCased`), otherwise `Identifier`. Used by `read_atom`.
+/// Classify a sub-token (the piece between operators inside a compound token) per the token-class
+/// rules in [design/type-system.md](../../design/type-system.md#token-classes--the-parser-level-foundation):
+///
+/// 1. Literal first (`null`, `true`, numbers).
+/// 2. `Keyword` per `is_keyword_token` — pure-symbol or ≥2 uppercase letters with no lowercase.
+/// 3. `Type` if first char ASCII-uppercase AND at least one lowercase char (`Number`, `Foo`,
+///    `OrderedSig`, `KFunction`).
+/// 4. Otherwise, if the token starts uppercase but fits neither rule (e.g. `A`, `AB1` — single
+///    uppercase letter, or uppercase + digits with no lowercase), it's a `ParseError`.
+/// 5. Otherwise `Identifier` (lowercase-leading or `_`-leading names).
 ///
 /// Type and Identifier tokens are validated for character content: Types accept only ASCII
 /// letters and digits; Identifiers also accept `_`. Anything else (e.g. `Number>`, `a@b`) is
@@ -78,6 +84,17 @@ fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
             ));
         }
         return Ok(ExpressionPart::Type(TypeExpr::leaf(tok.to_string())));
+    }
+    // Capital-leading tokens that are neither a keyword nor a type are reserved syntactic
+    // territory — module-system stage 1 declared the rule explicitly so a single-letter `A`
+    // or a `K9` shape can't slip in as an Identifier and silently shadow a future
+    // type-position binding.
+    if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        return Err(format!(
+            "token `{tok}` starts with an uppercase letter but classifies as neither a \
+             keyword (needs ≥2 uppercase letters with no lowercase) nor a type name \
+             (needs ≥1 lowercase letter)",
+        ));
     }
     if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric() && *c != '_') {
         return Err(format!(
@@ -300,5 +317,62 @@ mod tests {
     #[test]
     fn leading_suffix_errors() {
         assert!(classify("?foo").is_err());
+    }
+
+    // Module-system stage 1 §2 token-classification tests.
+
+    #[test]
+    fn keyword_two_uppercase_no_lowercase() {
+        // ≥2 uppercase letters with no lowercase qualifies as a Keyword.
+        assert_eq!(classify("LET").unwrap(), "t(LET)");
+        assert_eq!(classify("MODULE").unwrap(), "t(MODULE)");
+        assert_eq!(classify("FN").unwrap(), "t(FN)");
+    }
+
+    #[test]
+    fn type_uppercase_first_with_lowercase() {
+        // First uppercase + ≥1 lowercase classifies as Type.
+        assert_eq!(classify("Number").unwrap(), "T(Number)");
+        assert_eq!(classify("OrderedSig").unwrap(), "T(OrderedSig)");
+        assert_eq!(classify("KFunction").unwrap(), "T(KFunction)");
+    }
+
+    #[test]
+    fn single_uppercase_letter_is_parse_error() {
+        // `A`, `B`, `Z` etc. — neither keyword (only 1 uppercase) nor type (no lowercase).
+        assert!(classify("A").is_err());
+        assert!(classify("B").is_err());
+        assert!(classify("Z").is_err());
+    }
+
+    #[test]
+    fn uppercase_with_digits_no_lowercase_is_parse_error() {
+        // `K9` — uppercase first, no lowercase. The §2 rule rejects this rather than letting
+        // it fall through to Identifier (which would silently shadow a future type-position
+        // binding).
+        assert!(classify("K9").is_err());
+    }
+
+    #[test]
+    fn pure_symbol_token_is_keyword() {
+        // Pure-symbol tokens (no letters at all) bypass the alphabetic-letter rule. The
+        // ascription operators `:|` / `:!` (assembled at the build_tree layer because `:` and
+        // `!` are themselves expression-tree-level delimiters) and the existing `=` / `->`
+        // are all keywords.
+        assert_eq!(classify("=").unwrap(), "t(=)");
+        assert_eq!(classify("->").unwrap(), "t(->)");
+    }
+
+    #[test]
+    fn ascription_compound_tokens_classify_as_keywords() {
+        use crate::dispatch::types::is_keyword_token;
+        assert!(is_keyword_token(":|"));
+        assert!(is_keyword_token(":!"));
+    }
+
+    #[test]
+    fn lowercase_leading_is_identifier() {
+        assert_eq!(classify("foo").unwrap(), "t(foo)");
+        assert_eq!(classify("my_var").unwrap(), "t(my_var)");
     }
 }

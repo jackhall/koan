@@ -382,19 +382,19 @@ mod tests {
 
         run(
             scope,
-            "FN (B) -> Null = (PRINT \"ok\")\n\
-             FN (A) -> Null = (B)",
+            "FN (BB) -> Null = (PRINT \"ok\")\n\
+             FN (AA) -> Null = (BB)",
         );
 
         let mut sched = Scheduler::new();
-        sched.add_dispatch(parse_one("A"), scope);
-        sched.execute().expect("A should run");
+        sched.add_dispatch(parse_one("AA"), scope);
+        sched.execute().expect("AA should run");
 
         assert_eq!(captured.borrow().as_slice(), b"ok\n");
         assert_eq!(
             sched.len(),
             1,
-            "tail-call slot reuse: A -> B -> PRINT should collapse into one slot, got {}",
+            "tail-call slot reuse: AA -> BB -> PRINT should collapse into one slot, got {}",
             sched.len(),
         );
     }

@@ -1,17 +1,21 @@
-//! `ATTR <s> <field:Identifier>` — struct field access. Surface syntax is the `.` infix
-//! operator from [`operators::build_attr`](crate::parse::operators), which compiles
-//! `p.x` into `[Keyword("ATTR"), Identifier("p"), Identifier("x")]`. Two overloads share
+//! `ATTR <s> <field:Identifier>` — struct or module field access. Surface syntax is the `.`
+//! infix operator from [`operators::build_attr`](crate::parse::operators), which compiles
+//! `p.x` into `[Keyword("ATTR"), Identifier("p"), Identifier("x")]`. Three overloads share
 //! the bucket `[Keyword, Slot, Slot]` and pick by lhs shape:
 //!
 //! - [`body_identifier`] — `p.x` form. The lhs is still an `Identifier`, so this body
-//!   does the scope lookup itself, mirroring [`value_lookup`](super::value_lookup).
-//! - [`body_struct`] — chained access like `p.x.y`. The inner `[ATTR p x]` evaluates
-//!   first and arrives here as `Future(KObject::Struct{..})`.
+//!   does the scope lookup itself, mirroring [`value_lookup`](super::value_lookup), and
+//!   then dispatches to either struct-field or module-member access based on what the
+//!   identifier resolved to.
+//! - [`body_struct`] — chained access like `p.x.y` for structs. The inner `[ATTR p x]`
+//!   evaluates first and arrives here as `Future(KObject::Struct{..})`.
+//! - [`body_module`] — chained access like `M.SubModule.foo`. The inner `[ATTR M SubModule]`
+//!   evaluates first and arrives here as `Future(KObject::KModule(_))`. Module-system
+//!   stage 1.
 //!
-//! The two slot types are disjoint (`KType::Identifier` only matches
-//! `ExpressionPart::Identifier`; `KType::Struct` only matches
-//! `ExpressionPart::Future(KObject::Struct{..})`), so dispatch picks unambiguously
-//! without a specificity tiebreaker.
+//! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
+//! `KType::Struct` and `KType::Module` only match the corresponding `Future` variants), so
+//! dispatch picks unambiguously without a specificity tiebreaker.
 
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
@@ -49,6 +53,43 @@ pub fn body_identifier<'a>(
     access_field(scope, target, &field_name)
 }
 
+/// `ATTR <s:TypeExprRef> <field:_>` — module-system entry point. Module names are
+/// Type-classed tokens (`Foo`, `IntOrd`, `OrderedSig`) per the [token classes in
+/// design/type-system.md](../../../design/type-system.md#token-classes--the-parser-level-foundation),
+/// so `Foo.x` parses as
+/// `[ATTR Type(Foo) Identifier(x)]` rather than the `Identifier`-lhs the struct path uses.
+/// `Foo.SubModule` parses as `[ATTR Type(Foo) Type(SubModule)]` — the Type-Type overload
+/// shares this body so chained module access (`Outer.Inner.x`) works regardless of whether
+/// the field at each step is a module name or a regular member. Resolves the type name in
+/// the surrounding scope and dispatches to `access_field` (which routes to module-member
+/// access when the resolved value is a module).
+pub fn body_type_lhs<'a>(
+    scope: &'a Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
+    bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    let s_name = match bundle.get("s") {
+        Some(KObject::TypeExprValue(t)) => t.name.clone(),
+        Some(other) => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "s".to_string(),
+                expected: "TypeExprRef".to_string(),
+                got: other.ktype().name().to_string(),
+            }));
+        }
+        None => return err(KError::new(KErrorKind::MissingArg("s".to_string()))),
+    };
+    let field_name = match read_field_name(&bundle) {
+        Ok(s) => s,
+        Err(e) => return err(e),
+    };
+    let target = match scope.lookup(&s_name) {
+        Some(obj) => obj,
+        None => return err(KError::new(KErrorKind::UnboundName(s_name))),
+    };
+    access_field(scope, target, &field_name)
+}
+
 pub fn body_struct<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -65,9 +106,31 @@ pub fn body_struct<'a>(
     access_field(scope, target, &field_name)
 }
 
+/// Module-member access. The lhs already resolved to a `KObject::KModule`; look `field` up
+/// in the module's child scope's `data` map. Module-system stage 1.
+pub fn body_module<'a>(
+    _scope: &'a Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
+    bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    let target = match bundle.get("s") {
+        Some(obj) => obj,
+        None => return err(KError::new(KErrorKind::MissingArg("s".to_string()))),
+    };
+    let field_name = match read_field_name(&bundle) {
+        Ok(s) => s,
+        Err(e) => return err(e),
+    };
+    access_module_member(target, &field_name)
+}
+
 fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
     match bundle.get("field") {
         Some(KObject::KString(s)) => Ok(s.clone()),
+        // Module-system stage 1: a Type-classed field (e.g. `Foo.SubModule.x`) lands here as
+        // a `TypeExprValue`. The bare leaf name is what we need to look up in the enclosing
+        // module's scope — same as the Identifier path.
+        Some(KObject::TypeExprValue(t)) => Ok(t.name.clone()),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "field".to_string(),
             expected: "Identifier".to_string(),
@@ -90,12 +153,52 @@ fn access_field<'a>(
                 type_name, field
             )))),
         },
+        // The identifier resolved to a module — `IntOrd.compare`, `OrderedSig.Type`, etc.
+        // Module-system stage 1.
+        KObject::KModule(_) => access_module_member(target, field),
         other => err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "Struct".to_string(),
             got: other.ktype().name().to_string(),
         })),
     }
+}
+
+/// Look `field` up inside a [`KObject::KModule`]'s child scope. Tries the module's
+/// `type_members` table first (so `Foo.Type` resolves to a `KType` value when present), then
+/// the child scope's `data` (LET/FN bindings under the module body). Returns a clean
+/// `ShapeError` naming the module's path and the missing member when neither finds anything.
+fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a> {
+    let m = match target {
+        KObject::KModule(m) => *m,
+        other => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "s".to_string(),
+                expected: "Module".to_string(),
+                got: other.ktype().name().to_string(),
+            }));
+        }
+    };
+    // Type-position fallback: opaque ascription's `type_members` map (e.g., `IntOrd.Type`
+    // resolves to a `KType::ModuleType`). Returned as a `KObject::TypeExprValue` so the
+    // value flows through any "expects a type" position — same as a bare type-token.
+    if let Some(_kt) = m.type_members.borrow().get(field).cloned() {
+        // For now, return a TypeExprValue carrying the abstract type's surface name. The
+        // ascription stage 1 path mints fresh ModuleType variants here; consumers reading
+        // back the type should compare via `KType::matches_value`.
+        let te = crate::parse::kexpression::TypeExpr::leaf(field.to_string());
+        return BodyResult::Value(
+            m.child_scope().arena.alloc_object(KObject::TypeExprValue(te)),
+        );
+    }
+    let scope = m.child_scope();
+    if let Some(obj) = scope.data.borrow().get(field).copied() {
+        return BodyResult::Value(obj);
+    }
+    err(KError::new(KErrorKind::ShapeError(format!(
+        "module `{}` has no member `{}`",
+        m.path, field
+    ))))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -124,6 +227,60 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body_struct,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("ATTR".into()),
+                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::Module }),
+                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
+            ],
+        },
+        body_module,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("ATTR".into()),
+                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::TypeExprRef }),
+                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
+            ],
+        },
+        body_type_lhs,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("ATTR".into()),
+                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::TypeExprRef }),
+                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::TypeExprRef }),
+            ],
+        },
+        body_type_lhs,
+    );
+    // Chained access where the lhs is a module value (`Outer.Inner.x` after the inner
+    // resolves) and the field is itself a Type token (`Outer.Inner` step in `Outer.Inner.x`).
+    register_builtin(
+        scope,
+        "ATTR",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("ATTR".into()),
+                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::Module }),
+                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::TypeExprRef }),
+            ],
+        },
+        body_module,
     );
 }
 

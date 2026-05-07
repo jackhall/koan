@@ -1,12 +1,15 @@
 # Module system stage 5 — Modular implicits
 
-**Problem.** Stages 1-3 give an explicit module language: every functor
+**Problem.** Stages 1-2 give an explicit module language: every functor
 application, every module-typed argument, every signature constraint is
-written by hand. For everyday generic code this is verbose. Stage 5
-introduces **implicit module parameters**: a function declares that it
-requires some module satisfying a given signature, and at the call site the
-compiler resolves which module to thread in by searching scope. This is the
-ergonomic payoff of the design.
+written by hand. For everyday generic code this is verbose. The
+[`KType::Module`](../src/dispatch/types/ktype.rs) slot kind that stage 1
+shipped accepts any module value regardless of which signature it satisfies,
+so even the explicit-module path lacks the signature-bound dispatch a
+generic-function call site needs. Stage 5 introduces **implicit module
+parameters**: a function declares that it requires some module satisfying a
+given signature, and at the call site the compiler resolves which module to
+thread in by searching scope. This is the ergonomic payoff of the design.
 
 **Impact.**
 
@@ -24,6 +27,13 @@ ergonomic payoff of the design.
 
 **Directions.** None decided.
 
+- *Signature-bound module-typed dispatch.* The substrate the implicit-
+  parameter machinery rides on: `KType::Module` slots learn to carry a
+  required signature, and the dispatcher checks that the bound module value
+  satisfies it. Implicit parameters are then a special case of a typed
+  module slot whose argument is resolved by search rather than supplied at
+  the call site. Stage 1 shipped the unconstrained `KType::Module` slot;
+  this stage tightens it.
 - *Implicit-parameter declaration syntax.* The function signature needs a
   slot for implicit module parameters; surface form follows stage 1's
   conventions.
@@ -59,7 +69,9 @@ ergonomic payoff of the design.
 ## Dependencies
 
 **Requires:**
-- [Stage 3 — First-class modules](module-system-3-first-class-modules.md)
+- [Stage 1.5 — Scheduler integration](module-system-1.5-scheduler.md) —
+  modular implicits is the work that forces the `Infer` / `ImplicitSearch`
+  scheduler-node story stage 1.5 lands; this stage builds on top of it.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)

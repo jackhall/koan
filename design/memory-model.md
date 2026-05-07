@@ -175,11 +175,14 @@ nested user-fn frames each handle their own subtree at their own finalize.
 - The audit slate runs cycle-free: 16 closure-escape, KFuture-anchor, and
   arena-unsafe-site tests plus the cycle-gate regression all pass under
   `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit leaks,
-  signing off the memory model as it stands today. The
-  [post-stage-1 audit redo](../roadmap/post-stage-1-audit-redo.md) re-runs the
-  slate once module-system stage 1 reshapes the runtime.
+  signing off the memory model as it stands today.
+  [Module-system stage 1.5](../roadmap/module-system-1.5-scheduler.md) re-runs
+  the slate once the scheduler grows `Infer` and `ImplicitSearch` nodes, since
+  stage 1 plus those new nodes reshape the runtime that the slate signed off
+  against.
 
 ## Open work
 
-- [Post-stage-1 Miri audit redo](../roadmap/post-stage-1-audit-redo.md) — re-run
-  the audit slate after module-system stage 1 reshapes the memory model.
+- [Module system stage 1.5 — Scheduler integration](../roadmap/module-system-1.5-scheduler.md)
+  — re-run the audit slate after module-system stage 1 plus the new
+  `Infer` / `ImplicitSearch` scheduler nodes reshape the memory model.

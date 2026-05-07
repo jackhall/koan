@@ -31,11 +31,16 @@ and hands it to dispatch.
 Every non-literal atom falls into one of three classes, decided by the casing
 rule in [tokens.rs](src/parse/tokens.rs):
 
-| Class        | Rule                                            | Examples                  |
-|--------------|-------------------------------------------------|---------------------------|
-| `Keyword`    | all-caps, no lowercase                          | `LET`, `THEN`, `=`, `->`  |
-| `Type`       | first char uppercase **and** at least one lower | `Number`, `KFunction`     |
-| `Identifier` | everything else (lowercase, snake_case)         | `x`, `greeting`, `my_var` |
+| Class        | Rule                                                                      | Examples                       |
+|--------------|---------------------------------------------------------------------------|--------------------------------|
+| `Keyword`    | pure-symbol, **or** alphabetic with ≥2 uppercase letters and no lowercase | `=`, `->`, `:|`, `LET`, `THEN` |
+| `Type`       | first char uppercase **and** at least one lowercase elsewhere             | `Number`, `KFunction`, `IntOrd` |
+| `Identifier` | lowercase- or `_`-leading                                                 | `x`, `greeting`, `my_var`      |
+
+A token that starts uppercase but classifies as neither (e.g. a single
+uppercase letter `A`, or `K9`) is a parse error rather than falling through to
+identifier — the rule reserves uppercase-leading shapes as type-position
+territory.
 
 The split is load-bearing: only `Keyword` parts contribute fixed tokens to a
 function signature's bucket key. Identifiers, types, literals, and nested

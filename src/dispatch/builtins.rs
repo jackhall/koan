@@ -3,14 +3,17 @@ use super::runtime::{KError, Scope};
 use super::types::ExpressionSignature;
 use super::values::KObject;
 
+mod ascribe;
 mod attr;
 pub mod call_by_name;
 mod eval;
 mod fn_def;
 mod let_binding;
 mod match_case;
+mod module_def;
 mod print;
 mod quote;
+mod sig_def;
 mod struct_def;
 mod type_call;
 mod union;
@@ -151,6 +154,9 @@ pub fn default_scope<'a>(
     attr::register(scope);
     quote::register(scope);
     eval::register(scope);
+    module_def::register(scope);
+    sig_def::register(scope);
+    ascribe::register(scope);
 
     scope
 }

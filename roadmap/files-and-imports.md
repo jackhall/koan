@@ -69,10 +69,6 @@ another. This item closes that gap.
 ## Dependencies
 
 **Requires:**
-- [Module system stage 1 — Module language](module-system-1-module-language.md)
-  — defines what a module is. Until structures, signatures, and ascription
-  exist in the language, "how does a file become a module" has nothing
-  concrete to map onto.
 
 **Unblocks:** none directly — this item is about wiring source files into
 the language, and downstream features (effects, the eventual checker) use

@@ -3,28 +3,41 @@
 ## Token classes — the parser-level foundation
 
 The lexer ([tokens.rs](../src/parse/tokens.rs)) splits non-literal atoms into
-three classes by capitalization:
+three classes:
 
-- **All-caps** (`LET`, `THEN`, `=`, `->`) — dispatch keywords. Contribute fixed
-  tokens to a signature's bucket key.
-- **Capitalized + at least one lowercase** (`Number`, `Str`, `KFunction`,
-  `MyType`) — type references.
-- **Lowercase / snake_case** — identifiers.
+- **Keyword** — pure-symbol tokens (`=`, `->`, `:|`, `:!`, `+`) and alphabetic
+  tokens with **two or more uppercase letters and no lowercase letters**
+  (`LET`, `THEN`, `MODULE`, `SIG`). Contribute fixed tokens to a signature's
+  bucket key. The two-uppercase floor reserves single-letter capitals (`A`,
+  `K`) and uppercase-plus-digits shapes (`K9`, `AB1`) as syntactic territory
+  rather than letting them silently classify as identifiers — see below.
+- **Type** — uppercase-leading with at least one lowercase letter elsewhere
+  (`Number`, `Str`, `KFunction`, `MyType`, `IntOrd`, `OrderedSig`). Type
+  references, module names, and signature names all share this class.
+- **Identifier** — lowercase-leading or `_`-leading names (`compare`,
+  `my_var`, `_internal`).
 
 This split is what lets the language reserve a syntactic slot for type names
 without quoting. `FN (x: Number) -> Str = (...)` works because `Number` and
 `Str` are recognizable as types from their shape alone.
 
-The [module system](module-system.md) widens the second class without adding
-a fourth: module names (`IntOrd`, `MakeSet`) and signature names (`Ordered`,
-`Showable`) are both capitalized-with-lowercase, so they share the
-type-reference class. The discrimination between "host type", "module", and
-"signature" happens at scope resolution, not at lex time — a `.`-compound on
-a module-class token resolves to module member access the same way a
-`.`-compound on a struct value resolves to a field read, and a
-module-qualified `IntOrd.t` in type position parses as a single structured
-`TypeExpr`. The new keywords stage 1 introduces (`MODULE`, `SIG`, `STRUCT`,
-`END`, etc.) stay in the all-caps class.
+A token that starts uppercase but classifies as neither keyword nor type
+(e.g. a single uppercase letter `A`, or `K9`) is a parse error rather than
+falling through to identifier — the rule keeps the type-position slot
+syntactically discriminable and prevents a future binding from silently
+shadowing a one-letter type-position identifier.
+
+The [module system](module-system.md) reuses the Type class without adding
+a fourth: module names (`IntOrd`, `MakeSet`) and signature names
+(`OrderedSig`, `ShowableSig`) classify the same way as host type names. The
+discrimination between "host type", "module", and "signature" happens at
+scope resolution, not at lex time — a `.`-compound on a module-class token
+resolves to module member access the same way a `.`-compound on a struct
+value resolves to a field read, and a module-qualified `IntOrd.Type` in type
+position parses as a single structured `TypeExpr`. Abstract type
+declarations inside a signature use the Type-class spelling too — the
+convention is `LET Type = ...` for the principal abstract type, with `Elt`,
+`Key`, `Val` etc. when more than one is needed.
 
 ## `KType` — the runtime type system
 
@@ -39,6 +52,13 @@ module-qualified `IntOrd.t` in type position parses as a single structured
   [Type-position slot kinds](#type-position-slot-kinds).
 - First-class type values: `Type` (a tagged-union or struct schema), `Tagged`
   (a tagged-union variant value), `Struct` (a struct value).
+- Module-system carriers: `Module` (the type of a `MODULE` value),
+  `Signature` (the type of a `SIG` value), and
+  `ModuleType { scope_id: usize, name: String }` — the per-ascription
+  abstract-type carrier minted by `:|` opaque ascription. Two distinct
+  opaque ascriptions of the same source module mint distinct `ModuleType`s
+  (different `scope_id`s), giving the abstraction-barrier identity property
+  the [module system](module-system.md) rests on.
 - `Any` — the no-op fast-path.
 
 [`KType::matches_value`](../src/dispatch/types/ktype.rs) plus
@@ -205,16 +225,11 @@ The static-typing-and-jit work in open work closes the first two uniformly.
 The abstraction-over-types story is the [module
 system](module-system.md) — structures and signatures, opaque ascription as
 the type-abstraction primitive, functors for parametric types, and modular
-implicits for inferred dispatch. The seven implementation stages live under
-[`roadmap/module-system-*.md`](../roadmap/module-system-1-module-language.md);
-stage 1 introduces a `KType::ModuleType { module_path, name }` carrier
-alongside the variants documented above, giving per-module type identity
-(opaque ascription) the runtime substrate the existing `KType::Struct` lacks.
+implicits for inferred dispatch. Stage 1 (the module language and per-module
+type identity via `KType::ModuleType`) shipped and is described in the body
+above; the remaining stages live under
+[`roadmap/module-system-*.md`](../roadmap/module-system-2-functors.md).
 
-- [Module system stage 1 — Module language](../roadmap/module-system-1-module-language.md)
-  — structures, signatures, transparent and opaque ascription, per-module
-  type identity. The first slice that adds module-shaped variants to the
-  runtime type system.
 - [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — inferred dispatch on signatures. Lands the multi-parameter dispatch the
   current slot-specificity ranking can't express on its own.

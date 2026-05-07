@@ -1,10 +1,11 @@
 # Module system stage 2 — Functors
 
-**Problem.** Stage 1 lands structures and signatures with abstract types, but
-generic data structures still need parameterization. A `Set` should be one
-abstraction usable for any element type with an ordering — written once,
-instantiated many times. Without **functors** (modules parameterized by other
-modules) every concrete `Set<T>` would be hand-written.
+**Problem.** Structures and signatures with abstract types are in the
+language (stage 1), but generic data structures still need parameterization.
+A `Set` should be one abstraction usable for any element type with an
+ordering — written once, instantiated many times. Without **functors**
+(modules parameterized by other modules) every concrete `Set<T>` would be
+hand-written.
 
 **Impact.**
 
@@ -45,9 +46,10 @@ modules) every concrete `Set<T>` would be hand-written.
 ## Dependencies
 
 **Requires:**
-- [Stage 1 — Module language](module-system-1-module-language.md)
+- [Stage 1.5 — Scheduler integration](module-system-1.5-scheduler.md) —
+  sharing constraints and generative-functor type identity ride on the
+  type-checker substrate stage 1.5 lands.
 
 **Unblocks:**
-- [Stage 3 — First-class modules](module-system-3-first-class-modules.md)
 - [Error-handling surface follow-ups](error-handling.md) — `Result<T, E>`
   is the functor-produced carrier for user-typed errors.

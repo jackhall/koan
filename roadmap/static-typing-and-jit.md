@@ -50,8 +50,9 @@ is the same phase emitting code.
 ## Dependencies
 
 **Requires:**
-- [Post-stage-1 Miri audit redo](post-stage-1-audit-redo.md) — module-system
-  stage 1 reshapes the memory model, and the post-stage-1 audit redo is what
+- [Module system stage 1.5 — Scheduler integration](module-system-1.5-scheduler.md)
+  — module-system stage 1 plus stage 1.5's `Infer` / `ImplicitSearch` scheduler
+  nodes reshape the memory model, and the stage-1.5 audit slate re-run is what
   re-establishes the sign-off the checker's lifetime story and the JIT's
   codegen contract both want to target.
 - [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —

@@ -56,12 +56,10 @@ independent of signatures.
 ## Dependencies
 
 **Requires:**
-- [Stage 1 — Module language](module-system-1-module-language.md) — for the
-  ascription site where axiom checking integrates.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
 
 The engine is independent of implicit dispatch and could be developed in
-parallel with stages 2-3, but it integrates with the module language at
-ascription, so stage 1 is the hard prerequisite.
+parallel with stages 2-3 — its integration point is the module language's
+ascription site, which is already in place.

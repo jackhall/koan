@@ -52,6 +52,11 @@ pub struct Scope<'a> {
     /// `drain_pending`. Direct writes (no conflict) bypass the queue entirely, so the hot
     /// path is unchanged. See `add` for the conditional-defer logic.
     pub pending: RefCell<Vec<(String, &'a KObject<'a>)>>,
+    /// Lexical-context label for this scope, used only by `debug_path()` for diagnostic
+    /// output and by the `KModule` value to remember its source label. Empty string for
+    /// run-root and call frames whose context isn't worth naming. Set at construction by
+    /// `MODULE`-style builtins (`"MODULE Foo"`, `"SIG OrderedSig"`).
+    pub name: String,
 }
 
 impl<'a> Scope<'a> {
@@ -65,6 +70,7 @@ impl<'a> Scope<'a> {
             out: RefCell::new(Some(out)),
             arena,
             pending: RefCell::new(Vec::new()),
+            name: String::new(),
         }
     }
 
@@ -86,7 +92,40 @@ impl<'a> Scope<'a> {
             out: RefCell::new(None),
             arena: outer.arena,
             pending: RefCell::new(Vec::new()),
+            name: String::new(),
         }
+    }
+
+    /// Construct a named child scope — used by the `MODULE` and `SIG` builtins so the
+    /// resulting scope's `name` records the lexical context (`"MODULE IntOrd"`,
+    /// `"SIG OrderedSig"`). Identical to `child_under` otherwise.
+    pub fn child_under_named(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+        Scope {
+            outer: Some(outer),
+            data: RefCell::new(HashMap::new()),
+            functions: RefCell::new(HashMap::new()),
+            out: RefCell::new(None),
+            arena: outer.arena,
+            pending: RefCell::new(Vec::new()),
+            name,
+        }
+    }
+
+    /// Walk the `outer` chain joining non-empty names with `>`. Used for diagnostics — error
+    /// messages can identify the lexical context a dispatch failed in. Run-root and unnamed
+    /// frames contribute nothing; the result is empty for an unnamed leaf with no named
+    /// ancestor.
+    pub fn debug_path(&self) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        let mut cur: Option<&Scope<'_>> = Some(self);
+        while let Some(s) = cur {
+            if !s.name.is_empty() {
+                parts.push(&s.name);
+            }
+            cur = s.outer;
+        }
+        parts.reverse();
+        parts.join(" > ")
     }
 
     /// Insert `name → obj` into this scope. Conditional-defer: tries the direct mutation

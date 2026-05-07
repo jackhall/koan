@@ -150,8 +150,8 @@ fn adjacent_paren_groups() {
 #[test]
 fn deeply_nested() {
     assert_eq!(
-        tree("hey (whoever (I think) you are (when I remember) now) look at").unwrap(),
-        "[t(hey) [t(whoever) [t(I) t(think)] t(you) t(are) [t(when) t(I) t(remember)] t(now)] t(look) t(at)]"
+        tree("hey (whoever (i think) you are (when i remember) now) look at").unwrap(),
+        "[t(hey) [t(whoever) [t(i) t(think)] t(you) t(are) [t(when) t(i) t(remember)] t(now)] t(look) t(at)]"
     );
 }
 

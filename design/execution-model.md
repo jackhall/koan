@@ -106,10 +106,12 @@ either path compression in `read_result` or a post-execute pass.
   Inference and search interleave (search needs constrained types resolved;
   resolved implicits refine type variables that other inferences are waiting
   on), and the existing scheduler's dependency tracking and cycle detection
-  carry both. Stage 1
-  ([roadmap/module-system-1-module-language.md](../roadmap/module-system-1-module-language.md))
-  is where this lands; the scheduler grows multi-target unification and a
-  type-check-vs-evaluation phase boundary at the same time.
+  carry both. Module-system stage 1 shipped the surface forms (`MODULE`,
+  `SIG`, opaque/transparent ascription) without the inference scheduler;
+  [Stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
+  is where the scheduler grows multi-target unification and a
+  type-check-vs-evaluation phase boundary, since implicit resolution is what
+  forces the question.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

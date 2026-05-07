@@ -502,12 +502,12 @@ mod tests {
     }
 
     /// A made-up function call with no matching signature surfaces as
-    /// `KError::DispatchFailed`. (`WAT THIS IS NOT A FUNCTION` parses as a multi-token
-    /// expression with all-uppercase tokens, so dispatch fails to find a match.)
+    /// `KError::DispatchFailed`. (`WAT THIS IS NOT FUNC` parses as a multi-token expression
+    /// with ≥2-uppercase keyword tokens, so dispatch fails to find a match.)
     #[test]
     fn dispatch_failure_surfaces_as_kerror() {
         let result = interpret_with_writer(
-            "WAT THIS IS NOT A FUNCTION",
+            "WAT THIS IS NOT FUNC",
             Box::new(std::io::sink()),
         );
         match result {

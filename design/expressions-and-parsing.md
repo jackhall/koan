@@ -17,10 +17,15 @@ system.
 3. [expression_tree.rs](../src/parse/expression_tree.rs) — walk the
    paren-delimited string into a nested expression tree.
 4. [tokens.rs](../src/parse/tokens.rs) — classify each whitespace-delimited
-   token as a literal, keyword (no lowercase — `LET`, `=`, `THEN`, `->`), type
-   name (capitalized + has lowercase — `Number`, `KFunction`), identifier, or
-   compound (member access, indexing, prefix/suffix operators). See
-   [type-system.md](type-system.md) for what the three classes mean.
+   token as a literal, keyword (pure-symbol like `=`, `->`, `:|`, `:!`, or
+   alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`),
+   type name (uppercase-leading with at least one lowercase — `Number`,
+   `KFunction`, `IntOrd`), identifier, or compound (member access, indexing,
+   prefix/suffix operators). A token that starts uppercase but classifies as
+   neither keyword nor type (single uppercase letter, or uppercase + digits
+   only) is a parse error. See
+   [type-system.md](type-system.md#token-classes--the-parser-level-foundation)
+   for what the three classes mean.
 5. [operators.rs](../src/parse/operators.rs) — table of compound-token
    operators (`!`, `.`, `[]`, `?`); add a row to extend.
 
@@ -146,14 +151,6 @@ documented surface — user code goes through the sigils.
 
 ## Open work
 
-- [Module system stage 1 — Module language](../roadmap/module-system-1-module-language.md)
-  — adds new top-level forms (structures, signatures, ascription) that fit
-  into the existing parser via the keyword convention: `MODULE`, `SIG`, and
-  `STRUCT` are all-caps (so they classify as `Keyword` parts), and module
-  member access reuses the existing `.`-compound operator. The dispatch
-  table remains the extension point — module declarations register new
-  dispatchable shapes the same way `FN` does. See
-  [module-system.md](module-system.md).
 - Source spans on `KExpression`
   ([Error-handling surface follow-ups](../roadmap/error-handling.md)) — error
   frames currently can't point to a line/column in source.

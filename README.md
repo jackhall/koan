@@ -66,7 +66,7 @@ Entry point: `parse` in [src/parse/expression_tree.rs](src/parse/expression_tree
 1. [quotes.rs](src/parse/quotes.rs) — replace string-literal contents with placeholders so later passes don't re-tokenize them.
 2. [whitespace.rs](src/parse/whitespace.rs) — turn indentation-based block structure into parenthesized form.
 3. [expression_tree.rs](src/parse/expression_tree.rs) — walk the paren-delimited string into a nested expression tree.
-4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (no lowercase — `LET`, `=`, `THEN`, `->`), type name (capitalized + has lowercase — `Number`, `KFunction`), identifier, or compound (member access, indexing, prefix/suffix operators).
+4. [tokens.rs](src/parse/tokens.rs) — classify each whitespace-delimited token as a literal, keyword (pure-symbol like `=`, `->`, `:|`, or alphabetic with ≥2 uppercase letters and no lowercase — `LET`, `THEN`), type name (uppercase-leading with at least one lowercase — `Number`, `KFunction`, `IntOrd`), identifier, or compound (member access, indexing, prefix/suffix operators).
 5. [operators.rs](src/parse/operators.rs) — table of compound-token operators (`!`, `.`, `[]`, `?`); add a row to extend.
 
 The output is one [`KExpression`](src/parse/kexpression.rs) per top-level line: an ordered sequence of `ExpressionPart`s (`Keyword`, `Identifier`, `Type`, nested `Expression`, `ListLiteral`, or typed `Literal`). The `Keyword` vs slot split is the parser's contract with dispatch: only `Keyword` parts contribute fixed tokens to a signature's bucket key; `Identifier`, `Type`, literals, and sub-expressions all become slots that compete on type specificity.
@@ -189,7 +189,8 @@ implementation, since it spans several roadmap items:
 
 - [design/module-system.md](design/module-system.md) — modules, signatures, functors,
   first-class modules, modular implicits, axiom-checked signatures, and equivalence-checked
-  coherence. Implementation runs in seven stages under `roadmap/module-system-*.md`.
+  coherence. Stage 1 (the module language plus first-class module values) shipped;
+  remaining work runs as the `roadmap/module-system-*.md` items.
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. [ROADMAP.md](ROADMAP.md) keeps the curated ordering and the

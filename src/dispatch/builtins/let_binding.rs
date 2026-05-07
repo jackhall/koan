@@ -3,19 +3,33 @@ use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
-use crate::try_args;
 
 use super::{err, register_builtin};
 
-/// `LET <name:Identifier> = <value:Any>` — copies the bound value into an arena-allocated
-/// `KObject`, inserts it under `name`, and returns that same arena reference. Compound values
-/// recurse through `KObject::deep_clone`.
+/// `LET <name> = <value:Any>` — copies the bound value into an arena-allocated `KObject`,
+/// inserts it under `name`, and returns that same arena reference. Compound values recurse
+/// through `KObject::deep_clone`.
+///
+/// Two overloads share this body, differing only in the `name` slot's `KType`: `Identifier`
+/// (the original lowercase-name path) and `TypeExprRef` (added in module-system stage 1 so
+/// `LET ModuleName = (...)` can bind a name that classifies as a Type token per §2).
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    try_args!(bundle; name: KString);
+    let name = match bundle.get("name") {
+        Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::TypeExprValue(t)) => t.name.clone(),
+        Some(other) => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "name".to_string(),
+                expected: "Identifier or TypeExprRef".to_string(),
+                got: other.ktype().name(),
+            }));
+        }
+        None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+    };
     let cloned = match bundle.get("value") {
         Some(obj) => obj.deep_clone(),
         None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
@@ -35,6 +49,20 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             elements: vec![
                 SignatureElement::Keyword("LET".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier }),
+                SignatureElement::Keyword("=".into()),
+                SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any }),
+            ],
+        },
+        body,
+    );
+    register_builtin(
+        scope,
+        "LET",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("LET".into()),
+                SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::TypeExprRef }),
                 SignatureElement::Keyword("=".into()),
                 SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any }),
             ],

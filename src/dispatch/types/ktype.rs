@@ -58,16 +58,37 @@ pub enum KType {
     /// `KObject::StructType` both report this. Consumed by construction primitives and any
     /// builtin that takes "a type" as an argument.
     Type,
-    /// Transitional: stage 0 ships this as a flat singleton tag — every tagged-union value
-    /// reports the same `KType::Tagged` regardless of which UNION schema declared it. Stage 1
-    /// (module language) replaces this with a module-typed variant carrying the declaring
-    /// module's identity. See roadmap/module-system-1-module-language.md.
+    /// Flat singleton tag: every tagged-union value reports the same `KType::Tagged` regardless
+    /// of which UNION schema declared it. Per-declaration identity for tagged-union values is
+    /// not yet carried here — the analogous identity story for opaquely-ascribed module
+    /// abstract types lives in `ModuleType` below. Folding declaring-scope identity into
+    /// `Tagged` is tracked as
+    /// [per-declaration type identity](../../../roadmap/per-declaration-type-identity.md).
     Tagged,
-    /// Transitional: stage 0 ships this as a flat singleton tag — every user struct reports
-    /// the same `KType::Struct` regardless of declaration. Stage 1 (module language) replaces
-    /// this with a module-typed variant carrying the declaring module's identity. See
-    /// roadmap/module-system-1-module-language.md.
+    /// Flat singleton tag: every user struct reports the same `KType::Struct` regardless of
+    /// declaration. Per-declaration identity is not yet carried here; see the `Tagged` note
+    /// above for the analogous module-identity discussion and
+    /// [per-declaration type identity](../../../roadmap/per-declaration-type-identity.md)
+    /// for the tracking item.
     Struct,
+    /// Per-module abstract type (`Foo.Type` after opaque ascription). `scope_id` is the
+    /// declaring module's child-scope address cast to `usize` — stable for the run because
+    /// `Scope`s are arena-allocated and never moved, distinct across modules because the
+    /// arena hands out fresh addresses, and equal between two `KType::ModuleType` values iff
+    /// they were minted by the same opaque-ascription event. `name` is the abstract type name
+    /// (typically `"Type"`); it's the textual disambiguator within a module that declares
+    /// multiple abstract types. Equality on `KType::ModuleType` is the dispatch identity
+    /// check that makes opaquely-ascribed `IntOrd.Type` distinct from `Number` even when
+    /// the underlying definition is `Number`.
+    ModuleType { scope_id: usize, name: String },
+    /// Meta-type for `KObject::KModule` values: a first-class module value. Reported by
+    /// `KObject::ktype()` so any "expects a module" slot — ATTR's lhs, the ascription
+    /// operators' lhs — can declare a single slot type.
+    Module,
+    /// Meta-type for `KObject::KSignature` values: a first-class module signature. The
+    /// ascription operators' RHS slot uses this to require a signature on the right-hand
+    /// side of `:|` / `:!`.
+    Signature,
     Any,
 }
 
@@ -124,6 +145,9 @@ impl KType {
             KType::Type => "Type".into(),
             KType::Tagged => "Tagged".into(),
             KType::Struct => "Struct".into(),
+            KType::ModuleType { name, .. } => name.clone(),
+            KType::Module => "Module".into(),
+            KType::Signature => "Signature".into(),
             KType::Any => "Any".into(),
         }
     }
@@ -144,6 +168,8 @@ impl KType {
             "Type" => Some(KType::Type),
             "Tagged" => Some(KType::Tagged),
             "Struct" => Some(KType::Struct),
+            "Module" => Some(KType::Module),
+            "Signature" => Some(KType::Signature),
             "Any" => Some(KType::Any),
             _ => None,
         }
@@ -294,6 +320,17 @@ impl KType {
                 part,
                 ExpressionPart::Future(KObject::Struct { .. })
             ),
+            KType::ModuleType { .. } => match part {
+                // A part filling a `ModuleType` slot must be a value whose runtime KType is
+                // an exactly-equal `ModuleType` (same scope_id and name) — that's the
+                // abstraction-barrier identity check. Today no value variant reports
+                // `ModuleType`; this arm is reserved for stage-3 first-class module values
+                // and falls through to false until then.
+                ExpressionPart::Future(obj) => &obj.ktype() == self,
+                _ => false,
+            },
+            KType::Module => matches!(part, ExpressionPart::Future(KObject::KModule(_))),
+            KType::Signature => matches!(part, ExpressionPart::Future(KObject::KSignature(_))),
         }
     }
 

@@ -12,9 +12,10 @@ prerequisites and the items it unblocks.
 
 Design rationale for what's already in the language lives in [design/](design/) — six
 topical docs covering the execution model, memory model, functional programming, type
-system, expressions and parsing, and error handling. One forward-looking design doc,
-[design/module-system.md](design/module-system.md), captures the agreed module-based
-abstraction system; it spans the seven `module-system-*` roadmap items below. What's
+system, expressions and parsing, and error handling. A seventh design doc,
+[design/module-system.md](design/module-system.md), captures the module-based
+abstraction system end-to-end; stage 1 (the module language) shipped, and the
+remaining six stages live as `module-system-*` roadmap items below. What's
 shipped so far: user-defined functions, the dispatch-as-node scheduler refactor,
 first-cut tail-call optimization, the leak fix (with lexical closures + per-call
 arenas), structured error propagation, the user-defined-types substrate (return-type
@@ -32,15 +33,22 @@ redirects self-anchored values to the outer arena, closing out the audit slate a
 leaks and 0 UB under Miri tree borrows), the quote/eval sigils (`#(expr)` and
 `$(expr)` — surface forms that capture an AST as a `KExpression` value or evaluate a
 `KExpression` value as code, closing the gap between "`KExpression` is first-class"
-and "user code can manipulate expressions ergonomically"), and the module-system
+and "user code can manipulate expressions ergonomically"), the module-system
 stage 0 cleanup (vestigial `KType::TypeRef` removed in favor of the unified
 `TypeExprRef` slot kind, struct values now `IndexMap`-backed so PRINT emits fields
 in declaration order, constructor dispatch funneled through a single
 `dispatch_constructor` helper, and a `TypeResolver` trait threaded through
-`KType::from_type_expr` ready for stage 1's module-aware resolver). The next
+`KType::from_type_expr` ready for stage 1's module-aware resolver), and the
+module-system stage 1 module language (`MODULE` and `SIG` declarators bind
+structures and signatures under Type-token names; `:|` opaque ascription mints
+fresh `KType::ModuleType { scope_id, name }` per declared abstract type so two
+ascriptions of the same source module are observably distinct types; `:!`
+transparent ascription shape-checks against the signature without re-tagging
+identity; `Module`/`Signature` first-class values arena-allocated alongside
+`KFunction` and reachable via `Foo.member` ATTR access). The next
 signature revision after error handling lands monadic side-effect capture; the
-type-system arc runs through the module-system stages — foundation in stage 1,
-ergonomic generic dispatch in stage 5, coherence in stage 6.
+type-system arc runs through the module-system stages — foundation now landed
+in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 
 ## Next items
 
@@ -61,20 +69,19 @@ without first landing something else:
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
   — `Scope::out` is one ad-hoc effect channel; every future effect (IO, time, randomness)
   needs a uniform carrier.
-- [Post-stage-1 Miri audit redo](roadmap/post-stage-1-audit-redo.md) — re-run the
-  audit slate after module-system stage 1 reshapes the memory model.
 
 ### Module system
 
 The agreed design is captured in [design/module-system.md](design/module-system.md);
-the seven stages below land it incrementally, each producing a usable end state.
+stage 1 shipped (the module language: `MODULE`/`SIG` declarators, `:|`/`:!`
+ascription, per-module type identity), and the remaining stages below land
+the rest incrementally, each producing a usable end state.
 
-- [Stage 1 — Module language](roadmap/module-system-1-module-language.md) — structures,
-  signatures, transparent and opaque ascription, per-module type identity.
+- [Stage 1.5 — Scheduler integration](roadmap/module-system-1.5-scheduler.md) —
+  `Infer` and `ImplicitSearch` scheduler nodes, the type-checking phase boundary,
+  multi-target unification, and a post-stage-1 Miri audit slate re-run.
 - [Stage 2 — Functors](roadmap/module-system-2-functors.md) — parametric modules with
   explicit application and sharing constraints.
-- [Stage 3 — First-class modules](roadmap/module-system-3-first-class-modules.md) —
-  modules as values; pack, unpack, dynamic module dispatch.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.
@@ -91,6 +98,10 @@ the seven stages below land it incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
+- [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
+  — `KType::Struct` and `KType::Tagged` are flat singletons, so two distinct
+  `STRUCT` declarations report the same type. Extend per-declaration identity
+  along the lines of the module system's `KType::ModuleType` carrier.
 
 ### Surface and ergonomics
 

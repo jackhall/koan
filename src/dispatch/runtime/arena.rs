@@ -5,7 +5,7 @@ use std::rc::Rc;
 use typed_arena::Arena;
 
 use crate::dispatch::kfunction::KFunction;
-use crate::dispatch::values::KObject;
+use crate::dispatch::values::{KObject, Module, Signature};
 use super::scope::Scope;
 
 /// Run-lifetime allocator. Constructed by `interpret`, lives for one program run, dropped at
@@ -40,6 +40,8 @@ pub struct RuntimeArena {
     objects: Arena<KObject<'static>>,
     functions: Arena<KFunction<'static>>,
     scopes: Arena<Scope<'static>>,
+    modules: Arena<Module<'static>>,
+    signatures: Arena<Signature<'static>>,
     /// Addresses (as `usize`) of every `KObject` ever allocated into `objects`. Used by
     /// `owns_object` so `lift_kobject`'s KFuture arm can ask "does this `&KObject` borrow
     /// point into my arena?" without a full traversal — answer is a single linear scan over
@@ -63,6 +65,8 @@ impl RuntimeArena {
             objects: Arena::new(),
             functions: Arena::new(),
             scopes: Arena::new(),
+            modules: Arena::new(),
+            signatures: Arena::new(),
             allocated_objects: RefCell::new(Vec::new()),
             escape: None,
         }
@@ -76,6 +80,8 @@ impl RuntimeArena {
             objects: Arena::new(),
             functions: Arena::new(),
             scopes: Arena::new(),
+            modules: Arena::new(),
+            signatures: Arena::new(),
             allocated_objects: RefCell::new(Vec::new()),
             escape: Some(escape),
         }
@@ -153,6 +159,28 @@ impl RuntimeArena {
         };
         let stored: &'a mut Scope<'static> = self.scopes.alloc(static_s);
         unsafe { std::mem::transmute::<&'a mut Scope<'static>, &'a Scope<'a>>(stored) }
+    }
+
+    /// Arena-allocate a [`Module`] (module-system stage 1). Same lifetime-erasure shape as
+    /// `alloc_function`/`alloc_scope`: the public API tracks `'a`; internal storage is
+    /// `'static`. The returned reference is stable for the arena's lifetime — `KObject::KModule`
+    /// captures it directly and shares it cheaply across clones.
+    pub fn alloc_module<'a>(&'a self, m: Module<'a>) -> &'a Module<'a> {
+        let static_m: Module<'static> = unsafe {
+            std::mem::transmute::<Module<'a>, Module<'static>>(m)
+        };
+        let stored: &'a mut Module<'static> = self.modules.alloc(static_m);
+        unsafe { std::mem::transmute::<&'a mut Module<'static>, &'a Module<'a>>(stored) }
+    }
+
+    /// Arena-allocate a [`Signature`] (module-system stage 1). Same lifetime-erasure shape
+    /// as `alloc_module`.
+    pub fn alloc_signature<'a>(&'a self, s: Signature<'a>) -> &'a Signature<'a> {
+        let static_s: Signature<'static> = unsafe {
+            std::mem::transmute::<Signature<'a>, Signature<'static>>(s)
+        };
+        let stored: &'a mut Signature<'static> = self.signatures.alloc(static_s);
+        unsafe { std::mem::transmute::<&'a mut Signature<'static>, &'a Signature<'a>>(stored) }
     }
 
     /// Whether the functions sub-arena holds zero `KFunction`s. Used by `lift_kobject`'s fast
@@ -297,6 +325,7 @@ impl CallArena {
             out: RefCell::new(None),
             arena: arena_ref,
             pending: RefCell::new(Vec::new()),
+            name: String::new(),
         };
         let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
         let scope_ptr = allocated as *const Scope<'_> as *const Scope<'static>;

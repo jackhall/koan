@@ -14,12 +14,14 @@
 
 mod kkey;
 mod kobject;
+mod module;
 mod named_pairs;
 pub mod struct_value;
 pub mod tagged_union;
 
 pub use kkey::KKey;
 pub use kobject::KObject;
+pub use module::{Module, Signature};
 pub use named_pairs::parse_named_value_pairs;
 
 use crate::dispatch::kfunction::BodyResult;

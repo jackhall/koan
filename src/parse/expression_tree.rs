@@ -235,12 +235,34 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
             // a standalone `Keyword(":")` — the type-annotation separator (`x: Number`)
             // consumed by builtins like `UNION` (and, future-tense, function-signature
             // parameter declarations).
+            //
+            // Outside a dict frame, `:|` and `:!` are the module-system stage 1 ascription
+            // operators (opaque and transparent). They have to be assembled here rather than
+            // at the `classify_token` layer because `!` is independently a prefix operator
+            // (`!foo` for NOT) — leaving a bare `!` after `:` would route through
+            // `parse_compound` and never reach the keyword classifier. We therefore peek the
+            // next char and consume the two-char form atomically as a `Keyword(":|")` /
+            // `Keyword(":!")`.
             ':' => {
                 assert_no_pending(&pending_sigil, c)?;
                 flush_token(&mut stack, &mut buf)?;
                 match stack.last_mut().unwrap() {
                     Frame::Dict(d) => d.accept_colon()?,
-                    frame => frame.push(ExpressionPart::Keyword(":".to_string())),
+                    frame => match chars.peek().copied() {
+                        Some('|') => {
+                            chars.next();
+                            frame.push(ExpressionPart::Keyword(":|".to_string()));
+                            prev = Some('|');
+                            continue;
+                        }
+                        Some('!') => {
+                            chars.next();
+                            frame.push(ExpressionPart::Keyword(":!".to_string()));
+                            prev = Some('!');
+                            continue;
+                        }
+                        _ => frame.push(ExpressionPart::Keyword(":".to_string())),
+                    },
                 }
             }
             // `,` is a pair separator inside a dict (commits an in-progress pair via

@@ -2,11 +2,13 @@
 
 Koan's abstraction unit is the *module*: a bundle of types and operations behind
 a signature, with first-class module values and modular implicits providing
-ergonomic generic dispatch. This is the agreed design; implementation runs in
-seven stages — see the [open-work index](#open-work) at the bottom. None of
-what's described below is shipped yet. The doc lives in `design/` because
-modules are a cross-cutting language concern that several roadmap items will
-share, and capturing the shape up front keeps the staged work coherent.
+ergonomic generic dispatch. The module language, ascription primitive, and
+first-class module values are shipped (stage 1); functors, axioms, and
+implicits land in subsequent stages — see the [open-work index](#open-work) at
+the bottom.
+The doc lives in `design/` because modules are a cross-cutting language
+concern that several roadmap items share, and capturing the whole shape in
+one place keeps the staged work coherent.
 
 The motivation is uniformity: multi-parameter dispatch, higher-kinded
 abstraction, and representation hiding all fall out of one mechanism rather
@@ -14,31 +16,54 @@ than sitting in three.
 
 ## Structures and signatures
 
-A **structure** bundles type definitions, values, and functions:
+A **structure** (declared with `MODULE`) bundles type definitions, values,
+and functions:
 
 ```
-module IntOrd = struct
-  type t = Number
-  fun compare (x: t) (y: t) -> Number = (...)
-end
+MODULE IntOrd = ((LET Type = Number) (LET compare = (FN ...)))
 ```
 
-A **signature** is a module type — an interface specifying what a structure
-must contain:
+A **signature** (declared with `SIG`) is a module type — an interface
+specifying what a structure must contain:
 
 ```
-module type ORDERED = sig
-  type t
-  val compare : (t, t) -> Number
-end
+SIG OrderedSig = ((LET Type = Number) (LET compare = (FN ...)))
 ```
 
-Structures can be **ascribed** to signatures. *Transparent ascription* checks
-that the structure satisfies the signature but leaves type definitions visible.
-*Opaque ascription* additionally hides the representation: outside the module,
-`IntOrd.t` is **not** the same type as `Number`, even though that's its
-underlying definition. Type checking forbids passing an `IntOrd.t` to anything
-expecting a `Number` — the abstraction barrier is enforced.
+Module and signature names use the **Type-token** spelling: first character
+ASCII-uppercase plus at least one lowercase character (`IntOrd`, `OrderedSig`,
+`MakeSet`). Abstract types declared inside a signature use the same shape —
+the convention is `Type` for the principal abstract type, with additional
+abstract types named `Elt`, `Key`, `Val`, etc. when more than one is needed.
+A bare `LET <TypeName> = <expr>` inside a signature body declares an abstract
+type slot rather than a value binding. The token-class rule that distinguishes
+`MODULE` (keyword: ≥2 uppercase, no lowercase) from `IntOrd` (Type token:
+uppercase-leading with at least one lowercase) is described in
+[type-system.md](type-system.md#token-classes--the-parser-level-foundation).
+
+Structures can be **ascribed** to signatures via two operators that differ
+only by a whitespace gap in the visual rendering, expressing "you can see
+through this":
+
+```
+LET IntOrdView     = (IntOrd :! OrderedSig)   -- transparent
+LET IntOrdAbstract = (IntOrd :| OrderedSig)   -- opaque
+```
+
+*Transparent ascription* (`:!`) checks that the structure satisfies the
+signature but leaves type definitions visible: `IntOrdView.Type` resolves to
+`Number` just as `IntOrd.Type` does. *Opaque ascription* (`:|`) additionally
+hides the representation: outside the ascription, `IntOrdAbstract.Type` is
+**not** the same type as `Number`, even though that's its underlying
+definition. Type checking forbids passing an `IntOrdAbstract.Type` value to
+anything expecting a `Number` — the abstraction barrier is enforced.
+
+Opaque ascription is **generative**: each application mints a fresh
+`KType::ModuleType { scope_id, name }` per declared abstract type. Two
+distinct opaque ascriptions of the same source module yield distinct types
+that cannot be confused. The carrier lives in
+[`KType`](../src/dispatch/types/ktype.rs); the operators are registered as
+ordinary builtins in [`ascribe.rs`](../src/dispatch/builtins/ascribe.rs).
 
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.
@@ -290,17 +315,24 @@ absorbing the conceptual cost incrementally.
 
 ## Open work
 
-The seven implementation stages, each producing a usable end state:
+Implementation stages remain, each producing a usable end state. (Stage 1
+— the module language itself: `MODULE`, `SIG`, `:|`, `:!`, and per-module type
+identity via `KType::ModuleType` — shipped and is described in the body
+above. First-class module values shipped alongside it: `KObject::KModule`
+flows through `LET` and ATTR like any other value, so a separate pack/unpack
+construct isn't needed; the remaining first-class-modules work folds into
+later stages — signature-bound dispatch (modules-as-values typed against a
+specific signature) is part of stage 5, and the static-signature-at-use-site
+obligation for the type checker is part of stage 1.5.)
 
-- [Stage 1 — Module language](../roadmap/module-system-1-module-language.md)
-  — structures, signatures, transparent and opaque ascription. Ships an
-  ML-circa-1980 module system on top of Koan's existing value language.
+- [Stage 1.5 — Scheduler integration](../roadmap/module-system-1.5-scheduler.md)
+  — `Infer` and `ImplicitSearch` scheduler nodes, the type-checking phase
+  boundary, and multi-target unification. Re-runs the
+  [memory-model audit slate](memory-model.md#verification) against
+  the post-stage-1 runtime plus the new scheduler nodes.
 - [Stage 2 — Functors](../roadmap/module-system-2-functors.md) — parametric
   modules with explicit application and sharing constraints. Ships generic
   data structures.
-- [Stage 3 — First-class modules](../roadmap/module-system-3-first-class-modules.md)
-  — modules as values; pack and unpack. Ships dynamic module dispatch and
-  the substrate for implicits.
 - [Stage 4 — Property testing and axioms](../roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch, axiom
   syntax in signatures, compile-time axiom checking on ascription. Catches

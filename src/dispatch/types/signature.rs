@@ -30,12 +30,28 @@ pub enum UntypedElement {
 /// two sides agree on the spelling.
 pub type UntypedKey = Vec<UntypedElement>;
 
-/// True iff `s` is a keyword (fixed token) rather than an identifier when classifying a source
-/// token: no lowercase ASCII letters. `LET`, `=`, `THEN` qualify; `x`, `foo`, `Foo` don't.
+/// True iff `s` is a keyword (fixed token) rather than an identifier or type when classifying
+/// a source token. The rules — see [token classes in
+/// design/type-system.md](../../../design/type-system.md#token-classes--the-parser-level-foundation):
+///
+/// 1. Pure-symbol tokens (no ASCII letters at all): always keywords. Examples: `=`, `->`, `:`,
+///    `:|`, `:!`, `+`. The alphabetic-letter rules below don't apply because there are none.
+/// 2. Alphabetic tokens (at least one ASCII letter): keyword iff there are ≥2 ASCII-uppercase
+///    letters AND no ASCII-lowercase letters. Examples: `LET`, `FN`, `MODULE`, `MATCH`. A
+///    single-uppercase token like `A` falls into neither this nor the type-name rule and is
+///    rejected upstream by `classify_atom`.
+///
 /// Used by the parser's `classify_atom` and by `ExpressionSignature::normalize` to keep the
 /// two ends of the dispatch contract aligned.
 pub fn is_keyword_token(s: &str) -> bool {
-    !s.chars().any(|c| c.is_ascii_lowercase())
+    let has_letter = s.chars().any(|c| c.is_ascii_alphabetic());
+    if !has_letter {
+        // Pure-symbol token (`=`, `->`, `:|`). Bypass the alphabetic-letter rule.
+        return true;
+    }
+    let upper_count = s.chars().filter(|c| c.is_ascii_uppercase()).count();
+    let has_lower = s.chars().any(|c| c.is_ascii_lowercase());
+    upper_count >= 2 && !has_lower
 }
 
 /// Result of comparing two signatures' specificity. Returned by

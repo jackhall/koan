@@ -7,6 +7,7 @@ use crate::parse::kexpression::{KExpression, TypeExpr};
 use crate::dispatch::kfunction::KFunction;
 use crate::dispatch::runtime::{CallArena, KFuture};
 use crate::dispatch::types::{KType, Parseable, Serializable, SignatureElement};
+use super::module::{Module, Signature};
 
 /// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
 /// reference to a function in some scope. The universal value type that `KFunction`s consume
@@ -80,6 +81,15 @@ pub enum KObject<'a> {
     /// full parameterized form (`List<Number>`, `Function<(N) -> S>`, ...) rather than just
     /// the bare type name. Internal-only — no user-facing operation produces this variant.
     TypeExprValue(TypeExpr),
+    /// First-class module value (module-system stage 1). Carries an arena-allocated
+    /// [`Module`] reference whose `child_scope` points at the body scope `MODULE` populated
+    /// during construction. Reports `KType::Module`. ATTR routes through this variant for
+    /// member access (`Foo.bar`).
+    KModule(&'a Module<'a>),
+    /// First-class signature value (module-system stage 1). Holds the declaring scope so the
+    /// ascription operators `:|` / `:!` can iterate declared abstract types and operation
+    /// signatures. Reports `KType::Signature`.
+    KSignature(&'a Signature<'a>),
     Null,
 }
 
@@ -111,6 +121,8 @@ impl<'a> KObject<'a> {
             KObject::Tagged { .. } => KType::Tagged,
             KObject::Struct { .. } => KType::Struct,
             KObject::TypeExprValue(_) => KType::TypeExprRef,
+            KObject::KModule(_) => KType::Module,
+            KObject::KSignature(_) => KType::Signature,
         }
     }
 
@@ -146,6 +158,8 @@ impl<'a> KObject<'a> {
                 fields: Rc::clone(fields),
             },
             KObject::TypeExprValue(t) => KObject::TypeExprValue(t.clone()),
+            KObject::KModule(m) => KObject::KModule(*m),
+            KObject::KSignature(s) => KObject::KSignature(*s),
         }
     }
 }
@@ -217,6 +231,8 @@ impl<'a> Parseable for KObject<'a> {
             }
             KObject::Null => "null".to_string(),
             KObject::TypeExprValue(t) => t.render(),
+            KObject::KModule(m) => format!("module {}", m.path),
+            KObject::KSignature(s) => format!("sig {}", s.path),
         }
     }
 }
