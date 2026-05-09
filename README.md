@@ -105,6 +105,7 @@ eponymous Koan-runtime type: [kobject.rs](src/dispatch/values/kobject.rs) define
 Files without the prefix are infrastructure that don't introduce a single namesake type:
 [arena.rs](src/dispatch/runtime/arena.rs) (allocation),
 [scope.rs](src/dispatch/runtime/scope.rs) (lexical environment),
+[dispatcher.rs](src/dispatch/runtime/dispatcher.rs) (overload resolution),
 [signature.rs](src/dispatch/types/signature.rs) (dispatch shapes and specificity),
 [builtins.rs](src/dispatch/builtins.rs) (registry),
 [monad.rs](src/dispatch/types/monad.rs) (trait impl on a foreign type),
@@ -146,9 +147,10 @@ src/
 │   ├── kfunction.rs     KFunction, Body, ArgumentBundle — bind/apply at the dispatch root
 │   ├── runtime.rs
 │   ├── runtime/
-│   │   ├── arena.rs     RuntimeArena, CallArena — per-run and per-call allocation
-│   │   ├── kerror.rs    KError, KErrorKind, Frame — structured runtime errors
-│   │   └── scope.rs     Scope and KFuture
+│   │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
+│   │   ├── dispatcher.rs  overload resolution: pick / specificity / lazy-candidate
+│   │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
+│   │   └── scope.rs       Scope and KFuture
 │   ├── types.rs
 │   ├── types/
 │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values

@@ -53,7 +53,11 @@ serves both `needs_lift` and `kobject_borrows_arena`; `run_aggregate` and
 `run_aggregate_dict` share a parametric runner plus a frame-on-error
 `resolve_or_err` helper; module/signature resolution lives next to the
 `Module` / `Signature` types and serves both ascription operators and
-`MODULE_TYPE_OF`). The next
+`MODULE_TYPE_OF`), and the dispatcher extraction (overload resolution lifted
+out of `Scope` into a dedicated `dispatcher.rs` of free functions taking
+`&Scope`; `Scope::dispatch` and `Scope::lazy_candidate` are now thin
+forwarders so `scope.rs` is back to lexical-environment storage and direct
+mutators only). The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -138,6 +142,6 @@ the rest incrementally, each producing a usable end state.
 
 - [Static type checking and JIT compilation](roadmap/static-typing-and-jit.md) — the
   tooling and performance ceiling; both want a phase between parse and execution.
-- [`KType` and dispatcher concern split](roadmap/ktype-and-dispatcher-split.md) —
-  split `ktype.rs` and `scope.rs` along their concern boundaries; substrate for
+- [`KType` concern split](roadmap/ktype-split.md) —
+  split `ktype.rs` along its concern boundaries; substrate for
   static-typing-and-jit's checker pre-pass.

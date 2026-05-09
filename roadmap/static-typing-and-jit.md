@@ -66,7 +66,7 @@ is the same phase emitting code.
   against it. Stage 5 is the latest stage that introduces new shapes the checker has
   to handle (modules, functors, first-class modules, implicit resolution); stages 6
   and 7 are additive.
-- [`KType` and dispatcher concern split](ktype-and-dispatcher-split.md) — a
+- [`KType` concern split](ktype-split.md) — a
   clean dispatcher boundary lets the checker call into overload resolution
   without coupling to `Scope`'s storage internals, and the split-out
   resolution module gives the checker a focused surface for type-expression
