@@ -154,6 +154,3 @@ face the same Miri evidence the current set does.
   both the checker's lifetime story and the JIT's codegen contract want a
   stable, signed-off memory model plus a settled answer to the
   inference-as-scheduler-work question.
-- [`KType` concern split](ktype-split.md) —
-  splits `ktype.rs` and `scope.rs` along their concern boundaries once
-  stage 2 has finished landing new `KType` variants and dispatch paths.

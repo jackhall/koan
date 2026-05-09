@@ -24,7 +24,7 @@ echo 'PRINT "hello"' | cargo run
 
 The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
 
-User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The known types are `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `KFunction`, `KExpression`, and `Any`.
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `List<T>`, `Dict<K, V>`, `Function<(args) -> R>`, `Type`, `Tagged`, `Struct`, `Module`, `Signature`, `KExpression`, and `Any`.
 
 Example:
 
@@ -35,7 +35,7 @@ FN (ECHO x: Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
-Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals. The lexer distinguishes three token classes for non-literal atoms: **all-caps tokens** (`LET`, `THEN`, `=`, `->`) are dispatch keywords; **capitalized names with at least one lowercase letter** (`Number`, `Str`, `KFunction`, `MyType`) are type references; everything else (lowercase / snake_case) is an identifier.
+Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals. The lexer distinguishes three token classes for non-literal atoms: **all-caps tokens** (`LET`, `THEN`, `=`, `->`) are dispatch keywords; **capitalized names with at least one lowercase letter** (`Number`, `Str`, `KExpression`, `MyType`) are type references; everything else (lowercase / snake_case) is an identifier.
 
 For a walk-through of the language surface with runnable snippets, see [TUTORIAL.md](TUTORIAL.md).
 
@@ -154,6 +154,8 @@ src/
 │   ├── types.rs
 │   ├── types/
 │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+│   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
+│   │   ├── ktype_resolution.rs   surface-name and TypeExpr elaboration (from_name, from_type_expr, join)
 │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
 │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
 │   │   ├── monad.rs           Monadic impl for Option
