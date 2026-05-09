@@ -199,19 +199,20 @@ mod tests {
     use crate::execute::scheduler::Scheduler;
 
     // Sentinel-returning bodies. Each produces a distinct `KString` so a test can tell which
-    // overload won dispatch. The explicit `'a` is needed so the leaked `&'static KObject<'static>`
-    // marker coerces (covariantly) to `&'a KObject<'a>`.
-    fn marker<'a>(s: &'static str) -> &'a KObject<'a> {
-        Box::leak(Box::new(KObject::KString(s.into())))
+    // overload won dispatch. Allocate the marker into the call's scope arena so it drops with
+    // the run — Miri's leak detector flagged earlier `Box::leak`-based markers as the only
+    // post-stage-1 audit-slate leak.
+    fn marker<'a>(s: &'a Scope<'a>, label: &'static str) -> &'a KObject<'a> {
+        s.arena.alloc_object(KObject::KString(label.into()))
     }
 
-    fn body_identifier<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("identifier")) }
-    fn body_any<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any")) }
-    fn body_number_any<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("number_any")) }
-    fn body_any_number<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("any_number")) }
-    fn body_inner_any<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("inner_any")) }
-    fn body_outer_number<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("outer_number")) }
-    fn body_lowercase<'a>(_s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker("lowercase")) }
+    fn body_identifier<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "identifier")) }
+    fn body_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "any")) }
+    fn body_number_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "number_any")) }
+    fn body_any_number<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "any_number")) }
+    fn body_inner_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "inner_any")) }
+    fn body_outer_number<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "outer_number")) }
+    fn body_lowercase<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "lowercase")) }
 
     fn one_slot_sig(name: &str, kt: KType) -> ExpressionSignature {
         ExpressionSignature {

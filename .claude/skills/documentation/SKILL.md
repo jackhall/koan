@@ -17,6 +17,7 @@ Each tier has a job. Keeping them disjoint is what lets a reader pick the right 
 
 - **`README.md`**. Introduces a new user or developer to the project. Links other docs. Explains the directory structure. Aim for "what is this and where do I go next."
 - **`TUTORIAL.md`**. Walks a user through writing koan code. From the user's perspective, not the implementer's.
+- **`TEST.md`**. Testing and linting reference: `cargo test` conventions, clippy/fmt commands, and the canonical Miri audit-slate test list. Updated whenever a slate test is added or removed.
 - **`design/*.md`**. Describes shipped behavior — architecture, cross-cutting concerns, design rationale for what's already in the language. Update after a PR is code-complete and tested, but only if a design decision was made. If a file is being deleted or downsized, update inbound references.
 - **`roadmap/*.md`**. **Future work only.** Each file is one work item with a `## Dependencies` section. Items can reference prerequisites and unblockers.
 - **`ROADMAP.md`**. A curated index of `roadmap/*.md` items. The "What's shipped so far" prose paragraph is the running record of completed work; the bulleted "Open items" sections list active items.
@@ -69,6 +70,21 @@ The work item is no longer future work, so it leaves `roadmap/`.
 4. If the shipped behavior has explanatory value not already captured, **move that narrative into the relevant `design/*.md`** as a body section (not as an "Open work" entry — that section is for what's still future).
 5. **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph naming what landed. (The tool only touches the bullet lists.)
 6. **Re-run `doclinks check`** (below).
+
+### After a Miri run in this session
+
+If the session ran a Miri full-slate invocation, update the slate-duration log
+in [`TEST.md`](../../../TEST.md) before any other doc work:
+
+1. Locate the `<!-- slate-durations:start -->` / `<!-- slate-durations:end -->`
+   block.
+2. Prepend a new bullet for the most recent full-slate run, format
+   `- YYYY-MM-DD: <duration>s — <N> tests, <leaks> leaks, <ub> UB`.
+3. Trim the list to the five most-recent entries.
+
+The miri skill carries the parsing rules for `<duration>` / `<N>` / `<leaks>`
+/ `<ub>` from Miri's output; this rule is just the doc-side update obligation.
+Single-test triage runs and non-slate Miri invocations do not trigger this.
 
 ### When editing any doc
 

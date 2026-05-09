@@ -180,3 +180,83 @@ pub(crate) fn resolve_signature<'a>(
         got: obj.ktype().name(),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    //! Targeted Miri coverage for the post-stage-1 `Module` / `Signature` unsafe sites:
+    //! the `*const Scope<'static>` lifetime-erasure transmutes and the `type_members`
+    //! `RefCell` mutation under a held `&'a Module<'a>` borrow. Same convention as the
+    //! arena.rs slate — fail when Miri reports UB, not on values.
+    //!
+    //! Per [`design/memory-model.md`](../../../design/memory-model.md), each shape is
+    //! exercised in isolation so a regression in `Module::new` / `Module::child_scope` /
+    //! `Signature::new` / `Signature::decl_scope` / `type_members.borrow_mut` shows up
+    //! as a single attributable failure, not buried in a full end-to-end run.
+    use super::*;
+    use crate::dispatch::builtins::default_scope;
+    use crate::dispatch::runtime::RuntimeArena;
+    use crate::dispatch::types::KType;
+    use std::io::sink;
+    use std::ptr;
+    /// `Module::new` casts `&'a Scope<'a>` through `*const Scope<'_>` to
+    /// `*const Scope<'static>`; `child_scope()` re-attaches `'a` via transmute. The arena
+    /// outlives the module by construction. Pin the round-trip down on its own — alloc
+    /// the module into the arena, hand out a `&'a Module<'a>`, read its `child_scope()`
+    /// back, and verify the recovered ref is pointer-identical to the input scope.
+    #[test]
+    fn module_child_scope_transmute_does_not_dangle() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(sink()));
+        let module = arena.alloc_module(Module::new("Test".into(), scope));
+        let recovered = module.child_scope();
+        assert!(ptr::eq(recovered, scope));
+        // Re-borrow after a sibling alloc — typed-arena promises stable addresses, but
+        // tree borrows is sensitive to interleaved mutation under live shared borrows.
+        let _other = arena.alloc_object(crate::dispatch::values::KObject::Number(1.0));
+        let recovered2 = module.child_scope();
+        assert!(ptr::eq(recovered2, scope));
+    }
+
+    /// Symmetric to `module_child_scope_transmute_does_not_dangle`. `Signature` uses the
+    /// same `*const Scope<'static>` shape; the slate covers it independently because the
+    /// allocator lives on a different sub-arena (`signatures`) and a regression in either
+    /// `alloc_signature`'s transmute or `Signature::decl_scope`'s re-attach must surface
+    /// without the module path masking it.
+    #[test]
+    fn signature_decl_scope_transmute_does_not_dangle() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(sink()));
+        let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
+        let recovered = sig.decl_scope();
+        assert!(ptr::eq(recovered, scope));
+        let _other = arena.alloc_object(crate::dispatch::values::KObject::Number(1.0));
+        let recovered2 = sig.decl_scope();
+        assert!(ptr::eq(recovered2, scope));
+    }
+
+    /// Opaque ascription mutates `type_members` *after* the surrounding `KObject` is
+    /// alloc'd — the `&'a Module<'a>` borrow is already live when the borrow_mut + insert
+    /// happens. Tree borrows is strict about interior mutation under a live shared
+    /// borrow; pin the shape down. Read the value back through a fresh `borrow()` to
+    /// verify the insert is observable.
+    #[test]
+    fn module_type_members_refcell_mutation_with_held_module_ref() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(sink()));
+        let module = arena.alloc_module(Module::new("M".into(), scope));
+        // Hold the `&Module` borrow live across the borrow_mut + insert + readback.
+        let scope_id = module.scope_id();
+        {
+            let mut tm = module.type_members.borrow_mut();
+            tm.insert(
+                "Type".into(),
+                KType::ModuleType { scope_id, name: "Type".into() },
+            );
+        }
+        let bound = module.type_members.borrow().get("Type").cloned();
+        assert!(matches!(
+            &bound,
+            Some(KType::ModuleType { scope_id: id, name }) if *id == scope_id && name == "Type"
+        ));
+    }
+}
