@@ -42,6 +42,16 @@ pub enum KErrorKind {
     ParseError(String),
     /// Landing pad for an in-language `RAISE`-style builtin, not yet shipped.
     User(String),
+    /// A binder (LET, STRUCT, UNION, SIG, MODULE) tried to install a value name that the
+    /// current scope already binds — same-scope rebind is rejected per the decided rule
+    /// (cross-scope shadowing remains allowed). Surfaces via `Scope::bind_value` and the
+    /// dispatch-time placeholder install path (`install_dispatch_placeholder`).
+    Rebind { name: String },
+    /// A FN registration found an existing overload in the same bucket whose
+    /// `ExpressionSignature` is exact-equal (same shape, same per-slot KType). Distinct from
+    /// `Rebind` — function names live in a separate `functions` table keyed by signature, so
+    /// the collision is per-signature rather than per-name.
+    DuplicateOverload { name: String, signature: String },
 }
 
 /// One entry in an error's call-stack trace. `function` is the registered function's
@@ -131,6 +141,13 @@ impl fmt::Display for KErrorKind {
             KErrorKind::ShapeError(reason) => write!(f, "shape error: {reason}"),
             KErrorKind::ParseError(reason) => write!(f, "parse error: {reason}"),
             KErrorKind::User(msg) => write!(f, "{msg}"),
+            KErrorKind::Rebind { name } => {
+                write!(f, "name '{name}' is already bound in this scope")
+            }
+            KErrorKind::DuplicateOverload { name, signature } => write!(
+                f,
+                "function '{name}' already has an overload with signature {signature}",
+            ),
         }
     }
 }

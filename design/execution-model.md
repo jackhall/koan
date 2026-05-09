@@ -145,6 +145,55 @@ There is no separate type-checking phase preceding evaluation. Inference,
 dispatch, and execution interleave in one DAG; build-time is the same
 engine running before pegged inputs are unblocked.
 
+## Dispatch-time name placeholders
+
+Forward references between sibling top-level expressions, members of a
+`MODULE` body, and (eventually) names imported across files all require the
+same property: a lookup whose target binder has dispatched but not yet
+executed parks on the producer instead of failing with `UnboundName`. The
+mechanism lives in two pieces.
+
+A new [`Scope::placeholders`](../src/dispatch/runtime/scope.rs) sidecar — a
+`RefCell<HashMap<String, NodeId>>` — sits parallel to `data`. When a binder
+dispatches, its `pre_run` hook (a per-`KFunction` extractor that pulls the
+to-be-bound name structurally out of the expression's parts) installs
+`name → producer NodeId` in the dispatching scope's placeholders. The six
+binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`) opt in via
+`register_builtin_with_pre_run`; everything else stays placeholder-free.
+`Scope::resolve` walks `data` then `placeholders` in each scope on the chain
+and returns one of three shapes: `Resolution::Value(&KObject)` for a
+finalized binding, `Resolution::Placeholder(NodeId)` for a still-running
+producer, or `Resolution::Unbound` for a genuinely missing name. `bind_value`
+and `register_function` remove their own placeholder before inserting into
+`data` / `functions`, so the two tables are mutually exclusive at any
+moment.
+
+The execute side — [`run_dispatch`](../src/execute/run.rs) — handles the
+park. A bare-Identifier dispatch slot (`(some_var)`) hits a §1 short-circuit
+that resolves the name directly: `Value` returns inline, `Placeholder`
+rewrites the slot's work to `Lift { from: producer_id }` (the same shim
+`BodyResult::Tail` uses for sub-Bind waits), `Unbound` falls through to
+`value_lookup`'s structured error. The §7 auto-wrap promotes bare
+identifiers in *value-typed* slots of any picked function to single-Identifier
+sub-expressions so they re-enter `run_dispatch` and route through §1; this
+is why `LET y = z` looks up `z` rather than binding `y` to the literal
+string `"z"`. Multi-name forward references compose as N independent
+sub-Dispatches. The §8 replay-park covers the literal-name slots that
+*don't* sub-dispatch (`call_by_name`'s verb, `ATTR`'s identifier-lhs,
+`type_call`'s verb): if any of those names resolves to a placeholder whose
+producer hasn't terminalized, the outer slot's work is rewritten to
+`Dispatch(same_expr)` and parked on the producer's notify-list; on wake the
+re-dispatch finds the binding in `data` and proceeds. If the producer
+already terminalized with an error, the consumer's replay-park surfaces it
+with a `<replay-park>` frame rather than parking on a dead slot.
+
+The new edges are notify-only (consumer→producer for waking, no ownership
+transfer), so `node_dependencies` — the parent → owned-children sidecar that
+`free()` walks — stays untouched. Same-scope rebind of a value name surfaces
+as `KErrorKind::Rebind`; an `FN` overload duplicating an existing exact
+signature surfaces as `KErrorKind::DuplicateOverload`; recursive type
+definitions deadlock under the uniform-park rule and are tracked separately.
+
 ## Open work
 
 - **Inference and search as scheduler work**
@@ -162,12 +211,3 @@ engine running before pegged inputs are unblocked.
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Dispatch-time name placeholders**
-  ([roadmap/dispatch-time-placeholders.md](../roadmap/dispatch-time-placeholders.md)).
-  Binders (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`) install a
-  placeholder in a new `Scope::placeholders` sidecar at dispatch time —
-  before their RHS is scheduled — so a lookup whose target binder has
-  dispatched but not yet executed parks on the producer's slot via a
-  `Replace`-installed notify edge instead of failing with an
-  unresolved-name error. Same semantics for value-RHS and type-RHS for
-  v1; recursive type definitions are a separate follow-up.

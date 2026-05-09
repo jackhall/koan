@@ -1,4 +1,4 @@
-use super::kfunction::{Body, BodyResult, BuiltinFn, KFunction};
+use super::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use super::runtime::{KError, Scope};
 use super::types::ExpressionSignature;
 use super::values::KObject;
@@ -33,11 +33,38 @@ pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
 /// the object to `scope` under `name`. Centralizes the per-builtin `register` boilerplate.
 /// Allocations live for the run (the arena's lifetime) — fine for builtins because every run
 /// rebuilds the default scope, and the per-builtin allocations are tiny.
+///
+/// Routes through `Scope::register_function`, which adds the function to the per-signature
+/// `functions` bucket (deduping exact-equal signatures with `DuplicateOverload`) and
+/// installs the wrapper into `data[name]` if compatible. `default_scope` builds a fresh
+/// run-root and registers each builtin once, so the dedupe is a guard for future
+/// double-registrations rather than a hot path.
 pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature,
     body: BuiltinFn,
+) {
+    register_builtin_with_pre_run(scope, name, signature, body, None);
+}
+
+/// `register_builtin` with an optional `pre_run` extractor. Used by the binder builtins
+/// (LET, FN, STRUCT, UNION, SIG, MODULE) so `run_dispatch` can call the extractor before
+/// scheduling sub-deps and install a name → producer-NodeId placeholder in the dispatching
+/// scope. See [`crate::dispatch::kfunction::PreRunFn`] and the dispatch-time-placeholders
+/// roadmap item.
+///
+/// Errors from `register_function` (`DuplicateOverload`, `Rebind` on function/value
+/// collision) are silently dropped here — `default_scope` registers each builtin once at
+/// run-root construction, so a collision indicates a programming error in builtin
+/// registration code, not a recoverable runtime failure. Tests in
+/// `scope::tests::register_function_*` cover the structured-error paths.
+pub(crate) fn register_builtin_with_pre_run<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature,
+    body: BuiltinFn,
+    pre_run: Option<PreRunFn>,
 ) {
     let arena = scope.arena;
     // Builtins capture the scope they're being registered into — typically run-root (set up
@@ -45,11 +72,11 @@ pub(crate) fn register_builtin<'a>(
     // in, so `lift_kobject`'s arena-pointer comparison correctly identifies builtins as
     // never-in-a-dying-frame.
     let f: &'a KFunction<'a> =
-        arena.alloc_function(KFunction::new(signature, Body::Builtin(body), scope));
+        arena.alloc_function(KFunction::with_pre_run(signature, Body::Builtin(body), scope, pre_run));
     // `frame: None` here — the lift-on-return logic in the scheduler doesn't need to attach
     // an Rc for builtins (their captured arena is run-root and never dies).
     let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
-    scope.add(name.into(), obj);
+    let _ = scope.register_function(name.into(), f, obj);
 }
 
 /// Build a run-root scope populated with the language's builtin `KFunction`s, allocating them

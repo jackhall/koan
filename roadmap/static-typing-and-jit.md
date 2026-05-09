@@ -32,12 +32,13 @@ is the same phase emitting code.
 
 - *Checker scope — open.* The user-facing choice is whether the checker permits
   unresolved type bindings — the
-  [dispatch-time-placeholders](dispatch-time-placeholders.md) mechanism reaching
-  through into the check phase — or insists every type identifier resolves at
-  compile time. Permissive matches the dynamic-dispatch ergonomics today's runtime
-  exhibits and gives the checker a soft-rejection mode for programs that work but
-  can't be fully statically resolved; strict matches what a separate-from-runtime
-  type system would conventionally enforce. Likely a per-build switch.
+  [dispatch-time name placeholder](../design/execution-model.md#dispatch-time-name-placeholders)
+  mechanism reaching through into the check phase — or insists every type
+  identifier resolves at compile time. Permissive matches the dynamic-dispatch
+  ergonomics today's runtime exhibits and gives the checker a soft-rejection
+  mode for programs that work but can't be fully statically resolved; strict
+  matches what a separate-from-runtime type system would conventionally
+  enforce. Likely a per-build switch.
 - *JIT target — decided.* Compilation and execution share a process, so the artifact
   to persist is a serialized scheduler-plus-ownership-state snapshot with pegged
   nodes (resolved dispatch targets, monomorphized signatures) pre-baked — not a

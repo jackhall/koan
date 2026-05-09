@@ -125,14 +125,30 @@ plumbing for future work.
 
 `LET <name> = <value>` introduces a name. Once introduced, the name is
 visible to every expression that follows it in the same block, and to any
-nested block. A bare identifier on its own is a name lookup: it produces
-the value the name was bound to, or an `UnboundName` error if there is no
-such binding.
+nested block. A bare identifier in any value-typed slot is a name lookup —
+both the bare-identifier-on-its-own form and identifiers passed as
+arguments to a builtin or user function:
 
 ```
 LET msg = "hi"
-PRINT msg          # prints "hi"
+PRINT msg          # prints "hi" — `msg` in PRINT's value slot resolves to "hi"
+LET copy = msg     # binds `copy` to "hi", not to the literal string "msg"
 ```
+
+A name lookup whose binder hasn't run yet — a forward reference between
+sibling top-level expressions — *parks* on the producer rather than
+failing. Once the binder finishes, the consumer wakes and resumes:
+
+```
+LET y = x
+LET x = 42
+PRINT y            # prints 42
+```
+
+A name that no binder ever introduces still surfaces as `UnboundName`.
+Re-binding a value name in the same scope surfaces as `Rebind`; shadowing
+across nested scopes (a child block, a function body) is allowed and is
+how lexical scoping works.
 
 When you write an expression, Koan picks which function (builtin or
 user-defined) to run by matching the *shape* of what you wrote — the
@@ -399,9 +415,11 @@ error: type mismatch for argument '<return>': expected Number, got Str
 
 Variants you can hit today: `TypeMismatch`, `MissingArg`, `UnboundName`,
 `ArityMismatch`, `AmbiguousDispatch`, `DispatchFailed`, `ShapeError`,
-`ParseError`, `User`. There's no in-language try/catch yet — errors
-short-circuit to the top level. Intentional `null` values (the `null` literal,
-`PRINT`'s return) are not errors.
+`ParseError`, `Rebind` (a second `LET <name>` against a name already bound
+in the same scope), `DuplicateOverload` (an `FN` whose signature exactly
+matches an already-registered overload), `User`. There's no in-language
+try/catch yet — errors short-circuit to the top level. Intentional `null`
+values (the `null` literal, `PRINT`'s return) are not errors.
 
 ## Putting it together
 

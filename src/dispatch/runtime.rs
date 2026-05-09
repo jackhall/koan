@@ -9,4 +9,6 @@ mod scope;
 
 pub use arena::{CallArena, RuntimeArena};
 pub use kerror::{Frame, KError, KErrorKind};
-pub use scope::{KFuture, Scope};
+pub use scope::{KFuture, Resolution, Scope};
+#[allow(unused_imports)]
+pub use scope::ShapePick;

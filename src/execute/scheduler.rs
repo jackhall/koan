@@ -13,6 +13,31 @@ use crate::parse::kexpression::{ExpressionPart, KExpression};
 use super::lift::lift_kobject;
 use super::nodes::{work_dep_indices, Node, NodeOutput, NodeStep, NodeWork};
 
+/// Walk `scope` and its outer chain, looking for a function in `functions[expr.untyped_key()]`
+/// whose `pre_run` extractor returns `Some(name)` for `expr`. The first such name wins.
+/// Used by `Scheduler::add` to install the dispatch-time placeholder at *submission* time
+/// — so a sibling submitted later can park on the placeholder even if the producer slot
+/// hasn't yet been popped off the FIFO queue.
+fn extract_pre_run_name<'a>(expr: &KExpression<'a>, scope: &'a Scope<'a>) -> Option<String> {
+    let key = expr.untyped_key();
+    let mut current: Option<&Scope<'a>> = Some(scope);
+    while let Some(s) = current {
+        let functions = s.functions.borrow();
+        if let Some(bucket) = functions.get(&key) {
+            for f in bucket.iter() {
+                if let Some(extractor) = f.pre_run {
+                    if let Some(name) = extractor(expr) {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+        drop(functions);
+        current = s.outer;
+    }
+    None
+}
+
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
 /// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Aggregate`
 /// nodes, and a builtin body that holds `&mut dyn SchedulerHandle` can also add `Dispatch`
@@ -110,6 +135,16 @@ impl<'a> Scheduler<'a> {
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         let deps = work_dep_indices(&work);
         let no_deps = deps.is_empty();
+        // Pre-extract a binder name from a `Dispatch` work so the placeholder install can
+        // fire at submission time (not at run-time). Installing at submission means a
+        // *later* sibling submission that looks up `name` finds the placeholder
+        // immediately — covers the FIFO-order forward-reference case where a consumer is
+        // submitted before its producer. No-op for non-Dispatch work and for Dispatch
+        // shapes whose picked function has no `pre_run`.
+        let placeholder_install: Option<String> = match &work {
+            NodeWork::Dispatch(expr) => extract_pre_run_name(expr, scope),
+            _ => None,
+        };
         // Inherit the active slot's frame (if any) so sub-dispatch / sub-bind / sub-aggregate
         // slots spawned during a user-fn body's run keep that body's per-call arena alive
         // until they finalize. The Rc clone is what makes `current_frame()` available to
@@ -139,6 +174,15 @@ impl<'a> Scheduler<'a> {
                 i
             }
         };
+        // Install the dispatch-time placeholder *before* enqueueing. Order matters: the
+        // queued slot's `run_dispatch` will perform an idempotent re-install (which is a
+        // no-op when `placeholders[name]` already maps to this `idx`). Failure to install
+        // (e.g. `Rebind`) doesn't abort `add` here — the slot's `run_dispatch` will see the
+        // collision later via `install_dispatch_placeholder` and surface the structured
+        // error to the caller.
+        if let Some(name) = placeholder_install {
+            let _ = scope.install_placeholder(name, NodeId(idx));
+        }
         let pending = self.register_slot_deps(idx);
         if pending == 0 {
             // No outstanding deps: enqueue immediately. Top-level dispatches (no deps, no
@@ -531,7 +575,12 @@ impl<'a> KFunction<'a> {
                 for (name, rc) in bundle.args.iter() {
                     let cloned = rc.deep_clone();
                     let allocated = inner_arena.alloc_object(cloned);
-                    child.add(name.clone(), allocated);
+                    // Fresh per-call child scope: each parameter name is bound exactly
+                    // once. `bind_value`'s rebind check would only fire if the FN's
+                    // signature elements somehow agreed on the same name twice (a
+                    // signature parser invariant we already enforce upstream), so the
+                    // `_` swallow is a safety net rather than a recoverable path.
+                    let _ = child.bind_value(name.clone(), allocated);
                 }
                 let substituted = substitute_params(expr.clone(), &bundle, inner_arena);
                 BodyResult::tail_with_frame(substituted, frame, self)

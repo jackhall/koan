@@ -18,8 +18,10 @@ use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, Signature};
 
+use crate::parse::kexpression::{ExpressionPart, KExpression};
+
 use super::helpers::{extract_bare_type_name, extract_kexpression, run_body_statements};
-use super::{err, register_builtin};
+use super::{err, register_builtin_with_pre_run};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -51,12 +53,23 @@ pub fn body<'a>(
 
     let sig: &'a Signature<'a> = arena.alloc_signature(Signature::new(name.clone(), decl_scope));
     let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KSignature(sig));
-    scope.add(name, sig_obj);
+    if let Err(e) = scope.bind_value(name, sig_obj) {
+        return err(e);
+    }
     BodyResult::Value(sig_obj)
 }
 
+/// Dispatch-time placeholder extractor for SIG. `parts[1]` is the `Type(t)` token of the
+/// signature's name slot. Same shape as STRUCT / MODULE / named UNION.
+pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+    match expr.parts.get(1)? {
+        ExpressionPart::Type(t) => Some(t.name.clone()),
+        _ => None,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
+    register_builtin_with_pre_run(
         scope,
         "SIG",
         ExpressionSignature {
@@ -75,6 +88,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        Some(pre_run),
     );
 }
 
@@ -110,6 +124,16 @@ mod tests {
             sched.add_dispatch(expr, scope);
         }
         sched.execute().expect("scheduler should succeed");
+    }
+
+    /// Smoke test for SIG's pre_run extractor: structural extraction of the `Type(_)`
+    /// token at `parts[1]`.
+    #[test]
+    fn pre_run_extracts_sig_name() {
+        let mut exprs = parse("SIG OrderedSig = (LET x = 1)").expect("parse should succeed");
+        let expr = exprs.remove(0);
+        let name = super::pre_run(&expr);
+        assert_eq!(name.as_deref(), Some("OrderedSig"));
     }
 
     #[test]

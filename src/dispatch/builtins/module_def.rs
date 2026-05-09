@@ -20,8 +20,10 @@ use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, Module};
 
+use crate::parse::kexpression::{ExpressionPart, KExpression};
+
 use super::helpers::{extract_bare_type_name, extract_kexpression, run_body_statements};
-use super::{err, register_builtin};
+use super::{err, register_builtin_with_pre_run};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -60,12 +62,23 @@ pub fn body<'a>(
 
     let module: &'a Module<'a> = arena.alloc_module(Module::new(name.clone(), child_scope));
     let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(module));
-    scope.add(name, module_obj);
+    if let Err(e) = scope.bind_value(name, module_obj) {
+        return err(e);
+    }
     BodyResult::Value(module_obj)
 }
 
+/// Dispatch-time placeholder extractor for MODULE. `parts[1]` is the `Type(t)` token of the
+/// module's name slot. Same shape as STRUCT / SIG / named UNION.
+pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+    match expr.parts.get(1)? {
+        ExpressionPart::Type(t) => Some(t.name.clone()),
+        _ => None,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
+    register_builtin_with_pre_run(
         scope,
         "MODULE",
         ExpressionSignature {
@@ -84,6 +97,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        Some(pre_run),
     );
 }
 
@@ -146,6 +160,15 @@ mod tests {
             Ok(_) => panic!("expected error"),
             Err(e) => e.clone(),
         }
+    }
+
+    /// Smoke test for MODULE's pre_run extractor: structural extraction of the `Type(_)`
+    /// token at `parts[1]`.
+    #[test]
+    fn pre_run_extracts_module_name() {
+        let expr = parse_one("MODULE Foo = (LET x = 1)");
+        let name = super::pre_run(&expr);
+        assert_eq!(name.as_deref(), Some("Foo"));
     }
 
     #[test]

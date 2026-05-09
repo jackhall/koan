@@ -10,7 +10,7 @@
 //! does not fall through (silently shadowing it would hide a real conflict from the author).
 
 use super::kerror::{KError, KErrorKind};
-use super::scope::{KFuture, Scope};
+use super::scope::{KFuture, Scope, ShapePick};
 use crate::dispatch::kfunction::KFunction;
 use crate::dispatch::types::{KType, Parseable, SignatureElement, Specificity};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
@@ -151,6 +151,128 @@ fn lazy_eager_indices(f: &KFunction<'_>, expr: &KExpression<'_>) -> Option<Vec<u
         }
     }
     if has_lazy_slot { Some(eager_indices) } else { None }
+}
+
+/// Shape-pick: produces a [`ShapePick`] for `expr` by selecting the unique most-specific
+/// matching function in `scope` (or `outer` chain). Tries strict matching first
+/// (mirroring the real dispatcher's `Argument::matches` check); only falls back to a
+/// tentative-accept of bare-Identifier-in-value-slot when no strict candidate exists.
+///
+/// `eager_indices` carries `lazy_eager_indices`' result for the lazy path (or empty for
+/// non-lazy candidates). `wrap_indices` are bare-Identifier parts in value-typed slots
+/// that should be auto-wrapped as sub-Dispatches per §7. `ref_name_indices` are
+/// bare-Identifier parts in literal-name slots (`KType::Identifier` /
+/// `KType::TypeExprRef`) of a non-pre_run function, used by §8 replay-park.
+///
+/// Returns `None` when:
+/// - no candidate function in any scope on the chain matches `expr`'s shape, or
+/// - more than one candidate ties at the same specificity (ambiguous — `dispatch` will
+///   surface it later; the wrap pass shouldn't speculatively transform an ambiguous expr).
+pub(crate) fn shape_pick<'a>(scope: &Scope<'a>, expr: &KExpression<'_>) -> Option<ShapePick> {
+    let key = expr.untyped_key();
+    let functions = scope.functions.borrow();
+    // First: strict matching (only literal-Identifier-in-Identifier-slot etc.). This is
+    // the dispatch-time match the real dispatcher would make.
+    let strict: Vec<&KFunction<'_>> = functions
+        .get(&key)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|f| f.signature.matches(expr))
+        .collect();
+    let strict_pick = pick_most_specific_index(&strict);
+    if let Some(i) = strict_pick {
+        let pick = classify_for_pick(strict[i], expr);
+        drop(functions);
+        return Some(pick);
+    }
+    // Second: tentative-accept for the §7 auto-wrap case — bare-Identifier in a
+    // non-literal-name slot. The wrap rewrites that Identifier into a sub-Dispatch whose
+    // resolved value will type-match at late dispatch. Only fires when strict picked
+    // nothing AND tentative produces a unique candidate.
+    let tentative: Vec<&KFunction<'_>> = functions
+        .get(&key)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|f| accepts_for_wrap(f, expr))
+        .collect();
+    let tentative_pick = pick_most_specific_index(&tentative);
+    drop(functions);
+    match tentative_pick {
+        Some(i) => Some(classify_for_pick(tentative[i], expr)),
+        None if strict.is_empty() && tentative.is_empty() => match scope.outer {
+            Some(outer) => shape_pick(outer, expr),
+            None => None,
+        },
+        None => None,
+    }
+}
+
+/// Auto-wrap-permissive shape check: bare-Identifier parts in a slot whose declared type is
+/// neither `Identifier` nor `TypeExprRef` are tentatively accepted (the §7 auto-wrap will
+/// rewrite them into sub-Dispatches, whose results type-check at late dispatch). All other
+/// slot/part pairings reuse the normal `Argument::matches` check. Mirrors the strict
+/// matcher except for the bare-Identifier-in-value-slot allowance.
+fn accepts_for_wrap(f: &KFunction<'_>, expr: &KExpression<'_>) -> bool {
+    let sig = &f.signature;
+    if sig.elements.len() != expr.parts.len() {
+        return false;
+    }
+    for (el, part) in sig.elements.iter().zip(expr.parts.iter()) {
+        match (el, part) {
+            (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
+            (SignatureElement::Keyword(_), _) => return false,
+            (SignatureElement::Argument(arg), part) => {
+                if matches!(part, ExpressionPart::Identifier(_))
+                    && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
+                {
+                    continue;
+                }
+                if !arg.matches(part) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Build a [`ShapePick`] from the picked function and the matching expression. `eager_indices`
+/// reuses `lazy_eager_indices`' result for the lazy path (or empty for non-lazy candidates);
+/// `wrap_indices` and `ref_name_indices` classify bare-Identifier parts per §7 / §8.
+fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
+    let eager_indices = lazy_eager_indices(f, expr).unwrap_or_default();
+    let mut wrap_indices: Vec<usize> = Vec::new();
+    let mut ref_name_indices: Vec<usize> = Vec::new();
+    let picked_has_pre_run = f.pre_run.is_some();
+    for (i, (el, part)) in f.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
+        let SignatureElement::Argument(arg) = el else { continue };
+        let ExpressionPart::Identifier(_) = part else { continue };
+        match arg.ktype {
+            KType::Identifier | KType::TypeExprRef => {
+                // Literal-name slot — §8 candidate iff the picked function isn't a binder.
+                // Binders' Identifier/TypeExprRef slots are *declarations* (the name being
+                // bound), not references that need to look anything up.
+                if !picked_has_pre_run {
+                    ref_name_indices.push(i);
+                }
+            }
+            _ => {
+                // Value-typed slot — §7 auto-wrap target. Wrap regardless of whether the
+                // picked function has a pre_run; binders take their value from `parts[3]`
+                // (LET) or other Any-typed positions, so `LET y = z` with `z` an identifier
+                // wraps just like `(F z)`.
+                wrap_indices.push(i);
+            }
+        }
+    }
+    ShapePick {
+        eager_indices,
+        wrap_indices,
+        ref_name_indices,
+        picked_has_pre_run,
+    }
 }
 
 #[cfg(test)]
@@ -356,5 +478,106 @@ mod tests {
             KObject::Null => "null".into(),
             _ => "<other>".into(),
         }
+    }
+
+    // -------------------- §7 / §8 shape_pick coverage --------------------
+
+    /// A function whose signature is `OP <v:Number>` matched against `OP someName` (where
+    /// `someName` is a bare Identifier in a Number-typed slot) returns `wrap_indices = [1]`
+    /// and no ref_name_indices — the dispatcher will wrap `someName` as a sub-Dispatch so
+    /// it resolves through `value_lookup` (or §1's short-circuit, if the name is bound).
+    #[test]
+    fn shape_pick_returns_wrap_indices_for_value_slot_identifiers() {
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let sig = ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("OP".into()),
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Number }),
+            ],
+        };
+        register_builtin(scope, "OP", sig, body_any);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Identifier("someName".into()),
+            ],
+        };
+        let pick = scope.shape_pick(&expr).expect("OP <Number> should pick");
+        assert_eq!(pick.wrap_indices, vec![1]);
+        assert!(pick.ref_name_indices.is_empty());
+        assert!(!pick.picked_has_pre_run);
+    }
+
+    /// `call_by_name`'s shape — `<verb:Identifier> <args:KExpression>` — picked against
+    /// `myFn (x: 1)` returns ref_name_indices = [0]: the Identifier slot is a literal-name
+    /// reference and the function has no pre_run, so §8 will check whether `myFn` resolves
+    /// to a placeholder.
+    #[test]
+    fn shape_pick_returns_ref_name_indices_for_non_pre_run_function() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        // call_by_name is registered by default_scope.
+        let inner = KExpression {
+            parts: vec![
+                ExpressionPart::Identifier("x".into()),
+                ExpressionPart::Keyword(":".into()),
+                ExpressionPart::Literal(KLiteral::Number(1.0)),
+            ],
+        };
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Identifier("myFn".into()),
+                ExpressionPart::Expression(Box::new(inner)),
+            ],
+        };
+        let pick = scope
+            .shape_pick(&expr)
+            .expect("call_by_name should pick on Identifier-leading expression");
+        assert!(pick.ref_name_indices.contains(&0));
+        assert!(!pick.picked_has_pre_run);
+    }
+
+    /// LET's name slot is `Identifier` (or `TypeExprRef`), but LET has `pre_run = Some(_)` —
+    /// so shape_pick should NOT include the name slot in ref_name_indices. Binder Identifier
+    /// slots are declarations, not references; §8 must skip them.
+    #[test]
+    fn shape_pick_skips_ref_name_indices_for_pre_run_function() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("LET".into()),
+                ExpressionPart::Identifier("x".into()),
+                ExpressionPart::Keyword("=".into()),
+                ExpressionPart::Literal(KLiteral::Number(1.0)),
+            ],
+        };
+        let pick = scope.shape_pick(&expr).expect("LET should pick");
+        assert!(pick.picked_has_pre_run);
+        assert!(
+            pick.ref_name_indices.is_empty(),
+            "LET's Identifier name slot is a declaration, not a reference; should not be ref_name_index. Got {:?}",
+            pick.ref_name_indices,
+        );
+    }
+
+    /// Ambiguous shape (two equally-specific overloads matching) returns `None` — the wrap
+    /// pass mustn't speculatively transform an ambiguous expression.
+    #[test]
+    fn shape_pick_returns_none_when_ambiguous() {
+        let arena = RuntimeArena::new();
+        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        register_builtin(scope, "OP_NA", two_slot_sig(KType::Number, KType::Any), body_number_any);
+        register_builtin(scope, "OP_AN", two_slot_sig(KType::Any, KType::Number), body_any_number);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Literal(KLiteral::Number(5.0)),
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Literal(KLiteral::Number(7.0)),
+            ],
+        };
+        assert!(scope.shape_pick(&expr).is_none(), "ambiguous overlap → None");
     }
 }

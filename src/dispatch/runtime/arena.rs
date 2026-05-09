@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use typed_arena::Arena;
@@ -322,15 +321,17 @@ impl CallArena {
         let outer_static: &Scope<'static> = unsafe {
             std::mem::transmute::<&Scope<'_>, &Scope<'static>>(outer)
         };
-        let child = Scope {
-            outer: Some(outer_static),
-            data: RefCell::new(HashMap::new()),
-            functions: RefCell::new(HashMap::new()),
-            out: RefCell::new(None),
-            arena: arena_ref,
-            pending: RefCell::new(Vec::new()),
-            name: String::new(),
-        };
+        // Build the per-call child scope through `Scope::child_under` so the construction
+        // stays in one place — the inherent constructor populates `pending` and
+        // `placeholders` (private fields) without this site needing to know about them.
+        // The transmute back to a non-static lifetime mirrors `scope()`'s round-trip.
+        let child = Scope::child_under(outer_static);
+        // Re-set the arena field to the per-call arena (`child_under` defaults to
+        // `outer.arena`). Direct field access bypasses the constructor's `outer.arena`
+        // default — `arena_ref` is the freshly-allocated per-call arena that this
+        // CallArena owns.
+        let mut child = child;
+        child.arena = arena_ref;
         let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
         // `Scope` is invariant in `'a`, so the through-`'static` cast is required to match
         // `scope_ptr`'s `*const Scope<'static>` field type — clippy's "unnecessary cast"
@@ -424,7 +425,7 @@ mod tests {
         let inner_arena: &RuntimeArena = unsafe { &*(arena_ptr as *const _) };
         let child: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
         let it_obj: &KObject<'_> = inner_arena.alloc_object(KObject::Number(42.0));
-        child.add("it".to_string(), it_obj);
+        child.bind_value("it".to_string(), it_obj).unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
     }
 

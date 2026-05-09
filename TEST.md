@@ -68,12 +68,13 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-05-09: 266.18s — 23 tests, 0 leaks, 0 UB
 - 2026-05-09: 218.77s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
 
 ### The slate
 
-21 tests, grouped by the unsafe site each pins down. Names below are the exact
+23 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the command above.
 
 **Singleton transmutes** ([src/dispatch/runtime/arena.rs](src/dispatch/runtime/arena.rs)) — the `'static`→`'a`
@@ -146,6 +147,16 @@ shape).
 - `module_child_scope_transmute_does_not_dangle`
 - `signature_decl_scope_transmute_does_not_dangle`
 - `module_type_members_refcell_mutation_with_held_module_ref`
+
+**Dispatch-time placeholder parking** ([src/execute/run.rs](src/execute/run.rs)) — the §1
+single-Identifier short-circuit and the §8 replay-park (per
+[design/execution-model.md § Dispatch-time name placeholders](design/execution-model.md#dispatch-time-name-placeholders))
+both rewrite a parked slot's work and walk the producer's terminal `&KObject`
+out of `results[from]` after the notify-walk wakes the consumer. The reference
+must remain valid across the wake; these tests are minimal-shape mirrors.
+
+- `lift_park_minimal_program_for_miri`
+- `replay_park_minimal_program_for_miri`
 
 ### Adding tests to the slate
 

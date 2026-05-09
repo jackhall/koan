@@ -65,11 +65,11 @@ another. This item closes that gap.
   initialization wants the same handler machinery as effectful builtins.
 - *Circular imports — decided.* Resolved via the existing dispatch-as-node
   scheduler by treating cross-file references as another deferred
-  dependency, consistent with
-  [dispatch-time-placeholders](dispatch-time-placeholders.md)'s mechanism.
-  Disallowing or requiring forward-declaration discipline is rejected — the
-  scheduler already handles deferred resolution generically and forcing
-  source order on multi-file projects is gratuitous.
+  dependency, consistent with the
+  [dispatch-time name placeholder](../design/execution-model.md#dispatch-time-name-placeholders)
+  mechanism. Disallowing or requiring forward-declaration discipline is
+  rejected — the scheduler already handles deferred resolution generically
+  and forcing source order on multi-file projects is gratuitous.
 
 ## Dependencies
 

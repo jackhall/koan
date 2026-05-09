@@ -3,8 +3,9 @@ use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
+use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use super::{err, register_builtin};
+use super::{err, register_builtin_with_pre_run};
 
 /// `LET <name> = <value:Any>` — copies the bound value into an arena-allocated `KObject`,
 /// inserts it under `name`, and returns that same arena reference. Compound values recurse
@@ -36,12 +37,26 @@ pub fn body<'a>(
     };
     let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
-    scope.add(name, allocated);
+    if let Err(e) = scope.bind_value(name, allocated) {
+        return err(e);
+    }
     BodyResult::Value(allocated)
 }
 
+/// Dispatch-time placeholder extractor for LET. Both overloads (`LET <name:Identifier> = ...`
+/// and `LET <name:TypeExprRef> = ...`) put the bound name at `parts[1]`; pull it out
+/// structurally without dispatching anything. Returns `None` on shape mismatch (the body
+/// will surface a structured error later).
+pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+    match expr.parts.get(1)? {
+        ExpressionPart::Identifier(s) => Some(s.clone()),
+        ExpressionPart::Type(t) => Some(t.name.clone()),
+        _ => None,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
+    register_builtin_with_pre_run(
         scope,
         "LET",
         ExpressionSignature {
@@ -54,8 +69,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        Some(pre_run),
     );
-    register_builtin(
+    register_builtin_with_pre_run(
         scope,
         "LET",
         ExpressionSignature {
@@ -68,6 +84,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        Some(pre_run),
     );
 }
 
@@ -105,6 +122,37 @@ mod tests {
         let data = scope.data.borrow();
         let entry = data.get("x").expect("expected binding 'x'");
         assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
+    }
+
+    /// Smoke test for LET's pre_run extractor: structural extraction of `parts[1]`
+    /// returns the bound name without requiring sub-dispatches.
+    #[test]
+    fn pre_run_extracts_let_name() {
+        use crate::parse::expression_tree::parse;
+        let mut exprs = parse("LET hello = 1").expect("parse should succeed");
+        let expr = exprs.remove(0);
+        let name = super::pre_run(&expr);
+        assert_eq!(name.as_deref(), Some("hello"));
+    }
+
+    /// End-to-end install-then-clear: dispatch `LET x = 1` through the scheduler. The
+    /// pre_run hook installs `placeholders["x"] = NodeId(...)` before the body runs;
+    /// after the body finalizes via `bind_value`, the placeholder is removed.
+    #[test]
+    fn pre_run_install_then_body_finalize_clears_placeholder() {
+        use crate::dispatch::runtime::RuntimeArena;
+        use crate::execute::scheduler::Scheduler;
+        use crate::dispatch::builtins::default_scope;
+        use crate::parse::expression_tree::parse;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let exprs = parse("LET hello = 1").unwrap();
+        for e in exprs { sched.add_dispatch(e, scope); }
+        sched.execute().unwrap();
+        // After execute, placeholders should not contain "hello" — bind_value cleared it.
+        assert!(scope.placeholders.borrow().get("hello").is_none());
+        assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
     }
 
     #[test]

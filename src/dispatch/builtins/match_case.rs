@@ -89,7 +89,9 @@ pub fn body<'a>(
     let inner_arena: &'a RuntimeArena = unsafe { &*(arena_ptr as *const _) };
     let child: &'a Scope<'a> = unsafe { &*(scope_ptr as *const _) };
     let it_obj: &'a KObject<'a> = inner_arena.alloc_object(value.deep_clone());
-    child.add("it".to_string(), it_obj);
+    // Fresh per-call child scope: the `it` binding never collides. `bind_value`'s rebind
+    // check therefore always passes; the `_` swallow is intentional.
+    let _ = child.bind_value("it".to_string(), it_obj);
     let mut it_bundle = ArgumentBundle { args: HashMap::new() };
     it_bundle.args.insert("it".to_string(), Rc::new(value.deep_clone()));
     let substituted = substitute_params(branch_body, &it_bundle, inner_arena);

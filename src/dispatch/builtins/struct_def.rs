@@ -7,8 +7,10 @@ use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::types::parse_typed_field_list;
 
+use crate::parse::kexpression::{ExpressionPart, KExpression};
+
 use super::helpers::{extract_bare_type_name, extract_kexpression};
-use super::{err, register_builtin};
+use super::{err, register_builtin_with_pre_run};
 
 /// `STRUCT <name:TypeExprRef> = (<schema>)` — declare a named record type.
 ///
@@ -61,12 +63,24 @@ pub fn body<'a>(
         name: name.clone(),
         fields: Rc::new(fields),
     });
-    scope.add(name, struct_obj);
+    if let Err(e) = scope.bind_value(name, struct_obj) {
+        return err(e);
+    }
     BodyResult::Value(struct_obj)
 }
 
+/// Dispatch-time placeholder extractor for STRUCT. The name slot at `parts[1]` is a
+/// `Type(t)` token (the `TypeExprRef`-typed `name` argument). Only fires for bare leaves —
+/// parameterized forms (`STRUCT Foo<X> = ...`) aren't supported until functors land.
+pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+    match expr.parts.get(1)? {
+        ExpressionPart::Type(t) => Some(t.name.clone()),
+        _ => None,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
+    register_builtin_with_pre_run(
         scope,
         "STRUCT",
         ExpressionSignature {
@@ -79,6 +93,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        Some(pre_run),
     );
 }
 
@@ -135,6 +150,15 @@ mod tests {
             Ok(_) => panic!("expected error"),
             Err(e) => e.clone(),
         }
+    }
+
+    /// Smoke test for STRUCT's pre_run extractor: structural extraction of the `Type(_)`
+    /// token at `parts[1]`.
+    #[test]
+    fn pre_run_extracts_struct_name() {
+        let expr = parse_one("STRUCT Point = (x: Number, y: Number)");
+        let name = super::pre_run(&expr);
+        assert_eq!(name.as_deref(), Some("Point"));
     }
 
     #[test]

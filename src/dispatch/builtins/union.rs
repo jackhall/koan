@@ -8,8 +8,10 @@ use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::types::parse_typed_field_list;
 
+use crate::parse::kexpression::{ExpressionPart, KExpression};
+
 use super::helpers::extract_kexpression;
-use super::{err, register_builtin};
+use super::{err, register_builtin_with_pre_run};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` (named) or `UNION (<schema>)` (anonymous).
 ///
@@ -63,16 +65,30 @@ pub fn body<'a>(
     // would otherwise treat absence as `MissingArg`, which is wrong here.
     if bundle.get("name").is_some() {
         match super::helpers::extract_bare_type_name(&bundle, "name", "UNION") {
-            Ok(name) => scope.add(name, union_obj),
+            Ok(name) => {
+                if let Err(e) = scope.bind_value(name, union_obj) {
+                    return err(e);
+                }
+            }
             Err(e) => return err(e),
         }
     }
     BodyResult::Value(union_obj)
 }
 
+/// Dispatch-time placeholder extractor for the *named* UNION form (`UNION Foo = (...)`).
+/// `parts[1]` is a `Type(t)` token. The anonymous form (`UNION (...)`, registered separately)
+/// has no name slot and uses no pre_run.
+pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+    match expr.parts.get(1)? {
+        ExpressionPart::Type(t) => Some(t.name.clone()),
+        _ => None,
+    }
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Named form: `UNION Maybe = (some: Number none: Null)`
-    register_builtin(
+    register_builtin_with_pre_run(
         scope,
         "UNION",
         ExpressionSignature {
@@ -85,9 +101,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        Some(pre_run),
     );
-    // Anonymous form: `LET maybe = (UNION (some: Number none: Null))`
-    register_builtin(
+    // Anonymous form: `LET maybe = (UNION (some: Number none: Null))` — no name slot to
+    // pre-install. The wrapping LET (if any) installs its own placeholder via let's pre_run.
+    register_builtin_with_pre_run(
         scope,
         "UNION",
         ExpressionSignature {
@@ -98,6 +116,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        None,
     );
 }
 
@@ -154,6 +173,16 @@ mod tests {
             Ok(_) => panic!("expected error"),
             Err(e) => e.clone(),
         }
+    }
+
+    /// Smoke test for the named-UNION pre_run extractor: structural extraction of the
+    /// `Type(_)` token at `parts[1]` for the named form. The anonymous form has no
+    /// pre_run.
+    #[test]
+    fn pre_run_extracts_named_union_name() {
+        let expr = parse_one("UNION Maybe = (some: Number, none: Null)");
+        let name = super::pre_run(&expr);
+        assert_eq!(name.as_deref(), Some("Maybe"));
     }
 
     #[test]

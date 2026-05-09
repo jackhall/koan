@@ -6,7 +6,7 @@ use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::helpers::{extract_kexpression, extract_type_expr};
-use super::{err, register_builtin};
+use super::{err, register_builtin_with_pre_run};
 
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
 /// function constructor. The signature and body slots are `KType::KExpression`, so the parser's
@@ -108,7 +108,9 @@ pub fn body<'a>(
     // when this KFunction value escapes out of a per-call body. For top-level FNs, there's
     // no per-call frame to clone, so None stays.
     let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
-    scope.add(name, obj);
+    if let Err(e) = scope.register_function(name, f, obj) {
+        return err(e);
+    }
     // Returning the function reference (rather than null) lets callers do
     // `LET f = (FN ...)` to capture a callable handle, which the dispatch fallback for
     // identifier-bound KFunctions can then invoke.
@@ -185,8 +187,29 @@ fn parse_fn_param_list<'a>(
     Ok(elements)
 }
 
+/// Dispatch-time placeholder extractor for FN. The signature slot at `parts[1]` is an
+/// `Expression(signature_expr)` whose first `Keyword` is the function's name (the same
+/// name used by `body` to register the function — see the `find_map(SignatureElement::
+/// Keyword, ...)` call). Walks the signature parts inline rather than re-running the
+/// full `parse_fn_param_list`; the body still does the full parse and surfaces any shape
+/// errors. Returns `None` if the signature slot is missing or malformed (e.g. no Keyword
+/// in the signature) — the body's `ShapeError` reports the real failure.
+pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+    let sig_part = expr.parts.get(1)?;
+    let signature_expr = match sig_part {
+        ExpressionPart::Expression(boxed) => boxed,
+        _ => return None,
+    };
+    for part in &signature_expr.parts {
+        if let ExpressionPart::Keyword(s) = part {
+            return Some(s.clone());
+        }
+    }
+    None
+}
+
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
+    register_builtin_with_pre_run(
         scope,
         "FN",
         ExpressionSignature {
@@ -205,6 +228,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body,
+        Some(pre_run),
     );
 }
 
@@ -270,6 +294,16 @@ mod tests {
         run(scope, source);
         let bytes = captured.borrow().clone();
         bytes
+    }
+
+    /// Smoke test for FN's pre_run extractor: pulls the first Keyword out of the
+    /// signature Expression at `parts[1]` (FN's name slot is *inside* the signature,
+    /// not at `parts[1]` directly).
+    #[test]
+    fn pre_run_extracts_first_keyword_of_signature() {
+        let expr = parse_one("FN (DOUBLE x: Number) -> Number = (x)");
+        let name = super::pre_run(&expr);
+        assert_eq!(name.as_deref(), Some("DOUBLE"));
     }
 
     #[test]

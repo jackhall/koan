@@ -1,13 +1,9 @@
 #![allow(dead_code)]
 
-mod parse;
-mod dispatch;
-mod execute;
-
 use std::io::Read;
 use std::process::ExitCode;
 
-use crate::execute::interpret::interpret;
+use koan::execute::interpret::interpret;
 
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
 /// stdin, then parse, dispatch, and execute it via `interpret`.

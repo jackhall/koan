@@ -115,7 +115,8 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 
 ```
 src/
-├── main.rs              CLI entry point
+├── main.rs              CLI entry point — re-imports through lib.rs
+├── lib.rs               library facade — re-exports `parse`/`dispatch`/`execute` so integration tests under tests/ link against the same module graph
 ├── parse.rs             pub mod parse; …
 ├── parse/
 │   ├── kexpression.rs   parsed-expression types (KExpression, ExpressionPart, KLiteral)

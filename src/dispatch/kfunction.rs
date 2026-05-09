@@ -113,6 +113,19 @@ pub type BuiltinFn = for<'a> fn(
     ArgumentBundle<'a>,
 ) -> BodyResult<'a>;
 
+/// Dispatch-time name extractor for a binder builtin. Invoked by `run_dispatch` *before* any
+/// sub-deps are scheduled: given the unresolved expression that's about to dispatch, return
+/// `Some(name)` to install a `placeholders[name] = NodeId(this_slot)` mapping in the
+/// dispatching scope, or `None` to opt out (non-binder builtins, or a binder shape whose
+/// name slot is missing/malformed and the body will surface a `ShapeError` later).
+///
+/// Each binder's extractor reads the structural shape of the unresolved expression — typically
+/// `parts[1]` — without dispatching anything, so the install fires before the sub-expression
+/// graph wakes. The placeholder lets a sibling expression looking up `name` while this slot's
+/// body is still in flight park on this slot via the scheduler's `notify_list` /
+/// `pending_deps` machinery (see [`crate::dispatch::runtime::Scope::resolve`]).
+pub type PreRunFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
+
 /// What a `KFunction`'s body actually is. Builtins carry a host `fn` pointer; user-defined
 /// functions carry a captured `KExpression` to be dispatched at call time. Kept as an enum
 /// rather than a `Box<dyn Fn>` so the user-defined case stays introspectable — the upcoming TCO
@@ -141,22 +154,41 @@ pub struct KFunction<'a> {
     pub signature: ExpressionSignature,
     pub body: Body<'a>,
     captured: *const Scope<'static>,
+    /// Dispatch-time placeholder extractor. `Some(_)` for the binder builtins (LET, FN,
+    /// STRUCT, UNION, SIG, MODULE) — `run_dispatch` calls it before scheduling sub-deps and
+    /// installs the returned name in the dispatching scope's `placeholders` so a forward
+    /// reference parks on this slot until the binder's body finalizes. `None` for everything
+    /// else (the dispatch-time short-circuit is a no-op for non-binders).
+    pub pre_run: Option<PreRunFn>,
 }
 
 impl<'a> KFunction<'a> {
     /// Construct a `KFunction`. `captured` is the FN's defining scope (or, for builtins,
     /// run-root — the scope they're being registered into).
     pub fn new(
+        signature: ExpressionSignature,
+        body: Body<'a>,
+        captured: &'a Scope<'a>,
+    ) -> Self {
+        Self::with_pre_run(signature, body, captured, None)
+    }
+
+    /// `KFunction::new` with an optional dispatch-time placeholder extractor. The binder
+    /// builtins (LET, FN, STRUCT, UNION, SIG, MODULE) supply a `pre_run` so `run_dispatch`
+    /// can install a `name → producer-NodeId` placeholder in the dispatching scope before
+    /// scheduling sub-deps. See [`PreRunFn`] for the contract.
+    pub fn with_pre_run(
         mut signature: ExpressionSignature,
         body: Body<'a>,
         captured: &'a Scope<'a>,
+        pre_run: Option<PreRunFn>,
     ) -> Self {
         signature.normalize();
         // The double cast erases the lifetime to match the `*const Scope<'static>` field
         // type — `Scope` is invariant in `'a`, so a single cast is rejected.
         #[allow(clippy::unnecessary_cast)]
         let captured = captured as *const Scope<'_> as *const Scope<'static>;
-        Self { signature, body, captured }
+        Self { signature, body, captured, pre_run }
     }
 
     /// Re-attach the captured scope pointer to a fresh `'a` lifetime. The lifetime tracks

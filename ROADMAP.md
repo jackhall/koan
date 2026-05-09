@@ -60,7 +60,15 @@ forwarders so `scope.rs` is back to lexical-environment storage and direct
 mutators only), and the `KType` concern split (the 694-LOC `ktype.rs`
 partitioned into three sibling files — core enum plus `name()` rendering
 in `ktype.rs`, dispatch-time predicates in `ktype_predicates.rs`, and
-name/type-expression elaboration plus `join` in `ktype_resolution.rs`).
+name/type-expression elaboration plus `join` in `ktype_resolution.rs`),
+and dispatch-time name placeholders (binders install a `name → producer
+NodeId` entry in a new `Scope::placeholders` sidecar at dispatch time;
+bare-identifier slot lookups whose target binder has dispatched but not
+yet executed park on the producer via the existing `notify_list` /
+`pending_deps` machinery instead of failing with `UnboundName` — see
+[design/execution-model.md § Dispatch-time name placeholders](design/execution-model.md#dispatch-time-name-placeholders);
+same-scope rebind of a value name now surfaces as a structured `Rebind`
+error and an exact-signature `FN` overload conflict as `DuplicateOverload`).
 The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
@@ -90,12 +98,6 @@ without first landing something else:
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
   ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
   stage 2's functor support so the `Wrap` slot can be higher-kinded.
-- [Dispatch-time name placeholders](roadmap/dispatch-time-placeholders.md) —
-  binders install a placeholder in `Scope` when they dispatch so a lookup
-  whose target binder has been dispatched but not yet executed parks on the
-  producer instead of failing. Unblocks forward references inside MODULE
-  bodies, multi-file imports, and FN-signature elaboration with
-  not-yet-bound type identifiers.
 
 ### Module system
 

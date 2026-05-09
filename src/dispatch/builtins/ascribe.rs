@@ -56,10 +56,19 @@ pub fn body_opaque<'a>(
     ));
 
     // Re-bind every name from the source module into the new scope. The values themselves
-    // are arena-allocated and immutable, so sharing the references is safe.
+    // are arena-allocated and immutable, so sharing the references is safe. Bypasses the
+    // standard `bind_value`/`register_function` paths because we're mirroring an existing
+    // module's entire binding table — `data` and `functions` are populated independently
+    // below, with the function bucket mirrored separately. The mirrored table is empty at
+    // construction, so a direct insert is equivalent to the per-name bind path with none
+    // of the per-binding error-routing overhead, and avoids double-registering functions
+    // (which would land both via `data`'s function-arm and the explicit bucket loop).
     let src = m.child_scope();
-    for (name, obj) in src.data.borrow().iter() {
-        new_scope.add(name.clone(), obj);
+    {
+        let mut data = new_scope.data.borrow_mut();
+        for (name, obj) in src.data.borrow().iter() {
+            data.insert(name.clone(), obj);
+        }
     }
     // Mirror the function-bucket entries too, so dispatch within the new module's child
     // scope sees the same overload set. Same reference-sharing rationale.
