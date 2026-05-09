@@ -1,37 +1,28 @@
-//! Operator table driving compound-atom desugaring inside `tokens::parse_compound`. Each
-//! entry pairs a trigger character with an `OperatorKind` (prefix / infix / suffix) and a
-//! builder that wraps the surrounding operands into the appropriate nested
-//! `ExpressionPart`. Lookup is by character via `find_prefix` / `find_suffix`.
+//! Operator table driving compound-atom desugaring. Each entry pairs a trigger character
+//! with an `OperatorKind` and a builder that wraps surrounding operands into a nested
+//! `ExpressionPart`.
 
 use crate::parse::kexpression::ExpressionPart;
 
 type Builder = for<'a> fn(Vec<ExpressionPart<'a>>) -> ExpressionPart<'a>;
 
-/// Distinguishes how `parse_compound` gathers operands around a trigger character.
 pub enum OperatorKind {
     /// `<trigger> compound` — builder receives `[expr]`.
     Prefix,
     /// `lhs <trigger> atom` — builder receives `[lhs, rhs]`.
     Infix,
-    /// `lhs <trigger>` — builder receives `[lhs]`. Like Rust's `?` operator.
+    /// `lhs <trigger>` — builder receives `[lhs]`.
     Suffix,
 }
 
-/// One row of the operator table. The `kind` drives operand gathering inside `parse_compound`;
-/// `build` determines the shape of the resulting expression.
 pub struct Operator {
     pub trigger: char,
     pub kind: OperatorKind,
     pub build: Builder,
 }
 
-/// Registry of compound-token operators. `parse_compound` dispatches off this table; to add
-/// a new operator, append one row and define its builder fn.
-///
-/// `[` and `]` are intentionally absent: they're list-literal delimiters handled at the
-/// `build_tree` level (`[a b c]` → `ExpressionPart::ListLiteral`), not token-internal
-/// operators. Compound indexing like `foo[idx]` is therefore not currently expressible — a
-/// future syntax for indexing will be reintroduced separately.
+/// `[` and `]` are intentionally absent: they're list-literal delimiters handled one level up,
+/// not token-internal operators, so compound indexing like `foo[idx]` is not expressible here.
 const OPERATORS: &[Operator] = &[
     Operator { trigger: '!', kind: OperatorKind::Prefix, build: build_not  },
     Operator { trigger: '.', kind: OperatorKind::Infix,  build: build_attr },

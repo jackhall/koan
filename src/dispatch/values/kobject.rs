@@ -13,46 +13,13 @@ use super::module::{Module, Signature};
 /// reference to a function in some scope. The universal value type that `KFunction`s consume
 /// and produce; implements `Parseable` so values can be compared and rendered uniformly.
 ///
-/// `List(Rc<Vec<...>>)` / `Dict(Rc<HashMap<...>>)`: composite payloads are reference-counted
-/// so deep_clone (and the scheduler's lift-on-return walk) can `Rc::clone` instead of
-/// rebuilding. The contract is "Koan's collections are immutable values"; a future mutable-list
-/// builtin would need `Rc::make_mut` at the mutation site to clone-on-write. Subsequent lifts
-/// of the same value through a return chain are O(1) for these variants once any embedded
-/// `KFunction` has had its `Rc<CallArena>` attached.
+/// Composite payloads (`List`, `Dict`, `Tagged`, `Struct`, `TaggedUnionType`) are
+/// `Rc`-shared under an immutable-value contract: a future mutable-list builtin would need
+/// `Rc::make_mut` at the mutation site. `Struct.fields` uses `IndexMap` so iteration order
+/// matches schema declaration order.
 ///
-/// `KFunction(&fn, Option<Rc<CallArena>>)`: the second field keeps the function's underlying
-/// per-call arena alive when the function escaped from a per-call body (via lift-on-return).
-/// `None` for the common case (builtins and top-level FNs, which live in run-root and don't
-/// need a refcount). `Some(rc)` is set by the scheduler's lift logic when it detects the
-/// function lives in a dying frame's arena. The Rc keeps the arena alive past the slot's
-/// frame drop, so the `&KFunction` reference stays valid.
-///
-/// `KFuture(KFuture, Option<Rc<CallArena>>)`: same lifecycle anchor as `KFunction`. The
-/// inner `KFuture` carries a bare `&KFunction` plus a bundle and parsed `KExpression` whose
-/// `Future` parts are also borrowed `&KObject`s — all of which can point into a per-call
-/// arena. A single `Rc<CallArena>` keeps that arena alive, transitively keeping every
-/// internal reference valid. Set by `lift_kobject` when a KFuture-as-value escapes.
-///
-/// `TaggedUnionType(Rc<HashMap<...>>)`: a first-class tagged-union schema, mapping tag
-/// names to the `KType` each tag's payload must satisfy. Built by the `UNION` builtin and
-/// consumed by `TAG` (and the surface-level type-token / call-by-name construction paths)
-/// to validate tagged values at construction time. Reports `KType::Type` so it slots into
-/// any "expects a type" position alongside `StructType`.
-///
-/// `StructType { name, fields }`: a first-class struct schema produced by the `STRUCT`
-/// builtin. `fields` is an ordered `Vec<(String, KType)>` (not a HashMap) because struct
-/// construction is positional — the declaration order is part of the contract. Reports
-/// `KType::Type` like `TaggedUnionType`.
-///
-/// `Tagged { tag, value }`: a tagged value — one variant of a tagged union, carrying its
-/// tag name and inner payload. The payload is `Rc`-shared like `List`/`Dict` to keep
-/// `deep_clone` cheap and the lift-on-return walk able to skip allocation when no
-/// descendant `KFunction` is in flight.
-///
-/// `Struct { type_name, fields }`: a runtime struct value — a record of named fields. The
-/// `fields` map is `Rc`-shared with the same immutability contract as `Dict`/`List`. Stored
-/// as an `IndexMap` so iteration order matches the schema's declaration order — PRINT and
-/// `summarize` emit fields in the order the user wrote them, and `.get(name)` is still O(1).
+/// `KFunction` and `KFuture` carry an `Option<Rc<CallArena>>` lifecycle anchor; see
+/// [memory-model.md § Closure escape](../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),
@@ -75,29 +42,18 @@ pub enum KObject<'a> {
         type_name: String,
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
-    /// A first-class type expression — produced by `ExpressionPart::resolve_for` when the
-    /// receiving slot is `KType::TypeExprRef`. The structured `TypeExpr` survives the parser
-    /// → dispatch boundary intact so consumers like FN's return-type slot can recover the
-    /// full parameterized form (`List<Number>`, `Function<(N) -> S>`, ...) rather than just
-    /// the bare type name. Internal-only — no user-facing operation produces this variant.
+    /// First-class type expression: preserves the structured `TypeExpr` across the parser→
+    /// dispatch boundary so consumers like FN's return-type slot recover the full
+    /// parameterized form rather than just a bare type name. Internal-only.
     TypeExprValue(TypeExpr),
-    /// First-class module value (module-system stage 1). Carries an arena-allocated
-    /// [`Module`] reference whose `child_scope` points at the body scope `MODULE` populated
-    /// during construction. Reports `KType::Module`. ATTR routes through this variant for
-    /// member access (`Foo.bar`).
     KModule(&'a Module<'a>),
-    /// First-class signature value (module-system stage 1). Holds the declaring scope so the
-    /// ascription operators `:|` / `:!` can iterate declared abstract types and operation
-    /// signatures. Reports `KType::Signature`.
     KSignature(&'a Signature<'a>),
     Null,
 }
 
 impl<'a> KObject<'a> {
-    /// Runtime type tag for this value. Used by the scheduler's post-call return-type check
-    /// (`KType::matches_value`) and any future static-pass tooling. `KFuture` reports as
-    /// `KFunction` since a bound-but-unrun call is functionally a thunk and KFutures don't
-    /// escape as user-visible values today.
+    /// Runtime type tag. `KFuture` reports as `KFunction` since a bound-but-unrun call is
+    /// functionally a thunk and KFutures don't escape as user-visible values today.
     pub fn ktype(&self) -> KType {
         match self {
             KObject::Number(_) => KType::Number,
@@ -126,13 +82,8 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Independent-but-cheap clone. Composite payloads are `Rc`-shared (the immutability
-    /// contract on the `List`/`Dict` variants makes structural sharing safe), so cloning
-    /// those is `Rc::clone` rather than a recursive walk. `KFuture` and `KExpression` carry
-    /// their own clone semantics; `KFunction` preserves its `Rc<CallArena>` (if any) so a
-    /// kept-alive per-call arena stays alive in the clone. `Dict` keys are cloned through
-    /// `Serializable::clone_box` only when the surrounding `Rc` is being rebuilt — that
-    /// happens in `lift_kobject`, not here.
+    /// Independent-but-cheap clone: composite payloads are `Rc::clone`d under the
+    /// immutable-value contract; `KFunction`/`KFuture` preserve their `Rc<CallArena>` anchor.
     pub fn deep_clone(&self) -> KObject<'a> {
         match self {
             KObject::Number(n) => KObject::Number(*n),
@@ -163,17 +114,6 @@ impl<'a> KObject<'a> {
         }
     }
 
-    // Accessor helpers ---------------------------------------------------------------------
-    //
-    // Each `as_*` returns `Option<&T>` (or `Option<T>` for the trivially-`Copy` scalars). The
-    // pattern collapses the per-call-site `match` block — `match obj { KObject::Number(n) =>
-    // Some(*n), _ => None }` — to one method call. `Option<&T>::is_some()` covers any need
-    // for a boolean predicate, so no `is_*` helpers are introduced; reach for the accessor
-    // and call `.is_some()` if you only need shape detection. None of the helpers `clone()` —
-    // returns are by reference where the variant carries a non-`Copy` payload.
-
-    /// `KObject::KExpression(e)` → `Some(&e)`. Borrowed; clone at the call site if the slot
-    /// needs to be threaded through a tail-emit or similar.
     pub fn as_kexpression(&self) -> Option<&KExpression<'a>> {
         match self {
             KObject::KExpression(e) => Some(e),
@@ -181,11 +121,7 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// `KObject::StructType { name, fields }` → `Some((&name, &fields))`. Returns the `Rc`
-    /// reference to the field list so callers can `Rc::clone` rather than walk it. The tuple
-    /// type is non-trivial because it mirrors the struct variant's payload exactly — clippy's
-    /// `type_complexity` lint fires here, but introducing a named alias just for a single
-    /// return type would obscure rather than clarify; suppress targeted.
+    /// Returns the `Rc` directly so callers can `Rc::clone` the field list.
     #[allow(clippy::type_complexity)]
     pub fn as_struct_type(&self) -> Option<(&str, &Rc<Vec<(String, KType)>>)> {
         match self {
@@ -194,8 +130,6 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// `KObject::TaggedUnionType(schema)` → `Some(&schema)`. Returns the `Rc` reference for
-    /// the same reason as `as_struct_type`.
     pub fn as_tagged_union_type(&self) -> Option<&Rc<HashMap<String, KType>>> {
         match self {
             KObject::TaggedUnionType(schema) => Some(schema),
@@ -203,8 +137,6 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// `KObject::KModule(m)` → `Some(m)`. The `&'a Module<'a>` reference is returned
-    /// directly so call sites don't have to redo the dereference dance.
     pub fn as_module(&self) -> Option<&'a Module<'a>> {
         match self {
             KObject::KModule(m) => Some(*m),
@@ -212,7 +144,6 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// `KObject::KSignature(s)` → `Some(s)`. Mirrors [`as_module`](Self::as_module).
     pub fn as_signature(&self) -> Option<&'a Signature<'a>> {
         match self {
             KObject::KSignature(s) => Some(*s),
@@ -220,8 +151,6 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// `KObject::TypeExprValue(t)` → `Some(&t)`. Borrowed; clone if the call site needs to
-    /// own the structured `TypeExpr`.
     pub fn as_type_expr(&self) -> Option<&TypeExpr> {
         match self {
             KObject::TypeExprValue(t) => Some(t),
@@ -230,9 +159,6 @@ impl<'a> KObject<'a> {
     }
 }
 
-/// Project a parameterized `KType::KFunction { args, ret }` from a function value's signature.
-/// Used by `KObject::ktype` for both `KFunction` and `KFuture` — both report the same
-/// structural type since a `KFuture` is a bound-but-unrun thunk over the same `KFunction`.
 fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {
     let args: Vec<KType> = f
         .signature

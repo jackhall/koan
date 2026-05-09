@@ -1,10 +1,7 @@
-//! Top-level parser: runs the full `quote-mask → whitespace-collapse → tokenize →
-//! tree-build` pipeline and returns a `KExpression`. `build_tree` walks the
-//! paren-structured input one character at a time, maintaining a stack of frames
-//! (expression, list, dict, type-parameter). Tokens between paren transitions are
-//! classified by `tokens::classify_token`; dict-pair state lives on
-//! `dict_literal::DictFrame` and type-parameter folding lives on `type_frame::TypeFrame`,
-//! so the `:` / `,` / `}` / `<` / `>` arms here stay focused on framing.
+//! Top-level parser: runs the `quote-mask → whitespace-collapse → tokenize →
+//! tree-build` pipeline and returns a `KExpression`. Dict-pair state lives on
+//! `dict_literal::DictFrame` and type-parameter folding lives on
+//! `type_frame::TypeFrame` so framing arms here stay one-liners.
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
@@ -18,21 +15,9 @@ use crate::parse::whitespace::collapse_whitespace;
 use super::dict_literal::DictFrame;
 use super::type_frame::TypeFrame;
 
-/// One frame of `build_tree`'s parse stack. Parens open an `Expression` frame whose contents
-/// dispatch as a function call; brackets open a `List` frame whose contents become a
-/// `KObject::List` value at runtime; braces open a `Dict` frame whose alternating
-/// key/value parts (separated by `:`, terminated by `,` or whitespace) become a
-/// `KObject::Dict`; angle brackets open a `Type` frame attached to a preceding bare-Type part,
-/// whose contents become a parameterized `TypeExpr` (`List<Number>`, `Function<A -> R>`).
-/// Each frame accumulates `ExpressionPart`s the same way — only the wrapper produced when the
-/// frame closes differs. The dict-pair state machine lives on `DictFrame` (in
-/// [super::dict_literal]) rather than inline here, so `build_tree`'s `:` / `,` / `}` arms
-/// read as one-liners.
-///
-/// `Expression` frames carry an optional `head` — set when the frame was opened by the `#(...)`
-/// or `$(...)` sigil. On close, the frame's contents become the body of an inner
-/// `Expression` part, and the result pushed to the parent is `[Keyword(head), inner_expr]` —
-/// the AST shape `(QUOTE <body>)` / `(EVAL <body>)` that the QUOTE / EVAL builtins dispatch on.
+/// One frame of `build_tree`'s parse stack. `Expression::head` is `Some` only when the frame
+/// was opened by a `#(...)` / `$(...)` sigil; on close such a frame yields the
+/// `(QUOTE <body>)` / `(EVAL <body>)` AST shape rather than a bare `Expression` part.
 enum Frame<'a> {
     Expression {
         expr: KExpression<'a>,
@@ -53,10 +38,8 @@ impl<'a> Frame<'a> {
         }
     }
 
-    /// Peek the most recently pushed part on this frame, if accessible. Returns `None` for
-    /// `Dict` (whose state machine doesn't expose a flat last-part) — `<` after a Type inside
-    /// a dict frame therefore degrades to `Keyword("<")`, so users wanting a parameterized
-    /// type as a dict value must wrap it in parens (`{name: (List<Number>)}`).
+    /// Returns `None` for `Dict` (its state machine doesn't expose a flat last-part), which
+    /// makes `<` after a Type inside a dict frame degrade to `Keyword("<")`.
     fn last_part(&self) -> Option<&ExpressionPart<'a>> {
         match self {
             Frame::Expression { expr, .. } => expr.parts.last(),
@@ -66,8 +49,7 @@ impl<'a> Frame<'a> {
         }
     }
 
-    /// Pop and return the most recently pushed part. Caller must have already confirmed via
-    /// `last_part()` that the frame is one of Expression/List/Type.
+    /// Symmetric to `last_part`: `Dict` returns `None`.
     fn pop_last_part(&mut self) -> Option<ExpressionPart<'a>> {
         match self {
             Frame::Expression { expr, .. } => expr.parts.pop(),
@@ -78,9 +60,6 @@ impl<'a> Frame<'a> {
     }
 }
 
-/// If `buf` holds a pending token, classify it via `tokens::classify_token` and push the result
-/// onto the innermost frame on `stack`. Called by `build_tree` whenever a delimiter ends a run
-/// of token characters.
 fn flush_token<'a>(stack: &mut [Frame<'a>], buf: &mut String) -> Result<(), String> {
     if !buf.is_empty() {
         let tok = std::mem::take(buf);
@@ -90,8 +69,6 @@ fn flush_token<'a>(stack: &mut [Frame<'a>], buf: &mut String) -> Result<(), Stri
     Ok(())
 }
 
-/// Look up the original literal text for a `mask_quotes` placeholder. `inner` is the masked
-/// content found between two matching quote characters during `build_tree`.
 fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<String, String> {
     if inner.is_empty() {
         return Ok(String::new());
@@ -108,11 +85,6 @@ fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<Strin
         .ok_or_else(|| format!("unknown placeholder index: {}", idx))
 }
 
-/// Walk a quote-masked, delimited string and assemble it into a nested `KExpression`. Opens a
-/// sub-expression on `(`, closes it on `)`; opens a list literal on `[`, closes it on `]`;
-/// opens a dict literal on `{`, closes it on `}`. String literals are restored via
-/// `resolve_literal`; other runs go through `classify_token`. Collection-literal brackets
-/// must be adjacent only to delimiters — see `check_open_adjacency` / `check_close_adjacency`.
 pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression<'a>, String> {
     let mut stack: Vec<Frame<'a>> = vec![Frame::Expression {
         expr: KExpression { parts: Vec::new() },
@@ -120,24 +92,18 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
     }];
     let mut buf = String::new();
     let mut chars = masked.chars().peekable();
-    // Last char consumed from the input — used to enforce that collection-literal openings
-    // (`[`, `{`) are adjacent only to whitespace or matching delimiters, never glued to a
-    // token character or string literal.
+    // Used by adjacency checks for `[`, `{`, `<`, `>`.
     let mut prev: Option<char> = None;
-    // `Some(c)` after consuming a `#` or `$` sigil while waiting for the mandatory `(`. Any
-    // arm other than `(` and the sigils themselves rejects a non-None pending sigil (the
-    // surface is paren-only — `#foo`, `# (foo)`, `#42` are parse errors).
+    // `Some(c)` after consuming a `#`/`$` while waiting for the mandatory `(`. Any other arm
+    // rejects it — sigils are paren-only (`#foo`, `# (foo)`, `#42` are parse errors).
     let mut pending_sigil: Option<char> = None;
 
     while let Some(c) = chars.next() {
         match c {
             '#' | '$' => {
                 assert_no_pending(&pending_sigil, c)?;
-                // A sigil glued to a non-token character (whitespace, ',', '}') would make
-                // the immediately-following character the source of the "expected '(' after
-                // sigil" error from the next iteration. To keep the error at the sigil site
-                // we also disallow a non-empty token buffer — `foo#(...)` errors here, not
-                // later. The buffer is non-empty whenever the prior char was a token char.
+                // Reject `foo#(...)` here so the diagnostic points at the sigil; otherwise it
+                // would surface on the following char as "expected '(' after sigil".
                 if !buf.is_empty() {
                     return Err(format!(
                         "'{c}' sigil must be preceded by whitespace or '(' (got token char {prev:?})"
@@ -170,12 +136,9 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                             .unwrap()
                             .push(ExpressionPart::Expression(Box::new(complete)));
                     }
-                    // Sigil-opened frame: wrap the body in an inner `Expression` so the
-                    // QUOTE / EVAL builtin's `KExpression`-typed slot accepts it, and prepend
-                    // the head keyword. The result pushed to the parent is the `(QUOTE body)`
-                    // / `(EVAL body)` AST shape — `body` is always exactly one
-                    // `Expression` part regardless of how many tokens the user wrote inside
-                    // the sigil parens.
+                    // Sigil frame closes as `(QUOTE body)` / `(EVAL body)`; `body` is always
+                    // a single nested `Expression` part so the builtin's `KExpression` slot
+                    // accepts it regardless of how many tokens were inside the sigil parens.
                     Frame::Expression { expr: complete, head: Some(head) } => {
                         let wrapped = KExpression {
                             parts: vec![
@@ -231,18 +194,9 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                 let Frame::Dict(d) = stack.pop().unwrap() else { unreachable!() };
                 stack.last_mut().unwrap().push(ExpressionPart::DictLiteral(d.finish()?));
             }
-            // `:` is the key/value separator inside a dict frame. Outside one, it emits
-            // a standalone `Keyword(":")` — the type-annotation separator (`x: Number`)
-            // consumed by builtins like `UNION` (and, future-tense, function-signature
-            // parameter declarations).
-            //
-            // Outside a dict frame, `:|` and `:!` are the module-system stage 1 ascription
-            // operators (opaque and transparent). They have to be assembled here rather than
-            // at the `classify_token` layer because `!` is independently a prefix operator
-            // (`!foo` for NOT) — leaving a bare `!` after `:` would route through
-            // `parse_compound` and never reach the keyword classifier. We therefore peek the
-            // next char and consume the two-char form atomically as a `Keyword(":|")` /
-            // `Keyword(":!")`.
+            // `:|` / `:!` (ascription operators) must be assembled here, not in
+            // `classify_token`: `!` is independently a prefix operator, so a bare `!` after
+            // `:` would route through `parse_compound` and never reach keyword classification.
             ':' => {
                 assert_no_pending(&pending_sigil, c)?;
                 flush_token(&mut stack, &mut buf)?;
@@ -265,12 +219,8 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                     },
                 }
             }
-            // `,` is a pair separator inside a dict (commits an in-progress pair via
-            // `DictFrame::accept_comma`) and whitespace-equivalent everywhere else — no-op
-            // inside lists and expression frames. The expression-frame allowance lets
-            // type-annotation triples (`a: Number, b: Str`) and future function-signature
-            // parameter lists use commas as visual separators without changing the parsed
-            // shape.
+            // Pair separator in a dict; whitespace-equivalent (no-op) everywhere else, so
+            // type-annotation triples like `a: Number, b: Str` parse without altering shape.
             ',' => {
                 assert_no_pending(&pending_sigil, c)?;
                 flush_token(&mut stack, &mut buf)?;
@@ -279,14 +229,9 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                     Frame::List(_) | Frame::Expression { .. } | Frame::Type(_) => {}
                 }
             }
-            // `<` opens a `Frame::Type` ONLY when the parent frame's last `ExpressionPart`
-            // is a bare `Type(_)` (params=None). Otherwise it emits `Keyword("<")` and
-            // `check_separator_adjacency` requires whitespace separation — so `List<Number>`
-            // works without spaces, but `a<b` is rejected as glued to a token. A future
-            // less-than builtin can dispatch on the bare `<` keyword.
-            // Inside a `Frame::Dict`, `<` always emits the keyword (the dict's state
-            // machine doesn't expose a flat last-part); to use a parameterized type as a
-            // dict value, wrap in parens (`{name: (List<Number>)}`).
+            // Opens a `Frame::Type` only when the parent's last part is a bare `Type` (no
+            // params); otherwise emits `Keyword("<")` and requires whitespace separation, so
+            // `List<Number>` parses but `a<b` is rejected as glued.
             '<' => {
                 assert_no_pending(&pending_sigil, c)?;
                 flush_token(&mut stack, &mut buf)?;
@@ -305,16 +250,12 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                     parent.push(ExpressionPart::Keyword("<".to_string()));
                 }
             }
-            // `>` after `-` (no whitespace) is part of the `->` arrow token — applies
-            // BOTH inside and outside a TypeFrame, so `Function<Number -> Str>` keeps
-            // its arrow contiguous and `FN ... -> Number = ...` stays unaffected.
+            // Part of the `->` arrow token; applies both inside and outside a TypeFrame so
+            // `Function<Number -> Str>` keeps its arrow contiguous.
             '>' if prev == Some('-') => {
                 assert_no_pending(&pending_sigil, c)?;
                 buf.push('>');
             }
-            // `>` closes a TypeFrame when one is on top of the stack; otherwise it emits
-            // `Keyword(">")` and requires whitespace separation (same rule as standalone
-            // `<`) so `Number>` is rejected as glued to a token.
             '>' => {
                 assert_no_pending(&pending_sigil, c)?;
                 flush_token(&mut stack, &mut buf)?;
@@ -372,9 +313,7 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
     }
     match stack.pop().unwrap() {
         Frame::Expression { expr, head: None } => Ok(expr),
-        // The top-of-stack expression frame is created with `head: None` and never replaced
-        // — sigil-opened frames are nested inside, not at the root. So this arm is
-        // unreachable in practice; treat it as an internal invariant.
+        // Unreachable: the root frame is created with `head: None` and sigils only nest.
         Frame::Expression { head: Some(_), .. } => {
             Err("top-level frame unexpectedly carries a sigil head".to_string())
         }
@@ -388,9 +327,6 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
     }
 }
 
-/// Reject a non-paren character following a `#`/`$` sigil. Called by every match arm except
-/// `(` (which consumes the sigil) and `'#' | '$'` (which sets it). The error mentions both
-/// the sigil and the offending char so the diagnostic points at the sigil site.
 fn assert_no_pending(pending: &Option<char>, c: char) -> Result<(), String> {
     if let Some(s) = pending {
         return Err(format!("expected '(' after '{s}', found '{c}'"));
@@ -398,8 +334,6 @@ fn assert_no_pending(pending: &Option<char>, c: char) -> Result<(), String> {
     Ok(())
 }
 
-/// Enforce that an opening collection bracket (`[` or `{`) is preceded by a delimiter
-/// character, not glued to a token. Shared by `[` and `{` in `build_tree`.
 fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), String> {
     if matches!(prev, None | Some('(' | '[' | '{')) || matches!(prev, Some(c) if c.is_whitespace()) {
         return Ok(());
@@ -410,11 +344,8 @@ fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), String> 
     ))
 }
 
-/// Enforce that a standalone `<` or `>` keyword (the fallback path when neither opens nor
-/// closes a `Frame::Type`) is preceded by whitespace or a delimiter, not glued to a token.
-/// This rules out shapes like `Number>` and `a<b` so they surface as parse errors instead of
-/// silently splitting into separate tokens. Inside a TypeFrame the open/close paths bypass
-/// this check — `List<Number>` keeps working without intervening whitespace.
+/// Rejects glued shapes like `Number>` / `a<b` so they surface as parse errors instead of
+/// silently splitting into separate tokens. TypeFrame open/close paths bypass this check.
 fn check_separator_adjacency(c: char, prev: Option<char>) -> Result<(), String> {
     if matches!(prev, None | Some('(' | ')' | '[' | ']' | '{' | '}' | ','))
         || matches!(prev, Some(p) if p.is_whitespace())
@@ -427,8 +358,7 @@ fn check_separator_adjacency(c: char, prev: Option<char>) -> Result<(), String> 
     ))
 }
 
-/// Enforce that a closing collection bracket (`]` or `}`) is followed by a delimiter
-/// character, not glued to a token. Symmetric to `check_open_adjacency`.
+/// Symmetric to `check_open_adjacency` for closing brackets.
 fn check_close_adjacency(closer: char, next: Option<char>) -> Result<(), String> {
     if matches!(next, None | Some(')' | ']' | '}')) || matches!(next, Some(c) if c.is_whitespace()) {
         return Ok(());
@@ -439,10 +369,7 @@ fn check_close_adjacency(closer: char, next: Option<char>) -> Result<(), String>
     ))
 }
 
-/// Strip redundant single-`Expression` wrappers from `expr` and each of its sub-expressions
-/// so that `((foo bar))` and `(foo bar)` produce the same shape — extra parens shouldn't
-/// change what gets dispatched downstream. Recurses into list literals so nested
-/// sub-expressions inside a list are peeled the same way.
+/// Collapses single-`Expression` wrappers so `((foo bar))` and `(foo bar)` dispatch the same.
 fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
     while expr.parts.len() == 1 && matches!(expr.parts[0], ExpressionPart::Expression(_)) {
         if let Some(ExpressionPart::Expression(inner)) = expr.parts.pop() {
@@ -453,9 +380,6 @@ fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
     expr
 }
 
-/// Peel one `ExpressionPart`, recursing into `Expression`, `ListLiteral`, and `DictLiteral`
-/// children. Dict pairs peel both halves so a sub-expression key/value with a redundant
-/// wrapping (e.g. `{((k)): 1}`) collapses the same as it would inside a list or paren group.
 fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
     match part {
         ExpressionPart::Expression(inner) => {
@@ -474,10 +398,7 @@ fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
     }
 }
 
-/// Top-level parse pipeline: mask string literals, collapse indentation into parens, build
-/// the expression tree, then peel redundant single-expression wrappers. Returns one
-/// `KExpression` per top-level line; the single public entry point users of `parse` should
-/// call.
+/// Public entry point: returns one `KExpression` per top-level line.
 pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
     let (masked, quotes) = mask_quotes(input);
     let collapsed = collapse_whitespace(&masked)?;

@@ -10,9 +10,8 @@ use crate::dispatch::values::KObject;
 use super::arena::RuntimeArena;
 use super::kerror::{KError, KErrorKind};
 
-/// A function call that has been resolved but not yet executed: the original parsed expression,
-/// the chosen `KFunction`, and the `ArgumentBundle` produced by `KFunction::bind`. Carried
-/// inside `KObject::KTask` and is the unit of deferred work in the dispatch system.
+/// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
+/// and the `ArgumentBundle` from `KFunction::bind`. Unit of deferred work in dispatch.
 pub struct KFuture<'a> {
     pub parsed: KExpression<'a>,
     pub function: &'a KFunction<'a>,
@@ -20,9 +19,8 @@ pub struct KFuture<'a> {
 }
 
 impl<'a> KFuture<'a> {
-    /// Recursive clone. The `function` reference is shared (KFunctions are arena-allocated
-    /// and immutable); `parsed` clones the AST; `bundle` deep-clones each argument value into
-    /// fresh `Rc`s so the clone is independent of the original.
+    /// `function` is shared (arena-allocated, immutable); `parsed` and `bundle` clone deeply
+    /// so the result is independent of the original.
     pub fn deep_clone(&self) -> KFuture<'a> {
         KFuture {
             parsed: self.parsed.clone(),
@@ -32,70 +30,56 @@ impl<'a> KFuture<'a> {
     }
 }
 
-/// Result of `Scope::resolve`. `Value` is the common case — the name is bound in `data`.
-/// `Placeholder` says a binder dispatched the name but its body hasn't run yet — the carried
-/// `NodeId` identifies the producer slot the consumer should park on. `Unbound` means neither
-/// `data` nor `placeholders` (in any scope on the chain searched so far) carries the name.
+/// Result of `Scope::resolve`. `Placeholder` carries the producer `NodeId` the consumer
+/// should park on (a binder dispatched the name but its body hasn't finalized).
 ///
-/// Resolution stops at the first hit: per the dispatch-time-placeholders plan, `bind_value`
-/// removes its own placeholder before inserting into `data`, so `data` and `placeholders` never
-/// both hold the same name in one scope; the chain walk stops at the first scope that sees
-/// either.
+/// Invariant: `data` and `placeholders` never both hold the same name in one scope —
+/// `bind_value` removes the placeholder before inserting into `data`. Resolution stops at
+/// the first scope on the chain that has either.
 pub enum Resolution<'a> {
     Value(&'a KObject<'a>),
     Placeholder(NodeId),
     Unbound,
 }
 
-/// A pending re-entrant write. `bind_value` and `register_function` queue here when their
-/// `try_borrow_mut` on `data`/`functions` collides with a borrow held up the call stack;
-/// `drain_pending` retries each item between scheduler nodes. The split tag picks the right
-/// retry path so a queued function registration doesn't accidentally take the value-binding
-/// path (which would skip the per-signature dedupe and the value/function collision check).
+/// A pending re-entrant write — queued when `try_borrow_mut` on `data`/`functions` collides
+/// with a borrow held up the call stack, retried by `drain_pending` between scheduler nodes.
+/// The variant tag preserves the per-signature dedupe and value/function collision check on
+/// retry, which a single shared retry path would skip.
 enum PendingWrite<'a> {
     Value { name: String, obj: &'a KObject<'a> },
     Function { name: String, fn_ref: &'a KFunction<'a>, obj: &'a KObject<'a> },
 }
 
-/// Lexical environment. `functions` buckets overloads by their *untyped signature* — the
-/// arrangement of fixed tokens and slots with slot types erased — so dispatch can pick
-/// between same-shape overloads by `KType` specificity. `out` is pluggable so tests and
-/// embedders can capture builtin output instead of routing it to stdout — only the root scope
-/// holds a writer; child scopes have `None` and `write_out` walks `outer` to find one.
+/// Lexical environment. `functions` buckets overloads by their *untyped signature* (token
+/// shape with slot types erased) so dispatch can pick between same-shape overloads by
+/// `KType` specificity. Only the root scope holds a writer in `out`; child scopes have
+/// `None` and `write_out` walks `outer` to find one.
 ///
-/// All mutable state is interior-mutable (`RefCell`) so a `&'a Scope<'a>` can be shared across
-/// scheduler nodes (each per-call body Dispatch holds a borrow of its child scope) while
-/// builtins still mutate `data` / `functions` / `out` through it.
+/// All mutable state is interior-mutable (`RefCell`) so a `&'a Scope<'a>` can be shared
+/// across scheduler nodes while builtins still mutate through it.
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,
     pub data: RefCell<HashMap<String, &'a KObject<'a>>>,
     pub functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
-    /// Writes that hit a borrow conflict at `bind_value` / `register_function` time
-    /// (data/functions already iterated by some caller up the stack). The scheduler drains
-    /// this between dispatch nodes via `drain_pending`. Direct writes (no conflict) bypass
-    /// the queue entirely, so the hot path is unchanged. See `try_apply_value` /
-    /// `try_apply_function` for the conditional-defer logic.
+    /// Writes that hit a borrow conflict at `bind_value` / `register_function` time.
+    /// Drained between dispatch nodes by `drain_pending`; direct writes bypass the queue.
     pending: RefCell<Vec<PendingWrite<'a>>>,
-    /// Dispatch-time name placeholders: a binder's `pre_run` hook installs the binder's
-    /// declared name here, mapped to the producer slot's `NodeId`, *before* the binder's
-    /// body runs. A consumer that looks up the name while the binder's RHS is still in
-    /// flight gets `Resolution::Placeholder(producer_id)` and parks on the producer via the
-    /// scheduler's `notify_list` / `pending_deps` machinery. The binder's `bind_value` /
-    /// `register_function` removes its own placeholder before inserting into `data` /
-    /// `functions`, so post-finalize lookups go straight through the value path.
+    /// Dispatch-time name placeholders: a binder's `pre_run` hook installs its declared
+    /// name here, mapped to the producer slot's `NodeId`, before the binder's body runs.
+    /// A consumer looking up the name while the RHS is in flight gets `Placeholder` and
+    /// parks on the producer. The binder removes its placeholder before inserting into
+    /// `data` / `functions`.
     pub placeholders: RefCell<HashMap<String, NodeId>>,
-    /// Lexical-context label for this scope. Set at construction by `MODULE`-style builtins
-    /// (`"MODULE Foo"`, `"SIG OrderedSig"`) via `child_under_named`; empty string for run-root
-    /// and call frames whose context isn't worth naming. Currently a record-only field — kept
-    /// for future diagnostics that may want to surface the scope chain in error messages.
+    /// Lexical-context label set at construction by `child_under_named` (e.g. `"MODULE Foo"`,
+    /// `"SIG OrderedSig"`); empty for run-root and ordinary call frames. Record-only;
+    /// reserved for future diagnostics.
     pub name: String,
 }
 
 impl<'a> Scope<'a> {
-    /// Construct a fresh root scope with the given writer and arena. Used by `interpret` to
-    /// build the run-root that chains under the program-lifetime `default_scope`.
     pub fn run_root(arena: &'a RuntimeArena, outer: Option<&'a Scope<'a>>, out: Box<dyn Write + 'a>) -> Self {
         Self {
             outer,
@@ -109,16 +93,12 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Build a child scope parented to `self`, sharing its arena. Used by tests that don't
-    /// distinguish lexical from dynamic scoping; `KFunction::invoke` uses `child_under`
-    /// instead so the child's `outer` is the FN's *captured* scope, not the call site.
     pub fn child_for_call(&'a self) -> Scope<'a> {
         Self::child_under(self)
     }
 
-    /// Build a child scope with an explicit `outer` pointer. Used by `KFunction::invoke` for
-    /// user-defined bodies — `outer` is the FN's captured definition scope (lexical scoping),
-    /// not the call site. The child shares `outer`'s arena.
+    /// `outer` is the lexical parent — for FN bodies this is the captured definition scope,
+    /// not the call site.
     pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -132,9 +112,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Construct a named child scope — used by the `MODULE` and `SIG` builtins so the
-    /// resulting scope's `name` records the lexical context (`"MODULE IntOrd"`,
-    /// `"SIG OrderedSig"`). Identical to `child_under` otherwise.
+    /// Like `child_under` but stamps the scope's `name` with a lexical-context label.
     pub fn child_under_named(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -148,20 +126,13 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Bind a value (LET, STRUCT, UNION, SIG, MODULE) under `name` in this scope. Errors with
-    /// `Rebind` if `data` already holds `name` (same-scope rebind is rejected per the decided
-    /// rule; cross-scope shadowing remains allowed). On success, removes any matching
-    /// placeholder this scope owns — the producer has finalized, so consumers should fall
-    /// straight through to the value on the next lookup.
+    /// Bind `name` in this scope. Errors `Rebind` if `data` already holds `name`
+    /// (same-scope rebind rejected; cross-scope shadowing allowed). Removes any matching
+    /// placeholder this scope owns on success.
     ///
-    /// Conditional-defer: tries the direct mutation first, falls back to the `pending` queue
-    /// iff a borrow conflict would otherwise panic (typically a caller up the stack is
-    /// iterating `data` and re-entrantly triggers a write). The hot path — no concurrent
-    /// borrow — is the same direct insert as before; queued writes are observably deferred
-    /// until `drain_pending`.
+    /// Conditional-defer: direct mutation first, falls back to the `pending` queue iff a
+    /// borrow conflict would otherwise panic (caller up the stack iterating `data`).
     pub fn bind_value(&self, name: String, obj: &'a KObject<'a>) -> Result<(), KError> {
-        // Same-scope rebind check uses an immediate borrow of `data`. If `data` is already
-        // borrowed up-stack, route through `pending` — the drain path will re-check.
         match self.try_apply_value(&name, obj)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
@@ -171,15 +142,12 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Register a function (FN body, `register_builtin`) under `name` in this scope. Adds
-    /// `fn_ref` to the `functions` bucket keyed by its untyped signature; errors with
-    /// `DuplicateOverload` if the bucket already holds an exact-signature equal function.
-    /// Then inserts `obj` into `data[name]` only if `data[name]` is empty or already a
-    /// `KObject::KFunction` — a function can't be registered under a name that holds a
-    /// non-function value (`Rebind`).
+    /// Add `fn_ref` to the `functions` bucket keyed by its untyped signature, then insert
+    /// `obj` into `data[name]`. Errors:
+    /// - `DuplicateOverload` if the bucket already holds an exact-signature equal function.
+    /// - `Rebind` if `data[name]` holds a non-function.
     ///
-    /// Removes any matching placeholder this scope owns. Conditional-defer routes to the
-    /// `pending` queue on borrow conflict (same shape as `bind_value`).
+    /// Same conditional-defer shape as `bind_value`.
     pub fn register_function(
         &self,
         name: String,
@@ -199,27 +167,20 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Direct-write path for value bindings. `Ok(Applied)` on success, `Ok(Conflict)` on
-    /// borrow conflict (caller queues into `pending`), `Err(...)` for the `Rebind` case
-    /// — routed straight through to the caller without queuing because the conflict is
-    /// semantic, not borrow-based.
+    /// Direct-write path for `bind_value`. `Conflict` means borrow contention (caller
+    /// queues); `Err` means semantic rejection (not queued).
     ///
-    /// When `obj` is a `KObject::KFunction`, the wrapped function is *also* added to
-    /// `self.functions[signature_key]` so a downstream dispatch via the function's keyword
-    /// signature finds it. This preserves the closure-escape and `LET f = (FN ...)` shapes
-    /// where the LET-bound name doubles as a callable verb (call_by_name's apply emits a
-    /// Tail with the function's keyword signature, which then routes through the bucket
-    /// lookup). Pointer-equality dedupe in the bucket keeps a re-bind of the same function
-    /// from doubling up; structural exact-equal dedupe would over-trigger here because
-    /// LET aliasing is intentionally permitted.
+    /// When `obj` is a `KObject::KFunction`, the function is *also* mirrored into
+    /// `self.functions[signature_key]` so dispatch by the function's signature shape finds
+    /// it (supports `LET f = (FN ...)` where the bound name doubles as a callable verb).
+    /// Pointer-equality dedupe in the bucket allows intentional LET aliasing
+    /// (`LET g = (f)`) without doubling the entry; structural dedupe would over-trigger.
     fn try_apply_value(
         &self,
         name: &str,
         obj: &'a KObject<'a>,
     ) -> Result<ApplyOutcome, KError> {
-        // If we're binding a function value, take the functions borrow first (matches the
-        // borrow order in `try_apply_function` so re-entrant `bind_value` from inside an
-        // iteration over `functions` defers cleanly via Conflict).
+        // Borrow `functions` before `data` to match `try_apply_function`'s ordering.
         let mut functions_handle = if matches!(obj, KObject::KFunction(_, _)) {
             match self.functions.try_borrow_mut() {
                 Ok(g) => Some(g),
@@ -235,9 +196,6 @@ impl<'a> Scope<'a> {
         if data.contains_key(name) {
             return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
         }
-        // Mirror the function into the per-signature bucket so a downstream dispatch by the
-        // function's signature shape finds it. Pointer-dedupe keeps a re-aliased function
-        // (e.g. `LET g = (f)` after `LET f = (FN ...)`) from doubling the bucket entry.
         if let (KObject::KFunction(f, _), Some(functions)) = (obj, functions_handle.as_mut()) {
             let key = f.signature.untyped_key();
             let bucket = functions.entry(key).or_default();
@@ -249,17 +207,15 @@ impl<'a> Scope<'a> {
         data.insert(name.to_string(), obj);
         drop(data);
         drop(functions_handle);
-        // Remove our own placeholder — the binder we owned has finalized.
         if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
             ph.remove(name);
         }
         Ok(ApplyOutcome::Applied)
     }
 
-    /// Direct-write path for function registrations. Mirrors `try_apply_value` but addresses
-    /// the `functions` bucket first and uses signature-based dedupe rather than name-based
-    /// rebind. `Err(DuplicateOverload)` for exact-signature collision; `Err(Rebind)` if
-    /// `data[name]` already holds a non-function.
+    /// Direct-write path for `register_function`. Signature-based dedupe rather than
+    /// name-based rebind: pointer-equal re-registration is a silent no-op; structurally
+    /// exact-equal but distinct is `DuplicateOverload`.
     fn try_apply_function(
         &self,
         name: &str,
@@ -276,16 +232,8 @@ impl<'a> Scope<'a> {
         };
         let key = fn_ref.signature.untyped_key();
         let bucket = functions.entry(key).or_default();
-        // Exact-signature dedupe: a re-registration of the same `KFunction` (same pointer)
-        // is a silent no-op; an exact-signature equal but distinct `KFunction` is a
-        // `DuplicateOverload` error. Pointer-equality is a fast path for the
-        // re-registration case (same arena allocation). Structural equality is checked
-        // via `signatures_exact_equal` to catch the actual conflict.
         for existing in bucket.iter() {
             if std::ptr::eq(*existing, fn_ref) {
-                // Same KFunction re-registered (e.g. LET aliasing of an existing FN);
-                // skip the bucket update and fall through to the data insert (which the
-                // value-collision check below handles).
                 return apply_function_data_insert(&mut data, name, obj, &self.placeholders);
             }
             if signatures_exact_equal(&existing.signature, &fn_ref.signature) {
@@ -299,17 +247,9 @@ impl<'a> Scope<'a> {
         apply_function_data_insert(&mut data, name, obj, &self.placeholders)
     }
 
-    /// Apply queued writes. Called by the scheduler after each dispatch node so writes that
-    /// queued during a re-entrant borrow become visible by the next node's run. Items that
-    /// still hit a borrow conflict (rare — would mean drain itself was re-entered through a
-    /// live borrow) stay queued for the next drain attempt; the queue is therefore eventually
-    /// consistent rather than guaranteed-empty after one call.
-    ///
-    /// A pending write whose semantic check fails on retry (`Rebind` / `DuplicateOverload`)
-    /// is silently dropped here — there is no caller to surface the error to. Today this is
-    /// only reachable via the re-entrant-borrow path, which is itself a corner case used by
-    /// the `add_during_active_data_borrow_queues_and_drains` test; the test exercises the
-    /// no-conflict happy path.
+    /// Apply queued writes between dispatch nodes. Items that still hit a borrow conflict
+    /// stay queued (eventually-consistent, not guaranteed-empty after one call). Semantic
+    /// failures on retry are silently dropped — there is no caller to surface the error to.
     pub fn drain_pending(&self) {
         if self.pending.borrow().is_empty() {
             return;
@@ -324,9 +264,7 @@ impl<'a> Scope<'a> {
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Value { name, obj });
                         }
-                        Err(_) => {
-                            // Drop semantic errors on the drain path — see method doc.
-                        }
+                        Err(_) => {}
                     }
                 }
                 PendingWrite::Function { name, fn_ref, obj } => {
@@ -335,9 +273,7 @@ impl<'a> Scope<'a> {
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Function { name, fn_ref, obj });
                         }
-                        Err(_) => {
-                            // Drop semantic errors on the drain path — see method doc.
-                        }
+                        Err(_) => {}
                     }
                 }
             }
@@ -347,13 +283,8 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Look up `name` in this scope, walking the `outer` chain on miss. Returns the bound
-    /// `KObject` from the nearest enclosing scope, or `None` if unbound at every level.
-    /// Thin wrapper over [`Scope::resolve`] that drops the placeholder distinction —
-    /// non-`run_dispatch` callers (value_lookup body, ATTR / type_call / module-resolution
-    /// bodies, `lookup_kfunction`) keep using this path. With the §1 / §8 dispatch-time
-    /// short-circuits in place, those callers never see a placeholder for an in-flight
-    /// binder; they continue to surface `UnboundName` for genuinely unbound names.
+    /// Walk the `outer` chain for the nearest value binding of `name`. Wrapper over
+    /// [`Scope::resolve`] that collapses `Placeholder` and `Unbound` to `None`.
     pub fn lookup(&self, name: &str) -> Option<&'a KObject<'a>> {
         match self.resolve(name) {
             Resolution::Value(v) => Some(v),
@@ -361,19 +292,10 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Resolve `name` against this scope and the `outer` chain. Returns the first hit:
-    /// `Value(obj)` if a scope on the chain has a `data[name]` binding, `Placeholder(id)`
-    /// if the same scope has a `placeholders[name]` (and no value), or `Unbound` if neither
-    /// `data` nor `placeholders` carries `name` in any scope on the chain.
-    ///
-    /// Walks `data` first, then `placeholders`, in each scope. **Stops at the first hit** —
-    /// once an inner scope has the placeholder, an outer scope's `data` binding for the same
-    /// name does NOT shadow it. Per the dispatch-time-placeholders plan, `bind_value`
-    /// removes the placeholder before inserting into `data`, so `data` and `placeholders`
-    /// never both hold the same name in one scope.
-    ///
-    /// Used by `run_dispatch` (§1 single-Identifier short-circuit and §8 replay-park) to
-    /// detect forward references and park consumers on producers.
+    /// Resolve `name` against this scope and the `outer` chain. **Stops at the first hit
+    /// per scope, checking `data` then `placeholders`** — an inner scope's placeholder
+    /// shadows an outer scope's value binding for the same name (the inner producer hasn't
+    /// finalized yet, so the consumer must park on it rather than read through to the outer).
     pub fn resolve(&self, name: &str) -> Resolution<'a> {
         if let Some(obj) = self.data.borrow().get(name).copied() {
             return Resolution::Value(obj);
@@ -387,28 +309,17 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Install a dispatch-time placeholder for `name`, mapped to producer slot `idx`.
+    /// Install a dispatch-time placeholder for `name` -> producer slot `idx`.
     ///
-    /// Lenient when `data[name]` already holds a `KObject::KFunction`: returns `Ok(())`
-    /// without installing anything. This accommodates the FN overload model where
-    /// `register_function` adds new overloads to the per-signature bucket and reuses the
-    /// existing `data[name]` slot — a forward reference to `name` while the new overload is
-    /// in flight resolves through the *existing* function (the new overload will simply add
-    /// itself to the bucket once its body finalizes; consumers don't need to wait).
+    /// Lenient when `data[name]` already holds a `KObject::KFunction`: silent no-op.
+    /// Forward references resolve through the existing function value; a new FN overload
+    /// joins the per-signature bucket on finalize without consumers needing to park.
     ///
-    /// Errors with `Rebind` if `data[name]` holds a non-function or if `placeholders[name]`
-    /// already holds a *different* `NodeId` than `idx`. Idempotent for re-entry through
-    /// `run_dispatch` from a replay-park: if `placeholders[name]` already maps to the same
-    /// `NodeId`, no-op.
-    ///
-    /// Called by `run_dispatch` via the per-binder `pre_run` hook (§4) before any sub-deps
-    /// are scheduled, so a sibling expression that looks up `name` while the binder's RHS is
-    /// still in flight finds the placeholder and parks.
+    /// Errors `Rebind` if `data[name]` holds a non-function or if `placeholders[name]`
+    /// already maps to a *different* `NodeId`. Idempotent if re-entered with the same
+    /// `NodeId`.
     pub fn install_placeholder(&self, name: String, idx: NodeId) -> Result<(), KError> {
         if let Some(existing) = self.data.borrow().get(&name) {
-            // Function-bucket-managed name: silently skip the install. The existing function
-            // value satisfies forward references; the dispatching binder (FN) adds its own
-            // overload to the bucket on finalize.
             if matches!(existing, KObject::KFunction(_, _)) {
                 return Ok(());
             }
@@ -417,8 +328,6 @@ impl<'a> Scope<'a> {
         let mut ph = self.placeholders.borrow_mut();
         if let Some(existing) = ph.get(&name).copied() {
             if existing == idx {
-                // Re-entry: the same dispatch slot is reinstalling its own placeholder
-                // (only happens on a §8 replay-park re-dispatch). No-op.
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
@@ -427,11 +336,8 @@ impl<'a> Scope<'a> {
         Ok(())
     }
 
-    /// Walk the `outer` chain to find the nearest scope that holds a writer, and write `bytes`
-    /// to it. Used by PRINT. Child scopes constructed by `child_for_call` have `out: None`,
-    /// so writes ascend to the run-root (or to whichever scope the caller stashed the writer
-    /// into). Errors from the underlying writer are dropped — same shape as the previous
-    /// `let _ = writeln!(scope.out, ...)` call site.
+    /// Walk the `outer` chain for the nearest scope holding a writer and write `bytes`.
+    /// Writer errors are silently dropped.
     pub fn write_out(&self, bytes: &[u8]) {
         if let Some(w) = self.out.borrow_mut().as_mut() {
             let _ = w.write_all(bytes);
@@ -442,23 +348,12 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Resolve `expr` against this scope's functions, walking `outer` on miss so child scopes
-    /// inherit from their parents. Ambiguity does *not* fall through to `outer` — the inner
-    /// scope had a real conflict, and silently shadowing it would hide it from the author.
-    ///
-    /// Function-as-value calls (e.g., `LET f = (FN ...)` then `f (args)`) do not live here:
-    /// they go through the [`call_by_name`](super::builtins::call_by_name) builtin, whose
-    /// signature `[Identifier, KExpression]` matches identifier-leading expressions and
-    /// synthesizes a re-dispatchable expression by weaving the looked-up function's keyword
-    /// tokens back in.
+    /// Resolve `expr` to a callable, walking `outer` on miss. Ambiguity at the inner scope
+    /// does *not* fall through — it surfaces rather than being silently shadowed.
     pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
         super::dispatcher::dispatch(self, expr)
     }
 
-    /// Look up `name` in the scope chain and return the bound `KFunction`, or `None` if the
-    /// name is unbound or bound to a non-function value. Used by the
-    /// [`call_by_name`](super::builtins::call_by_name) builtin to resolve identifier-leading
-    /// expressions to the function they should invoke.
     pub fn lookup_kfunction(&self, name: &str) -> Option<&'a KFunction<'a>> {
         match self.lookup(name)? {
             KObject::KFunction(f, _) => Some(*f),
@@ -466,45 +361,28 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Find a "lazy candidate" for `expr`: a matching function with at least one
-    /// `KType::KExpression` slot bound by an `ExpressionPart::Expression`. Returns the indices
-    /// of the *eager* `Expression` parts — the caller schedules those as deps and leaves the
-    /// lazy ones in place for the receiving builtin to dispatch itself. Walks `outer` like
-    /// `dispatch` does.
-    ///
-    /// TODO(lazy-list-of-expressions): once user functions exist, `[e1 e2 e3]` will need to
-    /// ride into the parent as `KExpression` data rather than be eagerly scheduled. Today
-    /// every list-literal element resolves eagerly via `schedule_list_literal`.
+    /// Pick a matching function with at least one `KType::KExpression` slot bound by an
+    /// `ExpressionPart::Expression`. Returns the indices of the *eager* `Expression` parts;
+    /// lazy ones stay in place for the receiving builtin to dispatch.
     pub fn lazy_candidate(&self, expr: &KExpression<'_>) -> Option<Vec<usize>> {
         super::dispatcher::lazy_candidate(self, expr)
     }
 
-    /// Shape-pick helper: extended `lazy_candidate` that returns a single `ShapePick` carrying
-    /// the picked function's eager-Expression indices (the existing lazy-candidate behavior),
-    /// the bare-Identifier indices that should be *auto-wrapped* as sub-Dispatches (§7), and
-    /// the bare-Identifier indices that name *function references* whose binder may not yet
-    /// have finalized (§8 replay-park targets). Returns `None` if no unique candidate matches
-    /// `expr`'s shape.
-    ///
-    /// Used by `run_dispatch` after the §1 single-Identifier short-circuit. The auto-wrap
-    /// turns `LET y = z` (today bound to the literal string `"z"`) into a forward-reference
-    /// resolving lookup; the ref-name indices feed §8's parking decision.
+    /// Extended `lazy_candidate` returning eager-Expression, auto-wrap, and forward-ref
+    /// index sets for the picked function. `None` if no unique shape match.
     pub fn shape_pick(&self, expr: &KExpression<'_>) -> Option<ShapePick> {
         super::dispatcher::shape_pick(self, expr)
     }
 }
 
-/// Outcome of a direct-write attempt. `Applied` = success; `Conflict` = `try_borrow_mut`
-/// failed and the caller should route through the pending queue. Semantic errors return
-/// `Err(KError)` separately; only borrow-conflict cases land in `Conflict`.
+/// `Conflict` is reserved for borrow contention; semantic errors come through `Err(KError)`.
 enum ApplyOutcome {
     Applied,
     Conflict,
 }
 
-/// Helper for `try_apply_function`'s data-insert tail. Inserts `obj` into `data[name]` only
-/// if the slot is empty or already a `KFunction`; on collision with a non-function,
-/// returns `Rebind`. Removes the matching placeholder on success.
+/// Insert `obj` into `data[name]` if the slot is empty or already holds a `KFunction`;
+/// otherwise `Rebind`. Clears the matching placeholder on success.
 fn apply_function_data_insert<'a>(
     data: &mut std::cell::RefMut<'_, HashMap<String, &'a KObject<'a>>>,
     name: &str,
@@ -523,11 +401,9 @@ fn apply_function_data_insert<'a>(
     Ok(ApplyOutcome::Applied)
 }
 
-/// Exact structural equality for two `ExpressionSignature`s. Same shape (length + per-position
-/// keyword/argument tag), same per-Argument `KType`, same return type. Used by
-/// `try_apply_function`'s dedupe to reject re-registration of an exact-signature equal but
-/// distinct `KFunction`. Doesn't depend on `Argument::name` because two overloads with the
-/// same shape and KTypes but different parameter names still collide for dispatch.
+/// Structural equality on shape + per-Argument `KType` + return type. Independent of
+/// `Argument::name` — two overloads with matching shape and types collide for dispatch
+/// regardless of parameter naming.
 fn signatures_exact_equal(
     a: &crate::dispatch::types::ExpressionSignature,
     b: &crate::dispatch::types::ExpressionSignature,
@@ -546,20 +422,20 @@ fn signatures_exact_equal(
     })
 }
 
-/// Output of [`Scope::shape_pick`]. Carries the picked function's per-slot classification:
-/// `eager_indices` (Expression parts to schedule as eager sub-Dispatches — today's
-/// behavior), `wrap_indices` (bare-Identifier parts in non-literal-name slots that should
-/// be auto-wrapped as sub-Dispatches per §7), and `ref_name_indices` (bare-Identifier
-/// parts in literal-name slots — `KType::Identifier` or `KType::TypeExprRef` — of a
-/// non-pre_run function, used by §8 replay-park).
+/// Per-slot classification for [`Scope::shape_pick`]:
+/// - `eager_indices`: `Expression` parts to schedule as eager sub-Dispatches.
+/// - `wrap_indices`: bare-Identifier parts in non-literal-name slots to auto-wrap as
+///   sub-Dispatches.
+/// - `ref_name_indices`: bare-Identifier parts in literal-name slots (`KType::Identifier`
+///   / `KType::TypeExprRef`) of a non-`pre_run` function; candidates for replay-park.
+///
+/// `picked_has_pre_run` distinguishes binder-shaped expressions (literal-name slots are
+/// declarations) from call-shaped expressions (literal-name slots are references that may
+/// need to park).
 pub struct ShapePick {
     pub eager_indices: Vec<usize>,
     pub wrap_indices: Vec<usize>,
     pub ref_name_indices: Vec<usize>,
-    /// True iff the picked function has `pre_run = Some(_)`. §7 / §8 use this to
-    /// distinguish binder-shaped expressions (whose Identifier/TypeExprRef slots are
-    /// declarations, not references) from function-call-shaped expressions (whose
-    /// literal-name slots are references that may need to park).
     pub picked_has_pre_run: bool,
 }
 
@@ -583,18 +459,11 @@ mod tests {
         _sched: &mut dyn crate::dispatch::kfunction::SchedulerHandle<'a>,
         _bundle: crate::dispatch::kfunction::ArgumentBundle<'a>,
     ) -> crate::dispatch::kfunction::BodyResult<'a> {
-        crate::dispatch::kfunction::BodyResult::Value(
-            // Returning a leaked Null here would be safe for tests but the bodies in
-            // production paths always return arena allocations; keep parity by allocating
-            // through the captured scope.
-            _scope.arena.alloc_object(KObject::Null),
-        )
+        crate::dispatch::kfunction::BodyResult::Value(_scope.arena.alloc_object(KObject::Null))
     }
 
-    /// Re-entrant `bind_value` while a `data` borrow is held: conditional-defer routes the
-    /// write to `pending`; `drain_pending` applies it after the borrow drops. The held
-    /// iteration sees the pre-write snapshot (snapshot-iteration semantics), and the
-    /// post-drain state has the new entry visible — the foreach-binding pattern.
+    /// Snapshot-iteration semantics: a re-entrant `bind_value` queues silently and only
+    /// becomes visible after `drain_pending`; the held iteration sees the pre-write state.
     #[test]
     fn add_during_active_data_borrow_queues_and_drains() {
         let arena = RuntimeArena::new();
@@ -604,15 +473,11 @@ mod tests {
 
         let new_entry = arena.alloc_object(KObject::Number(2.0));
         {
-            // Hold an immutable borrow of `data` (simulates a builtin iterating bindings).
             let snapshot = scope.data.borrow();
             assert!(snapshot.contains_key("pre"));
-            // Re-entrant write: queues silently.
             scope.bind_value("during".to_string(), new_entry).unwrap();
-            // Iteration sees the pre-write snapshot only.
             assert!(!snapshot.contains_key("during"));
         }
-        // Borrow released. Pending still holds the queued write until drain runs.
         assert!(scope.data.borrow().get("during").is_none());
         scope.drain_pending();
         let after = scope.data.borrow();
@@ -641,9 +506,7 @@ mod tests {
         outer.bind_value("x".to_string(), v1).unwrap();
         let inner = arena.alloc_scope(outer.child_for_call());
         let v2 = arena.alloc_object(KObject::Number(2.0));
-        // Cross-scope shadowing is allowed (no Rebind from the child).
         inner.bind_value("x".to_string(), v2).unwrap();
-        // Inner sees the inner binding; outer keeps its own.
         assert!(matches!(inner.lookup("x"), Some(KObject::Number(n)) if *n == 2.0));
         assert!(matches!(outer.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
     }
@@ -655,7 +518,6 @@ mod tests {
         let f1 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
         let obj1 = arena.alloc_object(KObject::KFunction(f1, None));
         scope.register_function("FOO".to_string(), f1, obj1).unwrap();
-        // A *distinct* KFunction with the exact-equal signature is a DuplicateOverload.
         let f2 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
         let obj2 = arena.alloc_object(KObject::KFunction(f2, None));
         let err = scope.register_function("FOO".to_string(), f2, obj2).unwrap_err();
@@ -688,7 +550,6 @@ mod tests {
         let obj1 = arena.alloc_object(KObject::KFunction(f1, None));
         let obj2 = arena.alloc_object(KObject::KFunction(f2, None));
         scope.register_function("BAR".to_string(), f1, obj1).unwrap();
-        // Different per-slot KType — same untyped shape — no DuplicateOverload.
         scope.register_function("BAR".to_string(), f2, obj2).unwrap();
     }
 
@@ -720,8 +581,6 @@ mod tests {
 
     #[test]
     fn resolve_stops_at_first_hit_does_not_descend_outer() {
-        // Outer has a Value binding; inner has a Placeholder. Inner.resolve hits the
-        // placeholder first and does NOT descend to outer's value.
         let arena = RuntimeArena::new();
         let outer = run_root_bare(&arena);
         let v = arena.alloc_object(KObject::Number(1.0));
@@ -748,7 +607,6 @@ mod tests {
         scope.install_placeholder("x".to_string(), NodeId(2)).unwrap();
         let v = arena.alloc_object(KObject::Number(42.0));
         scope.bind_value("x".to_string(), v).unwrap();
-        // Placeholder gone; resolve returns Value.
         assert!(scope.placeholders.borrow().get("x").is_none());
         assert!(matches!(scope.resolve("x"), Resolution::Value(KObject::Number(n)) if *n == 42.0));
     }

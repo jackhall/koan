@@ -1,59 +1,33 @@
-//! Function signatures and their building blocks. An `ExpressionSignature` is the call shape
-//! a `KFunction` matches against — an ordered mix of fixed `Keyword` tokens and typed
-//! `Argument` slots, plus a `return_type`. `Scope::dispatch` walks each registered function's
-//! signature looking for one whose `matches` returns true for an incoming `KExpression`;
-//! `specificity_vs` then breaks ties between overloads sharing the same untyped shape.
+//! Expression-signature machinery: the call shape a `KFunction` matches against — an ordered
+//! mix of fixed `Keyword` tokens and typed `Argument` slots, plus a `return_type`.
+//! `UntypedKey` groups overloads by shape; `Specificity` ranks candidates within a bucket.
 //!
-//! `UntypedKey` is the bucket key used to group overloads by shape only; `Specificity` ranks
-//! candidates within a bucket. `is_keyword_token` is the parser-side classifier that decides
-//! whether a source token is a `Keyword` or `Identifier`; both ends of dispatch (signature
-//! registration and source-expression matching) rely on it agreeing with itself.
-//!
-//! **Terminology — "expression-signature" vs "module-signature".** This file holds the
-//! **expression-signature** machinery: the FN-parameter-list type used by dispatch
-//! (`ExpressionSignature`, `Argument`, `SignatureElement`). The **module-signature** type
-//! (`SIG`-declared) lives in [`crate::dispatch::values::module::Signature`]. The two are
-//! distinct concepts; do not conflate. Module-system stage 2 introduced the `SIG` declarator;
-//! this file's types predate it and continue to govern function-call dispatch.
+//! Not to be confused with the **module-signature** type (`SIG`-declared) at
+//! [`crate::dispatch::values::module::Signature`].
 
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::ktype::KType;
 
-/// One position in a function's structural shape: a `Keyword` (fixed token) or a typeless
-/// `Slot`. A sequence of these is the dispatch bucket key; overloads sharing a shape compete
-/// on `KType` specificity within the bucket.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum UntypedElement {
     Keyword(String),
     Slot,
 }
 
-/// Bucket key produced by `ExpressionSignature::untyped_key` and `KExpression::untyped_key`.
-/// They MUST agree on the same key for any signature/expression that should match. The parser
-/// classifies source tokens into `ExpressionPart::Keyword` vs `ExpressionPart::Identifier` up
-/// front using `is_keyword_token`; signatures map every `SignatureElement::Token` to
-/// `Keyword`. `ExpressionSignature::normalize` uppercases lowercase registered tokens so the
-/// two sides agree on the spelling.
+/// Bucket key produced by both `ExpressionSignature::untyped_key` and
+/// `KExpression::untyped_key`; they MUST agree for any pair that should match. The parser
+/// classifies source tokens via `is_keyword_token`; `ExpressionSignature::normalize`
+/// uppercases lowercase registered tokens so the two sides agree on spelling.
 pub type UntypedKey = Vec<UntypedElement>;
 
-/// True iff `s` is a keyword (fixed token) rather than an identifier or type when classifying
-/// a source token. The rules — see [token classes in
+/// True iff `s` classifies as a keyword (fixed token). See [token classes in
 /// design/type-system.md](../../../design/type-system.md#token-classes--the-parser-level-foundation):
-///
-/// 1. Pure-symbol tokens (no ASCII letters at all): always keywords. Examples: `=`, `->`, `:`,
-///    `:|`, `:!`, `+`. The alphabetic-letter rules below don't apply because there are none.
-/// 2. Alphabetic tokens (at least one ASCII letter): keyword iff there are ≥2 ASCII-uppercase
-///    letters AND no ASCII-lowercase letters. Examples: `LET`, `FN`, `MODULE`, `MATCH`. A
-///    single-uppercase token like `A` falls into neither this nor the type-name rule and is
-///    rejected upstream by `classify_atom`.
-///
-/// Used by the parser's `classify_atom` and by `ExpressionSignature::normalize` to keep the
-/// two ends of the dispatch contract aligned.
+/// pure-symbol tokens (no ASCII letters) are always keywords; alphabetic tokens are keywords
+/// iff they have ≥2 ASCII-uppercase letters and no ASCII-lowercase letters.
 pub fn is_keyword_token(s: &str) -> bool {
     let has_letter = s.chars().any(|c| c.is_ascii_alphabetic());
     if !has_letter {
-        // Pure-symbol token (`=`, `->`, `:|`). Bypass the alphabetic-letter rule.
         return true;
     }
     let upper_count = s.chars().filter(|c| c.is_ascii_uppercase()).count();
@@ -61,10 +35,8 @@ pub fn is_keyword_token(s: &str) -> bool {
     upper_count >= 2 && !has_lower
 }
 
-/// Result of comparing two signatures' specificity. Returned by
-/// `ExpressionSignature::specificity_vs`. `Equal` means "identical slot types"; `Incomparable`
-/// means "neither dominates" — e.g. `<Number> <Any>` vs `<Any> <Number>` for an input that
-/// matches both.
+/// `Incomparable` means neither dominates — e.g. `<Number> <Any>` vs `<Any> <Number>` against
+/// an input that matches both.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum Specificity {
     StrictlyMore,
@@ -73,9 +45,6 @@ pub enum Specificity {
     Incomparable,
 }
 
-/// The shape a function expects: an ordered mix of fixed `Token`s and typed `Argument` slots.
-/// `Scope::dispatch` walks each registered function's signature looking for one whose
-/// `matches` returns true for an incoming `KExpression`.
 pub struct ExpressionSignature {
     pub return_type: KType,
     pub elements: Vec<SignatureElement>,
@@ -93,9 +62,8 @@ impl ExpressionSignature {
         })
     }
 
-    /// Bucket key for this signature: keyword tokens become `Keyword(s)`, argument slots become
-    /// `Slot`. Slot types are erased — same shape with different types lives in the same bucket
-    /// and competes on specificity at dispatch time.
+    /// Slot types are erased — same shape with different types lives in the same bucket and
+    /// competes on specificity at dispatch time.
     pub fn untyped_key(&self) -> UntypedKey {
         self.elements
             .iter()
@@ -106,10 +74,10 @@ impl ExpressionSignature {
             .collect()
     }
 
-    /// Registration-time fixup: uppercase any lowercase fixed `Token` so its bucket key matches
-    /// what dispatch will compute from incoming expressions. TODO(monadic-effects): once
-    /// effects exist, emit a warning here instead of silently rewriting — rejecting would lose
-    /// the "drop in a builtin without thinking about caps" affordance.
+    /// Uppercases lowercase fixed tokens so the bucket key matches what dispatch computes from
+    /// incoming expressions. TODO(monadic-effects): emit a warning instead of silently
+    /// rewriting once effects exist — rejecting would lose the "drop in a builtin without
+    /// thinking about caps" affordance.
     pub fn normalize(&mut self) {
         for el in &mut self.elements {
             if let SignatureElement::Keyword(s) = el {
@@ -120,9 +88,8 @@ impl ExpressionSignature {
         }
     }
 
-    /// Partial-order specificity comparison for overload tiebreaking. Assumes `self` and
-    /// `other` share an `UntypedKey` (caller's responsibility) — only argument slots
-    /// contribute, since fixed-token positions are equal by construction.
+    /// Assumes `self` and `other` share an `UntypedKey` (caller's responsibility) — only
+    /// argument slots contribute, since fixed-token positions are equal by construction.
     pub fn specificity_vs(&self, other: &ExpressionSignature) -> Specificity {
         let mut any_more = false;
         let mut any_less = false;
@@ -144,23 +111,19 @@ impl ExpressionSignature {
     }
 }
 
-/// One slot in an `ExpressionSignature`: a literal `Token` that must match by string equality,
-/// or a typed `Argument` whose value is captured into the `ArgumentBundle`.
 pub enum SignatureElement {
     Keyword(String),
     Argument(Argument),
 }
 
-/// A typed parameter slot in a signature. `name` keys it in the `ArgumentBundle`; `ktype` gates
-/// what `ExpressionPart`s it accepts.
+/// `name` keys the slot in the `ArgumentBundle`; `ktype` gates what `ExpressionPart`s it
+/// accepts.
 pub struct Argument {
     pub name: String,
     pub ktype: KType,
 }
 
 impl Argument {
-    /// Per-part type check. Thin delegate to `KType::accepts_part` — the per-variant table
-    /// lives there so it stays next to the `KType` enum.
     pub fn matches(&self, part: &ExpressionPart<'_>) -> bool {
         self.ktype.accepts_part(part)
     }

@@ -1,33 +1,12 @@
 //! `KType` — the type tag attached to argument slots, function return-types, and runtime values.
 //!
-//! Used by `Argument::matches` at dispatch time, by user-facing return-type annotations on
-//! functions, and by the scheduler's runtime return-type check.
+//! Container types are always parameterized: bare `List` / `Dict` lower to `List<Any>` /
+//! `Dict<Any, Any>` at `from_name` time. There's no bare `KFunction` — "any function" with
+//! no signature has nothing to dispatch on, so users write `Function<(args) -> R>` or `Any`.
 //!
-//! `KExpression` is the lazy slot: it accepts an unevaluated `ExpressionPart::Expression`
-//! so the receiving builtin can choose when (or whether) to run it. `TypeExprRef` is the
-//! single meta-type for slots that capture a parsed type-name token (`ExpressionPart::Type(_)`):
-//! used by FN's return-type slot and by STRUCT/UNION/type-call's name slots. Resolved values
-//! are `KObject::TypeExprValue(t)` so callers see the full `TypeExpr` — name plus any
-//! nested params — rather than a flattened name string.
-//!
-//! `Type` is the meta-type for any first-class type-value: a tagged-union schema produced by
-//! `UNION` or a struct schema produced by `STRUCT` are both `KType::Type` at runtime, so
-//! builtins that consume "a type" (construction primitives, future trait checks) can declare
-//! a single slot and accept either form.
-//!
-//! Future work: let users define duck types instead of an enum.
-//!
-//! Container types are always parameterized: `List(Box<KType>)` carries the element type;
-//! `Dict(Box<KType>, Box<KType>)` carries key and value types; `KFunction { args, ret }`
-//! carries the full function signature. The bare names `List` / `Dict` lower to the `Any`-
-//! elemented forms (`List<Any>`, `Dict<Any, Any>`) at `from_name` time. There's no bare
-//! `KFunction` — users write `Function<(args) -> R>` for a typed function or `Any` for an
-//! unconstrained value, since "any function" with no signature has nothing to dispatch on.
-//!
-//! This file holds the core enum and its surface-name `name()` rendering. The predicate
-//! impls (`is_more_specific_than`, `matches_value`, `accepts_part`, `function_compat`) live
-//! in `ktype_predicates.rs`; the elaboration impls (`from_name`, `from_type_expr`, `join`,
-//! `join_iter`) live in `ktype_resolution.rs`.
+//! Predicates (`is_more_specific_than`, `matches_value`, `accepts_part`, `function_compat`)
+//! live in `ktype_predicates.rs`; elaboration (`from_name`, `from_type_expr`, `join`,
+//! `join_iter`) lives in `ktype_resolution.rs`.
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum KType {
@@ -35,66 +14,52 @@ pub enum KType {
     Str,
     Bool,
     Null,
-    /// `List<T>` — element type. Bare `List` lowers to `List<Any>`.
+    /// Bare `List` lowers to `List<Any>`.
     List(Box<KType>),
-    /// `Dict<K, V>` — key type and value type. Bare `Dict` lowers to `Dict<Any, Any>`.
+    /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType>, Box<KType>),
-    /// `Function<(args) -> ret>` — structural function type. `args.len()` is the arity;
-    /// each `args[i]` is the declared type of that parameter slot.
     KFunction {
         args: Vec<KType>,
         ret: Box<KType>,
     },
     Identifier,
+    /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
+    /// when (or whether) to run it.
     KExpression,
-    /// Meta-type for any slot that captures a parsed type-name token (`ExpressionPart::Type`).
-    /// Resolves to `KObject::TypeExprValue(t.clone())` — the full structured `TypeExpr`,
-    /// preserving any nested parameters (`List<Number>`, `Function<(N) -> S>`). Slots that
-    /// want only the bare name (e.g. STRUCT/UNION's name slots) check `TypeParams::None` on
-    /// the inner expr and read `t.name`.
+    /// Meta-type for slots capturing a parsed type-name token (`ExpressionPart::Type`).
+    /// Resolves to `KObject::TypeExprValue(t)` — the full structured `TypeExpr`, preserving
+    /// nested parameters rather than flattening to a name string.
     TypeExprRef,
-    /// Meta-type for first-class type-values: `KObject::TaggedUnionType` and
-    /// `KObject::StructType` both report this. Consumed by construction primitives and any
-    /// builtin that takes "a type" as an argument.
+    /// Meta-type for first-class type-values; both tagged-union and struct schemas report this.
     Type,
-    /// Flat singleton tag: every tagged-union value reports the same `KType::Tagged` regardless
-    /// of which UNION schema declared it. Per-declaration identity for tagged-union values is
-    /// not yet carried here — the analogous identity story for opaquely-ascribed module
-    /// abstract types lives in `ModuleType` below. Folding declaring-scope identity into
-    /// `Tagged` is tracked as
+    /// Singleton tag for every tagged-union value, regardless of declaring schema. Per-declaration
+    /// identity is tracked as
     /// [per-declaration type identity](../../../roadmap/per-declaration-type-identity.md).
     Tagged,
-    /// Flat singleton tag: every user struct reports the same `KType::Struct` regardless of
-    /// declaration. Per-declaration identity is not yet carried here; see the `Tagged` note
-    /// above for the analogous module-identity discussion and
-    /// [per-declaration type identity](../../../roadmap/per-declaration-type-identity.md)
-    /// for the tracking item.
+    /// Singleton tag for every user struct, regardless of declaration. Per-declaration identity
+    /// is tracked as
+    /// [per-declaration type identity](../../../roadmap/per-declaration-type-identity.md).
     Struct,
     /// Per-module abstract type (`Foo.Type` after opaque ascription). `scope_id` is the
     /// declaring module's child-scope address cast to `usize` — stable for the run because
     /// `Scope`s are arena-allocated and never moved, distinct across modules because the
     /// arena hands out fresh addresses, and equal between two `KType::ModuleType` values iff
     /// they were minted by the same opaque-ascription event. `name` is the abstract type name
-    /// (typically `"Type"`); it's the textual disambiguator within a module that declares
-    /// multiple abstract types. Equality on `KType::ModuleType` is the dispatch identity
-    /// check that makes opaquely-ascribed `IntOrd.Type` distinct from `Number` even when
-    /// the underlying definition is `Number`.
+    /// (typically `"Type"`); it disambiguates when a module declares multiple abstract types.
+    /// Equality on `KType::ModuleType` is the dispatch identity check that makes opaquely-
+    /// ascribed `IntOrd.Type` distinct from `Number` even when the underlying definition is
+    /// `Number`.
     ModuleType { scope_id: usize, name: String },
-    /// Meta-type for `KObject::KModule` values: a first-class module value. Reported by
-    /// `KObject::ktype()` so any "expects a module" slot — ATTR's lhs, the ascription
-    /// operators' lhs — can declare a single slot type.
+    /// Meta-type for first-class module values (`KObject::KModule`).
     Module,
-    /// Meta-type for `KObject::KSignature` values: a first-class module signature. The
-    /// ascription operators' RHS slot uses this to require a signature on the right-hand
-    /// side of `:|` / `:!`.
+    /// Meta-type for first-class module signatures (`KObject::KSignature`).
     Signature,
     Any,
 }
 
 impl KType {
-    /// Surface-syntax rendering of this type — used by error formatters. Mirrors the parser's
-    /// `Function<(args) -> R>` / `List<T>` / `Dict<K, V>` syntax so a round-trip through the
-    /// parser produces the same `KType`.
+    /// Surface-syntax rendering. Mirrors the parser's `Function<(args) -> R>` / `List<T>` /
+    /// `Dict<K, V>` syntax so a round-trip through the parser produces the same `KType`.
     pub fn name(&self) -> String {
         match self {
             KType::Number => "Number".into(),

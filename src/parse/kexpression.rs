@@ -1,8 +1,7 @@
-//! AST node types shared across the parse module. `KExpression` is a function-call node
-//! (head plus ordered and named arguments). `ExpressionPart` is one element inside such
-//! a call — atoms (literals, identifiers, types, keywords), collection literals (lists,
-//! dicts), and nested expressions. `KLiteral` enumerates the concrete literal kinds the
-//! lexer can produce. Produced by `tokens` and assembled into trees by `expression_tree`.
+//! AST node types shared across the parse module. `KExpression` is a function-call node;
+//! `ExpressionPart` is one element inside such a call — atoms (literals, identifiers, types,
+//! keywords), collection literals (lists, dicts), and nested expressions. `KLiteral`
+//! enumerates the concrete literal kinds the lexer can produce.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -12,8 +11,6 @@ use crate::dispatch::values::KKey;
 use crate::dispatch::values::KObject;
 use crate::dispatch::types::{Parseable, Serializable};
 
-/// Concrete literal kinds the parser recognizes; produced by `tokens::try_literal` and consumed
-/// when resolving an `ExpressionPart` into a runtime `KObject`.
 #[derive(Debug, Clone)]
 pub enum KLiteral {
     Number(f64),
@@ -24,9 +21,7 @@ pub enum KLiteral {
 
 /// Surface representation of a type token. Leaf types like `Number` carry `TypeParams::None`;
 /// container types like `List<Number>` and `Function<A, B -> R>` carry their inner types in
-/// the structured `TypeParams` variant. Built by `expression_tree::build_tree`'s `Frame::Type`
-/// when a `<...>` group closes, and consumed by the KType-construction layer
-/// (`KType::from_type_expr`) at signature-parse time.
+/// the structured `TypeParams` variant.
 #[derive(Debug, Clone)]
 pub struct TypeExpr {
     pub name: String,
@@ -39,22 +34,18 @@ pub struct TypeExpr {
 pub enum TypeParams {
     /// Leaf type (`Number`, `Str`, `Any`) or an unparameterized container (`List`).
     None,
-    /// Comma/whitespace-separated list of params: `List<X>`, `Dict<K, V>`. Arity validation
-    /// (e.g. `List` needs exactly one) lives at the KType-construction layer, not here.
+    /// `List<X>`, `Dict<K, V>`. Arity validation lives at the KType-construction layer.
     List(Vec<TypeExpr>),
     /// `Function<A, B, ... -> R>` — the `->` arrow distinguishes args from return type.
     Function { args: Vec<TypeExpr>, ret: Box<TypeExpr> },
 }
 
 impl TypeExpr {
-    /// Bare leaf — no parameters. Used by `tokens::classify_atom` for plain type tokens.
     pub fn leaf(name: String) -> TypeExpr {
         TypeExpr { name, params: TypeParams::None }
     }
 
-    /// Render this type expression in the surface syntax (`List<Number>`, `Function<-> R>`).
-    /// Used by `ExpressionPart::summarize` and Display so error messages and debug output
-    /// read naturally.
+    /// Render in surface syntax (`List<Number>`, `Function<(A) -> R>`).
     pub fn render(&self) -> String {
         match &self.params {
             TypeParams::None => self.name.clone(),
@@ -70,36 +61,18 @@ impl TypeExpr {
     }
 }
 
-/// One element of a parsed expression. The parser classifies each source token into one of:
-/// `Keyword` (all-caps fixed tokens like `LET`/`=`/`THEN`; see `is_keyword_token`), `Type`
-/// (capitalized type names like `Number`/`MyType`/`KFunction` — first char uppercase plus at
-/// least one lowercase), or `Identifier` (everything else: lowercase/snake names). `Expression`,
-/// `ListLiteral`, and `Literal` are the other parser outputs; the scheduler introduces `Future`
-/// later, splicing a completed dep's result into its dependent's parts list before late dispatch.
+/// One element of a parsed expression. Parser outputs are `Keyword`, `Identifier`, `Type`,
+/// `Expression`, `ListLiteral`, `DictLiteral`, and `Literal`; the scheduler introduces
+/// `Future` later, splicing a completed dep's resolved value into its dependent's parts
+/// list before late dispatch.
 pub enum ExpressionPart<'a> {
-    /// Fixed token consumed by a `SignatureElement::Token` slot at dispatch time. Contributes
-    /// `UntypedElement::Keyword(s)` to the bucket key.
     Keyword(String),
-    /// Name slot bound to an `Argument` whose `KType` is `Identifier` or `Any`. Contributes
-    /// `UntypedElement::Slot` to the bucket key — same shape as a literal or expression slot.
     Identifier(String),
-    /// A type-name reference like `Number`, `KFunction`, or `List<Number>`. Used in surface
-    /// positions that name a type (e.g. the return-type slot of `FN (sig) -> Type = (body)`).
-    /// Contributes `UntypedElement::Slot` to the bucket key; an `Argument` whose `ktype` is
-    /// `KType::TypeExprRef` matches this part. The `TypeExpr` carries any nested parameters
-    /// (`List<Number>` etc.); leaf types use `TypeParams::None`.
+    /// A type-name reference like `Number`, `KFunction`, or `List<Number>`. The `TypeExpr`
+    /// carries any nested parameters; leaf types use `TypeParams::None`.
     Type(TypeExpr),
     Expression(Box<KExpression<'a>>),
-    /// A `[a b c]` source-level list. Each element is itself an `ExpressionPart`; sub-expression
-    /// elements (`ExpressionPart::Expression`) are scheduled as deps and replaced with `Future`s
-    /// before the parent is dispatched. The whole literal resolves to `KObject::List` at
-    /// `resolve()` time.
     ListLiteral(Vec<ExpressionPart<'a>>),
-    /// A `{k: v, ...}` source-level dict. Each pair holds two `ExpressionPart`s; sub-expression
-    /// or bare-identifier sides are scheduled by the scheduler (mirroring `ListLiteral`'s path)
-    /// and the result materializes to `KObject::Dict`. Bare-identifier keys/values are wrapped
-    /// in a sub-`Dispatch` so they resolve via `value_lookup` (Python-like name resolution for
-    /// keys, a small extra wrapping cost for values that pays for itself in consistency).
     DictLiteral(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
     Literal(KLiteral),
     Future(&'a KObject<'a>),
@@ -126,8 +99,7 @@ impl<'a> ExpressionPart<'a> {
     }
 
     /// Short textual rendering of this part, matching the per-part subset of
-    /// `KExpression::summarize`. Used by error reporting (`KError::TypeMismatch.got` and
-    /// `Frame::expression`) to name an offending part without dragging in `Parseable`.
+    /// `KExpression::summarize`.
     pub fn summarize(&self) -> String {
         match self {
             ExpressionPart::Keyword(s) => s.clone(),
@@ -157,8 +129,8 @@ impl<'a> ExpressionPart<'a> {
 
     /// Slot-aware resolve. Identical to `resolve` for every variant except `Type`: when the
     /// receiving slot is `KType::TypeExprRef`, the structured `TypeExpr` is preserved as a
-    /// `KObject::TypeExprValue` rather than flattened to a name string. Used by `KFunction::bind`
-    /// so FN's return-type slot can recover parameterized types like `List<Number>`.
+    /// `KObject::TypeExprValue` rather than flattened to a name string, so parameterized
+    /// types like `List<Number>` survive into the binding.
     pub fn resolve_for(&self, slot: &crate::dispatch::types::KType) -> KObject<'a> {
         if let (ExpressionPart::Type(t), crate::dispatch::types::KType::TypeExprRef) =
             (self, slot)
@@ -178,19 +150,15 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
-            // The scheduler ordinarily replaces sub-expression elements with `Future`s before
-            // this runs (see `schedule_list_literal`); a raw `Expression` element here would
-            // round-trip through `KExpression` rather than its computed value.
+            // Sub-expression elements should already have been replaced with `Future`s by
+            // the scheduler; a raw `Expression` here round-trips as a `KExpression` value
+            // rather than its computed result.
             ExpressionPart::ListLiteral(items) => {
                 KObject::List(Rc::new(items.iter().map(|p| p.resolve()).collect()))
             }
-            // The scheduler ordinarily replaces sub-expression and bare-identifier dict
-            // entries with resolved values via `schedule_dict_literal` before this runs (see
-            // `Scheduler::schedule_dict_literal`); a raw non-scalar reaching here would
-            // fail the scalar-key conversion. Materialize what we can: each key part
-            // resolves to a `KObject` and is converted to a `KKey`. Panics if a key isn't a
-            // scalar — the scheduler is responsible for catching that earlier with a
-            // structured `ShapeError`.
+            // Sub-expression and bare-identifier dict entries should already have been
+            // resolved by the scheduler. Non-scalar keys reaching here are a scheduler bug
+            // — it's responsible for surfacing them as a structured `ShapeError` earlier.
             ExpressionPart::DictLiteral(pairs) => {
                 let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
                 for (k, v) in pairs {
@@ -202,9 +170,8 @@ impl<'a> ExpressionPart<'a> {
                 }
                 KObject::Dict(Rc::new(map))
             }
-            // Preserve compound shapes (List, KExpression) by deep-cloning rather than
-            // stringifying — a Future-borne List or KExpression must materialize back to its
-            // structured form.
+            // Deep-clone, don't stringify: a Future-borne List or KExpression must
+            // materialize back to its structured form.
             ExpressionPart::Future(obj) => obj.deep_clone(),
         }
     }
@@ -231,17 +198,15 @@ impl<'a> Clone for KExpression<'a> {
     }
 }
 
-/// A parsed Koan expression: an ordered sequence of `ExpressionPart`s. The output of the parse
-/// pipeline and the input to `Scope::dispatch`, which matches it against function signatures.
+/// A parsed Koan expression: an ordered sequence of `ExpressionPart`s.
 pub struct KExpression<'a> {
     pub parts: Vec<ExpressionPart<'a>>,
 }
 
 impl<'a> KExpression<'a> {
-    /// Bucket key for this expression: `Keyword` parts contribute `Keyword(s)`; everything else
-    /// (identifiers, literals, sub-expressions, list literals, futures) contributes `Slot`.
-    /// Must agree with `ExpressionSignature::untyped_key` for any signature that should match —
-    /// the parser classifies tokens via `is_keyword_token` up front so this is a direct lookup.
+    /// Bucket key: `Keyword` parts contribute `Keyword(s)`; every other variant contributes
+    /// `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature that
+    /// should match.
     pub fn untyped_key(&self) -> UntypedKey {
         self.parts
             .iter()

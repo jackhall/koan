@@ -5,40 +5,17 @@ use crate::dispatch::runtime::{CallArena, KFuture, RuntimeArena};
 use crate::dispatch::values::KObject;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-/// Lift a KObject value out of the dying frame's arena into the destination arena.
-/// Owned variants (Number, KString, Bool, Null) `deep_clone` cleanly because their
-/// content is owned. `KObject::KFunction(&f, frame)` is the special case: `&f` may
-/// point into the dying frame's arena (an escaping closure). If so, we carry a clone
-/// of the dying frame's `Rc<CallArena>` in the lifted value's frame field, so the
-/// arena stays alive past the slot's frame drop and the `&f` reference remains valid.
-/// If the function lives in a longer-lived arena (run-root or another live frame), no
-/// Rc is needed and the lifted value's frame field stays `None`.
+/// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
+/// an `Rc<CallArena>` to anchor any descendant that borrows into the dying arena.
 ///
-/// `KObject::KFuture`: the dying-frame Rc is attached only when the KFuture's bundle,
-/// parsed parts, or function reference actually borrows from the dying arena. The
-/// `kfuture_borrows_dying_arena` walk uses the dying arena's `owns_object` membership
-/// query to check each `ExpressionPart::Future(&KObject)` ref and recurses into the
-/// bundle's value subtrees; the function reference reuses the existing
-/// captured-scope-arena equality check. KFutures whose payload is wholly external (a
-/// closure with arena-external bundle args, say) lift with `frame: None`.
+/// Per-arm rules (closure-arena equality, KFuture targeted membership, composite
+/// memoization) and the `functions_is_empty` fast-path soundness argument are documented
+/// in [memory-model.md § Closure escape](../../design/memory-model.md#closure-escape-per-call-arenas--rc)
+/// and [§ Fast path](../../design/memory-model.md#fast-path).
 ///
-/// Pre-existing `Some(rc)` on the input value is preserved (the value is already
-/// keeping some arena alive; we don't overwrite that with the current dying frame's).
-///
-/// Composite variants (`List`, `Dict`) recurse to find embedded closures that need an
-/// Rc attach, but memoize via `needs_lift`: when no descendant needs lifting, the
-/// payload's existing `Rc` is cloned instead of rebuilding the `Vec`/`HashMap`. This
-/// makes a value's second-and-later lifts through a return chain O(N) walk + O(1)
-/// rebuild for the unchanged composites — Koan's collection-immutability contract is
-/// what makes the structural sharing safe.
-///
-/// Whole-tree fast path: if the dying arena has zero `KFunction`s allocated in it, no
-/// descendant `&KFunction` can point into it (per `alloc_function`'s invariant). This
-/// is sound *today* because KFutures don't escape as values — the only way a lifted
-/// `v` could need anchoring under this condition is via a KFuture descendant, and
-/// none exist in current usage. When KFutures begin escaping (planned async), this
-/// gate must add a no-unanchored-KFuture-descendant clause; the slow path's KFuture
-/// arm is already correct. The check is one O(1) emptiness query on the arena.
+/// Caveat the design doc doesn't yet cover: the fast path is sound *today* only because
+/// KFutures don't escape as values. Once they do, this gate must add a
+/// no-unanchored-KFuture-descendant clause (the slow path's KFuture arm is already correct).
 pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
     if dying_frame.arena().functions_is_empty() {
         return v.deep_clone();
@@ -108,19 +85,12 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
 }
 
 /// True iff some descendant of `v` satisfies `predicate`. The predicate returns
-/// `Some(true)` to short-circuit the entire walk with `true`, `Some(false)` to bottom out
-/// the current subtree at `false` without recursing into its composite arms, or `None` to
-/// let `any_descendant` recurse structurally into composite payloads (`List`, `Dict`,
-/// `Tagged`, `Struct`, `KExpression`, `KFuture`).
+/// `Some(true)` to short-circuit, `Some(false)` to bottom out the current subtree
+/// without recursing, or `None` to let the walker recurse into composite payloads.
 ///
-/// Single source of variant coverage for both `needs_lift` and `kobject_borrows_arena` —
-/// the two consumers differ only in their leaf decision and which intermediate variants
-/// they care about. Adding a new composite variant updates this walker once instead of
-/// keeping two parallel pattern-match trees in sync.
-///
-/// `KExpression` recursion looks at the parts' `Future(&KObject)` payloads via the
-/// `expression_borrows_arena` helper — the predicate sees only `KObject` shapes, so the
-/// walker handles the `KExpression` -> parts -> `Future(obj)` peeling itself.
+/// Single source of variant coverage for `needs_lift` and `kobject_borrows_arena`;
+/// the two consumers differ only in their per-leaf decision. Adding a new composite
+/// variant updates this walker once instead of two parallel match trees.
 fn any_descendant<'b, F>(v: &KObject<'b>, predicate: &F) -> bool
 where
     F: Fn(&KObject<'b>) -> Option<bool>,
@@ -143,27 +113,18 @@ where
             }),
             _ => false,
         }),
-        // Other variants (KFunction, KFuture, scalars, ...) reach this arm only when the
-        // predicate returns None for them — by convention those are leaves the predicate
-        // didn't classify, so they stop the walk at false.
+        // Predicate-returned-None on a non-composite variant is treated as a `false`
+        // leaf — the predicate is responsible for classifying every leaf it cares about.
         _ => false,
     }
 }
 
 /// True iff lifting `v` against `dying_frame` would attach an `Rc` to some descendant.
-/// Drives both `lift_kobject`'s top-level fast-path skip and the per-composite rebuild
-/// decision: when this returns false, the existing `Rc<Vec>`/`Rc<HashMap>` can be cloned
-/// instead of allocating a fresh one.
+/// Drives `lift_kobject`'s fast-path skip and the per-composite rebuild decision.
 ///
-/// Implemented as a one-line wrapper over [`any_descendant`]. The predicate hits each
-/// `KFunction` / `KFuture` for its leaf arena-equality decision, and returns `Some(false)`
-/// for `Struct`/`KExpression` — the existing semantics: those variants aren't reachable
-/// as values inside a List/Dict/Tagged at lift time in current Koan, so leaving the
-/// recursion structural in `any_descendant` keeps it forward-compatible without changing
-/// `needs_lift`'s observable answer today.
-///
-/// `KFuture(_, None)` defers to `kfuture_borrows_dying_arena` — a precise membership query
-/// against the dying arena's allocated-object set, mirroring `lift_kobject`'s slow path.
+/// Bottoms out on `Struct`/`KExpression`: those variants aren't reachable as values
+/// inside a List/Dict/Tagged at lift time in current Koan, so the structural recursion
+/// in `any_descendant` is left forward-compatible without changing the observable answer.
 fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
     let dying_runtime: *const RuntimeArena = dying_frame.arena();
     any_descendant(v, &|obj: &KObject<'b>| match obj {
@@ -174,23 +135,15 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
         }
         KObject::KFuture(_, Some(_)) => Some(false),
         KObject::KFuture(t, None) => Some(kfuture_borrows_dying_arena(t, dying_frame.arena())),
-        // Bottom out (no recurse) on Struct/KExpression: preserve historical behavior.
         KObject::Struct { .. } | KObject::KExpression(_) => Some(false),
-        // List / Dict / Tagged: returning None lets `any_descendant` recurse structurally.
         KObject::List(_) | KObject::Dict(_) | KObject::Tagged { .. } => None,
         _ => Some(false),
     })
 }
 
-/// True iff any descendant of an unanchored `KFuture` borrows into `arena`. Walks the
-/// `parsed.parts`' `Future(&KObject)` references (matched via `arena.owns_object`),
-/// recurses into nested `Expression` / `ListLiteral` / `DictLiteral` parts, and walks the
-/// `bundle.args` values (an arg can itself contain a `KExpression` whose parts borrow into
-/// the arena, or a Tagged/List/Dict carrying such a thing transitively). The `function`
-/// reference's arena is checked via the same captured-scope-equality test
-/// `lift_kobject` uses for `KFunction(_, None)` — if `function`'s captured arena equals the
-/// dying one, the KFuture's `&KFunction` is borrowing into the dying arena and the lift
-/// must anchor.
+/// True iff any descendant of an unanchored `KFuture` borrows into `arena`: the
+/// function reference's captured arena, the parsed expression's `Future(&KObject)`
+/// parts, or the bundle args (which may transitively carry a borrowing payload).
 fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> bool {
     if std::ptr::eq(t.function.captured_scope().arena, arena as *const RuntimeArena) {
         return true;
@@ -204,9 +157,6 @@ fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> boo
         .any(|v| kobject_borrows_arena(v, arena))
 }
 
-/// Walk `expr`'s parts recursively, checking each `Future(&KObject)` against `arena.owns_object`
-/// and recursing into nested `Expression` / `ListLiteral` / `DictLiteral` shapes. `Keyword`,
-/// `Identifier`, `Type`, `Literal` carry only owned data, so they short-circuit `false`.
 fn expression_borrows_arena<'b>(expr: &KExpression<'b>, arena: &RuntimeArena) -> bool {
     expr.parts.iter().any(|p| part_borrows_arena(p, arena))
 }
@@ -223,22 +173,18 @@ fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bo
     }
 }
 
-/// Recurse into a `KObject` looking for embedded `KExpression`s (whose `Future` parts may
-/// borrow), nested KFutures, Tagged/Struct/List/Dict payloads, and KFunction captures whose
-/// arena matches `arena`. One-line wrapper over [`any_descendant`] whose predicate
-/// answers the per-leaf membership question; the walker carries the structural shape.
+/// True iff any descendant of `v` borrows into `arena`. KExpression and KFuture
+/// settle as predicate leaves (their recursion is not `KObject`-shaped — parts,
+/// bundle args, function ref) so the walker doesn't double-traverse via the
+/// KExpression arm.
 fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
     any_descendant(v, &|obj: &KObject<'b>| match obj {
-        // KExpression has its own walker; ditto KFuture (its recursion is non-`KObject`-
-        // shaped — bundle args / parsed parts / function ref). Settle them as leaves so
-        // `any_descendant` doesn't double-walk the parts via its KExpression arm.
         KObject::KExpression(e) => Some(expression_borrows_arena(e, arena)),
         KObject::KFuture(t, _) => Some(kfuture_borrows_dying_arena(t, arena)),
         KObject::KFunction(f, _) => Some(std::ptr::eq(
             f.captured_scope().arena,
             arena as *const RuntimeArena,
         )),
-        // List / Dict / Tagged / Struct: returning None lets `any_descendant` recurse.
         KObject::List(_)
         | KObject::Dict(_)
         | KObject::Tagged { .. }
@@ -255,11 +201,9 @@ mod tests {
     use crate::dispatch::values::KObject;
     use crate::parse::expression_tree::parse;
 
-    /// A KFuture lifted against an arena it has no descendant borrow into should NOT
-    /// pick up the dying frame's Rc — `frame: None` means no over-keep. This is the
-    /// payoff of the targeted `kfuture_borrows_dying_arena` walk vs the previous
-    /// always-anchor behavior. Forces the slow path by installing a dummy KFunction in
-    /// the dying arena (otherwise `functions_is_empty()` short-circuits to deep_clone).
+    /// A KFuture with no descendant borrow into the dying arena must lift to
+    /// `frame: None` — anchoring would over-keep the arena. The dummy KFunction
+    /// below defeats `functions_is_empty()`'s fast path so the slow path runs.
     #[test]
     fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
         use crate::dispatch::kfunction::{Body, KFunction};
@@ -267,10 +211,6 @@ mod tests {
 
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
-        // Dying frame is a fresh CallArena under the same scope chain; its arena is a
-        // distinct allocation. We want `kfuture_borrows_dying_arena` to answer:
-        // PRINT's captured scope is in `arena`, not in `dying.arena()`, and the parsed
-        // expression's parts are owned data ("hi" literal) — no borrow into `dying`.
         let dying = CallArena::new(scope, None);
         let kf = KFunction::new(
             ExpressionSignature {
@@ -307,11 +247,8 @@ mod tests {
         );
     }
 
-    /// Symmetric case: when the KFuture's parsed parts contain a `Future(&KObject)` that
-    /// IS allocated in the dying arena, the lift must still anchor (frame=Some). To
-    /// exercise the slow path the dying arena needs at least one KFunction allocated in
-    /// it (otherwise `lift_kobject`'s `functions_is_empty` fast path returns
-    /// `deep_clone`); we install a copy of PRINT under a new keyword to satisfy that.
+    /// Symmetric case: a KFuture whose parsed parts contain a `Future(&KObject)`
+    /// allocated in the dying arena must lift with `frame: Some(rc)`.
     #[test]
     fn unanchored_kfuture_with_arena_borrow_does_anchor() {
         use crate::dispatch::kfunction::{Body, KFunction};
@@ -321,8 +258,8 @@ mod tests {
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let dying = CallArena::new(scope, None);
 
-        // Force the dying arena out of the fast-path: allocate a no-op KFunction in it.
-        // Captured scope lives in `dying.arena()`, satisfying `alloc_function`'s invariant.
+        // Defeat `functions_is_empty()` fast path so the slow path runs. Captured
+        // scope lives in `dying.arena()` to satisfy `alloc_function`'s invariant.
         let kf = KFunction::new(
             ExpressionSignature {
                 return_type: KType::Null,
@@ -356,8 +293,7 @@ mod tests {
             strong_before + 1,
             "lifting a borrowing KFuture must clone the dying frame's Rc once",
         );
-        // Drop the lifted result (its frame Rc) and `kf_obj` (which holds `inside` via
-        // `Future`) before `dying` drops, to keep arena teardown order well-defined.
+        // Drop borrowers before `dying` so arena teardown order is well-defined.
         drop(lifted);
         drop(kf_obj);
     }

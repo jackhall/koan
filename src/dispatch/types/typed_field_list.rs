@@ -1,28 +1,15 @@
-//! Shared parser for `(<name>: <Type> <name>: <Type> ...)` schema expressions. Used by both
-//! `UNION` (which discards order and converts the result to a `HashMap<tag, KType>`) and
-//! `STRUCT` (which keeps the ordered list because positional construction depends on it).
-//!
-//! The identifier/colon/duplicate-name scaffolding is shared with the value-side named-pair
-//! parser via [`crate::parse::parse_triple_list`]; the wrapper here adds the type-side
-//! interpretation of the third slot (must be a `Type` token, lowered through
-//! [`KType::from_type_expr`] with the caller's resolver).
+//! Shared parser for `(<name>: <Type> <name>: <Type> ...)` schema expressions, used by
+//! `UNION` (order discarded into a `HashMap<tag, KType>`) and `STRUCT` (order preserved for
+//! positional construction).
 
 use super::ktype::KType;
 use super::resolver::TypeResolver;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 use crate::parse::parse_triple_list;
 
-/// Walk the schema KExpression's parts as repeated `<Identifier(name)> <Keyword(":")>
-/// <Type(name)>` triples and assemble the resulting ordered list. Errors with a
-/// `ShapeError`-string on any malformed triple, unknown type name, or duplicate field name.
-/// `context` is the surface-form name (`UNION schema`, `STRUCT schema`) used in error
-/// messages so the caller's diagnostic stays grounded in user-facing syntax. `resolver` is
-/// forwarded into `KType::from_type_expr` so module-local / user-defined names can resolve
-/// before the builtin name table.
-///
-/// Thin wrapper over [`parse_triple_list`] that closes over the type-side third-slot
-/// interpretation. Callers pass `"UNION schema"` / `"STRUCT schema"` for the context so the
-/// generic shared scaffolding's diagnostics still mention "schema" verbatim.
+/// Parse repeated `<Identifier(name)> <Keyword(":")> <Type(name)>` triples into an ordered
+/// list. Errors as a `ShapeError`-string on malformed triples, unknown type names, or
+/// duplicate field names. `context` (e.g. `"UNION schema"`) is interpolated into diagnostics.
 pub fn parse_typed_field_list(
     expr: &KExpression<'_>,
     context: &str,

@@ -3,13 +3,9 @@ use std::hash::{Hash, Hasher};
 use super::ktype::KType;
 
 /// Base trait for everything that participates in the language: values, expressions, and
-/// functions all carry a canonical string `summarize` and a structural `equal`. Used widely as
-/// `&dyn Parseable` for heterogeneous collections of language objects.
+/// functions all carry a canonical string `summarize` and a structural `equal`.
 ///
-/// `ktype` returns the `KType` tag for this value. For containers (List, Dict) the impl walks
-/// elements to project the parameterized type — see `KObject::ktype` for the semantics. For
-/// dict-key types (`KKey`) the result is the appropriate scalar tag, used by `KObject::Dict`'s
-/// `ktype` to infer `Dict<K, V>`.
+/// For container values, `ktype` walks elements to project the parameterized type.
 pub trait Parseable {
     fn equal(&self, other: &dyn Parseable) -> bool;
     fn summarize(&self) -> String;
@@ -17,13 +13,12 @@ pub trait Parseable {
 }
 
 /// A `Parseable` that can be hashed and round-tripped through bytes. Doubles as the
-/// `Dict` key trait — the `Hash`/`PartialEq`/`Eq` impls below for `dyn Serializable`
-/// are what make `HashMap<Box<dyn Serializable>, _>` viable in `KObject::Dict`.
+/// `Dict` key trait — the `Hash`/`PartialEq`/`Eq` impls below make
+/// `HashMap<Box<dyn Serializable>, _>` viable.
 ///
-/// `clone_box` lets a boxed key be cloned without knowing its concrete type — required for
-/// `KObject::Dict::deep_clone`. The returned box is `'static` (since concrete keys today are
-/// owned-data types like `String`/`Number`); coerces into the Dict's `Box<dyn Serializable + 'a>`
-/// slot via the standard `'static: 'a` trait-object covariance.
+/// `clone_box` lets a boxed key be cloned without knowing its concrete type. The returned
+/// box is `'static` (concrete keys are owned-data types like `String`/`Number`) and coerces
+/// into a `Box<dyn Serializable + 'a>` slot via `'static: 'a` trait-object covariance.
 pub trait Serializable: Parseable {
     fn hash(&self, state: &mut dyn Hasher);
     fn encode(&self) -> Vec<u8>;

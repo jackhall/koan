@@ -25,23 +25,10 @@ mod value_pass;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The scheduler stores
-/// the error on the producing slot and propagates it via the notify-walk; any dependent slot
-/// short-circuits with the error frame appended.
 pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
     BodyResult::Err(e)
 }
 
-/// Allocate a fresh `KFunction` + wrapping `KObject::KFunction` in `scope`'s arena, then add
-/// the object to `scope` under `name`. Centralizes the per-builtin `register` boilerplate.
-/// Allocations live for the run (the arena's lifetime) — fine for builtins because every run
-/// rebuilds the default scope, and the per-builtin allocations are tiny.
-///
-/// Routes through `Scope::register_function`, which adds the function to the per-signature
-/// `functions` bucket (deduping exact-equal signatures with `DuplicateOverload`) and
-/// installs the wrapper into `data[name]` if compatible. `default_scope` builds a fresh
-/// run-root and registers each builtin once, so the dedupe is a guard for future
-/// double-registrations rather than a hot path.
 pub(crate) fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -51,17 +38,8 @@ pub(crate) fn register_builtin<'a>(
     register_builtin_with_pre_run(scope, name, signature, body, None);
 }
 
-/// `register_builtin` with an optional `pre_run` extractor. Used by the binder builtins
-/// (LET, FN, STRUCT, UNION, SIG, MODULE) so `run_dispatch` can call the extractor before
-/// scheduling sub-deps and install a name → producer-NodeId placeholder in the dispatching
-/// scope. See [`crate::dispatch::kfunction::PreRunFn`] and the dispatch-time-placeholders
-/// roadmap item.
-///
-/// Errors from `register_function` (`DuplicateOverload`, `Rebind` on function/value
-/// collision) are silently dropped here — `default_scope` registers each builtin once at
-/// run-root construction, so a collision indicates a programming error in builtin
-/// registration code, not a recoverable runtime failure. Tests in
-/// `scope::tests::register_function_*` cover the structured-error paths.
+/// Errors from `register_function` are dropped: `default_scope` registers each builtin once
+/// at run-root construction, so a collision is a programming error, not a runtime failure.
 pub(crate) fn register_builtin_with_pre_run<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -70,29 +48,20 @@ pub(crate) fn register_builtin_with_pre_run<'a>(
     pre_run: Option<PreRunFn>,
 ) {
     let arena = scope.arena;
-    // Builtins capture the scope they're being registered into — typically run-root (set up
-    // by `default_scope`). The captured scope's arena is the same arena the KFunction lives
-    // in, so `lift_kobject`'s arena-pointer comparison correctly identifies builtins as
-    // never-in-a-dying-frame.
+    // The captured scope's arena must be the same arena the KFunction lives in, so
+    // `lift_kobject`'s arena-pointer comparison identifies builtins as never-in-a-dying-frame.
     let f: &'a KFunction<'a> =
         arena.alloc_function(KFunction::with_pre_run(signature, Body::Builtin(body), scope, pre_run));
-    // `frame: None` here — the lift-on-return logic in the scheduler doesn't need to attach
-    // an Rc for builtins (their captured arena is run-root and never dies).
     let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj);
 }
 
-/// Build a run-root scope populated with the language's builtin `KFunction`s, allocating them
-/// in `arena`. The returned scope is owned by `arena` (via `alloc_scope`); callers chain
-/// per-call child scopes off it via `Scope.outer`. Each `interpret` call constructs a fresh
-/// default scope this way; per-builtin allocations are tiny and live only for the run.
+/// Build a run-root scope populated with the language's builtin `KFunction`s.
 ///
-/// Registration order does not affect dispatch. `Scope::dispatch` buckets registered functions
-/// by their untyped signature shape and picks among overloads in the same bucket by `KType`
-/// specificity. `value_lookup` (single `Identifier` slot) and `value_pass` (single `Any` slot)
-/// share the bucket `[Slot]`; `value_lookup` wins for inputs like `(some_var)` because
-/// `Identifier` is more specific than `Any`. Re-ordering the calls below should leave behavior
-/// unchanged — the test suite is the authority.
+/// Registration order does not affect dispatch: `Scope::dispatch` buckets by untyped signature
+/// shape and picks overloads by `KType` specificity. `value_lookup` (single `Identifier` slot)
+/// and `value_pass` (single `Any` slot) share the bucket `[Slot]`; `value_lookup` wins for
+/// inputs like `(some_var)` because `Identifier` is more specific than `Any`.
 pub fn default_scope<'a>(
     arena: &'a super::runtime::RuntimeArena,
     out: Box<dyn std::io::Write + 'a>,

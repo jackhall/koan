@@ -108,7 +108,6 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 [dispatcher.rs](src/dispatch/runtime/dispatcher.rs) (overload resolution),
 [signature.rs](src/dispatch/types/signature.rs) (dispatch shapes and specificity),
 [builtins.rs](src/dispatch/builtins.rs) (registry),
-[monad.rs](src/dispatch/types/monad.rs) (trait impl on a foreign type),
 [tagged_union.rs](src/dispatch/values/tagged_union.rs) (shared structure),
 [struct_value.rs](src/dispatch/values/struct_value.rs) (shared structure),
 [typed_field_list.rs](src/dispatch/types/typed_field_list.rs) (helper).
@@ -159,7 +158,6 @@ src/
 │   │   ├── ktype_resolution.rs   surface-name and TypeExpr elaboration (from_name, from_type_expr, join)
 │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
 │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
-│   │   ├── monad.rs           Monadic impl for Option
 │   │   └── typed_field_list.rs  shared parser for `(name: Type ...)` schemas
 │   ├── values.rs
 │   └── values/

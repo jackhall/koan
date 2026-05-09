@@ -1,9 +1,6 @@
 //! Type system and dispatch shape: the `KType` tag, function signatures, and the traits
-//! every language object implements. This is the bottom of the dispatch dependency stack —
-//! `values` and `runtime` build on it.
-//!
-//! Internal layout (private modules) is not part of the public API; callers reach for the
-//! re-exports below.
+//! every language object implements. Bottom of the dispatch dependency stack — `values`
+//! and `runtime` build on it.
 
 mod ktraits;
 mod ktype;
