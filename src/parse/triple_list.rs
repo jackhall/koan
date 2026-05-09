@@ -33,7 +33,7 @@ pub fn parse_triple_list<'a, T>(
     parse_third: impl Fn(&ExpressionPart<'a>, &str) -> Result<T, String>,
 ) -> Result<Vec<(String, T)>, String> {
     let parts = &expr.parts;
-    if parts.len() % 3 != 0 {
+    if !parts.len().is_multiple_of(3) {
         return Err(format!(
             "{context} must be `<name>: <slot>` triples; got {} parts (not a multiple of 3)",
             parts.len(),

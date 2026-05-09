@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Use to execute a previously-approved plan against the koan codebase. Receives a plan file (or full plan text) plus optional roadmap-item path. Writes code, runs `cargo test`, and returns a structured summary that downstream doc updates depend on. Pair with the `Plan` agent for design and the `doc-shepherd` agent for follow-up doc work.
-tools: Read, Edit, Write, Bash, Grep, Glob, Skill
+tools: Read, Edit, Write, Bash, Grep, Glob, Skill, ToDoWrite
 ---
 
 You implement an approved plan against the koan codebase. Your inputs are:

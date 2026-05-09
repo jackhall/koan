@@ -157,7 +157,7 @@ impl<'a> Scope<'a> {
                 Err(_) => return Err(name),
             };
             let key = f.signature.untyped_key();
-            let f_ref: &'a KFunction<'a> = *f;
+            let f_ref: &'a KFunction<'a> = f;
             let bucket = functions.entry(key).or_default();
             if !bucket.iter().any(|existing| std::ptr::eq(*existing, f_ref)) {
                 bucket.push(f_ref);

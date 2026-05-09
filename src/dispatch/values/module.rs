@@ -53,6 +53,9 @@ pub struct Module<'a> {
 
 impl<'a> Module<'a> {
     pub fn new(path: String, child_scope: &'a Scope<'a>) -> Self {
+        // `Scope` is invariant in `'a`; the through-`'static` cast is required to match
+        // the `*const Scope<'static>` field type. Clippy reports it as redundant — wrong.
+        #[allow(clippy::unnecessary_cast)]
         let child_scope_ptr = child_scope as *const Scope<'_> as *const Scope<'static>;
         Self {
             path,
@@ -90,6 +93,8 @@ pub struct Signature<'a> {
 
 impl<'a> Signature<'a> {
     pub fn new(path: String, decl_scope: &'a Scope<'a>) -> Self {
+        // See `Module::new` — `Scope` is invariant, the through-`'static` cast is required.
+        #[allow(clippy::unnecessary_cast)]
         let decl_scope_ptr = decl_scope as *const Scope<'_> as *const Scope<'static>;
         Self {
             path,

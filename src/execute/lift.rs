@@ -56,7 +56,7 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                     None
                 }
             };
-            KObject::KFunction(*f, new_frame)
+            KObject::KFunction(f, new_frame)
         }
         KObject::KFuture(t, existing) => {
             let new_frame = if existing.is_some() {

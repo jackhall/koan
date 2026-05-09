@@ -701,7 +701,7 @@ mod tests {
         assert!(sched.node_dependencies[s1].is_empty(), "s1 deps drained");
         assert!(sched.node_dependencies[s2].is_empty(), "s2 deps drained");
         assert_eq!(sched.node_dependencies[s0], vec![s1], "s0 deps untouched");
-        let mut freed: Vec<usize> = sched.free_list.iter().copied().collect();
+        let mut freed: Vec<usize> = sched.free_list.to_vec();
         freed.sort();
         assert_eq!(freed, vec![s1, s2, s3]);
 

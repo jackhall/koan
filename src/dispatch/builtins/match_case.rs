@@ -107,7 +107,7 @@ fn find_branch_body<'a>(
     target_tag: &str,
 ) -> Result<Option<KExpression<'a>>, String> {
     let parts = &branches.parts;
-    if parts.len() % 3 != 0 {
+    if !parts.len().is_multiple_of(3) {
         return Err(format!(
             "MATCH branches must be `<tag> -> <body>` triples; got {} parts (not a multiple of 3)",
             parts.len()

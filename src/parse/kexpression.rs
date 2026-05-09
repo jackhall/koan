@@ -220,7 +220,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
-            ExpressionPart::Future(o) => ExpressionPart::Future(*o),
+            ExpressionPart::Future(o) => ExpressionPart::Future(o),
         }
     }
 }

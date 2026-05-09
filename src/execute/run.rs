@@ -341,7 +341,7 @@ impl<'a> Scheduler<'a> {
             .as_ref()
             .expect("Lift only runs after notify wakes it from `from`'s terminal write")
         {
-            NodeOutput::Value(v) => NodeOutput::Value(*v),
+            NodeOutput::Value(v) => NodeOutput::Value(v),
             NodeOutput::Err(e) => NodeOutput::Err(e.clone_for_propagation()),
         }
     }

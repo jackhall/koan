@@ -59,7 +59,7 @@ pub fn body_opaque<'a>(
     // are arena-allocated and immutable, so sharing the references is safe.
     let src = m.child_scope();
     for (name, obj) in src.data.borrow().iter() {
-        new_scope.add(name.clone(), *obj);
+        new_scope.add(name.clone(), obj);
     }
     // Mirror the function-bucket entries too, so dispatch within the new module's child
     // scope sees the same overload set. Same reference-sharing rationale.

@@ -143,7 +143,7 @@ impl<'a> KObject<'a> {
             KObject::Dict(entries) => KObject::Dict(Rc::clone(entries)),
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
-            KObject::KFunction(f, frame) => KObject::KFunction(*f, frame.clone()),
+            KObject::KFunction(f, frame) => KObject::KFunction(f, frame.clone()),
             KObject::TaggedUnionType(schema) => KObject::TaggedUnionType(Rc::clone(schema)),
             KObject::StructType { name, fields } => KObject::StructType {
                 name: name.clone(),
@@ -158,8 +158,8 @@ impl<'a> KObject<'a> {
                 fields: Rc::clone(fields),
             },
             KObject::TypeExprValue(t) => KObject::TypeExprValue(t.clone()),
-            KObject::KModule(m) => KObject::KModule(*m),
-            KObject::KSignature(s) => KObject::KSignature(*s),
+            KObject::KModule(m) => KObject::KModule(m),
+            KObject::KSignature(s) => KObject::KSignature(s),
         }
     }
 

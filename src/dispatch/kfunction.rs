@@ -152,6 +152,9 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
     ) -> Self {
         signature.normalize();
+        // The double cast erases the lifetime to match the `*const Scope<'static>` field
+        // type — `Scope` is invariant in `'a`, so a single cast is rejected.
+        #[allow(clippy::unnecessary_cast)]
         let captured = captured as *const Scope<'_> as *const Scope<'static>;
         Self { signature, body, captured }
     }
@@ -160,7 +163,7 @@ impl<'a> KFunction<'a> {
     /// the original scope's allocation, which by the SAFETY argument on the struct still
     /// lives.
     pub fn captured_scope(&self) -> &'a Scope<'a> {
-        unsafe { std::mem::transmute::<*const Scope<'static>, &'a Scope<'a>>(self.captured) }
+        unsafe { &*self.captured.cast::<Scope<'a>>() }
     }
 
     pub fn summarize(&self) -> String {
