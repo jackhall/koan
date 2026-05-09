@@ -47,41 +47,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::{RuntimeArena, Scope};
-    use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
-
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-
-    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
-        default_scope(arena, Box::new(SharedBuf(captured)))
-    }
-
-    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(source).expect("parse should succeed");
-        let mut sched = Scheduler::new();
-        for expr in exprs {
-            sched.add_dispatch(expr, scope);
-        }
-        sched.execute().expect("scheduler should succeed");
-    }
+    use crate::dispatch::builtins::test_support::{run, run_root_with_buf};
+    use crate::dispatch::runtime::RuntimeArena;
 
     fn run_program(source: &str) -> Vec<u8> {
         let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured.clone());
+        let (scope, captured) = run_root_with_buf(&arena);
         run(scope, source);
         let bytes = captured.borrow().clone();
         bytes

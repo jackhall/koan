@@ -67,72 +67,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
-    use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::KErrorKind;
+    use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
     use crate::dispatch::values::KObject;
-    use crate::dispatch::runtime::Scope;
-    use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
-    use crate::parse::kexpression::KExpression;
-
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-
-    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
-        default_scope(arena, Box::new(SharedBuf(captured)))
-    }
-
-    fn parse_one(src: &str) -> KExpression<'static> {
-        let mut exprs = parse(src).expect("parse should succeed");
-        assert_eq!(exprs.len(), 1, "test helper expects a single expression");
-        exprs.remove(0)
-    }
-
-    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(source).expect("parse should succeed");
-        let mut sched = Scheduler::new();
-        for expr in exprs {
-            sched.add_dispatch(expr, scope);
-        }
-        sched.execute().expect("scheduler should succeed");
-    }
-
-    fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should succeed");
-        sched.read(id)
-    }
-
-    fn run_one_err<'a>(
-        scope: &'a Scope<'a>,
-        expr: KExpression<'a>,
-    ) -> crate::dispatch::runtime::KError {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should not surface errors directly");
-        match sched.read_result(id) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e.clone(),
-        }
-    }
 
     #[test]
     fn type_token_calls_construct_tagged_value() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "UNION Maybe = (some: Number none: Null)");
         let result = run_one(scope, parse_one("Maybe (some 42)"));
         match result {
@@ -147,8 +89,7 @@ mod tests {
     #[test]
     fn type_call_unbound_type_errors() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let err = run_one_err(scope, parse_one("Bogus (some 42)"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "Bogus"),
@@ -160,8 +101,7 @@ mod tests {
     fn type_call_propagates_tag_validation_error() {
         // The synthesized TAG call surfaces the schema's tag check.
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "UNION Maybe = (some: Number none: Null)");
         let err = run_one_err(scope, parse_one("Maybe (other 42)"));
         assert!(
@@ -175,8 +115,7 @@ mod tests {
         // `(x)` parens-wrapping forces the value-side identifier to resolve via value_lookup
         // before TAG's typed-slot bind sees it.
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "UNION Maybe = (some: Number none: Null)\nLET x = 7");
         let result = run_one(scope, parse_one("Maybe (some (x))"));
         match result {

@@ -42,16 +42,16 @@ mod tests {
     use std::rc::Rc;
 
     use super::body;
+    use crate::dispatch::builtins::test_support::run_root_bare;
     use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
     use crate::dispatch::values::KObject;
-    use crate::dispatch::runtime::Scope;
     use crate::execute::scheduler::Scheduler;
 
     #[test]
     fn value_pass_returns_literal() {
         use crate::dispatch::runtime::RuntimeArena;
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let mut sched = Scheduler::new();
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::Number(7.0)));

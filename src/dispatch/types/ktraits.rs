@@ -16,24 +16,6 @@ pub trait Parseable {
     fn ktype(&self) -> KType;
 }
 
-/// A `Parseable` that can be invoked with arguments. Implemented by `KExpression` so a parsed
-/// expression can be run; future call sites will use this to drive evaluation generically.
-pub trait Executable: Parseable {
-    fn execute(&self, args: &[&dyn Parseable]) -> Box<dyn Parseable>;
-}
-
-/// A `Parseable` that can produce a finite sequence of values; the foundation `Collection`
-/// builds on.
-pub trait Iterable: Parseable {
-    fn iterate(&self) -> Vec<Box<dyn Parseable>>;
-}
-
-/// An `Iterable` that also supports membership tests; the trait container types like `List`
-/// and `Dict` will satisfy.
-pub trait Collection: Iterable {
-    fn contains(&self, key: &dyn Parseable) -> bool;
-}
-
 /// A `Parseable` that can be hashed and round-tripped through bytes. Doubles as the
 /// `Dict` key trait — the `Hash`/`PartialEq`/`Eq` impls below for `dyn Serializable`
 /// are what make `HashMap<Box<dyn Serializable>, _>` viable in `KObject::Dict`.
@@ -62,14 +44,3 @@ impl<'a> PartialEq for dyn Serializable + 'a {
 }
 
 impl<'a> Eq for dyn Serializable + 'a {}
-
-/// Generic monad interface (`pure` + `bind`) over a wrapper type. `Option` implements it in
-/// `dispatch::monad`; intended as the abstraction Koan's deferred-task and error-handling
-/// combinators will share once they're fleshed out.
-pub trait Monadic {
-    type Inner;
-    type Wrap<T>: Monadic<Inner = T>;
-
-    fn pure(inner: Self::Inner) -> Self;
-    fn bind<B, F: Fn(Self::Inner) -> Self::Wrap<B>>(self, f: F) -> Self::Wrap<B>;
-}

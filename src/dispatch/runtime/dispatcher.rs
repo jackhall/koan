@@ -280,6 +280,7 @@ mod tests {
     use super::super::arena::RuntimeArena;
     use super::super::scope::Scope;
     use crate::dispatch::builtins::default_scope;
+    use crate::dispatch::builtins::test_support::run_root_bare;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
@@ -305,7 +306,7 @@ mod tests {
     #[test]
     fn dispatch_with_no_outer_and_no_match_errors() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let expr = KExpression {
             parts: vec![ExpressionPart::Identifier("nope".into())],
         };
@@ -375,7 +376,7 @@ mod tests {
     #[test]
     fn dispatch_picks_identifier_over_any_regardless_of_registration_order() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         register_builtin(scope, "any_first", one_slot_sig("v", KType::Any), body_any);
         register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
 
@@ -393,7 +394,7 @@ mod tests {
     #[test]
     fn dispatch_inner_scope_shadows_outer_more_specific() {
         let arena = RuntimeArena::new();
-        let outer = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let outer = run_root_bare(&arena);
         register_builtin(outer, "outer_specific", one_slot_sig("v", KType::Number), body_outer_number);
 
         let inner = arena.alloc_scope(outer.child_for_call());
@@ -416,7 +417,7 @@ mod tests {
     #[test]
     fn dispatch_errors_on_ambiguous_overlap() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         register_builtin(scope, "number_any", two_slot_sig(KType::Number, KType::Any), body_number_any);
         register_builtin(scope, "any_number", two_slot_sig(KType::Any, KType::Number), body_any_number);
 
@@ -443,7 +444,7 @@ mod tests {
     #[test]
     fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let sig = ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
@@ -489,7 +490,7 @@ mod tests {
     #[test]
     fn shape_pick_returns_wrap_indices_for_value_slot_identifiers() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let sig = ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
@@ -568,7 +569,7 @@ mod tests {
     #[test]
     fn shape_pick_returns_none_when_ambiguous() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         register_builtin(scope, "OP_NA", two_slot_sig(KType::Number, KType::Any), body_number_any);
         register_builtin(scope, "OP_AN", two_slot_sig(KType::Any, KType::Number), body_any_number);
         let expr = KExpression {

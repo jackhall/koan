@@ -252,60 +252,18 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::{RuntimeArena, Scope};
+    use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+    use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::types::{KType, NoopResolver};
     use crate::dispatch::values::KObject;
     use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
-    use crate::parse::kexpression::KExpression;
-
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-
-    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
-        default_scope(arena, Box::new(SharedBuf(captured)))
-    }
-
-    fn parse_one(src: &str) -> KExpression<'static> {
-        let mut exprs = parse(src).expect("parse should succeed");
-        assert_eq!(exprs.len(), 1, "test helper expects a single expression");
-        exprs.remove(0)
-    }
-
-    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(source).expect("parse should succeed");
-        let mut sched = Scheduler::new();
-        for expr in exprs {
-            sched.add_dispatch(expr, scope);
-        }
-        sched.execute().expect("scheduler should succeed");
-    }
-
-    fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should succeed");
-        sched.read(id)
-    }
 
     /// `(LIST_OF Number)` dispatches and produces a `TypeExprValue` whose lowered `KType`
     /// is `List<Number>`. Round-trips the structured form through `from_type_expr`.
     #[test]
     fn list_of_number_lowers_to_list_number() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("LIST_OF Number"));
         let te = match result {
             KObject::TypeExprValue(t) => t.clone(),
@@ -319,8 +277,7 @@ mod tests {
     #[test]
     fn dict_of_str_number_lowers_to_dict() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("DICT_OF Str Number"));
         let te = match result {
             KObject::TypeExprValue(t) => t.clone(),
@@ -339,8 +296,7 @@ mod tests {
     #[test]
     fn nested_list_of_dispatches_through_scheduler() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("LIST_OF (LIST_OF Number)"));
         let te = match result {
             KObject::TypeExprValue(t) => t.clone(),
@@ -359,8 +315,7 @@ mod tests {
     #[test]
     fn module_type_of_resolves_via_module_member() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(
             scope,
             "MODULE IntOrd = ((LET Type = Number) (LET compare = 0))\n\
@@ -382,8 +337,7 @@ mod tests {
     #[test]
     fn module_type_of_unknown_member_errors() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "MODULE Foo = (LET x = 1)");
         // `Foo` is a Type token; the TypeExprRef-lhs overload looks it up against the
         // surrounding scope. `Bogus` is also a Type token naming a nonexistent abstract

@@ -58,6 +58,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::body;
+    use crate::dispatch::builtins::test_support::run_root_bare;
     use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::runtime::{KError, KErrorKind};
     use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
@@ -90,7 +91,7 @@ mod tests {
     #[test]
     fn value_lookup_returns_binding() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let bound = arena.alloc_object(KObject::Number(42.0));
         scope.data.borrow_mut().insert("foo".to_string(), bound);
 
@@ -105,7 +106,7 @@ mod tests {
     #[test]
     fn value_lookup_unbound_returns_error() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("missing".into())));
 
@@ -130,7 +131,7 @@ mod tests {
     #[test]
     fn value_lookup_walks_outer_scope() {
         let arena = RuntimeArena::new();
-        let outer = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let outer = run_root_bare(&arena);
         let bound = arena.alloc_object(KObject::Number(7.0));
         outer.data.borrow_mut().insert("from_outer".to_string(), bound);
 

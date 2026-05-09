@@ -7,7 +7,7 @@ use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::types::parse_typed_field_list;
 
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::kexpression::KExpression;
 
 use super::helpers::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
@@ -73,10 +73,7 @@ pub fn body<'a>(
 /// `Type(t)` token (the `TypeExprRef`-typed `name` argument). Only fires for bare leaves —
 /// parameterized forms (`STRUCT Foo<X> = ...`) aren't supported until functors land.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    match expr.parts.get(1)? {
-        ExpressionPart::Type(t) => Some(t.name.clone()),
-        _ => None,
-    }
+    super::helpers::binder_name_from_type_part(expr)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -99,58 +96,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
-    use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::KErrorKind;
+    use crate::dispatch::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
+    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
     use crate::dispatch::types::KType;
     use crate::dispatch::values::KObject;
-    use crate::dispatch::runtime::Scope;
-    use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
-    use crate::parse::kexpression::KExpression;
-
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-
-    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
-        default_scope(arena, Box::new(SharedBuf(captured)))
-    }
-
-    fn parse_one(src: &str) -> KExpression<'static> {
-        let mut exprs = parse(src).expect("parse should succeed");
-        assert_eq!(exprs.len(), 1, "test helper expects a single expression");
-        exprs.remove(0)
-    }
-
-    fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should succeed");
-        sched.read(id)
-    }
-
-    fn run_one_err<'a>(
-        scope: &'a Scope<'a>,
-        expr: KExpression<'a>,
-    ) -> crate::dispatch::runtime::KError {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should not surface errors directly");
-        match sched.read_result(id) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e.clone(),
-        }
-    }
 
     /// Smoke test for STRUCT's pre_run extractor: structural extraction of the `Type(_)`
     /// token at `parts[1]`.
@@ -164,8 +113,7 @@ mod tests {
     #[test]
     fn struct_named_registers_type_in_scope() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let result = run_one(
             scope,
             parse_one("STRUCT Point = (x: Number, y: Number)"),
@@ -187,8 +135,7 @@ mod tests {
     #[test]
     fn struct_returns_type_value() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("STRUCT Point = (x: Number, y: Number)"));
         assert_eq!(result.ktype(), KType::Type);
     }
@@ -196,8 +143,7 @@ mod tests {
     #[test]
     fn struct_preserves_field_order() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run_one(scope, parse_one("STRUCT Backwards = (b: Number, a: Number)"));
         let data = scope.data.borrow();
         match data.get("Backwards").unwrap() {
@@ -212,8 +158,7 @@ mod tests {
     #[test]
     fn struct_rejects_unknown_type_name() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let err = run_one_err(scope, parse_one("STRUCT Bad = (a: Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
@@ -224,8 +169,7 @@ mod tests {
     #[test]
     fn struct_rejects_empty_schema() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let err = run_one_err(scope, parse_one("STRUCT Empty = ()"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("at least one field")),
@@ -236,8 +180,7 @@ mod tests {
     #[test]
     fn struct_rejects_duplicate_field() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let err = run_one_err(scope, parse_one("STRUCT Pair = (x: Number, x: Str)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
@@ -248,8 +191,7 @@ mod tests {
     #[test]
     fn struct_rejects_missing_colon() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let err = run_one_err(scope, parse_one("STRUCT Pair = (x Number, y: Number)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("triple")),

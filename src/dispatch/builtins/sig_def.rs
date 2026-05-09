@@ -18,7 +18,7 @@ use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, Signature};
 
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::kexpression::KExpression;
 
 use super::helpers::{extract_bare_type_name, extract_kexpression, run_body_statements};
 use super::{err, register_builtin_with_pre_run};
@@ -62,10 +62,7 @@ pub fn body<'a>(
 /// Dispatch-time placeholder extractor for SIG. `parts[1]` is the `Type(t)` token of the
 /// signature's name slot. Same shape as STRUCT / MODULE / named UNION.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    match expr.parts.get(1)? {
-        ExpressionPart::Type(t) => Some(t.name.clone()),
-        _ => None,
-    }
+    super::helpers::binder_name_from_type_part(expr)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -94,37 +91,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::{RuntimeArena, Scope};
+    use crate::dispatch::builtins::test_support::{run, run_root_silent};
+    use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::values::KObject;
-    use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
-
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-
-    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
-        default_scope(arena, Box::new(SharedBuf(captured)))
-    }
-
-    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(source).expect("parse should succeed");
-        let mut sched = Scheduler::new();
-        for expr in exprs {
-            sched.add_dispatch(expr, scope);
-        }
-        sched.execute().expect("scheduler should succeed");
-    }
 
     /// Smoke test for SIG's pre_run extractor: structural extraction of the `Type(_)`
     /// token at `parts[1]`.
@@ -139,8 +109,7 @@ mod tests {
     #[test]
     fn sig_binds_under_name_in_scope() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (LET x = 1)");
         let data = scope.data.borrow();
         assert!(matches!(data.get("OrderedSig"), Some(KObject::KSignature(_))));
@@ -149,8 +118,7 @@ mod tests {
     #[test]
     fn sig_path_records_name() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (LET x = 1)");
         let data = scope.data.borrow();
         let sig = match data.get("OrderedSig") {

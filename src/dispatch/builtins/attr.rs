@@ -283,72 +283,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
-    use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::KErrorKind;
+    use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
     use crate::dispatch::values::KObject;
-    use crate::dispatch::runtime::Scope;
-    use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
-    use crate::parse::kexpression::KExpression;
-
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-
-    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
-        default_scope(arena, Box::new(SharedBuf(captured)))
-    }
-
-    fn parse_one(src: &str) -> KExpression<'static> {
-        let mut exprs = parse(src).expect("parse should succeed");
-        assert_eq!(exprs.len(), 1, "test helper expects a single expression");
-        exprs.remove(0)
-    }
-
-    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(source).expect("parse should succeed");
-        let mut sched = Scheduler::new();
-        for expr in exprs {
-            sched.add_dispatch(expr, scope);
-        }
-        sched.execute().expect("scheduler should succeed");
-    }
-
-    fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should succeed");
-        sched.read(id)
-    }
-
-    fn run_one_err<'a>(
-        scope: &'a Scope<'a>,
-        expr: KExpression<'a>,
-    ) -> crate::dispatch::runtime::KError {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should not surface errors directly");
-        match sched.read_result(id) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e.clone(),
-        }
-    }
 
     #[test]
     fn attr_reads_field_from_named_struct() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(
             scope,
             "STRUCT Point = (x: Number, y: Number)\nLET p = (Point (x: 3, y: 4))",
@@ -360,8 +302,7 @@ mod tests {
     #[test]
     fn attr_reads_each_field_independently() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(
             scope,
             "STRUCT Point = (x: Number, y: Number)\nLET p = (Point (x: 3, y: 4))",
@@ -373,8 +314,7 @@ mod tests {
     #[test]
     fn attr_chained_through_nested_struct() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(
             scope,
             "STRUCT Point = (x: Number, y: Number)\n\
@@ -390,8 +330,7 @@ mod tests {
     #[test]
     fn attr_unbound_name_errors() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let err = run_one_err(scope, parse_one("ghost.x"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "ghost"),
@@ -402,8 +341,7 @@ mod tests {
     #[test]
     fn attr_on_non_struct_value_errors() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "LET n = 5");
         let err = run_one_err(scope, parse_one("n.x"));
         match &err.kind {
@@ -419,8 +357,7 @@ mod tests {
     #[test]
     fn attr_unknown_field_errors() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(
             scope,
             "STRUCT Point = (x: Number, y: Number)\nLET p = (Point (x: 3, y: 4))",
@@ -436,8 +373,7 @@ mod tests {
     #[test]
     fn attr_chained_unknown_field_errors() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(
             scope,
             "STRUCT Point = (x: Number, y: Number)\n\

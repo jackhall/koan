@@ -86,10 +86,10 @@ pub struct Scope<'a> {
     /// `register_function` removes its own placeholder before inserting into `data` /
     /// `functions`, so post-finalize lookups go straight through the value path.
     pub placeholders: RefCell<HashMap<String, NodeId>>,
-    /// Lexical-context label for this scope, used only by `debug_path()` for diagnostic
-    /// output and by the `KModule` value to remember its source label. Empty string for
-    /// run-root and call frames whose context isn't worth naming. Set at construction by
-    /// `MODULE`-style builtins (`"MODULE Foo"`, `"SIG OrderedSig"`).
+    /// Lexical-context label for this scope. Set at construction by `MODULE`-style builtins
+    /// (`"MODULE Foo"`, `"SIG OrderedSig"`) via `child_under_named`; empty string for run-root
+    /// and call frames whose context isn't worth naming. Currently a record-only field — kept
+    /// for future diagnostics that may want to surface the scope chain in error messages.
     pub name: String,
 }
 
@@ -146,23 +146,6 @@ impl<'a> Scope<'a> {
             placeholders: RefCell::new(HashMap::new()),
             name,
         }
-    }
-
-    /// Walk the `outer` chain joining non-empty names with `>`. Used for diagnostics — error
-    /// messages can identify the lexical context a dispatch failed in. Run-root and unnamed
-    /// frames contribute nothing; the result is empty for an unnamed leaf with no named
-    /// ancestor.
-    pub fn debug_path(&self) -> String {
-        let mut parts: Vec<&str> = Vec::new();
-        let mut cur: Option<&Scope<'_>> = Some(self);
-        while let Some(s) = cur {
-            if !s.name.is_empty() {
-                parts.push(&s.name);
-            }
-            cur = s.outer;
-        }
-        parts.reverse();
-        parts.join(" > ")
     }
 
     /// Bind a value (LET, STRUCT, UNION, SIG, MODULE) under `name` in this scope. Errors with
@@ -583,6 +566,7 @@ pub struct ShapePick {
 #[cfg(test)]
 mod tests {
     use super::{Resolution, RuntimeArena, Scope};
+    use crate::dispatch::builtins::test_support::run_root_bare;
     use crate::dispatch::kfunction::{Body, KFunction, NodeId};
     use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
     use crate::dispatch::values::KObject;
@@ -614,7 +598,7 @@ mod tests {
     #[test]
     fn add_during_active_data_borrow_queues_and_drains() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let pre = arena.alloc_object(KObject::Number(1.0));
         scope.bind_value("pre".to_string(), pre).unwrap();
 
@@ -638,7 +622,7 @@ mod tests {
     #[test]
     fn bind_value_errors_on_same_scope_rebind() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let v1 = arena.alloc_object(KObject::Number(1.0));
         let v2 = arena.alloc_object(KObject::Number(2.0));
         scope.bind_value("x".to_string(), v1).unwrap();
@@ -652,7 +636,7 @@ mod tests {
     #[test]
     fn bind_value_allows_shadowing_in_child_scope() {
         let arena = RuntimeArena::new();
-        let outer = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let outer = run_root_bare(&arena);
         let v1 = arena.alloc_object(KObject::Number(1.0));
         outer.bind_value("x".to_string(), v1).unwrap();
         let inner = arena.alloc_scope(outer.child_for_call());
@@ -667,7 +651,7 @@ mod tests {
     #[test]
     fn register_function_dedupes_exact_signature() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let f1 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
         let obj1 = arena.alloc_object(KObject::KFunction(f1, None));
         scope.register_function("FOO".to_string(), f1, obj1).unwrap();
@@ -684,7 +668,7 @@ mod tests {
     #[test]
     fn register_function_allows_overload_with_different_arg_types() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let sig_num = ExpressionSignature {
             return_type: KType::Any,
             elements: vec![
@@ -711,7 +695,7 @@ mod tests {
     #[test]
     fn register_function_errors_on_function_value_collision() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         let v = arena.alloc_object(KObject::Number(1.0));
         scope.bind_value("FOO".to_string(), v).unwrap();
         let f = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
@@ -726,7 +710,7 @@ mod tests {
     #[test]
     fn resolve_returns_placeholder_when_only_placeholder_exists() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         scope.install_placeholder("x".to_string(), NodeId(7)).unwrap();
         match scope.resolve("x") {
             Resolution::Placeholder(id) => assert_eq!(id, NodeId(7)),
@@ -739,7 +723,7 @@ mod tests {
         // Outer has a Value binding; inner has a Placeholder. Inner.resolve hits the
         // placeholder first and does NOT descend to outer's value.
         let arena = RuntimeArena::new();
-        let outer = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let outer = run_root_bare(&arena);
         let v = arena.alloc_object(KObject::Number(1.0));
         outer.bind_value("x".to_string(), v).unwrap();
         let inner = arena.alloc_scope(outer.child_for_call());
@@ -760,7 +744,7 @@ mod tests {
     #[test]
     fn bind_value_clears_own_placeholder() {
         let arena = RuntimeArena::new();
-        let scope = arena.alloc_scope(Scope::run_root(&arena, None, Box::new(std::io::sink())));
+        let scope = run_root_bare(&arena);
         scope.install_placeholder("x".to_string(), NodeId(2)).unwrap();
         let v = arena.alloc_object(KObject::Number(42.0));
         scope.bind_value("x".to_string(), v).unwrap();

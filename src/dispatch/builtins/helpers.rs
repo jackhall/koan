@@ -136,6 +136,22 @@ pub(crate) fn run_body_statements<'a>(
     Ok(())
 }
 
+/// `pre_run` helper for the family of name-binding builtins whose `parts[1]` is a single
+/// `Type(t)` token: STRUCT, UNION (named form), SIG, MODULE. Pulls the bare type-name
+/// string out and returns `None` on shape mismatch. The body still does the full
+/// shape-check and surfaces the structured error; this is only the dispatch-time
+/// placeholder extractor (see [`crate::dispatch::kfunction::PreRunFn`]).
+///
+/// LET is intentionally excluded — its `parts[1]` accepts either `Identifier` or `Type`
+/// (lowercase or uppercase binder), so it keeps its own slightly wider matcher. FN is
+/// excluded too — its name lives inside the signature sub-expression, not at `parts[1]`.
+pub(crate) fn binder_name_from_type_part(expr: &KExpression<'_>) -> Option<String> {
+    match expr.parts.get(1)? {
+        ExpressionPart::Type(t) => Some(t.name.clone()),
+        _ => None,
+    }
+}
+
 /// Build a `KError::TypeMismatch` from the three usual fields. Convenience wrapper used at
 /// the noisiest builtin call sites — most of the in-tree `KError::new(KErrorKind::TypeMismatch
 /// { ... })` calls predate this helper and are intentionally left untouched (changing them

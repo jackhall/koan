@@ -234,63 +234,16 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
+    use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
     use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::builtins::default_scope;
     use crate::dispatch::types::SignatureElement;
     use crate::dispatch::values::KObject;
-    use crate::dispatch::runtime::Scope;
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
-    use crate::parse::kexpression::KExpression;
-
-    fn parse_one(src: &str) -> KExpression<'static> {
-        let mut exprs = parse(src).expect("parse should succeed");
-        assert_eq!(exprs.len(), 1, "test helper expects a single expression");
-        exprs.remove(0)
-    }
-
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-
-    /// Build a default scope in `arena` with PRINT routed into `captured`. Returns the
-    /// run-root scope. The arena is owned by the test caller, so post-run state remains
-    /// inspectable for the duration of the test.
-    fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
-        default_scope(arena, Box::new(SharedBuf(captured)))
-    }
-
-    /// Run `source` to completion against `scope`; for one-shot dispatch tests.
-    fn run<'a>(scope: &'a Scope<'a>, source: &str) {
-        let exprs = parse(source).expect("parse should succeed");
-        let mut sched = Scheduler::new();
-        for expr in exprs {
-            sched.add_dispatch(expr, scope);
-        }
-        sched.execute().expect("scheduler should succeed");
-    }
-
-    /// Run a single parsed expression and return its result reference.
-    fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().expect("scheduler should succeed");
-        sched.read(id)
-    }
 
     fn capture_program_output(source: &str) -> Vec<u8> {
         let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured.clone());
+        let (scope, captured) = run_root_with_buf(&arena);
         run(scope, source);
         let bytes = captured.borrow().clone();
         bytes
@@ -309,8 +262,7 @@ mod tests {
     #[test]
     fn fn_registers_user_function_under_keyword_signature() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (GREET) -> Null = (PRINT \"hi\")");
 
         let data = scope.data.borrow();
@@ -328,8 +280,7 @@ mod tests {
     #[test]
     fn fn_call_dispatches_body_at_call_time() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "LET x = 42\nFN (GETX) -> Number = (x)");
 
         let result = run_one(scope, parse_one("GETX"));
@@ -340,8 +291,7 @@ mod tests {
     #[test]
     fn fn_rejects_non_keyword_name() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (greet) -> Null = (PRINT \"hi\")");
         let data = scope.data.borrow();
         assert!(data.get("greet").is_none());
@@ -351,8 +301,7 @@ mod tests {
     #[test]
     fn fn_call_runs_body_each_time() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "LET x = 7\nFN (GETX) -> Number = (x)");
 
         for _ in 0..2 {
@@ -384,8 +333,7 @@ mod tests {
     #[test]
     fn chained_user_fn_tail_calls_reuse_one_slot() {
         let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured.clone());
+        let (scope, captured) = run_root_with_buf(&arena);
 
         run(
             scope,
@@ -465,8 +413,7 @@ mod tests {
     #[test]
     fn fn_returns_param_value_directly() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (ECHO v: Number) -> Number = (v)");
 
         let result = run_one(scope, parse_one("ECHO 7"));
@@ -476,8 +423,7 @@ mod tests {
     #[test]
     fn fn_signature_with_no_keyword_is_rejected() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (x: Number) -> Null = (PRINT \"oops\")");
         let data = scope.data.borrow();
         assert!(data.get("x").is_none());
@@ -492,8 +438,7 @@ mod tests {
     #[test]
     fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (ECHO v: Number) -> Number = (v)");
         let baseline = arena.alloc_count();
         for _ in 0..50 {
@@ -531,8 +476,7 @@ mod tests {
     #[test]
     fn body_subexpression_slots_recycle_across_calls() {
         let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured.clone());
+        let (scope, captured) = run_root_with_buf(&arena);
 
         run(
             scope,
@@ -594,8 +538,7 @@ mod tests {
     fn fn_parses_declared_return_type_onto_signature() {
         use crate::dispatch::types::KType;
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
 
         let data = scope.data.borrow();
@@ -613,8 +556,7 @@ mod tests {
     #[test]
     fn fn_without_return_type_annotation_does_not_register() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let exprs = parse("FN (DOUBLE x: Number) = (PRINT \"x\")").expect("parse should succeed");
         let mut sched = Scheduler::new();
         for expr in exprs {
@@ -630,8 +572,7 @@ mod tests {
     fn fn_with_unknown_return_type_name_errors() {
         use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("FN (DOUBLE x: Number) -> Bogus = (x)"), scope);
         sched.execute().expect("execute does not surface per-slot errors");
@@ -650,8 +591,7 @@ mod tests {
     fn user_fn_return_type_mismatch_surfaces_as_kerror() {
         use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (LIE) -> Number = (\"oops\")");
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("LIE"), scope);
@@ -679,8 +619,7 @@ mod tests {
     #[test]
     fn user_fn_with_any_return_type_accepts_anything() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (PURE) -> Any = (\"a string\")");
         let result = run_one(scope, parse_one("PURE"));
         assert!(matches!(result, KObject::KString(s) if s == "a string"));
@@ -692,8 +631,7 @@ mod tests {
     #[test]
     fn fn_def_returns_the_registered_kfunction() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("FN (DOUBLE x: Number) -> Number = (x)"));
         assert!(
             matches!(result, KObject::KFunction(_, _)),
@@ -707,8 +645,7 @@ mod tests {
     fn fn_typed_param_records_ktype_on_signature() {
         use crate::dispatch::types::{Argument, KType};
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
 
         let data = scope.data.borrow();
@@ -731,8 +668,7 @@ mod tests {
     #[test]
     fn fn_typed_param_dispatches_on_matching_call() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
         let result = run_one(scope, parse_one("DOUBLE 7"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
@@ -745,8 +681,7 @@ mod tests {
     fn fn_typed_param_rejects_mismatched_call() {
         use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
         let mut sched = Scheduler::new();
         let _ = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
@@ -780,8 +715,7 @@ mod tests {
     fn fn_param_without_annotation_is_rejected() {
         use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
         sched.execute().expect("execute does not surface per-slot errors");
@@ -803,8 +737,7 @@ mod tests {
     fn fn_param_with_unknown_type_name_is_rejected() {
         use crate::dispatch::runtime::KErrorKind;
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("FN (DOUBLE x: Bogus) -> Number = (x)"), scope);
         sched.execute().expect("execute does not surface per-slot errors");
@@ -862,8 +795,7 @@ mod tests {
     #[test]
     fn fn_returning_typed_list_rejects_wrong_element_type() {
         let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (BAD) -> List<Number> = ([1 \"x\"])");
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("BAD"), scope);
@@ -880,8 +812,7 @@ mod tests {
     #[test]
     fn fn_with_invalid_list_arity_errors_at_definition() {
         let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
         let exprs = parse("FN (BAD xs: List<Number, Str>) -> Null = (xs)").expect("parse ok");
         let mut ids = Vec::new();
@@ -941,8 +872,7 @@ mod tests {
     fn fn_typed_list_param_rejects_wrong_element_type_at_call() {
         // Single overload typed List<Number> — wrong-element-type call must error.
         let arena = RuntimeArena::new();
-        let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "FN (HEAD xs: List<Number>) -> Number = (1)");
         let mut sched = Scheduler::new();
         sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
@@ -962,8 +892,7 @@ mod tests {
     #[test]
     fn list_of_let_binding_is_type_expr_value() {
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "LET MyList = (LIST_OF Number)");
         let data = scope.data.borrow();
         let entry = data.get("MyList").expect("MyList should be bound");
@@ -992,8 +921,7 @@ mod tests {
         use crate::dispatch::types::{KType, ScopeResolver, TypeResolver};
         use crate::parse::kexpression::{TypeExpr, TypeParams};
         let arena = RuntimeArena::new();
-        let captured = Rc::new(RefCell::new(Vec::new()));
-        let scope = build_scope(&arena, captured);
+        let scope = run_root_silent(&arena);
         run(scope, "LET MyList = (LIST_OF Number)");
         let resolver = ScopeResolver::new(scope);
         // MyList resolves through the scope.

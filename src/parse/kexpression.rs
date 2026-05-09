@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::dispatch::types::{UntypedElement, UntypedKey};
 use crate::dispatch::values::KKey;
 use crate::dispatch::values::KObject;
-use crate::dispatch::types::{Parseable, Executable, Serializable};
+use crate::dispatch::types::{Parseable, Serializable};
 
 /// Concrete literal kinds the parser recognizes; produced by `tokens::try_literal` and consumed
 /// when resolving an `ExpressionPart` into a runtime `KObject`.
@@ -271,8 +271,3 @@ impl<'a> Parseable for KExpression<'a> {
     }
 }
 
-impl<'a> Executable for KExpression<'a> {
-    fn execute(&self, _args: &[&dyn Parseable]) -> Box<dyn Parseable> {
-        Box::new(KObject::KString(self.summarize()))
-    }
-}

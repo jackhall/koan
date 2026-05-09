@@ -9,12 +9,11 @@ mod ktraits;
 mod ktype;
 mod ktype_predicates;
 mod ktype_resolution;
-mod monad;
 mod resolver;
 mod signature;
 mod typed_field_list;
 
-pub use ktraits::{Executable, Parseable, Serializable};
+pub use ktraits::{Parseable, Serializable};
 pub use ktype::KType;
 #[allow(unused_imports)]
 pub use resolver::{NoopResolver, ScopeResolver, TypeResolver};

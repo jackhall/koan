@@ -22,6 +22,9 @@ mod union;
 mod value_lookup;
 mod value_pass;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 /// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The scheduler stores
 /// the error on the producing slot and propagates it via the notify-walk; any dependent slot
 /// short-circuits with the error frame appended.
