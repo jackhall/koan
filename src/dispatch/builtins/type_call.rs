@@ -1,13 +1,10 @@
-use std::rc::Rc;
-
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
-use crate::dispatch::values::KObject;
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::values::dispatch_constructor;
-use crate::parse::kexpression::{KExpression, TypeParams};
 
+use super::helpers::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin};
 
 /// `<verb:TypeExprRef> <args:KExpression>` — the type-token construction path.
@@ -24,25 +21,13 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     // The verb slot is `TypeExprRef`, so its resolved value is `KObject::TypeExprValue(t)`.
     // The name slot wants the bare type name; reject parameterized forms (`List<Number>` as
-    // a constructor verb makes no sense here).
-    let verb = match bundle.get("verb") {
-        Some(KObject::TypeExprValue(t)) => match &t.params {
-            TypeParams::None => t.name.clone(),
-            _ => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
-                    "type-call verb must be a bare type name, got `{}`",
-                    t.render(),
-                ))));
-            }
-        },
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "verb".to_string(),
-                expected: "TypeExprRef".to_string(),
-                got: other.summarize(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("verb".to_string()))),
+    // a constructor verb makes no sense here). The shared helper reports
+    // `other.ktype().name()` for the non-`TypeExprValue` branch — slightly different from
+    // the previous `other.summarize()` here, but the value is debug-only (no test asserts
+    // on this `got:` field) and consolidating beats a one-off divergence.
+    let verb = match extract_bare_type_name(&bundle, "verb", "type-call") {
+        Ok(n) => n,
+        Err(e) => return err(e),
     };
     let args_expr = match extract_kexpression(&mut bundle, "args") {
         Some(e) => e,
@@ -62,21 +47,6 @@ pub fn body<'a>(
             })),
         },
         None => err(KError::new(KErrorKind::UnboundName(verb))),
-    }
-}
-
-fn extract_kexpression<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::KExpression(e)) => Some(e),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KExpression(e) => Some(e.clone()),
-            _ => None,
-        },
     }
 }
 

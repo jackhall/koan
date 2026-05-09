@@ -3,6 +3,7 @@
 //! failures.
 
 mod arena;
+mod dispatcher;
 mod kerror;
 mod scope;
 

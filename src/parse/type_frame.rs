@@ -146,7 +146,7 @@ fn extract_function_args<'a>(
         return Err(MISSING_PARENS.to_string());
     }
     let arg_parts = match before.into_iter().next().unwrap() {
-        ExpressionPart::Expression(boxed) => (*boxed).parts,
+        ExpressionPart::Expression(boxed) => boxed.parts,
         _ => return Err(MISSING_PARENS.to_string()),
     };
     arg_parts

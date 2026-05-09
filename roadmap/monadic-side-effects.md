@@ -28,23 +28,24 @@ is scaffolding without a building.
 - *Substrate for stage 4.* Module-system stage 4's generators thread randomness via the
   `Random` effect module; this work is what makes that possible.
 
-**Directions.** None decided.
+**Directions.**
 
-- *In-language `Monad` signature.* Defined in [design/effects.md](../design/effects.md).
+- *In-language `Monad` signature — decided per [design/effects.md](../design/effects.md).*
   Implementation lands the signature, the `Wrap` higher-kinded slot, and `pure` /
   `bind`. Requires module-system stage 2's functor support so `Wrap` can be a
   higher-kinded abstract type slot.
-- *Standard effect modules.* `Random`, `IO`, `Time`, plus existing `PRINT`-emitting
-  builtins folded into `IO`. Each ascribes the `Monad` signature plus per-effect
-  operations.
-- *Runtime carrier.* `BuiltinFn` returns an `Effectful<T>` carrier — a value paired with
-  pending effects. `Effectful` is the second `Monadic` impl the trait's doc comment is
-  waiting for, and it bridges the in-language `Monad` signature and the runtime's
-  effect drainage path.
-- *Handler in `Scope`.* `Scope::out` becomes `Scope::handler: Box<dyn EffectHandler>`.
-  Handlers decide what to do with each pending `Effect`: default performs them, test
-  captures them into a vec, replay feeds from a pre-recorded trace.
-- *Drainage points.* Eager (handler runs effects as each builtin returns) or lazy
+- *Standard effect modules — decided.* `Random`, `IO`, `Time`, plus existing
+  `PRINT`-emitting builtins folded into `IO`. Each ascribes the `Monad` signature plus
+  per-effect operations.
+- *Runtime carrier — decided.* `BuiltinFn` returns an `Effectful<T>` carrier — a value
+  paired with pending effects. `Effectful` is the second `Monadic` impl the trait's doc
+  comment is waiting for, and it bridges the in-language `Monad` signature and the
+  runtime's effect drainage path.
+- *Handler in `Scope` — decided.* `Scope::out` becomes
+  `Scope::handler: Box<dyn EffectHandler>`. Handlers decide what to do with each pending
+  `Effect`: default performs them, test captures them into a vec, replay feeds from a
+  pre-recorded trace.
+- *Drainage points — open.* Eager (handler runs effects as each builtin returns) or lazy
   (collected up the tree, run at top-level boundaries). Eager is simpler; lazy unlocks
   reordering. Pick one explicitly.
 

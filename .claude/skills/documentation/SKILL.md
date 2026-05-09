@@ -17,6 +17,7 @@ Each tier has a job. Keeping them disjoint is what lets a reader pick the right 
 
 - **`README.md`**. Introduces a new user or developer to the project. Links other docs. Explains the directory structure. Aim for "what is this and where do I go next."
 - **`TUTORIAL.md`**. Walks a user through writing koan code. From the user's perspective, not the implementer's.
+- **`TEST.md`**. Testing and linting reference: `cargo test` conventions, clippy/fmt commands, and the canonical Miri audit-slate test list. Updated whenever a slate test is added or removed.
 - **`design/*.md`**. Describes shipped behavior — architecture, cross-cutting concerns, design rationale for what's already in the language. Update after a PR is code-complete and tested, but only if a design decision was made. If a file is being deleted or downsized, update inbound references.
 - **`roadmap/*.md`**. **Future work only.** Each file is one work item with a `## Dependencies` section. Items can reference prerequisites and unblockers.
 - **`ROADMAP.md`**. A curated index of `roadmap/*.md` items. The "What's shipped so far" prose paragraph is the running record of completed work; the bulleted "Open items" sections list active items.
@@ -34,7 +35,11 @@ Standard skeleton (sections may be omitted when they have nothing to say, but th
 - **Optional one-line lede** — A single sentence framing the item. Skip if the title is self-evident.
 - **`**Problem.**`** — The status quo and what's broken or missing about it. Present-tense description of *today's* state, with concrete pointers to the code or doc surface that exhibits the gap. This is the only section that talks about today's pain. If this section starts feeling like a list of payoffs, those belong under Impact.
 - **`**Impact.**`** — What shipping this work *buys* the language when done. Frame each bullet as a capability that becomes available, not a limitation that exists today. Read every bullet as completing the sentence "After this ships, …". Cross-stage substrate ("substrate for stage N") and downstream-unblocking effects belong here too. If a bullet starts with "No …" or "… can't …", it's drifted into Problem framing — flip it.
-- **`**Directions.**`** — Open design options for how to ship the work, usually with "None decided" as the lede. Each bullet names a choice with its trade-offs so the design conversation has a starting point. Decisions made earlier (in design docs or prior roadmap items) get noted as decided rather than re-litigated. This is the only section where alternatives proliferate; Problem and Impact are about the *what* and *why*, Directions is about the *how*.
+- **`**Directions.**`** — Design choices for how to ship the work. Each bullet is a *decision point*; Problem/Impact cover the *what* and *why*.
+
+  **Every bullet carries an explicit status tag** in its first phrase: `— decided.` (with optional `per <link>`), `— open.` (lists alternatives; may add `Recommended: <option>.`), or `— deferred.` (punted to a named follow-up). An untagged bullet is the drift the audit catches. Bullets that aren't decision points (constraints, obligations) belong in Impact or Problem.
+
+  The `**Directions.**` heading takes no lede — no "None decided", no "X decided per Y; rest open" preamble. The per-bullet tags are the canonical signal; a lede only duplicates them and goes stale.
 - **`## Dependencies`** — Two labelled bullet lists:
   - **`Requires:`** — Prerequisites: roadmap items that must ship first, or shipped substrate the work depends on. Each bullet is a markdown link plus an optional inline rationale.
   - **`Unblocks:`** — Downstream items this work makes possible. Symmetric with Requires across files (`A.md` listing `B.md` under Requires obliges `B.md` to list `A.md` under Unblocks). The doclinks `deps` subcommand verifies the symmetry.
@@ -66,11 +71,26 @@ The work item is no longer future work, so it leaves `roadmap/`.
 5. **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph naming what landed. (The tool only touches the bullet lists.)
 6. **Re-run `doclinks check`** (below).
 
+### After a Miri run in this session
+
+If the session ran a Miri full-slate invocation, update the slate-duration log
+in [`TEST.md`](../../../TEST.md) before any other doc work:
+
+1. Locate the `<!-- slate-durations:start -->` / `<!-- slate-durations:end -->`
+   block.
+2. Prepend a new bullet for the most recent full-slate run, format
+   `- YYYY-MM-DD: <duration>s — <N> tests, <leaks> leaks, <ub> UB`.
+3. Trim the list to the five most-recent entries.
+
+The miri skill carries the parsing rules for `<duration>` / `<N>` / `<leaks>`
+/ `<ub>` from Miri's output; this rule is just the doc-side update obligation.
+Single-test triage runs and non-slate Miri invocations do not trigger this.
+
 ### When editing any doc
 
 After the edit:
 - `python3 tools/doclinks.py check` — runs the four audits in one pass: broken links, roadmap `Requires`/`Unblocks` symmetry, orphaned docs, and the informational source-tree-changes report.
-- **Audit the edited file against the Section structure rules above.** For a `roadmap/*.md` file, confirm Problem describes today's state (not payoffs), Impact reads as "what shipping this buys" (no "No …" / "… can't …" bullets), Directions lists alternatives, and `## Dependencies` has both edges where they apply. For a `design/*.md` file, confirm the body has no historical narrative ("was fixed," "old behavior," "previously," "earlier designs called …") and no forward-looking prose outside `## Open work` (`## Open work` is the only place future work appears, and every entry links to a `roadmap/*.md` item). Fix any drift in the same edit; partition violations compound silently.
+- **Audit the edited file against the Section structure rules above.** For a `roadmap/*.md` file, confirm Problem describes today's state (not payoffs), Impact reads as "what shipping this buys" (no "No …" / "… can't …" bullets), every Directions bullet carries a `— decided.` / `— open.` / `— deferred.` tag, and `## Dependencies` has both edges where they apply. For a `design/*.md` file, confirm the body has no historical narrative ("was fixed," "old behavior," "previously," "earlier designs called …") and no forward-looking prose outside `## Open work` (`## Open work` is the only place future work appears, and every entry links to a `roadmap/*.md` item). Fix any drift in the same edit; partition violations compound silently.
 
 ### Before deleting or renaming any doc
 

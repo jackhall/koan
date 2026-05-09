@@ -1,8 +1,8 @@
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
+use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
-use crate::try_args;
 
 use super::{err, register_builtin};
 
@@ -15,7 +15,23 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    try_args!(bundle; v: KString);
+    // Pre-Phase-2 this used the `try_args!` macro defined in `dispatch/builtins.rs`. The
+    // macro had exactly one consumer (this body) — its scaffolding cost outweighed the
+    // single-line benefit, especially after Phase 1's helpers + Phase 2's `KObject`
+    // accessors made the inline form a 4-line pattern. Inlined here and the macro deleted.
+    let v = match bundle.get("v") {
+        Some(KObject::KString(s)) => s.clone(),
+        other => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "v".to_string(),
+                expected: "KString".to_string(),
+                got: match other {
+                    Some(o) => o.summarize(),
+                    None => "(missing)".to_string(),
+                },
+            }));
+        }
+    };
     match scope.lookup(&v) {
         Some(obj) => BodyResult::Value(obj),
         None => err(KError::new(KErrorKind::UnboundName(v))),

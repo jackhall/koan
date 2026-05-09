@@ -7,6 +7,8 @@
 
 mod ktraits;
 mod ktype;
+mod ktype_predicates;
+mod ktype_resolution;
 mod monad;
 mod resolver;
 mod signature;

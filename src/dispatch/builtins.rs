@@ -8,6 +8,7 @@ mod attr;
 pub mod call_by_name;
 mod eval;
 mod fn_def;
+mod helpers;
 mod let_binding;
 mod match_case;
 mod module_def;
@@ -21,8 +22,9 @@ mod union;
 mod value_lookup;
 mod value_pass;
 
-/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The error propagates
-/// through the scheduler's Forward chain and short-circuits any dependent node.
+/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The scheduler stores
+/// the error on the producing slot and propagates it via the notify-walk; any dependent slot
+/// short-circuits with the error frame appended.
 pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
     BodyResult::Err(e)
 }
@@ -48,79 +50,6 @@ pub(crate) fn register_builtin<'a>(
     // an Rc for builtins (their captured arena is run-root and never dies).
     let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
     scope.add(name.into(), obj);
-}
-
-/// Pull typed arguments out of an `ArgumentBundle`. Two forms:
-///
-/// ```ignore
-/// // Default form: a missing or mistyped arg returns BodyResult::Err with a structured
-/// // KError::TypeMismatch identifying the offending argument and what was actually present.
-/// try_args!(bundle; name: KString, predicate: Bool);
-///
-/// // Override form: the caller supplies the early-return expression. Used when the
-/// // builtin wants to return something other than the structured TypeMismatch error
-/// // on a benign mismatch — currently no in-tree call site does this, but the
-/// // override stays available.
-/// try_args!(bundle, return BodyResult::Value(some_obj); name: KString);
-/// ```
-///
-/// Each `name: Variant` pair becomes a `let name = ...` binding extracted from
-/// `KObject::Variant`. Supported variants: `KString` (cloned to `String`), `Number`
-/// (deref'd to `f64`), `Bool` (deref'd to `bool`).
-///
-/// The macro earns its keep by centralizing the "on failure, exit the caller" clause and
-/// keeping each builtin's arg extraction to one line. It is not strictly necessary — a
-/// `let Some(KObject::KString(name)) = bundle.get("name") else { return ... };` chain, or
-/// a `bundle.try_get::<T>(name)` helper trait, would cover the same ground with a few more
-/// lines per builtin and one less piece of project-specific syntax to learn. If new
-/// `@extract` arms start piling up or the macro grows much beyond its current shape, that's
-/// the signal it's outgrowing its weight; switch to the helper-trait version instead.
-#[macro_export]
-macro_rules! try_args {
-    // Override form: caller supplies the early-return expression.
-    (
-        $bundle:expr,
-        return $err:expr;
-        $( $name:ident : $variant:ident ),* $(,)?
-    ) => {
-        $(
-            let $name = match $bundle.get(stringify!($name)) {
-                Some($crate::dispatch::values::KObject::$variant(v)) =>
-                    $crate::try_args!(@extract $variant, v),
-                _ => return $err,
-            };
-        )*
-    };
-    // Default form: missing/mistyped → BodyResult::Err with structured TypeMismatch.
-    (
-        $bundle:expr;
-        $( $name:ident : $variant:ident ),* $(,)?
-    ) => {
-        $(
-            let $name = match $bundle.get(stringify!($name)) {
-                Some($crate::dispatch::values::KObject::$variant(v)) =>
-                    $crate::try_args!(@extract $variant, v),
-                other => return $crate::dispatch::builtins::err(
-                    $crate::dispatch::runtime::KError::new(
-                        $crate::dispatch::runtime::KErrorKind::TypeMismatch {
-                            arg: stringify!($name).to_string(),
-                            expected: stringify!($variant).to_string(),
-                            got: match other {
-                                Some(o) => {
-                                    use $crate::dispatch::types::Parseable;
-                                    o.summarize()
-                                }
-                                None => "(missing)".to_string(),
-                            },
-                        }
-                    )
-                ),
-            };
-        )*
-    };
-    (@extract KString, $v:ident) => { $v.clone() };
-    (@extract Number,  $v:ident) => { *$v };
-    (@extract Bool,    $v:ident) => { *$v };
 }
 
 /// Build a run-root scope populated with the language's builtin `KFunction`s, allocating them

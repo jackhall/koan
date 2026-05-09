@@ -28,24 +28,29 @@ is the same phase emitting code.
   per-node overhead. Not load-bearing today (no production users, no benchmark target)
   but the option opens for when it matters.
 
-**Directions.** None decided.
+**Directions.**
 
-- *Checker scope.* Soft inference (warnings only, execution proceeds), hard inference
-  (rejected programs don't run), or gradual (typed regions check statically, untyped
-  fall through to runtime dispatch). Gradual matches the type sequence's incremental
-  shape — programs work without annotations, get checked once they have them.
-- *JIT target.* Bytecode VM (modest speedup, manageable scope, Lua/Python pattern), native
-  via cranelift or LLVM (real native speed, large toolchain dependency, hard to justify
-  for a research language), or inline caching only (cache resolved dispatch targets at
-  each call site, no IR, partial speedup). Inline caching is the cheapest first step
-  that doesn't preclude either bigger option later.
-- *Coupling.* Build the checker first, JIT later: checker output (resolved dispatch
-  targets, monomorphized signatures) is exactly what a JIT consumes. Building the
-  checker first ships independent value (errors, tooling) and produces the substrate the
-  JIT later builds on. JIT-without-checker would duplicate type inference inline; avoid.
-- *Closure interaction.* The leak fix's per-call arena + lexical closure model is the
-  load-bearing memory shape. A checker's lifetime story and a JIT's codegen contract both
-  have to honor it. Work through a closure-heavy test program before committing to an IR.
+- *Checker scope — open.* The user-facing choice is whether the checker permits
+  unresolved type bindings — the
+  [dispatch-time-placeholders](dispatch-time-placeholders.md) mechanism reaching
+  through into the check phase — or insists every type identifier resolves at
+  compile time. Permissive matches the dynamic-dispatch ergonomics today's runtime
+  exhibits and gives the checker a soft-rejection mode for programs that work but
+  can't be fully statically resolved; strict matches what a separate-from-runtime
+  type system would conventionally enforce. Likely a per-build switch.
+- *JIT target — decided.* Compilation and execution share a process, so the artifact
+  to persist is a serialized scheduler-plus-ownership-state snapshot with pegged
+  nodes (resolved dispatch targets, monomorphized signatures) pre-baked — not a
+  separate bytecode IR, native object file, or inline-cache sidecar.
+- *Coupling — decided.* Build the checker first, JIT later: checker output (resolved
+  dispatch targets, monomorphized signatures) is exactly what the snapshot's pegged
+  nodes are. Building the checker first ships independent value (errors, tooling)
+  and produces the substrate the JIT later builds on. JIT-without-checker would
+  duplicate type inference inline; avoid.
+- *Closure interaction — decided.* The leak fix's per-call arena + lexical closure
+  model is the load-bearing memory shape. A checker's lifetime story and a JIT's
+  codegen contract both have to honor it. Work through a closure-heavy test program
+  before committing to a snapshot format.
 
 ## Dependencies
 

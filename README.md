@@ -24,7 +24,7 @@ echo 'PRINT "hello"' | cargo run
 
 The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
 
-User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The known types are `Number`, `Str`, `Bool`, `Null`, `List`, `Dict`, `KFunction`, `KExpression`, and `Any`.
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `List<T>`, `Dict<K, V>`, `Function<(args) -> R>`, `Type`, `Tagged`, `Struct`, `Module`, `Signature`, `KExpression`, and `Any`.
 
 Example:
 
@@ -35,7 +35,7 @@ FN (ECHO x: Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
-Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals. The lexer distinguishes three token classes for non-literal atoms: **all-caps tokens** (`LET`, `THEN`, `=`, `->`) are dispatch keywords; **capitalized names with at least one lowercase letter** (`Number`, `Str`, `KFunction`, `MyType`) are type references; everything else (lowercase / snake_case) is an identifier.
+Indentation forms blocks (2-space increments, no tabs); `(` `)` group sub-expressions; `'…'` and `"…"` are string literals; numbers, `true`/`false`/`null` are literals. The lexer distinguishes three token classes for non-literal atoms: **all-caps tokens** (`LET`, `THEN`, `=`, `->`) are dispatch keywords; **capitalized names with at least one lowercase letter** (`Number`, `Str`, `KExpression`, `MyType`) are type references; everything else (lowercase / snake_case) is an identifier.
 
 For a walk-through of the language surface with runnable snippets, see [TUTORIAL.md](TUTORIAL.md).
 
@@ -46,7 +46,7 @@ cargo test            # all unit tests
 cargo test parse::    # tests under one module
 ```
 
-Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the code (parser, scheduler, dispatch, and interpreter all have suites).
+Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the code (parser, scheduler, dispatch, and interpreter all have suites). For the full testing and linting workflow — including the Miri audit slate that signs off the memory model under tree borrows — see [TEST.md](TEST.md).
 
 ## Architecture
 
@@ -77,7 +77,7 @@ A [`Scope`](src/dispatch/runtime/scope.rs) is a lexical environment: parent link
 
 Runtime values are [`KObject`](src/dispatch/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/dispatch/types/ktraits.rs). Builtins are registered in [builtins.rs](src/dispatch/builtins.rs) and produce the default root scope.
 
-Errors are first-class via [`KError`](src/dispatch/runtime/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) up the scheduler's Forward chain, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
+Errors are first-class via [`KError`](src/dispatch/runtime/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
 
 ### execute — run the DAG
 
@@ -105,6 +105,7 @@ eponymous Koan-runtime type: [kobject.rs](src/dispatch/values/kobject.rs) define
 Files without the prefix are infrastructure that don't introduce a single namesake type:
 [arena.rs](src/dispatch/runtime/arena.rs) (allocation),
 [scope.rs](src/dispatch/runtime/scope.rs) (lexical environment),
+[dispatcher.rs](src/dispatch/runtime/dispatcher.rs) (overload resolution),
 [signature.rs](src/dispatch/types/signature.rs) (dispatch shapes and specificity),
 [builtins.rs](src/dispatch/builtins.rs) (registry),
 [monad.rs](src/dispatch/types/monad.rs) (trait impl on a foreign type),
@@ -146,12 +147,15 @@ src/
 │   ├── kfunction.rs     KFunction, Body, ArgumentBundle — bind/apply at the dispatch root
 │   ├── runtime.rs
 │   ├── runtime/
-│   │   ├── arena.rs     RuntimeArena, CallArena — per-run and per-call allocation
-│   │   ├── kerror.rs    KError, KErrorKind, Frame — structured runtime errors
-│   │   └── scope.rs     Scope and KFuture
+│   │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
+│   │   ├── dispatcher.rs  overload resolution: pick / specificity / lazy-candidate
+│   │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
+│   │   └── scope.rs       Scope and KFuture
 │   ├── types.rs
 │   ├── types/
 │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+│   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
+│   │   ├── ktype_resolution.rs   surface-name and TypeExpr elaboration (from_name, from_type_expr, join)
 │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
 │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
 │   │   ├── monad.rs           Monadic impl for Option
@@ -168,8 +172,6 @@ src/
     ├── nodes.rs         node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
     ├── run.rs           per-NodeWork-variant run_* methods (impl Scheduler)
     ├── lift.rs          lift_kobject — rebuild values across per-call arena boundaries
-    ├── finalize.rs      finalize_ready_frames — promote forward-chain results out of
-    │                    dying per-call arenas
     └── interpret.rs     parse → dispatch → schedule → execute
 ```
 

@@ -63,17 +63,15 @@ face the same Miri evidence the current set does.
   introduces, so the closure-escape + per-call-arena story stays
   evidence-backed rather than carried on prior assertion.
 
-**Directions.** The central architectural question is decided per
-[design/module-system.md § Inference and search](../design/module-system.md#inference-and-search-as-scheduler-work):
-inference and implicit search reduce to the existing `Dispatch` and
-`Bind` machinery — no `Infer` node kind, no `ImplicitSearch` node kind,
-no `KType::TypeVar`, no `Scope::types`. Type-returning builtins are
-ordinary builtins, type expressions in source position re-elaborate to
-a synthesized call, and refinement rides on `Bind` waiting for its
-sub-Dispatches. Functor surface and sharing-constraint syntax are
-decided in the design doc; the remaining functor implementation choices
-are below.
+**Directions.**
 
+- *Inference and search as scheduler work — decided per [design/module-system.md § Inference and search](../design/module-system.md#inference-and-search-as-scheduler-work).*
+  Inference and implicit search reduce to the existing `Dispatch` and
+  `Bind` machinery — no `Infer` node kind, no `ImplicitSearch` node kind,
+  no `KType::TypeVar`, no `Scope::types`. Type-returning builtins are
+  ordinary builtins, type expressions in source position re-elaborate to
+  a synthesized call, and refinement rides on `Bind` waiting for its
+  sub-Dispatches.
 - *Type resolution in FN signatures — decided.* No new top-level
   sequencing primitive, no parallel type-resolution pass. The existing
   FIFO + `Bind` discipline that gives `LET x = ...; PRINT x` source-order
@@ -97,25 +95,26 @@ are below.
 - *Functor declaration syntax — decided.* Functors are FNs whose
   parameters are signature-typed and whose body returns a `MODULE`
   expression. No `FUNCTOR` keyword.
-- *Sharing constraints — decided.* Pinning a functor's output abstract
-  type to its input rides on named-slot syntax for parameterized type
-  expressions (`<Type: E.Type>`), not a separate `with type` keyword. See
-  [design/module-system.md § Parameterized type expressions](../design/module-system.md#parameterized-type-expressions).
-- *Generative vs applicative semantics.* Generative — each application
-  produces a fresh abstract type — is simpler to specify and provides the
-  per-type identity property the design relies on, and falls out of
-  `:|`-per-call evaluation. Applicative — same arguments yield the same
-  output type — is more ergonomic when functors are re-applied.
+- *Sharing constraints — decided per [design/module-system.md § Parameterized type expressions](../design/module-system.md#parameterized-type-expressions).*
+  Pinning a functor's output abstract type to its input rides on
+  named-slot syntax for parameterized type expressions (`<Type: E.Type>`),
+  not a separate `with type` keyword.
+- *Generative vs applicative semantics — open.* Generative — each
+  application produces a fresh abstract type — is simpler to specify and
+  provides the per-type identity property the design relies on, and falls
+  out of `:|`-per-call evaluation. Applicative — same arguments yield the
+  same output type — is more ergonomic when functors are re-applied.
   Recommended: generative for v1, revisit later.
-- *Type identity through functor application.* `(MAKESET IntOrd)` applied
-  twice yields two distinct `Set` types. The implementation extends stage
-  1's module-type identity carrier to include the application context.
-- *Higher-kinded abstract type slots.* Signatures need to declare type
+- *Type identity through functor application — decided.* `(MAKESET IntOrd)`
+  applied twice yields two distinct `Set` types. The implementation
+  extends stage 1's module-type identity carrier to include the
+  application context.
+- *Higher-kinded abstract type slots — decided.* Signatures declare type
   constructors (a `Wrap` slot taking a type parameter) so monads and
   other parametric abstractions are expressible. Required by
   [monadic-side-effects](monadic-side-effects.md).
-- *Audit slate carry-forward.* Re-run the existing 16-test audit slate
-  plus the `alloc_object_redirects_self_anchored_value_to_escape_arena`
+- *Audit slate carry-forward — decided.* Re-run the existing 16-test audit
+  slate plus the `alloc_object_redirects_self_anchored_value_to_escape_arena`
   regression test added in the cycle-gate fix. Append new tests for the
   stage-1 unsafe sites (the `*const Scope<'static>` transmutes in
   `Module::child_scope` / `Signature::decl_scope`, the opaque-ascription

@@ -1,8 +1,10 @@
 # Error handling
 
 Errors in Koan are values that propagate implicitly through the scheduler.
-The runtime substrate handles structured propagation through `Forward` chains
-and surfaces errors at the top level; the in-language surface for *handling*
+The runtime substrate handles structured propagation along the dependency
+edges — when a slot writes an `Err`, the notify-walk wakes its dependents,
+which short-circuit and propagate (appending a `Frame` per step) — and
+surfaces errors at the top level. The in-language surface for *handling*
 errors is open work — see the bottom.
 
 ## `BodyResult::Err` and `KError`
@@ -33,10 +35,11 @@ with these `KErrorKind` variants:
 
 ## Propagation
 
-The scheduler walks errors through `Forward` chains, short-circuiting any
-`Bind` whose dependency errored and appending a `Frame` per propagation step.
-Errors flow to the top level; the CLI formats them to stderr with the frame
-chain via `KError`'s `Display` impl.
+The scheduler walks errors along the dependency edges: a slot's terminal
+`Err` write triggers the notify-walk, which wakes each waiting `Bind` /
+`Aggregate` / `Lift` consumer; those short-circuit, append a `Frame`, and
+write the error into their own slot. Errors flow to the top level; the CLI
+formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
 [`Scope::dispatch`](../src/dispatch/runtime/scope.rs) and `KFunction::bind` return
 `Result<KFuture, KError>` — dispatch failures (no match, ambiguous overload,
@@ -60,7 +63,9 @@ A user-fn whose body tail-calls another user-fn ends up with only the inner
 function in the trace, because the slot's `function` field is replaced at TCO
 time (see [execution-model.md](execution-model.md)). Non-tail-call positions —
 e.g., a sub-`Dispatch` inside a parens-wrapped sub-expression — preserve the
-outer frame via the `frame_holding_slots` finalize path. This matches how other
+outer frame: the slot rewrites to a `Lift` shim that retains the call frame
+and `function` label until the spawned `Bind` notifies, so an error landing
+on the Lift carries the outer function's frame. This matches how other
 languages with TCO behave.
 
 ## User-side surface (in progress)
@@ -72,7 +77,7 @@ two tiers with a hard privilege boundary:
 
 - **Builtin errors** (every `KErrorKind` except `User`) are constructed
   only by the runtime. User code cannot raise them. They propagate
-  ambiently through the existing `Forward` chain.
+  ambiently along the dependency edges through the existing notify-walk.
 - **User errors** are typed values. A function that may raise them returns
   `Result<T, E>` for a user-defined error type `E` — the carrier from
   [module system stage 2](../roadmap/module-system-2-scheduler.md). `RAISE`

@@ -169,15 +169,12 @@ fn access_field<'a>(
 /// the child scope's `data` (LET/FN bindings under the module body). Returns a clean
 /// `ShapeError` naming the module's path and the missing member when neither finds anything.
 fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a> {
-    let m = match target {
-        KObject::KModule(m) => *m,
-        other => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "s".to_string(),
-                expected: "Module".to_string(),
-                got: other.ktype().name().to_string(),
-            }));
-        }
+    let Some(m) = target.as_module() else {
+        return err(KError::new(KErrorKind::TypeMismatch {
+            arg: "s".to_string(),
+            expected: "Module".to_string(),
+            got: target.ktype().name().to_string(),
+        }));
     };
     // Type-position fallback: opaque ascription's `type_members` map (e.g., `IntOrd.Type`
     // resolves to a `KType::ModuleType`). Returned as a `KObject::TypeExprValue` so the

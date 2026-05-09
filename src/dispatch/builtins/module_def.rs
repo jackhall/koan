@@ -15,15 +15,12 @@
 //! completion before MODULE returns; any error short-circuits and surfaces as a
 //! `BodyResult::Err`.
 
-use std::rc::Rc;
-
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, Module};
-use crate::execute::scheduler::Scheduler;
-use crate::parse::kexpression::{ExpressionPart, KExpression, TypeParams};
 
+use super::helpers::{extract_bare_type_name, extract_kexpression, run_body_statements};
 use super::{err, register_builtin};
 
 pub fn body<'a>(
@@ -35,24 +32,9 @@ pub fn body<'a>(
     // (`MODULE Foo`, `MODULE OrderedSig` would be a SIG, not a MODULE; the ascription
     // result is what's `OrderedSig`). Reject parameterized forms — module names are bare
     // leaves until functors land in stage 2.
-    let name = match bundle.get("name") {
-        Some(KObject::TypeExprValue(t)) => match &t.params {
-            TypeParams::None => t.name.clone(),
-            _ => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
-                    "MODULE name must be a bare type name, got `{}`",
-                    t.render(),
-                ))));
-            }
-        },
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "name".to_string(),
-                expected: "TypeExprRef".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+    let name = match extract_bare_type_name(&bundle, "name", "MODULE") {
+        Ok(n) => n,
+        Err(e) => return err(e),
     };
     let body_expr = match extract_kexpression(&mut bundle, "body") {
         Some(e) => e,
@@ -80,62 +62,6 @@ pub fn body<'a>(
     let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(module));
     scope.add(name, module_obj);
     BodyResult::Value(module_obj)
-}
-
-/// Dispatch each statement in `body_expr` against `child_scope` using a fresh inner
-/// scheduler. Returns the first error, or `Ok(())` if all statements completed.
-///
-/// Body shape detection: a multi-statement body consists *entirely* of
-/// `ExpressionPart::Expression(_)` parts (each statement is its own parens-wrapped sub-
-/// expression). Anything else — including a single LET or FN whose body contains a nested
-/// Expression part — is dispatched as one statement against the body as a whole. The
-/// stricter "all-Expression" rule avoids the false positive where `LET x = (FN ...)` would
-/// otherwise look like a one-statement body but get partially dispatched.
-fn run_body_statements<'a>(
-    child_scope: &'a Scope<'a>,
-    body_expr: KExpression<'a>,
-) -> Result<(), KError> {
-    let is_multi_statement = !body_expr.parts.is_empty()
-        && body_expr
-            .parts
-            .iter()
-            .all(|p| matches!(p, ExpressionPart::Expression(_)));
-
-    let mut sched = Scheduler::new();
-    let ids: Vec<crate::dispatch::kfunction::NodeId> = if is_multi_statement {
-        body_expr
-            .parts
-            .into_iter()
-            .filter_map(|p| match p {
-                ExpressionPart::Expression(e) => Some(sched.add_dispatch(*e, child_scope)),
-                _ => None,
-            })
-            .collect()
-    } else {
-        vec![sched.add_dispatch(body_expr, child_scope)]
-    };
-    sched.execute()?;
-    for id in ids {
-        if let Err(e) = sched.read_result(id) {
-            return Err(e.clone());
-        }
-    }
-    Ok(())
-}
-
-fn extract_kexpression<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::KExpression(e)) => Some(e),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KExpression(e) => Some(e.clone()),
-            _ => None,
-        },
-    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

@@ -61,7 +61,7 @@ convention is `LET Type = ...` for the principal abstract type, with `Elt`,
   the [module system](module-system.md) rests on.
 - `Any` — the no-op fast-path.
 
-[`KType::matches_value`](../src/dispatch/types/ktype.rs) plus
+[`KType::matches_value`](../src/dispatch/types/ktype_predicates.rs) plus
 [`KObject::ktype`](../src/dispatch/values/kobject.rs) close the loop on runtime
 checking: every value has a queryable type, and any declared type can be checked
 against it.
@@ -133,7 +133,7 @@ USE (FN (SHOW x: Any)    -> Str = ("hi"))   # → DispatchFailed
 ```
 
 **Element-type inference for literals** is the join of element types via
-[`KType::join_iter`](../src/dispatch/types/ktype.rs): `[1, 2, 3]` → `List<Number>`,
+[`KType::join_iter`](../src/dispatch/types/ktype_resolution.rs): `[1, 2, 3]` → `List<Number>`,
 `[1, "x"]` → `List<Any>`, `[]` → `List<Any>`.
 [`KObject::ktype`](../src/dispatch/values/kobject.rs) walks list elements and dict
 keys/values on each call to project the parameterized form; functions project

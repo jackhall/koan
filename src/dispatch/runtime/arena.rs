@@ -127,8 +127,12 @@ impl RuntimeArena {
     /// over `allocated_objects` — typically tens to hundreds of entries per per-call arena,
     /// dwarfed by the lift's recursion cost.
     pub fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
+        // Lifetime-erased identity comparison — `allocated_objects` stores raw addresses, so
+        // we cast through `*const KObject<'static>` to match. `KObject` is invariant in `'a`,
+        // so the through-`'static` cast is required despite clippy's complaint.
+        #[allow(clippy::unnecessary_cast)]
         let target = ptr as *const KObject<'static> as usize;
-        self.allocated_objects.borrow().iter().any(|&p| p == target)
+        self.allocated_objects.borrow().contains(&target)
     }
 
     /// INVARIANT: callers must allocate a `KFunction` into the same `RuntimeArena` that owns
@@ -328,6 +332,10 @@ impl CallArena {
             name: String::new(),
         };
         let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
+        // `Scope` is invariant in `'a`, so the through-`'static` cast is required to match
+        // `scope_ptr`'s `*const Scope<'static>` field type — clippy's "unnecessary cast"
+        // complaint is wrong.
+        #[allow(clippy::unnecessary_cast)]
         let scope_ptr = allocated as *const Scope<'_> as *const Scope<'static>;
         // Unique reference at this point — no clones exist yet. `get_mut` is safe.
         Rc::get_mut(&mut rc)
@@ -342,7 +350,7 @@ impl CallArena {
         }
     }
 
-    pub fn arena<'a>(&'a self) -> &'a RuntimeArena { &self.arena }
+    pub fn arena(&self) -> &RuntimeArena { &self.arena }
 }
 
 #[cfg(test)]

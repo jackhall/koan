@@ -1,5 +1,9 @@
 use std::fmt;
 
+use crate::dispatch::kfunction::KFunction;
+use crate::dispatch::types::Parseable;
+use crate::parse::kexpression::KExpression;
+
 /// A structured runtime error. Replaces the prior pattern of returning `KObject::Null` from
 /// every failure path in builtins and stringly-typed `Result<_, String>` from the scheduler.
 /// Errors propagate as values via `BodyResult::Err`; the scheduler short-circuits any node
@@ -51,6 +55,21 @@ pub struct Frame {
     pub expression: String,
 }
 
+impl Frame {
+    /// Build a frame from a `(function, expression)` pair — the common shape the scheduler
+    /// constructs when propagating an error past a user-fn invocation. Captures the two
+    /// `summarize()` calls in one place so the propagation site reads as a one-liner. The
+    /// function's summary populates both the `function` field (signature-text identifier)
+    /// and the `expression` field (the user wrote the verb at the call site, so the
+    /// expression-text of the Bind is the same surface text as the function's signature).
+    pub fn for_call(function: &KFunction<'_>, expr: &KExpression<'_>) -> Frame {
+        Frame {
+            function: function.summarize(),
+            expression: expr.summarize(),
+        }
+    }
+}
+
 impl KError {
     pub fn new(kind: KErrorKind) -> Self {
         Self { kind, frames: Vec::new() }
@@ -62,6 +81,14 @@ impl KError {
     pub fn with_frame(mut self, frame: Frame) -> Self {
         self.frames.push(frame);
         self
+    }
+
+    /// Convenience: build a `Frame::for_call` and append in one call. The common scheduler
+    /// propagation shape is "an inner call errored — wrap with the function's signature
+    /// text"; this wrapper collapses the two-step `with_frame(Frame::for_call(...))` to a
+    /// single method call.
+    pub fn with_call_frame(self, function: &KFunction<'_>, expr: &KExpression<'_>) -> Self {
+        self.with_frame(Frame::for_call(function, expr))
     }
 
     /// Owned copy for the propagation path: when the scheduler's `read_result` hands back

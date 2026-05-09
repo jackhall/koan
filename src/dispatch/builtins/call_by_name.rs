@@ -1,11 +1,10 @@
-use std::rc::Rc;
-
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
 use crate::dispatch::values::{KObject, dispatch_constructor};
 use crate::dispatch::runtime::Scope;
 
+use super::helpers::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `<verb:Identifier> <args:KExpression>` — invokes a function bound to `verb` in scope by
@@ -46,27 +45,19 @@ pub fn body<'a>(
             return err(KError::new(KErrorKind::MissingArg("verb".to_string())));
         }
     };
-    let args_expr = match bundle.args.remove("args") {
-        Some(rc) => match Rc::try_unwrap(rc) {
-            Ok(KObject::KExpression(e)) => e,
-            Ok(_) => {
-                return err(KError::new(KErrorKind::ShapeError(
-                    "call_by_name args slot resolved to a non-KExpression".to_string(),
-                )));
-            }
-            Err(rc) => match &*rc {
-                KObject::KExpression(e) => e.clone(),
-                _ => {
-                    return err(KError::new(KErrorKind::ShapeError(
-                        "call_by_name args slot resolved to a non-KExpression (shared)"
-                            .to_string(),
-                    )));
-                }
-            },
-        },
-        None => {
-            return err(KError::new(KErrorKind::MissingArg("args".to_string())));
+    // Distinguish missing-vs-wrong-shape before extracting: `extract_kexpression` returns
+    // `None` for either case, but the surface error wording differs. The signature already
+    // constrains the slot to `KType::KExpression`, so the non-KExpression branch is mostly
+    // defensive — kept for parity with the pre-helper code.
+    let was_present = bundle.get("args").is_some();
+    let args_expr = match extract_kexpression(&mut bundle, "args") {
+        Some(e) => e,
+        None if was_present => {
+            return err(KError::new(KErrorKind::ShapeError(
+                "call_by_name args slot resolved to a non-KExpression".to_string(),
+            )));
         }
+        None => return err(KError::new(KErrorKind::MissingArg("args".to_string()))),
     };
     match scope.lookup_kfunction(&verb) {
         Some(f) => f.apply(args_expr.parts),

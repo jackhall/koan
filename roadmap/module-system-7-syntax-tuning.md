@@ -25,27 +25,30 @@ breaks no existing programs.
   stronger-than-probabilistic certainty get it, at the cost of a slightly
   more verbose type, while everyone else keeps stage 6's behavior.
 
-**Directions.** None decided.
+**Directions.**
 
-- *Surveyed sugar candidates.* Block-scoped binding (apply a chosen
-  implicit to many calls in a region), module-level priority (one module
-  declared canonical, others warn), selective imports (`use mylib::sort
-  except IntOrdReverse`). Pick from observed patterns from real stage-5
-  code, not from imagination.
-- *Explicit-application syntax.* Stage 5 ships a placeholder; stage 7
-  fixes the form against the patterns of use. May coincide with the
-  block-scoped binding form (block applies to many calls; explicit applies
-  to one).
-- *Witness type encoding.* The type constructor declares a module-kind
-  slot whose value carries through type identity — `Set<Elt: Number>`
-  becomes `Set<Elt: Number, Ord: IntOrd>` when `IntOrd` is the implicit
-  used. Distinct module values means distinct types means cannot mix.
-  Type inference must elide the module-kind slot in source so users only
-  write it when they want.
-- *Opt-in mechanism for witness types.* Witness types are not the default.
-  A signature marks itself as participating (concrete syntax tbd) and
-  consumers of that signature carry the phantom. The decision is
-  per-signature, not per-use.
+- *Surveyed sugar candidates — deferred.* Block-scoped binding (apply a
+  chosen implicit to many calls in a region), module-level priority (one
+  module declared canonical, others warn), selective imports (`use
+  mylib::sort except IntOrdReverse`). Selection deliberately deferred
+  until stage 5's placeholder syntax has seen real use — pick from
+  observed patterns, not from imagination.
+- *Explicit-application syntax — deferred.* Stage 5 ships a placeholder;
+  stage 7 fixes the form against the patterns of use. May coincide with
+  the block-scoped binding form (block applies to many calls; explicit
+  applies to one). Same deferral discipline as the sugar candidates above.
+- *Witness type encoding — decided per [design/module-system.md § Parameterized type expressions](../design/module-system.md#parameterized-type-expressions).*
+  The type constructor declares a module-kind slot whose value carries
+  through type identity — `Set<Elt: Number>` becomes
+  `Set<Elt: Number, Ord: IntOrd>` when `IntOrd` is the implicit used.
+  Distinct module values means distinct types means cannot mix. Type
+  inference must elide the module-kind slot in source so users only write
+  it when they want.
+- *Opt-in mechanism for witness types — decided in concept, syntax open.*
+  Witness types are not the default. A signature marks itself as
+  participating and consumers of that signature carry the phantom. The
+  decision is per-signature, not per-use; the concrete marking syntax is
+  unsettled.
 
 ## Dependencies
 

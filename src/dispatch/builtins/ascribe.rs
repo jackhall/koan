@@ -32,9 +32,9 @@
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::{KObject, Module};
+use crate::dispatch::values::{resolve_module, resolve_signature, KObject, Module};
 
-use super::{err, register_builtin};
+use super::register_builtin;
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Mints fresh `KType::ModuleType`s and
 /// builds a new `Module` whose `child_scope` reuses the source module's bindings (by
@@ -59,7 +59,7 @@ pub fn body_opaque<'a>(
     // are arena-allocated and immutable, so sharing the references is safe.
     let src = m.child_scope();
     for (name, obj) in src.data.borrow().iter() {
-        new_scope.add(name.clone(), *obj);
+        new_scope.add(name.clone(), obj);
     }
     // Mirror the function-bucket entries too, so dispatch within the new module's child
     // scope sees the same overload set. Same reference-sharing rationale.
@@ -178,78 +178,23 @@ fn is_abstract_type_name(name: &str) -> bool {
 /// /rhs are already evaluated module/signature values) or `KObject::TypeExprValue` tokens
 /// that name the lookup target — `IntOrd :| OrderedSig` parses with both sides as Type
 /// tokens per the §2 classification rule, and the lookup happens here.
+///
+/// The `MissingArg` check stays at this call site (one of two consumers); the shared
+/// helpers in [`crate::dispatch::values::module`] take a `&KObject` directly, since the
+/// dual-shape resolution itself is what's duplicated, not the slot-presence check.
 fn resolve_module_and_signature<'a>(
     scope: &'a Scope<'a>,
     bundle: &ArgumentBundle<'a>,
 ) -> Result<(&'a crate::dispatch::values::Module<'a>, &'a crate::dispatch::values::Signature<'a>), KError> {
-    let m = resolve_module(scope, bundle.get("m"), "m")?;
-    let s = resolve_signature(scope, bundle.get("s"), "s")?;
+    let m_obj = bundle
+        .get("m")
+        .ok_or_else(|| KError::new(KErrorKind::MissingArg("m".to_string())))?;
+    let s_obj = bundle
+        .get("s")
+        .ok_or_else(|| KError::new(KErrorKind::MissingArg("s".to_string())))?;
+    let m = resolve_module(scope, m_obj, "m")?;
+    let s = resolve_signature(scope, s_obj, "s")?;
     Ok((m, s))
-}
-
-fn resolve_module<'a>(
-    scope: &'a Scope<'a>,
-    obj: Option<&KObject<'a>>,
-    arg: &str,
-) -> Result<&'a crate::dispatch::values::Module<'a>, KError> {
-    match obj {
-        Some(KObject::KModule(m)) => Ok(*m),
-        Some(KObject::TypeExprValue(t)) => match scope.lookup(&t.name) {
-            Some(KObject::KModule(m)) => Ok(*m),
-            Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: arg.to_string(),
-                expected: "Module".to_string(),
-                got: other.ktype().name(),
-            })),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        },
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: arg.to_string(),
-            expected: "Module".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg(arg.to_string()))),
-    }
-}
-
-fn resolve_signature<'a>(
-    scope: &'a Scope<'a>,
-    obj: Option<&KObject<'a>>,
-    arg: &str,
-) -> Result<&'a crate::dispatch::values::Signature<'a>, KError> {
-    match obj {
-        Some(KObject::KSignature(s)) => Ok(*s),
-        Some(KObject::TypeExprValue(t)) => match scope.lookup(&t.name) {
-            Some(KObject::KSignature(s)) => Ok(*s),
-            Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: arg.to_string(),
-                expected: "Signature".to_string(),
-                got: other.ktype().name(),
-            })),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        },
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: arg.to_string(),
-            expected: "Signature".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg(arg.to_string()))),
-    }
-}
-
-#[allow(dead_code)]
-fn missing_args<'a>(bundle: &ArgumentBundle<'a>) -> BodyResult<'a> {
-    let m = bundle.get("m");
-    let s = bundle.get("s");
-    err(KError::new(KErrorKind::TypeMismatch {
-        arg: "m or s".to_string(),
-        expected: "(Module, Signature)".to_string(),
-        got: format!(
-            "({}, {})",
-            m.map(|o| o.ktype().name()).unwrap_or_else(|| "(missing)".to_string()),
-            s.map(|o| o.ktype().name()).unwrap_or_else(|| "(missing)".to_string()),
-        ),
-    }))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

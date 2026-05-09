@@ -1,11 +1,9 @@
-use std::rc::Rc;
-
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::KObject;
-use crate::parse::kexpression::KExpression;
 
+use super::helpers::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`. The body is the captured raw AST,
@@ -30,25 +28,6 @@ pub fn body<'a>(
     };
     let arena = scope.arena;
     BodyResult::Value(arena.alloc_object(KObject::KExpression(expr)))
-}
-
-/// Take ownership of a `KExpression` from the bundle. Mirrors `match_case`'s helper of the
-/// same shape — the duplication is intentional, not extracted to a shared helper because
-/// the two call sites' surrounding code is otherwise distinct enough that abstracting one
-/// helper would obscure rather than clarify.
-fn extract_kexpression<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::KExpression(e)) => Some(e),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KExpression(e) => Some(e.clone()),
-            _ => None,
-        },
-    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

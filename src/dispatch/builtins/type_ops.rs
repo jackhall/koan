@@ -19,7 +19,7 @@
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::KObject;
+use crate::dispatch::values::{resolve_module, KObject};
 use crate::parse::kexpression::{TypeExpr, TypeParams};
 
 use super::{err, register_builtin};
@@ -31,15 +31,17 @@ use super::{err, register_builtin};
 /// from a previous dispatch. Anything else reaching here is a `TypeMismatch` from the
 /// dispatcher's perspective; surface that as a clean error.
 fn read_type_expr<'a>(bundle: &ArgumentBundle<'a>, name: &str) -> Result<TypeExpr, KError> {
-    match bundle.get(name) {
-        Some(KObject::TypeExprValue(t)) => Ok(t.clone()),
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: name.to_string(),
-            expected: "TypeExprRef".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+    let Some(obj) = bundle.get(name) else {
+        return Err(KError::new(KErrorKind::MissingArg(name.to_string())));
+    };
+    if let Some(t) = obj.as_type_expr() {
+        return Ok(t.clone());
     }
+    Err(KError::new(KErrorKind::TypeMismatch {
+        arg: name.to_string(),
+        expected: "TypeExprRef".to_string(),
+        got: obj.ktype().name(),
+    }))
 }
 
 /// `LIST_OF <elem:TypeExprRef>` → `TypeExprRef` carrying `List<elem>`. The output has its
@@ -94,14 +96,16 @@ pub fn body_function_of<'a>(
 ) -> BodyResult<'a> {
     use crate::parse::kexpression::ExpressionPart;
     let args_expr = match bundle.get("args") {
-        Some(KObject::KExpression(e)) => e.clone(),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "args".to_string(),
-                expected: "KExpression".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
+        Some(obj) => match obj.as_kexpression() {
+            Some(e) => e.clone(),
+            None => {
+                return err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "args".to_string(),
+                    expected: "KExpression".to_string(),
+                    got: obj.ktype().name(),
+                }));
+            }
+        },
         None => return err(KError::new(KErrorKind::MissingArg("args".to_string()))),
     };
     let ret = match read_type_expr(&bundle, "ret") {
@@ -136,30 +140,27 @@ pub fn body_function_of<'a>(
 /// scheduled call so a functor body can synthesize it from a parameter module value. The
 /// `m` slot has two overloads (registered separately): one accepts an evaluated `Module`
 /// value (`Future(KModule)`), the other accepts a `TypeExprRef` token and looks the module
-/// up by name in `scope`. The same body handles both — `resolve_module` does the case
-/// split.
+/// up by name in `scope`. The same body handles both — the shared
+/// [`crate::dispatch::values::resolve_module`] helper does the case split (the same
+/// helper also serves the ascription operators' `m` slot).
 pub fn body_module_type_of<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let m = match resolve_module_arg(scope, bundle.get("m")) {
-        Ok(m) => m,
-        Err(e) => return err(e),
+    let m = match bundle.get("m") {
+        Some(obj) => match resolve_module(scope, obj, "m") {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        },
+        None => return err(KError::new(KErrorKind::MissingArg("m".to_string()))),
     };
     // The `name` slot accepts a Type token (e.g. `Type`, `Elt`) — abstract type names
     // classify as Type per the §2 token rules, not Identifier. The lookup uses the bare
     // leaf name from the resolved `TypeExpr`.
-    let name = match bundle.get("name") {
-        Some(KObject::TypeExprValue(t)) => t.name.clone(),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "name".to_string(),
-                expected: "TypeExprRef".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+    let name = match read_type_expr(&bundle, "name") {
+        Ok(t) => t.name,
+        Err(e) => return err(e),
     };
     if !m.type_members.borrow().contains_key(&name) {
         return err(KError::new(KErrorKind::ShapeError(format!(
@@ -175,34 +176,6 @@ pub fn body_module_type_of<'a>(
         params: TypeParams::None,
     };
     BodyResult::Value(scope.arena.alloc_object(KObject::TypeExprValue(result)))
-}
-
-/// Resolve the `m` slot to a `&Module`. Accepts either a directly-typed `KModule` (when
-/// the lhs is already an evaluated module value via a sub-expression) or a `TypeExprRef`
-/// token that names a module bound in `scope`. Mirrors `ascribe::resolve_module`'s
-/// dual-shape handling.
-fn resolve_module_arg<'a>(
-    scope: &'a Scope<'a>,
-    obj: Option<&KObject<'a>>,
-) -> Result<&'a crate::dispatch::values::Module<'a>, KError> {
-    match obj {
-        Some(KObject::KModule(m)) => Ok(*m),
-        Some(KObject::TypeExprValue(t)) => match scope.lookup(&t.name) {
-            Some(KObject::KModule(m)) => Ok(*m),
-            Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "m".to_string(),
-                expected: "Module".to_string(),
-                got: other.ktype().name(),
-            })),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        },
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "m".to_string(),
-            expected: "Module".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg("m".to_string()))),
-    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

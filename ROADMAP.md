@@ -47,7 +47,21 @@ fresh `KType::ModuleType { scope_id, name }` per declared abstract type so two
 ascriptions of the same source module are observably distinct types; `:!`
 transparent ascription shape-checks against the signature without re-tagging
 identity; `Module`/`Signature` first-class values arena-allocated alongside
-`KFunction` and reachable via `Foo.member` ATTR access). The next
+`KFunction` and reachable via `Foo.member` ATTR access), and the lift-walk
+and aggregate-scheduler dedup (a single `any_descendant` predicate-walker
+serves both `needs_lift` and `kobject_borrows_arena`; `run_aggregate` and
+`run_aggregate_dict` share a parametric runner plus a frame-on-error
+`resolve_or_err` helper; module/signature resolution lives next to the
+`Module` / `Signature` types and serves both ascription operators and
+`MODULE_TYPE_OF`), and the dispatcher extraction (overload resolution lifted
+out of `Scope` into a dedicated `dispatcher.rs` of free functions taking
+`&Scope`; `Scope::dispatch` and `Scope::lazy_candidate` are now thin
+forwarders so `scope.rs` is back to lexical-environment storage and direct
+mutators only), and the `KType` concern split (the 694-LOC `ktype.rs`
+partitioned into three sibling files — core enum plus `name()` rendering
+in `ktype.rs`, dispatch-time predicates in `ktype_predicates.rs`, and
+name/type-expression elaboration plus `join` in `ktype_resolution.rs`).
+The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -66,8 +80,6 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
-- [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
-  only when the next feature would multiply existing duplication.
 
 ## Open items
 
@@ -78,6 +90,12 @@ without first landing something else:
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
   ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
   stage 2's functor support so the `Wrap` slot can be higher-kinded.
+- [Dispatch-time name placeholders](roadmap/dispatch-time-placeholders.md) —
+  binders install a placeholder in `Scope` when they dispatch so a lookup
+  whose target binder has been dispatched but not yet executed parks on the
+  producer instead of failing. Unblocks forward references inside MODULE
+  bodies, multi-file imports, and FN-signature elaboration with
+  not-yet-bound type identifiers.
 
 ### Module system
 
@@ -128,5 +146,3 @@ the rest incrementally, each producing a usable end state.
 
 - [Static type checking and JIT compilation](roadmap/static-typing-and-jit.md) — the
   tooling and performance ceiling; both want a phase between parse and execution.
-- [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing item: remove
-  accidental abstraction when the next feature would multiply existing duplication.
