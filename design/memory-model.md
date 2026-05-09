@@ -131,21 +131,23 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 
 ## Performance notes
 
-`finalize_ready_frames` uses a sidecar `frame_holding_slots: Vec<usize>` on
-`Scheduler` to find slots needing finalization in O(in-flight calls) rather
-than O(scheduler size).
+The push/notify scheduler ([execution-model.md § Push/notify dependency
+edges](execution-model.md#pushnotify-dependency-edges)) carries three
+`Vec`-shaped sidecars on `Scheduler`: `notify_list: Vec<Vec<NodeId>>` (each
+producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
+unresolved-dep counter), and `node_dependencies: Vec<Vec<usize>>` (each
+Bind/Aggregate slot's owned sub-slot indices, captured at `add()` time
+before `take()` consumes the work). All three are 1:1 with `nodes`.
+A fourth sidecar, `free_list: Vec<usize>`, holds recyclable indices that
+`add()` pulls from before extending the vecs.
 
-Transient-node reclamation extends the substrate with two more sidecars:
-`node_dependencies: Vec<Vec<usize>>` (1:1 with `nodes`, capturing each
-Bind/Aggregate slot's owned sub-slot indices at `add()` time before `take()`
-consumes the work) and `free_list: Vec<usize>` (LIFO of recyclable indices that
-`add()` pulls from before extending). `Scheduler::free` walks `Forward` chain
-links and drains the dep sidecar recursively, defensively skipping any
-still-live slot. Two trigger points: `run_bind`/`run_aggregate*` free their deps
-right after the splice/copy step, and `finalize_ready_frames` chain-frees the
-collapsed `Forward(target)` once it has been replaced with the lifted Value.
-Reclamation stops at frame holders (their `nodes[i].is_some()` check trips), so
-nested user-fn frames each handle their own subtree at their own finalize.
+Transient-node reclamation runs at the end of `run_bind` / `run_aggregate*`:
+once a Bind has spliced its dep results into `expr.parts` (or an Aggregate
+has materialized its list/dict), `Scheduler::free` walks the consumer's
+`node_dependencies` entry recursively and recycles each owned sub-slot's
+indices. The walk skips any still-live slot via the `nodes[i].is_some()`
+guard, so a free that dives into another in-flight user-fn call leaves
+that subtree for that call's own reclamation.
 
 ## Verification
 

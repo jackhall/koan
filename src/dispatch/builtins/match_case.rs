@@ -336,10 +336,10 @@ mod tests {
         // during writer drop. Root cause was structural in the scheduler/MATCH frame
         // chain: MATCH built a per-call `CallArena` whose child scope's `outer` pointed
         // into the call-site (the per-call arena of the enclosing user-fn). The
-        // enclosing-fn frame was dropped on TCO replace before MATCH's forward chain
-        // finalized, so the lift in `finalize_ready_frames` read `scope.outer.arena`
-        // through a freed pointer. Fixed by chaining the call-site frame's Rc onto the
-        // new `CallArena` via `SchedulerHandle::current_frame` + `outer_frame`.
+        // enclosing-fn frame was dropped on TCO replace before MATCH's deferred lift
+        // ran, so the value-lift read `scope.outer.arena` through a freed pointer.
+        // Fixed by chaining the call-site frame's Rc onto the new `CallArena` via
+        // `SchedulerHandle::current_frame` + `outer_frame`.
         let bytes = run_program(
             "UNION Bit = (one: Null zero: Null)\n\
              FN (HOP b: Tagged) -> Any = (MATCH (b) WITH (\

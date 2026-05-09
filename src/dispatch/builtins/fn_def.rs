@@ -276,8 +276,8 @@ mod tests {
     }
 
     /// Build a default scope in `arena` with PRINT routed into `captured`. Returns the
-    /// run-root scope. Replaces the previous `capture_program_output` rig — tests now own
-    /// the arena explicitly so they can inspect post-run state.
+    /// run-root scope. The arena is owned by the test caller, so post-run state remains
+    /// inspectable for the duration of the test.
     fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
         default_scope(arena, Box::new(SharedBuf(captured)))
     }
@@ -517,21 +517,22 @@ mod tests {
     /// Repeated calls to a user-fn whose body has an internal sub-expression reuse
     /// scheduler slots. The body of `LOOK` evaluates `MATCH (b) WITH …`; the `(b)`
     /// is a sub-expression that spawns a sub-`Dispatch` and a parent `Bind` per call.
-    /// Without transient-node reclamation those slots would accumulate one set per
-    /// call, growing `nodes.len()` proportional to call count. With reclamation,
-    /// `run_bind` frees the sub-`Dispatch` after splicing and the chain-free at
-    /// finalize collapses the Bind itself, so the per-call transient pool gets
-    /// recycled by `add()` on the next call's spawns.
     ///
-    /// The truly-recursive variant (the body tail-calls itself) used to UAF on writer
-    /// teardown — MATCH built a per-call frame whose child scope's `outer` pointed into
-    /// the caller's per-call arena, but the caller's frame was dropped on TCO replace
-    /// before MATCH's frame finished its forward-chain. The fix wires
-    /// `SchedulerHandle::current_frame` so MATCH chains the caller's frame Rc onto its
-    /// own (`CallArena`'s `outer_frame`); the recursive case is exercised by
-    /// `match_case::tests::recursive_tagged_match_no_uaf`.
+    /// Property under test: after a warmup call has populated the free-list with the
+    /// body's transient slots, each subsequent call's growth in `nodes.len()` is
+    /// bounded by the *persistent* per-call overhead — the top-level dispatch slot
+    /// itself, plus any persistent shim it lifts into. The body's transient sub-
+    /// Dispatches/Binds must be recycled, not accumulated.
+    ///
+    /// Without reclamation, every call would leave its body's transient fanout
+    /// behind (~5+ slots/call). With reclamation, the steady-state rate is the
+    /// persistent overhead alone (a small constant ≤ 2 today). Comparing two
+    /// batches catches super-linear growth without coupling to the exact constant.
+    ///
+    /// The truly-recursive variant (where the body tail-calls itself) is exercised
+    /// by `match_case::tests::recursive_tagged_match_no_uaf`.
     #[test]
-    fn tail_recursive_match_keeps_scheduler_bounded() {
+    fn body_subexpression_slots_recycle_across_calls() {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured.clone());
@@ -545,40 +546,48 @@ mod tests {
              ))",
         );
 
-        // Drive one call at a time so each call's transient sub-Dispatches/Binds get
-        // reclaimed before the next call's spawns. With reclamation, the second through
-        // Nth calls reuse free-list indices instead of extending `nodes`.
-        let calls = 10;
         let mut sched = Scheduler::new();
-        for i in 0..calls {
+
+        // One warmup call: extends `nodes` with the persistent top-level slot(s)
+        // *and* the body's transient pool. After this call returns, the transients
+        // are on the free-list, ready to be recycled by the next call's spawns.
+        sched.add_dispatch(parse_one("LOOK (Bit (one null))"), scope);
+        sched.execute().expect("LOOK should run");
+        let after_warmup = sched.len();
+
+        // Steady-state batch. Each call's body re-spawns the same transient shape;
+        // those slots come off the free-list, so `nodes` only grows by the
+        // persistent per-call overhead.
+        let n = 30;
+        for i in 1..=n {
             let src = if i % 2 == 0 { "LOOK (Bit (one null))" } else { "LOOK (Bit (zero null))" };
             sched.add_dispatch(parse_one(src), scope);
             sched.execute().expect("LOOK should run");
         }
+        let after_batch = sched.len();
 
-        // Each call prints once.
+        // Sanity: each call printed once.
         assert_eq!(
             captured.borrow().iter().filter(|&&b| b == b'\n').count(),
-            calls,
+            n + 1,
             "expected one PRINT per LOOK call, got {:?}",
             String::from_utf8_lossy(&captured.borrow()),
         );
 
-        // Bound: `calls` persistent top-level slots + the persistent forward-target Bind
-        // each call lifts into (currently never reclaimed because top-level Forward
-        // chains have no finalize trigger to collapse them). The transient sub-
-        // Dispatches/Binds spawned during each body iteration get reclaimed and the
-        // free-list recycles them across calls, so the slot count grows linearly with
-        // call count, not multiplicatively. Without reclamation, each LOOK call would
-        // leave ~5-7 transient slots behind in addition to the persistent pair, so
-        // `nodes.len()` would be ~70+ at calls=10.
-        // Empirically: ~22 slots at calls=10. Without reclamation: 70+ (~7 slots/call).
-        let bound = 2 * calls + 8;
+        // The property: steady-state per-call growth is bounded by persistent
+        // overhead. Currently 2 slots/call (top-level dispatch + Lift shim); if
+        // reclamation regressed and transients leaked, it would be ≥ 5.
+        // The bound of 3 reflects the property, not the exact value — it leaves
+        // daylight for one extra persistent slot per call without admitting any
+        // amount of transient pile-up.
+        let growth = after_batch - after_warmup;
+        let per_call = growth as f64 / n as f64;
         assert!(
-            sched.len() <= bound,
-            "transient-node reclamation: {calls} LOOK calls should keep scheduler \
-             vec bounded by {bound}, got {}",
-            sched.len(),
+            per_call <= 3.0,
+            "transient-node reclamation regressed: {per_call:.2} slots/call \
+             across {n} calls (after {after_warmup}-slot warmup, ended at \
+             {after_batch}). Expected ≤ 3 — body's transient sub-Dispatches/\
+             Binds should be recycled via the free-list, not accumulating."
         );
     }
 
@@ -824,11 +833,11 @@ mod tests {
         assert_eq!(bytes, b"1\n");
     }
 
-    // -------------------- Phase 2: parameterized container types --------------------
+    // -------------------- parameterized container types --------------------
 
     /// FN with a `List<Number>` parameter accepts a homogeneous number list and runs the body.
-    /// The Phase 1 stub used to reject this at FN-definition time with "parameterized type
-    /// not yet supported"; Phase 2 routes it through `KType::List(Box::new(Number))`.
+    /// The signature parser routes `List<Number>` through `KType::List(Box::new(Number))`,
+    /// so per-element type checking is enforced at call time.
     #[test]
     fn fn_with_typed_list_param_accepts_matching_list() {
         let bytes = capture_program_output(

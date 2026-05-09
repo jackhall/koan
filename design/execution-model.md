@@ -36,25 +36,47 @@ BodyResult { Value(&KObject) | Tail(KExpression) | Err(KError) }
   see below).
 - `Err` — structured failure; see [error-handling.md](error-handling.md).
 
-For asynchronous chains (a body whose result depends on a deferred computation)
-the result vec carries `Forward(NodeId)`, deferring cleanly until the dependency
-resolves.
+When a body cannot produce its result inline — its expression has nested
+sub-expressions whose own evaluation hasn't run yet — the slot's work is
+rewritten to `Lift { from: NodeId }` (a [`NodeWork`](../src/execute/nodes.rs)
+variant). The Lift shim parks on the spawned `Bind`'s notify-list, waits
+for that slot's terminal write, and copies the result into its own slot when
+it runs. The original slot keeps its frame and notify-list across the
+rewrite, so consumers downstream see the eventual terminal as if the body
+had produced it directly.
+
+## Push/notify dependency edges
+
+The scheduler's edges point producer → consumer. Each slot carries a
+`notify_list: Vec<NodeId>` of dependents waiting on it; each `Bind` /
+`Aggregate` / `Lift` consumer carries a `pending_deps: usize` counter of
+unresolved deps. When a slot writes a terminal `Value` or `Err`, the
+notify-walk drains its `notify_list`, decrements each consumer's
+`pending_deps`, and pushes any zero-counter consumer onto the run-set
+([`Scheduler::notify_consumers`](../src/execute/scheduler.rs)). Consumers
+arrive on the run-set only when actually ready; there is no poll-and-requeue.
+
+The run-set has two priority bands. Internal work goes through `ready_set`
+(populated by the notify-walk and by ready-on-arrival nodes registered in
+`add()`). Top-level `add_dispatch` calls go through a separate FIFO `queue`
+so independent top-level expressions execute in submission order. The
+execute loop drains `ready_set` first, then `queue`.
 
 ## Tail-call optimization
 
 [`BodyResult::Tail(KExpression)`](../src/dispatch/kfunction.rs) makes a tail
 return rewrite the **current scheduler slot's work** to a fresh
-`Dispatch(expr)` and re-run in place. No new node allocated, no `Forward` chain.
-Both deferring builtins (`match_case`, `KFunction::invoke` for user-fns) are
-tail by construction. A chain of tail calls (`A → B → PRINT`, or unbounded
-`LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count assertions
-in the test suite.
+`Dispatch(expr)` and re-run in place — no new node allocated. Both deferring
+builtins (`match_case`, `KFunction::invoke` for user-fns) are tail by
+construction. A chain of tail calls (`A → B → PRINT`, or unbounded
+`LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
+assertions in the test suite.
 
 A subtle point: host-stack overflow on naïve recursion is solved by the graph
-model itself, not by `Tail`. Every "recursive call" enters the FIFO queue rather
-than growing the Rust call stack — that property is structural, not optimizing.
-What `Tail` adds is constant **scheduler-vec** memory across the tail-call
-chain.
+model itself, not by `Tail`. Every "recursive call" enters the scheduler's
+run-set rather than growing the Rust call stack — that property is
+structural, not optimizing. What `Tail` adds is constant **scheduler-vec**
+memory across the tail-call chain.
 
 ## Transient-node reclamation
 
@@ -65,36 +87,35 @@ sub-`Dispatch` and a parent `Bind`/`Aggregate` slot. Without reclamation those
 slots accumulate per body iteration, so realistic recursive code is O(n)
 scheduler memory even when its data footprint is O(1).
 
-Reclamation runs in two places:
-
-- **Eager free at end of `run_bind` / `run_aggregate*`.** Once a Bind has read
-  its dep results and spliced them into `expr.parts` as `Future(value)` (or an
-  Aggregate has deep-cloned each element into the materialized list/dict), the
-  dep slots are unreachable — Forward chains never target sub-`Dispatch`
-  slots, and a sub-Dispatch is read by exactly one Bind/Aggregate. Free walks
-  recursively, recycling each dep's own forward chain and dep tree.
-- **Chain-free at finalize.** When `finalize_ready_frames` collapses a
-  frame-holder's `Forward(target)` into the lifted `Value`, the chain target
-  is freed. Free's `nodes[i].is_some()` guard makes the recursion stop at any
-  still-live slot — frame holders, queued Binds — so each in-flight user-fn
-  call handles its own subtree at its own finalize.
+Reclamation runs at the end of `run_bind` / `run_aggregate*`. Once a Bind has
+read its dep results and spliced them into `expr.parts` as `Future(value)`
+(or an Aggregate has deep-cloned each element into the materialized
+list/dict), the dep slots are unreachable: a sub-Dispatch is owned by exactly
+one Bind / Aggregate, recorded in the consumer's `node_dependencies` entry.
+Free walks recursively, recycling each dep's own dep tree, and stops at any
+still-live slot via `nodes[i].is_some()` — so a free that dives into another
+in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 The net effect: recursive bodies whose only persistent state is the call
 result run in O(1) scheduler memory across iterations, with the per-iteration
 fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
-Bookkeeping lives in two `Scheduler` sidecars: `node_dependencies:
+Bookkeeping lives in three `Scheduler` sidecars: `notify_list:
+Vec<Vec<NodeId>>` (each producer's dependent list), `pending_deps: Vec<usize>`
+(each consumer's unresolved-dep counter), and `node_dependencies:
 Vec<Vec<usize>>` (each Bind/Aggregate slot's owned sub-slot indices, captured
-at `add()` time before `take()` consumes the work) and `free_list:
-Vec<usize>`. See also [memory-model.md § Performance notes](memory-model.md).
+at `add()` time before `take()` consumes the work and used by `free()` to
+walk the ownership tree). The `free_list: Vec<usize>` carries indices whose
+`nodes`/`results`/`notify_list`/`pending_deps`/`node_dependencies` entries
+are cleared and ready for reuse. See also [memory-model.md § Performance
+notes](memory-model.md).
 
 A known limitation: each top-level dispatch retains two persistent slots —
-the entry slot returned to the user and the Bind it forwards to (which the
-user-fn body's lift writes its terminal `Value` into). Top-level forward
-chains have no finalize trigger that would collapse them into a direct
-`Value`, so each `add_dispatch` costs a small constant rather than one slot.
-Linear in call count, not multiplicative in body size; closing it would need
-either path compression in `read_result` or a post-execute pass.
+the entry `Lift` slot returned to the user, and the `Bind` it lifts from
+(which the user-fn body writes its terminal `Value` into). Neither has a
+parent to free it, so each `add_dispatch` costs a small constant rather than
+one slot. Linear in call count, not multiplicative in body size; closing it
+would need a post-execute compaction pass.
 
 ## Pegged and free execution
 

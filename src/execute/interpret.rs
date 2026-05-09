@@ -545,10 +545,10 @@ mod tests {
     /// non-tail position so OUTER's frame survives), surfaces with frames listing both
     /// function names. OUTER's body wraps INNER's call inside a `LET xx = (INNER)` so
     /// the body has 4 parts (not a single-Expression wrapper that the parser would peel)
-    /// and INNER becomes a sub-Dispatch within OUTER's body — OUTER's slot then becomes
-    /// a Forward holding OUTER's frame, and finalize appends OUTER's frame as the
-    /// terminal Err propagates up. Direct `((INNER))` would peel to `INNER` and tail-call
-    /// into INNER, causing TCO to replace OUTER's frame with INNER's.
+    /// and INNER becomes a sub-Dispatch within OUTER's body — OUTER's slot then defers
+    /// to a `Lift` shim holding OUTER's frame, and the Done arm appends OUTER's frame
+    /// as the propagated Err lands on the slot. Direct `((INNER))` would peel to `INNER`
+    /// and tail-call into INNER, causing TCO to replace OUTER's frame with INNER's.
     #[test]
     fn frame_chain_walks_nested_user_fn_calls() {
         let result = interpret_with_writer(

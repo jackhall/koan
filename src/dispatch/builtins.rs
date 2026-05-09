@@ -21,8 +21,9 @@ mod union;
 mod value_lookup;
 mod value_pass;
 
-/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The error propagates
-/// through the scheduler's Forward chain and short-circuits any dependent node.
+/// `BodyResult::Err(e)` — the structured-error early-exit for builtins. The scheduler stores
+/// the error on the producing slot and propagates it via the notify-walk; any dependent slot
+/// short-circuits with the error frame appended.
 pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
     BodyResult::Err(e)
 }

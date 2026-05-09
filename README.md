@@ -77,7 +77,7 @@ A [`Scope`](src/dispatch/runtime/scope.rs) is a lexical environment: parent link
 
 Runtime values are [`KObject`](src/dispatch/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/dispatch/types/ktraits.rs). Builtins are registered in [builtins.rs](src/dispatch/builtins.rs) and produce the default root scope.
 
-Errors are first-class via [`KError`](src/dispatch/runtime/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) up the scheduler's Forward chain, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
+Errors are first-class via [`KError`](src/dispatch/runtime/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
 
 ### execute — run the DAG
 
@@ -168,8 +168,6 @@ src/
     ├── nodes.rs         node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
     ├── run.rs           per-NodeWork-variant run_* methods (impl Scheduler)
     ├── lift.rs          lift_kobject — rebuild values across per-call arena boundaries
-    ├── finalize.rs      finalize_ready_frames — promote forward-chain results out of
-    │                    dying per-call arenas
     └── interpret.rs     parse → dispatch → schedule → execute
 ```
 

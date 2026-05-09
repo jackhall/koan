@@ -7,16 +7,13 @@ use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::KExpression;
 
-/// What a scheduler node will produce when its work runs. `Value` is computed inline; `Forward`
-/// says "my result is whatever node `id` produces" — set when a `Dispatch` spawns a `Bind` for
-/// its sub-expression deps. `Err` says the work errored; dependents short-circuit and propagate
-/// it (with a frame appended for context). `read` and `is_result_ready` follow `Forward` chains
-/// until they land on a terminal `Value` or `Err`. Cycles are statically prevented because
-/// every `NodeId` produced by `add_*` is strictly greater than every `NodeId` it could forward
-/// to.
+/// Terminal output a scheduler node produces when its work runs. `Value` is the computed
+/// result; `Err` says the work errored and dependents short-circuit and propagate it
+/// (with a frame appended for context). Both are terminal — once a slot's `results` entry
+/// holds either, `notify_consumers` wakes any parked consumers and no further write to
+/// that slot occurs (until the slot is freed and reused).
 pub(super) enum NodeOutput<'a> {
     Value(&'a KObject<'a>),
-    Forward(NodeId),
     Err(KError),
 }
 
@@ -48,6 +45,16 @@ pub(super) enum NodeStep<'a> {
 /// - `Bind { expr, subs }`: splice each dep's resolved value into `parts` as `Future(...)`,
 ///   dispatch the resulting expression, invoke the bound future.
 /// - `Aggregate { elements }` materializes a list literal once each `Dep` element resolves.
+/// - `Lift { from }` is the deferring-dispatch shim. When `run_dispatch` finds it has to
+///   wait on sub-Dispatch deps, it spawns a `Bind` for the actual work and rewrites its
+///   own slot's work to `Lift { from: bind_id }`. The Lift slot is parked on
+///   `notify_list[bind_id]`; once the bind writes its terminal `bind_id`'s notify-walk
+///   wakes the Lift, whose run copies `results[from]` into the Lift slot's own result so
+///   consumers see the same terminal. The push/notify model relies on a single producer
+///   slot per result — Lift exists so a deferring dispatch surfaces under its original
+///   slot index without consumers having to chase a chain. A frame-holding Lift's Done arm
+///   in `execute` performs the `lift_kobject` deep-clone so the Value escapes the per-call
+///   arena into the captured outer arena before the frame Rc drops.
 pub(super) enum NodeWork<'a> {
     Dispatch(KExpression<'a>),
     Bind {
@@ -59,25 +66,29 @@ pub(super) enum NodeWork<'a> {
     },
     /// Materializes a dict literal once each key/value `Dep` resolves. Mirrors `Aggregate`'s
     /// shape but holds pairs and converts each resolved key to a `KKey` (rejecting non-scalar
-    /// keys with `KErrorKind::ShapeError`) before inserting into the runtime `HashMap`.
+    /// keys with `KErrorKind::ShapeError`) before inserting into the runtime `HashMap`. Each
+    /// pair side reuses `AggregateElement` so the same Static/Dep machinery applies to keys
+    /// and values alike.
     AggregateDict {
-        entries: Vec<(AggregateDictElement<'a>, AggregateDictElement<'a>)>,
+        entries: Vec<(AggregateElement<'a>, AggregateElement<'a>)>,
+    },
+    /// Deferring-dispatch shim: when the slot runs, copy `results[from]` into the slot's
+    /// own result so consumers of this slot see the same terminal. The slot is parked on
+    /// `notify_list[from]` at install time; `from`'s terminal write wakes it. Used
+    /// whenever a Dispatch has to defer to a Bind/Aggregate to wait on sub-deps — the
+    /// dispatch's slot is rewritten to `Lift { from: bind_id }` so its result surfaces
+    /// under the original slot index rather than the bind's.
+    Lift {
+        from: NodeId,
     },
 }
 
-/// One slot in an `Aggregate` node. `Static` is an already-resolved value; `Dep` defers to a
-/// previously-scheduled node. The mix lets a list literal like `[1 (LET x = 5) z]` schedule
-/// only the sub-expression and inline the other two.
+/// One slot in an `Aggregate` node, or one side of one pair in an `AggregateDict` node.
+/// `Static` is an already-resolved value; `Dep` defers to a previously-scheduled node. The
+/// mix lets a list literal like `[1 (LET x = 5) z]` schedule only the sub-expression and
+/// inline the other two; for dicts both sides of a pair use the same shape so a literal
+/// like `{(get_k): 1 a: (get_v)}` can defer either side while inlining scalars.
 pub(super) enum AggregateElement<'a> {
-    Static(KObject<'a>),
-    Dep(NodeId),
-}
-
-/// One side of one pair in an `AggregateDict` node. Same `Static` / `Dep` split as
-/// `AggregateElement`; reused for both keys and values so a dict literal like
-/// `{(get_k): 1 a: (get_v)}` can defer the two sub-expression sides while inlining the
-/// scalar literal sides.
-pub(super) enum AggregateDictElement<'a> {
     Static(KObject<'a>),
     Dep(NodeId),
 }
@@ -136,11 +147,12 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
                 .iter()
                 .flat_map(|(k, v)| [k, v])
                 .filter_map(|e| match e {
-                    AggregateDictElement::Dep(d) => Some(*d),
-                    AggregateDictElement::Static(_) => None,
+                    AggregateElement::Dep(d) => Some(*d),
+                    AggregateElement::Static(_) => None,
                 })
                 .collect(),
         ),
+        NodeWork::Lift { from } => Some(vec![*from]),
     }
 }
 
