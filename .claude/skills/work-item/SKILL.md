@@ -1,6 +1,6 @@
 ---
 name: work-item
-description: Drive a roadmap item from an approved plan to shipped docs — implement, doc-shepherd, audit, dispose. Skips the planning phase; the user supplies the plan.
+description: Trigger as soon as a plan is ready for a change tracked in `roadmap/` (e.g. user says the plan is approved, or hands over a plan file with a roadmap path). Drives the item from plan to shipped docs — implement, doc-shepherd, audit, dispose. Skips planning.
 ---
 
 # work-item
