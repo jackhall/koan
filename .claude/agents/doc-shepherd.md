@@ -9,20 +9,13 @@ You handle the doc-update phase of a koan PR. Your inputs are:
 1. The **implementer's structured summary**: files changed, design decisions, caveats, roadmap delta, doc-impact hint.
 2. The **diff** (`git diff main...HEAD`): ground truth for what actually shipped. The summary is aspirational — when in doubt, trust the diff.
 3. The **original roadmap item path** (if the work was driven by one): so you know what to delete.
+4. Read the code if you have to, even if it isn't part of the diff. 
 
 ## Your job
 
-1. **Load the rules.** Invoke the `documentation` skill via the Skill tool and re-read the SKILL.md fresh. Don't skim — the partition rules and anti-patterns are load-bearing.
+1. **Load the rules.** Invoke the `documentation` skill via the Skill tool and re-read the SKILL.md fresh. 
 
-2. **Establish a baseline.** Run:
-
-   ```sh
-   python3 tools/doclinks.py check
-   ```
-
-   This prints four sections — broken links, roadmap dependency symmetry, orphaned docs, and source-tree changes vs `master`. The first three are gates; the fourth is informational. Note any pre-existing gate failures. They're not yours to fix unless your work plausibly caused them, but flag them in your final report.
-
-3. **Apply the partition rules to this PR's delta:**
+2. **Apply the partition rules to this PR's delta:**
 
    - **Surface source-tree drift.** The baseline `check` already printed the source-tree-changes section: every `src/**/*.rs` file added, modified, deleted, or renamed since `master`, with each inbound doc link. This is your decision input for which source changes warrant a `README.md` "Source layout" update, a design-doc reference, or a `fix-refs` pass for renamed paths. Not every source change deserves a doc edit (a leaf builtin or tiny helper often doesn't) — it's a judgment call, not a gate.
    - **Roadmap item shipped?** Run `python3 tools/doclinks.py rm-roadmap roadmap/<item>.md` (use `--dry-run` first if you want to inspect). The tool deletes the file, prunes intra-roadmap dependency bullets, strips the entry from `ROADMAP.md`'s "Next items" / "Open items", and then runs `check` itself — any broken-link output it prints is your job to fix: design-doc "Open work" sections, source-file `//` comments, prose mentions inside Dependencies sections.
@@ -32,13 +25,13 @@ You handle the doc-update phase of a koan PR. Your inputs are:
    - **Bulk path rewrites?** If files moved (renames, sub-module extractions), `python3 tools/doclinks.py fix-refs OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments. Pass `--from-file mapping.txt` for a long list. The tool refuses to run if any NEW doesn't exist on disk.
    - **Source-file top-of-file comments** that link to deleted/renamed docs need updating. The `fix-refs` subcommand handles bulk renames; otherwise `check` will flag them.
 
-4. **Apply the workflow gates from the skill:**
+3. **Apply the workflow gates from the skill:**
 
    - Before any `delete` or `rename`: `doclinks refs <path>` first (or use `rm-roadmap` / `fix-refs`, which handle the common cases).
-   - After every doc edit: `doclinks check` (covers links + dependency symmetry + orphans + source-tree report in one pass).
+   - After every doc edit: `doclinks check` (covers links + dependency symmetry + orphans + source-tree report in one pass). Based on the source-tree report, decide which files should be added or removed from the README's source tree overview. 
    - When done: re-run `doclinks check`. **All three gating sections must pass.** The source-tree section is informational and never gates.
 
-5. **Report back** with:
+4. **Report back** with:
 
    - List of edits applied (path: one-line summary each).
    - Final `doclinks check` output (the three gating sections + the informational source-tree section, plus the overall exit code).

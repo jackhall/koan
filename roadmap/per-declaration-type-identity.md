@@ -31,34 +31,34 @@ encoding the identity.
   union-specific destructors, type-class-style dispatch outside the module
   system) has a stable identity to key on.
 
-**Directions.** None decided.
+**Directions.**
 
-- *Carrier shape.* The `KType::ModuleType { scope_id, name }` design — a
-  declaration-site address plus a name — is the natural analog. A
-  `KType::Tagged { scope_id, name }` and `KType::Struct { scope_id, name }`
+- *Carrier shape — open.* The `KType::ModuleType { scope_id, name }`
+  design — a declaration-site address plus a name — is the natural analog.
+  A `KType::Tagged { scope_id, name }` and `KType::Struct { scope_id, name }`
   pair would mirror it directly: the declaring scope address gives stable
   identity for the run, the name handles textual disambiguation. Open
   question whether to share one carrier (`KType::UserType { kind: TaggedKind |
   StructKind, scope_id, name }`) or keep two parallel variants.
-- *Construction-site capture.* `STRUCT Foo = (...)` and `UNION Bar = ...` need
-  to record the scope address at declaration time and thread it onto every
-  value produced. The construction primitives that currently mint
-  `KObject::StructType` / `KObject::TaggedUnionType` are the single capture
-  point; the question is what slot on those values carries the identity
-  forward to `KObject::ktype()`.
-- *Dispatch consequences.* `KType::matches_value` and
+- *Construction-site capture — open.* `STRUCT Foo = (...)` and
+  `UNION Bar = ...` need to record the scope address at declaration time
+  and thread it onto every value produced. The construction primitives
+  that currently mint `KObject::StructType` / `KObject::TaggedUnionType`
+  are the single capture point; the question is what slot on those values
+  carries the identity forward to `KObject::ktype()`.
+- *Dispatch consequences — open.* `KType::matches_value` and
   `is_more_specific_than` need to compare on the new identity, mirroring
   what `KType::ModuleType` already does. Any builtin or user-fn slot
   declared as `Struct` (today: matches any struct) needs a migration story
   — either widen to a wildcard slot that accepts any declared struct, or
   treat the bare `Struct` shape as a parse error in slot position.
-- *Module-system relationship.* This is *not* part of the module-system
-  staged work — opaque-ascription types and user-defined types are
-  conceptually distinct (one is an abstraction barrier, the other is a
-  nominal declaration), and the design doesn't require them to share an
-  implementation. The `KType::ModuleType` carrier may be the right model to
-  extend, but the work itself is type-system upkeep that ships independently
-  of any module-system stage.
+- *Module-system relationship — decided.* This is not part of the
+  module-system staged work — opaque-ascription types and user-defined
+  types are conceptually distinct (one is an abstraction barrier, the
+  other is a nominal declaration), and the design doesn't require them to
+  share an implementation. The `KType::ModuleType` carrier may be the
+  right model to extend, but the work itself is type-system upkeep that
+  ships independently of any module-system stage.
 
 ## Dependencies
 

@@ -29,42 +29,47 @@ another. This item closes that gap.
   becomes expressible — the default shape of a test suite in every other
   language.
 
-**Directions.** None decided.
+**Directions.**
 
-- *File-to-module mapping.* The OCaml convention is "every file is a module
-  of the same name" — `utils/list.koan` defines a module `List` inside a
-  module `Utils`. The alternative is that files are containers for explicit
-  `MODULE … END` declarations and aren't themselves modules. The first is
-  cheaper to write and matches the most natural mental model; the second
+- *File-to-module mapping — open.* The OCaml convention is "every file is a
+  module of the same name" — `utils/list.koan` defines a module `List`
+  inside a module `Utils`. The alternative is that files are containers for
+  explicit `MODULE` declarations and aren't themselves modules. The first
+  is cheaper to write and matches the most natural mental model; the second
   gives more control at the cost of boilerplate. A hybrid (each file is
   *implicitly* a module, and explicit `MODULE` declarations may nest inside
   it) is also viable.
-- *Filesystem layout.* Flat directory of `.koan` files, or a tree
-  (`utils/list.koan`, `utils/string.koan`)? Implicit entry point
-  (`main.koan`) or explicit manifest file? Single-file programs (today's
-  shape) should keep working — directory mode is an addition.
-- *Import surface.* An explicit `IMPORT "utils/list"` builtin that loads the
-  file and brings its top-level module into scope, vs. implicit "everything
-  in the project directory is visible." Explicit is more verbose but makes
-  the dependency graph readable; implicit is cheaper to write but couples
-  every file to every other.
-- *Qualified vs unqualified names after import.* `Utils.List.map` keeps
-  collisions controlled and signals where a name comes from at the call
-  site; an `OPEN Utils.List` form (or import-with-binding) lets the user
-  drop the qualification when they want it. Two files each defining a
+- *Filesystem layout — decided.* A directory tree of `.koan` files
+  (`utils/list.koan`, `utils/string.koan`, …); flat layout is rejected as
+  it doesn't scale past a handful of files. Single-file programs (today's
+  shape) keep working — tree mode is an addition. Implicit entry point
+  (`main.koan`) vs. explicit manifest is a sub-question to settle when the
+  first multi-file program lands.
+- *Import surface — decided.* An explicit `IMPORT "utils/list"` builtin
+  loads the file and brings its top-level module into scope. Implicit
+  "everything in the project directory is visible" is rejected: the
+  per-file dependency graph stays readable, and the file loader has a
+  single concrete trigger to drive scheduler work off.
+- *Qualified vs unqualified names after import — open.* `Utils.List.map`
+  keeps collisions controlled and signals where a name comes from at the
+  call site; an `OPEN Utils.List` form (or import-with-binding) lets the
+  user drop the qualification when they want it. Two files each defining a
   `Point` type are the load-bearing case — module-system opaque ascription
   already gives them distinct identities, but the surface still needs a way
   to disambiguate at use site.
-- *Definition vs side-effect at file load.* Does loading a file run its
-  top-level expressions (so importing has effects), or only register its
-  `FN`, module, and signature definitions and leave expression evaluation to
-  the entry-point file? The latter matches most languages and dovetails with
-  the monadic-effect work — effectful initialization wants the same handler
-  machinery as effectful builtins.
-- *Circular imports.* Disallow (simplest, may force awkward splits), allow
-  with forward-declaration discipline, or resolve via the existing
-  dispatch-as-node scheduler by treating cross-file references as another
-  deferred dependency.
+- *Definition vs side-effect at file load — open.* Does loading a file run
+  its top-level expressions (so importing has effects), or only register
+  its `FN`, module, and signature definitions and leave expression
+  evaluation to the entry-point file? Recommended: the latter matches most
+  languages and dovetails with the monadic-effect work — effectful
+  initialization wants the same handler machinery as effectful builtins.
+- *Circular imports — decided.* Resolved via the existing dispatch-as-node
+  scheduler by treating cross-file references as another deferred
+  dependency, consistent with
+  [dispatch-time-placeholders](dispatch-time-placeholders.md)'s mechanism.
+  Disallowing or requiring forward-declaration discipline is rejected — the
+  scheduler already handles deferred resolution generically and forcing
+  source order on multi-file projects is gratuitous.
 
 ## Dependencies
 

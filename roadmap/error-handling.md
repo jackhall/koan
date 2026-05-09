@@ -27,25 +27,25 @@ function raise."
 - *REPL ergonomics.* A top-level failure no longer ends the session; the
   next expression still runs.
 
-**Directions.** The user-side shape is decided:
+**Directions.**
 
-- *Two tiers with a privilege boundary.* Builtin errors (every
+- *Two tiers with a privilege boundary — decided.* Builtin errors (every
   `KErrorKind` except `User`) are constructed only by the runtime; user
   code cannot raise them. They propagate ambiently through the existing
   `Forward` chain. `KErrorKind` is a closed set; `User` is the only
   variant whose payload is user-extensible.
-- *Typed user errors via `Result<T, E>`.* A function that may raise user
-  errors returns `Result<T, E>` for a user-defined error type `E`.
-  `RAISE` produces a value of `E`; the runtime carries it as
+- *Typed user errors via `Result<T, E>` — decided.* A function that may
+  raise user errors returns `Result<T, E>` for a user-defined error type
+  `E`. `RAISE` produces a value of `E`; the runtime carries it as
   `KErrorKind::User(KObject)` through the propagation channel above.
-- *Catch as non-exhaustive match.* Arms cover whichever builtin kinds and
-  user-error variants the caller wants to handle; anything else continues
-  to propagate. A catch arm may construct a user-error value and reraise —
-  the only mechanism by which a builtin error is lifted into the type
-  system.
+- *Catch as non-exhaustive match — decided.* Arms cover whichever builtin
+  kinds and user-error variants the caller wants to handle; anything else
+  continues to propagate. A catch arm may construct a user-error value and
+  reraise — the only mechanism by which a builtin error is lifted into the
+  type system.
 
-The remaining open items are scoped sub-tasks rather than open design
-options:
+The remaining items are scoped sub-tasks for implementation rather than
+design choices:
 
 - *Errors as first-class values.* `KObject::Err` lets errors bind via
   `LET` and pass as args. Substrate for the typed surface; needs the

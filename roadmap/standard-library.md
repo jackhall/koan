@@ -30,24 +30,25 @@ doesn't exist yet.
   effects together — so the answer to "how do I structure a real Koan
   program?" is a directory they can read.
 
-**Directions.** None decided.
+**Directions.**
 
-- *Initial collection set.* Which data structures ship in v1? `Set`,
+- *Initial collection set — open.* Which data structures ship in v1? `Set`,
   `Map`, `List` extensions are obvious; `OrderedMap`, `HashMap`,
-  `Sequence` are candidates. Ship the minimum that exercises the functor
-  patterns the language depends on, defer the rest.
-- *Layout under the stdlib root.* Flat (`std/Set.koan`,
-  `std/Map.koan`) or grouped (`std/collections/Set.koan`)? Falls out
-  of the [files-and-imports](files-and-imports.md) layout decision.
-- *Naming conventions for ordering / equality / hashing modules.*
+  `Sequence` are candidates. Recommended: ship the minimum that exercises
+  the functor patterns the language depends on, defer the rest.
+- *Layout under the stdlib root — deferred.* Pending further design in
+  [files-and-imports](files-and-imports.md) — the open file-to-module
+  mapping and qualification-after-import choices there shape what a
+  natural stdlib layout looks like.
+- *Naming conventions for ordering / equality / hashing modules — open.*
   `IntOrd`, `StringOrd`, `IntEq` — the canonical implicit modules users
   pass to functor applications. The shapes are constrained by the
   signature names in the stdlib's collection functors; the surface form
   needs a deliberate convention.
-- *Builtin retirement.* Where the stdlib supersedes a Rust-side builtin
-  (e.g., the existing dictionary builtin if Set/Map cover its uses), the
-  builtin gets removed in the same change rather than left as a parallel
-  surface.
+- *Builtin retirement — decided.* Where the stdlib supersedes a Rust-side
+  builtin (e.g., the existing dictionary builtin if Set/Map cover its
+  uses), the builtin gets removed in the same change rather than left as
+  a parallel surface.
 
 ## Dependencies
 

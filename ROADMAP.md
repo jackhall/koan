@@ -78,6 +78,12 @@ without first landing something else:
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
   ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
   stage 2's functor support so the `Wrap` slot can be higher-kinded.
+- [Dispatch-time name placeholders](roadmap/dispatch-time-placeholders.md) —
+  binders install a placeholder in `Scope` when they dispatch so a lookup
+  whose target binder has been dispatched but not yet executed parks on the
+  producer instead of failing. Unblocks forward references inside MODULE
+  bodies, multi-file imports, and FN-signature elaboration with
+  not-yet-bound type identifiers.
 
 ### Module system
 

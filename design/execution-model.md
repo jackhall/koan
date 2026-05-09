@@ -162,3 +162,12 @@ engine running before pegged inputs are unblocked.
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Dispatch-time name placeholders**
+  ([roadmap/dispatch-time-placeholders.md](../roadmap/dispatch-time-placeholders.md)).
+  Binders (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`) install a
+  placeholder in a new `Scope::placeholders` sidecar at dispatch time —
+  before their RHS is scheduled — so a lookup whose target binder has
+  dispatched but not yet executed parks on the producer's slot via a
+  `Replace`-installed notify edge instead of failing with an
+  unresolved-name error. Same semantics for value-RHS and type-RHS for
+  v1; recursive type definitions are a separate follow-up.

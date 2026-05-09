@@ -25,48 +25,45 @@ thread in by searching scope. This is the ergonomic payoff of the design.
   dispatches on all of its abstract types simultaneously rather than needing a
   partial-order tiebreak between single-type candidates.
 
-**Directions.** None decided.
+**Directions.**
 
-- *Signature-bound module-typed dispatch.* The substrate the implicit-
-  parameter machinery rides on: `KType::Module` slots learn to carry a
-  required signature, and the dispatcher checks that the bound module value
-  satisfies it. Implicit parameters are then a special case of a typed
-  module slot whose argument is resolved by search rather than supplied at
-  the call site. Stage 1 shipped the unconstrained `KType::Module` slot;
-  this stage tightens it.
-- *Implicit-parameter declaration syntax.* The function signature needs a
-  slot for implicit module parameters; surface form follows stage 1's
-  conventions.
-- *Explicit-application disambiguation syntax.* The lowest-level form for
-  resolving ambiguity at a call site. Surface form is **deliberately
-  deferred** — explicit application ships in this stage with a placeholder
-  syntax, and stage 7 designs the user-facing form against patterns from
-  real code. The placeholder is intentionally ugly so it doesn't accidentally
-  become the final answer.
-- *Resolution algorithm.* Lexical scope plus explicitly imported implicits;
-  filter by signature unification; pick the most specific; ambiguity is an
-  error. Specificity rule: most-specific-wins, with unrelated ties as
-  errors. See [the design doc's resolution dials
-  table](../design/module-system.md#resolution-and-coherence-the-design-dials).
-- *Inference and search interleaving.* Implicit search lands as a single
-  `SEARCH_IMPLICIT` builtin per
-  [design/module-system.md § Inference and search](../design/module-system.md#inference-and-search-as-scheduler-work) —
-  no new node kind, no parallel substitution table. Inference produces
-  type refinements that search consumes; search produces module choices
-  that refine types other inference tasks are waiting on. Both ride the
+- *Signature-bound module-typed dispatch — decided.* The substrate the
+  implicit-parameter machinery rides on: `KType::Module` slots learn to
+  carry a required signature, and the dispatcher checks that the bound
+  module value satisfies it. Implicit parameters are then a special case
+  of a typed module slot whose argument is resolved by search rather than
+  supplied at the call site. Stage 1 shipped the unconstrained
+  `KType::Module` slot; this stage tightens it.
+- *Implicit-parameter declaration syntax — open.* The function signature
+  needs a slot for implicit module parameters; surface form follows stage
+  1's conventions but the exact spelling is unsettled.
+- *Explicit-application disambiguation syntax — deferred.* Surface form is
+  deliberately deferred to [stage 7](module-system-7-syntax-tuning.md);
+  this stage ships a placeholder, and stage 7 designs the user-facing form
+  against patterns from real code. The placeholder is intentionally ugly
+  so it doesn't accidentally become the final answer.
+- *Resolution algorithm — decided per [design/module-system.md § Resolution and coherence](../design/module-system.md#resolution-and-coherence-the-design-dials).*
+  Lexical scope plus explicitly imported implicits; filter by signature
+  unification; pick the most specific; ambiguity is an error. Specificity
+  rule: most-specific-wins, with unrelated ties as errors.
+- *Inference and search interleaving — decided per [design/module-system.md § Inference and search](../design/module-system.md#inference-and-search-as-scheduler-work).*
+  Implicit search lands as a single `SEARCH_IMPLICIT` builtin — no new
+  node kind, no parallel substitution table. Inference produces type
+  refinements that search consumes; search produces module choices that
+  refine types other inference tasks are waiting on. Both ride the
   existing `Dispatch` / `Bind` machinery stage 2 lands.
-- *Higher-order restriction.* Implicit modules cannot themselves take
-  implicit parameters. Decided up front; documented and enforced in this
-  stage. This is the architectural simplification that keeps resolution
-  decidable and search-tree size bounded.
-- *Error message investment.* When ambiguity errors fire, they need to name
-  the candidate modules with their import paths and suggest the explicit
-  form. The design doc identifies this as where strict-on-ambiguity lives or
-  dies for users.
-- *Orphan-rule lint.* Implicits not defined alongside their signature or any
-  of their dispatched types produce a warning, not an error — a lint
-  signaling likely coherence issues without forbidding the third-party
-  extension pattern.
+- *Higher-order restriction — decided.* Implicit modules cannot themselves
+  take implicit parameters; documented and enforced in this stage. This is
+  the architectural simplification that keeps resolution decidable and
+  search-tree size bounded.
+- *Error message investment — decided.* When ambiguity errors fire, they
+  name the candidate modules with their import paths and suggest the
+  explicit form. The design doc identifies this as where
+  strict-on-ambiguity lives or dies for users.
+- *Orphan-rule lint — decided.* Implicits not defined alongside their
+  signature or any of their dispatched types produce a warning, not an
+  error — a lint signaling likely coherence issues without forbidding the
+  third-party extension pattern.
 
 ## Dependencies
 
