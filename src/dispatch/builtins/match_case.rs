@@ -10,6 +10,7 @@ use crate::dispatch::runtime::Scope;
 use crate::execute::scheduler::substitute_params;
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
+use super::helpers::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.
@@ -156,21 +157,6 @@ fn find_branch_body<'a>(
         i += 3;
     }
     Ok(None)
-}
-
-fn extract_kexpression<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::KExpression(e)) => Some(e),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KExpression(e) => Some(e.clone()),
-            _ => None,
-        },
-    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

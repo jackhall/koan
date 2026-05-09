@@ -3,12 +3,15 @@
 //! function calls ([`KFunction::apply`](super::kfunction::KFunction::apply)) — the two paths
 //! that switched from positional to named arguments.
 //!
-//! Mirrors the shape of [`typed_field_list::parse_typed_field_list`](super::typed_field_list::parse_typed_field_list)
-//! but the third element of each triple is an arbitrary value-side `ExpressionPart` rather
-//! than a `KType` token. The parser leaves the value untouched — the caller decides how to
-//! resolve it (wrap-and-dispatch for eager evaluation, or thread it through unchanged).
+//! Mirrors the shape of [`typed_field_list::parse_typed_field_list`](super::typed_field_list::parse_typed_field_list);
+//! both parsers walk the same `<Identifier> : <slot>` triple shape and share the
+//! identifier/colon/duplicate scaffolding through
+//! [`crate::parse::parse_triple_list`]. The third-slot interpretation is the only thing that
+//! differs — value-side here is "take the part verbatim", type-side over there is
+//! "resolve as a KType". The wrapper closes over the right interpretation.
 
 use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::parse_triple_list;
 
 /// Walk an expression's parts as repeated `<Identifier(name)> <Keyword(":")> <value>` triples
 /// and assemble the resulting ordered list of `(name, value-part)` pairs. Errors with a
@@ -17,45 +20,16 @@ use crate::parse::kexpression::{ExpressionPart, KExpression};
 /// messages so the caller's diagnostic stays grounded in user-facing syntax.
 ///
 /// Empty `parts` returns an empty Vec — supports zero-arg calls like `f ()`.
+///
+/// Thin wrapper over [`parse_triple_list`] that closes over "take the third part as-is".
+/// The shared helper's error messages name the slot `<slot>`; this wrapper accepts that
+/// since the value side never rejects on the slot's content (only on shape), so the third
+/// closure is `Ok(part.clone())` unconditionally.
 pub fn parse_named_value_pairs<'a>(
     expr: &KExpression<'a>,
     context: &str,
 ) -> Result<Vec<(String, ExpressionPart<'a>)>, String> {
-    let parts = &expr.parts;
-    if parts.len() % 3 != 0 {
-        return Err(format!(
-            "{context} args must be `<name>: <value>` triples; got {} parts (not a multiple of 3)",
-            parts.len(),
-        ));
-    }
-    let mut pairs: Vec<(String, ExpressionPart<'a>)> = Vec::with_capacity(parts.len() / 3);
-    let mut i = 0;
-    while i < parts.len() {
-        let name = match &parts[i] {
-            ExpressionPart::Identifier(s) => s.clone(),
-            other => {
-                return Err(format!(
-                    "{context} arg name must be a bare identifier, got {}",
-                    other.summarize(),
-                ));
-            }
-        };
-        match &parts[i + 1] {
-            ExpressionPart::Keyword(k) if k == ":" => {}
-            other => {
-                return Err(format!(
-                    "{context} separator must be `:`, got {}",
-                    other.summarize(),
-                ));
-            }
-        }
-        if pairs.iter().any(|(n, _)| n == &name) {
-            return Err(format!("duplicate name `{}` in {context}", name));
-        }
-        pairs.push((name, parts[i + 2].clone()));
-        i += 3;
-    }
-    Ok(pairs)
+    parse_triple_list(expr, context, |part, _name| Ok(part.clone()))
 }
 
 #[cfg(test)]

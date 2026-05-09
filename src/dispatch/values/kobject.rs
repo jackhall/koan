@@ -162,6 +162,117 @@ impl<'a> KObject<'a> {
             KObject::KSignature(s) => KObject::KSignature(*s),
         }
     }
+
+    // Accessor helpers ---------------------------------------------------------------------
+    //
+    // Each `as_*` returns `Option<&T>` (or `Option<T>` for the trivially-`Copy` scalars). The
+    // pattern collapses the per-call-site `match` block — `match obj { KObject::Number(n) =>
+    // Some(*n), _ => None }` — to one method call. `Option<&T>::is_some()` covers any need
+    // for a boolean predicate, so no `is_*` helpers are introduced; reach for the accessor
+    // and call `.is_some()` if you only need shape detection. None of the helpers `clone()` —
+    // returns are by reference where the variant carries a non-`Copy` payload.
+
+    /// `KObject::Number(n)` → `Some(n)`. Numbers are `Copy`, so the value is returned by-value.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            KObject::Number(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// `KObject::KString(s)` → `Some(&s)`. Borrowed; clone at the call site if ownership is
+    /// needed.
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            KObject::KString(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// `KObject::Bool(b)` → `Some(b)`. Booleans are `Copy`, so the value is returned by-value.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            KObject::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// `KObject::List(items)` → `Some(&items)`. Returns the `Rc` reference so callers can
+    /// `Rc::clone` for cheap shared ownership without rebuilding.
+    pub fn as_list(&self) -> Option<&Rc<Vec<KObject<'a>>>> {
+        match self {
+            KObject::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// `KObject::KExpression(e)` → `Some(&e)`. Borrowed; clone at the call site if the slot
+    /// needs to be threaded through a tail-emit or similar.
+    pub fn as_kexpression(&self) -> Option<&KExpression<'a>> {
+        match self {
+            KObject::KExpression(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// `KObject::KFunction(f, _)` → `Some(f)`. Drops the optional `Rc<CallArena>` (the
+    /// arena anchor is only relevant to lift / clone paths; consumers reading the function
+    /// don't need it). Returns the `&'a KFunction<'a>` directly so call sites keep arena
+    /// lifetime threading.
+    pub fn as_kfunction(&self) -> Option<&'a KFunction<'a>> {
+        match self {
+            KObject::KFunction(f, _) => Some(*f),
+            _ => None,
+        }
+    }
+
+    /// `KObject::StructType { name, fields }` → `Some((&name, &fields))`. Returns the `Rc`
+    /// reference to the field list so callers can `Rc::clone` rather than walk it. The tuple
+    /// type is non-trivial because it mirrors the struct variant's payload exactly — clippy's
+    /// `type_complexity` lint fires here, but introducing a named alias just for a single
+    /// return type would obscure rather than clarify; suppress targeted.
+    #[allow(clippy::type_complexity)]
+    pub fn as_struct_type(&self) -> Option<(&str, &Rc<Vec<(String, KType)>>)> {
+        match self {
+            KObject::StructType { name, fields } => Some((name.as_str(), fields)),
+            _ => None,
+        }
+    }
+
+    /// `KObject::TaggedUnionType(schema)` → `Some(&schema)`. Returns the `Rc` reference for
+    /// the same reason as `as_struct_type`.
+    pub fn as_tagged_union_type(&self) -> Option<&Rc<HashMap<String, KType>>> {
+        match self {
+            KObject::TaggedUnionType(schema) => Some(schema),
+            _ => None,
+        }
+    }
+
+    /// `KObject::KModule(m)` → `Some(m)`. The `&'a Module<'a>` reference is returned
+    /// directly so call sites don't have to redo the dereference dance.
+    pub fn as_module(&self) -> Option<&'a Module<'a>> {
+        match self {
+            KObject::KModule(m) => Some(*m),
+            _ => None,
+        }
+    }
+
+    /// `KObject::KSignature(s)` → `Some(s)`. Mirrors [`as_module`](Self::as_module).
+    pub fn as_signature(&self) -> Option<&'a Signature<'a>> {
+        match self {
+            KObject::KSignature(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    /// `KObject::TypeExprValue(t)` → `Some(&t)`. Borrowed; clone if the call site needs to
+    /// own the structured `TypeExpr`.
+    pub fn as_type_expr(&self) -> Option<&TypeExpr> {
+        match self {
+            KObject::TypeExprValue(t) => Some(t),
+            _ => None,
+        }
+    }
 }
 
 /// Project a parameterized `KType::KFunction { args, ret }` from a function value's signature.

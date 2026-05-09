@@ -40,7 +40,7 @@ pub fn apply<'a>(
     args_parts: Vec<ExpressionPart<'a>>,
 ) -> BodyResult<'a> {
     debug_assert!(
-        matches!(schema_obj, KObject::TaggedUnionType(_)),
+        schema_obj.as_tagged_union_type().is_some(),
         "tagged_union::apply called on non-TaggedUnionType",
     );
     if args_parts.len() != 2 {

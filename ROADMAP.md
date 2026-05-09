@@ -66,8 +66,6 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
-- [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing/exploratory; act
-  only when the next feature would multiply existing duplication.
 
 ## Open items
 
@@ -134,5 +132,9 @@ the rest incrementally, each producing a usable end state.
 
 - [Static type checking and JIT compilation](roadmap/static-typing-and-jit.md) — the
   tooling and performance ceiling; both want a phase between parse and execution.
-- [Refactor for cleaner abstractions](roadmap/refactoring.md) — standing item: remove
-  accidental abstraction when the next feature would multiply existing duplication.
+- [Lift-walk and aggregate-scheduler dedup](roadmap/lift-and-schedule-dedup.md) —
+  collapse duplicated `KObject`-tree walks and per-variant scheduler paths in
+  `execute/` once module-system stage 2 has stabilized those hot paths.
+- [`KType` and dispatcher concern split](roadmap/ktype-and-dispatcher-split.md) —
+  split `ktype.rs` and `scope.rs` along their concern boundaries; substrate for
+  static-typing-and-jit's checker pre-pass.

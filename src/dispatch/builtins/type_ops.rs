@@ -31,15 +31,17 @@ use super::{err, register_builtin};
 /// from a previous dispatch. Anything else reaching here is a `TypeMismatch` from the
 /// dispatcher's perspective; surface that as a clean error.
 fn read_type_expr<'a>(bundle: &ArgumentBundle<'a>, name: &str) -> Result<TypeExpr, KError> {
-    match bundle.get(name) {
-        Some(KObject::TypeExprValue(t)) => Ok(t.clone()),
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: name.to_string(),
-            expected: "TypeExprRef".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+    let Some(obj) = bundle.get(name) else {
+        return Err(KError::new(KErrorKind::MissingArg(name.to_string())));
+    };
+    if let Some(t) = obj.as_type_expr() {
+        return Ok(t.clone());
     }
+    Err(KError::new(KErrorKind::TypeMismatch {
+        arg: name.to_string(),
+        expected: "TypeExprRef".to_string(),
+        got: obj.ktype().name(),
+    }))
 }
 
 /// `LIST_OF <elem:TypeExprRef>` → `TypeExprRef` carrying `List<elem>`. The output has its
@@ -94,14 +96,16 @@ pub fn body_function_of<'a>(
 ) -> BodyResult<'a> {
     use crate::parse::kexpression::ExpressionPart;
     let args_expr = match bundle.get("args") {
-        Some(KObject::KExpression(e)) => e.clone(),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "args".to_string(),
-                expected: "KExpression".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
+        Some(obj) => match obj.as_kexpression() {
+            Some(e) => e.clone(),
+            None => {
+                return err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "args".to_string(),
+                    expected: "KExpression".to_string(),
+                    got: obj.ktype().name(),
+                }));
+            }
+        },
         None => return err(KError::new(KErrorKind::MissingArg("args".to_string()))),
     };
     let ret = match read_type_expr(&bundle, "ret") {
@@ -150,16 +154,9 @@ pub fn body_module_type_of<'a>(
     // The `name` slot accepts a Type token (e.g. `Type`, `Elt`) — abstract type names
     // classify as Type per the §2 token rules, not Identifier. The lookup uses the bare
     // leaf name from the resolved `TypeExpr`.
-    let name = match bundle.get("name") {
-        Some(KObject::TypeExprValue(t)) => t.name.clone(),
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "name".to_string(),
-                expected: "TypeExprRef".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+    let name = match read_type_expr(&bundle, "name") {
+        Ok(t) => t.name,
+        Err(e) => return err(e),
     };
     if !m.type_members.borrow().contains_key(&name) {
         return err(KError::new(KErrorKind::ShapeError(format!(
@@ -185,24 +182,29 @@ fn resolve_module_arg<'a>(
     scope: &'a Scope<'a>,
     obj: Option<&KObject<'a>>,
 ) -> Result<&'a crate::dispatch::values::Module<'a>, KError> {
-    match obj {
-        Some(KObject::KModule(m)) => Ok(*m),
-        Some(KObject::TypeExprValue(t)) => match scope.lookup(&t.name) {
-            Some(KObject::KModule(m)) => Ok(*m),
-            Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "m".to_string(),
-                expected: "Module".to_string(),
-                got: other.ktype().name(),
-            })),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        },
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "m".to_string(),
-            expected: "Module".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg("m".to_string()))),
+    let Some(obj) = obj else {
+        return Err(KError::new(KErrorKind::MissingArg("m".to_string())));
+    };
+    if let Some(m) = obj.as_module() {
+        return Ok(m);
     }
+    if let Some(t) = obj.as_type_expr() {
+        return match scope.lookup(&t.name) {
+            Some(found) => found.as_module().ok_or_else(|| {
+                KError::new(KErrorKind::TypeMismatch {
+                    arg: "m".to_string(),
+                    expected: "Module".to_string(),
+                    got: found.ktype().name(),
+                })
+            }),
+            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
+        };
+    }
+    Err(KError::new(KErrorKind::TypeMismatch {
+        arg: "m".to_string(),
+        expected: "Module".to_string(),
+        got: obj.ktype().name(),
+    }))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

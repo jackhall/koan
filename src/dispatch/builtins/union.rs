@@ -7,8 +7,8 @@ use crate::dispatch::types::{Argument, ExpressionSignature, KType, ScopeResolver
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::types::parse_typed_field_list;
-use crate::parse::kexpression::{KExpression, TypeParams};
 
+use super::helpers::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` (named) or `UNION (<schema>)` (anonymous).
@@ -42,7 +42,7 @@ pub fn body<'a>(
         }
     };
     let resolver = ScopeResolver::new(scope);
-    let fields = match parse_typed_field_list(&schema_expr, "UNION", &resolver) {
+    let fields = match parse_typed_field_list(&schema_expr, "UNION schema", &resolver) {
         Ok(f) => f,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
@@ -58,47 +58,16 @@ pub fn body<'a>(
     let arena = scope.arena;
     let union_obj: &'a KObject<'a> =
         arena.alloc_object(KObject::TaggedUnionType(Rc::new(schema)));
-    if let Some(name_obj) = bundle.get("name") {
-        // `TypeExprRef`-typed slot resolves to `KObject::TypeExprValue(t)`. The name slot
-        // wants a bare leaf — reject parameterized forms like `Maybe<X>` here.
-        let name = match name_obj {
-            KObject::TypeExprValue(t) => match &t.params {
-                TypeParams::None => t.name.clone(),
-                _ => {
-                    return err(KError::new(KErrorKind::ShapeError(format!(
-                        "UNION name must be a bare type name, got `{}`",
-                        t.render(),
-                    ))));
-                }
-            },
-            other => {
-                return err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "name".to_string(),
-                    expected: "TypeExprRef".to_string(),
-                    got: other.ktype().name().to_string(),
-                }));
-            }
-        };
-        scope.add(name, union_obj);
+    // The named form supplies a `name` slot; the anonymous form omits it. Only validate
+    // the slot's shape (and bind into scope) when it's present — `extract_bare_type_name`
+    // would otherwise treat absence as `MissingArg`, which is wrong here.
+    if bundle.get("name").is_some() {
+        match super::helpers::extract_bare_type_name(&bundle, "name", "UNION") {
+            Ok(name) => scope.add(name, union_obj),
+            Err(e) => return err(e),
+        }
     }
     BodyResult::Value(union_obj)
-}
-
-/// Extract a `KExpression`-typed argument from the bundle. Mirrors the `Rc::try_unwrap`
-/// dance used by [`fn_def`](super::fn_def) and [`match_case`](super::match_case).
-fn extract_kexpression<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match std::rc::Rc::try_unwrap(rc) {
-        Ok(KObject::KExpression(e)) => Some(e),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KExpression(e) => Some(e.clone()),
-            _ => None,
-        },
-    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

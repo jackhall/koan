@@ -1,12 +1,11 @@
-use std::rc::Rc;
-
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::kfunction::{ArgumentBundle, Body, BodyResult, KFunction, SchedulerHandle};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, ScopeResolver, SignatureElement};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
-use crate::parse::kexpression::{ExpressionPart, KExpression, TypeExpr};
+use crate::parse::kexpression::{ExpressionPart, KExpression};
 
+use super::helpers::{extract_kexpression, extract_type_expr};
 use super::{err, register_builtin};
 
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
@@ -184,42 +183,6 @@ fn parse_fn_param_list<'a>(
         }
     }
     Ok(elements)
-}
-
-/// Pull a `KType::KExpression`-typed argument out of the bundle and return the inner
-/// `KExpression`. Mirrors the `Rc::try_unwrap` shape `match_case::body` uses to avoid cloning
-/// when the bundle holds the only reference.
-fn extract_kexpression<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::KExpression(e)) => Some(e),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KExpression(e) => Some(e.clone()),
-            _ => None,
-        },
-    }
-}
-
-/// Pull the structured `TypeExpr` out of a `KType::TypeExprRef` slot — the resolve path
-/// preserves the parser's `TypeExpr` as `KObject::TypeExprValue` so parameterized types
-/// (`List<Number>`, `Function<(N) -> S>`) survive into the FN-construction body intact.
-fn extract_type_expr<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<TypeExpr> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::TypeExprValue(t)) => Some(t),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::TypeExprValue(t) => Some(t.clone()),
-            _ => None,
-        },
-    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

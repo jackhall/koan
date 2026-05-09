@@ -44,9 +44,9 @@ pub fn apply<'a>(
     schema_obj: &'a KObject<'a>,
     args_parts: Vec<ExpressionPart<'a>>,
 ) -> BodyResult<'a> {
-    let fields = match schema_obj {
-        KObject::StructType { fields, .. } => Rc::clone(fields),
-        _ => {
+    let fields = match schema_obj.as_struct_type() {
+        Some((_, fields)) => Rc::clone(fields),
+        None => {
             debug_assert!(false, "struct_value::apply called on non-StructType");
             return BodyResult::Err(KError::new(KErrorKind::ShapeError(
                 "struct_value::apply called on non-StructType".to_string(),

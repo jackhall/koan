@@ -34,7 +34,7 @@ use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, Module};
 
-use super::{err, register_builtin};
+use super::register_builtin;
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription. Mints fresh `KType::ModuleType`s and
 /// builds a new `Module` whose `child_scope` reuses the source module's bindings (by
@@ -192,24 +192,29 @@ fn resolve_module<'a>(
     obj: Option<&KObject<'a>>,
     arg: &str,
 ) -> Result<&'a crate::dispatch::values::Module<'a>, KError> {
-    match obj {
-        Some(KObject::KModule(m)) => Ok(*m),
-        Some(KObject::TypeExprValue(t)) => match scope.lookup(&t.name) {
-            Some(KObject::KModule(m)) => Ok(*m),
-            Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: arg.to_string(),
-                expected: "Module".to_string(),
-                got: other.ktype().name(),
-            })),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        },
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: arg.to_string(),
-            expected: "Module".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg(arg.to_string()))),
+    let Some(obj) = obj else {
+        return Err(KError::new(KErrorKind::MissingArg(arg.to_string())));
+    };
+    if let Some(m) = obj.as_module() {
+        return Ok(m);
     }
+    if let Some(t) = obj.as_type_expr() {
+        return match scope.lookup(&t.name) {
+            Some(found) => found.as_module().ok_or_else(|| {
+                KError::new(KErrorKind::TypeMismatch {
+                    arg: arg.to_string(),
+                    expected: "Module".to_string(),
+                    got: found.ktype().name(),
+                })
+            }),
+            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
+        };
+    }
+    Err(KError::new(KErrorKind::TypeMismatch {
+        arg: arg.to_string(),
+        expected: "Module".to_string(),
+        got: obj.ktype().name(),
+    }))
 }
 
 fn resolve_signature<'a>(
@@ -217,38 +222,28 @@ fn resolve_signature<'a>(
     obj: Option<&KObject<'a>>,
     arg: &str,
 ) -> Result<&'a crate::dispatch::values::Signature<'a>, KError> {
-    match obj {
-        Some(KObject::KSignature(s)) => Ok(*s),
-        Some(KObject::TypeExprValue(t)) => match scope.lookup(&t.name) {
-            Some(KObject::KSignature(s)) => Ok(*s),
-            Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-                arg: arg.to_string(),
-                expected: "Signature".to_string(),
-                got: other.ktype().name(),
-            })),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        },
-        Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
-            arg: arg.to_string(),
-            expected: "Signature".to_string(),
-            got: other.ktype().name(),
-        })),
-        None => Err(KError::new(KErrorKind::MissingArg(arg.to_string()))),
+    let Some(obj) = obj else {
+        return Err(KError::new(KErrorKind::MissingArg(arg.to_string())));
+    };
+    if let Some(s) = obj.as_signature() {
+        return Ok(s);
     }
-}
-
-#[allow(dead_code)]
-fn missing_args<'a>(bundle: &ArgumentBundle<'a>) -> BodyResult<'a> {
-    let m = bundle.get("m");
-    let s = bundle.get("s");
-    err(KError::new(KErrorKind::TypeMismatch {
-        arg: "m or s".to_string(),
-        expected: "(Module, Signature)".to_string(),
-        got: format!(
-            "({}, {})",
-            m.map(|o| o.ktype().name()).unwrap_or_else(|| "(missing)".to_string()),
-            s.map(|o| o.ktype().name()).unwrap_or_else(|| "(missing)".to_string()),
-        ),
+    if let Some(t) = obj.as_type_expr() {
+        return match scope.lookup(&t.name) {
+            Some(found) => found.as_signature().ok_or_else(|| {
+                KError::new(KErrorKind::TypeMismatch {
+                    arg: arg.to_string(),
+                    expected: "Signature".to_string(),
+                    got: found.ktype().name(),
+                })
+            }),
+            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
+        };
+    }
+    Err(KError::new(KErrorKind::TypeMismatch {
+        arg: arg.to_string(),
+        expected: "Signature".to_string(),
+        got: obj.ktype().name(),
     }))
 }
 

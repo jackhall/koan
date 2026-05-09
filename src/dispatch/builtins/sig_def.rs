@@ -13,15 +13,12 @@
 //! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
 //! attaches axioms.
 
-use std::rc::Rc;
-
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, Signature};
-use crate::execute::scheduler::Scheduler;
-use crate::parse::kexpression::{ExpressionPart, KExpression, TypeParams};
 
+use super::helpers::{extract_bare_type_name, extract_kexpression, run_body_statements};
 use super::{err, register_builtin};
 
 pub fn body<'a>(
@@ -29,24 +26,9 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let name = match bundle.get("name") {
-        Some(KObject::TypeExprValue(t)) => match &t.params {
-            TypeParams::None => t.name.clone(),
-            _ => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
-                    "SIG name must be a bare type name, got `{}`",
-                    t.render(),
-                ))));
-            }
-        },
-        Some(other) => {
-            return err(KError::new(KErrorKind::TypeMismatch {
-                arg: "name".to_string(),
-                expected: "TypeExprRef".to_string(),
-                got: other.ktype().name(),
-            }));
-        }
-        None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
+    let name = match extract_bare_type_name(&bundle, "name", "SIG") {
+        Ok(n) => n,
+        Err(e) => return err(e),
     };
     let body_expr = match extract_kexpression(&mut bundle, "body") {
         Some(e) => e,
@@ -71,52 +53,6 @@ pub fn body<'a>(
     let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KSignature(sig));
     scope.add(name, sig_obj);
     BodyResult::Value(sig_obj)
-}
-
-fn run_body_statements<'a>(
-    decl_scope: &'a Scope<'a>,
-    body_expr: KExpression<'a>,
-) -> Result<(), KError> {
-    let is_multi_statement = !body_expr.parts.is_empty()
-        && body_expr
-            .parts
-            .iter()
-            .all(|p| matches!(p, ExpressionPart::Expression(_)));
-    let mut sched = Scheduler::new();
-    let ids: Vec<crate::dispatch::kfunction::NodeId> = if is_multi_statement {
-        body_expr
-            .parts
-            .into_iter()
-            .filter_map(|p| match p {
-                ExpressionPart::Expression(e) => Some(sched.add_dispatch(*e, decl_scope)),
-                _ => None,
-            })
-            .collect()
-    } else {
-        vec![sched.add_dispatch(body_expr, decl_scope)]
-    };
-    sched.execute()?;
-    for id in ids {
-        if let Err(e) = sched.read_result(id) {
-            return Err(e.clone());
-        }
-    }
-    Ok(())
-}
-
-fn extract_kexpression<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KExpression<'a>> {
-    let rc = bundle.args.remove(name)?;
-    match Rc::try_unwrap(rc) {
-        Ok(KObject::KExpression(e)) => Some(e),
-        Ok(_) => None,
-        Err(rc) => match &*rc {
-            KObject::KExpression(e) => Some(e.clone()),
-            _ => None,
-        },
-    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
