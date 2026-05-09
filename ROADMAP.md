@@ -47,7 +47,13 @@ fresh `KType::ModuleType { scope_id, name }` per declared abstract type so two
 ascriptions of the same source module are observably distinct types; `:!`
 transparent ascription shape-checks against the signature without re-tagging
 identity; `Module`/`Signature` first-class values arena-allocated alongside
-`KFunction` and reachable via `Foo.member` ATTR access). The next
+`KFunction` and reachable via `Foo.member` ATTR access), and the lift-walk
+and aggregate-scheduler dedup (a single `any_descendant` predicate-walker
+serves both `needs_lift` and `kobject_borrows_arena`; `run_aggregate` and
+`run_aggregate_dict` share a parametric runner plus a frame-on-error
+`resolve_or_err` helper; module/signature resolution lives next to the
+`Module` / `Signature` types and serves both ascription operators and
+`MODULE_TYPE_OF`). The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -132,9 +138,6 @@ the rest incrementally, each producing a usable end state.
 
 - [Static type checking and JIT compilation](roadmap/static-typing-and-jit.md) — the
   tooling and performance ceiling; both want a phase between parse and execution.
-- [Lift-walk and aggregate-scheduler dedup](roadmap/lift-and-schedule-dedup.md) —
-  collapse duplicated `KObject`-tree walks and per-variant scheduler paths in
-  `execute/` once module-system stage 2 has stabilized those hot paths.
 - [`KType` and dispatcher concern split](roadmap/ktype-and-dispatcher-split.md) —
   split `ktype.rs` and `scope.rs` along their concern boundaries; substrate for
   static-typing-and-jit's checker pre-pass.

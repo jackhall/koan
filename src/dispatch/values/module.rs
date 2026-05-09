@@ -31,9 +31,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 
 use super::super::types::KType;
+use super::KObject;
 
 /// First-class module value. The `path` is the lexical-source label used by error messages
 /// and `summarize()`; `child_scope_ptr` points into the same arena as the containing
@@ -108,4 +109,74 @@ impl<'a> Signature<'a> {
             std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.decl_scope_ptr)
         }
     }
+}
+
+/// Resolve a `KObject` slot to a borrowed `&Module`. Accepts either an already-evaluated
+/// `KObject::KModule` (when the lhs is a `Future(KModule)` from a sub-dispatch) or a
+/// `KObject::TypeExprValue` token that names a module bound in `scope` (the surface case
+/// where module names classify as Type tokens, e.g. `IntOrd :| OrderedSig`). Used by both
+/// the ascription operators (`:|` / `:!`) and `MODULE_TYPE_OF`'s `m` slot — the dual-shape
+/// pattern was duplicated in two builtin files before being lifted here.
+///
+/// `arg_name` is the surface argument label used in the produced `TypeMismatch` so error
+/// messages stay byte-identical with the previous per-builtin helpers (`m` for both
+/// consumers today; threading it keeps the API future-proof if a third site lands a
+/// different label).
+pub(crate) fn resolve_module<'a>(
+    scope: &'a Scope<'a>,
+    obj: &KObject<'a>,
+    arg_name: &str,
+) -> Result<&'a Module<'a>, KError> {
+    if let Some(m) = obj.as_module() {
+        return Ok(m);
+    }
+    if let Some(t) = obj.as_type_expr() {
+        return match scope.lookup(&t.name) {
+            Some(found) => found.as_module().ok_or_else(|| {
+                KError::new(KErrorKind::TypeMismatch {
+                    arg: arg_name.to_string(),
+                    expected: "Module".to_string(),
+                    got: found.ktype().name(),
+                })
+            }),
+            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
+        };
+    }
+    Err(KError::new(KErrorKind::TypeMismatch {
+        arg: arg_name.to_string(),
+        expected: "Module".to_string(),
+        got: obj.ktype().name(),
+    }))
+}
+
+/// Symmetric to [`resolve_module`] for `&Signature`. Same dual-shape match
+/// (`KObject::KSignature(_) | KObject::TypeExprValue(t)` with scope lookup) and same
+/// `TypeMismatch` / `UnboundName` error shape. The shared callers are the ascription
+/// operators' `s` slot — `MODULE_TYPE_OF` doesn't take a Signature today, but the helper
+/// lives here because the ascription operators want a parallel API to `resolve_module`.
+pub(crate) fn resolve_signature<'a>(
+    scope: &'a Scope<'a>,
+    obj: &KObject<'a>,
+    arg_name: &str,
+) -> Result<&'a Signature<'a>, KError> {
+    if let Some(s) = obj.as_signature() {
+        return Ok(s);
+    }
+    if let Some(t) = obj.as_type_expr() {
+        return match scope.lookup(&t.name) {
+            Some(found) => found.as_signature().ok_or_else(|| {
+                KError::new(KErrorKind::TypeMismatch {
+                    arg: arg_name.to_string(),
+                    expected: "Signature".to_string(),
+                    got: found.ktype().name(),
+                })
+            }),
+            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
+        };
+    }
+    Err(KError::new(KErrorKind::TypeMismatch {
+        arg: arg_name.to_string(),
+        expected: "Signature".to_string(),
+        got: obj.ktype().name(),
+    }))
 }

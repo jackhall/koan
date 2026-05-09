@@ -107,29 +107,79 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
     }
 }
 
+/// True iff some descendant of `v` satisfies `predicate`. The predicate returns
+/// `Some(true)` to short-circuit the entire walk with `true`, `Some(false)` to bottom out
+/// the current subtree at `false` without recursing into its composite arms, or `None` to
+/// let `any_descendant` recurse structurally into composite payloads (`List`, `Dict`,
+/// `Tagged`, `Struct`, `KExpression`, `KFuture`).
+///
+/// Single source of variant coverage for both `needs_lift` and `kobject_borrows_arena` —
+/// the two consumers differ only in their leaf decision and which intermediate variants
+/// they care about. Adding a new composite variant updates this walker once instead of
+/// keeping two parallel pattern-match trees in sync.
+///
+/// `KExpression` recursion looks at the parts' `Future(&KObject)` payloads via the
+/// `expression_borrows_arena` helper — the predicate sees only `KObject` shapes, so the
+/// walker handles the `KExpression` -> parts -> `Future(obj)` peeling itself.
+fn any_descendant<'b, F>(v: &KObject<'b>, predicate: &F) -> bool
+where
+    F: Fn(&KObject<'b>) -> Option<bool>,
+{
+    if let Some(decision) = predicate(v) {
+        return decision;
+    }
+    match v {
+        KObject::List(items) => items.iter().any(|x| any_descendant(x, predicate)),
+        KObject::Dict(entries) => entries.values().any(|x| any_descendant(x, predicate)),
+        KObject::Tagged { value, .. } => any_descendant(value, predicate),
+        KObject::Struct { fields, .. } => fields
+            .values()
+            .any(|x| any_descendant(x, predicate)),
+        KObject::KExpression(e) => e.parts.iter().any(|p| match p {
+            ExpressionPart::Future(obj) => any_descendant(obj, predicate),
+            ExpressionPart::Expression(inner) => inner.parts.iter().any(|p2| match p2 {
+                ExpressionPart::Future(obj) => any_descendant(obj, predicate),
+                _ => false,
+            }),
+            _ => false,
+        }),
+        // Other variants (KFunction, KFuture, scalars, ...) reach this arm only when the
+        // predicate returns None for them — by convention those are leaves the predicate
+        // didn't classify, so they stop the walk at false.
+        _ => false,
+    }
+}
+
 /// True iff lifting `v` against `dying_frame` would attach an `Rc` to some descendant.
 /// Drives both `lift_kobject`'s top-level fast-path skip and the per-composite rebuild
 /// decision: when this returns false, the existing `Rc<Vec>`/`Rc<HashMap>` can be cloned
-/// instead of allocating a fresh one. Walks composites recursively but bottoms out on
-/// the first match (`any`-style).
+/// instead of allocating a fresh one.
+///
+/// Implemented as a one-line wrapper over [`any_descendant`]. The predicate hits each
+/// `KFunction` / `KFuture` for its leaf arena-equality decision, and returns `Some(false)`
+/// for `Struct`/`KExpression` — the existing semantics: those variants aren't reachable
+/// as values inside a List/Dict/Tagged at lift time in current Koan, so leaving the
+/// recursion structural in `any_descendant` keeps it forward-compatible without changing
+/// `needs_lift`'s observable answer today.
 ///
 /// `KFuture(_, None)` defers to `kfuture_borrows_dying_arena` — a precise membership query
 /// against the dying arena's allocated-object set, mirroring `lift_kobject`'s slow path.
 fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
-    match v {
-        KObject::KFunction(_, Some(_)) => false,
+    let dying_runtime: *const RuntimeArena = dying_frame.arena();
+    any_descendant(v, &|obj: &KObject<'b>| match obj {
+        KObject::KFunction(_, Some(_)) => Some(false),
         KObject::KFunction(f, None) => {
-            let dying_runtime: *const RuntimeArena = dying_frame.arena();
             let captured_runtime: *const RuntimeArena = f.captured_scope().arena;
-            std::ptr::eq(captured_runtime, dying_runtime)
+            Some(std::ptr::eq(captured_runtime, dying_runtime))
         }
-        KObject::KFuture(_, Some(_)) => false,
-        KObject::KFuture(t, None) => kfuture_borrows_dying_arena(t, dying_frame.arena()),
-        KObject::List(items) => items.iter().any(|x| needs_lift(x, dying_frame)),
-        KObject::Dict(entries) => entries.values().any(|x| needs_lift(x, dying_frame)),
-        KObject::Tagged { value, .. } => needs_lift(value, dying_frame),
-        _ => false,
-    }
+        KObject::KFuture(_, Some(_)) => Some(false),
+        KObject::KFuture(t, None) => Some(kfuture_borrows_dying_arena(t, dying_frame.arena())),
+        // Bottom out (no recurse) on Struct/KExpression: preserve historical behavior.
+        KObject::Struct { .. } | KObject::KExpression(_) => Some(false),
+        // List / Dict / Tagged: returning None lets `any_descendant` recurse structurally.
+        KObject::List(_) | KObject::Dict(_) | KObject::Tagged { .. } => None,
+        _ => Some(false),
+    })
 }
 
 /// True iff any descendant of an unanchored `KFuture` borrows into `arena`. Walks the
@@ -175,22 +225,26 @@ fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bo
 
 /// Recurse into a `KObject` looking for embedded `KExpression`s (whose `Future` parts may
 /// borrow), nested KFutures, Tagged/Struct/List/Dict payloads, and KFunction captures whose
-/// arena matches `arena`. Mirrors the structural shape of `needs_lift` but answers the
-/// arena-membership question used by Stream 2's targeted KFuture anchor.
+/// arena matches `arena`. One-line wrapper over [`any_descendant`] whose predicate
+/// answers the per-leaf membership question; the walker carries the structural shape.
 fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
-    match v {
-        KObject::KExpression(e) => expression_borrows_arena(e, arena),
-        KObject::KFuture(t, _) => kfuture_borrows_dying_arena(t, arena),
-        KObject::KFunction(f, _) => std::ptr::eq(
+    any_descendant(v, &|obj: &KObject<'b>| match obj {
+        // KExpression has its own walker; ditto KFuture (its recursion is non-`KObject`-
+        // shaped — bundle args / parsed parts / function ref). Settle them as leaves so
+        // `any_descendant` doesn't double-walk the parts via its KExpression arm.
+        KObject::KExpression(e) => Some(expression_borrows_arena(e, arena)),
+        KObject::KFuture(t, _) => Some(kfuture_borrows_dying_arena(t, arena)),
+        KObject::KFunction(f, _) => Some(std::ptr::eq(
             f.captured_scope().arena,
             arena as *const RuntimeArena,
-        ),
-        KObject::List(items) => items.iter().any(|x| kobject_borrows_arena(x, arena)),
-        KObject::Dict(entries) => entries.values().any(|x| kobject_borrows_arena(x, arena)),
-        KObject::Tagged { value, .. } => kobject_borrows_arena(value, arena),
-        KObject::Struct { fields, .. } => fields.values().any(|x| kobject_borrows_arena(x, arena)),
-        _ => false,
-    }
+        )),
+        // List / Dict / Tagged / Struct: returning None lets `any_descendant` recurse.
+        KObject::List(_)
+        | KObject::Dict(_)
+        | KObject::Tagged { .. }
+        | KObject::Struct { .. } => None,
+        _ => Some(false),
+    })
 }
 
 #[cfg(test)]

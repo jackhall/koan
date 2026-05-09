@@ -32,7 +32,7 @@
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::{KObject, Module};
+use crate::dispatch::values::{resolve_module, resolve_signature, KObject, Module};
 
 use super::register_builtin;
 
@@ -178,73 +178,23 @@ fn is_abstract_type_name(name: &str) -> bool {
 /// /rhs are already evaluated module/signature values) or `KObject::TypeExprValue` tokens
 /// that name the lookup target — `IntOrd :| OrderedSig` parses with both sides as Type
 /// tokens per the §2 classification rule, and the lookup happens here.
+///
+/// The `MissingArg` check stays at this call site (one of two consumers); the shared
+/// helpers in [`crate::dispatch::values::module`] take a `&KObject` directly, since the
+/// dual-shape resolution itself is what's duplicated, not the slot-presence check.
 fn resolve_module_and_signature<'a>(
     scope: &'a Scope<'a>,
     bundle: &ArgumentBundle<'a>,
 ) -> Result<(&'a crate::dispatch::values::Module<'a>, &'a crate::dispatch::values::Signature<'a>), KError> {
-    let m = resolve_module(scope, bundle.get("m"), "m")?;
-    let s = resolve_signature(scope, bundle.get("s"), "s")?;
+    let m_obj = bundle
+        .get("m")
+        .ok_or_else(|| KError::new(KErrorKind::MissingArg("m".to_string())))?;
+    let s_obj = bundle
+        .get("s")
+        .ok_or_else(|| KError::new(KErrorKind::MissingArg("s".to_string())))?;
+    let m = resolve_module(scope, m_obj, "m")?;
+    let s = resolve_signature(scope, s_obj, "s")?;
     Ok((m, s))
-}
-
-fn resolve_module<'a>(
-    scope: &'a Scope<'a>,
-    obj: Option<&KObject<'a>>,
-    arg: &str,
-) -> Result<&'a crate::dispatch::values::Module<'a>, KError> {
-    let Some(obj) = obj else {
-        return Err(KError::new(KErrorKind::MissingArg(arg.to_string())));
-    };
-    if let Some(m) = obj.as_module() {
-        return Ok(m);
-    }
-    if let Some(t) = obj.as_type_expr() {
-        return match scope.lookup(&t.name) {
-            Some(found) => found.as_module().ok_or_else(|| {
-                KError::new(KErrorKind::TypeMismatch {
-                    arg: arg.to_string(),
-                    expected: "Module".to_string(),
-                    got: found.ktype().name(),
-                })
-            }),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        };
-    }
-    Err(KError::new(KErrorKind::TypeMismatch {
-        arg: arg.to_string(),
-        expected: "Module".to_string(),
-        got: obj.ktype().name(),
-    }))
-}
-
-fn resolve_signature<'a>(
-    scope: &'a Scope<'a>,
-    obj: Option<&KObject<'a>>,
-    arg: &str,
-) -> Result<&'a crate::dispatch::values::Signature<'a>, KError> {
-    let Some(obj) = obj else {
-        return Err(KError::new(KErrorKind::MissingArg(arg.to_string())));
-    };
-    if let Some(s) = obj.as_signature() {
-        return Ok(s);
-    }
-    if let Some(t) = obj.as_type_expr() {
-        return match scope.lookup(&t.name) {
-            Some(found) => found.as_signature().ok_or_else(|| {
-                KError::new(KErrorKind::TypeMismatch {
-                    arg: arg.to_string(),
-                    expected: "Signature".to_string(),
-                    got: found.ktype().name(),
-                })
-            }),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        };
-    }
-    Err(KError::new(KErrorKind::TypeMismatch {
-        arg: arg.to_string(),
-        expected: "Signature".to_string(),
-        got: obj.ktype().name(),
-    }))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

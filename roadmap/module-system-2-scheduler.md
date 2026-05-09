@@ -154,10 +154,6 @@ face the same Miri evidence the current set does.
   both the checker's lifetime story and the JIT's codegen contract want a
   stable, signed-off memory model plus a settled answer to the
   inference-as-scheduler-work question.
-- [Lift-walk and aggregate-scheduler dedup](lift-and-schedule-dedup.md) —
-  collapses the duplicated `KObject`-tree walks and per-variant scheduler
-  paths in `execute/` once stage 2's reshape of the lift and schedule
-  hot paths has stabilized.
 - [`KType` and dispatcher concern split](ktype-and-dispatcher-split.md) —
   splits `ktype.rs` and `scope.rs` along their concern boundaries once
   stage 2 has finished landing new `KType` variants and dispatch paths.
