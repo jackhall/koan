@@ -12,22 +12,29 @@ use, and a [`ScopeResolver`](../src/dispatch/types/resolver.rs) lowers
 binding makes `MyList` available as a type name in subsequent FN signatures.
 What this substrate does not yet support: parens-wrapped type expressions
 in FN parameter positions (`xs: (LIST_OF Number)`) aren't sub-dispatched,
-and FN-def's `ScopeResolver` lookup gives up rather than deferring when a
-type identifier isn't yet bound — so a non-LET-wrapped FN that references
-an earlier `LET MyType = (LIST_OF Number)` fails, and a signature-typed
-parameter naming a SIG that's only in scope at the call site has no path
-to resolve. Functors aren't dispatchable end-to-end at all: there is no
+and FN-def's [`ScopeResolver`](../src/dispatch/types/resolver.rs) does a
+synchronous `scope.lookup(name)` and returns `None` rather than parking on
+a dispatch-time placeholder, so a type identifier bound by an earlier
+top-level `LET MyType = (LIST_OF Number)` doesn't resolve in a sibling FN
+signature, and a signature-typed parameter naming a SIG only in scope at
+the call site has no path to resolve. (Value-name forward references
+already park on placeholders via the
+[`Scope::placeholders`](../src/dispatch/runtime/scope.rs) sidecar and the
+scheduler's `notify_list` / `pending_deps` machinery — the type-name path
+is the gap.) Functors aren't dispatchable end-to-end at all: there is no
 `KType::SignatureBound` slot kind, no `KType::TypeConstructor`, no
 `TypeParams::Named` for sharing constraints, and no generative-application
 semantics that mints fresh abstract types per call. Meanwhile the
-[`dispatch::runtime::arena`](../src/dispatch/runtime/arena.rs) Miri slate that
-signed off the previous memory model under `-Zmiri-tree-borrows` is out of
-date: stage 1 reshaped the runtime — `Module` and `Signature` use the same
-`*const Scope<'static>` lifetime-erasure pattern as `KFunction`, new
-`RuntimeArena` slots feed into ATTR's chained-attribute path, opaque
-ascription re-binds source module entries into a fresh child scope. Every new
-unsafe site, every new shape of arena re-entry, every new lift path needs to
-face the same Miri evidence the current set does.
+[`dispatch::runtime::arena`](../src/dispatch/runtime/arena.rs) Miri slate
+covers the post-reverse-DAG scheduler shape (push/notify edges with
+`notify_list` / `pending_deps` sidecars and the `Lift { from: NodeId }`
+work variant) and the stage-1 `*const Scope<'static>` lifetime-erasure
+transmutes on `Module` / `Signature` plus the `type_members` `RefCell`,
+but the opaque-ascription path that re-binds source module entries into
+a fresh child scope still has no Miri test under tree borrows. Every new
+unsafe site this stage introduces (functor lift, signature-bound dispatch,
+type-op dispatch through the per-call arena) needs the same Miri evidence
+the current set does.
 
 **Impact.**
 
@@ -58,10 +65,11 @@ face the same Miri evidence the current set does.
   module system is exercised through the scheduler rather than only at
   the surface forms shipped in stage 1.
 - *Memory-model sign-off carries the new module surface.* The
-  [audit slate](../design/memory-model.md#audit-and-sign-off) re-runs
-  against the post-stage-1 runtime and any new unsafe sites this stage
-  introduces, so the closure-escape + per-call-arena story stays
-  evidence-backed rather than carried on prior assertion.
+  [audit slate](../design/memory-model.md#verification) re-runs against
+  the new unsafe sites this stage introduces (functor lift, signature-bound
+  dispatch, type-op dispatch through the per-call arena, the opaque-
+  ascription re-bind path), so the closure-escape + per-call-arena story
+  stays evidence-backed rather than carried on prior assertion.
 
 **Directions.**
 
@@ -73,25 +81,29 @@ face the same Miri evidence the current set does.
   a synthesized call, and refinement rides on `Bind` waiting for its
   sub-Dispatches.
 - *Type resolution in FN signatures — decided.* No new top-level
-  sequencing primitive, no parallel type-resolution pass. The existing
-  FIFO + `Bind` discipline that gives `LET x = ...; PRINT x` source-order
-  semantics for values gives the same for types, *if* FN-def's signature
-  elaboration rides on the same machinery. Two changes:
+  sequencing primitive, no parallel type-resolution pass. The
+  push/notify scheduler with dispatch-time placeholders gives the same
+  source-order semantics for types that it already gives for values, *if*
+  FN-def's signature elaboration rides on the same machinery. Two
+  changes:
   - **Parens-wrapped type expressions sub-dispatch.** A parameter
     position written `xs: (LIST_OF MyType)` schedules the parens-wrapped
     part as a sub-Dispatch; its `KObject::TypeExprValue` result splices
     in via the standard `Bind` path. An `elaborate_type_expr` helper in
-    `src/dispatch/types/resolver.rs` is the shared entry point.
-  - **Bare type identifiers resolve hybrid.** FN-def attempts synchronous
-    resolution at body time via the existing `ScopeResolver`. Resolved
-    slots land in the resulting `KFunction` as ordinary `KType`s.
-    Unresolved slots carry the original `TypeExpr` on the KFunction; the
-    first call re-runs resolution against the FN's captured scope and
-    memoizes the result (one `OnceCell<KType>` per slot, sound because
-    the captured scope is lexically fixed). This covers the realistic
-    LET-wrapped FN cases (resolution succeeds at body time via FIFO) and
-    the late-binding cases — signature-typed parameters, mutually
-    recursive type references — without a new scheduler primitive.
+    [`src/dispatch/types/resolver.rs`](../src/dispatch/types/resolver.rs)
+    is the shared entry point.
+  - **Bare type identifiers park on placeholders, then memoize.**
+    FN-def's signature elaboration consults `ScopeResolver` (extended
+    to check `Scope::placeholders` after `data`); a name whose binder
+    has dispatched but not finalized parks the elaborating slot via
+    the existing `notify_list` / `pending_deps` machinery, the same
+    way a value-name forward reference parks today. Names not yet
+    even dispatched (signature-typed parameters whose type comes from
+    a SIG only in scope at the call site, mutually recursive type
+    references) carry the original `TypeExpr` on the resulting
+    `KFunction`; the first call re-runs resolution against the FN's
+    captured scope and memoizes the result (one `OnceCell<KType>` per
+    slot, sound because the captured scope is lexically fixed).
 - *Functor declaration syntax — decided.* Functors are FNs whose
   parameters are signature-typed and whose body returns a `MODULE`
   expression. No `FUNCTOR` keyword.
@@ -99,12 +111,15 @@ face the same Miri evidence the current set does.
   Pinning a functor's output abstract type to its input rides on
   named-slot syntax for parameterized type expressions (`<Type: E.Type>`),
   not a separate `with type` keyword.
-- *Generative vs applicative semantics — open.* Generative — each
-  application produces a fresh abstract type — is simpler to specify and
-  provides the per-type identity property the design relies on, and falls
-  out of `:|`-per-call evaluation. Applicative — same arguments yield the
-  same output type — is more ergonomic when functors are re-applied.
-  Recommended: generative for v1, revisit later.
+- *Generative vs applicative semantics — decided.* Each functor
+  application produces a fresh abstract type. `(MAKESET IntOrd)` called
+  twice yields two distinct `Set` types whose values don't interoperate.
+  Falls out of `:|`-per-call opaque ascription and stage 1's per-scope
+  `KType::ModuleType { scope_id, .. }` identity carrier — no
+  arguments-seen-before bookkeeping. Applicative semantics (same
+  arguments → same output type) can be reconsidered later if the
+  ergonomic cost of threading a single shared instance shows up in real
+  use, but it's not in scope for v1.
 - *Type identity through functor application — decided.* `(MAKESET IntOrd)`
   applied twice yields two distinct `Set` types. The implementation
   extends stage 1's module-type identity carrier to include the
@@ -113,25 +128,18 @@ face the same Miri evidence the current set does.
   constructors (a `Wrap` slot taking a type parameter) so monads and
   other parametric abstractions are expressible. Required by
   [monadic-side-effects](monadic-side-effects.md).
-- *Audit slate carry-forward — decided.* Re-run the existing 16-test audit
-  slate plus the `alloc_object_redirects_self_anchored_value_to_escape_arena`
-  regression test added in the cycle-gate fix. Append new tests for the
-  stage-1 unsafe sites (the `*const Scope<'static>` transmutes in
-  `Module::child_scope` / `Signature::decl_scope`, the opaque-ascription
-  path that re-binds source module entries into a fresh child scope, the
-  `type_members` `RefCell<HashMap>` mutation), the type-builtin dispatch
-  path (`type_op_dispatch_does_not_dangle`), and the per-call functor
-  module lift (`functor_per_call_module_lifts_correctly`). The named
-  slate from the implementation plan
-  (`module_child_scope_transmute_does_not_dangle`,
-  `signature_decl_scope_transmute_does_not_dangle`,
-  `opaque_ascription_re_binds_do_not_alias_unsoundly`,
-  `type_members_refcell_mutation_does_not_corrupt_under_concurrent_borrow`,
-  plus the two named above) is the deliverable. Today the test-helper
-  leaks in `dispatch::runtime::scope::tests` (the `Box::leak` markers in
-  the specificity tests) are the only Miri findings — replace those with
-  arena-anchored allocations as part of this work so the slate runs
-  zero-leak.
+- *Audit slate carry-forward — decided.* The current 23-test slate
+  ([TEST.md § Miri audit slate](../TEST.md#miri-audit-slate)) already
+  passes against the post-reverse-DAG scheduler and the stage-1
+  `*const Scope<'static>` transmute + `type_members` `RefCell` sites
+  (covered by tests in
+  [`dispatch::values::module`](../src/dispatch/values/module.rs)).
+  Append three new tests for the sites this stage adds: the stage-1
+  opaque-ascription re-bind path
+  (`opaque_ascription_re_binds_do_not_alias_unsoundly`); the type-builtin
+  dispatch path (`type_op_dispatch_does_not_dangle`); and the per-call
+  functor module lift (`functor_per_call_module_lifts_correctly`). Slate
+  re-runs zero-UB / zero-leak after each.
 
 ## Dependencies
 

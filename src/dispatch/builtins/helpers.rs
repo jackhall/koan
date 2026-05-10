@@ -5,10 +5,9 @@
 
 use std::rc::Rc;
 
-use crate::dispatch::kfunction::{ArgumentBundle, NodeId};
+use crate::dispatch::kfunction::{ArgumentBundle, NodeId, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::values::KObject;
-use crate::execute::scheduler::Scheduler;
 use crate::parse::kexpression::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 /// Take ownership of a `KType::KExpression`-typed argument out of `bundle.args`, cloning
@@ -72,42 +71,37 @@ pub(crate) fn extract_bare_type_name<'a>(
     }
 }
 
-/// Run each top-level statement in `body_expr` against `scope` on a fresh inner scheduler.
+/// Schedule each top-level statement in `body_expr` against `scope` on the OUTER scheduler
+/// and return their `NodeId`s. Caller (MODULE / SIG body) wraps these in a `Combine` whose
+/// finish closure builds the binder value once all statements terminalize.
 ///
 /// A body counts as multi-statement only when *every* part is `ExpressionPart::Expression(_)`;
 /// otherwise the whole body is dispatched as a single statement. The stricter all-Expression
 /// rule prevents `LET x = (FN ...)` from being mis-split (its inner `Expression` part would
 /// otherwise look like a second statement).
-pub(crate) fn run_body_statements<'a>(
-    scope: &'a Scope<'a>,
+pub(crate) fn plan_body_statements<'a>(
+    sched: &mut dyn SchedulerHandle<'a>,
+    child_scope: &'a Scope<'a>,
     body_expr: KExpression<'a>,
-) -> Result<(), KError> {
+) -> Vec<NodeId> {
     let is_multi_statement = !body_expr.parts.is_empty()
         && body_expr
             .parts
             .iter()
             .all(|p| matches!(p, ExpressionPart::Expression(_)));
 
-    let mut sched = Scheduler::new();
-    let ids: Vec<NodeId> = if is_multi_statement {
+    if is_multi_statement {
         body_expr
             .parts
             .into_iter()
             .filter_map(|p| match p {
-                ExpressionPart::Expression(e) => Some(sched.add_dispatch(*e, scope)),
+                ExpressionPart::Expression(e) => Some(sched.add_dispatch(*e, child_scope)),
                 _ => None,
             })
             .collect()
     } else {
-        vec![sched.add_dispatch(body_expr, scope)]
-    };
-    sched.execute()?;
-    for id in ids {
-        if let Err(e) = sched.read_result(id) {
-            return Err(e.clone());
-        }
+        vec![sched.add_dispatch(body_expr, child_scope)]
     }
-    Ok(())
 }
 
 /// `pre_run` placeholder extractor for builtins whose `parts[1]` is a single `Type(t)`

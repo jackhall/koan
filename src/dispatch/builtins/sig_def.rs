@@ -2,30 +2,30 @@
 //! a module can be ascribed to). See
 //! [design/module-system.md](../../../design/module-system.md).
 //!
-//! Construction shape mirrors [`module_def`](super::module_def): the body is a parens-
-//! wrapped KExpression dispatched against a fresh child scope. The body's declarations are
+//! Construction shape mirrors [`module_def`](super::module_def): body statements dispatch
+//! against a fresh child scope on the OUTER scheduler, then a `Combine` over those slots
+//! captures the populated scope into a [`Signature`] value, allocates it in the parent's
+//! arena, and binds it under the signature's name. Body declarations are
 //! `LET name = (FN <signature> -> <return> = ...)` for operations and `LET Type = TypeExpr`
-//! for abstract type declarations (stage 4 will add `axiom`s here too). The captured child
-//! scope is wrapped in a [`Signature`] value, allocated in the parent's arena, and bound
-//! under the signature's name.
+//! for abstract type declarations (stage 4 will add `axiom`s here too).
 //!
 //! Stage 1 stores the raw scope; the ascription operators (`:|` / `:!`) iterate it at
 //! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
 //! attaches axioms.
 
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::runtime::{KError, KErrorKind, Scope};
+use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, CombineFinish, SchedulerHandle};
+use crate::dispatch::runtime::{Frame, KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, Signature};
 
 use crate::parse::kexpression::KExpression;
 
-use super::helpers::{extract_bare_type_name, extract_kexpression, run_body_statements};
+use super::helpers::{extract_bare_type_name, extract_kexpression, plan_body_statements};
 use super::{err, register_builtin_with_pre_run};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let name = match extract_bare_type_name(&bundle, "name", "SIG") {
@@ -47,16 +47,24 @@ pub fn body<'a>(
         format!("SIG {}", name),
     ));
 
-    if let Err(e) = run_body_statements(decl_scope, body_expr) {
-        return BodyResult::Err(e);
-    }
+    let deps = plan_body_statements(sched, decl_scope, body_expr);
 
-    let sig: &'a Signature<'a> = arena.alloc_signature(Signature::new(name.clone(), decl_scope));
-    let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KSignature(sig));
-    if let Err(e) = scope.bind_value(name, sig_obj) {
-        return err(e);
-    }
-    BodyResult::Value(sig_obj)
+    let name_for_finish = name.clone();
+    let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
+        let arena = parent_scope.arena;
+        let sig: &'a Signature<'a> =
+            arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
+        let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KSignature(sig));
+        if let Err(e) = parent_scope.bind_value(name_for_finish.clone(), sig_obj) {
+            return BodyResult::Err(e.with_frame(Frame {
+                function: "<signature>".to_string(),
+                expression: format!("SIG {} body", name_for_finish),
+            }));
+        }
+        BodyResult::Value(sig_obj)
+    });
+    let combine_id = sched.add_combine(deps, scope, finish);
+    BodyResult::DeferTo(combine_id)
 }
 
 /// Dispatch-time placeholder extractor for SIG. `parts[1]` is the `Type(t)` token of the
@@ -126,5 +134,35 @@ mod tests {
             _ => panic!("OrderedSig should be a signature"),
         };
         assert_eq!(sig.path, "OrderedSig");
+    }
+
+    /// Body-statement forward-reference: SIG body's `LET x = y` references a sibling
+    /// top-level binding. Mirrors `module_def::module_body_parks_on_outer_placeholder` —
+    /// post-refactor the body statement parks on the outer placeholder.
+    #[test]
+    fn sig_body_parks_on_outer_placeholder() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "LET y = 7\nSIG Foo = (LET x = y)");
+        let data = scope.data.borrow();
+        let sig = match data.get("Foo") {
+            Some(KObject::KSignature(s)) => *s,
+            _ => panic!("Foo should be a signature"),
+        };
+        let inner = sig.decl_scope().data.borrow();
+        assert!(matches!(inner.get("x"), Some(KObject::Number(n)) if *n == 7.0));
+    }
+
+    /// Failing body statement surfaces as the SIG node's error and must NOT bind `Foo` in
+    /// the parent scope.
+    #[test]
+    fn sig_body_error_short_circuits_finalize() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "SIG Foo = (LET x = nonexistent_name)");
+        assert!(
+            scope.data.borrow().get("Foo").is_none(),
+            "Foo must not bind when its body errors",
+        );
     }
 }

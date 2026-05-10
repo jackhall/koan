@@ -68,20 +68,19 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-05-10: 281.61s — 24 tests, 0 leaks, 0 UB
 - 2026-05-09: 266.18s — 23 tests, 0 leaks, 0 UB
 - 2026-05-09: 218.77s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
 
 ### The slate
 
-23 tests, grouped by the unsafe site each pins down. Names below are the exact
+22 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the command above.
 
 **Singleton transmutes** ([src/dispatch/runtime/arena.rs](src/dispatch/runtime/arena.rs)) — the `'static`→`'a`
 re-annotation on the `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` shared singletons.
 
-- `null_singleton_returns_null_kobject`
-- `bool_singletons_return_correct_values`
 - `singleton_ref_independent_of_arena_lifetime`
 - `singletons_aliasable`
 
@@ -147,6 +146,15 @@ shape).
 - `module_child_scope_transmute_does_not_dangle`
 - `signature_decl_scope_transmute_does_not_dangle`
 - `module_type_members_refcell_mutation_with_held_module_ref`
+
+**MODULE body Combine continuation** ([src/dispatch/builtins/module_def.rs](src/dispatch/builtins/module_def.rs)) — the
+MODULE body schedules a `Combine` whose `finish` closure captures the child
+scope and runs on the outer scheduler's main loop after every body statement
+terminalizes. The captured-reference and finalize-write shapes are the
+post-refactor analogue of the `module_child_scope_transmute_does_not_dangle`
+site, exercised through the actual scheduler path.
+
+- `module_body_dispatch_does_not_dangle`
 
 **Dispatch-time placeholder parking** ([src/execute/run.rs](src/execute/run.rs)) — the §1
 single-Identifier short-circuit and the §8 replay-park (per
