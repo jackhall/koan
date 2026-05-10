@@ -143,6 +143,16 @@ impl<'a> Scheduler<'a> {
                 for i in pick.ref_name_indices {
                     let name = match rewritten.parts.get(i) {
                         Some(ExpressionPart::Identifier(n)) => n.as_str(),
+                        // Bare leaf Type-tokens in literal-name slots park on the same
+                        // placeholder rails as Identifier — `IntOrd :| OrderedSig` waits
+                        // on a forward-declared `MODULE IntOrd` the same way `LET y = (x)`
+                        // waits on `LET x = …`. Parameterized Type parts (List<…>, etc.)
+                        // are structural type-syntax, not look-up targets.
+                        Some(ExpressionPart::Type(t))
+                            if matches!(t.params, crate::parse::kexpression::TypeParams::None) =>
+                        {
+                            t.name.as_str()
+                        }
                         // wrap_indices and ref_name_indices are disjoint by construction.
                         _ => continue,
                     };
@@ -713,5 +723,56 @@ mod tests {
             "UNDEFINED_FN dispatch failure should surface via execute",
         );
         assert!(scope.lookup("y").is_none(), "y should not bind when its dependency errors");
+    }
+
+    /// A bare Type-token in a `TypeExprRef` slot of a non-binder picks up the same §8
+    /// replay-park rails as a bare Identifier: `IntOrd :| OrderedSig` submitted before
+    /// `MODULE IntOrd` / `SIG OrderedSig` must park on the placeholders the binders install
+    /// rather than racing the FIFO submission order. Pins the Type-token park symmetry
+    /// added by [roadmap/type-token-auto-wrap.md].
+    #[test]
+    fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        for e in parse_all(
+            "LET aResult = (IntOrd :| OrderedSig)\n\
+             MODULE IntOrd = (LET compare = 0)\n\
+             SIG OrderedSig = (LET compare = 0)",
+        ) {
+            sched.add_dispatch(e, scope);
+        }
+        sched.execute().unwrap();
+        assert!(
+            matches!(scope.lookup("aResult"), Some(KObject::KModule(_, _))),
+            "aResult should bind to a KModule after replay-park on forward-declared MODULE / SIG",
+        );
+    }
+
+    /// Substrate cross-check: `LET ty = Number` still binds `ty` to a `TypeExprValue`
+    /// carrying the `Number` leaf. After the unification, the value flows through the
+    /// wrap → `value_lookup`-TypeExprRef path rather than the literal `TypeExprValue`
+    /// carve-out; the observable binding must be identical to the literal path. (Lowercase
+    /// LHS because single-letter uppercase tokens don't classify as Type names.)
+    #[test]
+    fn let_t_equals_number_still_binds_type_expr_value() {
+        use crate::parse::kexpression::TypeParams;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        for e in parse_all("LET ty = Number") {
+            sched.add_dispatch(e, scope);
+        }
+        sched.execute().unwrap();
+        match scope.lookup("ty") {
+            Some(KObject::TypeExprValue(t)) => {
+                assert_eq!(t.name, "Number");
+                assert!(matches!(t.params, TypeParams::None));
+            }
+            other => panic!(
+                "ty should bind to TypeExprValue(Number), got {:?}",
+                other.map(|o| o.ktype())
+            ),
+        }
     }
 }

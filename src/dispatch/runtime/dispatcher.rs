@@ -249,7 +249,10 @@ fn accepts_for_wrap(f: &KFunction<'_>, expr: &KExpression<'_>) -> bool {
 
 /// Build a [`ShapePick`] from the picked function and the matching expression. `eager_indices`
 /// reuses `lazy_eager_indices`' result for the lazy path (or empty for non-lazy candidates);
-/// `wrap_indices` and `ref_name_indices` classify bare-Identifier parts per §7 / §8.
+/// `wrap_indices` and `ref_name_indices` classify bare-name parts per §7 / §8. Identifier
+/// and bare leaf Type-token (`TypeParams::None`) are treated symmetrically — both name-shaped
+/// parts ride the same wrap-or-park rails, so `LET T = Number` and `LET y = z` (and their
+/// forward-reference variants) walk identical scheduler paths.
 fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
     let eager_indices = lazy_eager_indices(f, expr).unwrap_or_default();
     let mut wrap_indices: Vec<usize> = Vec::new();
@@ -257,43 +260,31 @@ fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
     let picked_has_pre_run = f.pre_run.is_some();
     for (i, (el, part)) in f.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
         let SignatureElement::Argument(arg) = el else { continue };
-        match (part, &arg.ktype) {
-            // Identifier in literal-name slot: §8 replay-park iff the picked function isn't
-            // a binder. Binders' literal-name slots are *declarations*.
-            (ExpressionPart::Identifier(_), KType::Identifier | KType::TypeExprRef) => {
+        let is_bare_name = matches!(
+            part,
+            ExpressionPart::Identifier(_)
+                | ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
+                    params: crate::parse::kexpression::TypeParams::None,
+                    ..
+                })
+        );
+        if !is_bare_name {
+            continue;
+        }
+        match &arg.ktype {
+            // Bare name in literal-name slot: §8 replay-park iff the picked function isn't
+            // a binder. Binders' literal-name slots are *declarations*; the slot already
+            // owns the name and must not park on its own placeholder.
+            KType::Identifier | KType::TypeExprRef => {
                 if !picked_has_pre_run {
                     ref_name_indices.push(i);
                 }
             }
-            // Identifier in any other slot (including `Any`): §7 wrap. The wrap overrides
-            // the strict literal-name semantics (`LET y = z` looks `z` up rather than
-            // binding to the literal identifier).
-            (ExpressionPart::Identifier(_), _) => {
-                wrap_indices.push(i);
-            }
-            // Bare leaf Type-token in a slot that strictly accepts Type-parts (`Any`
-            // accepts via the literal-TypeExprValue path; `TypeExprRef` is the type-syntax
-            // slot itself). Don't wrap — preserves `LET T = Number` literal semantics.
-            (
-                ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
-                    params: crate::parse::kexpression::TypeParams::None,
-                    ..
-                }),
-                KType::Any | KType::TypeExprRef,
-            ) => {}
-            // Bare leaf Type-token in a slot that strictly *doesn't* accept Type-parts
-            // (Module, SignatureBound, etc.): §7 wrap routes through the TypeExprRef
-            // overload of `value_lookup`. Covers `MAKESET IntOrd`.
-            (
-                ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
-                    params: crate::parse::kexpression::TypeParams::None,
-                    ..
-                }),
-                _,
-            ) => {
-                wrap_indices.push(i);
-            }
-            _ => {}
+            // Bare name in any other slot (including `Any`): §7 wrap. The wrap rewrites
+            // the part into a sub-Dispatch that re-enters via §1 and routes through the
+            // Identifier / TypeExprRef overload of `value_lookup`. Covers both `LET y = z`
+            // and `LET T = Number` / `MAKESET IntOrd` symmetrically.
+            _ => wrap_indices.push(i),
         }
     }
     ShapePick {
@@ -591,6 +582,62 @@ mod tests {
             "LET's Identifier name slot is a declaration, not a reference; should not be ref_name_index. Got {:?}",
             pick.ref_name_indices,
         );
+    }
+
+    /// A non-pre_run function whose slot is `TypeExprRef`, dispatched against a bare leaf
+    /// Type-token, classifies the Type slot the same way an Identifier in an Identifier
+    /// slot does: it lands in `ref_name_indices` so §8 replay-park parks the call on the
+    /// Type-token's placeholder. Symmetry pinned by [roadmap/type-token-auto-wrap.md].
+    #[test]
+    fn shape_pick_type_token_in_typeexprref_slot_returns_ref_name_indices() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("OP".into()),
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::TypeExprRef }),
+            ],
+        };
+        register_builtin(scope, "OP", sig, body_any);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Type(crate::parse::kexpression::TypeExpr::leaf("IntOrd".into())),
+            ],
+        };
+        let pick = scope.shape_pick(&expr).expect("OP <TypeExprRef> should pick");
+        assert_eq!(pick.ref_name_indices, vec![1]);
+        assert!(pick.wrap_indices.is_empty());
+        assert!(!pick.picked_has_pre_run);
+    }
+
+    /// Companion to the literal-name slot case: a bare leaf Type-token in an `Any` slot
+    /// of a non-binder lands in `wrap_indices` so §7 rewrites it into a sub-Dispatch that
+    /// resolves through the TypeExprRef overload of `value_lookup`. No more carve-out for
+    /// `Type-in-Any`; `LET T = Number` walks the same wrap path as `LET y = z`.
+    #[test]
+    fn shape_pick_type_token_in_any_slot_returns_wrap_indices() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("OP".into()),
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
+            ],
+        };
+        register_builtin(scope, "OP", sig, body_any);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Type(crate::parse::kexpression::TypeExpr::leaf("Number".into())),
+            ],
+        };
+        let pick = scope.shape_pick(&expr).expect("OP <Any> should pick");
+        assert_eq!(pick.wrap_indices, vec![1]);
+        assert!(pick.ref_name_indices.is_empty());
+        assert!(!pick.picked_has_pre_run);
     }
 
     /// Ambiguous shape (two equally-specific overloads matching) returns `None` — the wrap
