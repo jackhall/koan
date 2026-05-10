@@ -207,11 +207,10 @@ never terminates).
 
 **Requires:**
 - [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](type-token-auto-wrap.md) —
-  the chained-Lift + replay-park notify-chain deadlock blocks Combine-shaped
-  binders from waking when an inner type-name lookup parks on a producer
-  placeholder. The same notify-chain shape this work introduces for
-  STRUCT/UNION recursion and FN-def signature-elaboration parking;
-  diagnosis must land first.
+  unifies the Combine-shaped binder + name-placeholder path on
+  Type-tokens, which is the same shape STRUCT/UNION recursion and
+  FN-def signature elaboration need; landing the Type-token unification
+  is the substrate this work builds on.
 
 **Unblocks:**
 - [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md) —

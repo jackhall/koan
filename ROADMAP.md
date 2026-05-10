@@ -69,7 +69,13 @@ yet executed park on the producer via the existing `notify_list` /
 `pending_deps` machinery instead of failing with `UnboundName` — see
 [design/execution-model.md § Dispatch-time name placeholders](design/execution-model.md#dispatch-time-name-placeholders);
 same-scope rebind of a value name now surfaces as a structured `Rebind`
-error and an exact-signature `FN` overload conflict as `DuplicateOverload`).
+error and an exact-signature `FN` overload conflict as `DuplicateOverload`),
+and the scheduler park-vs-own edge split (the `Scheduler::dep_edges`
+sidecar's entries now carry a `DepEdge::Owned` / `DepEdge::Notify` tag so
+`free`'s recursive reclaim walks the ownership tree only and ignores
+park edges installed by the single-Identifier short-circuit and
+replay-park; reclaiming a consumer can no longer transit a notify edge
+into a sibling producer's subtree).
 The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
@@ -85,10 +91,6 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
-- [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](roadmap/type-token-auto-wrap.md)
-  — diagnose the chained-Lift + replay-park notify-chain deadlock; unblocks
-  eager type elaboration's Combine-shaped binders.
-
 ## Open items
 
 ### Memory and runtime substrate
@@ -132,9 +134,9 @@ the rest incrementally, each producing a usable end state.
   along the lines of the module system's `KType::ModuleType` carrier.
 - [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](roadmap/type-token-auto-wrap.md)
   — `classify_for_pick` carves Type-tokens out of the auto-wrap rule for `Any` /
-  `TypeExprRef` slots and never replay-parks them; collapsing the carve-out
-  hits a chained-Lift + replay-park scheduler deadlock that needs diagnosis
-  before the Identifier-vs-Type dispatch paths can unify.
+  `TypeExprRef` slots and never replay-parks them; unifying the dispatch paths
+  collapses the literal carve-out and the parallel `Type, Type` ascription
+  overload. Requires the scheduler park-vs-own split.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
   — make type elaboration scheduler-driven the same way value evaluation is;
   replace `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`

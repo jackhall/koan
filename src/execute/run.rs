@@ -9,7 +9,7 @@ use crate::dispatch::types::{Parseable, Serializable};
 use crate::dispatch::runtime::{KFuture, Scope};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use super::nodes::{NodeOutput, NodeStep, NodeWork};
+use super::nodes::{DepEdge, NodeOutput, NodeStep, NodeWork};
 use super::scheduler::Scheduler;
 
 /// One element of a list literal or one side of a dict-literal pair, captured by the
@@ -93,7 +93,11 @@ impl<'a> Scheduler<'a> {
                     return Ok(NodeStep::Done(NodeOutput::Value(obj)));
                 }
                 Resolution::Placeholder(producer_id) => {
-                    self.node_dependencies[idx].push(producer_id.index());
+                    // Notify edge, not Owned: the producer is a sibling slot this Lift
+                    // only parks on for a wake — it is not part of this slot's reclaim
+                    // subtree. Bookkeeping: `register_slot_deps` will still install the
+                    // forward wake on `notify_list[producer]`; `free` will skip past it.
+                    self.dep_edges[idx].push(DepEdge::Notify(producer_id));
                     return Ok(NodeStep::Replace {
                         work: NodeWork::Lift { from: producer_id },
                         frame: None,
@@ -162,8 +166,11 @@ impl<'a> Scheduler<'a> {
                 }
 
                 if !producers_to_wait.is_empty() {
+                    // Notify edges: §8 replay-park parks on sibling producers (often
+                    // top-level slots) the rewritten Dispatch does not own. `free` must
+                    // not transit through these into the producer's subtree.
                     for p in &producers_to_wait {
-                        self.node_dependencies[idx].push(p.index());
+                        self.dep_edges[idx].push(DepEdge::Notify(*p));
                     }
                     return Ok(NodeStep::Replace {
                         work: NodeWork::Dispatch(rewritten),
@@ -234,8 +241,15 @@ impl<'a> Scheduler<'a> {
 
     /// Frame / function are left as `None` so the slot's existing per-call frame and
     /// function label stay attached when the Lift writes its terminal.
+    ///
+    /// `bind_id` was just spawned by this slot's `run_dispatch`, so it lands in
+    /// `dep_edges[idx]` as `Owned`: the Lift owns its underlying Bind/Combine and
+    /// must cascade-free it. When a Dispatch slot first parked via §8 replay-park and
+    /// then re-dispatched here, the resulting `dep_edges[idx]` is the mixed shape
+    /// `[Notify(producer), …, Owned(bind_id)]` — exactly the case `free`'s
+    /// `Owned`-only recursion handles correctly.
     fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'a> {
-        self.node_dependencies[idx].push(bind_id.index());
+        self.dep_edges[idx].push(DepEdge::Owned(bind_id));
         NodeStep::Replace {
             work: NodeWork::Lift { from: bind_id },
             frame: None,
@@ -250,7 +264,7 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        // Sub slots stay in `node_dependencies[idx]` on the error path so chain-free at
+        // Sub slots stay in `dep_edges[idx]` on the error path so chain-free at
         // finalize reclaims them; eager free is the success-path optimization.
         for (_, dep_id) in &subs {
             if let Err(e) = self.read_result(*dep_id) {
@@ -277,8 +291,12 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Success-path eager free; the error path leaves deps for chain-free at slot drop.
+    /// `dep_edges[idx].clear()` is sound here: Bind / Combine slots at reclaim time hold
+    /// only `Owned` edges (their `subs` / `deps`, all spawned by this slot). Notify
+    /// edges land only on Dispatch slots via §1 / §8 in `run_dispatch`, never on Bind /
+    /// Combine, so clearing the list cannot drop a wake intent.
     fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
-        self.node_dependencies[idx].clear();
+        self.dep_edges[idx].clear();
         for d in dep_indices {
             self.free(d);
         }
@@ -288,7 +306,7 @@ impl<'a> Scheduler<'a> {
     /// frame-attached propagation as `run_bind`, then call `finish` over the dep values
     /// and decode the returned `BodyResult` (Value, Tail, or Err) into a `NodeStep`
     /// using the same dispatch as `invoke_to_step`. Deps are eagerly freed on the
-    /// success path; the error path leaves them in `node_dependencies[idx]` for
+    /// success path; the error path leaves them in `dep_edges[idx]` for
     /// chain-free at slot drop.
     pub(super) fn run_combine(
         &mut self,
@@ -481,9 +499,9 @@ impl<'a> Scheduler<'a> {
     /// and SIG body wrap-up via `add_combine`).
     ///
     /// `idx` is the executing slot. Needed so the `DeferTo` arm can push `id` into
-    /// `node_dependencies[idx]` before returning the `Replace` — without that push,
-    /// `register_slot_deps` sees an empty dep list and re-enqueues the Lift before the
-    /// producer runs (the same shape `defer_to_lift` already handles).
+    /// `dep_edges[idx]` (as `Owned`, via `defer_to_lift`) before returning the
+    /// `Replace` — without that push, `register_slot_deps` sees an empty dep list and
+    /// re-enqueues the Lift before the producer runs.
     pub(super) fn invoke_to_step(
         &mut self,
         future: KFuture<'a>,

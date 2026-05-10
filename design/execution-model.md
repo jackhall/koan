@@ -99,7 +99,7 @@ Reclamation runs at the end of `run_bind` / `run_combine`. Once a Bind has
 read its dep results and spliced them into `expr.parts` as `Future(value)`
 (or a Combine's finish closure has produced its result), the dep slots are
 unreachable: a sub-Dispatch is owned by exactly one Bind / Combine, recorded
-in the consumer's `node_dependencies` entry.
+in the consumer's `dep_edges` entry as a `DepEdge::Owned(NodeId)`.
 Free walks recursively, recycling each dep's own dep tree, and stops at any
 still-live slot via `nodes[i].is_some()` — so a free that dives into another
 in-flight user-fn call leaves that subtree for that call's own reclamation.
@@ -110,11 +110,12 @@ fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Bookkeeping lives in three `Scheduler` sidecars: `notify_list:
 Vec<Vec<NodeId>>` (each producer's dependent list), `pending_deps: Vec<usize>`
-(each consumer's unresolved-dep counter), and `node_dependencies:
-Vec<Vec<usize>>` (each Bind/Combine slot's owned sub-slot indices, captured
-at `add()` time before `take()` consumes the work and used by `free()` to
-walk the ownership tree). The `free_list: Vec<usize>` carries indices whose
-`nodes`/`results`/`notify_list`/`pending_deps`/`node_dependencies` entries
+(each consumer's unresolved-dep counter), and `dep_edges:
+Vec<Vec<DepEdge>>` (each slot's backward edges to producers it depends on,
+tagged `Owned` or `Notify`; the `Owned` arm carries the ownership tree the
+free walk follows, and the `Notify` arm carries park-only edges that the
+walk skips). The `free_list: Vec<usize>` carries indices whose
+`nodes`/`results`/`notify_list`/`pending_deps`/`dep_edges` entries
 are cleared and ready for reuse. See also [memory-model.md § Performance
 notes](memory-model.md).
 
@@ -198,9 +199,13 @@ producer's notify-list; on wake the re-dispatch finds the binding in
 the consumer's replay-park surfaces it with a `<replay-park>` frame
 rather than parking on a dead slot.
 
-The new edges are notify-only (consumer→producer for waking, no ownership
-transfer), so `node_dependencies` — the parent → owned-children sidecar that
-`free()` walks — stays untouched. Same-scope rebind of a value name surfaces
+The bare-Identifier short-circuit and replay-park push a
+`DepEdge::Notify(producer)` into the consumer's `dep_edges` entry — the
+same backward-edge sidecar that holds `DepEdge::Owned(child)` for sub-slots
+the consumer owns. `register_slot_deps` walks every entry to install the
+forward `notify_list` edge regardless of kind, but `free()` recurses only
+into `Owned` arms, so a consumer's reclamation cannot transit a park edge
+into a sibling producer's subtree. Same-scope rebind of a value name surfaces
 as `KErrorKind::Rebind`; an `FN` overload duplicating an existing exact
 signature surfaces as `KErrorKind::DuplicateOverload`. Type bindings share
 this placeholder mechanism: a type-binding site registers in

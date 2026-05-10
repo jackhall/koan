@@ -11,7 +11,7 @@ use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::lift::lift_kobject;
-use super::nodes::{work_dep_indices, Node, NodeOutput, NodeStep, NodeWork};
+use super::nodes::{work_owned_edges, DepEdge, Node, NodeOutput, NodeStep, NodeWork};
 
 /// Walk `scope` and its outer chain, looking for a function in `functions[expr.untyped_key()]`
 /// whose `pre_run` extractor returns `Some(name)` for `expr`. The first such name wins.
@@ -67,11 +67,15 @@ pub struct Scheduler<'a> {
     /// 1:1 with `nodes`: count of deps whose terminal result hasn't yet been observed by
     /// this slot's notify-decrement. Reaches zero -> slot pushed onto `ready_set`.
     pub(super) pending_deps: Vec<usize>,
-    /// 1:1 with `nodes`: backward edges (parent -> owned sub-slots). `notify_list` is
-    /// forward; this sidecar is what `free()` walks to reclaim transitive sub-trees.
-    /// Cleared by `run_bind` / `run_combine` after they eagerly free their deps on the
-    /// success path.
-    pub(super) node_dependencies: Vec<Vec<usize>>,
+    /// 1:1 with `nodes`: backward edges (consumer -> producer slots), tagged by kind.
+    /// `DepEdge::Owned` marks a sub-slot this slot is responsible for reclaiming
+    /// (Bind subs, Combine deps, Lift's `from`); `DepEdge::Notify` marks a sibling
+    /// producer this slot only parked on for wake notification (§1 single-Identifier
+    /// short-circuit, §8 replay-park). `notify_list` is the forward analogue;
+    /// `free()` walks this sidecar but recurses only into `Owned` so park edges can
+    /// never transit the reclaim walk into unrelated slots. Cleared by `run_bind` /
+    /// `run_combine` after they eagerly free their deps on the success path.
+    pub(super) dep_edges: Vec<Vec<DepEdge>>,
     /// Reclaimed slot indices. `add()` pulls from here before extending the vecs, so
     /// transient-node reclamation gives constant scheduler memory across tail-recursive
     /// bodies.
@@ -91,7 +95,7 @@ impl<'a> Scheduler<'a> {
             ready_set: VecDeque::new(),
             notify_list: Vec::new(),
             pending_deps: Vec::new(),
-            node_dependencies: Vec::new(),
+            dep_edges: Vec::new(),
             free_list: Vec::new(),
             active_frame: None,
         }
@@ -118,8 +122,8 @@ impl<'a> Scheduler<'a> {
     }
 
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
-        let deps = work_dep_indices(&work);
-        let no_deps = deps.is_empty();
+        let owned_edges = work_owned_edges(&work);
+        let no_deps = owned_edges.is_empty();
         // Submission-time install lets a later sibling park on the placeholder before the
         // producer slot is popped from the FIFO. No-op for non-Dispatch work and for
         // Dispatch shapes whose picked function has no `pre_run`.
@@ -136,7 +140,7 @@ impl<'a> Scheduler<'a> {
                 self.results[i] = None;
                 self.notify_list[i].clear();
                 self.pending_deps[i] = 0;
-                self.node_dependencies[i] = deps;
+                self.dep_edges[i] = owned_edges;
                 i
             }
             None => {
@@ -145,7 +149,7 @@ impl<'a> Scheduler<'a> {
                 self.results.push(None);
                 self.notify_list.push(Vec::new());
                 self.pending_deps.push(0);
-                self.node_dependencies.push(deps);
+                self.dep_edges.push(owned_edges);
                 i
             }
         };
@@ -170,13 +174,15 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Register `idx` as a consumer on each not-yet-terminal dep recorded in
-    /// `node_dependencies[idx]`, returning the count installed. Already-terminal producers
-    /// are skipped — their notify-walk has already happened.
+    /// `dep_edges[idx]`, returning the count installed. Already-terminal producers
+    /// are skipped — their notify-walk has already happened. Both `Owned` and `Notify`
+    /// edges install a wake edge here: the kind distinction matters only at reclaim
+    /// time (`free` recurses only into `Owned`).
     fn register_slot_deps(&mut self, idx: usize) -> usize {
         let mut pending = 0usize;
-        let n = self.node_dependencies[idx].len();
+        let n = self.dep_edges[idx].len();
         for i in 0..n {
-            let dep = self.node_dependencies[idx][i];
+            let dep = self.dep_edges[idx][i].node_id().index();
             if self.is_result_ready(NodeId(dep)) {
                 continue;
             }
@@ -332,8 +338,11 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Reclaim slot `idx` and the sub-tree it owns. Walks `node_dependencies` recursively,
-    /// clearing `results` and pushing each freed index onto `free_list`.
+    /// Reclaim slot `idx` and the sub-tree it owns. Walks `dep_edges` recursively but
+    /// recurses only into `DepEdge::Owned` entries, clearing `results` and pushing each
+    /// freed index onto `free_list`. `DepEdge::Notify` entries are dropped on the floor:
+    /// they point at sibling producers this slot merely parked on, and reclaiming a
+    /// consumer must not reach across a park edge into the producer's subtree.
     ///
     /// Idempotent and safe to call on a still-live slot: the guards early-continue when
     /// `nodes[idx]` is still `Some` or the slot was already reclaimed.
@@ -344,12 +353,14 @@ impl<'a> Scheduler<'a> {
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
             if self.nodes[i].is_some() { continue; }
-            if self.results[i].is_none() && self.node_dependencies[i].is_empty() {
+            if self.results[i].is_none() && self.dep_edges[i].is_empty() {
                 continue;
             }
-            let deps = std::mem::take(&mut self.node_dependencies[i]);
-            for d in deps {
-                stack.push(d);
+            let edges = std::mem::take(&mut self.dep_edges[i]);
+            for edge in edges {
+                if let DepEdge::Owned(id) = edge {
+                    stack.push(id.index());
+                }
             }
             self.results[i] = None;
             self.free_list.push(i);
@@ -599,9 +610,9 @@ mod tests {
         sched.results[s1] = Some(NodeOutput::Value(value));
         sched.results[s2] = Some(NodeOutput::Value(value));
         sched.results[s3] = Some(NodeOutput::Value(value));
-        sched.node_dependencies[s0] = vec![s1];
-        sched.node_dependencies[s1] = vec![s2];
-        sched.node_dependencies[s2] = vec![s3];
+        sched.dep_edges[s0] = vec![DepEdge::Owned(NodeId(s1))];
+        sched.dep_edges[s1] = vec![DepEdge::Owned(NodeId(s2))];
+        sched.dep_edges[s2] = vec![DepEdge::Owned(NodeId(s3))];
 
         sched.free(s1);
 
@@ -609,9 +620,13 @@ mod tests {
         assert!(sched.results[s1].is_none(), "s1 result cleared");
         assert!(sched.results[s2].is_none(), "s2 result cleared");
         assert!(sched.results[s3].is_none(), "s3 result cleared");
-        assert!(sched.node_dependencies[s1].is_empty(), "s1 deps drained");
-        assert!(sched.node_dependencies[s2].is_empty(), "s2 deps drained");
-        assert_eq!(sched.node_dependencies[s0], vec![s1], "s0 deps untouched");
+        assert!(sched.dep_edges[s1].is_empty(), "s1 deps drained");
+        assert!(sched.dep_edges[s2].is_empty(), "s2 deps drained");
+        assert_eq!(sched.dep_edges[s0].len(), 1, "s0 edges untouched");
+        assert!(
+            matches!(sched.dep_edges[s0][0], DepEdge::Owned(id) if id.index() == s1),
+            "s0 still owns s1",
+        );
         let mut freed: Vec<usize> = sched.free_list.to_vec();
         freed.sort();
         assert_eq!(freed, vec![s1, s2, s3]);
@@ -640,6 +655,58 @@ mod tests {
         assert_eq!(sched.free_list, vec![s]);
         sched.free(s);
         assert_eq!(sched.free_list, vec![s], "no duplicate free");
+    }
+
+    #[test]
+    fn free_does_not_recurse_through_notify_edges() {
+        // Regression canary for the conflation bug fixed by `DepEdge`. Synthetic state:
+        //   s_owner:   parent with dep_edges = [Owned(s_owned), Notify(s_sibling)]
+        //   s_owned:   terminalized, owned by s_owner
+        //   s_sibling: terminalized, parked-on by s_owner (must survive free of owner)
+        // After `free(s_owner)`: only s_owner and s_owned land on `free_list`. The
+        // sibling's `results` and `dep_edges` are untouched — the prior single-list
+        // implementation would have reclaimed it as a transitive owned dep.
+        let arena = RuntimeArena::new();
+        let root = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let value: &KObject = arena.alloc_object(KObject::Number(7.0));
+        let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
+        let s_owner = sched.add(mk_dispatch(), root).index();
+        let s_owned = sched.add(mk_dispatch(), root).index();
+        let s_sibling = sched.add(mk_dispatch(), root).index();
+        for i in [s_owner, s_owned, s_sibling] {
+            sched.nodes[i] = None;
+        }
+        sched.results[s_owner] = Some(NodeOutput::Value(value));
+        sched.results[s_owned] = Some(NodeOutput::Value(value));
+        sched.results[s_sibling] = Some(NodeOutput::Value(value));
+        // Give the sibling a non-empty edge list so the bug-shape would observably
+        // walk into it: a self-loop would never be installed in the real scheduler,
+        // but it lets us assert the walk stopped at the Notify edge by checking the
+        // list is still intact after free.
+        sched.dep_edges[s_owner] = vec![
+            DepEdge::Owned(NodeId(s_owned)),
+            DepEdge::Notify(NodeId(s_sibling)),
+        ];
+        sched.dep_edges[s_owned] = Vec::new();
+        sched.dep_edges[s_sibling] = vec![DepEdge::Owned(NodeId(s_sibling))];
+
+        sched.free(s_owner);
+
+        let mut freed = sched.free_list.clone();
+        freed.sort();
+        let mut expected = vec![s_owner, s_owned];
+        expected.sort();
+        assert_eq!(freed, expected, "free must not recurse through Notify edges");
+        assert!(
+            sched.results[s_sibling].is_some(),
+            "sibling's result must survive free of a slot that only parked on it",
+        );
+        assert_eq!(
+            sched.dep_edges[s_sibling].len(),
+            1,
+            "sibling's dep_edges must survive (the free walk stopped at the Notify edge)",
+        );
     }
 
     #[test]
