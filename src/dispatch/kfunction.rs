@@ -66,6 +66,12 @@ pub type CombineFinish<'a> = Box<
 /// `CallArena::outer_frame` so the drop doesn't free memory still in use.
 ///
 /// `Tail { frame: None, .. }` keeps the slot's existing frame and scope.
+///
+/// `DeferTo(id)` rewrites the slot's work to `Lift { from: id }`; the slot's terminal
+/// becomes whatever `id` produces. Used by binder bodies (MODULE, SIG) that schedule a
+/// `Combine` to wrap up their body statements: the Combine owns the finalize work and the
+/// binder's own slot lifts its terminal off the Combine. Same shape as `defer_to_lift`'s
+/// post-Bind park, exposed to bodies for combinator-style planning.
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
     Tail {
@@ -77,6 +83,7 @@ pub enum BodyResult<'a> {
         /// name. `None` for builtin tails that are deferred-eval continuations, not calls.
         function: Option<&'a KFunction<'a>>,
     },
+    DeferTo(NodeId),
     Err(KError),
 }
 

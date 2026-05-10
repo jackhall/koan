@@ -183,7 +183,7 @@ impl<'a> Scheduler<'a> {
             let parent = KExpression { parts };
             if subs.is_empty() {
                 let future = scope.dispatch(parent)?;
-                return Ok(self.invoke_to_step(future, scope));
+                return Ok(self.invoke_to_step(future, scope, idx));
             }
             let bind_id = self.add(NodeWork::Bind { expr: parent, subs }, scope);
             return Ok(self.defer_to_lift(idx, bind_id));
@@ -215,7 +215,7 @@ impl<'a> Scheduler<'a> {
         let new_expr = KExpression { parts: new_parts };
         if subs.is_empty() {
             let future = scope.dispatch(new_expr)?;
-            return Ok(self.invoke_to_step(future, scope));
+            return Ok(self.invoke_to_step(future, scope, idx));
         }
         let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
         Ok(self.defer_to_lift(idx, bind_id))
@@ -262,7 +262,7 @@ impl<'a> Scheduler<'a> {
         // the indices immediately.
         self.reclaim_deps(idx, dep_indices);
         let future = scope.dispatch(expr)?;
-        Ok(self.invoke_to_step(future, scope))
+        Ok(self.invoke_to_step(future, scope, idx))
     }
 
     /// Success-path eager free; the error path leaves deps for chain-free at slot drop.
@@ -312,6 +312,7 @@ impl<'a> Scheduler<'a> {
                 frame,
                 function,
             },
+            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }
@@ -448,11 +449,20 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `BodyResult::Tail` rewrites the current slot's work in place — this is what gives
-    /// recursion constant scheduler memory.
+    /// recursion constant scheduler memory. `BodyResult::DeferTo(id)` rewrites to a Lift
+    /// off `id`, so the slot's terminal becomes whatever `id` produces; matches
+    /// `defer_to_lift`'s post-Bind shape but for body-driven combinator planning (MODULE
+    /// and SIG body wrap-up via `add_combine`).
+    ///
+    /// `idx` is the executing slot. Needed so the `DeferTo` arm can push `id` into
+    /// `node_dependencies[idx]` before returning the `Replace` — without that push,
+    /// `register_slot_deps` sees an empty dep list and re-enqueues the Lift before the
+    /// producer runs (the same shape `defer_to_lift` already handles).
     pub(super) fn invoke_to_step(
         &mut self,
         future: KFuture<'a>,
         scope: &'a Scope<'a>,
+        idx: usize,
     ) -> NodeStep<'a> {
         match future.function.invoke(scope, self, future.bundle) {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
@@ -461,6 +471,7 @@ impl<'a> Scheduler<'a> {
                 frame,
                 function,
             },
+            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }

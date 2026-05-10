@@ -116,6 +116,7 @@ mod tests {
         let value = match result {
             BodyResult::Value(v) => v,
             BodyResult::Tail { .. } => panic!("LET should not produce a Tail"),
+            BodyResult::DeferTo(_) => panic!("LET should not produce a DeferTo"),
             BodyResult::Err(e) => panic!("LET errored unexpectedly: {e}"),
         };
         assert!(matches!(value, KObject::Number(n) if *n == 42.0));

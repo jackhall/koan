@@ -59,6 +59,7 @@ mod tests {
         let result = match body(scope, &mut sched, ArgumentBundle { args }) {
             BodyResult::Value(v) => v,
             BodyResult::Tail { .. } => panic!("value_pass should not produce a Tail"),
+            BodyResult::DeferTo(_) => panic!("value_pass should not produce a DeferTo"),
             BodyResult::Err(e) => panic!("value_pass errored unexpectedly: {e}"),
         };
 

@@ -763,6 +763,56 @@ mod tests {
     }
 
     #[test]
+    fn defer_to_lifts_slot_terminal_off_combine_id() {
+        // Round-trip for `BodyResult::DeferTo(id)`: a builtin body returns
+        // `DeferTo(combine_id)`, the slot rewrites to `Lift { from: combine_id }`, the
+        // Combine resolves to a value, and the builtin's slot ends up with the same
+        // terminal as the Combine. Pins the binder-body wrap-up shape MODULE / SIG use.
+        use crate::dispatch::builtins::{default_scope, register_builtin};
+        use crate::dispatch::kfunction::{BodyResult, CombineFinish};
+        use crate::dispatch::types::{ExpressionSignature, KType, SignatureElement};
+        use crate::parse::kexpression::ExpressionPart;
+
+        // Builtin "DEFERTEST": no args; schedules a Combine over zero deps whose finish
+        // returns a known KString, then returns `BodyResult::DeferTo(combine_id)`.
+        fn body<'a>(
+            scope: &'a Scope<'a>,
+            sched: &mut dyn crate::dispatch::kfunction::SchedulerHandle<'a>,
+            _bundle: ArgumentBundle<'a>,
+        ) -> BodyResult<'a> {
+            let finish: CombineFinish<'a> = Box::new(|scope, _sched, _results| {
+                let v = scope.arena.alloc_object(KObject::KString("from-combine".into()));
+                BodyResult::Value(v)
+            });
+            let combine_id = sched.add_combine(Vec::new(), scope, finish);
+            BodyResult::DeferTo(combine_id)
+        }
+
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        register_builtin(
+            scope,
+            "DEFERTEST",
+            ExpressionSignature {
+                return_type: KType::Str,
+                elements: vec![SignatureElement::Keyword("DEFERTEST".into())],
+            },
+            body,
+        );
+
+        let mut sched = Scheduler::new();
+        let id = sched.add_dispatch(
+            KExpression { parts: vec![ExpressionPart::Keyword("DEFERTEST".into())] },
+            scope,
+        );
+        sched.execute().unwrap();
+        assert!(
+            matches!(sched.read(id), KObject::KString(s) if s == "from-combine"),
+            "DEFERTEST slot's terminal should match the Combine's terminal",
+        );
+    }
+
+    #[test]
     fn tail_call_reuses_node_slot_in_place() {
         // MATCH returns `BodyResult::Tail`; the scheduler rewrites MATCH's slot to a
         // Dispatch of the matched branch body in place rather than spawning a fresh slot.

@@ -74,6 +74,7 @@ mod tests {
         match body(scope, &mut sched, bundle) {
             BodyResult::Value(v) => v,
             BodyResult::Tail { .. } => panic!("value_lookup should not produce a Tail"),
+            BodyResult::DeferTo(_) => panic!("value_lookup should not produce a DeferTo"),
             BodyResult::Err(e) => panic!("value_lookup errored unexpectedly: {e}"),
         }
     }
@@ -124,6 +125,7 @@ mod tests {
         match r {
             BodyResult::Value(_) => "Value",
             BodyResult::Tail { .. } => "Tail",
+            BodyResult::DeferTo(_) => "DeferTo",
             BodyResult::Err(_) => "Err",
         }
     }
