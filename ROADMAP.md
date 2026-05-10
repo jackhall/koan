@@ -80,10 +80,12 @@ in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Stage 2 — Module values and functors through the scheduler](roadmap/module-system-2-scheduler.md) —
-  make module expressions, type expressions (with incremental refinement), and
-  functors full participants in the scheduler's free-execution model; carries
-  forward the post-stage-1 Miri audit slate.
+- [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
+  — make type elaboration scheduler-driven the same way value evaluation is;
+  replace `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`
+  for one canonical runtime type representation; add `KType::Mu` and
+  `KType::RecursiveRef` so recursive type definitions elaborate via threaded-set
+  self-reference recognition without deadlocking on their own placeholder.
 - [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
   — extend the `KType::ModuleType` per-declaration identity carrier to `STRUCT` and
   `UNION` so two distinct declarations report distinct types.
@@ -108,9 +110,9 @@ ascription, per-module type identity), and the remaining stages below land
 the rest incrementally, each producing a usable end state.
 
 - [Stage 2 — Module values and functors through the scheduler](roadmap/module-system-2-scheduler.md) —
-  make module expressions, type expressions (with incremental refinement), and
-  functors full participants in the scheduler's free-execution model; carries
-  forward the post-stage-1 Miri audit slate.
+  higher-kinded type slots (`KType::TypeConstructor`), sharing constraints
+  (`<Type: E.Type>`), and the post-stage-1 Miri audit slate carry-forward.
+  Requires eager type elaboration.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.
@@ -136,6 +138,12 @@ the rest incrementally, each producing a usable end state.
   `TypeExprRef` slots and never §8-parks them; collapsing the carve-out
   hits a chained-Lift + §8-park scheduler deadlock that needs diagnosis
   before the Identifier-vs-Type dispatch paths can unify.
+- [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
+  — make type elaboration scheduler-driven the same way value evaluation is;
+  replace `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`
+  for one canonical runtime type representation; add `KType::Mu` and
+  `KType::RecursiveRef` so recursive type definitions elaborate via threaded-set
+  self-reference recognition without deadlocking on their own placeholder.
 
 ### Surface and ergonomics
 

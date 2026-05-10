@@ -48,7 +48,7 @@ Standard skeleton (sections may be omitted when they have nothing to say, but th
 
 ### Design files (`design/*.md`)
 
-Design files describe **the design** — shipped or aspirational — in whatever section shape the topic wants. There is no fixed section order, but the framing rules are strict:
+Design files describe **the design** — whether shipped or aspirational — in whatever section shape the topic wants. There is no fixed section order, but the framing rules are strict:
 
 - **Body prose describes the design as it is or as it will be.** Architecture, invariants, decisions and their rationale, code pointers. Aspirational design is fine: a design doc can land before its implementation, capturing the shape the work will take. The doc reads as a single coherent picture of "this is how it works (or will work)" — present-tense or future-tense, never both side-by-side.
 - **No historical narrative.** Design docs never reference past designs, prior approaches, or earlier states the language passed through. "Used to be X, now is Y" comparisons belong in `git log` and PR descriptions, not in the doc tree. If a body section starts re-litigating a superseded design, delete the comparison and keep only the current shape.

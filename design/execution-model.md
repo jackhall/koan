@@ -199,8 +199,13 @@ The new edges are notify-only (consumer→producer for waking, no ownership
 transfer), so `node_dependencies` — the parent → owned-children sidecar that
 `free()` walks — stays untouched. Same-scope rebind of a value name surfaces
 as `KErrorKind::Rebind`; an `FN` overload duplicating an existing exact
-signature surfaces as `KErrorKind::DuplicateOverload`; recursive type
-definitions deadlock under the uniform-park rule and are tracked separately.
+signature surfaces as `KErrorKind::DuplicateOverload`. Type bindings share
+this placeholder mechanism: a type-binding site registers in
+`Scope::placeholders` exactly like a value binding, external lookups park
+the same way, and self-references during a binding's own elaboration
+short-circuit through the elaborator's threaded-set recognition (see
+[type-system.md § Type elaboration](type-system.md#type-elaboration)) so
+recursive type definitions don't deadlock on their own placeholder.
 
 ## Open work
 
@@ -210,11 +215,14 @@ definitions deadlock under the uniform-park rule and are tracked separately.
   `Dispatch` and `Bind` machinery — type-returning builtins on the value
   path, `Bind` as the refinement-and-wake-up mechanism, and stage 5
   implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
-  node kind. Module-system
-  [stage 2](../roadmap/module-system-2-scheduler.md) lands the type-builtin
-  substrate end-to-end through FN signatures;
+  node kind.
+  [Eager type elaboration](../roadmap/eager-type-elaboration.md) lands the
+  scheduler-driven type-elaboration substrate end-to-end through FN
+  signatures, including placeholder-based recursive type definitions;
+  module-system [stage 2](../roadmap/module-system-2-scheduler.md) layers
+  higher-kinded slots and sharing constraints on top;
   [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
-  implicit search on top.
+  implicit search.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

@@ -163,12 +163,14 @@ shape at runtime.
 
 `TypeExprRef` is the meta-type for argument slots that capture a parsed type-name
 token (`ExpressionPart::Type(_)`). The slot resolves to a
-`KObject::TypeExprValue(t)` carrying the full structured `TypeExpr` — name plus
-any nested parameters — so parameterized types like `List<Number>` survive the
-parser → dispatch boundary intact. Used by FN's return-type slot, by STRUCT and
-UNION's name slots, and by `type_call`'s verb slot. Slots that want only a bare
-name (STRUCT/UNION) check `TypeParams::None` on the inner expr and read `t.name`;
-the validation lives at the consuming builtin rather than at the slot kind.
+`KObject::KTypeValue(KType)` carrying the elaborated type — name, nested
+parameters, and (for recursive types) `Mu` / `RecursiveRef` structure — so
+parameterized types like `List<Number>` and recursive types like `Tree`
+survive the parser → dispatch boundary as a single canonical value. Used by
+FN's return-type slot, by STRUCT and UNION's name slots, and by `type_call`'s
+verb slot. Slots that want only a bare name (STRUCT/UNION) check the elaborated
+shape on the inner value; the validation lives at the consuming builtin rather
+than at the slot kind.
 
 ## Function signatures
 
@@ -197,6 +199,52 @@ FN itself registers with a return type of `Any` — there's no "any function"
 KType to declare, since a function with no signature has nothing to dispatch
 on; the constructed function's projected `ktype()` carries the real shape at
 runtime.
+
+## Type elaboration
+
+Type elaboration runs in the same scheduler that runs value evaluation.
+A type-binding site (`LET T = ...`, `STRUCT T = ...`, `UNION T = ...`)
+registers a placeholder in
+[`Scope::placeholders`](../src/dispatch/runtime/scope.rs) — the same
+sidecar value bindings use — and dispatches its body as scheduler work.
+Lookups of type names from outside the body park on the producer's NodeId
+via `notify_list` / `pending_deps`, the same path value-name forward
+references take ([execution-model.md § Dispatch-time name placeholders](execution-model.md#dispatch-time-name-placeholders)).
+This makes type-name and value-name forward references compose uniformly:
+submission order is not load-bearing for either.
+
+**Recursion via threaded-set self-reference recognition.** The elaborator
+threads a set of binder names currently being elaborated. A lookup of a
+name in the set returns `KType::RecursiveRef(name)` directly without
+parking — this is what keeps a recursive type definition from deadlocking
+on its own placeholder. At binding finalization, if any self-reference
+fired, the body wraps in `KType::Mu { binder, body }`; otherwise it
+commits bare. There is no transient `KType::Placeholder` variant —
+recognition lives in the elaborator's call frame, not in the type
+language. Mutual recursion seeds the threaded set with all names in a
+strongly-connected declaration group before elaborating any member's
+body, so `STRUCT TreeA { b: TreeB }` and `STRUCT TreeB { a: TreeA }`
+elaborate as a unit with cross-references becoming `RecursiveRef` directly.
+
+**Why threaded-set rather than a tagged placeholder or NodeId sentinel.**
+Threading the set keeps recursion recognition layered above the scheduler:
+the scheduler stays type-agnostic (no awareness of "who's elaborating
+right now"), the type language stays scheduler-agnostic (no NodeIds
+embedded in `KType`), and recursion is purely the elaborator's concern.
+SCC mutual recursion just expands the set. Tagging the scheduler
+placeholder with "currently elaborating by node N" couples NodeIds into
+the type language; sentinel-by-NodeId smuggles runtime identity into
+`KType` during the elaboration window. Both alternatives violate the
+layering this design preserves.
+
+**One canonical runtime type representation.** Type bindings finalize to
+`KObject::KTypeValue(KType)`. Consumers read the elaborated type
+directly; there is no surface/elaborated split, no per-lookup
+re-elaboration, no parallel `TypeExpr` representation flowing through
+dispatch. Cycle-aware traversals (equality, printing, hashing) carry an
+"inside this `Mu` binder" set so back-references terminate after one
+unfold. Trivially cyclic aliases (`LET T = T`) surface as a structured
+error rather than a stack overflow.
 
 ## Dispatch and slot-specificity
 
@@ -230,6 +278,11 @@ type identity via `KType::ModuleType`) shipped and is described in the body
 above; the remaining stages live under
 [`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
+- [Eager type elaboration with placeholder-based recursion](../roadmap/eager-type-elaboration.md)
+  — replaces `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`
+  for one canonical runtime type representation; adds `KType::Mu` and
+  `KType::RecursiveRef` so the type-elaboration mechanism described above
+  ships end-to-end.
 - [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — inferred dispatch on signatures. Lands the multi-parameter dispatch the
   current slot-specificity ranking can't express on its own.

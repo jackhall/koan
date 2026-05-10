@@ -346,15 +346,19 @@ The mechanism:
 
 - **Type-returning builtins are ordinary builtins.** `LIST_OF`,
   `DICT_OF`, `FUNCTION_OF`, `MODULE_TYPE_OF` and the like dispatch and
-  execute on the value path; their result is a type carried in
-  `KObject::TypeExprValue`. A [`ScopeResolver`](../src/dispatch/types/resolver.rs)
-  lowers `TypeExprValue` bindings so a `LET MyList = (LIST_OF Number)`
-  binding makes `MyList` available as a type name in subsequent FN
-  signatures.
+  execute on the value path; their result is the elaborated type carried
+  in `KObject::KTypeValue(KType)`. A `LET MyList = (LIST_OF Number)`
+  binding finalizes once and makes `MyList` available as a type name in
+  subsequent FN signatures with no per-lookup re-elaboration.
 - **Type expressions in source position re-elaborate to a synthesized
   call.** A parameter or return type written as `(LIST_OF Number)` (or
   `List<Number>`) is dispatched directly as a sub-expression whose value
-  is a `KType`.
+  is a `KType`. Bare type identifiers in FN signatures park on the
+  binding's scheduler placeholder via the same `notify_list` /
+  `pending_deps` machinery value-name forward references use; recursive
+  type definitions short-circuit self-references through the elaborator's
+  threaded-set recognition rather than parking on their own placeholder
+  ([type-system.md § Type elaboration](type-system.md#type-elaboration)).
 - **Refinement rides on `Bind`.** A `Bind` waiting for its sub-Dispatches
   to complete is the existing wake-up mechanism; a type expression that
   tightens later (e.g. as functor application reaches the body) wakes
