@@ -135,21 +135,20 @@ pub fn body_function_of<'a>(
     BodyResult::Value(scope.arena.alloc_object(KObject::TypeExprValue(result)))
 }
 
-/// `MODULE_TYPE_OF <m> <name>` → `TypeExprRef` carrying the abstract type bound under
-/// `name` in `m`'s `type_members` table. Surface analogue of `M.Type`, but reachable as a
-/// scheduled call so a functor body can synthesize it from a parameter module value. The
-/// `m` slot has two overloads (registered separately): one accepts an evaluated `Module`
-/// value (`Future(KModule)`), the other accepts a `TypeExprRef` token and looks the module
-/// up by name in `scope`. The same body handles both — the shared
-/// [`crate::dispatch::values::resolve_module`] helper does the case split (the same
-/// helper also serves the ascription operators' `m` slot).
+/// `MODULE_TYPE_OF <m:Module> <name>` → `TypeExprRef` carrying the abstract type bound
+/// under `name` in `m`'s `type_members` table. Surface analogue of `M.Type`, but reachable
+/// as a scheduled call so a functor body can synthesize it from a parameter module value.
+/// The `m` slot is strictly `Module`; bare Type-token operands (`MODULE_TYPE_OF Foo Type`)
+/// ride the §7 auto-wrap rails — they sub-dispatch through `value_lookup` and arrive here
+/// as a `Future(KModule)`. The shared [`crate::dispatch::values::resolve_module`] helper
+/// covers both the direct `KModule` path and the `(KModule, frame)` lifted form.
 pub fn body_module_type_of<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let m = match bundle.get("m") {
-        Some(obj) => match resolve_module(scope, obj, "m") {
+        Some(obj) => match resolve_module(obj, "m") {
             Ok(m) => m,
             Err(e) => return err(e),
         },
@@ -218,6 +217,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         },
         body_function_of,
     );
+    // Single overload: the `m` slot is `Module`. Bare Type-token operands
+    // (`MODULE_TYPE_OF Foo Type`) ride the unified §7 wrap path and resolve through the
+    // `value_lookup`-TypeExprRef overload to a `Future(KModule)`, which then matches this
+    // slot strictly. Same pattern as the ascription operators after the type-token-auto-wrap
+    // cleanup — no parallel TypeExprRef-lhs overload needed.
     register_builtin(
         scope,
         "MODULE_TYPE_OF",
@@ -226,23 +230,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             elements: vec![
                 SignatureElement::Keyword("MODULE_TYPE_OF".into()),
                 SignatureElement::Argument(Argument { name: "m".into(),    ktype: KType::Module }),
-                SignatureElement::Argument(Argument { name: "name".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_module_type_of,
-    );
-    // Surface form: `MODULE_TYPE_OF Foo Type` — `Foo` is a Type token rather than an
-    // already-evaluated module value, so the lhs slot is `TypeExprRef`. The body's
-    // `resolve_module_arg` does the scope lookup, mirroring how ascribe handles the same
-    // dual-shape signature.
-    register_builtin(
-        scope,
-        "MODULE_TYPE_OF",
-        ExpressionSignature {
-            return_type: KType::TypeExprRef,
-            elements: vec![
-                SignatureElement::Keyword("MODULE_TYPE_OF".into()),
-                SignatureElement::Argument(Argument { name: "m".into(),    ktype: KType::TypeExprRef }),
                 SignatureElement::Argument(Argument { name: "name".into(), ktype: KType::TypeExprRef }),
             ],
         },

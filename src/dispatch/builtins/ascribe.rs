@@ -18,7 +18,7 @@ pub fn body_opaque<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let (m, s) = match resolve_module_and_signature(scope, &bundle) {
+    let (m, s) = match resolve_module_and_signature(&bundle) {
         Ok(pair) => pair,
         Err(e) => return BodyResult::Err(e),
     };
@@ -89,7 +89,7 @@ pub fn body_transparent<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let (m, s) = match resolve_module_and_signature(scope, &bundle) {
+    let (m, s) = match resolve_module_and_signature(&bundle) {
         Ok(pair) => pair,
         Err(e) => return BodyResult::Err(e),
     };
@@ -142,10 +142,10 @@ fn is_abstract_type_name(name: &str) -> bool {
     chars.any(|c| c.is_ascii_lowercase())
 }
 
-/// Resolve `m` and `s` from the bundle. Accepts either already-evaluated `KModule` /
-/// `KSignature` values or `TypeExprValue` tokens that name a lookup target.
+/// Resolve `m` and `s` from the bundle. Both slots are typed `Module` / `Signature`, so
+/// the resolver is just a typed `as_module()` / `as_signature()` projection; the
+/// `TypeMismatch` arm is a defensive guard against a future caller wiring something else.
 fn resolve_module_and_signature<'a>(
-    scope: &'a Scope<'a>,
     bundle: &ArgumentBundle<'a>,
 ) -> Result<(&'a crate::dispatch::values::Module<'a>, &'a crate::dispatch::values::Signature<'a>), KError> {
     let m_obj = bundle
@@ -154,41 +154,17 @@ fn resolve_module_and_signature<'a>(
     let s_obj = bundle
         .get("s")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("s".to_string())))?;
-    let m = resolve_module(scope, m_obj, "m")?;
-    let s = resolve_signature(scope, s_obj, "s")?;
+    let m = resolve_module(m_obj, "m")?;
+    let s = resolve_signature(s_obj, "s")?;
     Ok((m, s))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    // Surface case: both sides are Type tokens (`IntOrd :| OrderedSig`). Module/signature
-    // names always classify as Type, so this is the overload that fires from user source.
-    register_builtin(
-        scope,
-        ":|",
-        ExpressionSignature {
-            return_type: KType::Module,
-            elements: vec![
-                SignatureElement::Argument(Argument { name: "m".into(), ktype: KType::TypeExprRef }),
-                SignatureElement::Keyword(":|".into()),
-                SignatureElement::Argument(Argument { name: "s".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_opaque,
-    );
-    register_builtin(
-        scope,
-        ":!",
-        ExpressionSignature {
-            return_type: KType::Module,
-            elements: vec![
-                SignatureElement::Argument(Argument { name: "m".into(), ktype: KType::TypeExprRef }),
-                SignatureElement::Keyword(":!".into()),
-                SignatureElement::Argument(Argument { name: "s".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_transparent,
-    );
-    // Fallback: already-evaluated Module/Signature values.
+    // Both ascription operators take already-evaluated `Module` / `Signature` values.
+    // Bare Type-token operands (`IntOrd :| OrderedSig`) ride the unified §7 / §8 wrap +
+    // replay-park rails in `classify_for_pick` — they sub-dispatch through the
+    // `value_lookup`-TypeExprRef overload to a `Future(KModule)` / `Future(KSignature)`,
+    // which then matches these slots strictly. No parallel Type-Type overload required.
     register_builtin(
         scope,
         ":|",

@@ -118,30 +118,18 @@ impl<'a> Signature<'a> {
     }
 }
 
-/// Resolve a `KObject` slot to a borrowed `&Module`. Accepts either a `KObject::KModule`
-/// or a `KObject::TypeExprValue` token that names a module bound in `scope` (module names
-/// classify as Type tokens at the surface, e.g. `IntOrd :| OrderedSig`).
+/// Resolve a `KObject` slot to a borrowed `&Module`. Ascribe and MODULE_TYPE_OF both
+/// declare their `m` slot as `KType::Module`, so the `Argument::matches` filter already
+/// guarantees `obj.as_module()` is `Some` on the happy path; the `TypeMismatch` arm is a
+/// defensive guard against a future caller routing a non-module value through here.
 ///
 /// `arg_name` is the surface argument label threaded into any produced `TypeMismatch`.
 pub(crate) fn resolve_module<'a>(
-    scope: &'a Scope<'a>,
     obj: &KObject<'a>,
     arg_name: &str,
 ) -> Result<&'a Module<'a>, KError> {
     if let Some(m) = obj.as_module() {
         return Ok(m);
-    }
-    if let Some(t) = obj.as_type_expr() {
-        return match scope.lookup(&t.name) {
-            Some(found) => found.as_module().ok_or_else(|| {
-                KError::new(KErrorKind::TypeMismatch {
-                    arg: arg_name.to_string(),
-                    expected: "Module".to_string(),
-                    got: found.ktype().name(),
-                })
-            }),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        };
     }
     Err(KError::new(KErrorKind::TypeMismatch {
         arg: arg_name.to_string(),
@@ -152,24 +140,11 @@ pub(crate) fn resolve_module<'a>(
 
 /// Symmetric to [`resolve_module`] for `&Signature`.
 pub(crate) fn resolve_signature<'a>(
-    scope: &'a Scope<'a>,
     obj: &KObject<'a>,
     arg_name: &str,
 ) -> Result<&'a Signature<'a>, KError> {
     if let Some(s) = obj.as_signature() {
         return Ok(s);
-    }
-    if let Some(t) = obj.as_type_expr() {
-        return match scope.lookup(&t.name) {
-            Some(found) => found.as_signature().ok_or_else(|| {
-                KError::new(KErrorKind::TypeMismatch {
-                    arg: arg_name.to_string(),
-                    expected: "Signature".to_string(),
-                    got: found.ktype().name(),
-                })
-            }),
-            None => Err(KError::new(KErrorKind::UnboundName(t.name.clone()))),
-        };
     }
     Err(KError::new(KErrorKind::TypeMismatch {
         arg: arg_name.to_string(),
