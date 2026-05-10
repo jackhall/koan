@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
 
-use crate::parse::kexpression::KExpression;
+use crate::parse::kexpression::{KExpression, TypeExpr, TypeParams};
 
 use crate::dispatch::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::dispatch::types::UntypedKey;
@@ -165,6 +165,38 @@ impl<'a> Scope<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Register `name` as a type-valued binding in this scope. The binding lives in
+    /// [`Scope::data`] as a `KObject::TypeExprValue` carrying the bare-leaf surface form
+    /// (`TypeExpr { name, params: None }`); the type resolver re-elaborates it to a
+    /// [`crate::dispatch::types::KType`] on lookup via
+    /// [`crate::dispatch::types::KType::from_type_expr`], which falls back to
+    /// [`crate::dispatch::types::KType::from_name`] for the parameterless leaf.
+    ///
+    /// This is the dual of [`Self::register_function`] for the type half of the binding
+    /// surface — the call site that would otherwise reach into `Scope::data` directly to
+    /// seed builtin type names goes through here so the borrow / arena / pending-defer
+    /// plumbing matches the function path. The `_ktype` parameter mirrors how
+    /// `register_function` carries the function value: it documents what the binding
+    /// resolves to and guards against drift between the registered name and the resolver's
+    /// `from_name` mapping (debug-asserted), even though storage is the surface form.
+    ///
+    /// Infallible like the function-side `register_builtin` wrapper: a name collision at
+    /// builtin registration is a programming error, so the [`KErrorKind::Rebind`] returned
+    /// by the underlying `bind_value` is dropped. Per-call-site error handling would just
+    /// bury the bug.
+    pub fn register_type(&self, name: String, _ktype: crate::dispatch::types::KType) {
+        debug_assert_eq!(
+            crate::dispatch::types::KType::from_name(&name),
+            Some(_ktype.clone()),
+            "register_type({name:?}, {:?}): name does not match KType::from_name",
+            _ktype,
+        );
+        let arena = self.arena;
+        let te = TypeExpr { name: name.clone(), params: TypeParams::None };
+        let obj: &'a KObject<'a> = arena.alloc_object(KObject::TypeExprValue(te));
+        let _ = self.bind_value(name, obj);
     }
 
     /// Direct-write path for `bind_value`. `Conflict` means borrow contention (caller

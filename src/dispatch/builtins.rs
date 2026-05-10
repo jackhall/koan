@@ -1,6 +1,6 @@
 use super::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use super::runtime::{KError, Scope};
-use super::types::ExpressionSignature;
+use super::types::{ExpressionSignature, KType};
 use super::values::KObject;
 
 mod ascribe;
@@ -68,6 +68,25 @@ pub fn default_scope<'a>(
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
     let scope = arena.alloc_scope(Scope::run_root(arena, None, out));
+
+    // Builtin type names — bound as `KObject::TypeExprValue` via `Scope::register_type` so
+    // the resolver finds them via the same scope-walk path user-defined types use.
+    scope.register_type("Number".into(), KType::Number);
+    scope.register_type("Str".into(), KType::Str);
+    scope.register_type("Bool".into(), KType::Bool);
+    scope.register_type("Null".into(), KType::Null);
+    scope.register_type("List".into(), KType::List(Box::new(KType::Any)));
+    scope.register_type(
+        "Dict".into(),
+        KType::Dict(Box::new(KType::Any), Box::new(KType::Any)),
+    );
+    scope.register_type("KExpression".into(), KType::KExpression);
+    scope.register_type("Type".into(), KType::Type);
+    scope.register_type("Tagged".into(), KType::Tagged);
+    scope.register_type("Struct".into(), KType::Struct);
+    scope.register_type("Module".into(), KType::Module);
+    scope.register_type("Signature".into(), KType::Signature);
+    scope.register_type("Any".into(), KType::Any);
 
     let_binding::register(scope);
     print::register(scope);

@@ -131,6 +131,11 @@ the rest incrementally, each producing a usable end state.
   — `KType::Struct` and `KType::Tagged` are flat singletons, so two distinct
   `STRUCT` declarations report the same type. Extend per-declaration identity
   along the lines of the module system's `KType::ModuleType` carrier.
+- [Uniform §7 / §8 handling for Type-tokens in value slots](roadmap/type-token-auto-wrap.md)
+  — `classify_for_pick` carves Type-tokens out of the §7 wrap rule for `Any` /
+  `TypeExprRef` slots and never §8-parks them; collapsing the carve-out
+  hits a chained-Lift + §8-park scheduler deadlock that needs diagnosis
+  before the Identifier-vs-Type dispatch paths can unify.
 
 ### Surface and ergonomics
 
