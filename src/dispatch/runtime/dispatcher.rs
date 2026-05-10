@@ -587,7 +587,8 @@ mod tests {
     /// A non-pre_run function whose slot is `TypeExprRef`, dispatched against a bare leaf
     /// Type-token, classifies the Type slot the same way an Identifier in an Identifier
     /// slot does: it lands in `ref_name_indices` so §8 replay-park parks the call on the
-    /// Type-token's placeholder. Symmetry pinned by [roadmap/type-token-auto-wrap.md].
+    /// Type-token's placeholder. Symmetry pinned by
+    /// [design/execution-model.md § Dispatch-time name placeholders](../../../design/execution-model.md#dispatch-time-name-placeholders).
     #[test]
     fn shape_pick_type_token_in_typeexprref_slot_returns_ref_name_indices() {
         let arena = RuntimeArena::new();

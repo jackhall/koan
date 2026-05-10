@@ -75,7 +75,13 @@ sidecar's entries now carry a `DepEdge::Owned` / `DepEdge::Notify` tag so
 `free`'s recursive reclaim walks the ownership tree only and ignores
 park edges installed by the single-Identifier short-circuit and
 replay-park; reclaiming a consumer can no longer transit a notify edge
-into a sibling producer's subtree).
+into a sibling producer's subtree), and the Type-token auto-wrap /
+replay-park unification (`classify_for_pick` now treats bare leaf
+Type-tokens symmetrically with Identifiers in both the §7 auto-wrap
+and §8 replay-park rails, so `LET T = Number` and `IntOrd :| OrderedSig`
+ride the same scheduler paths as `LET y = z` and let the parallel
+`Type, Type` ascription overload plus the Type-token branches of
+`resolve_module` / `resolve_signature` collapse out of the dispatcher).
 The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
@@ -132,11 +138,6 @@ the rest incrementally, each producing a usable end state.
   — `KType::Struct` and `KType::Tagged` are flat singletons, so two distinct
   `STRUCT` declarations report the same type. Extend per-declaration identity
   along the lines of the module system's `KType::ModuleType` carrier.
-- [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](roadmap/type-token-auto-wrap.md)
-  — `classify_for_pick` carves Type-tokens out of the auto-wrap rule for `Any` /
-  `TypeExprRef` slots and never replay-parks them; unifying the dispatch paths
-  collapses the literal carve-out and the parallel `Type, Type` ascription
-  overload. Requires the scheduler park-vs-own split.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
   — make type elaboration scheduler-driven the same way value evaluation is;
   replace `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`

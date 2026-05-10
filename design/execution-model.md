@@ -178,28 +178,32 @@ and `register_function` remove their own placeholder before inserting into
 moment.
 
 The execute side — [`run_dispatch`](../src/execute/run.rs) — handles the
-park. A bare-Identifier dispatch slot (`(some_var)`) hits the
-**bare-Identifier short-circuit** that resolves the name directly:
-`Value` returns inline, `Placeholder` rewrites the slot's work to
-`Lift { from: producer_id }` (the same shim `BodyResult::Tail` uses for
-sub-Bind waits), `Unbound` falls through to `value_lookup`'s structured
-error. The **auto-wrap pass** (carrier: `ShapePick::wrap_indices`)
-promotes bare identifiers in *value-typed* slots of any picked function
-to single-Identifier sub-expressions so they re-enter `run_dispatch` and
-route through the bare-Identifier short-circuit; this is why `LET y = z`
-looks up `z` rather than binding `y` to the literal string `"z"`.
-Multi-name forward references compose as N independent sub-Dispatches.
-The **replay-park** (carrier: `ShapePick::ref_name_indices`) covers the
-literal-name slots that *don't* sub-dispatch (`call_by_name`'s verb,
-`ATTR`'s identifier-lhs, `type_call`'s verb): if any of those names
-resolves to a placeholder whose producer hasn't terminalized, the outer
-slot's work is rewritten to `Dispatch(same_expr)` and parked on the
-producer's notify-list; on wake the re-dispatch finds the binding in
-`data` and proceeds. If the producer already terminalized with an error,
-the consumer's replay-park surfaces it with a `<replay-park>` frame
-rather than parking on a dead slot.
+park. A bare-name dispatch slot (`(some_var)`) hits the **bare-name
+short-circuit** that resolves the name directly: `Value` returns inline,
+`Placeholder` rewrites the slot's work to `Lift { from: producer_id }`
+(the same shim `BodyResult::Tail` uses for sub-Bind waits), `Unbound`
+falls through to `value_lookup`'s structured error. The **auto-wrap
+pass** (carrier: `ShapePick::wrap_indices`) promotes bare-name parts in
+*value-typed* slots of any picked function to single-part sub-expressions
+so they re-enter `run_dispatch` and route through the bare-name
+short-circuit. Both `ExpressionPart::Identifier` and bare leaf
+`ExpressionPart::Type` (a Type-token with no `<…>` parameters) are
+bare-name parts here and ride identical rails: `LET y = z` and
+`LET T = Number` walk the same wrap → sub-dispatch → `value_lookup` path,
+the first through the `Identifier` overload and the second through the
+`TypeExprRef` overload of `value_lookup`. Multi-name forward references
+compose as N independent sub-Dispatches. The **replay-park** (carrier:
+`ShapePick::ref_name_indices`) covers the literal-name slots that *don't*
+sub-dispatch (`call_by_name`'s verb, `ATTR`'s identifier-lhs,
+`type_call`'s verb, ascription's `m` / `s` slots): if any of those names
+— Identifier or bare leaf Type-token — resolves to a placeholder whose
+producer hasn't terminalized, the outer slot's work is rewritten to
+`Dispatch(same_expr)` and parked on the producer's notify-list; on wake
+the re-dispatch finds the binding in `data` and proceeds. If the producer
+already terminalized with an error, the consumer's replay-park surfaces
+it with a `<replay-park>` frame rather than parking on a dead slot.
 
-The bare-Identifier short-circuit and replay-park push a
+The bare-name short-circuit and replay-park push a
 `DepEdge::Notify(producer)` into the consumer's `dep_edges` entry — the
 same backward-edge sidecar that holds `DepEdge::Owned(child)` for sub-slots
 the consumer owns. `register_slot_deps` walks every entry to install the

@@ -220,8 +220,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // Single overload: the `m` slot is `Module`. Bare Type-token operands
     // (`MODULE_TYPE_OF Foo Type`) ride the unified §7 wrap path and resolve through the
     // `value_lookup`-TypeExprRef overload to a `Future(KModule)`, which then matches this
-    // slot strictly. Same pattern as the ascription operators after the type-token-auto-wrap
-    // cleanup — no parallel TypeExprRef-lhs overload needed.
+    // slot strictly. Same shape as the ascription operators — no parallel TypeExprRef-lhs
+    // overload needed.
     register_builtin(
         scope,
         "MODULE_TYPE_OF",

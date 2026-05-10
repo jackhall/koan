@@ -729,7 +729,8 @@ mod tests {
     /// replay-park rails as a bare Identifier: `IntOrd :| OrderedSig` submitted before
     /// `MODULE IntOrd` / `SIG OrderedSig` must park on the placeholders the binders install
     /// rather than racing the FIFO submission order. Pins the Type-token park symmetry
-    /// added by [roadmap/type-token-auto-wrap.md].
+    /// described in
+    /// [design/execution-model.md § Dispatch-time name placeholders](../../design/execution-model.md#dispatch-time-name-placeholders).
     #[test]
     fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
         let arena = RuntimeArena::new();

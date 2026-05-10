@@ -205,13 +205,6 @@ never terminates).
 
 ## Dependencies
 
-**Requires:**
-- [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](type-token-auto-wrap.md) —
-  unifies the Combine-shaped binder + name-placeholder path on
-  Type-tokens, which is the same shape STRUCT/UNION recursion and
-  FN-def signature elaboration need; landing the Type-token unification
-  is the substrate this work builds on.
-
 **Unblocks:**
 - [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md) —
   higher-kinded slot elaboration (`KType::TypeConstructor`), sharing
