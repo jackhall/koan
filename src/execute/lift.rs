@@ -16,6 +16,14 @@ use crate::parse::kexpression::{ExpressionPart, KExpression};
 /// Caveat the design doc doesn't yet cover: the fast path is sound *today* only because
 /// KFutures don't escape as values. Once they do, this gate must add a
 /// no-unanchored-KFuture-descendant clause (the slow path's KFuture arm is already correct).
+/// Test-only re-export of `lift_kobject` so cross-module Miri tests (e.g.
+/// `dispatch::values::module::tests::functor_per_call_module_lifts_correctly`) can
+/// exercise the per-arm anchor logic in isolation.
+#[cfg(test)]
+pub fn lift_kobject_for_test<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
+    lift_kobject(v, dying_frame)
+}
+
 pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
     if dying_frame.arena().functions_is_empty() {
         return v.deep_clone();
@@ -44,6 +52,25 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                 None
             };
             KObject::KFuture(t.deep_clone(), new_frame)
+        }
+        KObject::KModule(m, existing) => {
+            // Mirror of the `KFunction` arm: if the module's child scope was alloc'd in
+            // the dying frame's arena (a functor body's freshly-built `MODULE Result =
+            // (...)`), anchor on the dying frame's `Rc` so the child scope outlives the
+            // returned `&Module`. Pre-anchored values (e.g. lifted twice) keep their
+            // existing frame; modules built outside this frame need no anchor.
+            let new_frame = if existing.is_some() {
+                existing.clone()
+            } else {
+                let dying_runtime: *const RuntimeArena = dying_frame.arena();
+                let module_runtime: *const RuntimeArena = m.child_scope().arena;
+                if std::ptr::eq(module_runtime, dying_runtime) {
+                    Some(Rc::clone(dying_frame))
+                } else {
+                    None
+                }
+            };
+            KObject::KModule(m, new_frame)
         }
         KObject::List(items) => {
             if items.iter().any(|x| needs_lift(x, dying_frame)) {
@@ -135,6 +162,11 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
         }
         KObject::KFuture(_, Some(_)) => Some(false),
         KObject::KFuture(t, None) => Some(kfuture_borrows_dying_arena(t, dying_frame.arena())),
+        KObject::KModule(_, Some(_)) => Some(false),
+        KObject::KModule(m, None) => {
+            let module_runtime: *const RuntimeArena = m.child_scope().arena;
+            Some(std::ptr::eq(module_runtime, dying_runtime))
+        }
         KObject::Struct { .. } | KObject::KExpression(_) => Some(false),
         KObject::List(_) | KObject::Dict(_) | KObject::Tagged { .. } => None,
         _ => Some(false),
@@ -183,6 +215,10 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
         KObject::KFuture(t, _) => Some(kfuture_borrows_dying_arena(t, arena)),
         KObject::KFunction(f, _) => Some(std::ptr::eq(
             f.captured_scope().arena,
+            arena as *const RuntimeArena,
+        )),
+        KObject::KModule(m, _) => Some(std::ptr::eq(
+            m.child_scope().arena,
             arena as *const RuntimeArena,
         )),
         KObject::List(_)

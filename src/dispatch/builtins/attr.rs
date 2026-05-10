@@ -155,7 +155,7 @@ fn access_field<'a>(
         },
         // The identifier resolved to a module — `IntOrd.compare`, `OrderedSig.Type`, etc.
         // Module-system stage 1.
-        KObject::KModule(_) => access_module_member(target, field),
+        KObject::KModule(_, _) => access_module_member(target, field),
         other => err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "Struct".to_string(),

@@ -36,6 +36,11 @@ impl KType {
                 let ret_eq = ar == br;
                 (args_more && (ret_more || ret_eq)) || (args_eq && ret_more)
             }
+            // SignatureBound strictly refines Module: a sig-typed slot is a refinement of
+            // "any module." Two SignatureBounds with different sig_ids are incomparable —
+            // they're disjoint slot types — so this predicate stays `false` for that case
+            // by falling through to the wildcard.
+            (SignatureBound { .. }, Module) => true,
             _ => false,
         }
     }
@@ -62,6 +67,13 @@ impl KType {
             KType::KFunction { args, ret } => match obj {
                 KObject::KFunction(f, _) => function_compat(&f.signature, args, ret),
                 KObject::KFuture(_, _) => true,
+                _ => false,
+            },
+            // FN-return-type check: a FN declared `-> OrderedSig` whose body produces a
+            // module that hasn't been ascribed to OrderedSig errors at the slot's Done arm.
+            // Mirror of `accepts_part`'s SignatureBound arm.
+            KType::SignatureBound { sig_id, .. } => match obj {
+                KObject::KModule(m, _) => m.compatible_sigs.borrow().contains(sig_id),
                 _ => false,
             },
             _ => *self == obj.ktype(),
@@ -142,7 +154,20 @@ impl KType {
                 ExpressionPart::Future(obj) => &obj.ktype() == self,
                 _ => false,
             },
-            KType::Module => matches!(part, ExpressionPart::Future(KObject::KModule(_))),
+            KType::Module => matches!(part, ExpressionPart::Future(KObject::KModule(_, _))),
+            // O(1) per-sig admissibility: a `Future(KModule)` fills a sig-typed slot iff
+            // its ascription-populated `compatible_sigs` set carries the slot's `sig_id`.
+            // Unascribed source modules never match (their compat set is empty); pass them
+            // through `:|` / `:!` first. Bare-name arguments are routed through value
+            // lookup (LET-bound to a lowercase identifier) so they enter as Identifier
+            // tokens which the §7 auto-wrap pass converts to sub-Dispatches that resolve
+            // to the module value before re-entering this slot.
+            KType::SignatureBound { sig_id, .. } => match part {
+                ExpressionPart::Future(KObject::KModule(m, _)) => {
+                    m.compatible_sigs.borrow().contains(sig_id)
+                }
+                _ => false,
+            },
             KType::Signature => matches!(part, ExpressionPart::Future(KObject::KSignature(_))),
         }
     }

@@ -122,7 +122,7 @@ fn cross_scope_shadowing_succeeds() {
     assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
     // Module's x is 99.
     let m = match scope.lookup("Mod") {
-        Some(KObject::KModule(m)) => *m,
+        Some(KObject::KModule(m, _)) => *m,
         _ => panic!("Mod should be a module"),
     };
     let data = m.child_scope().data.borrow();

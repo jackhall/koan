@@ -61,12 +61,20 @@ pub fn body<'a>(
 
     // The closure runs on the outer scheduler's main loop after every body statement has
     // terminalized. `name` is moved in by clone so it lives across the closure's life.
+    //
+    // Capture the active per-call frame at MODULE-dispatch time so a functor body's
+    // `MODULE Result = (...)` can attach the frame's `Rc` to the produced `KModule`. The
+    // captured frame keeps `child_scope`'s arena alive even after the FN's call frame
+    // would otherwise drop. For top-level MODULEs there's no active frame; the produced
+    // `KModule(_, None)` matches the existing behavior.
+    let active_frame = sched.current_frame();
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
         let arena = parent_scope.arena;
         let module: &'a Module<'a> =
             arena.alloc_module(Module::new(name_for_finish.clone(), child_scope));
-        let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(module));
+        let module_obj: &'a KObject<'a> =
+            arena.alloc_object(KObject::KModule(module, active_frame.clone()));
         if let Err(e) = parent_scope.bind_value(name_for_finish.clone(), module_obj) {
             return BodyResult::Err(e.with_frame(Frame {
                 function: "<module>".to_string(),
@@ -130,7 +138,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "MODULE Foo = (LET x = 1)");
         let data = scope.data.borrow();
-        assert!(matches!(data.get("Foo"), Some(KObject::KModule(_))));
+        assert!(matches!(data.get("Foo"), Some(KObject::KModule(_, _))));
     }
 
     #[test]
@@ -172,7 +180,7 @@ mod tests {
         );
         let data = scope.data.borrow();
         let foo = match data.get("Foo") {
-            Some(KObject::KModule(m)) => *m,
+            Some(KObject::KModule(m, _)) => *m,
             _ => panic!("Foo should be a module"),
         };
         assert!(foo.child_scope().data.borrow().contains_key("double"));
@@ -245,7 +253,7 @@ mod tests {
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
         let data = scope.data.borrow();
         let foo = match data.get("Foo") {
-            Some(KObject::KModule(m)) => *m,
+            Some(KObject::KModule(m, _)) => *m,
             _ => panic!("Foo should be a module"),
         };
         let inner = foo.child_scope().data.borrow();

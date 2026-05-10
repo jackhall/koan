@@ -52,6 +52,16 @@ pub enum KType {
     ModuleType { scope_id: usize, name: String },
     /// Meta-type for first-class module values (`KObject::KModule`).
     Module,
+    /// First-class module value tagged with the signature it satisfies. `sig_id` is the
+    /// declaring `Signature`'s `decl_scope_ptr as usize` — the same identity scheme
+    /// `ModuleType` uses for module abstract types: the arena pins the `Signature` for the
+    /// run, addresses are stable and unique, and two `SIG Foo = (...)` declarations in the
+    /// same scope already error (`Rebind`). Equality (and dispatch admissibility) is by
+    /// `sig_id` exclusively; `sig_path` is for diagnostics only. Distinguishing this from
+    /// `KType::Module` is what lets the dispatcher reject unascribed modules from a
+    /// signature-typed slot — the per-sig admissibility check rides on `Module`'s
+    /// `compatible_sigs` set populated by `:|` / `:!`.
+    SignatureBound { sig_id: usize, sig_path: String },
     /// Meta-type for first-class module signatures (`KObject::KSignature`).
     Signature,
     Any,
@@ -80,6 +90,7 @@ impl KType {
             KType::Struct => "Struct".into(),
             KType::ModuleType { name, .. } => name.clone(),
             KType::Module => "Module".into(),
+            KType::SignatureBound { sig_path, .. } => sig_path.clone(),
             KType::Signature => "Signature".into(),
             KType::Any => "Any".into(),
         }

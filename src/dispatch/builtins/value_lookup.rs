@@ -6,25 +6,33 @@ use crate::dispatch::runtime::Scope;
 
 use super::{err, register_builtin};
 
-/// `<v:Identifier>` — single-part expression containing one name token. Looks `v` up via
-/// `Scope::lookup` (which walks the `outer` chain) and returns the bound `KObject`, or
-/// `KError::UnboundName` if unbound at every level. Lets a parens-wrapped name like
-/// `(some_var)` dispatch and resolve to its current value.
+/// `<v:Identifier>` or `<v:TypeExprRef>` — single-part expression containing one name token.
+/// Looks `v` up via `Scope::lookup` (which walks the `outer` chain) and returns the bound
+/// `KObject`, or `KError::UnboundName` if unbound at every level. Lets a parens-wrapped name
+/// (`(some_var)`, `(IntOrd)`) — or a §7 auto-wrap of the same — dispatch and resolve to its
+/// current value. The TypeExprRef overload only accepts bare leaves (`params: None`);
+/// parameterized type expressions like `List<Number>` are structural type-syntax, not
+/// look-up targets.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    // Pre-Phase-2 this used the `try_args!` macro defined in `dispatch/builtins.rs`. The
-    // macro had exactly one consumer (this body) — its scaffolding cost outweighed the
-    // single-line benefit, especially after Phase 1's helpers + Phase 2's `KObject`
-    // accessors made the inline form a 4-line pattern. Inlined here and the macro deleted.
     let v = match bundle.get("v") {
         Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::TypeExprValue(t)) => {
+            if !matches!(t.params, crate::parse::kexpression::TypeParams::None) {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "value_lookup: parameterized type expression `{}` is not a value-lookup target",
+                    t.render()
+                ))));
+            }
+            t.name.clone()
+        }
         other => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "v".to_string(),
-                expected: "KString".to_string(),
+                expected: "KString or TypeExprValue".to_string(),
                 got: match other {
                     Some(o) => o.summarize(),
                     None => "(missing)".to_string(),
@@ -46,6 +54,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Any,
             elements: vec![
                 SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Identifier }),
+            ],
+        },
+        body,
+    );
+    register_builtin(
+        scope,
+        "value_lookup",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::TypeExprRef }),
             ],
         },
         body,

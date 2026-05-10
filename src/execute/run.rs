@@ -106,17 +106,28 @@ impl<'a> Scheduler<'a> {
 
         let expr = match scope.shape_pick(&expr) {
             Some(pick) => {
-                // §7 wrap: bare-Identifier in a value slot becomes a single-Identifier
-                // sub-Expression so it re-enters via §1.
+                // §7 wrap: bare-Identifier or bare leaf Type-token in a value slot becomes
+                // a single-name sub-Expression so it re-enters via §1 and routes through
+                // the Identifier or TypeExprRef overload of `value_lookup`.
                 let mut parts = expr.parts;
                 for i in pick.wrap_indices {
-                    if let ExpressionPart::Identifier(name) =
-                        std::mem::replace(&mut parts[i], ExpressionPart::Identifier(String::new()))
-                    {
-                        parts[i] = ExpressionPart::Expression(Box::new(KExpression {
-                            parts: vec![ExpressionPart::Identifier(name)],
-                        }));
-                    }
+                    let placeholder = ExpressionPart::Identifier(String::new());
+                    let original = std::mem::replace(&mut parts[i], placeholder);
+                    parts[i] = match original {
+                        ExpressionPart::Identifier(name) => {
+                            ExpressionPart::Expression(Box::new(KExpression {
+                                parts: vec![ExpressionPart::Identifier(name)],
+                            }))
+                        }
+                        ExpressionPart::Type(t) => {
+                            ExpressionPart::Expression(Box::new(KExpression {
+                                parts: vec![ExpressionPart::Type(t)],
+                            }))
+                        }
+                        // wrap_indices is built from is_bare_name parts; any other variant
+                        // is a classifier bug. Restore the part rather than panic.
+                        other => other,
+                    };
                 }
                 let rewritten = KExpression { parts };
 
@@ -420,6 +431,21 @@ impl<'a> Scheduler<'a> {
             ExpressionPart::Identifier(name) if wrap_identifiers => {
                 let expr = KExpression {
                     parts: vec![ExpressionPart::Identifier(name)],
+                };
+                let sub_id = self.add(NodeWork::Dispatch(expr), scope);
+                let pos = deps.len();
+                deps.push(sub_id);
+                Slot::Dep(pos)
+            }
+            ExpressionPart::Type(t)
+                if wrap_identifiers
+                    && matches!(t.params, crate::parse::kexpression::TypeParams::None) =>
+            {
+                // §7 auto-wrap for bare leaf Type-tokens in value slots: `MAKESET IntOrd`
+                // sub-dispatches `(IntOrd)` through the TypeExprRef overload of
+                // `value_lookup`, which surfaces the bound `KModule`/`KSignature`.
+                let expr = KExpression {
+                    parts: vec![ExpressionPart::Type(t)],
                 };
                 let sub_id = self.add(NodeWork::Dispatch(expr), scope);
                 let pos = deps.len();

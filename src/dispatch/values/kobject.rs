@@ -46,7 +46,13 @@ pub enum KObject<'a> {
     /// dispatch boundary so consumers like FN's return-type slot recover the full
     /// parameterized form rather than just a bare type name. Internal-only.
     TypeExprValue(TypeExpr),
-    KModule(&'a Module<'a>),
+    /// `Option<Rc<CallArena>>` mirrors `KFunction`'s lifecycle anchor: a `Module` whose
+    /// child scope was alloc'd inside a per-call frame (a functor body's freshly-built
+    /// `MODULE Result = (...)`) carries the frame's `Rc` so the captured scope outlives
+    /// the dying frame. `None` for modules built outside a per-call frame (top-level
+    /// `MODULE Foo = (...)` and the ascription paths). See [memory-model.md § Closure
+    /// escape](../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
+    KModule(&'a Module<'a>, Option<Rc<CallArena>>),
     KSignature(&'a Signature<'a>),
     Null,
 }
@@ -77,7 +83,7 @@ impl<'a> KObject<'a> {
             KObject::Tagged { .. } => KType::Tagged,
             KObject::Struct { .. } => KType::Struct,
             KObject::TypeExprValue(_) => KType::TypeExprRef,
-            KObject::KModule(_) => KType::Module,
+            KObject::KModule(_, _) => KType::Module,
             KObject::KSignature(_) => KType::Signature,
         }
     }
@@ -109,7 +115,7 @@ impl<'a> KObject<'a> {
                 fields: Rc::clone(fields),
             },
             KObject::TypeExprValue(t) => KObject::TypeExprValue(t.clone()),
-            KObject::KModule(m) => KObject::KModule(m),
+            KObject::KModule(m, frame) => KObject::KModule(m, frame.clone()),
             KObject::KSignature(s) => KObject::KSignature(s),
         }
     }
@@ -139,7 +145,7 @@ impl<'a> KObject<'a> {
 
     pub fn as_module(&self) -> Option<&'a Module<'a>> {
         match self {
-            KObject::KModule(m) => Some(*m),
+            KObject::KModule(m, _) => Some(*m),
             _ => None,
         }
     }
@@ -223,7 +229,7 @@ impl<'a> Parseable for KObject<'a> {
             }
             KObject::Null => "null".to_string(),
             KObject::TypeExprValue(t) => t.render(),
-            KObject::KModule(m) => format!("module {}", m.path),
+            KObject::KModule(m, _) => format!("module {}", m.path),
             KObject::KSignature(s) => format!("sig {}", s.path),
         }
     }

@@ -157,6 +157,7 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
     match obj {
         KObject::KFunction(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::KFuture(_, Some(rc)) => rc_targets(rc, arena_ptr),
+        KObject::KModule(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::List(items) => items.iter().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Dict(entries) => entries.values().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Tagged { value, .. } => obj_anchors_to(value, arena_ptr),

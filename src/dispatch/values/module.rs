@@ -30,6 +30,12 @@ pub struct Module<'a> {
     /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
     pub type_members: RefCell<HashMap<String, KType>>,
+    /// Sigs this module shape-checks against. Populated by `:|` and `:!` at ascription
+    /// time via [`Module::mark_satisfies`]. `accepts_part` for `KType::SignatureBound {
+    /// sig_id }` is an O(1) membership check against this set. `RefCell` because
+    /// ascription writes after the surrounding `KObject::KModule` is already alloc'd —
+    /// same shape as `type_members`.
+    pub compatible_sigs: RefCell<Vec<usize>>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -43,7 +49,20 @@ impl<'a> Module<'a> {
             path,
             child_scope_ptr,
             type_members: RefCell::new(HashMap::new()),
+            compatible_sigs: RefCell::new(Vec::new()),
             _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Record that this module shape-checks against `sig_id`. Routed through one named
+    /// method (rather than open-coded `compatible_sigs.borrow_mut().push(...)` at each
+    /// ascription site) so future ascription paths are easy to grep for, and so the
+    /// idempotency check sits in one place — re-ascribing the same module to the same sig
+    /// (e.g. `(View :| OrderedSig)` after `(View :! OrderedSig)`) doesn't double-insert.
+    pub fn mark_satisfies(&self, sig_id: usize) {
+        let mut s = self.compatible_sigs.borrow_mut();
+        if !s.contains(&sig_id) {
+            s.push(sig_id);
         }
     }
 
@@ -88,6 +107,14 @@ impl<'a> Signature<'a> {
         unsafe {
             std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.decl_scope_ptr)
         }
+    }
+
+    /// Stable identity used to seed `KType::SignatureBound { sig_id, .. }`. Mirrors
+    /// `Module::scope_id` — the arena pins the `Signature` for the run, addresses are
+    /// stable and unique, and two `SIG Foo = (...)` declarations in the same scope
+    /// already error (`Rebind`), so distinct `Signature` values always have distinct ids.
+    pub fn sig_id(&self) -> usize {
+        self.decl_scope_ptr as usize
     }
 }
 
@@ -214,5 +241,69 @@ mod tests {
             &bound,
             Some(KType::ModuleType { scope_id: id, name }) if *id == scope_id && name == "Type"
         ));
+    }
+
+    /// Module-system stage 2 (functor slice). Minimal-shape mirror of
+    /// [`crate::execute::lift::lift_kobject`]'s `KModule` arm: build a `Module` whose
+    /// `child_scope` lives in a `CallArena`, lift it against the dying frame, and assert
+    /// the lifted result carries the arena anchor. Pins the unsafe site behind functor
+    /// execution end-to-end.
+    #[test]
+    fn functor_per_call_module_lifts_correctly() {
+        use crate::dispatch::kfunction::{Body, KFunction};
+        use crate::dispatch::runtime::{CallArena, RuntimeArena as RA};
+        use crate::dispatch::types::{ExpressionSignature, KType, SignatureElement};
+        use crate::dispatch::values::KObject;
+        use crate::execute::lift::lift_kobject_for_test;
+        use std::rc::Rc;
+
+        let outer_arena = RuntimeArena::new();
+        let outer_scope = default_scope(&outer_arena, Box::new(sink()));
+        let frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+
+        // Borrow into the per-call arena via raw-pointer roundtrip so the borrow doesn't
+        // outlive `frame` for the borrow-checker (the SAFETY invariant on `CallArena` —
+        // arena heap address is stable for the Rc's life — backs this).
+        let arena_ptr: *const RA = frame.arena();
+        let inner_arena: &RA = unsafe { &*arena_ptr };
+
+        // Defeat `functions_is_empty()`'s fast path so the slow lift path runs.
+        let kf = KFunction::new(
+            ExpressionSignature {
+                return_type: KType::Null,
+                elements: vec![SignatureElement::Keyword("__SLOW__".into())],
+            },
+            Body::Builtin(|s, _, _| {
+                crate::dispatch::kfunction::BodyResult::Value(s.arena.alloc_object(KObject::Null))
+            }),
+            frame.scope(),
+        );
+        let _ = inner_arena.alloc_function(kf);
+
+        // Module's `child_scope` lives in `inner_arena` — exactly the shape a functor
+        // body's `MODULE Result = (...)` produces. Lift must observe the arena match.
+        let inner_scope = inner_arena.alloc_scope(
+            crate::dispatch::runtime::Scope::child_under_named(frame.scope(), "Inner".into()),
+        );
+        let module = inner_arena.alloc_module(Module::new("Inner".into(), inner_scope));
+        let m_obj = KObject::KModule(module, None);
+
+        let strong_before = Rc::strong_count(&frame);
+        let lifted = lift_kobject_for_test(&m_obj, &frame);
+        match &lifted {
+            KObject::KModule(_, anchor) => assert!(
+                anchor.is_some(),
+                "KModule whose child scope lives in the dying arena must lift with frame=Some(rc)",
+            ),
+            other => panic!("expected lifted KModule, got {:?}", other.ktype()),
+        }
+        assert_eq!(
+            Rc::strong_count(&frame),
+            strong_before + 1,
+            "lifting a per-frame module must clone the dying frame's Rc once",
+        );
+        // Drop borrowers before `frame` so arena teardown order is well-defined.
+        drop(lifted);
+        drop(m_obj);
     }
 }

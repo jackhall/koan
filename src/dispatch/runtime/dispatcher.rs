@@ -209,11 +209,12 @@ pub(crate) fn shape_pick<'a>(scope: &Scope<'a>, expr: &KExpression<'_>) -> Optio
     }
 }
 
-/// Auto-wrap-permissive shape check: bare-Identifier parts in a slot whose declared type is
-/// neither `Identifier` nor `TypeExprRef` are tentatively accepted (the §7 auto-wrap will
-/// rewrite them into sub-Dispatches, whose results type-check at late dispatch). All other
-/// slot/part pairings reuse the normal `Argument::matches` check. Mirrors the strict
-/// matcher except for the bare-Identifier-in-value-slot allowance.
+/// Auto-wrap-permissive shape check: bare-Identifier and bare-Type parts in a slot whose
+/// declared type is neither `Identifier` nor `TypeExprRef` are tentatively accepted (the §7
+/// auto-wrap will rewrite them into sub-Dispatches whose results type-check at late
+/// dispatch). All other slot/part pairings reuse the normal `Argument::matches` check.
+/// Mirrors the strict matcher except for the bare-name-in-value-slot allowance — covers
+/// both `MAKESET some_var` (Identifier) and `MAKESET IntOrd` (Type-token module name).
 fn accepts_for_wrap(f: &KFunction<'_>, expr: &KExpression<'_>) -> bool {
     let sig = &f.signature;
     if sig.elements.len() != expr.parts.len() {
@@ -224,7 +225,15 @@ fn accepts_for_wrap(f: &KFunction<'_>, expr: &KExpression<'_>) -> bool {
             (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
             (SignatureElement::Keyword(_), _) => return false,
             (SignatureElement::Argument(arg), part) => {
-                if matches!(part, ExpressionPart::Identifier(_))
+                let is_bare_name = matches!(
+                    part,
+                    ExpressionPart::Identifier(_)
+                        | ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
+                            params: crate::parse::kexpression::TypeParams::None,
+                            ..
+                        })
+                );
+                if is_bare_name
                     && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
                 {
                     continue;
@@ -248,23 +257,43 @@ fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
     let picked_has_pre_run = f.pre_run.is_some();
     for (i, (el, part)) in f.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
         let SignatureElement::Argument(arg) = el else { continue };
-        let ExpressionPart::Identifier(_) = part else { continue };
-        match arg.ktype {
-            KType::Identifier | KType::TypeExprRef => {
-                // Literal-name slot — §8 candidate iff the picked function isn't a binder.
-                // Binders' Identifier/TypeExprRef slots are *declarations* (the name being
-                // bound), not references that need to look anything up.
+        match (part, &arg.ktype) {
+            // Identifier in literal-name slot: §8 replay-park iff the picked function isn't
+            // a binder. Binders' literal-name slots are *declarations*.
+            (ExpressionPart::Identifier(_), KType::Identifier | KType::TypeExprRef) => {
                 if !picked_has_pre_run {
                     ref_name_indices.push(i);
                 }
             }
-            _ => {
-                // Value-typed slot — §7 auto-wrap target. Wrap regardless of whether the
-                // picked function has a pre_run; binders take their value from `parts[3]`
-                // (LET) or other Any-typed positions, so `LET y = z` with `z` an identifier
-                // wraps just like `(F z)`.
+            // Identifier in any other slot (including `Any`): §7 wrap. The wrap overrides
+            // the strict literal-name semantics (`LET y = z` looks `z` up rather than
+            // binding to the literal identifier).
+            (ExpressionPart::Identifier(_), _) => {
                 wrap_indices.push(i);
             }
+            // Bare leaf Type-token in a slot that strictly accepts Type-parts (`Any`
+            // accepts via the literal-TypeExprValue path; `TypeExprRef` is the type-syntax
+            // slot itself). Don't wrap — preserves `LET T = Number` literal semantics.
+            (
+                ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
+                    params: crate::parse::kexpression::TypeParams::None,
+                    ..
+                }),
+                KType::Any | KType::TypeExprRef,
+            ) => {}
+            // Bare leaf Type-token in a slot that strictly *doesn't* accept Type-parts
+            // (Module, SignatureBound, etc.): §7 wrap routes through the TypeExprRef
+            // overload of `value_lookup`. Covers `MAKESET IntOrd`.
+            (
+                ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
+                    params: crate::parse::kexpression::TypeParams::None,
+                    ..
+                }),
+                _,
+            ) => {
+                wrap_indices.push(i);
+            }
+            _ => {}
         }
     }
     ShapePick {

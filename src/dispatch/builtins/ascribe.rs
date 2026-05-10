@@ -72,7 +72,14 @@ pub fn body_opaque<'a>(
         return BodyResult::Err(e);
     }
 
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(new_module));
+    // Record the sig in the new module's compat set so a `KType::SignatureBound { sig_id }`
+    // slot accepts this module. Every ascription path must do this — see
+    // `Module::mark_satisfies` for the bookkeeping discipline.
+    new_module.mark_satisfies(s.sig_id());
+
+    // Ascription paths run on the outer scheduler; the resulting `Module` lives in `arena`
+    // (the calling scope's arena), not in any per-call frame. `frame: None` is correct.
+    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(new_module, None));
     BodyResult::Value(module_obj)
 }
 
@@ -95,7 +102,10 @@ pub fn body_transparent<'a>(
         format!("{} :! {}", m.path, s.path),
         m.child_scope(),
     ));
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(new_module));
+    // Same compat-set bookkeeping as `body_opaque`. `:!` makes the module appear as the
+    // sig at the type level too — sig-typed slots accept it.
+    new_module.mark_satisfies(s.sig_id());
+    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(new_module, None));
     BodyResult::Value(module_obj)
 }
 
@@ -227,7 +237,7 @@ mod tests {
              LET IntOrdAbstract = (IntOrd :| OrderedSig)",
         );
         let data = scope.data.borrow();
-        assert!(matches!(data.get("IntOrdAbstract"), Some(KObject::KModule(_))));
+        assert!(matches!(data.get("IntOrdAbstract"), Some(KObject::KModule(_, _))));
     }
 
     #[test]
@@ -241,7 +251,7 @@ mod tests {
              LET IntOrdView = (IntOrd :! OrderedSig)",
         );
         let data = scope.data.borrow();
-        assert!(matches!(data.get("IntOrdView"), Some(KObject::KModule(_))));
+        assert!(matches!(data.get("IntOrdView"), Some(KObject::KModule(_, _))));
     }
 
     #[test]
@@ -283,11 +293,11 @@ mod tests {
         }
         let data = scope.data.borrow();
         let a = match data.get("FirstAbstract") {
-            Some(KObject::KModule(m)) => *m,
+            Some(KObject::KModule(m, _)) => *m,
             _ => panic!("FirstAbstract should be a module"),
         };
         let b = match data.get("SecondAbstract") {
-            Some(KObject::KModule(m)) => *m,
+            Some(KObject::KModule(m, _)) => *m,
             _ => panic!("SecondAbstract should be a module"),
         };
         let a_t = a.type_members.borrow().get("Type").cloned();
@@ -309,7 +319,7 @@ mod tests {
         );
         let data = scope.data.borrow();
         let v = match data.get("ViewMod") {
-            Some(KObject::KModule(m)) => *m,
+            Some(KObject::KModule(m, _)) => *m,
             _ => panic!("ViewMod should be a module"),
         };
         assert!(v.type_members.borrow().is_empty());
@@ -343,7 +353,7 @@ mod tests {
 
         let data = scope.data.borrow();
         let abstract_mod = match data.get("IntOrdAbstract") {
-            Some(KObject::KModule(m)) => *m,
+            Some(KObject::KModule(m, _)) => *m,
             other => panic!("IntOrdAbstract should be a module, got {:?}", other.map(|o| o.ktype())),
         };
         let minted = abstract_mod
@@ -364,5 +374,278 @@ mod tests {
             .get("compare")
             .copied();
         assert!(matches!(compare, Some(KObject::Number(n)) if *n == 7.0));
+    }
+
+    // ---------- Functor integration (module-system stage 2 — functor slice) ----------
+    //
+    // These tests pin down the end-to-end functor path: a FN with a sig-typed parameter
+    // whose body builds a fresh `MODULE Result = (...)`. Construction depends on three
+    // pieces wired together:
+    //
+    //   (a) `KType::SignatureBound` on the parameter slot (Step 3 — resolver lowers SIG
+    //       names) so the slot's `accepts_part` does the per-sig admissibility check.
+    //   (b) `Module::compatible_sigs` populated by `:|` / `:!` (Step 4) so an ascribed
+    //       module flows through the slot.
+    //   (c) `lift_kobject`'s `KModule` arm (Step 8) attaching the FN's per-call
+    //       `Rc<CallArena>` to the returned module so the body's `child_scope` outlives
+    //       the dying frame.
+    //
+    // Module/sig declarations are dispatched in their own batch ahead of the functor
+    // call so the synchronous `ScopeResolver` consultation in FN-def's parameter-list
+    // elaboration sees the SIG binding (the same caveat documented on
+    // `scope_resolver_lowers_type_expr_value_binding` above).
+
+    /// Test 1 — Functor returns a module. A FN with a sig-typed parameter whose body
+    /// declares `MODULE Result = (LET inner = 1)` produces a `KObject::KModule` whose
+    /// child scope carries `inner = 1`.
+    #[test]
+    fn functor_returns_a_module() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = (LET compare = 7)",
+        );
+        run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
+        run(
+            scope,
+            "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        );
+        run(scope, "LET set_value = (MAKESET int_ord_a)");
+
+        let data = scope.data.borrow();
+        let m = match data.get("set_value") {
+            Some(KObject::KModule(m, _)) => *m,
+            other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
+        };
+        let inner = m.child_scope().data.borrow().get("inner").copied();
+        assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0));
+    }
+
+    /// Test 2 — Functor body sees the signature-typed parameter. `(elem.compare)` inside
+    /// the body resolves through ATTR's KModule arm and reads `7` from the ascribed
+    /// IntOrd; that value lands in `S.sample`.
+    #[test]
+    fn functor_body_reads_signature_typed_parameter() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = (LET compare = 7)",
+        );
+        run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
+        run(
+            scope,
+            "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET sample = (elem.compare)))",
+        );
+        run(scope, "LET set_value = (MAKESET int_ord_a)");
+
+        let data = scope.data.borrow();
+        let m = match data.get("set_value") {
+            Some(KObject::KModule(m, _)) => *m,
+            other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
+        };
+        let sample = m.child_scope().data.borrow().get("sample").copied();
+        assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
+    }
+
+    /// Test 3 — Per-call generative semantics. Two functor invocations produce modules
+    /// whose `scope_id` differs, since each call's body runs in a fresh per-call frame
+    /// whose arena hands out a fresh scope address. The `Module::scope_id` is the
+    /// identity carrier `KType::ModuleType` would mint after `:|` opaque ascription;
+    /// asserting on the bare `scope_id`s themselves directly pins the per-call
+    /// generativity property without depending on multi-statement-FN-body forward refs
+    /// (which fold through `CONS` and don't share lexical bindings between statements).
+    #[test]
+    fn functor_application_is_generative() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = (LET compare = 7)",
+        );
+        run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
+        run(
+            scope,
+            "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        );
+        run(scope, "LET set_one = (MAKESET (int_ord_a))");
+        run(scope, "LET set_two = (MAKESET (int_ord_a))");
+
+        let data = scope.data.borrow();
+        let m1 = match data.get("set_one") {
+            Some(KObject::KModule(m, _)) => *m,
+            other => panic!("set_one should be a module, got ktype={:?}", other.map(|o| o.ktype())),
+        };
+        let m2 = match data.get("set_two") {
+            Some(KObject::KModule(m, _)) => *m,
+            _ => panic!("set_two should be a module"),
+        };
+        // Per-call generativity: each invocation allocates a fresh `child_scope` in its
+        // own per-call frame's arena, so `scope_id`s differ. After `:|` ascription this
+        // would seed two distinct `KType::ModuleType { scope_id, .. }` values; the
+        // identity carrier is what makes the abstract types incompatible across calls.
+        assert_ne!(
+            m1.scope_id(),
+            m2.scope_id(),
+            "two functor applications must produce modules with distinct scope_id",
+        );
+    }
+
+    /// Test 4 — Dispatch admissibility filters non-conforming modules. An unascribed
+    /// `MODULE Empty` has an empty `compatible_sigs` set, so `accepts_part` for the
+    /// `SignatureBound { sig_id }` slot rejects it and dispatch fails. (Also: ascribing
+    /// `Empty :! OrderedSig` would itself fail at shape-check time since `Empty` lacks a
+    /// `compare` member — verified by `ascription_missing_member_errors` above; the
+    /// admissibility-only path is what's pinned here.)
+    #[test]
+    fn functor_rejects_unascribed_module_argument() {
+        use crate::execute::scheduler::Scheduler;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = (LET compare = 7)",
+        );
+        run(
+            scope,
+            "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        );
+        // Bind `IntOrd` (an unascribed module) under a lowercase identifier so the
+        // §7 auto-wrap pass triggers when the identifier appears in the SignatureBound
+        // slot. The wrapped sub-Dispatch resolves to `Future(KModule(IntOrd, _))`, but
+        // IntOrd's `compatible_sigs` is empty — no overload matches. Surfaces as
+        // `DispatchFailed` out of `Scheduler::execute`.
+        run(scope, "LET unascribed = IntOrd");
+        let mut sched = Scheduler::new();
+        sched.add_dispatch(parse_one("MAKESET unascribed"), scope);
+        let err = sched.execute().expect_err("MAKESET on unascribed module should fail dispatch");
+        assert!(
+            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+            "expected DispatchFailed, got {err}",
+        );
+    }
+
+    /// Test 5 — Sig-typed-parameter overload selection. Two functors share a keyword
+    /// (`MAKESET`) but differ on parameter sig (`OrderedSig` vs `HashedSig`); a call
+    /// with an OrderedSig-conforming module routes to the first body, a HashedSig one to
+    /// the second.
+    #[test]
+    fn functor_overloads_dispatch_by_signature_bound_param() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             SIG HashedSig = (LET hash = 0)\n\
+             MODULE IntOrd = (LET compare = 7)\n\
+             MODULE IntHash = (LET hash = 11)",
+        );
+        run(
+            scope,
+            "LET int_ord_a = (IntOrd :! OrderedSig)\n\
+             LET int_hash_a = (IntHash :! HashedSig)",
+        );
+        run(
+            scope,
+            "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET tag = 1))",
+        );
+        run(
+            scope,
+            "FN (MAKESET elem: HashedSig) -> Module = (MODULE Result = (LET tag = 2))",
+        );
+        run(scope, "LET ord_set = (MAKESET (int_ord_a))");
+        run(scope, "LET hash_set = (MAKESET (int_hash_a))");
+
+        let data = scope.data.borrow();
+        let mo = match data.get("ord_set") { Some(KObject::KModule(m, _)) => *m, _ => panic!("ord_set not module") };
+        let mh = match data.get("hash_set") { Some(KObject::KModule(m, _)) => *m, _ => panic!("hash_set not module") };
+        let to = mo.child_scope().data.borrow().get("tag").copied();
+        let th = mh.child_scope().data.borrow().get("tag").copied();
+        assert!(matches!(to, Some(KObject::Number(n)) if *n == 1.0),
+                "OrderedSig call should pick body with tag=1, got {:?}", to.map(|o| o.ktype()));
+        assert!(matches!(th, Some(KObject::Number(n)) if *n == 2.0),
+                "HashedSig call should pick body with tag=2, got {:?}", th.map(|o| o.ktype()));
+    }
+
+    /// Test 6 — Transparent ascription satisfies `SignatureBound`. Pins that `:!`
+    /// (transparent) populates `compatible_sigs` the same way `:|` (opaque) does — the
+    /// functor's sig-typed slot accepts a `:!`-ascribed module, and the body still reads
+    /// the underlying member through the view.
+    #[test]
+    fn transparent_ascription_satisfies_signature_bound_slot() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = (LET compare = 7)",
+        );
+        run(scope, "LET int_view = (IntOrd :! OrderedSig)");
+        run(
+            scope,
+            "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET sample = (elem.compare)))",
+        );
+        run(scope, "LET set_value = (MAKESET int_view)");
+
+        let data = scope.data.borrow();
+        let m = match data.get("set_value") {
+            Some(KObject::KModule(m, _)) => *m,
+            other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
+        };
+        let sample = m.child_scope().data.borrow().get("sample").copied();
+        assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
+    }
+
+    /// Test 7 — bare Type-token argument auto-wraps into a value-lookup. A `LET`-bound
+    /// Type-classified name (`IntOrdA`) passed as `MAKESET IntOrdA` should resolve to its
+    /// bound `KModule` the same way the lowercase-identifier and parens-wrapped forms do.
+    /// Pins the §7 wrap extension to Type-tokens via the `value_lookup`-TypeExprRef overload.
+    #[test]
+    fn functor_argument_bare_type_token_auto_wraps() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = (LET compare = 7)",
+        );
+        run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
+        run(
+            scope,
+            "FN (MAKESET elem: OrderedSig) -> Module = \
+             (MODULE Result = (LET sample = (elem.compare)))",
+        );
+        run(scope, "LET set_value = (MAKESET IntOrdA)");
+
+        let data = scope.data.borrow();
+        let m = match data.get("set_value") {
+            Some(KObject::KModule(m, _)) => *m,
+            other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
+        };
+        let sample = m.child_scope().data.borrow().get("sample").copied();
+        assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
+    }
+
+    /// Companion: bare Type-token in an ascription operand. `IntOrd :! OrderedSig` already
+    /// works via the strict `Type, Type` overload at ascribe.rs:165, so the unified wrap
+    /// shouldn't have regressed it. This test pins the path stays green after the wrap
+    /// extension lands.
+    #[test]
+    fn ascription_with_bare_type_tokens_still_works() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = (LET compare = 7)\n\
+             LET IntOrdA = (IntOrd :| OrderedSig)",
+        );
+        let data = scope.data.borrow();
+        assert!(matches!(data.get("IntOrdA"), Some(KObject::KModule(_, _))));
     }
 }

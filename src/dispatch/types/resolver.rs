@@ -35,6 +35,14 @@ impl<'s, 'a> TypeResolver for ScopeResolver<'s, 'a> {
             // Shadowing applies only at the top-level lookup, not inside the
             // already-resolved `TypeExpr`'s parameters.
             KObject::TypeExprValue(t) => KType::from_type_expr(t, &NoopResolver).ok(),
+            // SIG names lower to `SignatureBound` so a FN parameter typed `E: OrderedSig`
+            // gets a per-sig admissibility slot rather than the catch-all `KType::Module`.
+            // `sig_id` is the declaring `Signature`'s stable address; the dispatcher
+            // checks it against the candidate module's `compatible_sigs` set.
+            KObject::KSignature(s) => Some(KType::SignatureBound {
+                sig_id: s.sig_id(),
+                sig_path: s.path.clone(),
+            }),
             _ => None,
         }
     }
