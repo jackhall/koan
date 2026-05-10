@@ -70,6 +70,11 @@ pub fn body<'a>(
             )));
         }
     };
+    // Multi-statement body desugar: a body whose parts are entirely sub-expressions
+    // (`((a) (b) (c))`) right-folds into a chain of `CONS` calls so the scheduler sees a
+    // single tail-callable expression. See [`super::cons`] for the contract — TCO holds
+    // on the last statement, backward refs across statements work, forward refs do not.
+    let body_expr = super::cons::fold_multi_statement(body_expr);
 
     let elements = match parse_fn_param_list(&signature_expr, &resolver) {
         Ok(es) => es,

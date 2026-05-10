@@ -6,6 +6,7 @@ use super::values::KObject;
 mod ascribe;
 mod attr;
 pub mod call_by_name;
+mod cons;
 mod eval;
 mod fn_def;
 mod helpers;
@@ -87,6 +88,7 @@ pub fn default_scope<'a>(
     sig_def::register(scope);
     ascribe::register(scope);
     type_ops::register(scope);
+    cons::register(scope);
 
     scope
 }
