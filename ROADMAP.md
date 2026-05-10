@@ -24,7 +24,7 @@ arenas), structured error propagation, the user-defined-types substrate (return-
 enforcement at runtime), the IF-THEN→MATCH consolidation (`MATCH` accepts `Bool`
 directly via projection at entry), per-parameter type annotations on user-fn
 signatures, container type parameterization (`List<T>`, `Dict<K, V>`,
-`Function<(args) -> R>`), transient-node reclamation (Bind/Aggregate sub-trees
+`Function<(args) -> R>`), transient-node reclamation (Bind/Combine sub-trees
 recycled via a per-slot deps sidecar + free-list, keeping repeated-call scheduler
 memory near-constant), per-call-frame chaining for builtin-built frames (MATCH's
 child-scope `outer` no longer dangles when a TCO replace drops the call-site frame),
@@ -49,11 +49,12 @@ transparent ascription shape-checks against the signature without re-tagging
 identity; `Module`/`Signature` first-class values arena-allocated alongside
 `KFunction` and reachable via `Foo.member` ATTR access), and the lift-walk
 and aggregate-scheduler dedup (a single `any_descendant` predicate-walker
-serves both `needs_lift` and `kobject_borrows_arena`; `run_aggregate` and
-`run_aggregate_dict` share a parametric runner plus a frame-on-error
-`resolve_or_err` helper; module/signature resolution lives next to the
-`Module` / `Signature` types and serves both ascription operators and
-`MODULE_TYPE_OF`), and the dispatcher extraction (overload resolution lifted
+serves both `needs_lift` and `kobject_borrows_arena`; list- and dict-literal
+planning collapsed into a single `Combine` scheduler variant whose
+host-side `finish` closure captures the construction logic and folds
+already-resolved literal scalars in alongside dep results; module/signature
+resolution lives next to the `Module` / `Signature` types and serves both
+ascription operators and `MODULE_TYPE_OF`), and the dispatcher extraction (overload resolution lifted
 out of `Scope` into a dedicated `dispatcher.rs` of free functions taking
 `&Scope`; `Scope::dispatch` and `Scope::lazy_candidate` are now thin
 forwarders so `scope.rs` is back to lexical-environment storage and direct

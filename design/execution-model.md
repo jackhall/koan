@@ -19,9 +19,17 @@ work, decides when each `KFuture` runs, and hands its body the live scope.
 The scheduler models dispatch itself as a node type — `Dispatch(KExpression)`.
 [`schedule_expr`](../src/execute/interpret.rs) collapses to "add a `Dispatch`
 node per top-level expression"; the rest is dynamic. At run time a `Dispatch`
-walks its expression's parts, spawns sub-`Dispatch`/`Bind`/`Aggregate` nodes for
+walks its expression's parts, spawns sub-`Dispatch`/`Bind`/`Combine` nodes for
 nested sub-expressions, and a builtin body holding `&mut dyn SchedulerHandle`
 can also add `Dispatch` nodes.
+
+`Combine` is the host-side dual of `Bind`: an N→1 combinator that waits on a
+fixed set of dep slots and then runs an arbitrary host closure
+([`CombineFinish`](../src/dispatch/kfunction.rs)) over their resolved values.
+List- and dict-literal planners use it; the construction logic — including
+already-resolved literal scalars that don't need a dep slot — lives in the
+closure's capture rather than in fixed-shape variants. Body-finalization for
+future MODULE/SIG inner work will reuse the same primitive.
 
 ## `BodyResult` — the three return shapes
 
@@ -49,7 +57,7 @@ had produced it directly.
 
 The scheduler's edges point producer → consumer. Each slot carries a
 `notify_list: Vec<NodeId>` of dependents waiting on it; each `Bind` /
-`Aggregate` / `Lift` consumer carries a `pending_deps: usize` counter of
+`Combine` / `Lift` consumer carries a `pending_deps: usize` counter of
 unresolved deps. When a slot writes a terminal `Value` or `Err`, the
 notify-walk drains its `notify_list`, decrements each consumer's
 `pending_deps`, and pushes any zero-counter consumer onto the run-set
@@ -83,15 +91,15 @@ memory across the tail-call chain.
 `Tail` reuses the outermost slot but bodies typically have internal
 sub-expressions — the predicate of an `IF`/`MATCH` guard, the argument
 expressions of a recursive call, list/dict literal elements. Each spawns a
-sub-`Dispatch` and a parent `Bind`/`Aggregate` slot. Without reclamation those
+sub-`Dispatch` and a parent `Bind`/`Combine` slot. Without reclamation those
 slots accumulate per body iteration, so realistic recursive code is O(n)
 scheduler memory even when its data footprint is O(1).
 
-Reclamation runs at the end of `run_bind` / `run_aggregate*`. Once a Bind has
+Reclamation runs at the end of `run_bind` / `run_combine`. Once a Bind has
 read its dep results and spliced them into `expr.parts` as `Future(value)`
-(or an Aggregate has deep-cloned each element into the materialized
-list/dict), the dep slots are unreachable: a sub-Dispatch is owned by exactly
-one Bind / Aggregate, recorded in the consumer's `node_dependencies` entry.
+(or a Combine's finish closure has produced its result), the dep slots are
+unreachable: a sub-Dispatch is owned by exactly one Bind / Combine, recorded
+in the consumer's `node_dependencies` entry.
 Free walks recursively, recycling each dep's own dep tree, and stops at any
 still-live slot via `nodes[i].is_some()` — so a free that dives into another
 in-flight user-fn call leaves that subtree for that call's own reclamation.
@@ -103,7 +111,7 @@ free-list of slot indices that `add()` pulls from before extending the vecs.
 Bookkeeping lives in three `Scheduler` sidecars: `notify_list:
 Vec<Vec<NodeId>>` (each producer's dependent list), `pending_deps: Vec<usize>`
 (each consumer's unresolved-dep counter), and `node_dependencies:
-Vec<Vec<usize>>` (each Bind/Aggregate slot's owned sub-slot indices, captured
+Vec<Vec<usize>>` (each Bind/Combine slot's owned sub-slot indices, captured
 at `add()` time before `take()` consumes the work and used by `free()` to
 walk the ownership tree). The `free_list: Vec<usize>` carries indices whose
 `nodes`/`results`/`notify_list`/`pending_deps`/`node_dependencies` entries

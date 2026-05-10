@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::dispatch::runtime::CallArena;
 use crate::dispatch::runtime::KError;
-use crate::dispatch::kfunction::{KFunction, NodeId};
+use crate::dispatch::kfunction::{CombineFinish, KFunction, NodeId};
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::KExpression;
@@ -32,34 +32,29 @@ pub(super) enum NodeStep<'a> {
 /// What a scheduler node will run.
 ///
 /// `Lift` exists because the push/notify model assumes a single producer slot per result.
-/// When a `Dispatch` has to defer to a `Bind`/`Aggregate` to wait on sub-deps, it spawns
+/// When a `Dispatch` has to defer to a `Bind`/`Combine` to wait on sub-deps, it spawns
 /// the worker into a new slot and rewrites its own slot to `Lift { from: worker }` so the
 /// result still surfaces under the original slot index without consumers chasing a chain.
 /// The `lift_kobject` deep-clone in `execute`'s Done arm handles the case where the lifted
 /// Value lives in a per-call arena that is about to drop.
+///
+/// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a fixed set
+/// of dep slots and then runs an arbitrary host closure over their resolved values. List
+/// and dict literals plan into `Combine` with their construction logic in `finish`'s
+/// capture; future MODULE/SIG bodies will reuse the same primitive.
 pub(super) enum NodeWork<'a> {
     Dispatch(KExpression<'a>),
     Bind {
         expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
     },
-    Aggregate {
-        elements: Vec<AggregateElement<'a>>,
-    },
-    /// Resolved keys are converted to `KKey`; non-scalar keys produce `KErrorKind::ShapeError`.
-    AggregateDict {
-        entries: Vec<(AggregateElement<'a>, AggregateElement<'a>)>,
+    Combine {
+        deps: Vec<NodeId>,
+        finish: CombineFinish<'a>,
     },
     Lift {
         from: NodeId,
     },
-}
-
-/// One slot in an `Aggregate`, or one side of a pair in an `AggregateDict`. The split
-/// lets literals inline already-resolved values and only schedule sub-expressions.
-pub(super) enum AggregateElement<'a> {
-    Static(KObject<'a>),
-    Dep(NodeId),
 }
 
 pub(super) struct Node<'a> {
@@ -87,25 +82,7 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
         NodeWork::Dispatch(_) => None,
         NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
-        NodeWork::Aggregate { elements } => Some(
-            elements
-                .iter()
-                .filter_map(|e| match e {
-                    AggregateElement::Dep(d) => Some(*d),
-                    AggregateElement::Static(_) => None,
-                })
-                .collect(),
-        ),
-        NodeWork::AggregateDict { entries } => Some(
-            entries
-                .iter()
-                .flat_map(|(k, v)| [k, v])
-                .filter_map(|e| match e {
-                    AggregateElement::Dep(d) => Some(*d),
-                    AggregateElement::Static(_) => None,
-                })
-                .collect(),
-        ),
+        NodeWork::Combine { deps, .. } => Some(deps.clone()),
         NodeWork::Lift { from } => Some(vec![*from]),
     }
 }

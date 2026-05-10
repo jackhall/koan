@@ -290,7 +290,7 @@ fn list_inside_paren_expression() {
 #[test]
 fn paren_expression_inside_list() {
     // Sub-expressions inside list literals stay as Expression elements; the scheduler is
-    // responsible for resolving them at runtime via the Aggregate node path.
+    // responsible for resolving them at runtime via the Combine node path.
     assert_eq!(
         tree("[(LET x = 1) y]").unwrap(),
         "[L[[t(LET) t(x) t(=) n(1)] t(y)]]",

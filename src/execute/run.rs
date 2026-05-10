@@ -2,15 +2,38 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::dispatch::runtime::{Frame, KError, Resolution};
-use crate::dispatch::kfunction::{BodyResult, NodeId};
+use crate::dispatch::kfunction::{BodyResult, CombineFinish, NodeId};
 use crate::dispatch::values::KKey;
 use crate::dispatch::values::KObject;
 use crate::dispatch::types::{Parseable, Serializable};
 use crate::dispatch::runtime::{KFuture, Scope};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use super::nodes::{AggregateElement, NodeOutput, NodeStep, NodeWork};
+use super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::scheduler::Scheduler;
+
+/// One element of a list literal or one side of a dict-literal pair, captured by the
+/// `Combine` closure. `Static` carries an already-resolved value (e.g. a literal scalar);
+/// `Dep(pos)` indexes into the `Combine`'s dep-results slice. Kept private to the planner
+/// — the scheduler doesn't see it.
+enum Slot<'a> {
+    Static(KObject<'a>),
+    Dep(usize),
+}
+
+impl<'a> Slot<'a> {
+    /// Materialize this slot into an owned `KObject` for the literal under construction.
+    /// `Dep` results are deep-cloned because the resulting `KList` / `KDict` owns its
+    /// elements (you can't store `&'a KObject` into `Rc<Vec<KObject>>`). Infallible:
+    /// `run_combine` short-circuits on errored deps before invoking the closure.
+    fn materialize(self, results: &[&'a KObject<'a>]) -> KObject<'a> {
+        match self {
+            Slot::Static(obj) => obj,
+            // `results` mirrors `deps` order, so `Dep(pos)` indexes directly.
+            Slot::Dep(pos) => results[pos].deep_clone(),
+        }
+    }
+}
 
 /// Idempotent on a §8 replay-park re-dispatch. Errors with `Rebind` if `data` or
 /// `placeholders` already holds `name` and the existing entry doesn't match `idx`.
@@ -250,188 +273,159 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    pub(super) fn run_aggregate(
+    /// Run a `Combine` slot: short-circuit on the first errored dep using the same
+    /// frame-attached propagation as `run_bind`, then call `finish` over the dep values
+    /// and decode the returned `BodyResult` (Value, Tail, or Err) into a `NodeStep`
+    /// using the same dispatch as `invoke_to_step`. Deps are eagerly freed on the
+    /// success path; the error path leaves them in `node_dependencies[idx]` for
+    /// chain-free at slot drop.
+    pub(super) fn run_combine(
         &mut self,
-        elements: Vec<AggregateElement<'a>>,
+        deps: Vec<NodeId>,
+        finish: CombineFinish<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
-    ) -> NodeOutput<'a> {
-        self.run_aggregate_with(idx, scope, "<list>", "list literal", elements, |items| {
-            KObject::List(Rc::new(items))
-        })
-    }
-
-    fn run_aggregate_with<F>(
-        &mut self,
-        idx: usize,
-        scope: &'a Scope<'a>,
-        frame_function: &str,
-        frame_expression: &str,
-        elements: Vec<AggregateElement<'a>>,
-        build: F,
-    ) -> NodeOutput<'a>
-    where
-        F: FnOnce(Vec<KObject<'a>>) -> KObject<'a>,
-    {
+    ) -> NodeStep<'a> {
+        // The closure carries its own framing context (e.g. "<list>", "<dict>") via its
+        // capture; the Combine machinery only handles dep-error propagation, which uses
+        // the generic "<combine>" frame to match `run_bind`'s "<bind>" convention.
         let make_frame = || Frame {
-            function: frame_function.to_string(),
-            expression: frame_expression.to_string(),
+            function: "<combine>".to_string(),
+            expression: "combine".to_string(),
         };
-        let mut items: Vec<KObject<'a>> = Vec::with_capacity(elements.len());
-        let mut dep_indices: Vec<usize> = Vec::new();
-        for e in elements {
-            match self.resolve_or_err(e, &mut dep_indices, &make_frame) {
-                Ok(v) => items.push(v),
-                Err(framed) => return framed,
+        for dep in &deps {
+            if let Err(e) = self.read_result(*dep) {
+                let propagated = e.clone_for_propagation().with_frame(make_frame());
+                return NodeStep::Done(NodeOutput::Err(propagated));
             }
         }
+        // Pre-collect refs so `finish` (which holds `&mut self` via the trait object)
+        // doesn't reborrow `self` for reads.
+        let values: Vec<&'a KObject<'a>> = deps.iter().map(|d| self.read(*d)).collect();
+        let dep_indices: Vec<usize> = deps.iter().map(|d| d.index()).collect();
+        let body = finish(scope, self, &values);
         self.reclaim_deps(idx, dep_indices);
-        let arena = scope.arena;
-        let allocated: &'a KObject<'a> = arena.alloc_object(build(items));
-        NodeOutput::Value(allocated)
+        match body {
+            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
+                work: NodeWork::Dispatch(expr),
+                frame,
+                function,
+            },
+            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        }
     }
 
+    /// Schedule a list literal as a `Combine`: every `Expression` part becomes a sub
+    /// `Dispatch`; bare identifiers and other already-resolved parts stay as captured
+    /// `KObject` statics. The closure interleaves dep results with statics in source
+    /// order to build the final `KObject::List`.
     pub(super) fn schedule_list_literal(
         &mut self,
         items: Vec<ExpressionPart<'a>>,
         scope: &'a Scope<'a>,
     ) -> NodeId {
-        // Bare `Identifier` parts stay `Static` (parser surfaces them as already-resolved
-        // values via `resolve()`); list keys are not name-resolved like dict keys are.
-        let elements = self.schedule_aggregate_parts(items, scope, |this, part, scope| match part {
-            ExpressionPart::Expression(boxed) => {
-                let sub_id = this.add(NodeWork::Dispatch(*boxed), scope);
-                AggregateElement::Dep(sub_id)
-            }
-            other => AggregateElement::Static(other.resolve()),
+        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(items.len());
+        let mut deps: Vec<NodeId> = Vec::new();
+        for part in items {
+            // Bare `Identifier` parts in a list stay `Static` (parser surfaces them as
+            // already-resolved values via `resolve()`); list elements are not
+            // name-resolved like dict keys/values are.
+            let slot = self.classify_aggregate_part(part, scope, &mut deps, false);
+            layout.push(slot);
+        }
+        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+            let items: Vec<KObject<'a>> = layout
+                .into_iter()
+                .map(|slot| slot.materialize(results))
+                .collect();
+            let allocated: &'a KObject<'a> =
+                scope.arena.alloc_object(KObject::List(Rc::new(items)));
+            BodyResult::Value(allocated)
         });
-        self.add(NodeWork::Aggregate { elements }, scope)
+        self.add_combine(deps, scope, finish)
     }
 
-    /// Bare identifiers on either side are scheduled as Dep (Python-like name resolution
-    /// applies to keys and values). Identifier wrapping happens here, not at parse time,
-    /// so the AST stays faithful to the source.
+    /// Schedule a dict literal as a `Combine`. Bare identifiers on either side are
+    /// scheduled as sub-Dispatches (Python-like name resolution applies to both keys and
+    /// values). Identifier wrapping happens here, not at parse time, so the AST stays
+    /// faithful to the source. The closure performs `KKey` conversion on each key —
+    /// non-scalar keys produce `KErrorKind::ShapeError`.
     pub(super) fn schedule_dict_literal(
         &mut self,
         pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
         scope: &'a Scope<'a>,
     ) -> NodeId {
-        let mut entries: Vec<(AggregateElement<'a>, AggregateElement<'a>)> =
-            Vec::with_capacity(pairs.len());
+        let mut layout: Vec<(Slot<'a>, Slot<'a>)> = Vec::with_capacity(pairs.len());
+        let mut deps: Vec<NodeId> = Vec::new();
         for (k, v) in pairs {
-            entries.push((
-                self.schedule_dict_part(k, scope),
-                self.schedule_dict_part(v, scope),
-            ));
+            let key_slot = self.classify_aggregate_part(k, scope, &mut deps, true);
+            let val_slot = self.classify_aggregate_part(v, scope, &mut deps, true);
+            layout.push((key_slot, val_slot));
         }
-        self.add(NodeWork::AggregateDict { entries }, scope)
-    }
-
-    /// Caller passes a `classify` closure for the diverging arms (list keeps everything
-    /// non-Expression as `Static`; dict wraps bare Identifiers as sub-Dispatches).
-    fn schedule_aggregate_parts<F>(
-        &mut self,
-        parts: Vec<ExpressionPart<'a>>,
-        scope: &'a Scope<'a>,
-        mut classify: F,
-    ) -> Vec<AggregateElement<'a>>
-    where
-        F: FnMut(&mut Self, ExpressionPart<'a>, &'a Scope<'a>) -> AggregateElement<'a>,
-    {
-        let mut elements: Vec<AggregateElement<'a>> = Vec::with_capacity(parts.len());
-        for part in parts {
-            match part {
-                ExpressionPart::ListLiteral(inner) => {
-                    let nested_id = self.schedule_list_literal(inner, scope);
-                    elements.push(AggregateElement::Dep(nested_id));
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    let nested_id = self.schedule_dict_literal(pairs, scope);
-                    elements.push(AggregateElement::Dep(nested_id));
-                }
-                other => elements.push(classify(self, other, scope)),
-            }
-        }
-        elements
-    }
-
-    fn schedule_dict_part(
-        &mut self,
-        part: ExpressionPart<'a>,
-        scope: &'a Scope<'a>,
-    ) -> AggregateElement<'a> {
-        let mut out = self.schedule_aggregate_parts(vec![part], scope, |this, part, scope| match part {
-            ExpressionPart::Expression(boxed) => {
-                let sub_id = this.add(NodeWork::Dispatch(*boxed), scope);
-                AggregateElement::Dep(sub_id)
-            }
-            // Bare identifier wraps as a sub-Dispatch so name resolution runs.
-            ExpressionPart::Identifier(name) => {
-                let expr = KExpression {
-                    parts: vec![ExpressionPart::Identifier(name)],
-                };
-                let sub_id = this.add(NodeWork::Dispatch(expr), scope);
-                AggregateElement::Dep(sub_id)
-            }
-            other => AggregateElement::Static(other.resolve()),
-        });
-        out.pop().expect("schedule_aggregate_parts produces exactly one element per input")
-    }
-
-    pub(super) fn run_aggregate_dict(
-        &mut self,
-        entries: Vec<(AggregateElement<'a>, AggregateElement<'a>)>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeOutput<'a> {
-        // KKey conversion can fail for non-scalar keys; surface that as a framed error.
-        let make_frame = || Frame {
+        let frame_label = || Frame {
             function: "<dict>".to_string(),
             expression: "dict literal".to_string(),
         };
-        let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
-        let mut dep_indices: Vec<usize> = Vec::new();
-        for (k_el, v_el) in entries {
-            let key_obj = match self.resolve_or_err(k_el, &mut dep_indices, &make_frame) {
-                Ok(v) => v,
-                Err(framed) => return framed,
-            };
-            let value_obj = match self.resolve_or_err(v_el, &mut dep_indices, &make_frame) {
-                Ok(v) => v,
-                Err(framed) => return framed,
-            };
-            let kkey = match KKey::try_from_kobject(&key_obj) {
-                Ok(k) => k,
-                Err(e) => return NodeOutput::Err(e.with_frame(make_frame())),
-            };
-            map.insert(Box::new(kkey), value_obj);
-        }
-        self.reclaim_deps(idx, dep_indices);
-        let arena = scope.arena;
-        let allocated: &'a KObject<'a> = arena.alloc_object(KObject::Dict(Rc::new(map)));
-        NodeOutput::Value(allocated)
+        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+            let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
+            for (k_slot, v_slot) in layout {
+                let key_obj = k_slot.materialize(results);
+                let value_obj = v_slot.materialize(results);
+                let kkey = match KKey::try_from_kobject(&key_obj) {
+                    Ok(k) => k,
+                    Err(e) => return BodyResult::Err(e.with_frame(frame_label())),
+                };
+                map.insert(Box::new(kkey), value_obj);
+            }
+            let allocated: &'a KObject<'a> =
+                scope.arena.alloc_object(KObject::Dict(Rc::new(map)));
+            BodyResult::Value(allocated)
+        });
+        self.add_combine(deps, scope, finish)
     }
 
-    /// `Err(framed)` carries the already-framed `NodeOutput::Err` so callers do a single
-    /// early return without re-applying `with_frame`. On success, `dep.index()` is pushed
-    /// onto `dep_indices` for success-path reclaim.
-    fn resolve_or_err(
-        &self,
-        element: AggregateElement<'a>,
-        dep_indices: &mut Vec<usize>,
-        make_frame: &dyn Fn() -> Frame,
-    ) -> Result<KObject<'a>, NodeOutput<'a>> {
-        match element {
-            AggregateElement::Static(obj) => Ok(obj),
-            AggregateElement::Dep(dep) => match self.read_result(dep) {
-                Ok(v) => {
-                    dep_indices.push(dep.index());
-                    Ok(v.deep_clone())
-                }
-                Err(err) => Err(NodeOutput::Err(
-                    err.clone_for_propagation().with_frame(make_frame()),
-                )),
-            },
+    /// Plan one slot of a list / dict literal: nested literals recurse via their own
+    /// schedulers, `Expression` parts spawn sub-Dispatches, and bare identifiers either
+    /// stay static (list) or wrap as sub-Dispatches (dict, when `wrap_identifiers` is
+    /// set). Sub-Dispatch ids are pushed onto `deps` and tracked in the returned `Slot`
+    /// by their position in `deps`.
+    fn classify_aggregate_part(
+        &mut self,
+        part: ExpressionPart<'a>,
+        scope: &'a Scope<'a>,
+        deps: &mut Vec<NodeId>,
+        wrap_identifiers: bool,
+    ) -> Slot<'a> {
+        match part {
+            ExpressionPart::ListLiteral(inner) => {
+                let nested_id = self.schedule_list_literal(inner, scope);
+                let pos = deps.len();
+                deps.push(nested_id);
+                Slot::Dep(pos)
+            }
+            ExpressionPart::DictLiteral(inner) => {
+                let nested_id = self.schedule_dict_literal(inner, scope);
+                let pos = deps.len();
+                deps.push(nested_id);
+                Slot::Dep(pos)
+            }
+            ExpressionPart::Expression(boxed) => {
+                let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
+                let pos = deps.len();
+                deps.push(sub_id);
+                Slot::Dep(pos)
+            }
+            ExpressionPart::Identifier(name) if wrap_identifiers => {
+                let expr = KExpression {
+                    parts: vec![ExpressionPart::Identifier(name)],
+                };
+                let sub_id = self.add(NodeWork::Dispatch(expr), scope);
+                let pos = deps.len();
+                deps.push(sub_id);
+                Slot::Dep(pos)
+            }
+            other => Slot::Static(other.resolve()),
         }
     }
 

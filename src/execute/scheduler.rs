@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::dispatch::runtime::{CallArena, RuntimeArena};
 use crate::dispatch::runtime::{Frame, KError, KErrorKind};
 use crate::dispatch::kfunction::{
-    ArgumentBundle, Body, BodyResult, KFunction, NodeId, SchedulerHandle,
+    ArgumentBundle, Body, BodyResult, CombineFinish, KFunction, NodeId, SchedulerHandle,
 };
 use crate::dispatch::values::KObject;
 use crate::dispatch::runtime::Scope;
@@ -38,7 +38,7 @@ fn extract_pre_run_name<'a>(expr: &KExpression<'a>, scope: &'a Scope<'a>) -> Opt
 }
 
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
-/// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Aggregate`
+/// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Combine`
 /// nodes, and builtin bodies holding `&mut dyn SchedulerHandle` can also add `Dispatch` nodes.
 ///
 /// The execute loop drains two queues: internal `ready_set` (populated by the notify-walk
@@ -55,7 +55,7 @@ fn extract_pre_run_name<'a>(expr: &KExpression<'a>, scope: &'a Scope<'a>) -> Opt
 pub struct Scheduler<'a> {
     pub(super) nodes: Vec<Option<Node<'a>>>,
     pub(super) results: Vec<Option<NodeOutput<'a>>>,
-    /// Top-level dispatches submitted via `add_dispatch`. Internal Bind/Aggregate slots
+    /// Top-level dispatches submitted via `add_dispatch`. Internal Bind/Combine slots
     /// arrive on `ready_set` instead.
     pub(super) queue: VecDeque<usize>,
     /// Drained ahead of `queue` so internal work is consumed before the next top-level
@@ -69,7 +69,7 @@ pub struct Scheduler<'a> {
     pub(super) pending_deps: Vec<usize>,
     /// 1:1 with `nodes`: backward edges (parent -> owned sub-slots). `notify_list` is
     /// forward; this sidecar is what `free()` walks to reclaim transitive sub-trees.
-    /// Cleared by `run_bind` / `run_aggregate*` after they eagerly free their deps on the
+    /// Cleared by `run_bind` / `run_combine` after they eagerly free their deps on the
     /// success path.
     pub(super) node_dependencies: Vec<Vec<usize>>,
     /// Reclaimed slot indices. `add()` pulls from here before extending the vecs, so
@@ -101,10 +101,20 @@ impl<'a> Scheduler<'a> {
     pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
     /// Submit an unresolved expression for the scheduler to dispatch + execute against
-    /// `scope`. The only public way to add work; `Bind`/`Aggregate` are internal scaffolding
+    /// `scope`. The only public way to add work; `Bind`/`Combine` are internal scaffolding
     /// spawned during a `Dispatch` node's run.
     pub fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         self.add(NodeWork::Dispatch(expr), scope)
+    }
+
+    /// Schedule a `Combine` slot. See `SchedulerHandle::add_combine`.
+    pub fn add_combine(
+        &mut self,
+        deps: Vec<NodeId>,
+        scope: &'a Scope<'a>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        self.add(NodeWork::Combine { deps, finish }, scope)
     }
 
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
@@ -211,10 +221,7 @@ impl<'a> Scheduler<'a> {
             let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope, idx)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
-                NodeWork::Aggregate { elements } => NodeStep::Done(self.run_aggregate(elements, scope, idx)),
-                NodeWork::AggregateDict { entries } => {
-                    NodeStep::Done(self.run_aggregate_dict(entries, scope, idx))
-                }
+                NodeWork::Combine { deps, finish } => self.run_combine(deps, finish, scope, idx),
                 NodeWork::Lift { from } => NodeStep::Done(self.run_lift(from)),
             };
             self.active_frame = prev_active;
@@ -350,7 +357,7 @@ impl<'a> Scheduler<'a> {
     }
 
     /// True iff slot `id` holds a terminal result. An errored sub counts as ready — the
-    /// parent short-circuits on it in `run_bind`/`run_aggregate`.
+    /// parent short-circuits on it in `run_bind`/`run_combine`.
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
         matches!(
             self.results.get(id.index()).and_then(|o| o.as_ref()),
@@ -386,6 +393,15 @@ impl<'a> Default for Scheduler<'a> {
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         Scheduler::add(self, NodeWork::Dispatch(expr), scope)
+    }
+
+    fn add_combine(
+        &mut self,
+        deps: Vec<NodeId>,
+        scope: &'a Scope<'a>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        Scheduler::add_combine(self, deps, scope, finish)
     }
 
     /// Active slot's frame `Rc<CallArena>`, set by `execute` for the duration of each
@@ -660,6 +676,90 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn combine_waits_on_deps_then_runs_finish() {
+        // Direct exercise of `Combine`: two trivial dep slots that resolve to numbers,
+        // a finish closure that concatenates their string renderings into a KString.
+        // Pins the contract that Combine waits on every dep before invoking finish and
+        // that finish-returned BodyResult::Value lands in the slot's result.
+        use crate::dispatch::kfunction::{BodyResult, CombineFinish};
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let dep_a = sched.add_dispatch(let_expr("ca", 7.0), scope);
+        let dep_b = sched.add_dispatch(let_expr("cb", 11.0), scope);
+        let finish: CombineFinish = Box::new(|scope, _sched, results| {
+            let a = match results[0] {
+                KObject::Number(n) => *n,
+                _ => return BodyResult::Err(crate::dispatch::runtime::KError::new(
+                    crate::dispatch::runtime::KErrorKind::ShapeError("a not number".into()),
+                )),
+            };
+            let b = match results[1] {
+                KObject::Number(n) => *n,
+                _ => return BodyResult::Err(crate::dispatch::runtime::KError::new(
+                    crate::dispatch::runtime::KErrorKind::ShapeError("b not number".into()),
+                )),
+            };
+            let allocated = scope.arena.alloc_object(KObject::KString(format!("{a}+{b}")));
+            BodyResult::Value(allocated)
+        });
+        let combine_id = sched.add_combine(vec![dep_a, dep_b], scope, finish);
+        sched.execute().unwrap();
+        assert!(matches!(sched.read(combine_id), KObject::KString(s) if s == "7+11"));
+    }
+
+    #[test]
+    fn combine_short_circuits_on_dep_error() {
+        // Synthetic state: a Combine whose two deps already hold terminal results — one
+        // Value, one Err. Pins the contract that finish does not run when any dep
+        // errored, and that the propagated error carries a "<combine>" frame matching
+        // run_bind's "<bind>" convention.
+        use crate::dispatch::kfunction::{BodyResult, CombineFinish};
+        use crate::dispatch::runtime::{KError, KErrorKind};
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+
+        // Allocate two placeholder Dispatch slots, drain the queue so add() doesn't
+        // re-enqueue them at execute time, then overwrite their results directly
+        // (mirrors the synthetic-state pattern used by `free_reclaims_owned_subtree`).
+        let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
+        let dep_ok = sched.add(mk_dispatch(), scope);
+        let dep_err = sched.add(mk_dispatch(), scope);
+        sched.nodes[dep_ok.index()] = None;
+        sched.nodes[dep_err.index()] = None;
+        sched.queue.clear();
+        sched.ready_set.clear();
+        let value = arena.alloc_object(KObject::Number(99.0));
+        sched.results[dep_ok.index()] = Some(NodeOutput::Value(value));
+        sched.results[dep_err.index()] = Some(NodeOutput::Err(
+            KError::new(KErrorKind::ShapeError("dep_err synthetic".into())),
+        ));
+
+        let invoked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+        let invoked_clone = Rc::clone(&invoked);
+        let finish: CombineFinish = Box::new(move |_scope, _sched, _results| {
+            invoked_clone.set(true);
+            BodyResult::Value(value)
+        });
+        let combine_id = sched.add_combine(vec![dep_ok, dep_err], scope, finish);
+        sched.execute().unwrap();
+
+        assert!(!invoked.get(), "finish must not run when a dep errored");
+        let result = sched.read_result(combine_id);
+        let err = match result {
+            Err(e) => e.clone(),
+            Ok(_) => panic!("combine should have errored"),
+        };
+        assert!(
+            err.frames.iter().any(|f| f.function == "<combine>"),
+            "propagated error should carry a <combine> frame, got {err}",
+        );
     }
 
     #[test]

@@ -37,7 +37,7 @@ with these `KErrorKind` variants:
 
 The scheduler walks errors along the dependency edges: a slot's terminal
 `Err` write triggers the notify-walk, which wakes each waiting `Bind` /
-`Aggregate` / `Lift` consumer; those short-circuit, append a `Frame`, and
+`Combine` / `Lift` consumer; those short-circuit, append a `Frame`, and
 write the error into their own slot. Errors flow to the top level; the CLI
 formats them to stderr with the frame chain via `KError`'s `Display` impl.
 

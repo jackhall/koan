@@ -56,7 +56,7 @@ composite holds the `Rc<CallArena>`, and the `Rc` holds the arena. Neither
 side can drop. The case shows up when a body returns a List/Dict/Tagged/Struct
 holding a closure — the lift-on-return machinery attaches the per-call frame's
 `Rc` to the closure, then a re-allocation of the composite (via `value_pass`,
-`Aggregate`, etc.) lands the composite back in the per-call arena.
+`Combine`, etc.) lands the composite back in the per-call arena.
 
 [`RuntimeArena`](../src/dispatch/runtime/arena.rs) carries an
 `escape: Option<*const RuntimeArena>` set by `CallArena::new` to the outer
@@ -92,7 +92,7 @@ frame Rc through
 [`SchedulerHandle::current_frame`](../src/dispatch/kfunction.rs), which MATCH
 clones into its `CallArena::new` call. `Scheduler::active_frame` is set per
 slot run and inherited by `add()` so spawned sub-dispatch / sub-bind /
-sub-aggregate slots also see the right ancestor. Top-level FN invokes pass
+sub-combine slots also see the right ancestor. Top-level FN invokes pass
 `None` (their captured chain ends in run-root, which outlives the run, so no
 chain is needed and TCO recursion stays bounded).
 
@@ -136,14 +136,14 @@ edges](execution-model.md#pushnotify-dependency-edges)) carries three
 `Vec`-shaped sidecars on `Scheduler`: `notify_list: Vec<Vec<NodeId>>` (each
 producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
 unresolved-dep counter), and `node_dependencies: Vec<Vec<usize>>` (each
-Bind/Aggregate slot's owned sub-slot indices, captured at `add()` time
+Bind/Combine slot's owned sub-slot indices, captured at `add()` time
 before `take()` consumes the work). All three are 1:1 with `nodes`.
 A fourth sidecar, `free_list: Vec<usize>`, holds recyclable indices that
 `add()` pulls from before extending the vecs.
 
-Transient-node reclamation runs at the end of `run_bind` / `run_aggregate*`:
-once a Bind has spliced its dep results into `expr.parts` (or an Aggregate
-has materialized its list/dict), `Scheduler::free` walks the consumer's
+Transient-node reclamation runs at the end of `run_bind` / `run_combine`:
+once a Bind has spliced its dep results into `expr.parts` (or a Combine's
+finish closure has produced its result), `Scheduler::free` walks the consumer's
 `node_dependencies` entry recursively and recycles each owned sub-slot's
 indices. The walk skips any still-live slot via the `nodes[i].is_some()`
 guard, so a free that dives into another in-flight user-fn call leaves

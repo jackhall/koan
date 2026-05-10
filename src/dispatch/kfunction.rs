@@ -33,8 +33,27 @@ impl NodeId {
 /// dangles the moment the slot's old frame is dropped on TCO replace.
 pub trait SchedulerHandle<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId;
+    /// Schedule a `Combine` slot: wait on `deps` to terminalize, then run `finish` over
+    /// their resolved values. The dual of `Bind` for host-side N→1 combinators (list /
+    /// dict literals today; MODULE / SIG body wrap-up in flight). `deps` order is the
+    /// order `finish` sees its `&[&'a KObject<'a>]` slice.
+    fn add_combine(
+        &mut self,
+        deps: Vec<NodeId>,
+        scope: &'a Scope<'a>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId;
     fn current_frame(&self) -> Option<Rc<CallArena>>;
 }
+
+/// Host-side closure for `Combine` slots. Receives the dep values in submission order;
+/// static elements (e.g. literal scalars in a list literal) are captured in the closure.
+/// Returning a `BodyResult` lets the closure surface a structured error (e.g. dict-literal
+/// key conversion) without a special-case channel.
+pub type CombineFinish<'a> = Box<
+    dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, &[&'a KObject<'a>]) -> BodyResult<'a>
+        + 'a,
+>;
 
 /// What a builtin's body returns.
 ///
