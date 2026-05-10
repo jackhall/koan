@@ -156,8 +156,8 @@ site, exercised through the actual scheduler path.
 
 - `module_body_dispatch_does_not_dangle`
 
-**Dispatch-time placeholder parking** ([src/execute/run.rs](src/execute/run.rs)) — the §1
-single-Identifier short-circuit and the §8 replay-park (per
+**Dispatch-time placeholder parking** ([src/execute/run.rs](src/execute/run.rs)) — the bare-Identifier
+short-circuit and the replay-park (per
 [design/execution-model.md § Dispatch-time name placeholders](design/execution-model.md#dispatch-time-name-placeholders))
 both rewrite a parked slot's work and walk the producer's terminal `&KObject`
 out of `results[from]` after the notify-walk wakes the consumer. The reference

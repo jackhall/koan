@@ -177,23 +177,26 @@ and `register_function` remove their own placeholder before inserting into
 moment.
 
 The execute side — [`run_dispatch`](../src/execute/run.rs) — handles the
-park. A bare-Identifier dispatch slot (`(some_var)`) hits a §1 short-circuit
-that resolves the name directly: `Value` returns inline, `Placeholder`
-rewrites the slot's work to `Lift { from: producer_id }` (the same shim
-`BodyResult::Tail` uses for sub-Bind waits), `Unbound` falls through to
-`value_lookup`'s structured error. The §7 auto-wrap promotes bare
-identifiers in *value-typed* slots of any picked function to single-Identifier
-sub-expressions so they re-enter `run_dispatch` and route through §1; this
-is why `LET y = z` looks up `z` rather than binding `y` to the literal
-string `"z"`. Multi-name forward references compose as N independent
-sub-Dispatches. The §8 replay-park covers the literal-name slots that
-*don't* sub-dispatch (`call_by_name`'s verb, `ATTR`'s identifier-lhs,
-`type_call`'s verb): if any of those names resolves to a placeholder whose
-producer hasn't terminalized, the outer slot's work is rewritten to
-`Dispatch(same_expr)` and parked on the producer's notify-list; on wake the
-re-dispatch finds the binding in `data` and proceeds. If the producer
-already terminalized with an error, the consumer's replay-park surfaces it
-with a `<replay-park>` frame rather than parking on a dead slot.
+park. A bare-Identifier dispatch slot (`(some_var)`) hits the
+**bare-Identifier short-circuit** that resolves the name directly:
+`Value` returns inline, `Placeholder` rewrites the slot's work to
+`Lift { from: producer_id }` (the same shim `BodyResult::Tail` uses for
+sub-Bind waits), `Unbound` falls through to `value_lookup`'s structured
+error. The **auto-wrap pass** (carrier: `ShapePick::wrap_indices`)
+promotes bare identifiers in *value-typed* slots of any picked function
+to single-Identifier sub-expressions so they re-enter `run_dispatch` and
+route through the bare-Identifier short-circuit; this is why `LET y = z`
+looks up `z` rather than binding `y` to the literal string `"z"`.
+Multi-name forward references compose as N independent sub-Dispatches.
+The **replay-park** (carrier: `ShapePick::ref_name_indices`) covers the
+literal-name slots that *don't* sub-dispatch (`call_by_name`'s verb,
+`ATTR`'s identifier-lhs, `type_call`'s verb): if any of those names
+resolves to a placeholder whose producer hasn't terminalized, the outer
+slot's work is rewritten to `Dispatch(same_expr)` and parked on the
+producer's notify-list; on wake the re-dispatch finds the binding in
+`data` and proceeds. If the producer already terminalized with an error,
+the consumer's replay-park surfaces it with a `<replay-park>` frame
+rather than parking on a dead slot.
 
 The new edges are notify-only (consumer→producer for waking, no ownership
 transfer), so `node_dependencies` — the parent → owned-children sidecar that

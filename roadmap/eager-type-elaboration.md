@@ -180,6 +180,20 @@ never terminates).
   (already path-shaped) or a new `KType::Qualified(Path)` variant is
   needed. Decision deferred until a use case forces it; the current
   module-system stages don't.
+- *Recursion encoding key — decided.* `KType::RecursiveRef(String)` keys
+  by binder name only. When [per-declaration type identity for structs
+  and tagged unions](per-declaration-type-identity.md) ships, its
+  `{ scope_id, name }` carrier inherits the same name; `RecursiveRef`
+  resolution walks the enclosing `Mu` or schema-binder context to find
+  the concrete identity. No rework of the recursion encoding required
+  when per-declaration-identity lands.
+- *TCO interaction — decided.* Phase-3 Combine-shaped STRUCT/UNION
+  bodies and the phase-4 Combine-shaped FN-def constructor body are
+  declaration-time registration paths, not tail sites — they return
+  `BodyResult::Value` (or `DeferTo` to the Combine) rather than `Tail`.
+  Call-time TCO of the user-defined functions FN-def constructs lives
+  in `KFunction::invoke`'s `BodyResult::tail_with_frame`, on a path
+  this work doesn't touch.
 - *Forward references and partial definitions — open.* Eager elaboration
   means a type alias's RHS must resolve at bind time. Mutual recursion
   is handled by the SCC pre-registration above, but a binding whose RHS
@@ -192,6 +206,12 @@ never terminates).
 ## Dependencies
 
 **Requires:**
+- [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](type-token-auto-wrap.md) —
+  the chained-Lift + replay-park notify-chain deadlock blocks Combine-shaped
+  binders from waking when an inner type-name lookup parks on a producer
+  placeholder. The same notify-chain shape this work introduces for
+  STRUCT/UNION recursion and FN-def signature-elaboration parking;
+  diagnosis must land first.
 
 **Unblocks:**
 - [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md) —

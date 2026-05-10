@@ -80,17 +80,14 @@ in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
-  — make type elaboration scheduler-driven the same way value evaluation is;
-  replace `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`
-  for one canonical runtime type representation; add `KType::Mu` and
-  `KType::RecursiveRef` so recursive type definitions elaborate via threaded-set
-  self-reference recognition without deadlocking on their own placeholder.
 - [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
   — extend the `KType::ModuleType` per-declaration identity carrier to `STRUCT` and
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
+- [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](roadmap/type-token-auto-wrap.md)
+  — diagnose the chained-Lift + replay-park notify-chain deadlock; unblocks
+  eager type elaboration's Combine-shaped binders.
 
 ## Open items
 
@@ -133,10 +130,10 @@ the rest incrementally, each producing a usable end state.
   — `KType::Struct` and `KType::Tagged` are flat singletons, so two distinct
   `STRUCT` declarations report the same type. Extend per-declaration identity
   along the lines of the module system's `KType::ModuleType` carrier.
-- [Uniform §7 / §8 handling for Type-tokens in value slots](roadmap/type-token-auto-wrap.md)
-  — `classify_for_pick` carves Type-tokens out of the §7 wrap rule for `Any` /
-  `TypeExprRef` slots and never §8-parks them; collapsing the carve-out
-  hits a chained-Lift + §8-park scheduler deadlock that needs diagnosis
+- [Uniform auto-wrap / replay-park handling for Type-tokens in value slots](roadmap/type-token-auto-wrap.md)
+  — `classify_for_pick` carves Type-tokens out of the auto-wrap rule for `Any` /
+  `TypeExprRef` slots and never replay-parks them; collapsing the carve-out
+  hits a chained-Lift + replay-park scheduler deadlock that needs diagnosis
   before the Identifier-vs-Type dispatch paths can unify.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
   — make type elaboration scheduler-driven the same way value evaluation is;
