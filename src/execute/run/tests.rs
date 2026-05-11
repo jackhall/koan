@@ -1,5 +1,6 @@
-//! End-to-end coverage for the §1/§7/§8 dispatch-time placeholder routing in
-//! `run_dispatch` (see design/execution-model.md).
+//! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
+//! replay-park routing in `run_dispatch` (see
+//! [design/execution-model.md § Dispatch-time name placeholders](../../../design/execution-model.md#dispatch-time-name-placeholders)).
 use crate::builtins::default_scope;
 use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
 use super::super::scheduler::Scheduler;
@@ -136,7 +137,7 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
 }
 
-/// Miri audit-slate: pins the §1 Lift-park lifetime contract. The `&KObject<'a>` the
+/// Miri audit-slate: pins the bare-name-short-circuit Lift-park lifetime contract. The `&KObject<'a>` the
 /// Lift returns is the producer's reference, not a clone — the arena must outlive
 /// the wake and re-run.
 #[test]
@@ -151,7 +152,7 @@ fn lift_park_minimal_program_for_miri() {
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 11.0));
 }
 
-/// Miri audit-slate: pins the §8 replay-park scope-lifetime contract — the parked
+/// Miri audit-slate: pins the replay-park scope-lifetime contract — the parked
 /// slot's scope must stay valid across the wake and the re-dispatch.
 #[test]
 fn replay_park_minimal_program_for_miri() {
@@ -189,7 +190,7 @@ fn replay_park_propagates_producer_error() {
     assert!(scope.lookup("y").is_none(), "y should not bind when its dependency errors");
 }
 
-/// A bare Type-token in a `TypeExprRef` slot of a non-binder picks up the same §8
+/// A bare Type-token in a `TypeExprRef` slot of a non-binder picks up the same
 /// replay-park rails as a bare Identifier: `IntOrd :| OrderedSig` submitted before
 /// `MODULE IntOrd` / `SIG OrderedSig` must park on the placeholders the binders install
 /// rather than racing the FIFO submission order. Pins the Type-token park symmetry

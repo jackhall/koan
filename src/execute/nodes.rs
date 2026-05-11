@@ -85,8 +85,8 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
 
 /// A backward edge stored in `Scheduler::dep_edges[idx]`. `Owned` marks slots `idx` is
 /// responsible for reclaiming (sub-Dispatches a Bind spawned, the producer a Lift wraps);
-/// `Notify` marks producer slots `idx` only parked on for wake notification (the §1
-/// single-Identifier short-circuit and §8 replay-park push these — the producer is a
+/// `Notify` marks producer slots `idx` only parked on for wake notification (the
+/// bare-name short-circuit and replay-park push these — the producer is a
 /// sibling slot `idx` does not own). `Scheduler::register_slot_deps` walks both kinds
 /// to install notify edges; `Scheduler::free` recurses only into `Owned`, so the
 /// reclaim walk cannot transit through park edges into unrelated slot graphs.
@@ -108,8 +108,8 @@ impl DepEdge {
 
 /// Owned-edge sidecar populated at `add()` time: every dep `work_deps` reports comes
 /// from the work's own subs/deps/from field, so the spawning slot owns it. `Dispatch`
-/// produces an empty list. Notify edges (single-Identifier short-circuit, §8 replay-
-/// park) are not produced here — they're pushed at the call site in `run_dispatch`.
+/// produces an empty list. Notify edges (bare-name short-circuit, replay-park) are not
+/// produced here — they're pushed at the call site in `run_dispatch`.
 pub(super) fn work_owned_edges<'a>(work: &NodeWork<'a>) -> Vec<DepEdge> {
     match work_deps(work) {
         Some(ids) => ids.into_iter().map(DepEdge::Owned).collect(),

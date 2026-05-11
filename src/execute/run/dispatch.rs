@@ -4,7 +4,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use super::super::nodes::{DepEdge, NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 
-/// Idempotent on a §8 replay-park re-dispatch. Errors with `Rebind` if `data` or
+/// Idempotent on a replay-park re-dispatch. Errors with `Rebind` if `data` or
 /// `placeholders` already holds `name` and the existing entry doesn't match `idx`.
 fn install_dispatch_placeholder<'a>(
     expr: &KExpression<'a>,
@@ -40,20 +40,21 @@ fn install_dispatch_placeholder<'a>(
 }
 
 impl<'a> Scheduler<'a> {
-    /// See design/execution-model.md for the dispatch-time placeholder rules
-    /// (§1 short-circuit, §4 install, §7 auto-wrap, §8 replay-park) referenced below.
+    /// See [design/execution-model.md § Dispatch-time name placeholders](../../../design/execution-model.md#dispatch-time-name-placeholders)
+    /// for the bare-name short-circuit, placeholder install, auto-wrap pass, and
+    /// replay-park rules referenced below.
     pub(in crate::execute) fn run_dispatch(
         &mut self,
         expr: KExpression<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        // §4: a `Rebind` here surfaces as Done(Err) so other slots keep draining.
+        // Placeholder install: a `Rebind` here surfaces as Done(Err) so other slots keep draining.
         if let Err(e) = install_dispatch_placeholder(&expr, scope, idx) {
             return Ok(NodeStep::Done(NodeOutput::Err(e)));
         }
 
-        // §1: single-Identifier short-circuit. Unbound falls through so `value_lookup`'s
+        // Bare-name short-circuit. Unbound falls through so `value_lookup`'s
         // body produces the structured `UnboundName` error.
         if let [ExpressionPart::Identifier(name)] = expr.parts.as_slice() {
             match scope.resolve(name) {
@@ -78,9 +79,9 @@ impl<'a> Scheduler<'a> {
 
         let expr = match scope.shape_pick(&expr) {
             Some(pick) => {
-                // §7 wrap: bare-Identifier or bare leaf Type-token in a value slot becomes
-                // a single-name sub-Expression so it re-enters via §1 and routes through
-                // the Identifier or TypeExprRef overload of `value_lookup`.
+                // Auto-wrap: bare-Identifier or bare leaf Type-token in a value slot becomes
+                // a single-name sub-Expression so it re-enters via the bare-name short-circuit
+                // and routes through the Identifier or TypeExprRef overload of `value_lookup`.
                 let mut parts = expr.parts;
                 for i in pick.wrap_indices {
                     let placeholder = ExpressionPart::Identifier(String::new());
@@ -103,7 +104,7 @@ impl<'a> Scheduler<'a> {
                 }
                 let rewritten = KExpression { parts };
 
-                // §8 replay-park check. A `ref_name_indices` slot whose producer has
+                // Replay-park check. A `ref_name_indices` slot whose producer has
                 // already terminalized but whose placeholder is still set means the
                 // producer errored (success would have cleared the placeholder via
                 // `bind_value`); propagate the error rather than parking on a dead slot.
@@ -144,7 +145,7 @@ impl<'a> Scheduler<'a> {
                 }
 
                 if !producers_to_wait.is_empty() {
-                    // Notify edges: §8 replay-park parks on sibling producers (often
+                    // Notify edges: replay-park parks on sibling producers (often
                     // top-level slots) the rewritten Dispatch does not own. `free` must
                     // not transit through these into the producer's subtree.
                     for p in &producers_to_wait {

@@ -140,7 +140,7 @@ pub fn body_function_of<'a>(
 /// under `name` in `m`'s `type_members` table. Surface analogue of `M.Type`, but reachable
 /// as a scheduled call so a functor body can synthesize it from a parameter module value.
 /// The `m` slot is strictly `Module`; bare Type-token operands (`MODULE_TYPE_OF Foo Type`)
-/// ride the §7 auto-wrap rails — they sub-dispatch through `value_lookup` and arrive here
+/// ride the auto-wrap rails — they sub-dispatch through `value_lookup` and arrive here
 /// as a `Future(KModule)`. The shared [`crate::dispatch::values::resolve_module`] helper
 /// covers both the direct `KModule` path and the `(KModule, frame)` lifted form.
 pub fn body_module_type_of<'a>(
@@ -156,7 +156,7 @@ pub fn body_module_type_of<'a>(
         None => return err(KError::new(KErrorKind::MissingArg("m".to_string()))),
     };
     // The `name` slot accepts a Type token (e.g. `Type`, `Elt`) — abstract type names
-    // classify as Type per the §2 token rules, not Identifier. The lookup uses the bare
+    // classify as Type per the token-classification rules, not Identifier. The lookup uses the bare
     // leaf name from the resolved `TypeExpr`.
     let name = match read_type_expr(&bundle, "name") {
         Ok(t) => t.name,
@@ -219,7 +219,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body_function_of,
     );
     // Single overload: the `m` slot is `Module`. Bare Type-token operands
-    // (`MODULE_TYPE_OF Foo Type`) ride the unified §7 wrap path and resolve through the
+    // (`MODULE_TYPE_OF Foo Type`) ride the unified auto-wrap path and resolve through the
     // `value_lookup`-TypeExprRef overload to a `Future(KModule)`, which then matches this
     // slot strictly. Same shape as the ascription operators — no parallel TypeExprRef-lhs
     // overload needed.

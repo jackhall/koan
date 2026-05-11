@@ -319,7 +319,7 @@ mod tests {
         assert!(classify("?foo").is_err());
     }
 
-    // Module-system stage 1 §2 token-classification tests.
+    // Token-classification tests.
 
     #[test]
     fn keyword_two_uppercase_no_lowercase() {
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn uppercase_with_digits_no_lowercase_is_parse_error() {
-        // `K9` — uppercase first, no lowercase. The §2 rule rejects this rather than letting
+        // `K9` — uppercase first, no lowercase. The token-classification rule rejects this rather than letting
         // it fall through to Identifier (which would silently shadow a future type-position
         // binding).
         assert!(classify("K9").is_err());

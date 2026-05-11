@@ -46,8 +46,8 @@ pub struct Scheduler<'a> {
     /// 1:1 with `nodes`: backward edges (consumer -> producer slots), tagged by kind.
     /// `DepEdge::Owned` marks a sub-slot this slot is responsible for reclaiming
     /// (Bind subs, Combine deps, Lift's `from`); `DepEdge::Notify` marks a sibling
-    /// producer this slot only parked on for wake notification (§1 single-Identifier
-    /// short-circuit, §8 replay-park). `notify_list` is the forward analogue;
+    /// producer this slot only parked on for wake notification (bare-name short-circuit,
+    /// replay-park). `notify_list` is the forward analogue;
     /// `free()` walks this sidecar but recurses only into `Owned` so park edges can
     /// never transit the reclaim walk into unrelated slots. Cleared by `run_bind` /
     /// `run_combine` after they eagerly free their deps on the success path.

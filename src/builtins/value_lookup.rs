@@ -8,7 +8,7 @@ use super::{err, register_builtin};
 /// `<v:Identifier>` or `<v:TypeExprRef>` — single-part expression containing one name token.
 /// Looks `v` up via `Scope::lookup` (which walks the `outer` chain) and returns the bound
 /// `KObject`, or `KError::UnboundName` if unbound at every level. Lets a parens-wrapped name
-/// (`(some_var)`, `(IntOrd)`) — or a §7 auto-wrap of the same — dispatch and resolve to its
+/// (`(some_var)`, `(IntOrd)`) — or an auto-wrap of the same — dispatch and resolve to its
 /// current value. The TypeExprRef overload only accepts bare leaves (`params: None`);
 /// parameterized type expressions like `List<Number>` are structural type-syntax, not
 /// look-up targets.

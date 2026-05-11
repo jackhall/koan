@@ -160,7 +160,7 @@ impl KType {
             // Unascribed source modules never match (their compat set is empty); pass them
             // through `:|` / `:!` first. Bare-name arguments are routed through value
             // lookup (LET-bound to a lowercase identifier) so they enter as Identifier
-            // tokens which the §7 auto-wrap pass converts to sub-Dispatches that resolve
+            // tokens which the auto-wrap pass converts to sub-Dispatches that resolve
             // to the module value before re-entering this slot.
             KType::SignatureBound { sig_id, .. } => match part {
                 ExpressionPart::Future(KObject::KModule(m, _)) => {

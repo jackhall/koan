@@ -11,8 +11,8 @@ use super::{err, register_builtin_with_pre_run};
 /// through `KObject::deep_clone`.
 ///
 /// Two overloads share this body, differing only in the `name` slot's `KType`: `Identifier`
-/// (the original lowercase-name path) and `TypeExprRef` (added in module-system stage 1 so
-/// `LET ModuleName = (...)` can bind a name that classifies as a Type token per §2).
+/// (the original lowercase-name path) and `TypeExprRef` (so `LET ModuleName = (...)` can
+/// bind a name that classifies as a Type token under the parser's token-classification rules).
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,

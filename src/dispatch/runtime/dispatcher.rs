@@ -160,9 +160,9 @@ fn lazy_eager_indices(f: &KFunction<'_>, expr: &KExpression<'_>) -> Option<Vec<u
 ///
 /// `eager_indices` carries `lazy_eager_indices`' result for the lazy path (or empty for
 /// non-lazy candidates). `wrap_indices` are bare-Identifier parts in value-typed slots
-/// that should be auto-wrapped as sub-Dispatches per §7. `ref_name_indices` are
+/// that the auto-wrap pass rewrites into sub-Dispatches. `ref_name_indices` are
 /// bare-Identifier parts in literal-name slots (`KType::Identifier` /
-/// `KType::TypeExprRef`) of a non-pre_run function, used by §8 replay-park.
+/// `KType::TypeExprRef`) of a non-pre_run function, used by replay-park.
 ///
 /// Returns `None` when:
 /// - no candidate function in any scope on the chain matches `expr`'s shape, or
@@ -186,7 +186,7 @@ pub(crate) fn shape_pick<'a>(scope: &Scope<'a>, expr: &KExpression<'_>) -> Optio
         drop(functions);
         return Some(pick);
     }
-    // Second: tentative-accept for the §7 auto-wrap case — bare-Identifier in a
+    // Second: tentative-accept for the auto-wrap case — bare-Identifier in a
     // non-literal-name slot. The wrap rewrites that Identifier into a sub-Dispatch whose
     // resolved value will type-match at late dispatch. Only fires when strict picked
     // nothing AND tentative produces a unique candidate.
@@ -210,8 +210,8 @@ pub(crate) fn shape_pick<'a>(scope: &Scope<'a>, expr: &KExpression<'_>) -> Optio
 }
 
 /// Auto-wrap-permissive shape check: bare-Identifier and bare-Type parts in a slot whose
-/// declared type is neither `Identifier` nor `TypeExprRef` are tentatively accepted (the §7
-/// auto-wrap will rewrite them into sub-Dispatches whose results type-check at late
+/// declared type is neither `Identifier` nor `TypeExprRef` are tentatively accepted (the
+/// auto-wrap pass will rewrite them into sub-Dispatches whose results type-check at late
 /// dispatch). All other slot/part pairings reuse the normal `Argument::matches` check.
 /// Mirrors the strict matcher except for the bare-name-in-value-slot allowance — covers
 /// both `MAKESET some_var` (Identifier) and `MAKESET IntOrd` (Type-token module name).
@@ -249,7 +249,8 @@ fn accepts_for_wrap(f: &KFunction<'_>, expr: &KExpression<'_>) -> bool {
 
 /// Build a [`ShapePick`] from the picked function and the matching expression. `eager_indices`
 /// reuses `lazy_eager_indices`' result for the lazy path (or empty for non-lazy candidates);
-/// `wrap_indices` and `ref_name_indices` classify bare-name parts per §7 / §8. Identifier
+/// `wrap_indices` and `ref_name_indices` classify bare-name parts for the auto-wrap pass
+/// and replay-park respectively. Identifier
 /// and bare leaf Type-token (`TypeParams::None`) are treated symmetrically — both name-shaped
 /// parts ride the same wrap-or-park rails, so `LET T = Number` and `LET y = z` (and their
 /// forward-reference variants) walk identical scheduler paths.
@@ -272,7 +273,7 @@ fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
             continue;
         }
         match &arg.ktype {
-            // Bare name in literal-name slot: §8 replay-park iff the picked function isn't
+            // Bare name in literal-name slot: replay-park iff the picked function isn't
             // a binder. Binders' literal-name slots are *declarations*; the slot already
             // owns the name and must not park on its own placeholder.
             KType::Identifier | KType::TypeExprRef => {
@@ -280,8 +281,9 @@ fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
                     ref_name_indices.push(i);
                 }
             }
-            // Bare name in any other slot (including `Any`): §7 wrap. The wrap rewrites
-            // the part into a sub-Dispatch that re-enters via §1 and routes through the
+            // Bare name in any other slot (including `Any`): auto-wrap. The wrap rewrites
+            // the part into a sub-Dispatch that re-enters via the bare-name short-circuit
+            // and routes through the
             // Identifier / TypeExprRef overload of `value_lookup`. Covers both `LET y = z`
             // and `LET T = Number` / `MAKESET IntOrd` symmetrically.
             _ => wrap_indices.push(i),
@@ -501,12 +503,12 @@ mod tests {
         }
     }
 
-    // -------------------- §7 / §8 shape_pick coverage --------------------
+    // -------------------- auto-wrap / replay-park shape_pick coverage --------------------
 
     /// A function whose signature is `OP <v:Number>` matched against `OP someName` (where
     /// `someName` is a bare Identifier in a Number-typed slot) returns `wrap_indices = [1]`
     /// and no ref_name_indices — the dispatcher will wrap `someName` as a sub-Dispatch so
-    /// it resolves through `value_lookup` (or §1's short-circuit, if the name is bound).
+    /// it resolves through `value_lookup` (or the bare-name short-circuit, if the name is bound).
     #[test]
     fn shape_pick_returns_wrap_indices_for_value_slot_identifiers() {
         let arena = RuntimeArena::new();
@@ -533,7 +535,7 @@ mod tests {
 
     /// `call_by_name`'s shape — `<verb:Identifier> <args:KExpression>` — picked against
     /// `myFn (x: 1)` returns ref_name_indices = [0]: the Identifier slot is a literal-name
-    /// reference and the function has no pre_run, so §8 will check whether `myFn` resolves
+    /// reference and the function has no pre_run, so replay-park will check whether `myFn` resolves
     /// to a placeholder.
     #[test]
     fn shape_pick_returns_ref_name_indices_for_non_pre_run_function() {
@@ -562,7 +564,7 @@ mod tests {
 
     /// LET's name slot is `Identifier` (or `TypeExprRef`), but LET has `pre_run = Some(_)` —
     /// so shape_pick should NOT include the name slot in ref_name_indices. Binder Identifier
-    /// slots are declarations, not references; §8 must skip them.
+    /// slots are declarations, not references; replay-park must skip them.
     #[test]
     fn shape_pick_skips_ref_name_indices_for_pre_run_function() {
         let arena = RuntimeArena::new();
@@ -586,7 +588,7 @@ mod tests {
 
     /// A non-pre_run function whose slot is `TypeExprRef`, dispatched against a bare leaf
     /// Type-token, classifies the Type slot the same way an Identifier in an Identifier
-    /// slot does: it lands in `ref_name_indices` so §8 replay-park parks the call on the
+    /// slot does: it lands in `ref_name_indices` so replay-park parks the call on the
     /// Type-token's placeholder. Symmetry pinned by
     /// [design/execution-model.md § Dispatch-time name placeholders](../../../design/execution-model.md#dispatch-time-name-placeholders).
     #[test]
@@ -614,7 +616,7 @@ mod tests {
     }
 
     /// Companion to the literal-name slot case: a bare leaf Type-token in an `Any` slot
-    /// of a non-binder lands in `wrap_indices` so §7 rewrites it into a sub-Dispatch that
+    /// of a non-binder lands in `wrap_indices` so the auto-wrap pass rewrites it into a sub-Dispatch that
     /// resolves through the TypeExprRef overload of `value_lookup`. No more carve-out for
     /// `Type-in-Any`; `LET T = Number` walks the same wrap path as `LET y = z`.
     #[test]

@@ -43,7 +43,8 @@ impl<'a> Scheduler<'a> {
     /// Success-path eager free; the error path leaves deps for chain-free at slot drop.
     /// `dep_edges[idx].clear()` is sound here: Bind / Combine slots at reclaim time hold
     /// only `Owned` edges (their `subs` / `deps`, all spawned by this slot). Notify
-    /// edges land only on Dispatch slots via §1 / §8 in `run_dispatch`, never on Bind /
+    /// edges land only on Dispatch slots via the bare-name short-circuit / replay-park
+    /// in `run_dispatch`, never on Bind /
     /// Combine, so clearing the list cannot drop a wake intent.
     fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
         self.dep_edges[idx].clear();

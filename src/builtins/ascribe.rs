@@ -162,7 +162,7 @@ fn resolve_module_and_signature<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Both ascription operators take already-evaluated `Module` / `Signature` values.
-    // Bare Type-token operands (`IntOrd :| OrderedSig`) ride the unified §7 / §8 wrap +
+    // Bare Type-token operands (`IntOrd :| OrderedSig`) ride the unified auto-wrap +
     // replay-park rails in `classify_for_pick` — they sub-dispatch through the
     // `value_lookup`-TypeExprRef overload to a `Future(KModule)` / `Future(KSignature)`,
     // which then matches these slots strictly. No parallel Type-Type overload required.
@@ -491,7 +491,7 @@ mod tests {
             "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
         );
         // Bind `IntOrd` (an unascribed module) under a lowercase identifier so the
-        // §7 auto-wrap pass triggers when the identifier appears in the SignatureBound
+        // auto-wrap pass triggers when the identifier appears in the SignatureBound
         // slot. The wrapped sub-Dispatch resolves to `Future(KModule(IntOrd, _))`, but
         // IntOrd's `compatible_sigs` is empty — no overload matches. Surfaces as
         // `DispatchFailed` out of `Scheduler::execute`.
@@ -579,7 +579,7 @@ mod tests {
     /// Test 7 — bare Type-token argument auto-wraps into a value-lookup. A `LET`-bound
     /// Type-classified name (`IntOrdA`) passed as `MAKESET IntOrdA` should resolve to its
     /// bound `KModule` the same way the lowercase-identifier and parens-wrapped forms do.
-    /// Pins the §7 wrap extension to Type-tokens via the `value_lookup`-TypeExprRef overload.
+    /// Pins the auto-wrap extension to Type-tokens via the `value_lookup`-TypeExprRef overload.
     #[test]
     fn functor_argument_bare_type_token_auto_wraps() {
         let arena = RuntimeArena::new();

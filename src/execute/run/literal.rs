@@ -144,7 +144,7 @@ impl<'a> Scheduler<'a> {
                 if wrap_identifiers
                     && matches!(t.params, crate::parse::TypeParams::None) =>
             {
-                // §7 auto-wrap for bare leaf Type-tokens in value slots: `MAKESET IntOrd`
+                // Auto-wrap for bare leaf Type-tokens in value slots: `MAKESET IntOrd`
                 // sub-dispatches `(IntOrd)` through the TypeExprRef overload of
                 // `value_lookup`, which surfaces the bound `KModule`/`KSignature`.
                 let expr = KExpression {

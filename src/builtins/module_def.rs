@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn module_member_function_via_let_fn() {
-        // Per the plan §1: module member functions must use `LET <name> = (FN ...)` to bind
+        // Module member functions must use `LET <name> = (FN ...)` to bind
         // under a clean identifier. Bare FN inside a MODULE body lands under the FN's
         // signature key, not under an identifier — accessible only via dispatch from inside
         // the module body, not via `Foo.<name>`.
