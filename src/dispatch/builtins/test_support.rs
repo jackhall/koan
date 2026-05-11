@@ -9,8 +9,7 @@ use std::rc::Rc;
 
 use crate::dispatch::{KError, KObject, RuntimeArena, Scope};
 use crate::execute::scheduler::Scheduler;
-use crate::parse::expression_tree::parse;
-use crate::parse::kexpression::KExpression;
+use crate::parse::{parse, KExpression};
 
 use super::default_scope;
 

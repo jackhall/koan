@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::parse::kexpression::{KExpression, TypeExpr, TypeParams};
+use crate::parse::{KExpression, TypeExpr, TypeParams};
 
 use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::dispatch::values::KObject;

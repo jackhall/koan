@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::dispatch::kfunction::KFunction;
 use crate::dispatch::types::Parseable;
-use crate::parse::kexpression::KExpression;
+use crate::parse::KExpression;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.

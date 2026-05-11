@@ -22,7 +22,7 @@ use crate::dispatch::{
 };
 use crate::dispatch::values::Module;
 
-use crate::parse::kexpression::KExpression;
+use crate::parse::KExpression;
 
 use crate::dispatch::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};

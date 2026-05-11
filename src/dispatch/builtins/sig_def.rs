@@ -19,7 +19,7 @@ use crate::dispatch::{
 };
 use crate::dispatch::values::Signature;
 
-use crate::parse::kexpression::KExpression;
+use crate::parse::KExpression;
 
 use crate::dispatch::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
@@ -102,7 +102,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::dispatch::builtins::test_support::{run, run_root_silent};
     use crate::dispatch::{KObject, RuntimeArena};
-    use crate::parse::expression_tree::parse;
+    use crate::parse::parse;
 
     /// Smoke test for SIG's pre_run extractor: structural extraction of the `Type(_)`
     /// token at `parts[1]`.

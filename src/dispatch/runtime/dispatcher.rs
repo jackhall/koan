@@ -13,7 +13,7 @@ use super::kerror::{KError, KErrorKind};
 use super::scope::{KFuture, Scope, ShapePick};
 use crate::dispatch::kfunction::KFunction;
 use crate::dispatch::types::{KType, Parseable, SignatureElement, Specificity};
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 /// Resolve `expr` against `scope`'s functions, walking `outer` on miss so child scopes
 /// inherit from their parents. Ambiguity does *not* fall through to `outer` — the inner
@@ -228,8 +228,8 @@ fn accepts_for_wrap(f: &KFunction<'_>, expr: &KExpression<'_>) -> bool {
                 let is_bare_name = matches!(
                     part,
                     ExpressionPart::Identifier(_)
-                        | ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
-                            params: crate::parse::kexpression::TypeParams::None,
+                        | ExpressionPart::Type(crate::parse::TypeExpr {
+                            params: crate::parse::TypeParams::None,
                             ..
                         })
                 );
@@ -263,8 +263,8 @@ fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
         let is_bare_name = matches!(
             part,
             ExpressionPart::Identifier(_)
-                | ExpressionPart::Type(crate::parse::kexpression::TypeExpr {
-                    params: crate::parse::kexpression::TypeParams::None,
+                | ExpressionPart::Type(crate::parse::TypeExpr {
+                    params: crate::parse::TypeParams::None,
                     ..
                 })
         );
@@ -301,7 +301,7 @@ mod tests {
     use super::super::scope::Scope;
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::builtins::test_support::run_root_bare;
-    use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
+    use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
     fn dispatch_walks_outer_chain_to_find_builtin() {
@@ -604,7 +604,7 @@ mod tests {
         let expr = KExpression {
             parts: vec![
                 ExpressionPart::Keyword("OP".into()),
-                ExpressionPart::Type(crate::parse::kexpression::TypeExpr::leaf("IntOrd".into())),
+                ExpressionPart::Type(crate::parse::TypeExpr::leaf("IntOrd".into())),
             ],
         };
         let pick = scope.shape_pick(&expr).expect("OP <TypeExprRef> should pick");
@@ -632,7 +632,7 @@ mod tests {
         let expr = KExpression {
             parts: vec![
                 ExpressionPart::Keyword("OP".into()),
-                ExpressionPart::Type(crate::parse::kexpression::TypeExpr::leaf("Number".into())),
+                ExpressionPart::Type(crate::parse::TypeExpr::leaf("Number".into())),
             ],
         };
         let pick = scope.shape_pick(&expr).expect("OP <Any> should pick");

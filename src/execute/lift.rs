@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::dispatch::{CallArena, KFuture, KObject, RuntimeArena};
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
 /// an `Rc<CallArena>` to anchor any descendant that borrows into the dying arena.
@@ -233,7 +233,7 @@ mod tests {
     use super::*;
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::{CallArena, KObject};
-    use crate::parse::expression_tree::parse;
+    use crate::parse::parse;
 
     /// A KFuture with no descendant borrow into the dying arena must lift to
     /// `frame: None` — anchoring would over-keep the arena. The dummy KFunction

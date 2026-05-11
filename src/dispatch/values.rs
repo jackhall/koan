@@ -20,7 +20,7 @@ pub(crate) use module::{resolve_module, resolve_signature};
 pub use named_pairs::parse_named_value_pairs;
 
 use crate::dispatch::kfunction::BodyResult;
-use crate::parse::kexpression::ExpressionPart;
+use crate::parse::ExpressionPart;
 
 /// Route a resolved verb-object to its construction primitive's `apply` function. Returns
 /// `Some(BodyResult)` for `TaggedUnionType` / `StructType`; `None` otherwise.

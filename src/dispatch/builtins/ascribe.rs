@@ -199,7 +199,7 @@ mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::dispatch::{KErrorKind, KObject, KType, RuntimeArena};
     use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
+    use crate::parse::parse;
 
     #[test]
     fn opaque_ascription_returns_module() {

@@ -1,5 +1,5 @@
 //! `ATTR <s> <field:Identifier>` — struct or module field access. Surface syntax is the `.`
-//! infix operator from [`operators::build_attr`](crate::parse::operators), which compiles
+//! infix operator from `operators::build_attr` (private to `crate::parse`), which compiles
 //! `p.x` into `[Keyword("ATTR"), Identifier("p"), Identifier("x")]`. Three overloads share
 //! the bucket `[Keyword, Slot, Slot]` and pick by lhs shape:
 //!
@@ -182,7 +182,7 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
         // For now, return a TypeExprValue carrying the abstract type's surface name. The
         // ascription stage 1 path mints fresh ModuleType variants here; consumers reading
         // back the type should compare via `KType::matches_value`.
-        let te = crate::parse::kexpression::TypeExpr::leaf(field.to_string());
+        let te = crate::parse::TypeExpr::leaf(field.to_string());
         return BodyResult::Value(
             m.child_scope().arena.alloc_object(KObject::TypeExprValue(te)),
         );

@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 use crate::dispatch::runtime::{CallArena, Scope};
 use crate::dispatch::values::KObject;

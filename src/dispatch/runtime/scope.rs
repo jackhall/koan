@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
 
-use crate::parse::kexpression::{KExpression, TypeExpr, TypeParams};
+use crate::parse::{KExpression, TypeExpr, TypeParams};
 
 use crate::dispatch::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::dispatch::types::UntypedKey;

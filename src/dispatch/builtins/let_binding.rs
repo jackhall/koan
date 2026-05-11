@@ -2,7 +2,7 @@ use crate::dispatch::{
     Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
     Scope, SchedulerHandle, SignatureElement,
 };
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 use super::{err, register_builtin_with_pre_run};
 
@@ -97,7 +97,7 @@ mod tests {
     use crate::dispatch::builtins::test_support::run_root_bare;
     use crate::dispatch::{ArgumentBundle, BodyResult, KObject};
     use crate::execute::scheduler::Scheduler;
-    use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
+    use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
     fn let_inserts_binding_into_scope() {
@@ -127,7 +127,7 @@ mod tests {
     /// returns the bound name without requiring sub-dispatches.
     #[test]
     fn pre_run_extracts_let_name() {
-        use crate::parse::expression_tree::parse;
+        use crate::parse::parse;
         let mut exprs = parse("LET hello = 1").expect("parse should succeed");
         let expr = exprs.remove(0);
         let name = super::pre_run(&expr);
@@ -142,7 +142,7 @@ mod tests {
         use crate::dispatch::RuntimeArena;
         use crate::execute::scheduler::Scheduler;
         use crate::dispatch::builtins::default_scope;
-        use crate::parse::expression_tree::parse;
+        use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();

@@ -21,7 +21,7 @@ use crate::dispatch::{
     Scope, SchedulerHandle, SignatureElement,
 };
 use crate::dispatch::values::resolve_module;
-use crate::parse::kexpression::{TypeExpr, TypeParams};
+use crate::parse::{TypeExpr, TypeParams};
 
 use super::{err, register_builtin};
 
@@ -95,7 +95,7 @@ pub fn body_function_of<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    use crate::parse::kexpression::ExpressionPart;
+    use crate::parse::ExpressionPart;
     let args_expr = match bundle.get("args") {
         Some(obj) => match obj.as_kexpression() {
             Some(e) => e.clone(),

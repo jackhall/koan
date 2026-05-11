@@ -5,7 +5,7 @@
 
 use super::ktype::KType;
 use super::resolver::TypeResolver;
-use crate::parse::kexpression::{TypeExpr, TypeParams};
+use crate::parse::{TypeExpr, TypeParams};
 
 impl KType {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,

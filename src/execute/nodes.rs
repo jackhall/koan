@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::dispatch::{CallArena, CombineFinish, KError, KFunction, KObject, NodeId, Scope};
-use crate::parse::kexpression::KExpression;
+use crate::parse::KExpression;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.

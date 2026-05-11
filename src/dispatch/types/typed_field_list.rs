@@ -4,8 +4,7 @@
 
 use super::ktype::KType;
 use super::resolver::TypeResolver;
-use crate::parse::kexpression::{ExpressionPart, KExpression};
-use crate::parse::parse_triple_list;
+use crate::parse::{parse_triple_list, ExpressionPart, KExpression};
 
 /// Parse repeated `<Identifier(name)> <Keyword(":")> <Type(name)>` triples into an ordered
 /// list. Errors as a `ShapeError`-string on malformed triples, unknown type names, or

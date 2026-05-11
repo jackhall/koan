@@ -5,7 +5,7 @@
 //! Not to be confused with the **module-signature** type (`SIG`-declared) at
 //! [`crate::dispatch::values::module::Signature`].
 
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 use super::ktype::KType;
 

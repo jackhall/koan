@@ -24,7 +24,7 @@ use crate::dispatch::{
     Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KType, Scope,
     SchedulerHandle, SignatureElement,
 };
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 use crate::dispatch::kfunction::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};

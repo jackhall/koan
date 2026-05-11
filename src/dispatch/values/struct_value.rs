@@ -25,7 +25,7 @@ use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::{KObject, parse_named_value_pairs};
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 /// Parse the inner expression of a `Point (x: 3, y: 4)` form as named pairs, validate the
 /// names match the schema, reorder the values into schema declaration order, and synthesize
@@ -196,8 +196,7 @@ mod tests {
     use crate::dispatch::runtime::{KErrorKind, RuntimeArena, Scope};
     use crate::dispatch::values::KObject;
     use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
-    use crate::parse::kexpression::KExpression;
+    use crate::parse::{parse, KExpression};
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl Write for SharedBuf {

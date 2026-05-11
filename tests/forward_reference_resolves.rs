@@ -12,7 +12,7 @@ use koan::dispatch::builtins::default_scope;
 use koan::dispatch::runtime::{RuntimeArena, Scope};
 use koan::dispatch::values::KObject;
 use koan::execute::scheduler::Scheduler;
-use koan::parse::expression_tree::parse;
+use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through
 /// the scheduler, and return both the captured PRINT output and the root scope so tests

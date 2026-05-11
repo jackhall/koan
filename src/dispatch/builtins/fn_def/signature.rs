@@ -8,7 +8,7 @@
 
 use crate::dispatch::{Argument, KType, SignatureElement};
 use crate::dispatch::types::TypeResolver;
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 /// Convert the captured FN-parameter-list `KExpression` into a list of `SignatureElement`s.
 /// (Module signatures — `Signature`, declared via `SIG` — are a different concept; this

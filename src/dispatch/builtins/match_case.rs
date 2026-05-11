@@ -6,7 +6,7 @@ use crate::dispatch::{
     KObject, KType, RuntimeArena, Scope, SchedulerHandle, SignatureElement,
 };
 use crate::execute::scheduler::substitute_params;
-use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
 use crate::dispatch::kfunction::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};

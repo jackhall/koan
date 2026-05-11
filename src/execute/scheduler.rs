@@ -5,7 +5,7 @@ use crate::dispatch::{
     ArgumentBundle, Body, BodyResult, CallArena, CombineFinish, Frame, KError, KErrorKind,
     KFunction, KObject, NodeId, RuntimeArena, Scope, SchedulerHandle,
 };
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 use super::lift::lift_kobject;
 use super::nodes::{work_owned_edges, DepEdge, Node, NodeOutput, NodeStep, NodeWork};
@@ -526,7 +526,7 @@ mod tests {
     use super::*;
     use crate::dispatch::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
-    use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
+    use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
     fn let_expr<'a>(name: &str, value: f64) -> KExpression<'a> {
         KExpression {
@@ -718,7 +718,7 @@ mod tests {
         let mut sched = Scheduler::new();
 
         // Run a small program with sub-Dispatch fan-out to populate notify edges.
-        let exprs = crate::parse::expression_tree::parse(
+        let exprs = crate::parse::parse(
             "LET x = 1\n\
              LET y = 2\n\
              LET z = (LET a = 3)",
@@ -833,7 +833,7 @@ mod tests {
         // terminal as the Combine. Pins the binder-body wrap-up shape MODULE / SIG use.
         use crate::dispatch::builtins::{default_scope, register_builtin};
         use crate::dispatch::{BodyResult, CombineFinish, ExpressionSignature, KType, SignatureElement};
-        use crate::parse::kexpression::ExpressionPart;
+        use crate::parse::ExpressionPart;
 
         // Builtin "DEFERTEST": no args; schedules a Combine over zero deps whose finish
         // returns a known KString, then returns `BodyResult::DeferTo(combine_id)`.
@@ -881,7 +881,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let root = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();
-        let exprs = crate::parse::expression_tree::parse(
+        let exprs = crate::parse::parse(
             "MATCH true WITH (true -> (\"hi\") false -> (\"no\"))",
         )
         .expect("parse should succeed");

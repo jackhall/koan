@@ -5,7 +5,7 @@ use crate::dispatch::{BodyResult, CombineFinish, Frame, KError, KFuture, KObject
 use crate::dispatch::runtime::Resolution;
 use crate::dispatch::values::KKey;
 use crate::dispatch::types::Serializable;
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 use super::nodes::{DepEdge, NodeOutput, NodeStep, NodeWork};
 use super::scheduler::Scheduler;
@@ -147,7 +147,7 @@ impl<'a> Scheduler<'a> {
                         // waits on `LET x = …`. Parameterized Type parts (List<…>, etc.)
                         // are structural type-syntax, not look-up targets.
                         Some(ExpressionPart::Type(t))
-                            if matches!(t.params, crate::parse::kexpression::TypeParams::None) =>
+                            if matches!(t.params, crate::parse::TypeParams::None) =>
                         {
                             t.name.as_str()
                         }
@@ -465,7 +465,7 @@ impl<'a> Scheduler<'a> {
             }
             ExpressionPart::Type(t)
                 if wrap_identifiers
-                    && matches!(t.params, crate::parse::kexpression::TypeParams::None) =>
+                    && matches!(t.params, crate::parse::TypeParams::None) =>
             {
                 // §7 auto-wrap for bare leaf Type-tokens in value slots: `MAKESET IntOrd`
                 // sub-dispatches `(IntOrd)` through the TypeExprRef overload of
@@ -536,15 +536,15 @@ mod tests {
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
     use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
+    use crate::parse::parse;
 
-    fn parse_one(src: &str) -> crate::parse::kexpression::KExpression<'static> {
+    fn parse_one(src: &str) -> crate::parse::KExpression<'static> {
         let mut exprs = parse(src).expect("parse should succeed");
         assert_eq!(exprs.len(), 1, "test helper expects a single expression");
         exprs.remove(0)
     }
 
-    fn parse_all(src: &str) -> Vec<crate::parse::kexpression::KExpression<'static>> {
+    fn parse_all(src: &str) -> Vec<crate::parse::KExpression<'static>> {
         parse(src).expect("parse should succeed")
     }
 
@@ -754,7 +754,7 @@ mod tests {
     /// LHS because single-letter uppercase tokens don't classify as Type names.)
     #[test]
     fn let_t_equals_number_still_binds_type_expr_value() {
-        use crate::parse::kexpression::TypeParams;
+        use crate::parse::TypeParams;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();

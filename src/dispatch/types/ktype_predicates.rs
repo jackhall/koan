@@ -6,7 +6,7 @@
 use super::ktype::KType;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::dispatch::values::KObject;
-use crate::parse::kexpression::{ExpressionPart, KLiteral};
+use crate::parse::{ExpressionPart, KLiteral};
 
 impl KType {
     /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`; for parameterized

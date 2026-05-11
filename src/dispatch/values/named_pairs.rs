@@ -10,8 +10,7 @@
 //! differs — value-side here is "take the part verbatim", type-side over there is
 //! "resolve as a KType". The wrapper closes over the right interpretation.
 
-use crate::parse::kexpression::{ExpressionPart, KExpression};
-use crate::parse::parse_triple_list;
+use crate::parse::{parse_triple_list, ExpressionPart, KExpression};
 
 /// Walk an expression's parts as repeated `<Identifier(name)> <Keyword(":")> <value>` triples
 /// and assemble the resulting ordered list of `(name, value-part)` pairs. Errors with a
@@ -35,7 +34,7 @@ pub fn parse_named_value_pairs<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::kexpression::KLiteral;
+    use crate::parse::KLiteral;
 
     fn ident(s: &str) -> ExpressionPart<'static> {
         ExpressionPart::Identifier(s.to_string())

@@ -20,7 +20,7 @@ pub fn body<'a>(
     let v = match bundle.get("v") {
         Some(KObject::KString(s)) => s.clone(),
         Some(KObject::TypeExprValue(t)) => {
-            if !matches!(t.params, crate::parse::kexpression::TypeParams::None) {
+            if !matches!(t.params, crate::parse::TypeParams::None) {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "value_lookup: parameterized type expression `{}` is not a value-lookup target",
                     t.render()

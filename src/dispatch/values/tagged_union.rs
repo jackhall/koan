@@ -25,7 +25,7 @@ use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::KObject;
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 /// Mirror of [`KFunction::apply`](super::kfunction::KFunction::apply): take the args parts
 /// captured at the call site and produce a `BodyResult::Tail` re-dispatching through the
@@ -174,8 +174,7 @@ mod tests {
     use crate::dispatch::runtime::{KErrorKind, RuntimeArena, Scope};
     use crate::dispatch::values::KObject;
     use crate::execute::scheduler::Scheduler;
-    use crate::parse::expression_tree::parse;
-    use crate::parse::kexpression::KExpression;
+    use crate::parse::{parse, KExpression};
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl Write for SharedBuf {

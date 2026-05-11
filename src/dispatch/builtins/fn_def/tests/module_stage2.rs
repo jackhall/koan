@@ -37,7 +37,7 @@ fn list_of_let_binding_is_type_expr_value() {
 fn scope_resolver_lowers_type_expr_value_binding() {
     use crate::dispatch::KType;
     use crate::dispatch::types::{ScopeResolver, TypeResolver};
-    use crate::parse::kexpression::{TypeExpr, TypeParams};
+    use crate::parse::{TypeExpr, TypeParams};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");

@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression};
 
 use crate::dispatch::runtime::{KError, KErrorKind, KFuture, Scope};
 use crate::dispatch::types::{ExpressionSignature, Parseable, SignatureElement};

@@ -10,7 +10,7 @@ use koan::dispatch::builtins::default_scope;
 use koan::dispatch::runtime::{KError, KErrorKind, RuntimeArena, Scope};
 use koan::dispatch::values::KObject;
 use koan::execute::scheduler::Scheduler;
-use koan::parse::expression_tree::parse;
+use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 impl std::io::Write for SharedBuf {
