@@ -13,6 +13,8 @@ use super::runtime::{CallArena, KError, KErrorKind, KFuture, Scope};
 use super::types::{ExpressionSignature, Parseable, SignatureElement};
 use super::values::KObject;
 
+pub use super::argument_bundle::ArgumentBundle;
+
 /// Stable handle to a node in the scheduler's DAG. Lives in `dispatch` so `BodyResult` and
 /// `SchedulerHandle` can name a node without `dispatch` importing from `execute`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -44,6 +46,39 @@ pub trait SchedulerHandle<'a> {
         finish: CombineFinish<'a>,
     ) -> NodeId;
     fn current_frame(&self) -> Option<Rc<CallArena>>;
+
+    /// Schedule each top-level statement in `body_expr` against `scope` and return their
+    /// `NodeId`s. Caller (MODULE / SIG body) wraps these in a `Combine` whose finish
+    /// closure builds the binder value once all statements terminalize.
+    ///
+    /// A body counts as multi-statement only when *every* part is `ExpressionPart::Expression(_)`;
+    /// otherwise the whole body is dispatched as a single statement. The stricter all-
+    /// Expression rule prevents `LET x = (FN ...)` from being mis-split (its inner
+    /// `Expression` part would otherwise look like a second statement).
+    fn plan_body_statements(
+        &mut self,
+        scope: &'a Scope<'a>,
+        body_expr: KExpression<'a>,
+    ) -> Vec<NodeId> {
+        let is_multi_statement = !body_expr.parts.is_empty()
+            && body_expr
+                .parts
+                .iter()
+                .all(|p| matches!(p, ExpressionPart::Expression(_)));
+
+        if is_multi_statement {
+            body_expr
+                .parts
+                .into_iter()
+                .filter_map(|p| match p {
+                    ExpressionPart::Expression(e) => Some(self.add_dispatch(*e, scope)),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            vec![self.add_dispatch(body_expr, scope)]
+        }
+    }
 }
 
 /// Host-side closure for `Combine` slots. Receives the dep values in submission order;
@@ -293,25 +328,3 @@ impl<'a> KFunction<'a> {
     }
 }
 
-/// Name to resolved value, produced by `KFunction::bind` and consumed by the body.
-pub struct ArgumentBundle<'a> {
-    pub args: HashMap<String, Rc<KObject<'a>>>,
-}
-
-impl<'a> ArgumentBundle<'a> {
-    pub fn get(&self, name: &str) -> Option<&KObject<'a>> {
-        self.args.get(name).map(|v| v.as_ref())
-    }
-
-    /// Fully independent copy: each value is `deep_clone`d into a fresh `Rc`. Sharing in
-    /// the original bundle's `Rc`s is not preserved.
-    pub fn deep_clone(&self) -> ArgumentBundle<'a> {
-        ArgumentBundle {
-            args: self
-                .args
-                .iter()
-                .map(|(k, v)| (k.clone(), Rc::new(v.deep_clone())))
-                .collect(),
-        }
-    }
-}

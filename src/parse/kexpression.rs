@@ -217,6 +217,17 @@ impl<'a> KExpression<'a> {
             .collect()
     }
 
+    /// If `parts[1]` is a single `Type(t)` token, return its bare name. Used as the
+    /// dispatch-time placeholder extractor for typed-binder builtins (STRUCT, UNION,
+    /// MODULE, SIG) whose surface form is `<KEYWORD> <Name> = (<body>)`. Returns `None`
+    /// on shape mismatch; the builtin body is responsible for surfacing the structured
+    /// error (see [`crate::dispatch::kfunction::PreRunFn`]).
+    pub fn binder_name_from_type_part(&self) -> Option<String> {
+        match self.parts.get(1)? {
+            ExpressionPart::Type(t) => Some(t.name.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl<'a> std::fmt::Debug for KExpression<'a> {

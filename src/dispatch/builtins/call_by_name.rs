@@ -4,7 +4,7 @@ use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, Si
 use crate::dispatch::values::{KObject, dispatch_constructor};
 use crate::dispatch::runtime::Scope;
 
-use super::helpers::extract_kexpression;
+use crate::dispatch::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `<verb:Identifier> <args:KExpression>` — surface syntax `f (a: 1, b: 2)`. When `verb`

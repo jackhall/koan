@@ -10,7 +10,7 @@ use crate::dispatch::types::parse_typed_field_list;
 
 use crate::parse::kexpression::KExpression;
 
-use super::helpers::extract_kexpression;
+use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` (named) or `UNION (<schema>)` (anonymous).
@@ -64,7 +64,7 @@ pub fn body<'a>(
     // the slot's shape (and bind into scope) when it's present — `extract_bare_type_name`
     // would otherwise treat absence as `MissingArg`, which is wrong here.
     if bundle.get("name").is_some() {
-        match super::helpers::extract_bare_type_name(&bundle, "name", "UNION") {
+        match extract_bare_type_name(&bundle, "name", "UNION") {
             Ok(name) => {
                 if let Err(e) = scope.bind_value(name, union_obj) {
                     return err(e);
@@ -80,7 +80,7 @@ pub fn body<'a>(
 /// `parts[1]` is a `Type(t)` token. The anonymous form (`UNION (...)`, registered separately)
 /// has no name slot and uses no pre_run.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    super::helpers::binder_name_from_type_part(expr)
+    expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

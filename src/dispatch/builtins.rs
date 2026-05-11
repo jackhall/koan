@@ -9,7 +9,6 @@ pub mod call_by_name;
 mod cons;
 mod eval;
 mod fn_def;
-mod helpers;
 mod let_binding;
 mod match_case;
 mod module_def;

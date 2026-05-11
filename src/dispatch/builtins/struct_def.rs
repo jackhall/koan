@@ -9,7 +9,7 @@ use crate::dispatch::types::parse_typed_field_list;
 
 use crate::parse::kexpression::KExpression;
 
-use super::helpers::{extract_bare_type_name, extract_kexpression};
+use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
 
 /// `STRUCT <name:TypeExprRef> = (<schema>)` — declare a named record type.
@@ -73,7 +73,7 @@ pub fn body<'a>(
 /// `Type(t)` token (the `TypeExprRef`-typed `name` argument). Only fires for bare leaves —
 /// parameterized forms (`STRUCT Foo<X> = ...`) aren't supported until functors land.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    super::helpers::binder_name_from_type_part(expr)
+    expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

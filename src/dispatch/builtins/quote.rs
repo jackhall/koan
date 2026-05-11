@@ -3,7 +3,7 @@ use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::dispatch::values::KObject;
 
-use super::helpers::extract_kexpression;
+use crate::dispatch::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`. The body is the captured raw AST,

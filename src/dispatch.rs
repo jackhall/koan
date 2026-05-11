@@ -1,3 +1,4 @@
+pub mod argument_bundle;
 pub mod builtins;
 pub mod kfunction;
 pub mod runtime;

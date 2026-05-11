@@ -23,7 +23,7 @@ use crate::dispatch::values::{KObject, Module};
 
 use crate::parse::kexpression::KExpression;
 
-use super::helpers::{extract_bare_type_name, extract_kexpression, plan_body_statements};
+use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
 
 pub fn body<'a>(
@@ -57,7 +57,7 @@ pub fn body<'a>(
     // Plan each top-level body statement onto the outer scheduler. A statement referencing
     // a sibling name dispatched in the same batch parks on its placeholder via the standard
     // notify-walk; the inner-scheduler version of this code couldn't see those placeholders.
-    let deps = plan_body_statements(sched, child_scope, body_expr);
+    let deps = sched.plan_body_statements(child_scope, body_expr);
 
     // The closure runs on the outer scheduler's main loop after every body statement has
     // terminalized. `name` is moved in by clone so it lives across the closure's life.
@@ -90,7 +90,7 @@ pub fn body<'a>(
 /// Dispatch-time placeholder extractor for MODULE. `parts[1]` is the `Type(t)` token of the
 /// module's name slot. Same shape as STRUCT / SIG / named UNION.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    super::helpers::binder_name_from_type_part(expr)
+    expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

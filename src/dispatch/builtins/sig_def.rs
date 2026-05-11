@@ -20,7 +20,7 @@ use crate::dispatch::values::{KObject, Signature};
 
 use crate::parse::kexpression::KExpression;
 
-use super::helpers::{extract_bare_type_name, extract_kexpression, plan_body_statements};
+use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
 
 pub fn body<'a>(
@@ -47,7 +47,7 @@ pub fn body<'a>(
         format!("SIG {}", name),
     ));
 
-    let deps = plan_body_statements(sched, decl_scope, body_expr);
+    let deps = sched.plan_body_statements(decl_scope, body_expr);
 
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
@@ -70,7 +70,7 @@ pub fn body<'a>(
 /// Dispatch-time placeholder extractor for SIG. `parts[1]` is the `Type(t)` token of the
 /// signature's name slot. Same shape as STRUCT / MODULE / named UNION.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    super::helpers::binder_name_from_type_part(expr)
+    expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

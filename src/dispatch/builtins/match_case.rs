@@ -10,7 +10,7 @@ use crate::dispatch::runtime::Scope;
 use crate::execute::scheduler::substitute_params;
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
-use super::helpers::extract_kexpression;
+use crate::dispatch::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.

@@ -25,7 +25,7 @@ use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use super::helpers::extract_kexpression;
+use crate::dispatch::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 pub fn body<'a>(
@@ -64,7 +64,7 @@ pub fn body<'a>(
 /// ```
 ///
 /// Bodies with `n < 2` parts, or any non-`Expression` part, pass through unchanged — the
-/// stricter all-`Expression` rule mirrors `helpers::plan_body_statements` so a single
+/// stricter all-`Expression` rule mirrors `SchedulerHandle::plan_body_statements` so a single
 /// statement like `(LET x = (FN ...))` doesn't get mis-split (its inner `Expression`
 /// would otherwise look like a second statement).
 pub(crate) fn fold_multi_statement<'a>(body: KExpression<'a>) -> KExpression<'a> {

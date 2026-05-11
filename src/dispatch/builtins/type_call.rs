@@ -4,7 +4,7 @@ use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElem
 use crate::dispatch::runtime::Scope;
 use crate::dispatch::values::dispatch_constructor;
 
-use super::helpers::{extract_bare_type_name, extract_kexpression};
+use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin};
 
 /// `<verb:TypeExprRef> <args:KExpression>` — the type-token construction path.
