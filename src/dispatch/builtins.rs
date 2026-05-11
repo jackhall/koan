@@ -29,7 +29,7 @@ pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
     BodyResult::Err(e)
 }
 
-pub(crate) fn register_builtin<'a>(
+pub fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature,

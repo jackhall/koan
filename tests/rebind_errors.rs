@@ -6,9 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::dispatch::builtins::default_scope;
-use koan::dispatch::runtime::{KError, KErrorKind, RuntimeArena, Scope};
-use koan::dispatch::values::KObject;
+use koan::dispatch::{default_scope, KError, KErrorKind, KObject, RuntimeArena, Scope};
 use koan::execute::Scheduler;
 use koan::parse::parse;
 

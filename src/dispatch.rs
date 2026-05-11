@@ -1,24 +1,35 @@
 //! Dispatch — the runtime that maps a parsed `KExpression` to a value by selecting the
 //! `KFunction` whose signature matches its parts and running its `Body`. Submodules:
 //!
-//! - [`runtime`] — `Scope`, `RuntimeArena`, `KError`, `KFuture`, scheduler glue.
-//! - [`types`] — `KType` and signature shapes (`Argument`, `SignatureElement`, ...).
-//! - [`values`] — `KObject` and the heap-side value representation.
-//! - [`kfunction`] — `KFunction`, `Body`, `BodyResult`, `ArgumentBundle`, scheduler handle.
-//! - [`builtins`] — the registered builtin set and per-builtin test support.
+//! - `runtime` — `Scope`, `RuntimeArena`, `KError`, `KFuture`, scheduler glue.
+//! - `types` — `KType` and signature shapes (`Argument`, `SignatureElement`, ...).
+//! - `values` — `KObject` and the heap-side value representation.
+//! - `kfunction` — `KFunction`, `Body`, `BodyResult`, `ArgumentBundle`, scheduler handle.
+//! - `builtins` — the registered builtin set and per-builtin test support.
 //!
 //! The `pub use` block below is the curated public surface — the ~18 names that most
 //! callers need. Reach into a submodule directly only for symbols not re-exported here.
 
-pub mod builtins;
-pub mod kfunction;
-pub mod runtime;
-pub mod types;
-pub mod values;
+pub(crate) mod builtins;
+pub(crate) mod kfunction;
+pub(crate) mod runtime;
+pub(crate) mod types;
+pub(crate) mod values;
 
+pub use builtins::{default_scope, register_builtin};
+// register_builtin: 1 external import site
 pub use kfunction::{
     ArgumentBundle, Body, BodyResult, CombineFinish, KFunction, NodeId, SchedulerHandle,
 };
-pub use runtime::{CallArena, Frame, KError, KErrorKind, KFuture, RuntimeArena, Scope};
-pub use types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
-pub use values::KObject;
+pub use runtime::{CallArena, Frame, KError, KErrorKind, KFuture, Resolution, RuntimeArena, Scope};
+// Resolution: 1 external import site
+pub use types::{
+    Argument, ExpressionSignature, KType, Parseable, Serializable, SignatureElement,
+    UntypedElement, UntypedKey, is_keyword_token,
+};
+// Serializable: 3 external import sites
+// UntypedElement: 1 external import site
+// UntypedKey: 1 external import site
+// is_keyword_token: 2 external import sites
+pub use values::{KKey, KObject};
+// KKey: 3 external import sites

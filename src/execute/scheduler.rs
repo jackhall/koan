@@ -524,8 +524,7 @@ fn substitute_part<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::RuntimeArena;
-    use crate::dispatch::builtins::default_scope;
+    use crate::dispatch::{default_scope, RuntimeArena};
     use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
     fn let_expr<'a>(name: &str, value: f64) -> KExpression<'a> {
@@ -831,8 +830,10 @@ mod tests {
         // `DeferTo(combine_id)`, the slot rewrites to `Lift { from: combine_id }`, the
         // Combine resolves to a value, and the builtin's slot ends up with the same
         // terminal as the Combine. Pins the binder-body wrap-up shape MODULE / SIG use.
-        use crate::dispatch::builtins::{default_scope, register_builtin};
-        use crate::dispatch::{BodyResult, CombineFinish, ExpressionSignature, KType, SignatureElement};
+        use crate::dispatch::{
+            default_scope, register_builtin, BodyResult, CombineFinish, ExpressionSignature,
+            KType, SignatureElement,
+        };
         use crate::parse::ExpressionPart;
 
         // Builtin "DEFERTEST": no args; schedules a Combine over zero deps whose finish

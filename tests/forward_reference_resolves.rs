@@ -8,9 +8,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::dispatch::builtins::default_scope;
-use koan::dispatch::runtime::{RuntimeArena, Scope};
-use koan::dispatch::values::KObject;
+use koan::dispatch::{default_scope, KObject, RuntimeArena, Scope};
 use koan::execute::Scheduler;
 use koan::parse::parse;
 
@@ -128,7 +126,7 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
 /// roadmap item.
 #[test]
 fn producer_error_propagates_to_parked_consumer() {
-    use koan::dispatch::runtime::KErrorKind;
+    use koan::dispatch::KErrorKind;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);

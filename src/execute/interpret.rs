@@ -1,5 +1,4 @@
-use crate::dispatch::{KError, KErrorKind, RuntimeArena};
-use crate::dispatch::builtins::default_scope;
+use crate::dispatch::{default_scope, KError, KErrorKind, RuntimeArena};
 use super::scheduler::Scheduler;
 use crate::parse::parse;
 
@@ -231,8 +230,7 @@ mod tests {
 
     // --- Dict literal integration tests ---
 
-    use crate::dispatch::values::KKey;
-    use crate::dispatch::types::Serializable;
+    use crate::dispatch::{KKey, Serializable};
 
     fn lookup_string_key<'a, 'b>(
         d: &'b std::collections::HashMap<Box<dyn Serializable + 'a>, KObject<'a>>,

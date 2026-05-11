@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::{BodyResult, CombineFinish, Frame, KError, KFuture, KObject, NodeId, Parseable, Scope};
-use crate::dispatch::runtime::Resolution;
-use crate::dispatch::values::KKey;
-use crate::dispatch::types::Serializable;
+use crate::dispatch::{
+    BodyResult, CombineFinish, Frame, KError, KFuture, KKey, KObject, NodeId, Parseable,
+    Resolution, Scope, Serializable,
+};
 use crate::parse::{ExpressionPart, KExpression};
 
 use super::nodes::{DepEdge, NodeOutput, NodeStep, NodeWork};
@@ -533,8 +533,7 @@ impl<'a> Scheduler<'a> {
 mod tests {
     //! End-to-end coverage for the §1/§7/§8 dispatch-time placeholder routing in
     //! `run_dispatch` (see design/execution-model.md).
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
+    use crate::dispatch::{default_scope, KErrorKind, KObject, RuntimeArena};
     use super::super::scheduler::Scheduler;
     use crate::parse::parse;
 
