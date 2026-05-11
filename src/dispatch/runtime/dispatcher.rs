@@ -20,7 +20,7 @@ use crate::parse::{ExpressionPart, KExpression};
 /// scope had a real conflict, and silently shadowing it would hide it from the author.
 ///
 /// Function-as-value calls (e.g., `LET f = (FN ...)` then `f (args)`) do not live here:
-/// they go through the [`call_by_name`](crate::dispatch::builtins::call_by_name) builtin,
+/// they go through the [`call_by_name`](crate::builtins::call_by_name) builtin,
 /// whose signature `[Identifier, KExpression]` matches identifier-leading expressions and
 /// synthesizes a re-dispatchable expression by weaving the looked-up function's keyword
 /// tokens back in.
@@ -299,8 +299,8 @@ fn classify_for_pick(f: &KFunction<'_>, expr: &KExpression<'_>) -> ShapePick {
 mod tests {
     use super::super::arena::RuntimeArena;
     use super::super::scope::Scope;
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::builtins::test_support::run_root_bare;
+    use crate::builtins::default_scope;
+    use crate::builtins::test_support::run_root_bare;
     use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
@@ -335,7 +335,7 @@ mod tests {
 
     // --- specificity / bucketing / shadowing tests ---
 
-    use crate::dispatch::builtins::register_builtin;
+    use crate::builtins::register_builtin;
     use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
     use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
     use crate::dispatch::values::KObject;

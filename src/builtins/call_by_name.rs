@@ -77,7 +77,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::dispatch::{KErrorKind, KObject, Parseable, RuntimeArena};
 
     #[test]

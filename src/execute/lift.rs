@@ -231,7 +231,8 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::{default_scope, CallArena, KObject};
+    use crate::builtins::default_scope;
+    use crate::dispatch::{CallArena, KObject};
     use crate::parse::parse;
 
     /// A KFuture with no descendant borrow into the dying arena must lift to

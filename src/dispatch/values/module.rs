@@ -161,7 +161,7 @@ mod tests {
     //! isolation so a regression attributes to a single site rather than an end-to-end run.
     //! See [`design/memory-model.md`](../../../design/memory-model.md).
     use super::*;
-    use crate::dispatch::builtins::default_scope;
+    use crate::builtins::default_scope;
     use crate::dispatch::runtime::RuntimeArena;
     use crate::dispatch::types::KType;
     use std::io::sink;

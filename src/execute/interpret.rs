@@ -1,4 +1,5 @@
-use crate::dispatch::{default_scope, KError, KErrorKind, RuntimeArena};
+use crate::builtins::default_scope;
+use crate::dispatch::{KError, KErrorKind, RuntimeArena};
 use super::scheduler::Scheduler;
 use crate::parse::parse;
 

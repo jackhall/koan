@@ -1,4 +1,5 @@
-use crate::dispatch::{default_scope, KObject, NodeId, RuntimeArena};
+use crate::builtins::default_scope;
+use crate::dispatch::{KObject, NodeId, RuntimeArena};
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
 use super::super::nodes::{DepEdge, NodeOutput, NodeWork};
@@ -307,9 +308,10 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     // `DeferTo(combine_id)`, the slot rewrites to `Lift { from: combine_id }`, the
     // Combine resolves to a value, and the builtin's slot ends up with the same
     // terminal as the Combine. Pins the binder-body wrap-up shape MODULE / SIG use.
+    use crate::builtins::{default_scope, register_builtin};
     use crate::dispatch::{
-        default_scope, register_builtin, ArgumentBundle, BodyResult, CombineFinish,
-        ExpressionSignature, KType, Scope, SignatureElement,
+        ArgumentBundle, BodyResult, CombineFinish, ExpressionSignature, KType, Scope,
+        SignatureElement,
     };
     use crate::parse::ExpressionPart;
 

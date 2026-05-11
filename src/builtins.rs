@@ -1,7 +1,7 @@
-use super::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
-use super::runtime::{KError, Scope};
-use super::types::{ExpressionSignature, KType};
-use super::values::KObject;
+use crate::dispatch::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
+use crate::dispatch::runtime::{KError, Scope};
+use crate::dispatch::types::{ExpressionSignature, KType};
+use crate::dispatch::values::KObject;
 
 mod ascribe;
 mod attr;
@@ -63,7 +63,7 @@ pub(crate) fn register_builtin_with_pre_run<'a>(
 /// and `value_pass` (single `Any` slot) share the bucket `[Slot]`; `value_lookup` wins for
 /// inputs like `(some_var)` because `Identifier` is more specific than `Any`.
 pub fn default_scope<'a>(
-    arena: &'a super::runtime::RuntimeArena,
+    arena: &'a crate::dispatch::runtime::RuntimeArena,
     out: Box<dyn std::io::Write + 'a>,
 ) -> &'a Scope<'a> {
     let scope = arena.alloc_scope(Scope::run_root(arena, None, out));
@@ -94,9 +94,9 @@ pub fn default_scope<'a>(
     fn_def::register(scope);
     call_by_name::register(scope);
     union::register(scope);
-    super::values::tagged_union::register(scope);
+    crate::dispatch::values::tagged_union::register(scope);
     struct_def::register(scope);
-    super::values::struct_value::register(scope);
+    crate::dispatch::values::struct_value::register(scope);
     type_call::register(scope);
     match_case::register(scope);
     attr::register(scope);

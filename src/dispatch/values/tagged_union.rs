@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::builtins::register_builtin;
+use crate::builtins::register_builtin;
 use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::dispatch::runtime::{KError, KErrorKind, Scope};
 use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
@@ -170,7 +170,7 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::dispatch::builtins::default_scope;
+    use crate::builtins::default_scope;
     use crate::dispatch::runtime::{KErrorKind, RuntimeArena, Scope};
     use crate::dispatch::values::KObject;
     use crate::execute::Scheduler;

@@ -93,8 +93,8 @@ mod tests {
     use std::rc::Rc;
 
     use super::body;
-    use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::builtins::test_support::run_root_bare;
+    use crate::builtins::default_scope;
+    use crate::builtins::test_support::run_root_bare;
     use crate::dispatch::{ArgumentBundle, BodyResult, KObject};
     use crate::execute::Scheduler;
     use crate::parse::{ExpressionPart, KExpression, KLiteral};
@@ -141,7 +141,7 @@ mod tests {
     fn pre_run_install_then_body_finalize_clears_placeholder() {
         use crate::dispatch::RuntimeArena;
         use crate::execute::Scheduler;
-        use crate::dispatch::builtins::default_scope;
+        use crate::builtins::default_scope;
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));

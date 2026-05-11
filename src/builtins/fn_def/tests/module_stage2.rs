@@ -1,6 +1,6 @@
 //! Module-system stage 2: `ScopeResolver`, signature-bound parameters, functor lifting.
 
-use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::dispatch::{KObject, RuntimeArena};
 
 /// Verify that `LET MyList = (LIST_OF Number)` binds a `TypeExprValue` carrying the

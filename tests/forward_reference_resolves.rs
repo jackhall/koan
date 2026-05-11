@@ -8,7 +8,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::dispatch::{default_scope, KObject, RuntimeArena, Scope};
+use koan::builtins::default_scope;
+use koan::dispatch::{KObject, RuntimeArena, Scope};
 use koan::execute::Scheduler;
 use koan::parse::parse;
 

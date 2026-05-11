@@ -240,7 +240,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+    use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
     use crate::dispatch::{KObject, KType, RuntimeArena};
     use crate::dispatch::types::NoopResolver;
     use crate::execute::Scheduler;

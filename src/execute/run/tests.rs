@@ -1,6 +1,7 @@
 //! End-to-end coverage for the §1/§7/§8 dispatch-time placeholder routing in
 //! `run_dispatch` (see design/execution-model.md).
-use crate::dispatch::{default_scope, KErrorKind, KObject, RuntimeArena};
+use crate::builtins::default_scope;
+use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
 use super::super::scheduler::Scheduler;
 use crate::parse::parse;
 

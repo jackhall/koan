@@ -268,7 +268,7 @@ mod tests {
     //! — these tests fail when Miri reports UB, not on values.
 
     use super::*;
-    use crate::dispatch::builtins::default_scope;
+    use crate::builtins::default_scope;
 
     #[test]
     fn null_singleton_returns_null_kobject() {

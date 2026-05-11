@@ -181,7 +181,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::dispatch::builtins::test_support::{parse_one, run, run_one_err, run_root_silent, run_root_with_buf};
+    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent, run_root_with_buf};
     use crate::dispatch::{KErrorKind, RuntimeArena};
 
     fn run_program(source: &str) -> Vec<u8> {

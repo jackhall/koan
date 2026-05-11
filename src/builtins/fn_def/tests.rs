@@ -14,7 +14,7 @@ mod module_stage2;
 mod param_type;
 mod return_type;
 
-use crate::dispatch::builtins::test_support::{run, run_root_with_buf};
+use crate::builtins::test_support::{run, run_root_with_buf};
 use crate::dispatch::RuntimeArena;
 
 /// Run `source` in a fresh scope whose root output buffer is captured, and return the

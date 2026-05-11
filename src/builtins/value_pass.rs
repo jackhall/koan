@@ -42,7 +42,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::body;
-    use crate::dispatch::builtins::test_support::run_root_bare;
+    use crate::builtins::test_support::run_root_bare;
     use crate::dispatch::{ArgumentBundle, BodyResult, KObject};
     use crate::execute::Scheduler;
 

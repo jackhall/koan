@@ -474,7 +474,7 @@ pub struct ShapePick {
 #[cfg(test)]
 mod tests {
     use super::{Resolution, RuntimeArena, Scope};
-    use crate::dispatch::builtins::test_support::run_root_bare;
+    use crate::builtins::test_support::run_root_bare;
     use crate::dispatch::kfunction::{Body, KFunction, NodeId};
     use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
     use crate::dispatch::values::KObject;

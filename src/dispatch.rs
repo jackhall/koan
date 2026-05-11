@@ -5,19 +5,15 @@
 //! - `types` — `KType` and signature shapes (`Argument`, `SignatureElement`, ...).
 //! - `values` — `KObject` and the heap-side value representation.
 //! - `kfunction` — `KFunction`, `Body`, `BodyResult`, `ArgumentBundle`, scheduler handle.
-//! - `builtins` — the registered builtin set and per-builtin test support.
 //!
 //! The `pub use` block below is the curated public surface — the ~18 names that most
 //! callers need. Reach into a submodule directly only for symbols not re-exported here.
 
-pub(crate) mod builtins;
 pub(crate) mod kfunction;
 pub(crate) mod runtime;
 pub(crate) mod types;
 pub(crate) mod values;
 
-pub use builtins::{default_scope, register_builtin};
-// register_builtin: 1 external import site
 pub use kfunction::{
     ArgumentBundle, Body, BodyResult, CombineFinish, KFunction, NodeId, SchedulerHandle,
 };

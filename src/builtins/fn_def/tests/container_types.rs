@@ -1,7 +1,7 @@
 //! Parameterized container types in FN parameter and return slots:
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
-use crate::dispatch::builtins::test_support::{parse_one, run, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_root_silent};
 use crate::dispatch::RuntimeArena;
 use crate::execute::Scheduler;
 use crate::parse::parse;

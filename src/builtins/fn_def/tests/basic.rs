@@ -1,6 +1,6 @@
 //! Basic FN registration, dispatch, and parameter substitution.
 
-use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::dispatch::{KObject, RuntimeArena, SignatureElement};
 
 use super::capture_program_output;
@@ -11,7 +11,7 @@ use super::capture_program_output;
 #[test]
 fn pre_run_extracts_first_keyword_of_signature() {
     let expr = parse_one("FN (DOUBLE x: Number) -> Number = (x)");
-    let name = crate::dispatch::builtins::fn_def::pre_run(&expr);
+    let name = crate::builtins::fn_def::pre_run(&expr);
     assert_eq!(name.as_deref(), Some("DOUBLE"));
 }
 
@@ -163,7 +163,7 @@ fn fn_signature_with_no_keyword_is_rejected() {
 
 /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a
 /// callable handle via `LET f = (FN ...)`. Calling the captured handle is tested in
-/// [`call_by_name`](crate::dispatch::builtins::call_by_name).
+/// [`call_by_name`](crate::builtins::call_by_name).
 #[test]
 fn fn_def_returns_the_registered_kfunction() {
     let arena = RuntimeArena::new();

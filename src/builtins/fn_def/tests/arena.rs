@@ -1,6 +1,6 @@
 //! Run-root arena and scheduler-slot reclamation invariants for user FN calls.
 
-use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
+use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
 use crate::dispatch::RuntimeArena;
 use crate::execute::Scheduler;
 
