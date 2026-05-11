@@ -1,10 +1,14 @@
 use std::rc::Rc;
 
-use crate::dispatch::{
-    ArgumentBundle, Body, BodyResult, CallArena, KFunction, KObject, RuntimeArena, Scope,
-    SchedulerHandle,
-};
 use crate::parse::{ExpressionPart, KExpression};
+
+use crate::dispatch::runtime::{CallArena, RuntimeArena, Scope};
+use crate::dispatch::values::KObject;
+
+use super::argument_bundle::ArgumentBundle;
+use super::body::{Body, BodyResult};
+use super::scheduler_handle::SchedulerHandle;
+use super::KFunction;
 
 impl<'a> KFunction<'a> {
     /// Run this function's body for an already-bound call. Builtins call straight through;
@@ -59,7 +63,7 @@ impl<'a> KFunction<'a> {
 pub(crate) fn substitute_params<'a>(
     expr: KExpression<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::RuntimeArena,
+    arena: &'a RuntimeArena,
 ) -> KExpression<'a> {
     KExpression {
         parts: expr
@@ -73,7 +77,7 @@ pub(crate) fn substitute_params<'a>(
 fn substitute_part<'a>(
     part: ExpressionPart<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::RuntimeArena,
+    arena: &'a RuntimeArena,
 ) -> ExpressionPart<'a> {
     match part {
         ExpressionPart::Identifier(name) => match bundle.get(&name) {

@@ -21,6 +21,7 @@ pub use builtins::{default_scope, register_builtin};
 pub use kfunction::{
     ArgumentBundle, Body, BodyResult, CombineFinish, KFunction, NodeId, SchedulerHandle,
 };
+pub(crate) use kfunction::substitute_params;
 pub use runtime::{CallArena, Frame, KError, KErrorKind, KFuture, Resolution, RuntimeArena, Scope};
 // Resolution: 1 external import site
 pub use types::{

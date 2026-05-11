@@ -9,12 +9,9 @@ use crate::parse::KExpression;
 use super::nodes::{DepEdge, Node, NodeOutput, NodeWork};
 
 mod execute;
-mod invoke;
 mod submit;
 #[cfg(test)]
 mod tests;
-
-pub(crate) use invoke::substitute_params;
 
 /// A dynamic DAG of dispatch and execution work. The parser submits `Dispatch` nodes for each
 /// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Combine`

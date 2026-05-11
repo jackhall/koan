@@ -23,7 +23,5 @@ mod scheduler;
 pub use interpret::{interpret, interpret_with_writer};
 pub use scheduler::Scheduler;
 
-pub(crate) use scheduler::substitute_params;
-
 #[cfg(test)]
 pub use lift::lift_kobject_for_test;

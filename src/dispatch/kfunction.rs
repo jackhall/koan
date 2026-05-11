@@ -10,6 +10,8 @@
 //!   slot-extraction helpers used by binder builtins.
 //! - [`scheduler_handle`] — `NodeId`, the `SchedulerHandle` trait, and `CombineFinish`.
 //! - [`body`] — `BodyResult`, `BuiltinFn`, `PreRunFn`, and the `Body` enum.
+//! - [`invoke`] — `KFunction::invoke` (the body-runner) and `substitute_params` (the
+//!   parameter-Identifier rewriter user-fn bodies use on entry).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -22,10 +24,12 @@ use crate::dispatch::values::{parse_named_value_pairs, KObject};
 
 pub mod argument_bundle;
 pub mod body;
+pub mod invoke;
 pub mod scheduler_handle;
 
 pub use argument_bundle::ArgumentBundle;
 pub use body::{Body, BodyResult, BuiltinFn, PreRunFn};
+pub(crate) use invoke::substitute_params;
 pub use scheduler_handle::{CombineFinish, NodeId, SchedulerHandle};
 
 /// A callable Koan function: signature, body, and the lexical environment captured at
