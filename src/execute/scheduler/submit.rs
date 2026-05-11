@@ -1,0 +1,120 @@
+use crate::dispatch::{CombineFinish, NodeId, Scope};
+use crate::parse::KExpression;
+
+use super::super::nodes::{work_owned_edges, Node, NodeWork};
+use super::Scheduler;
+
+/// Walk `scope` and its outer chain, looking for a function in `functions[expr.untyped_key()]`
+/// whose `pre_run` extractor returns `Some(name)` for `expr`. The first such name wins.
+/// Submission-time install lets a later sibling park on the placeholder before the producer
+/// slot is popped from the FIFO.
+fn extract_pre_run_name<'a>(expr: &KExpression<'a>, scope: &'a Scope<'a>) -> Option<String> {
+    let key = expr.untyped_key();
+    let mut current: Option<&Scope<'a>> = Some(scope);
+    while let Some(s) = current {
+        let functions = s.functions.borrow();
+        if let Some(bucket) = functions.get(&key) {
+            for f in bucket.iter() {
+                if let Some(extractor) = f.pre_run {
+                    if let Some(name) = extractor(expr) {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+        drop(functions);
+        current = s.outer;
+    }
+    None
+}
+
+impl<'a> Scheduler<'a> {
+    /// Submit an unresolved expression for the scheduler to dispatch + execute against
+    /// `scope`. The only public way to add work; `Bind`/`Combine` are internal scaffolding
+    /// spawned during a `Dispatch` node's run.
+    pub fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
+        self.add(NodeWork::Dispatch(expr), scope)
+    }
+
+    /// Schedule a `Combine` slot. See `SchedulerHandle::add_combine`.
+    pub fn add_combine(
+        &mut self,
+        deps: Vec<NodeId>,
+        scope: &'a Scope<'a>,
+        finish: CombineFinish<'a>,
+    ) -> NodeId {
+        self.add(NodeWork::Combine { deps, finish }, scope)
+    }
+
+    pub(in crate::execute) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
+        let owned_edges = work_owned_edges(&work);
+        let no_deps = owned_edges.is_empty();
+        // Submission-time install lets a later sibling park on the placeholder before the
+        // producer slot is popped from the FIFO. No-op for non-Dispatch work and for
+        // Dispatch shapes whose picked function has no `pre_run`.
+        let placeholder_install: Option<String> = match &work {
+            NodeWork::Dispatch(expr) => extract_pre_run_name(expr, scope),
+            _ => None,
+        };
+        // Inherit the active slot's frame so sub-slots spawned during a user-fn body's run
+        // keep that body's per-call arena alive until they finalize.
+        let frame = self.active_frame.clone();
+        let idx = match self.free_list.pop() {
+            Some(i) => {
+                self.nodes[i] = Some(Node { work, scope, frame, function: None });
+                self.results[i] = None;
+                self.notify_list[i].clear();
+                self.pending_deps[i] = 0;
+                self.dep_edges[i] = owned_edges;
+                i
+            }
+            None => {
+                let i = self.nodes.len();
+                self.nodes.push(Some(Node { work, scope, frame, function: None }));
+                self.results.push(None);
+                self.notify_list.push(Vec::new());
+                self.pending_deps.push(0);
+                self.dep_edges.push(owned_edges);
+                i
+            }
+        };
+        // Install before enqueueing: the queued slot's `run_dispatch` will idempotently
+        // re-install. A failure here (e.g. `Rebind` collision) is surfaced later by
+        // `install_dispatch_placeholder` rather than aborting `add`.
+        if let Some(name) = placeholder_install {
+            let _ = scope.install_placeholder(name, NodeId(idx));
+        }
+        let pending = self.register_slot_deps(idx);
+        if pending == 0 {
+            // Top-level dispatches (no active frame, no deps) take the FIFO `queue` for
+            // submission-order. Internal slots whose deps are already terminal take the
+            // internal-priority `ready_set`.
+            if self.active_frame.is_none() && no_deps {
+                self.queue.push_back(idx);
+            } else {
+                self.ready_set.push_back(idx);
+            }
+        }
+        NodeId(idx)
+    }
+
+    /// Register `idx` as a consumer on each not-yet-terminal dep recorded in
+    /// `dep_edges[idx]`, returning the count installed. Already-terminal producers
+    /// are skipped — their notify-walk has already happened. Both `Owned` and `Notify`
+    /// edges install a wake edge here: the kind distinction matters only at reclaim
+    /// time (`free` recurses only into `Owned`).
+    pub(super) fn register_slot_deps(&mut self, idx: usize) -> usize {
+        let mut pending = 0usize;
+        let n = self.dep_edges[idx].len();
+        for i in 0..n {
+            let dep = self.dep_edges[idx][i].node_id().index();
+            if self.is_result_ready(NodeId(dep)) {
+                continue;
+            }
+            self.notify_list[dep].push(idx);
+            pending += 1;
+        }
+        self.pending_deps[idx] = pending;
+        pending
+    }
+}
