@@ -51,7 +51,7 @@ complete the surfacing.
 ## `try_args!` macro
 
 The default form
-[`try_args!(bundle; arg: Variant, ...)`](../src/dispatch/builtins.rs)
+[`try_args!(bundle; arg: Variant, ...)`](../src/builtins.rs)
 auto-constructs a structured `TypeMismatch` on failure — the common case in
 builtin bodies. The override form `try_args!(bundle, return $err; ...)` is
 preserved for the rare site that wants something custom (e.g., a `ShapeError`

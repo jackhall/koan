@@ -17,19 +17,19 @@ from the scheduler that drives value evaluation. Three concrete gaps:
   type representations in parallel (`TypeExpr` for stored values, `KType` for
   dispatch slots), and consumers throughout dispatch reach into `TypeExpr`
   for `.name` and `.params`
-  ([`attr.rs`](../src/dispatch/builtins/attr.rs),
-  [`let_binding.rs`](../src/dispatch/builtins/let_binding.rs),
-  [`helpers.rs`](../src/dispatch/builtins/helpers.rs),
-  [`type_call.rs`](../src/dispatch/builtins/type_call.rs),
-  [`type_ops.rs`](../src/dispatch/builtins/type_ops.rs),
-  [`value_lookup.rs`](../src/dispatch/builtins/value_lookup.rs),
-  [`struct_def.rs`](../src/dispatch/builtins/struct_def.rs),
-  [`fn_def.rs`](../src/dispatch/builtins/fn_def.rs),
+  ([`attr.rs`](../src/builtins/attr.rs),
+  [`let_binding.rs`](../src/builtins/let_binding.rs),
+  [`argument_bundle.rs`](../src/dispatch/kfunction/argument_bundle.rs),
+  [`type_call.rs`](../src/builtins/type_call.rs),
+  [`type_ops.rs`](../src/builtins/type_ops.rs),
+  [`value_lookup.rs`](../src/builtins/value_lookup.rs),
+  [`struct_def.rs`](../src/builtins/struct_def.rs),
+  [`fn_def.rs`](../src/builtins/fn_def.rs),
   [`module.rs`](../src/dispatch/values/module.rs)).
 - *Synchronous FN-signature elaboration.* Parens-wrapped type expressions in
   FN parameter positions (`xs: (LIST_OF Number)`) aren't sub-dispatched:
   `parse_fn_param_list` in
-  [`builtins/fn_def.rs`](../src/dispatch/builtins/fn_def.rs) only accepts
+  [`builtins/fn_def.rs`](../src/builtins/fn_def.rs) only accepts
   `ExpressionPart::Type(t)` triples and routes them through the synchronous
   `KType::from_type_expr`. FN-def's `ScopeResolver` does a synchronous
   `scope.lookup(name)` and returns `None` rather than parking on a

@@ -55,7 +55,7 @@ pub fn body<'a>(
     };
     // ScopeResolver walks the surrounding scope's bindings first so user-defined types
     // (`LET MyList = (LIST_OF Number)`) shadow builtins. Stage-2 substrate per the
-    // [module-system stage 2 plan](../../../../roadmap/module-system-2-scheduler.md).
+    // [module-system stage 2 plan](../../roadmap/module-system-2-scheduler.md).
     let resolver = ScopeResolver::new(scope);
     let return_type = match KType::from_type_expr(&return_type_expr, &resolver) {
         Ok(t) => t,

@@ -448,23 +448,23 @@ What runs:
 ## Builtin reference
 
 One line per surface form. Sources under
-[src/dispatch/builtins/](src/dispatch/builtins/).
+[src/builtins/](src/builtins/).
 
 | Form                                                  | Effect                                                                                          | File                                                          |
 |-------------------------------------------------------|-------------------------------------------------------------------------------------------------|---------------------------------------------------------------|
-| `LET <name> = <value>`                                | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/dispatch/builtins/let_binding.rs)        |
-| `PRINT <msg:Str>`                                     | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/dispatch/builtins/print.rs)                    |
-| `FN <sig> -> <Type> = <body>`                         | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/dispatch/builtins/fn_def.rs)          |
-| `UNION <Name> = (<schema>)` / `UNION (<schema>)`      | Declare a tagged-union type. Named form binds `<Name>` in scope.                                | [union.rs](src/dispatch/builtins/union.rs)                    |
-| `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/dispatch/builtins/struct_def.rs)          |
-| `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/dispatch/builtins/match_case.rs)          |
-| `<verb:TypeExprRef> (<args>)`                         | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/dispatch/builtins/type_call.rs)            |
-| `<verb:Identifier> (<args>)`                          | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/dispatch/builtins/call_by_name.rs)      |
-| `<s>.<field>` (`ATTR <s> <field>`)                    | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/dispatch/builtins/attr.rs)                      |
-| `<v:Identifier>` (single-part)                        | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/dispatch/builtins/value_lookup.rs)      |
-| `<v>` (single-part literal/expr)                      | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/dispatch/builtins/value_pass.rs)          |
-| `#(<expr>)`                                           | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/dispatch/builtins/quote.rs)                    |
-| `$(<expr>)`                                           | Eval: resolve `<expr>`; if the result is a `KExpression`, dispatch the captured AST.             | [eval.rs](src/dispatch/builtins/eval.rs)                      |
+| `LET <name> = <value>`                                | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/builtins/let_binding.rs)        |
+| `PRINT <msg:Str>`                                     | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/builtins/print.rs)                    |
+| `FN <sig> -> <Type> = <body>`                         | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/builtins/fn_def.rs)          |
+| `UNION <Name> = (<schema>)` / `UNION (<schema>)`      | Declare a tagged-union type. Named form binds `<Name>` in scope.                                | [union.rs](src/builtins/union.rs)                    |
+| `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/builtins/struct_def.rs)          |
+| `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/builtins/match_case.rs)          |
+| `<verb:TypeExprRef> (<args>)`                         | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/builtins/type_call.rs)            |
+| `<verb:Identifier> (<args>)`                          | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/builtins/call_by_name.rs)      |
+| `<s>.<field>` (`ATTR <s> <field>`)                    | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/builtins/attr.rs)                      |
+| `<v:Identifier>` (single-part)                        | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/builtins/value_lookup.rs)      |
+| `<v>` (single-part literal/expr)                      | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/builtins/value_pass.rs)          |
+| `#(<expr>)`                                           | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/builtins/quote.rs)                    |
+| `$(<expr>)`                                           | Eval: resolve `<expr>`; if the result is a `KExpression`, dispatch the captured AST.             | [eval.rs](src/builtins/eval.rs)                      |
 
 ## What's not in the language yet
 

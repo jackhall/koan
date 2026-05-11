@@ -1,6 +1,6 @@
 //! `MODULE <name:TypeExprRef> = <body:KExpression>` — declare a structure (a bundle of
 //! type definitions, values, and functions). See
-//! [design/module-system.md](../../../design/module-system.md) for the surface design.
+//! [design/module-system.md](../../design/module-system.md) for the surface design.
 //!
 //! Construction shape: the body is a parens-wrapped KExpression. Each top-level
 //! `Expression` part inside the body is dispatched as an independent statement against a

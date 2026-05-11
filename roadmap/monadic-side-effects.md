@@ -1,7 +1,7 @@
 # Generalize `Scope::out` into monadic side-effect capture
 
 **Problem.** [`Scope::out`](../src/dispatch/runtime/scope.rs) is a `Box<dyn Write>` sink that
-exists solely so [`PRINT`](../src/dispatch/builtins/print.rs) has somewhere to send bytes
+exists solely so [`PRINT`](../src/builtins/print.rs) has somewhere to send bytes
 and tests can swap stdout for a buffer. It is the only side-effect channel the runtime
 has, and it is hard-coded to one channel and one shape (write bytes). Every additional
 effect Koan eventually wants to support — file IO, time, randomness, network,
@@ -64,6 +64,6 @@ is scaffolding without a building.
 
 `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the error item added
 a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three churning passes
-over every builtin in [builtins/](../src/dispatch/builtins/) is meaningfully worse than
+over every builtin in [builtins/](../src/builtins/) is meaningfully worse than
 one — but with reclamation already landed, the only remaining lever is folding effects
 into the eventual static-typing/JIT pass if their schedules align.

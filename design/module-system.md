@@ -63,7 +63,7 @@ Opaque ascription is **generative**: each application mints a fresh
 distinct opaque ascriptions of the same source module yield distinct types
 that cannot be confused. The carrier lives in
 [`KType`](../src/dispatch/types/ktype.rs); the operators are registered as
-ordinary builtins in [`ascribe.rs`](../src/dispatch/builtins/ascribe.rs).
+ordinary builtins in [`ascribe.rs`](../src/builtins/ascribe.rs).
 
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.

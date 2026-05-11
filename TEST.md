@@ -104,7 +104,7 @@ the storage cycle that closure-escape returns can otherwise produce.
 
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
 
-**Closure escape and TCO replace** ([src/dispatch/builtins/call_by_name.rs](src/dispatch/builtins/call_by_name.rs)) — a closure
+**Closure escape and TCO replace** ([src/builtins/call_by_name.rs](src/builtins/call_by_name.rs)) — a closure
 returned from its defining frame remains invocable, including with parameters
 whose values are arena-allocated in the dying frame.
 
@@ -117,7 +117,7 @@ so the conditional-defer path doesn't violate the `RefCell` invariant.
 
 - `add_during_active_data_borrow_queues_and_drains`
 
-**MATCH on `Tagged` recursion** ([src/dispatch/builtins/match_case.rs](src/dispatch/builtins/match_case.rs)) — the
+**MATCH on `Tagged` recursion** ([src/builtins/match_case.rs](src/builtins/match_case.rs)) — the
 `outer_frame` chain keeps the call-site arena alive across TCO replace when a
 user-fn recurses through a `Tagged` parameter via MATCH.
 
@@ -131,7 +131,7 @@ one with a `Future(&KObject)` allocated in the dying arena anchors with
 - `unanchored_kfuture_no_arena_borrow_does_not_anchor`
 - `unanchored_kfuture_with_arena_borrow_does_anchor`
 
-**Per-call arena reclamation** ([src/dispatch/builtins/fn_def.rs](src/dispatch/builtins/fn_def.rs)) — repeated user-fn
+**Per-call arena reclamation** ([src/builtins/fn_def.rs](src/builtins/fn_def.rs)) — repeated user-fn
 calls grow the run-root arena by one lifted return value per call, with all
 per-call scaffolding freed at call return.
 
@@ -147,7 +147,7 @@ shape).
 - `signature_decl_scope_transmute_does_not_dangle`
 - `module_type_members_refcell_mutation_with_held_module_ref`
 
-**MODULE body Combine continuation** ([src/dispatch/builtins/module_def.rs](src/dispatch/builtins/module_def.rs)) — the
+**MODULE body Combine continuation** ([src/builtins/module_def.rs](src/builtins/module_def.rs)) — the
 MODULE body schedules a `Combine` whose `finish` closure captures the child
 scope and runs on the outer scheduler's main loop after every body statement
 terminalizes. The captured-reference and finalize-write shapes are the

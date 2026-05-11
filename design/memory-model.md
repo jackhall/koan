@@ -77,7 +77,7 @@ A user-fn call's per-call frame is anchored by lexical scoping: the new frame's
 child scope's `outer` is the FN's *captured* scope (run-root for top-level FNs),
 which outlives every per-call frame. Builtins that build their own per-call
 frame don't always have that property —
-[MATCH](../src/dispatch/builtins/match_case.rs) constructs a frame whose child
+[MATCH](../src/builtins/match_case.rs) constructs a frame whose child
 scope's `outer` is the **call-site** scope, so free names in the branch body
 resolve against the surrounding call. When the call site itself lives in a
 per-call arena (MATCH inside a user-fn body), the new frame's `outer` pointer
@@ -154,17 +154,17 @@ user-fn call leaves that subtree for that call's own reclamation.
 
 ## Verification
 
-- [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/dispatch/builtins/fn_def.rs)
+- [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/builtins/fn_def.rs)
   asserts 50 ECHO calls grow the run-root arena by exactly 50 — one lifted
   return value per call, with all per-call scaffolding freed at call return.
 - Closure-escape tests
-  ([`closure_escapes_outer_call_and_remains_invocable`](../src/dispatch/builtins/call_by_name.rs),
-  [`escaped_closure_with_param_returns_body_value`](../src/dispatch/builtins/call_by_name.rs))
+  ([`closure_escapes_outer_call_and_remains_invocable`](../src/builtins/call_by_name.rs),
+  [`escaped_closure_with_param_returns_body_value`](../src/builtins/call_by_name.rs))
   confirm a closure returned from its defining frame remains invocable.
 - [`add_during_active_data_borrow_queues_and_drains`](../src/dispatch/runtime/scope.rs)
   holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms
   the queued write applied — exercising the conditional-defer path.
-- [`recursive_tagged_match_no_uaf`](../src/dispatch/builtins/match_case.rs)
+- [`recursive_tagged_match_no_uaf`](../src/builtins/match_case.rs)
   runs a user-fn that recurses through a `Tagged` parameter via MATCH, exercising
   the `outer_frame` chain that keeps the call-site arena alive across TCO replace.
 - [`unanchored_kfuture_no_arena_borrow_does_not_anchor`](../src/execute/lift.rs)

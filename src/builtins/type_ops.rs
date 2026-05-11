@@ -6,7 +6,7 @@
 //! outer slot only after the inner sub-dispatch resolves to a concrete `Type` value.
 //!
 //! **Why builtins rather than a parallel registration table.** The plan in
-//! [roadmap/module-system-2-scheduler.md](../../../roadmap/module-system-2-scheduler.md)
+//! [roadmap/module-system-2-scheduler.md](../../roadmap/module-system-2-scheduler.md)
 //! reduces type-expression evaluation to ordinary dispatch: the same scope-lookup chain,
 //! the same `Bind`-waits-for-subs refinement, the same `lift_kobject` rules. No new node
 //! kind, no `KType::TypeVar`, no second registration table — a `TypeExprRef`-typed binding

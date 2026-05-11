@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/dispatch/builtins/](src/dispatch/builtins/), pulled together by [default_scope](src/dispatch/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
+The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/builtins/](src/builtins/), pulled together by [default_scope](src/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `List<T>`, `Dict<K, V>`, `Function<(args) -> R>`, `Type`, `Tagged`, `Struct`, `Module`, `Signature`, `KExpression`, and `Any`.
 
@@ -75,7 +75,7 @@ The output is one [`KExpression`](src/parse/kexpression.rs) per top-level line: 
 
 A [`Scope`](src/dispatch/runtime/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. `Scope::dispatch` scans registered functions for one whose [`ExpressionSignature`](src/dispatch/kfunction.rs) matches the incoming expression — signatures are an ordered mix of fixed `Token`s and typed `Argument` slots — then `bind`s the expression into a [`KFuture`](src/dispatch/runtime/scope.rs): the resolved function plus its `ArgumentBundle`, ready to run but not yet executed.
 
-Runtime values are [`KObject`](src/dispatch/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/dispatch/types/ktraits.rs). Builtins are registered in [builtins.rs](src/dispatch/builtins.rs) and produce the default root scope.
+Runtime values are [`KObject`](src/dispatch/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/dispatch/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
 Errors are first-class via [`KError`](src/dispatch/runtime/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
 
@@ -91,9 +91,10 @@ Inside [src/dispatch/](src/dispatch/), code is grouped into three sub-modules:
 [types/](src/dispatch/types/) holds the type system (`KType`, signatures, traits),
 [values/](src/dispatch/values/) holds runtime data (`KObject`, `KKey`, struct/union
 construction), and [runtime/](src/dispatch/runtime/) holds execution machinery
-(arenas, `Scope`, `KError`). [kfunction.rs](src/dispatch/kfunction.rs) and
-[builtins.rs](src/dispatch/builtins.rs) sit at the dispatch root because they tie
-the three sub-modules together.
+(arenas, `Scope`, `KError`). [kfunction.rs](src/dispatch/kfunction.rs) sits at the
+dispatch root because it ties the three sub-modules together. Builtins live in a
+top-level [src/builtins/](src/builtins/) module, with [builtins.rs](src/builtins.rs)
+holding the registry and `default_scope()`.
 
 Within those sub-modules, the `k`-prefix marks files built around a single
 eponymous Koan-runtime type: [kobject.rs](src/dispatch/values/kobject.rs) defines `KObject`,
@@ -107,7 +108,7 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 [scope.rs](src/dispatch/runtime/scope.rs) (lexical environment),
 [dispatcher.rs](src/dispatch/runtime/dispatcher.rs) (overload resolution),
 [signature.rs](src/dispatch/types/signature.rs) (dispatch shapes and specificity),
-[builtins.rs](src/dispatch/builtins.rs) (registry),
+[builtins.rs](src/builtins.rs) (registry),
 [tagged_union.rs](src/dispatch/values/tagged_union.rs) (shared structure),
 [struct_value.rs](src/dispatch/values/struct_value.rs) (shared structure),
 [typed_field_list.rs](src/dispatch/types/typed_field_list.rs) (helper).
@@ -127,23 +128,23 @@ src/
 │   ├── type_frame.rs    Frame::Type sub-state for `<...>` type-parameter groups
 │   ├── tokens.rs        classify tokens, compound-operator desugaring
 │   └── operators.rs     operator registry
+├── builtins.rs          try_args!, register_builtin, default_scope()
+├── builtins/            one file per builtin (body + register paired)
+│   ├── let_binding.rs
+│   ├── print.rs
+│   ├── value_lookup.rs
+│   ├── value_pass.rs
+│   ├── attr.rs
+│   ├── fn_def.rs
+│   ├── call_by_name.rs
+│   ├── match_case.rs
+│   ├── type_call.rs
+│   ├── union.rs
+│   ├── struct_def.rs
+│   ├── quote.rs         # surface form `#(expr)`
+│   └── eval.rs          # surface form `$(expr)`
 ├── dispatch.rs
 ├── dispatch/
-│   ├── builtins.rs      try_args!, register_builtin, default_scope()
-│   ├── builtins/        one file per builtin (body + register paired)
-│   │   ├── let_binding.rs
-│   │   ├── print.rs
-│   │   ├── value_lookup.rs
-│   │   ├── value_pass.rs
-│   │   ├── attr.rs
-│   │   ├── fn_def.rs
-│   │   ├── call_by_name.rs
-│   │   ├── match_case.rs
-│   │   ├── type_call.rs
-│   │   ├── union.rs
-│   │   ├── struct_def.rs
-│   │   ├── quote.rs       # surface form `#(expr)`
-│   │   └── eval.rs        # surface form `$(expr)`
 │   ├── kfunction.rs     KFunction, Body, ArgumentBundle — bind/apply at the dispatch root
 │   ├── runtime.rs
 │   ├── runtime/

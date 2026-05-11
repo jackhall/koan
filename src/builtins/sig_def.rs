@@ -1,6 +1,6 @@
 //! `SIG <name:TypeExprRef> = <body:KExpression>` — declare a module signature (an interface
 //! a module can be ascribed to). See
-//! [design/module-system.md](../../../design/module-system.md).
+//! [design/module-system.md](../../design/module-system.md).
 //!
 //! Construction shape mirrors [`module_def`](super::module_def): body statements dispatch
 //! against a fresh child scope on the OUTER scheduler, then a `Combine` over those slots

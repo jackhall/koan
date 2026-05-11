@@ -117,9 +117,9 @@ following `(` clears it by opening an `Expression` frame tagged with the head
 keyword. On frame-close, the body is wrapped in an inner `Expression` part and
 prepended with the head, producing the AST shape `(QUOTE <body>)` /
 `(EVAL <body>)` that the QUOTE / EVAL builtins dispatch on. The
-[QUOTE](../src/dispatch/builtins/quote.rs) builtin's signature consumes a
+[QUOTE](../src/builtins/quote.rs) builtin's signature consumes a
 `KExpression`-typed slot and returns the captured AST as a value;
-[EVAL](../src/dispatch/builtins/eval.rs)'s slot is `Any` so the scheduler
+[EVAL](../src/builtins/eval.rs)'s slot is `Any` so the scheduler
 eagerly evaluates the operand first, after which the body checks the result is
 a `KExpression` and tail-dispatches the inner AST in a fresh `CallArena`
 (mirroring `MATCH`'s per-call frame so free names resolve against the

@@ -22,7 +22,7 @@ use crate::parse::{ExpressionPart, KExpression};
 ///
 /// The `resolver` is forwarded into `KType::from_type_expr` for each parameter type so
 /// user-defined types in the surrounding scope can shadow builtins. Stage-2 substrate per
-/// the [module-system stage 2 plan](../../../../roadmap/module-system-2-scheduler.md).
+/// the [module-system stage 2 plan](../../../roadmap/module-system-2-scheduler.md).
 pub(super) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
     resolver: &dyn TypeResolver,

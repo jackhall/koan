@@ -1,6 +1,6 @@
 //! Ascription operators `:|` (opaque) and `:!` (transparent) — bolt a [`Signature`] onto
 //! a [`Module`]. Both consume `(Module, Signature)` and produce a `Module`.
-//! See [design/module-system.md](../../../design/module-system.md).
+//! See [design/module-system.md](../../design/module-system.md).
 //!
 //! Stage 1 shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
@@ -133,7 +133,7 @@ fn shape_check<'a>(
 }
 
 /// True iff `name` classifies as a Type token (first char uppercase + at least one
-/// lowercase elsewhere). See [design/type-system.md](../../../design/type-system.md#token-classes--the-parser-level-foundation).
+/// lowercase elsewhere). See [design/type-system.md](../../design/type-system.md#token-classes--the-parser-level-foundation).
 fn is_abstract_type_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else { return false; };
@@ -314,7 +314,7 @@ mod tests {
         assert!(matches!(result, KObject::Number(n) if *n == 42.0));
     }
 
-    /// End-to-end example from [design/module-system.md](../../../design/module-system.md).
+    /// End-to-end example from [design/module-system.md](../../design/module-system.md).
     #[test]
     fn roadmap_example_int_ord_with_ordered_sig() {
         let arena = RuntimeArena::new();
