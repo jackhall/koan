@@ -6,10 +6,9 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::types::{UntypedElement, UntypedKey};
+use crate::dispatch::{KObject, Parseable};
+use crate::dispatch::types::{Serializable, UntypedElement, UntypedKey};
 use crate::dispatch::values::KKey;
-use crate::dispatch::values::KObject;
-use crate::dispatch::types::{Parseable, Serializable};
 
 #[derive(Debug, Clone)]
 pub enum KLiteral {
@@ -131,8 +130,8 @@ impl<'a> ExpressionPart<'a> {
     /// receiving slot is `KType::TypeExprRef`, the structured `TypeExpr` is preserved as a
     /// `KObject::TypeExprValue` rather than flattened to a name string, so parameterized
     /// types like `List<Number>` survive into the binding.
-    pub fn resolve_for(&self, slot: &crate::dispatch::types::KType) -> KObject<'a> {
-        if let (ExpressionPart::Type(t), crate::dispatch::types::KType::TypeExprRef) =
+    pub fn resolve_for(&self, slot: &crate::dispatch::KType) -> KObject<'a> {
+        if let (ExpressionPart::Type(t), crate::dispatch::KType::TypeExprRef) =
             (self, slot)
         {
             return KObject::TypeExprValue(t.clone());
@@ -238,7 +237,7 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 
 impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
-    fn ktype(&self) -> crate::dispatch::types::KType { crate::dispatch::types::KType::KExpression }
+    fn ktype(&self) -> crate::dispatch::KType { crate::dispatch::KType::KExpression }
     fn summarize(&self) -> String {
         self.parts.iter()
             .map(|p| p.summarize())

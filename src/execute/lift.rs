@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::runtime::{CallArena, KFuture, RuntimeArena};
-use crate::dispatch::values::KObject;
+use crate::dispatch::{CallArena, KFuture, KObject, RuntimeArena};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
@@ -233,8 +232,7 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
 mod tests {
     use super::*;
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::CallArena;
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{CallArena, KObject};
     use crate::parse::expression_tree::parse;
 
     /// A KFuture with no descendant borrow into the dying arena must lift to
@@ -242,8 +240,7 @@ mod tests {
     /// below defeats `functions_is_empty()`'s fast path so the slow path runs.
     #[test]
     fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
-        use crate::dispatch::kfunction::{Body, KFunction};
-        use crate::dispatch::types::{ExpressionSignature, KType, SignatureElement};
+        use crate::dispatch::{Body, ExpressionSignature, KFunction, KType, SignatureElement};
 
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -253,7 +250,7 @@ mod tests {
                 return_type: KType::Null,
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
-            Body::Builtin(|s, _, _| crate::dispatch::kfunction::BodyResult::Value(
+            Body::Builtin(|s, _, _| crate::dispatch::BodyResult::Value(
                 s.arena.alloc_object(KObject::Null)
             )),
             dying.scope(),
@@ -287,8 +284,7 @@ mod tests {
     /// allocated in the dying arena must lift with `frame: Some(rc)`.
     #[test]
     fn unanchored_kfuture_with_arena_borrow_does_anchor() {
-        use crate::dispatch::kfunction::{Body, KFunction};
-        use crate::dispatch::types::{ExpressionSignature, KType, SignatureElement};
+        use crate::dispatch::{Body, ExpressionSignature, KFunction, KType, SignatureElement};
 
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -301,7 +297,7 @@ mod tests {
                 return_type: KType::Null,
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
-            Body::Builtin(|s, _, _| crate::dispatch::kfunction::BodyResult::Value(
+            Body::Builtin(|s, _, _| crate::dispatch::BodyResult::Value(
                 s.arena.alloc_object(KObject::Null)
             )),
             dying.scope(),

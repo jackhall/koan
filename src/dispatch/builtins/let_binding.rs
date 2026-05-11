@@ -1,8 +1,7 @@
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::KObject;
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Scope, SchedulerHandle, SignatureElement,
+};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::{err, register_builtin_with_pre_run};
@@ -96,14 +95,13 @@ mod tests {
     use super::body;
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::builtins::test_support::run_root_bare;
-    use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{ArgumentBundle, BodyResult, KObject};
     use crate::execute::scheduler::Scheduler;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
     fn let_inserts_binding_into_scope() {
-        use crate::dispatch::runtime::RuntimeArena;
+        use crate::dispatch::RuntimeArena;
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         let mut sched = Scheduler::new();
@@ -141,7 +139,7 @@ mod tests {
     /// after the body finalizes via `bind_value`, the placeholder is removed.
     #[test]
     fn pre_run_install_then_body_finalize_clears_placeholder() {
-        use crate::dispatch::runtime::RuntimeArena;
+        use crate::dispatch::RuntimeArena;
         use crate::execute::scheduler::Scheduler;
         use crate::dispatch::builtins::default_scope;
         use crate::parse::expression_tree::parse;
@@ -158,7 +156,7 @@ mod tests {
 
     #[test]
     fn dispatch_let_expression() {
-        use crate::dispatch::runtime::RuntimeArena;
+        use crate::dispatch::RuntimeArena;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let expr = KExpression {

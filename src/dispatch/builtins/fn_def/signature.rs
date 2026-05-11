@@ -6,7 +6,8 @@
 //! - [`pre_run`] — the dispatch-time placeholder extractor used by `register` to
 //!   announce the function's name before its body runs.
 
-use crate::dispatch::types::{Argument, KType, SignatureElement, TypeResolver};
+use crate::dispatch::{Argument, KType, SignatureElement};
+use crate::dispatch::types::TypeResolver;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 /// Convert the captured FN-parameter-list `KExpression` into a list of `SignatureElement`s.

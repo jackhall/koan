@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::runtime::{CallArena, KError, KErrorKind, Scope};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::KObject;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, CallArena, ExpressionSignature, KError, KErrorKind,
+    KObject, KType, Scope, SchedulerHandle, SignatureElement,
+};
 
 use super::{err, register_builtin};
 
@@ -67,7 +67,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one_err, run_root_silent, run_root_with_buf};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
+    use crate::dispatch::{KErrorKind, RuntimeArena};
 
     fn run_program(source: &str) -> Vec<u8> {
         let arena = RuntimeArena::new();

@@ -1,9 +1,9 @@
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::runtime::{KError, KErrorKind, Scope};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::KObject;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Scope, SchedulerHandle, SignatureElement,
+};
 
-use crate::dispatch::argument_bundle::extract_kexpression;
+use crate::dispatch::kfunction::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`. The body is the captured raw AST,
@@ -48,7 +48,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{run, run_root_with_buf};
-    use crate::dispatch::runtime::RuntimeArena;
+    use crate::dispatch::RuntimeArena;
 
     fn run_program(source: &str) -> Vec<u8> {
         let arena = RuntimeArena::new();

@@ -5,10 +5,11 @@
 //! Stage 1 shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::runtime::{KError, KErrorKind, Scope};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::{resolve_module, resolve_signature, KObject, Module};
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Scope, SchedulerHandle, SignatureElement,
+};
+use crate::dispatch::values::{resolve_module, resolve_signature, Module};
 
 use super::register_builtin;
 
@@ -196,9 +197,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
-    use crate::dispatch::types::KType;
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KErrorKind, KObject, KType, RuntimeArena};
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
 

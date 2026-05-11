@@ -20,12 +20,13 @@
 //! first depending on the queue. Use placeholder-bearing statements (`LET`) to enforce
 //! ordering when needed.
 
-use crate::dispatch::runtime::{KError, KErrorKind, Scope};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KType, Scope,
+    SchedulerHandle, SignatureElement,
+};
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
-use crate::dispatch::argument_bundle::extract_kexpression;
+use crate::dispatch::kfunction::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 pub fn body<'a>(
@@ -114,8 +115,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{run, run_one, parse_one, run_root_silent, run_root_with_buf};
-    use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KObject, RuntimeArena};
 
     fn capture(source: &str) -> Vec<u8> {
         let arena = RuntimeArena::new();

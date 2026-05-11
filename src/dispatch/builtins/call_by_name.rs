@@ -1,10 +1,10 @@
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
-use crate::dispatch::values::{KObject, dispatch_constructor};
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Parseable, Scope, SchedulerHandle, SignatureElement,
+};
+use crate::dispatch::values::dispatch_constructor;
 
-use crate::dispatch::argument_bundle::extract_kexpression;
+use crate::dispatch::kfunction::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `<verb:Identifier> <args:KExpression>` — surface syntax `f (a: 1, b: 2)`. When `verb`
@@ -78,9 +78,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
-    use crate::dispatch::types::Parseable;
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KErrorKind, KObject, Parseable, RuntimeArena};
 
     #[test]
     fn fn_callable_via_call_by_name() {

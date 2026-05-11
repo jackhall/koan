@@ -1,16 +1,15 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, ScopeResolver, SignatureElement};
-use crate::dispatch::values::KObject;
-use crate::dispatch::runtime::Scope;
-use crate::dispatch::types::parse_typed_field_list;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Scope, SchedulerHandle, SignatureElement,
+};
+use crate::dispatch::types::{parse_typed_field_list, ScopeResolver};
 
 use crate::parse::kexpression::KExpression;
 
-use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
+use crate::dispatch::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` (named) or `UNION (<schema>)` (anonymous).
@@ -120,9 +119,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
-    use crate::dispatch::types::KType;
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KErrorKind, KObject, KType, RuntimeArena};
 
     /// Smoke test for the named-UNION pre_run extractor: structural extraction of the
     /// `Type(_)` token at `parts[1]` for the named form. The anonymous form has no

@@ -13,14 +13,15 @@
 //! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
 //! attaches axioms.
 
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, CombineFinish, SchedulerHandle};
-use crate::dispatch::runtime::{Frame, KError, KErrorKind, Scope};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::{KObject, Signature};
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, CombineFinish, ExpressionSignature, Frame, KError,
+    KErrorKind, KObject, KType, Scope, SchedulerHandle, SignatureElement,
+};
+use crate::dispatch::values::Signature;
 
 use crate::parse::kexpression::KExpression;
 
-use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
+use crate::dispatch::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
 
 pub fn body<'a>(
@@ -100,8 +101,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{run, run_root_silent};
-    use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KObject, RuntimeArena};
     use crate::parse::expression_tree::parse;
 
     /// Smoke test for SIG's pre_run extractor: structural extraction of the `Type(_)`

@@ -17,11 +17,10 @@
 //! `KType::Struct` and `KType::Module` only match the corresponding `Future` variants), so
 //! dispatch picks unambiguously without a specificity tiebreaker.
 
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::KObject;
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Scope, SchedulerHandle, SignatureElement,
+};
 
 use super::{err, register_builtin};
 
@@ -284,8 +283,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
 
     #[test]
     fn attr_reads_field_from_named_struct() {

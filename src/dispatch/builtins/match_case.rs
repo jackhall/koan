@@ -1,16 +1,14 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::runtime::{CallArena, RuntimeArena};
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::KObject;
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, CallArena, ExpressionSignature, KError, KErrorKind,
+    KObject, KType, RuntimeArena, Scope, SchedulerHandle, SignatureElement,
+};
 use crate::execute::scheduler::substitute_params;
 use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
-use crate::dispatch::argument_bundle::extract_kexpression;
+use crate::dispatch::kfunction::argument_bundle::extract_kexpression;
 use super::{err, register_builtin};
 
 /// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.
@@ -184,7 +182,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one_err, run_root_silent, run_root_with_buf};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
+    use crate::dispatch::{KErrorKind, RuntimeArena};
 
     fn run_program(source: &str) -> Vec<u8> {
         let arena = RuntimeArena::new();

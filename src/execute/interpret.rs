@@ -1,6 +1,5 @@
-use crate::dispatch::runtime::RuntimeArena;
+use crate::dispatch::{KError, KErrorKind, RuntimeArena};
 use crate::dispatch::builtins::default_scope;
-use crate::dispatch::runtime::{KError, KErrorKind};
 use crate::execute::scheduler::Scheduler;
 use crate::parse::expression_tree::parse;
 
@@ -29,7 +28,7 @@ pub fn interpret_with_writer(
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, out);
     let mut scheduler = Scheduler::new();
-    let mut top_level: Vec<crate::dispatch::kfunction::NodeId> = Vec::with_capacity(exprs.len());
+    let mut top_level: Vec<crate::dispatch::NodeId> = Vec::with_capacity(exprs.len());
     for expr in exprs {
         top_level.push(scheduler.add_dispatch(expr, root));
     }
@@ -53,9 +52,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::dispatch::runtime::KErrorKind;
-    use crate::dispatch::values::KObject;
-    use crate::dispatch::runtime::Scope;
+    use crate::dispatch::{KErrorKind, KObject, Scope};
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 

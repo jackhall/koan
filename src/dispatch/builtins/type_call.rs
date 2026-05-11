@@ -1,10 +1,10 @@
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KType, Scope,
+    SchedulerHandle, SignatureElement,
+};
 use crate::dispatch::values::dispatch_constructor;
 
-use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
+use crate::dispatch::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin};
 
 /// `<verb:TypeExprRef> <args:KExpression>` — the type-token construction path.
@@ -68,8 +68,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
 
     #[test]
     fn type_token_calls_construct_tagged_value() {

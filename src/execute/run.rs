@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::dispatch::runtime::{Frame, KError, Resolution};
-use crate::dispatch::kfunction::{BodyResult, CombineFinish, NodeId};
+use crate::dispatch::{BodyResult, CombineFinish, Frame, KError, KFuture, KObject, NodeId, Parseable, Scope};
+use crate::dispatch::runtime::Resolution;
 use crate::dispatch::values::KKey;
-use crate::dispatch::values::KObject;
-use crate::dispatch::types::{Parseable, Serializable};
-use crate::dispatch::runtime::{KFuture, Scope};
+use crate::dispatch::types::Serializable;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::nodes::{DepEdge, NodeOutput, NodeStep, NodeWork};
@@ -42,7 +40,7 @@ fn install_dispatch_placeholder<'a>(
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> Result<(), KError> {
-    use crate::dispatch::kfunction::NodeId;
+    use crate::dispatch::NodeId;
     let key = expr.untyped_key();
     // Placeholder installs land in the dispatching scope, not the scope the candidate
     // was found in — placeholders track dispatch-time intent local to the call site.
@@ -536,8 +534,7 @@ mod tests {
     //! End-to-end coverage for the §1/§7/§8 dispatch-time placeholder routing in
     //! `run_dispatch` (see design/execution-model.md).
     use crate::dispatch::builtins::default_scope;
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
     use crate::execute::scheduler::Scheduler;
     use crate::parse::expression_tree::parse;
 

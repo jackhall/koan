@@ -1,8 +1,7 @@
 //! Module-system stage 2: `ScopeResolver`, signature-bound parameters, functor lifting.
 
 use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::dispatch::runtime::RuntimeArena;
-use crate::dispatch::values::KObject;
+use crate::dispatch::{KObject, RuntimeArena};
 
 /// Verify that `LET MyList = (LIST_OF Number)` binds a `TypeExprValue` carrying the
 /// surface `List` form. The bound value can then be lowered to `KType::List(Number)`
@@ -36,7 +35,8 @@ fn list_of_let_binding_is_type_expr_value() {
 /// already does the right thing once the binding is present.
 #[test]
 fn scope_resolver_lowers_type_expr_value_binding() {
-    use crate::dispatch::types::{KType, ScopeResolver, TypeResolver};
+    use crate::dispatch::KType;
+    use crate::dispatch::types::{ScopeResolver, TypeResolver};
     use crate::parse::kexpression::{TypeExpr, TypeParams};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
@@ -58,7 +58,7 @@ fn scope_resolver_lowers_type_expr_value_binding() {
 /// path that drives functor dispatch.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
-    use crate::dispatch::types::{Argument, KType, SignatureElement};
+    use crate::dispatch::{Argument, KType, SignatureElement};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     // Two batches: SIG resolves to a `KSignature` binding (its Combine finalizes)

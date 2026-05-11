@@ -1,13 +1,10 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use crate::dispatch::runtime::{CallArena, RuntimeArena};
-use crate::dispatch::runtime::{Frame, KError, KErrorKind};
-use crate::dispatch::kfunction::{
-    ArgumentBundle, Body, BodyResult, CombineFinish, KFunction, NodeId, SchedulerHandle,
+use crate::dispatch::{
+    ArgumentBundle, Body, BodyResult, CallArena, CombineFinish, Frame, KError, KErrorKind,
+    KFunction, KObject, NodeId, RuntimeArena, Scope, SchedulerHandle,
 };
-use crate::dispatch::values::KObject;
-use crate::dispatch::runtime::Scope;
 use crate::parse::kexpression::{ExpressionPart, KExpression};
 
 use super::lift::lift_kobject;
@@ -476,7 +473,7 @@ impl<'a> KFunction<'a> {
 pub(crate) fn substitute_params<'a>(
     expr: KExpression<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::runtime::RuntimeArena,
+    arena: &'a crate::dispatch::RuntimeArena,
 ) -> KExpression<'a> {
     KExpression {
         parts: expr
@@ -490,7 +487,7 @@ pub(crate) fn substitute_params<'a>(
 fn substitute_part<'a>(
     part: ExpressionPart<'a>,
     bundle: &ArgumentBundle<'a>,
-    arena: &'a crate::dispatch::runtime::RuntimeArena,
+    arena: &'a crate::dispatch::RuntimeArena,
 ) -> ExpressionPart<'a> {
     match part {
         ExpressionPart::Identifier(name) => match bundle.get(&name) {
@@ -527,7 +524,7 @@ fn substitute_part<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::runtime::RuntimeArena;
+    use crate::dispatch::RuntimeArena;
     use crate::dispatch::builtins::default_scope;
     use crate::parse::kexpression::{ExpressionPart, KExpression, KLiteral};
 
@@ -751,7 +748,7 @@ mod tests {
         // a finish closure that concatenates their string renderings into a KString.
         // Pins the contract that Combine waits on every dep before invoking finish and
         // that finish-returned BodyResult::Value lands in the slot's result.
-        use crate::dispatch::kfunction::{BodyResult, CombineFinish};
+        use crate::dispatch::{BodyResult, CombineFinish};
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();
@@ -760,14 +757,14 @@ mod tests {
         let finish: CombineFinish = Box::new(|scope, _sched, results| {
             let a = match results[0] {
                 KObject::Number(n) => *n,
-                _ => return BodyResult::Err(crate::dispatch::runtime::KError::new(
-                    crate::dispatch::runtime::KErrorKind::ShapeError("a not number".into()),
+                _ => return BodyResult::Err(crate::dispatch::KError::new(
+                    crate::dispatch::KErrorKind::ShapeError("a not number".into()),
                 )),
             };
             let b = match results[1] {
                 KObject::Number(n) => *n,
-                _ => return BodyResult::Err(crate::dispatch::runtime::KError::new(
-                    crate::dispatch::runtime::KErrorKind::ShapeError("b not number".into()),
+                _ => return BodyResult::Err(crate::dispatch::KError::new(
+                    crate::dispatch::KErrorKind::ShapeError("b not number".into()),
                 )),
             };
             let allocated = scope.arena.alloc_object(KObject::KString(format!("{a}+{b}")));
@@ -784,8 +781,7 @@ mod tests {
         // Value, one Err. Pins the contract that finish does not run when any dep
         // errored, and that the propagated error carries a "<combine>" frame matching
         // run_bind's "<bind>" convention.
-        use crate::dispatch::kfunction::{BodyResult, CombineFinish};
-        use crate::dispatch::runtime::{KError, KErrorKind};
+        use crate::dispatch::{BodyResult, CombineFinish, KError, KErrorKind};
         use std::cell::Cell;
         use std::rc::Rc;
         let arena = RuntimeArena::new();
@@ -836,15 +832,14 @@ mod tests {
         // Combine resolves to a value, and the builtin's slot ends up with the same
         // terminal as the Combine. Pins the binder-body wrap-up shape MODULE / SIG use.
         use crate::dispatch::builtins::{default_scope, register_builtin};
-        use crate::dispatch::kfunction::{BodyResult, CombineFinish};
-        use crate::dispatch::types::{ExpressionSignature, KType, SignatureElement};
+        use crate::dispatch::{BodyResult, CombineFinish, ExpressionSignature, KType, SignatureElement};
         use crate::parse::kexpression::ExpressionPart;
 
         // Builtin "DEFERTEST": no args; schedules a Combine over zero deps whose finish
         // returns a known KString, then returns `BodyResult::DeferTo(combine_id)`.
         fn body<'a>(
             scope: &'a Scope<'a>,
-            sched: &mut dyn crate::dispatch::kfunction::SchedulerHandle<'a>,
+            sched: &mut dyn crate::dispatch::SchedulerHandle<'a>,
             _bundle: ArgumentBundle<'a>,
         ) -> BodyResult<'a> {
             let finish: CombineFinish<'a> = Box::new(|scope, _sched, _results| {

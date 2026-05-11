@@ -1,10 +1,6 @@
 use std::rc::Rc;
 
-use crate::dispatch::runtime::CallArena;
-use crate::dispatch::runtime::KError;
-use crate::dispatch::kfunction::{CombineFinish, KFunction, NodeId};
-use crate::dispatch::values::KObject;
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{CallArena, CombineFinish, KError, KFunction, KObject, NodeId, Scope};
 use crate::parse::kexpression::KExpression;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,

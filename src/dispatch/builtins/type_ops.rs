@@ -16,10 +16,11 @@
 //! rather than a `KType`. Consumers that need a concrete `KType` lower the structured value
 //! via `KType::from_type_expr` at the point they need to dispatch on it.
 
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::runtime::{KError, KErrorKind, Scope};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::{resolve_module, KObject};
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Scope, SchedulerHandle, SignatureElement,
+};
+use crate::dispatch::values::resolve_module;
 use crate::parse::kexpression::{TypeExpr, TypeParams};
 
 use super::{err, register_builtin};
@@ -240,9 +241,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-    use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::types::{KType, NoopResolver};
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KObject, KType, RuntimeArena};
+    use crate::dispatch::types::NoopResolver;
     use crate::execute::scheduler::Scheduler;
 
     /// `(LIST_OF Number)` dispatches and produces a `TypeExprValue` whose lowered `KType`

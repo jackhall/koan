@@ -7,8 +7,7 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::dispatch::runtime::{KError, RuntimeArena, Scope};
-use crate::dispatch::values::KObject;
+use crate::dispatch::{KError, KObject, RuntimeArena, Scope};
 use crate::execute::scheduler::Scheduler;
 use crate::parse::expression_tree::parse;
 use crate::parse::kexpression::KExpression;

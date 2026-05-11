@@ -1,7 +1,7 @@
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KType, Scope,
+    SchedulerHandle, SignatureElement,
+};
 
 use super::{err, register_builtin};
 
@@ -43,13 +43,12 @@ mod tests {
 
     use super::body;
     use crate::dispatch::builtins::test_support::run_root_bare;
-    use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{ArgumentBundle, BodyResult, KObject};
     use crate::execute::scheduler::Scheduler;
 
     #[test]
     fn value_pass_returns_literal() {
-        use crate::dispatch::runtime::RuntimeArena;
+        use crate::dispatch::RuntimeArena;
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         let mut sched = Scheduler::new();

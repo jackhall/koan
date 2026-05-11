@@ -10,8 +10,8 @@ use std::rc::Rc;
 
 use crate::parse::kexpression::{KExpression, TypeExpr, TypeParams};
 
-use super::runtime::{KError, KErrorKind};
-use super::values::KObject;
+use crate::dispatch::runtime::{KError, KErrorKind};
+use crate::dispatch::values::KObject;
 
 /// Name to resolved value, produced by `KFunction::bind` and consumed by the body.
 pub struct ArgumentBundle<'a> {

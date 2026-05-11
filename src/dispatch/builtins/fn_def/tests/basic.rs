@@ -1,9 +1,7 @@
 //! Basic FN registration, dispatch, and parameter substitution.
 
 use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::dispatch::runtime::RuntimeArena;
-use crate::dispatch::types::SignatureElement;
-use crate::dispatch::values::KObject;
+use crate::dispatch::{KObject, RuntimeArena, SignatureElement};
 
 use super::capture_program_output;
 

@@ -16,14 +16,15 @@
 //! off the Combine's terminal — the parent's `Foo` binding lands at Combine-finish time,
 //! not when MODULE's body returns to the dispatcher.
 
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, CombineFinish, SchedulerHandle};
-use crate::dispatch::runtime::{Frame, KError, KErrorKind, Scope};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
-use crate::dispatch::values::{KObject, Module};
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, CombineFinish, ExpressionSignature, Frame, KError,
+    KErrorKind, KObject, KType, Scope, SchedulerHandle, SignatureElement,
+};
+use crate::dispatch::values::Module;
 
 use crate::parse::kexpression::KExpression;
 
-use crate::dispatch::argument_bundle::{extract_bare_type_name, extract_kexpression};
+use crate::dispatch::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{err, register_builtin_with_pre_run};
 
 pub fn body<'a>(
@@ -120,8 +121,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::dispatch::runtime::{KErrorKind, RuntimeArena};
-    use crate::dispatch::values::KObject;
+    use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
 
     /// Smoke test for MODULE's pre_run extractor: structural extraction of the `Type(_)`
     /// token at `parts[1]`.

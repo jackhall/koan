@@ -1,8 +1,7 @@
-use crate::dispatch::runtime::{KError, KErrorKind};
-use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::dispatch::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
-use crate::dispatch::values::KObject;
-use crate::dispatch::runtime::Scope;
+use crate::dispatch::{
+    Argument, ArgumentBundle, BodyResult, ExpressionSignature, KError, KErrorKind, KObject, KType,
+    Parseable, Scope, SchedulerHandle, SignatureElement,
+};
 
 use super::{err, register_builtin};
 
@@ -78,11 +77,9 @@ mod tests {
 
     use super::body;
     use crate::dispatch::builtins::test_support::run_root_bare;
-    use crate::dispatch::runtime::RuntimeArena;
-    use crate::dispatch::runtime::{KError, KErrorKind};
-    use crate::dispatch::kfunction::{ArgumentBundle, BodyResult};
-    use crate::dispatch::values::KObject;
-    use crate::dispatch::runtime::Scope;
+    use crate::dispatch::{
+        ArgumentBundle, BodyResult, KError, KErrorKind, KObject, RuntimeArena, Scope,
+    };
     use crate::execute::scheduler::Scheduler;
 
     fn run_body<'a>(
