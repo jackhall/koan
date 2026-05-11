@@ -44,7 +44,7 @@ mod tests {
     use super::body;
     use crate::dispatch::builtins::test_support::run_root_bare;
     use crate::dispatch::{ArgumentBundle, BodyResult, KObject};
-    use crate::execute::scheduler::Scheduler;
+    use crate::execute::Scheduler;
 
     #[test]
     fn value_pass_returns_literal() {

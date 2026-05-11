@@ -40,7 +40,7 @@
       "Bash(git -C /var/home/jack/Code/koan show *)",
       "Bash(git -C /var/home/jack/Code/koan log *)"
     ],
-    "deny": [
+    "ask": [
       "Bash(find * -delete*)",
       "Bash(find * -exec*)",
       "Bash(find * -ok*)",

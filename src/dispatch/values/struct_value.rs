@@ -195,7 +195,7 @@ mod tests {
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::runtime::{KErrorKind, RuntimeArena, Scope};
     use crate::dispatch::values::KObject;
-    use crate::execute::scheduler::Scheduler;
+    use crate::execute::Scheduler;
     use crate::parse::{parse, KExpression};
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);

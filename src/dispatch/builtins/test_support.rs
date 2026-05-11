@@ -8,7 +8,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::dispatch::{KError, KObject, RuntimeArena, Scope};
-use crate::execute::scheduler::Scheduler;
+use crate::execute::Scheduler;
 use crate::parse::{parse, KExpression};
 
 use super::default_scope;

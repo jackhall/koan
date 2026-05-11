@@ -80,7 +80,7 @@ mod tests {
     use crate::dispatch::{
         ArgumentBundle, BodyResult, KError, KErrorKind, KObject, RuntimeArena, Scope,
     };
-    use crate::execute::scheduler::Scheduler;
+    use crate::execute::Scheduler;
 
     fn run_body<'a>(
         scope: &'a Scope<'a>,

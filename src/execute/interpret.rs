@@ -1,6 +1,6 @@
 use crate::dispatch::{KError, KErrorKind, RuntimeArena};
 use crate::dispatch::builtins::default_scope;
-use crate::execute::scheduler::Scheduler;
+use super::scheduler::Scheduler;
 use crate::parse::parse;
 
 /// Parse Koan source and run it. Each call constructs a fresh `RuntimeArena` and a per-run

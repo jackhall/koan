@@ -11,7 +11,7 @@ use std::rc::Rc;
 use koan::dispatch::builtins::default_scope;
 use koan::dispatch::runtime::{RuntimeArena, Scope};
 use koan::dispatch::values::KObject;
-use koan::execute::scheduler::Scheduler;
+use koan::execute::Scheduler;
 use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through

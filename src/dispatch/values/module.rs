@@ -219,7 +219,7 @@ mod tests {
     }
 
     /// Module-system stage 2 (functor slice). Minimal-shape mirror of
-    /// [`crate::execute::lift::lift_kobject`]'s `KModule` arm: build a `Module` whose
+    /// [`crate::execute`]'s internal `lift_kobject` `KModule` arm: build a `Module` whose
     /// `child_scope` lives in a `CallArena`, lift it against the dying frame, and assert
     /// the lifted result carries the arena anchor. Pins the unsafe site behind functor
     /// execution end-to-end.
@@ -229,7 +229,7 @@ mod tests {
         use crate::dispatch::runtime::{CallArena, RuntimeArena as RA};
         use crate::dispatch::types::{ExpressionSignature, KType, SignatureElement};
         use crate::dispatch::values::KObject;
-        use crate::execute::lift::lift_kobject_for_test;
+        use crate::execute::lift_kobject_for_test;
         use std::rc::Rc;
 
         let outer_arena = RuntimeArena::new();

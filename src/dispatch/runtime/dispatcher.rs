@@ -339,7 +339,7 @@ mod tests {
     use crate::dispatch::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
     use crate::dispatch::types::{Argument, ExpressionSignature, KType, SignatureElement};
     use crate::dispatch::values::KObject;
-    use crate::execute::scheduler::Scheduler;
+    use crate::execute::Scheduler;
 
     // Sentinel-returning bodies. Each produces a distinct `KString` so a test can tell which
     // overload won dispatch. Allocate the marker into the call's scope arena so it drops with

@@ -198,7 +198,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::dispatch::{KErrorKind, KObject, KType, RuntimeArena};
-    use crate::execute::scheduler::Scheduler;
+    use crate::execute::Scheduler;
     use crate::parse::parse;
 
     #[test]
@@ -478,7 +478,7 @@ mod tests {
     /// admissibility-only path is what's pinned here.)
     #[test]
     fn functor_rejects_unascribed_module_argument() {
-        use crate::execute::scheduler::Scheduler;
+        use crate::execute::Scheduler;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(

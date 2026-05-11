@@ -2,7 +2,7 @@
 
 use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
 use crate::dispatch::RuntimeArena;
-use crate::execute::scheduler::Scheduler;
+use crate::execute::Scheduler;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {

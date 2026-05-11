@@ -535,7 +535,7 @@ mod tests {
     //! `run_dispatch` (see design/execution-model.md).
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::{KErrorKind, KObject, RuntimeArena};
-    use crate::execute::scheduler::Scheduler;
+    use super::super::scheduler::Scheduler;
     use crate::parse::parse;
 
     fn parse_one(src: &str) -> crate::parse::KExpression<'static> {

@@ -3,7 +3,7 @@
 
 use crate::dispatch::builtins::test_support::{parse_one, run, run_root_silent};
 use crate::dispatch::RuntimeArena;
-use crate::execute::scheduler::Scheduler;
+use crate::execute::Scheduler;
 use crate::parse::parse;
 
 use super::capture_program_output;

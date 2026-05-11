@@ -96,7 +96,7 @@ mod tests {
     use crate::dispatch::builtins::default_scope;
     use crate::dispatch::builtins::test_support::run_root_bare;
     use crate::dispatch::{ArgumentBundle, BodyResult, KObject};
-    use crate::execute::scheduler::Scheduler;
+    use crate::execute::Scheduler;
     use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn pre_run_install_then_body_finalize_clears_placeholder() {
         use crate::dispatch::RuntimeArena;
-        use crate::execute::scheduler::Scheduler;
+        use crate::execute::Scheduler;
         use crate::dispatch::builtins::default_scope;
         use crate::parse::parse;
         let arena = RuntimeArena::new();

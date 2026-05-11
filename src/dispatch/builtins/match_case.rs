@@ -5,7 +5,7 @@ use crate::dispatch::{
     Argument, ArgumentBundle, BodyResult, CallArena, ExpressionSignature, KError, KErrorKind,
     KObject, KType, RuntimeArena, Scope, SchedulerHandle, SignatureElement,
 };
-use crate::execute::scheduler::substitute_params;
+use crate::execute::substitute_params;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 
 use crate::dispatch::kfunction::argument_bundle::extract_kexpression;

@@ -243,7 +243,7 @@ mod tests {
     use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
     use crate::dispatch::{KObject, KType, RuntimeArena};
     use crate::dispatch::types::NoopResolver;
-    use crate::execute::scheduler::Scheduler;
+    use crate::execute::Scheduler;
 
     /// `(LIST_OF Number)` dispatches and produces a `TypeExprValue` whose lowered `KType`
     /// is `List<Number>`. Round-trips the structured form through `from_type_expr`.

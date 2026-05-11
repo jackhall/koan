@@ -2,7 +2,7 @@
 
 use crate::dispatch::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::dispatch::{KErrorKind, KObject, KType, RuntimeArena};
-use crate::execute::scheduler::Scheduler;
+use crate::execute::Scheduler;
 use crate::parse::parse;
 
 /// `FN` parses the declared return type from the `-> Type` slot and stores it on the
