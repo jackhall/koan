@@ -18,9 +18,7 @@ impl<'a> Scheduler<'a> {
     /// the frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
         while let Some(idx) = self.queues.pop_next() {
-            let node = self.nodes[idx]
-                .take()
-                .expect("scheduler must not revisit a completed node");
+            let node = self.store.take_for_run(idx);
             let scope = node.scope;
             let work = node.work;
             let prev_frame = node.frame;
@@ -64,14 +62,12 @@ impl<'a> Scheduler<'a> {
                                         function: f.summarize(),
                                         expression: f.summarize(),
                                     });
-                                    self.results[idx] = Some(NodeOutput::Err(err));
-                                    self.notify_consumers(idx);
+                                    self.finalize(idx, NodeOutput::Err(err));
                                     continue;
                                 }
                             }
                             let lifted = dest.alloc_object(lifted_obj);
-                            self.results[idx] = Some(NodeOutput::Value(lifted));
-                            self.notify_consumers(idx);
+                            self.finalize(idx, NodeOutput::Value(lifted));
                             // `frame` drops here; if the lifted value cloned an Rc the
                             // arena lives on, otherwise it frees.
                         }
@@ -83,12 +79,10 @@ impl<'a> Scheduler<'a> {
                                 }),
                                 None => e,
                             };
-                            self.results[idx] = Some(NodeOutput::Err(with_frame));
-                            self.notify_consumers(idx);
+                            self.finalize(idx, NodeOutput::Err(with_frame));
                         }
                         (other, None) => {
-                            self.results[idx] = Some(other);
-                            self.notify_consumers(idx);
+                            self.finalize(idx, other);
                         }
                     }
                 }
@@ -101,8 +95,8 @@ impl<'a> Scheduler<'a> {
                             drop(prev_frame);
                             // SAFETY: `f.scope()` borrows from `f`, but `f` is owned by the
                             // slot once installed. The `&'a` we hand to the next iteration
-                            // is anchored to `self.nodes[idx]`'s storage, which lives until
-                            // the slot drops or its frame is replaced again.
+                            // is anchored to the slot's storage inside `NodeStore`, which
+                            // lives until the slot drops or its frame is replaced again.
                             let s: &'a Scope<'a> = unsafe {
                                 std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(f.scope())
                             };
@@ -111,7 +105,7 @@ impl<'a> Scheduler<'a> {
                         None => (scope, prev_frame),
                     };
                     let next_function = new_function.or(prev_function);
-                    self.nodes[idx] = Some(Node {
+                    self.store.reinstall(idx, Node {
                         work: new_work,
                         scope: next_scope,
                         frame: next_frame,
@@ -132,42 +126,46 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
-    /// Drain `notify_list[idx]` after a terminal write to `results[idx]`, decrementing each
-    /// consumer's `pending_deps` and routing zero-counter consumers via
-    /// [`WorkQueues::push_woken`].
+    /// Terminal write + notify-walk for slot `idx`. The single entry point for
+    /// landing a `NodeOutput` and waking parked consumers — pairs
+    /// `NodeStore::finalize` with `DepGraph::drain_notify` so the two halves
+    /// of the terminal step happen in one method body.
     ///
-    /// Invariant: every consumer here is parked with a non-zero counter. Freed slots are
-    /// scrubbed from every producer's `notify_list` before the producer drains (see the
+    /// Invariant: every consumer drained here is parked with a non-zero
+    /// counter. Freed slots are scrubbed from every producer's `notify_list`
+    /// before the producer drains (see the
     /// `freed_slot_does_not_appear_in_other_notify_lists` test).
-    pub(super) fn notify_consumers(&mut self, idx: usize) {
+    pub(in crate::runtime::machine::execute) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
+        self.store.finalize(idx, output);
         for consumer in self.deps.drain_notify(idx) {
             self.queues.push_woken(consumer);
         }
     }
 
     /// Reclaim slot `idx` and the sub-tree it owns. Walks `dep_edges` recursively but
-    /// recurses only into `DepEdge::Owned` entries, clearing `results` and pushing each
-    /// freed index onto `free_list`. `DepEdge::Notify` entries are dropped on the floor:
-    /// they point at sibling producers this slot merely parked on, and reclaiming a
-    /// consumer must not reach across a park edge into the producer's subtree.
+    /// recurses only into `DepEdge::Owned` entries (via `DepGraph::owned_children`),
+    /// invoking `NodeStore::free_one` per reclaimed index. `DepEdge::Notify` entries are
+    /// dropped on the floor: they point at sibling producers this slot merely parked on,
+    /// and reclaiming a consumer must not reach across a park edge into the producer's
+    /// subtree.
     ///
     /// Idempotent and safe to call on a still-live slot: the guards early-continue when
-    /// `nodes[idx]` is still `Some` or the slot was already reclaimed.
+    /// the slot is still live (`NodeStore::is_live`) or was already reclaimed
+    /// (`NodeStore::is_reclaimed` paired with `DepGraph::is_dep_edges_empty`).
     ///
     /// `&'a KObject` references handed out by `read` survive `free` because the underlying
-    /// value lives in an arena; clearing `results[idx]` only drops the enum wrapper.
+    /// value lives in an arena; clearing the slot's result only drops the enum wrapper.
     pub(in crate::runtime::machine::execute) fn free(&mut self, idx: usize) {
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
-            if self.nodes[i].is_some() { continue; }
-            if self.results[i].is_none() && self.deps.is_dep_edges_empty(i) {
+            if self.store.is_live(i) { continue; }
+            if self.store.is_reclaimed(i) && self.deps.is_dep_edges_empty(i) {
                 continue;
             }
             for child in self.deps.owned_children(i) {
                 stack.push(child.index());
             }
-            self.results[i] = None;
-            self.free_list.push(i);
+            self.store.free_one(i);
         }
     }
 }

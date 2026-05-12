@@ -69,21 +69,8 @@ impl<'a> Scheduler<'a> {
             .map(|e| e.node_id())
             .filter(|p| !self.is_result_ready(*p))
             .collect();
-        let idx = match self.free_list.pop() {
-            Some(i) => {
-                self.nodes[i] = Some(Node { work, scope, frame, function: None });
-                self.results[i] = None;
-                self.deps.reset_slot_deps(NodeId(i), owned_edges, &pending_producers);
-                i
-            }
-            None => {
-                let i = self.nodes.len();
-                self.nodes.push(Some(Node { work, scope, frame, function: None }));
-                self.results.push(None);
-                self.deps.extend_for_new_slot(NodeId(i), owned_edges, &pending_producers);
-                i
-            }
-        };
+        let idx = self.store.alloc_slot(Node { work, scope, frame, function: None });
+        self.deps.install_for_slot(NodeId(idx), owned_edges, &pending_producers);
         // Install before enqueueing: the queued slot's `run_dispatch` will idempotently
         // re-install. A failure here (e.g. `Rebind` collision) is surfaced later by
         // `install_dispatch_placeholder` rather than aborting `add`.

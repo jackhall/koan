@@ -9,11 +9,14 @@
 //! **Inv-A (wake-pending coherence).** For every consumer slot `c`,
 //! `pending_deps[c] == |{ p : c appears in notify_list[p] }|`. Every public
 //! method that mutates `notify_list[*]` or `pending_deps[*]` does so in a
-//! single atomic body — no method can desync one of those two fields without
-//! the other. The forbidden shape is a half-mutation method like
-//! `install_wake(p, c)` that pushes to `notify_list` and increments
-//! `pending_deps` without writing `dep_edges`; that would re-create the
-//! deferred-fixup gap the roadmap item exists to close.
+//! single atomic body — `install_for_slot` (recycle vs. extend, branching
+//! privately on `consumer.index() < notify_list.len()`), `add_owned_edge`,
+//! `add_park_edge`, `drain_notify`, `owned_children`, `clear_dep_edges`. No
+//! method can desync one of those two fields without the other. The
+//! forbidden shape is a half-mutation method like `install_wake(p, c)`
+//! that pushes to `notify_list` and increments `pending_deps` without
+//! writing `dep_edges`; that would re-create the deferred-fixup gap the
+//! roadmap item exists to close.
 //!
 //! **Inv-B (free-cascade source).** `dep_edges[c]` lists every Owned sub-slot
 //! `c` must cascade-reclaim. Park edges are tagged `Notify` and filtered out
@@ -95,39 +98,37 @@ impl DepGraph {
         }
     }
 
-    /// Atomic init of all three vectors when extending the node-space by one
-    /// slot. `pending_producers` is the subset of `owned_edges`'s `node_id()`s
+    /// Atomic init of all three vectors for a slot the caller has just
+    /// allocated via `NodeStore::alloc_slot`. Branches privately on whether
+    /// the slot is being recycled (`consumer.index() < notify_list.len()`,
+    /// existing entries are reset) or freshly extended (the tri-vector
+    /// length grows by one). The caller cannot tell the difference — same
+    /// atomic body either way.
+    ///
+    /// `pending_producers` is the subset of `owned_edges`'s `node_id()`s
     /// whose producers are not yet terminal; the caller pre-filters via
-    /// `Scheduler::is_result_ready` so `DepGraph` stays oblivious to results
-    /// storage (phase 3 can move results to `NodeStore` without touching this
-    /// surface). Returns the installed pending count so the caller can decide
-    /// enqueue routing.
-    pub(super) fn extend_for_new_slot(
+    /// `NodeStore::is_result_ready` so `DepGraph` stays oblivious to
+    /// results storage. Returns the installed pending count so the caller
+    /// can decide enqueue routing.
+    pub(super) fn install_for_slot(
         &mut self,
         consumer: NodeId,
         owned_edges: Vec<DepEdge>,
         pending_producers: &[NodeId],
     ) -> usize {
-        self.notify_list.push(Vec::new());
-        self.pending_deps.push(pending_producers.len());
-        self.dep_edges.push(owned_edges);
-        for p in pending_producers {
-            self.notify_list[p.index()].push(consumer.index());
+        if consumer.index() < self.notify_list.len() {
+            // Recycle path: rewrite existing indices.
+            self.notify_list[consumer.index()].clear();
+            self.pending_deps[consumer.index()] = pending_producers.len();
+            self.dep_edges[consumer.index()] = owned_edges;
+        } else {
+            // Extend path: push new entries. The index-space invariant
+            // (all three vectors share a length) means `consumer.index()`
+            // equals the current length here.
+            self.notify_list.push(Vec::new());
+            self.pending_deps.push(pending_producers.len());
+            self.dep_edges.push(owned_edges);
         }
-        pending_producers.len()
-    }
-
-    /// Atomic reset of all three vectors for a recycled slot. Same semantics
-    /// as `extend_for_new_slot` but writing into existing indices.
-    pub(super) fn reset_slot_deps(
-        &mut self,
-        consumer: NodeId,
-        owned_edges: Vec<DepEdge>,
-        pending_producers: &[NodeId],
-    ) -> usize {
-        self.notify_list[consumer.index()].clear();
-        self.pending_deps[consumer.index()] = pending_producers.len();
-        self.dep_edges[consumer.index()] = owned_edges;
         for p in pending_producers {
             self.notify_list[p.index()].push(consumer.index());
         }

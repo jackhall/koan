@@ -4,12 +4,14 @@ use crate::runtime::model::KObject;
 use crate::runtime::machine::{CallArena, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
 use crate::ast::KExpression;
 
-use super::nodes::{Node, NodeOutput, NodeWork};
+use super::nodes::NodeWork;
 use dep_graph::DepGraph;
+use node_store::NodeStore;
 use work_queues::WorkQueues;
 
 mod dep_graph;
 mod execute;
+mod node_store;
 mod submit;
 mod work_queues;
 #[cfg(test)]
@@ -32,8 +34,6 @@ mod tests;
 ///
 /// See design/execution-model.md and design/memory-model.md.
 pub struct Scheduler<'a> {
-    pub(super) nodes: Vec<Option<Node<'a>>>,
-    pub(super) results: Vec<Option<NodeOutput<'a>>>,
     /// Routing + priority wrapper over the `fresh` and `in_flight` bands. All push/pop
     /// sites go through [`WorkQueues`]'s five named entry points so the routing arm and
     /// drain priority are enforced by the type rather than restated at each call site.
@@ -45,10 +45,14 @@ pub struct Scheduler<'a> {
     /// keeps the three vectors in lockstep. See `dep_graph.rs` for the
     /// invariants and the small set of mutation entry points.
     pub(in crate::runtime::machine::execute) deps: DepGraph,
-    /// Reclaimed slot indices. `add()` pulls from here before extending the vecs, so
-    /// transient-node reclamation gives constant scheduler memory across tail-recursive
-    /// bodies.
-    pub(super) free_list: Vec<usize>,
+    /// Slot table — `nodes`, `results`, `free_list` bundled behind a surface
+    /// that keeps the three vectors in lockstep across `alloc_slot ->
+    /// take_for_run -> reinstall* -> finalize -> free_one`. See
+    /// `node_store.rs` for the invariants and the small set of mutation
+    /// entry points. Scope mirrors `deps` (`execute` rather than
+    /// `execute::scheduler`) so `run/finish.rs::run_lift` can call
+    /// `store.result_slot`.
+    pub(in crate::runtime::machine::execute) store: NodeStore<'a>,
     /// Frame Rc of the slot currently being executed. Read via `SchedulerHandle::current_frame`
     /// so frame-creating builtins (MATCH) can chain it onto their new frame; see
     /// [memory-model.md § Per-call-frame chaining](../../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames).
@@ -58,45 +62,31 @@ pub struct Scheduler<'a> {
 impl<'a> Scheduler<'a> {
     pub fn new() -> Self {
         Self {
-            nodes: Vec::new(),
-            results: Vec::new(),
             queues: WorkQueues::new(),
             deps: DepGraph::new(),
-            free_list: Vec::new(),
+            store: NodeStore::new(),
             active_frame: None,
         }
     }
 
-    pub fn len(&self) -> usize { self.nodes.len() }
-    pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
+    pub fn len(&self) -> usize { self.store.len() }
+    pub fn is_empty(&self) -> bool { self.store.is_empty() }
 
     /// True iff slot `id` holds a terminal result. An errored sub counts as ready — the
     /// parent short-circuits on it in `run_bind`/`run_combine`.
     pub(in crate::runtime::machine::execute) fn is_result_ready(&self, id: NodeId) -> bool {
-        matches!(
-            self.results.get(id.index()).and_then(|o| o.as_ref()),
-            Some(NodeOutput::Value(_)) | Some(NodeOutput::Err(_))
-        )
+        self.store.is_result_ready(id)
     }
 
     /// Retrieve the resolved result for a top-level dispatch. Only safe on IDs returned by
     /// `add_dispatch`; internal slots may have been eagerly freed by their parent.
     pub fn read_result(&self, id: NodeId) -> Result<&'a KObject<'a>, &KError> {
-        match self.results[id.index()]
-            .as_ref()
-            .expect("result must be ready by the time it's read")
-        {
-            NodeOutput::Value(v) => Ok(v),
-            NodeOutput::Err(e) => Err(e),
-        }
+        self.store.read_result(id)
     }
 
     /// Convenience wrapper for the value-only path: panics on `Err`.
     pub fn read(&self, id: NodeId) -> &'a KObject<'a> {
-        match self.read_result(id) {
-            Ok(v) => v,
-            Err(e) => panic!("read called on errored node: {e}"),
-        }
+        self.store.read(id)
     }
 }
 

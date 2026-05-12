@@ -60,9 +60,13 @@ The scheduler's edges point producer → consumer. Each slot carries a
 `Combine` / `Lift` consumer carries a `pending_deps: usize` counter of
 unresolved deps. When a slot writes a terminal `Value` or `Err`, the
 notify-walk drains its `notify_list`, decrements each consumer's
-`pending_deps`, and pushes any zero-counter consumer onto the run-set
-([`Scheduler::notify_consumers`](../src/runtime/machine/execute/scheduler.rs)). Consumers
-arrive on the run-set only when actually ready; there is no poll-and-requeue.
+`pending_deps`, and pushes any zero-counter consumer onto the run-set.
+The terminal write and notify-walk fire in a single
+[`Scheduler::finalize`](../src/runtime/machine/execute/scheduler/execute.rs)
+method body that pairs `NodeStore::finalize` with `DepGraph::drain_notify`,
+so the "every terminal write fires the notify" rule is type-enforced
+rather than restated at each call site. Consumers arrive on the run-set
+only when actually ready; there is no poll-and-requeue.
 
 The run-set has two priority bands managed by
 [`WorkQueues`](../src/runtime/machine/execute/scheduler/work_queues.rs). Internal
@@ -107,29 +111,42 @@ read its dep results and spliced them into `expr.parts` as `Future(value)`
 unreachable: a sub-Dispatch is owned by exactly one Bind / Combine, recorded
 in the consumer's `dep_edges` entry as a `DepEdge::Owned(NodeId)`.
 Free walks recursively, recycling each dep's own dep tree, and stops at any
-still-live slot via `nodes[i].is_some()` — so a free that dives into another
+still-live slot via `NodeStore::is_live` — so a free that dives into another
 in-flight user-fn call leaves that subtree for that call's own reclamation.
 
 The net effect: recursive bodies whose only persistent state is the call
 result run in O(1) scheduler memory across iterations, with the per-iteration
 fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
-Bookkeeping lives in a single
+Slot-table state lives in a
+[`NodeStore`](../src/runtime/machine/execute/scheduler/node_store.rs)
+sub-struct on `Scheduler` that owns three private vectors — `nodes:
+Vec<Option<Node<'a>>>` (active node payloads), `results:
+Vec<Option<NodeOutput<'a>>>` (terminal results), and `free_list: Vec<usize>`
+(recyclable indices) — and the slot lifecycle that moves each index through
+them: `alloc_slot → take_for_run → reinstall* → finalize → free_one`. Each
+transition is a single atomic mutator body, so the recycle-vs-extend choice,
+the take/reinstall pairing, the terminal write, and reclamation are each
+encapsulated; no call site outside `NodeStore` can grow `nodes` without
+`results` or land a `NodeOutput` without firing the notify-walk.
+Dependency bookkeeping lives alongside it in a single
 [`DepGraph`](../src/runtime/machine/execute/scheduler/dep_graph.rs) sub-struct
-on `Scheduler` that bundles three parallel vectors — `notify_list:
-Vec<Vec<NodeId>>` (each producer's dependent list), `pending_deps: Vec<usize>`
-(each consumer's unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>`
-(each slot's backward edges to producers it depends on, tagged `Owned` or
-`Notify`; the `Owned` arm carries the ownership tree the free walk follows,
-and the `Notify` arm carries park-only edges that the walk skips). The three
-vectors are kept private and mutated only through a small surface
-(`extend_for_new_slot`, `reset_slot_deps`, `add_owned_edge`, `add_park_edge`,
-`drain_notify`, `owned_children`, `clear_dep_edges`) so every change preserves
-the tri-vector invariant atomically — every forward edge in `notify_list[p]`
-has a matching backward entry in `dep_edges[c]` and contributes 1 to
-`pending_deps[c]`. The `free_list: Vec<usize>` carries indices whose
-`nodes`/`results`/`DepGraph` entries are cleared and ready for reuse. See
-also [memory-model.md § Performance notes](memory-model.md).
+that bundles three parallel vectors — `notify_list: Vec<Vec<NodeId>>` (each
+producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
+unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>` (each slot's
+backward edges to producers it depends on, tagged `Owned` or `Notify`; the
+`Owned` arm carries the ownership tree the free walk follows, and the
+`Notify` arm carries park-only edges that the walk skips). The three vectors
+are kept private and mutated only through a small surface
+(`install_for_slot`, `add_owned_edge`, `add_park_edge`, `drain_notify`,
+`owned_children`, `clear_dep_edges`) so every change preserves the tri-vector
+invariant atomically — every forward edge in `notify_list[p]` has a matching
+backward entry in `dep_edges[c]` and contributes 1 to `pending_deps[c]`.
+`Scheduler::add` orchestrates across the two sub-structs: `NodeStore::alloc_slot`
+picks the index (popping `free_list` or extending) and `DepGraph::install_for_slot`
+branches privately on whether the slot is recycled or freshly extended to
+write the dep entries in lockstep. See also
+[memory-model.md § Performance notes](memory-model.md).
 
 A known limitation: each top-level dispatch retains two persistent slots —
 the entry `Lift` slot returned to the user, and the `Bind` it lifts from
@@ -157,9 +174,9 @@ the scheduler resumes — same machinery, no new pass.
   cross-implicit equivalence checking.
 
 The intermediate representation is the **stalled DAG state** — the
-scheduler's `nodes` / `results` arrays at the free-execution fixed point,
-plus the identifiers of pegged nodes. Run-time consumes that state
-directly: skip parsing, supply the pegged inputs and effects, continue
+scheduler's `NodeStore` and `DepGraph` contents at the free-execution
+fixed point, plus the identifiers of pegged nodes. Run-time consumes that
+state directly: skip parsing, supply the pegged inputs and effects, continue
 running the scheduler.
 
 There is no separate type-checking phase preceding evaluation. Inference,

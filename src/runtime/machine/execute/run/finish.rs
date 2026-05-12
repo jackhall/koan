@@ -105,10 +105,7 @@ impl<'a> Scheduler<'a> {
     /// A `None` would mean the wake fired without a terminal write, which is impossible
     /// by construction.
     pub(in crate::runtime::machine::execute) fn run_lift(&self, from: NodeId) -> NodeOutput<'a> {
-        match self.results[from.index()]
-            .as_ref()
-            .expect("Lift only runs after notify wakes it from `from`'s terminal write")
-        {
+        match self.store.result_slot(from) {
             NodeOutput::Value(v) => NodeOutput::Value(v),
             NodeOutput::Err(e) => NodeOutput::Err(e.clone_for_propagation()),
         }

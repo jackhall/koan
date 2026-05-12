@@ -66,16 +66,23 @@ phase 1 (the two raw `queue` + `ready_set` fields on `Scheduler<'a>` collapsed
 into a single `queues: WorkQueues` sub-struct whose five named entry points —
 `pop_next`, `push_top_level`, `push_internal`, `push_internal_front`,
 `push_woken` — type-enforce the routing and priority rules that the call sites
-in `submit.rs` and `execute.rs` previously restated by hand), and scheduler
+in `submit.rs` and `execute.rs` previously restated by hand), scheduler
 refactor phase 2 (the three tri-vector dependency fields `notify_list` +
 `pending_deps` + `dep_edges` collapsed into a single `deps: DepGraph`
-sub-struct whose `add_owned_edge` / `add_park_edge` / `extend_for_new_slot`
-/ `reset_slot_deps` / `drain_notify` / `owned_children` surface keeps the
+sub-struct whose `add_owned_edge` / `add_park_edge` / `install_for_slot`
+/ `drain_notify` / `owned_children` surface keeps the
 three vectors in lockstep atomically — every forward edge in
 `notify_list[p]` has a matching backward entry in `dep_edges[c]` and
 contributes 1 to `pending_deps[c]`, so the deferred-fixup gap where
 `run_dispatch` / `defer_to_lift` pushed raw and relied on a later
-`register_slot_deps` call closes). The next
+`register_slot_deps` call closes), and scheduler refactor phase 3 (the
+slot-table fields `nodes` + `results` + `free_list` collapsed into a single
+`store: NodeStore<'a>` sub-struct whose `alloc_slot` / `take_for_run` /
+`reinstall` / `finalize` / `free_one` surface walks each slot through one
+lifecycle, so the index-space, run-window, terminal-write, and reclaim
+invariants are each a single atomic body and `Scheduler<'a>` is now four
+fields with three internal sub-structs each carrying a single tight
+invariant). The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -100,11 +107,6 @@ without first landing something else:
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
   ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
   stage 2's functor support so the `Wrap` slot can be higher-kinded.
-- [Scheduler refactor phase 3 — Extract `NodeStore`](roadmap/scheduler-3-nodestore.md) —
-  wrap `nodes` + `results` + `free_list` in a `NodeStore` sub-struct with the
-  slot lifecycle (`alloc_slot → take_for_run → reinstall → finalize → free_one`)
-  as named methods. `finalize` absorbs the terminal-write↔notify-walk pairing
-  so the "every terminal write fires the notify" rule becomes type-enforced.
 
 ### Module system
 
