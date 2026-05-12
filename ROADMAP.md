@@ -97,6 +97,12 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
+- [Crate module restructure — runtime grouping with hoisted AST](roadmap/crate-module-restructure-runtime-grouping.md)
+  — pure Rust-side rename: hoist `parse::kexpression` to `crate::ast`, group
+  `dispatch + execute + builtins` under `crate::runtime` (with a
+  `model` / `machine` / `builtins` split). Cuts the LOC-weighted fractal
+  complexity score from 126.43 to 89.54 (`tools/modgraph.py`); no language
+  surface or behavior changes.
 ## Open items
 
 ### Memory and runtime substrate

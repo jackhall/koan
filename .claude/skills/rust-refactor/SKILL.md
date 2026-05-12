@@ -10,7 +10,7 @@ Command-line workflow for Rust refactors in the koan repo. Four tools, in order 
 1. **`cargo build` / `cargo clippy`** — the compiler is the source of truth.
 2. **`cargo fix` / `cargo clippy --fix`** — auto-apply suggestions the compiler already knows about.
 3. **`ast-grep`** — pattern-based structural rewrites for things the compiler can't do alone (renames, moves, signature reshapes).
-4. **`cargo modules` + `tools/modgraph.py`** — score a proposed top-level module partition against the live dep graph before committing to a reshuffle.
+4. **`cargo modules` + `tools/modgraph.py`** — score a proposed top-level module partition against the live dep graph before committing to a reshuffle. Pair with **`tools/modgraph_rewrite.py`** to score a refactor (renamed layout) under `--fractal` without moving real files.
 
 Assumes `ast-grep`, `cargo clippy`, and `cargo modules` are on PATH.
 
@@ -146,6 +146,35 @@ Reports per-module index plus `Σ index·loc` and the LOC-normalized average.
 Each level's coupling index is weighted by the LOC under that node, so
 internal tangles in large modules count for more than the same tangle in a
 small one.
+
+### 9. Score a proposed *refactor* (renames the existing layout)
+
+`tools/modgraph.py --partition` only re-classifies edges at one level; it
+can't model the LOC-weighted fractal score after a real rename. Use
+`tools/modgraph_rewrite.py` to apply `OLD=NEW` module renames to the DOT
+graph and mirror `src/` to a parallel tree, then re-run `modgraph.py
+--fractal` against the rewritten pair.
+
+```sh
+python3 tools/modgraph_rewrite.py \
+    --edges /tmp/koan.dot \
+    --output-edges /tmp/koan_proposed.dot \
+    --output-src /tmp/koan_proposed_src \
+    --rename koan::parse::kexpression=koan::ast \
+    --rename koan::execute=koan::dispatch::execute
+
+python3 tools/modgraph.py --edges /tmp/koan_proposed.dot --fractal koan \
+                          --src-root /tmp/koan_proposed_src
+```
+
+Each `--rename OLD=NEW` rebinds module paths matching `OLD` or starting
+with `OLD::`; both DOT tokens and the mirrored `src/` filenames update.
+Renames apply against the original path only — chains (`A=B`, `B=C`)
+must be expressed as the final target. For long lists, use
+`--rename-file <path>` (one `OLD=NEW` per line, `#` for comments).
+
+The score before/after gap is what to optimize: a rename is worth doing
+only if `--fractal koan` drops by more than rounding noise.
 
 ## Pitfalls
 
