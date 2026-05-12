@@ -6,7 +6,7 @@ use crate::runtime::machine::{BodyResult, CombineFinish, Frame, NodeId, Scope};
 use crate::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::NodeWork;
-use super::super::scheduler::Scheduler;
+use super::Scheduler;
 
 /// One element of a list literal or one side of a dict-literal pair, captured by the
 /// `Combine` closure. `Static` carries an already-resolved value (e.g. a literal scalar);
@@ -36,7 +36,7 @@ impl<'a> Scheduler<'a> {
     /// `Dispatch`; bare identifiers and other already-resolved parts stay as captured
     /// `KObject` statics. The closure interleaves dep results with statics in source
     /// order to build the final `KObject::List`.
-    pub(in crate::runtime::machine::execute) fn schedule_list_literal(
+    pub(super) fn schedule_list_literal(
         &mut self,
         items: Vec<ExpressionPart<'a>>,
         scope: &'a Scope<'a>,
@@ -67,7 +67,7 @@ impl<'a> Scheduler<'a> {
     /// values). Identifier wrapping happens here, not at parse time, so the AST stays
     /// faithful to the source. The closure performs `KKey` conversion on each key —
     /// non-scalar keys produce `KErrorKind::ShapeError`.
-    pub(in crate::runtime::machine::execute) fn schedule_dict_literal(
+    pub(super) fn schedule_dict_literal(
         &mut self,
         pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
         scope: &'a Scope<'a>,

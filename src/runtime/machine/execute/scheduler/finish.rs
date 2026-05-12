@@ -3,10 +3,10 @@ use crate::runtime::machine::{BodyResult, CombineFinish, Frame, KError, KFuture,
 use crate::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
-use super::super::scheduler::Scheduler;
+use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
-    pub(in crate::runtime::machine::execute) fn run_bind(
+    pub(super) fn run_bind(
         &mut self,
         mut expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
@@ -58,7 +58,7 @@ impl<'a> Scheduler<'a> {
     /// using the same dispatch as `invoke_to_step`. Deps are eagerly freed on the
     /// success path; the error path leaves them in `dep_edges[idx]` for
     /// chain-free at slot drop.
-    pub(in crate::runtime::machine::execute) fn run_combine(
+    pub(super) fn run_combine(
         &mut self,
         deps: Vec<NodeId>,
         finish: CombineFinish<'a>,
@@ -104,7 +104,7 @@ impl<'a> Scheduler<'a> {
     /// Invariant: when notify-walk wakes a Lift, `results[from]` is `Some` (Value or Err).
     /// A `None` would mean the wake fired without a terminal write, which is impossible
     /// by construction.
-    pub(in crate::runtime::machine::execute) fn run_lift(&self, from: NodeId) -> NodeOutput<'a> {
+    pub(super) fn run_lift(&self, from: NodeId) -> NodeOutput<'a> {
         match self.store.result_slot(from) {
             NodeOutput::Value(v) => NodeOutput::Value(v),
             NodeOutput::Err(e) => NodeOutput::Err(e.clone_for_propagation()),
@@ -122,7 +122,7 @@ impl<'a> Scheduler<'a> {
     /// before returning the `Replace` — without that install, the Replace gate's
     /// `pending_count(idx)` read sees zero and re-enqueues the Lift before the
     /// producer runs.
-    pub(in crate::runtime::machine::execute) fn invoke_to_step(
+    pub(super) fn invoke_to_step(
         &mut self,
         future: KFuture<'a>,
         scope: &'a Scope<'a>,

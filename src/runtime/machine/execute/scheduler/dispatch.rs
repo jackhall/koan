@@ -3,7 +3,7 @@ use crate::runtime::machine::{Frame, KError, NodeId, Resolution, Scope};
 use crate::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
-use super::super::scheduler::Scheduler;
+use super::Scheduler;
 
 /// Idempotent on a replay-park re-dispatch. Errors with `Rebind` if `data` or
 /// `placeholders` already holds `name` and the existing entry doesn't match `idx`.
@@ -44,7 +44,7 @@ impl<'a> Scheduler<'a> {
     /// See [design/execution-model.md § Dispatch-time name placeholders](../../../../../design/execution-model.md#dispatch-time-name-placeholders)
     /// for the bare-name short-circuit, placeholder install, auto-wrap pass, and
     /// replay-park rules referenced below.
-    pub(in crate::runtime::machine::execute) fn run_dispatch(
+    pub(super) fn run_dispatch(
         &mut self,
         expr: KExpression<'a>,
         scope: &'a Scope<'a>,

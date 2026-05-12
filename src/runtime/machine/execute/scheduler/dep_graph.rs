@@ -40,14 +40,14 @@ use super::super::nodes::{NodeWork, work_deps};
 /// `Owned`, so the reclaim walk cannot transit through park edges into
 /// unrelated slot graphs).
 #[derive(Copy, Clone, Debug)]
-pub(in crate::runtime::machine::execute) enum DepEdge {
+pub(super) enum DepEdge {
     Owned(NodeId),
     Notify(NodeId),
 }
 
 impl DepEdge {
     /// Read the producer slot index regardless of edge kind.
-    pub(in crate::runtime::machine::execute) fn node_id(self) -> NodeId {
+    pub(super) fn node_id(self) -> NodeId {
         match self {
             DepEdge::Owned(id) | DepEdge::Notify(id) => id,
         }
@@ -69,7 +69,7 @@ pub(super) fn work_owned_edges<'a>(work: &NodeWork<'a>) -> Vec<DepEdge> {
 /// Tri-vector dependency state. All three vectors are 1:1 with `Scheduler::nodes`
 /// indices. Mutation is restricted to the small set of methods below; every
 /// method preserves Inv-A atomically (or is a read-only access).
-pub(in crate::runtime::machine::execute) struct DepGraph {
+pub(super) struct DepGraph {
     /// Forward edges (producer -> consumer slot indices). Cleared on `free`'s
     /// implicit drain (consumers are scrubbed before free; see Inv-C) so a
     /// reused slot doesn't inherit phantom edges.
@@ -138,7 +138,7 @@ impl DepGraph {
     /// Atomic +1 across all three vectors for a mid-run owned dep. Caller
     /// guarantees `producer` is not yet terminal at install time (see audit
     /// in the roadmap plan).
-    pub(in crate::runtime::machine::execute) fn add_owned_edge(
+    pub(super) fn add_owned_edge(
         &mut self,
         producer: NodeId,
         consumer: NodeId,
@@ -152,7 +152,7 @@ impl DepGraph {
     /// backward entry is `Notify(producer)` so `free` skips past it; the
     /// forward wake on `notify_list[producer]` is identical to an owned edge.
     /// Caller guarantees `producer` is not yet terminal.
-    pub(in crate::runtime::machine::execute) fn add_park_edge(
+    pub(super) fn add_park_edge(
         &mut self,
         producer: NodeId,
         consumer: NodeId,
@@ -193,7 +193,7 @@ impl DepGraph {
     /// Eager-free on the success path. Inv-C ensures `notify_list[idx]` is
     /// already drained by the time the caller hits this — the notify-walk
     /// runs before any consumer reclaims its deps.
-    pub(in crate::runtime::machine::execute) fn clear_dep_edges(&mut self, idx: usize) {
+    pub(super) fn clear_dep_edges(&mut self, idx: usize) {
         self.dep_edges[idx].clear();
     }
 

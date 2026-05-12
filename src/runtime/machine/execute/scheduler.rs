@@ -10,10 +10,15 @@ use node_store::NodeStore;
 use work_queues::WorkQueues;
 
 mod dep_graph;
+mod dispatch;
 mod execute;
+mod finish;
+mod literal;
 mod node_store;
 mod submit;
 mod work_queues;
+#[cfg(test)]
+mod run_tests;
 #[cfg(test)]
 mod tests;
 
@@ -44,19 +49,18 @@ pub struct Scheduler<'a> {
     /// backward Owned/Notify edges) bundled behind an enforced surface that
     /// keeps the three vectors in lockstep. See `dep_graph.rs` for the
     /// invariants and the small set of mutation entry points.
-    pub(in crate::runtime::machine::execute) deps: DepGraph,
+    pub(in crate::runtime::machine::execute::scheduler) deps: DepGraph,
     /// Slot table — `nodes`, `results`, `free_list` bundled behind a surface
     /// that keeps the three vectors in lockstep across `alloc_slot ->
     /// take_for_run -> reinstall* -> finalize -> free_one`. See
     /// `node_store.rs` for the invariants and the small set of mutation
-    /// entry points. Scope mirrors `deps` (`execute` rather than
-    /// `execute::scheduler`) so `run/finish.rs::run_lift` can call
-    /// `store.result_slot`.
-    pub(in crate::runtime::machine::execute) store: NodeStore<'a>,
+    /// entry points. Scope matches `deps` and `queues`; `scheduler/finish.rs::run_lift`
+    /// calls `store.result_slot` from a sibling submodule.
+    pub(in crate::runtime::machine::execute::scheduler) store: NodeStore<'a>,
     /// Frame Rc of the slot currently being executed. Read via `SchedulerHandle::current_frame`
     /// so frame-creating builtins (MATCH) can chain it onto their new frame; see
     /// [memory-model.md § Per-call-frame chaining](../../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames).
-    pub(super) active_frame: Option<Rc<CallArena>>,
+    pub(in crate::runtime::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
 }
 
 impl<'a> Scheduler<'a> {
@@ -74,7 +78,7 @@ impl<'a> Scheduler<'a> {
 
     /// True iff slot `id` holds a terminal result. An errored sub counts as ready — the
     /// parent short-circuits on it in `run_bind`/`run_combine`.
-    pub(in crate::runtime::machine::execute) fn is_result_ready(&self, id: NodeId) -> bool {
+    pub(in crate::runtime::machine::execute::scheduler) fn is_result_ready(&self, id: NodeId) -> bool {
         self.store.is_result_ready(id)
     }
 

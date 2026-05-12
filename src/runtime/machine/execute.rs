@@ -5,7 +5,7 @@
 //!
 //! - `interpret` — `interpret` / `interpret_with_writer` entry points used by `main.rs`.
 //! - `scheduler` — the `Scheduler` work-stealing dataflow engine.
-//! - `lift`, `nodes`, `run` — internal scheduler machinery.
+//! - `lift`, `nodes` — internal scheduler machinery.
 //!
 //! The `pub use` block below is the entire public surface: the [`Scheduler`], the
 //! [`interpret`]/[`interpret_with_writer`] entry points, and the test-only
@@ -17,7 +17,6 @@
 mod interpret;
 mod lift;
 mod nodes;
-mod run;
 mod scheduler;
 
 pub use interpret::{interpret, interpret_with_writer};

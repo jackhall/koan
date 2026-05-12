@@ -4,7 +4,7 @@
 use crate::runtime::builtins::default_scope;
 use crate::runtime::model::KObject;
 use crate::runtime::machine::{KErrorKind, RuntimeArena};
-use super::super::scheduler::Scheduler;
+use super::Scheduler;
 use crate::parse::parse;
 
 fn parse_one(src: &str) -> crate::ast::KExpression<'static> {

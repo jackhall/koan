@@ -40,7 +40,7 @@ use super::super::nodes::{Node, NodeOutput};
 /// index space; all mutation goes through the named methods below so the
 /// recycle/extend choice, take/reinstall pairing, terminal-write, and
 /// reclaim are each a single atomic body.
-pub(in crate::runtime::machine::execute) struct NodeStore<'a> {
+pub(super) struct NodeStore<'a> {
     /// Active node payloads. `Some` while a slot is live and not currently
     /// running; `None` between `take_for_run` and the matching
     /// `reinstall` / `finalize` / `free_one`.
@@ -170,10 +170,10 @@ impl<'a> NodeStore<'a> {
 
     /// Direct projection of the terminal result for `run_lift`. The
     /// `expect` here pins the invariant: Lift only runs after notify-walk
-    /// observes a terminal write on `from`. Scope mirrors `Scheduler::store`
-    /// (`execute` rather than `execute::scheduler`) so `run/finish.rs` can
-    /// reach it.
-    pub(in crate::runtime::machine::execute) fn result_slot(&self, from: NodeId) -> &NodeOutput<'a> {
+    /// observes a terminal write on `from`. `scheduler/finish.rs::run_lift`
+    /// reaches this via `pub(super)` because both files sit under
+    /// `scheduler::`.
+    pub(super) fn result_slot(&self, from: NodeId) -> &NodeOutput<'a> {
         self.results[from.index()]
             .as_ref()
             .expect("Lift only runs after notify wakes it from `from`'s terminal write")

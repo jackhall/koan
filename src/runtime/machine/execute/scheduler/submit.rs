@@ -47,7 +47,7 @@ impl<'a> Scheduler<'a> {
         self.add(NodeWork::Combine { deps, finish }, scope)
     }
 
-    pub(in crate::runtime::machine::execute) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
+    pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         let owned_edges = work_owned_edges(&work);
         let no_deps = owned_edges.is_empty();
         // Submission-time install lets a later sibling park on the placeholder before the

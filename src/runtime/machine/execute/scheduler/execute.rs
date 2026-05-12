@@ -1,4 +1,4 @@
-use crate::runtime::machine::{Frame, KError, KErrorKind, Scope};
+use crate::runtime::machine::{Frame, KError, KErrorKind, NodeId, Scope};
 
 use super::super::lift::lift_kobject;
 use super::super::nodes::{Node, NodeOutput, NodeStep, NodeWork};
@@ -135,7 +135,7 @@ impl<'a> Scheduler<'a> {
     /// counter. Freed slots are scrubbed from every producer's `notify_list`
     /// before the producer drains (see the
     /// `freed_slot_does_not_appear_in_other_notify_lists` test).
-    pub(in crate::runtime::machine::execute) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
+    pub(super) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
         self.store.finalize(idx, output);
         for consumer in self.deps.drain_notify(idx) {
             self.queues.push_woken(consumer);
@@ -155,7 +155,7 @@ impl<'a> Scheduler<'a> {
     ///
     /// `&'a KObject` references handed out by `read` survive `free` because the underlying
     /// value lives in an arena; clearing the slot's result only drops the enum wrapper.
-    pub(in crate::runtime::machine::execute) fn free(&mut self, idx: usize) {
+    pub(super) fn free(&mut self, idx: usize) {
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
             if self.store.is_live(i) { continue; }
@@ -166,6 +166,27 @@ impl<'a> Scheduler<'a> {
                 stack.push(child.index());
             }
             self.store.free_one(i);
+        }
+    }
+
+    /// Frame / function are left as `None` so the slot's existing per-call frame and
+    /// function label stay attached when the Lift writes its terminal.
+    ///
+    /// `bind_id` was just spawned by this slot's `run_dispatch`, so it lands in
+    /// `dep_edges[idx]` as `Owned`: the Lift owns its underlying Bind/Combine and
+    /// must cascade-free it. When a Dispatch slot first parked via replay-park and
+    /// then re-dispatched here, the resulting `dep_edges[idx]` is the mixed shape
+    /// `[Notify(producer), …, Owned(bind_id)]` — exactly the case `free`'s
+    /// `Owned`-only recursion handles correctly.
+    pub(super) fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'a> {
+        // `bind_id` was just spawned by this slot — fresh slot, terminal not yet
+        // computed, so the producer-not-terminal precondition for `add_owned_edge`
+        // holds. Atomic +1 across the three vectors closes the deferred-fixup gap.
+        self.deps.add_owned_edge(bind_id, NodeId(idx));
+        NodeStep::Replace {
+            work: NodeWork::Lift { from: bind_id },
+            frame: None,
+            function: None,
         }
     }
 }

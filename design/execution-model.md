@@ -206,7 +206,7 @@ and `register_function` remove their own placeholder before inserting into
 `data` / `functions`, so the two tables are mutually exclusive at any
 moment.
 
-The execute side — [`run_dispatch`](../src/runtime/machine/execute/run.rs) — handles the
+The execute side — [`run_dispatch`](../src/runtime/machine/execute/scheduler/dispatch.rs) — handles the
 park. A bare-name dispatch slot (`(some_var)`) hits the **bare-name
 short-circuit** that resolves the name directly: `Value` returns inline,
 `Placeholder` rewrites the slot's work to `Lift { from: producer_id }`
