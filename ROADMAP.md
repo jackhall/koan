@@ -102,6 +102,10 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
+- [Scheduler refactor phase 1 — Extract `WorkQueues`](roadmap/scheduler-1-workqueues.md)
+  — wrap `Scheduler`'s `queue` + `ready_set` fields in a `WorkQueues` sub-struct with
+  named push/pop methods that type-enforce the routing and priority rules. Lowest-risk
+  substrate for phases 2 and 3.
 
 ## Open items
 
@@ -112,6 +116,16 @@ without first landing something else:
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
   ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
   stage 2's functor support so the `Wrap` slot can be higher-kinded.
+- [Scheduler refactor phase 2 — Extract `DepGraph`](roadmap/scheduler-2-depgraph.md) —
+  wrap `notify_list` + `pending_deps` + `dep_edges` in a `DepGraph` sub-struct.
+  Two `add_*_edge` methods become the only edge-addition paths and close the
+  deferred-fixup gap where `run_dispatch` / `defer_to_lift` push raw and rely
+  on a later `register_slot_deps` call.
+- [Scheduler refactor phase 3 — Extract `NodeStore`](roadmap/scheduler-3-nodestore.md) —
+  wrap `nodes` + `results` + `free_list` in a `NodeStore` sub-struct with the
+  slot lifecycle (`alloc_slot → take_for_run → reinstall → finalize → free_one`)
+  as named methods. `finalize` absorbs the terminal-write↔notify-walk pairing
+  so the "every terminal write fires the notify" rule becomes type-enforced.
 
 ### Module system
 
