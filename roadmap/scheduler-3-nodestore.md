@@ -148,11 +148,6 @@ open-coded:
   is `let woken = self.store.finalize(idx, output); for c in
   self.deps.drain_notify(idx) { self.queues.push_woken(c) }` — designing
   `NodeStore::finalize` before `DepGraph`'s API is fixed risks churn.
-- [Scheduler refactor phase 1 — Extract `WorkQueues`](scheduler-1-workqueues.md) —
-  `Scheduler::finalize` calls `self.queues.push_woken(_)` directly, so
-  the queue wrapper must exist before this phase lands. (Transitive
-  through phase 2; named explicitly because the dependency is direct in
-  this phase's orchestration code.)
 
 **Unblocks:** none on the language roadmap. The partitioning this
 phase lands is plausibly useful substrate for the JIT-snapshot

@@ -5,26 +5,19 @@ use super::super::nodes::{DepEdge, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
-    /// Drain pending work in two priority bands: `ready_set` (internal slots whose deps
-    /// have all produced) feeds first, then the FIFO `queue` (top-level dispatches).
+    /// Drain pending work via [`WorkQueues::pop_next`]: in-flight slots feed first,
+    /// then fresh top-level dispatches in submission order.
     ///
-    /// `NodeStep::Replace` is the tail-call path: the slot's work is rewritten in place
-    /// and re-enqueued at the front of `ready_set`. `Replace { frame: Some(f) }` installs
-    /// `f` on the slot and drops the previous frame; the new frame's scope becomes the
-    /// slot's scope and its arena owns the per-call allocations.
+    /// `NodeStep::Replace` is the tail-call path: the slot's work is rewritten in place and
+    /// re-enqueued via [`WorkQueues::push_after_replace`]. `Replace { frame: Some(f) }`
+    /// installs `f` on the slot and drops the previous frame; the new frame's scope
+    /// becomes the slot's scope and its arena owns the per-call allocations.
     ///
     /// On `Done` with a frame: the return `Value` references memory in the per-call arena
     /// that's about to drop, so it must be lifted into the captured scope's arena before
     /// the frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
-        loop {
-            let idx = match self.ready_set.pop_front() {
-                Some(i) => i,
-                None => match self.queue.pop_front() {
-                    Some(i) => i,
-                    None => break,
-                },
-            };
+        while let Some(idx) = self.queues.pop_next() {
             let node = self.nodes[idx]
                 .take()
                 .expect("scheduler must not revisit a completed node");
@@ -126,7 +119,7 @@ impl<'a> Scheduler<'a> {
                     });
                     let pending = self.register_slot_deps(idx);
                     if pending == 0 {
-                        self.ready_set.push_front(idx);
+                        self.queues.push_after_replace(idx);
                     }
                 }
             }
@@ -135,7 +128,8 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Drain `notify_list[idx]` after a terminal write to `results[idx]`, decrementing each
-    /// consumer's `pending_deps` and pushing zero-counter consumers onto `ready_set`.
+    /// consumer's `pending_deps` and routing zero-counter consumers via
+    /// [`WorkQueues::push_woken`].
     ///
     /// Invariant: every consumer here is parked with a non-zero counter. Freed slots are
     /// scrubbed from every producer's `notify_list` before the producer drains (see the
@@ -145,7 +139,7 @@ impl<'a> Scheduler<'a> {
         for consumer in notifees {
             self.pending_deps[consumer] -= 1;
             if self.pending_deps[consumer] == 0 {
-                self.ready_set.push_back(consumer);
+                self.queues.push_woken(consumer);
             }
         }
     }

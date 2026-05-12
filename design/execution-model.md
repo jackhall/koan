@@ -64,11 +64,17 @@ notify-walk drains its `notify_list`, decrements each consumer's
 ([`Scheduler::notify_consumers`](../src/runtime/machine/execute/scheduler.rs)). Consumers
 arrive on the run-set only when actually ready; there is no poll-and-requeue.
 
-The run-set has two priority bands. Internal work goes through `ready_set`
-(populated by the notify-walk and by ready-on-arrival nodes registered in
-`add()`). Top-level `add_dispatch` calls go through a separate FIFO `queue`
-so independent top-level expressions execute in submission order. The
-execute loop drains `ready_set` first, then `queue`.
+The run-set has two priority bands managed by
+[`WorkQueues`](../src/runtime/machine/execute/scheduler/work_queues.rs). Internal
+work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
+nodes registered in `add()` — routes through `WorkQueues::push_internal` /
+`push_internal_front` / `push_woken`. Top-level `add_dispatch` calls route
+through `WorkQueues::push_top_level` so independent top-level expressions
+execute in submission order. The execute loop drains via `WorkQueues::pop_next`,
+which yields internal slots ahead of top-level slots; the routing rule (which
+band a push lands in) and the priority rule (which band a pop drains first)
+are both enforced by the wrapper's method surface rather than restated at each
+call site.
 
 ## Tail-call optimization
 

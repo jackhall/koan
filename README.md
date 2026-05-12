@@ -191,7 +191,7 @@ src/
         │   └── scope.rs       Scope and KFuture
         ├── execute.rs
         └── execute/
-            ├── scheduler.rs   Scheduler struct, execute loop, KFunction::invoke bridge; submit/, tests under it
+            ├── scheduler.rs   Scheduler struct, execute loop, KFunction::invoke bridge; submit/, work_queues/, tests under it
             ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
             ├── run.rs         per-NodeWork-variant run_* methods (impl Scheduler); dispatch/, finish/, literal/ submodules
             ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries

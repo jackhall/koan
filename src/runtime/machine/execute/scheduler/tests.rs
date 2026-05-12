@@ -274,8 +274,9 @@ fn combine_short_circuits_on_dep_error() {
     let dep_err = sched.add(mk_dispatch(), scope);
     sched.nodes[dep_ok.index()] = None;
     sched.nodes[dep_err.index()] = None;
-    sched.queue.clear();
-    sched.ready_set.clear();
+    // Drain the two indices add() just enqueued so execute() doesn't revisit them.
+    let _ = sched.queues.pop_next();
+    let _ = sched.queues.pop_next();
     let value = arena.alloc_object(KObject::Number(99.0));
     sched.results[dep_ok.index()] = Some(NodeOutput::Value(value));
     sched.results[dep_err.index()] = Some(NodeOutput::Err(

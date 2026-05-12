@@ -86,13 +86,10 @@ impl<'a> Scheduler<'a> {
         }
         let pending = self.register_slot_deps(idx);
         if pending == 0 {
-            // Top-level dispatches (no active frame, no deps) take the FIFO `queue` for
-            // submission-order. Internal slots whose deps are already terminal take the
-            // internal-priority `ready_set`.
             if self.active_frame.is_none() && no_deps {
-                self.queue.push_back(idx);
+                self.queues.push_fresh(idx);
             } else {
-                self.ready_set.push_back(idx);
+                self.queues.push_in_flight_submit(idx);
             }
         }
         NodeId(idx)

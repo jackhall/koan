@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crate::runtime::model::KObject;
@@ -6,9 +5,11 @@ use crate::runtime::machine::{CallArena, CombineFinish, KError, NodeId, Scope, S
 use crate::ast::KExpression;
 
 use super::nodes::{DepEdge, Node, NodeOutput, NodeWork};
+use work_queues::WorkQueues;
 
 mod execute;
 mod submit;
+mod work_queues;
 #[cfg(test)]
 mod tests;
 
@@ -16,11 +17,12 @@ mod tests;
 /// top-level expression; running a `Dispatch` may add child `Dispatch`/`Bind`/`Combine`
 /// nodes, and builtin bodies holding `&mut dyn SchedulerHandle` can also add `Dispatch` nodes.
 ///
-/// The execute loop drains two queues: internal `ready_set` (populated by the notify-walk
-/// when a producer's terminal write decrements every dependent's `pending_deps` to zero) and
-/// the top-level FIFO `queue` (submission order for top-level dispatches). Cycles are
-/// statically prevented because every new node's `NodeId` is strictly greater than every
-/// node it can depend on.
+/// The execute loop drains work via [`WorkQueues::pop_next`], which prioritizes in-flight
+/// slots (sub-work spawned during another slot's run, plus consumers woken by the
+/// notify-walk when a producer's terminal write decrements `pending_deps` to zero) ahead
+/// of fresh top-level dispatches (submission order). Cycles are statically prevented
+/// because every new node's `NodeId` is strictly greater than every node it can depend
+/// on.
 ///
 /// Each node carries the scope it should run against (`Node::scope`). Sub-nodes default to
 /// the spawning node's scope; user-fn invocation installs a per-call child scope via
@@ -30,17 +32,18 @@ mod tests;
 pub struct Scheduler<'a> {
     pub(super) nodes: Vec<Option<Node<'a>>>,
     pub(super) results: Vec<Option<NodeOutput<'a>>>,
-    /// Top-level dispatches submitted via `add_dispatch`. Internal Bind/Combine slots
-    /// arrive on `ready_set` instead.
-    pub(super) queue: VecDeque<usize>,
-    /// Drained ahead of `queue` so internal work is consumed before the next top-level
-    /// submission is dispatched.
-    pub(super) ready_set: VecDeque<usize>,
+    /// Routing + priority wrapper over the `fresh` and `in_flight` bands. All push/pop
+    /// sites go through [`WorkQueues`]'s five named entry points so the routing arm and
+    /// drain priority are enforced by the type rather than restated at each call site.
+    /// Scoped to `scheduler/` (matches `WorkQueues`'s `pub(super)`); no caller outside
+    /// this module touches it.
+    pub(in crate::runtime::machine::execute::scheduler) queues: WorkQueues,
     /// 1:1 with `nodes`: forward edges (producer -> consumer slot indices). Cleared on
     /// `free()` so a reused slot doesn't inherit phantom edges.
     pub(super) notify_list: Vec<Vec<usize>>,
     /// 1:1 with `nodes`: count of deps whose terminal result hasn't yet been observed by
-    /// this slot's notify-decrement. Reaches zero -> slot pushed onto `ready_set`.
+    /// this slot's notify-decrement. Reaches zero -> slot routed via
+    /// [`WorkQueues::push_woken`].
     pub(super) pending_deps: Vec<usize>,
     /// 1:1 with `nodes`: backward edges (consumer -> producer slots), tagged by kind.
     /// `DepEdge::Owned` marks a sub-slot this slot is responsible for reclaiming
@@ -66,8 +69,7 @@ impl<'a> Scheduler<'a> {
         Self {
             nodes: Vec::new(),
             results: Vec::new(),
-            queue: VecDeque::new(),
-            ready_set: VecDeque::new(),
+            queues: WorkQueues::new(),
             notify_list: Vec::new(),
             pending_deps: Vec::new(),
             dep_edges: Vec::new(),

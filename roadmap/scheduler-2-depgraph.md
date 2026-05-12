@@ -130,12 +130,6 @@ a single function but is not the only path that could mutate
 ## Dependencies
 
 **Requires:**
-- [Scheduler refactor phase 1 — Extract `WorkQueues`](scheduler-1-workqueues.md) —
-  the `register_slot_deps` migration and the `free` edge-walk migration
-  both touch code that already routes through `WorkQueues::push_woken`
-  / `WorkQueues::pop_next`. Landing `WorkQueues` first means this phase's
-  high-risk edge-addition migration lands on a clean substrate, not on
-  top of an in-flight queue wrapper.
 
 **Unblocks:**
 - [Scheduler refactor phase 3 — Extract `NodeStore`](scheduler-3-nodestore.md) —
