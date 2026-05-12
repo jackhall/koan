@@ -6,9 +6,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::default_scope;
-use koan::dispatch::{KError, KErrorKind, KObject, RuntimeArena, Scope};
-use koan::execute::Scheduler;
+use koan::runtime::builtins::default_scope;
+use koan::runtime::model::KObject;
+use koan::runtime::machine::{KError, KErrorKind, RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);

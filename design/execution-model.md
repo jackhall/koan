@@ -9,15 +9,15 @@ source ──▶ parse ──▶ dispatch ──▶ execute
 
 Dispatch and execution are deliberately separate stages. **Dispatch** does
 name-resolution and signature-matching: given a `KExpression` and a `Scope`, it
-returns a [`KFuture`](../src/dispatch/runtime/scope.rs) — the resolved `&KFunction` plus
+returns a [`KFuture`](../src/runtime/machine/core/scope.rs) — the resolved `&KFunction` plus
 its `ArgumentBundle`, ready to run but not yet executed. **Execution** is what
-the [`Scheduler`](../src/execute/scheduler.rs) does: it owns a DAG of deferred
+the [`Scheduler`](../src/runtime/machine/execute/scheduler.rs) does: it owns a DAG of deferred
 work, decides when each `KFuture` runs, and hands its body the live scope.
 
 ## Dispatch as a scheduler node
 
 The scheduler models dispatch itself as a node type — `Dispatch(KExpression)`.
-[`schedule_expr`](../src/execute/interpret.rs) collapses to "add a `Dispatch`
+[`schedule_expr`](../src/runtime/machine/execute/interpret.rs) collapses to "add a `Dispatch`
 node per top-level expression"; the rest is dynamic. At run time a `Dispatch`
 walks its expression's parts, spawns sub-`Dispatch`/`Bind`/`Combine` nodes for
 nested sub-expressions, and a builtin body holding `&mut dyn SchedulerHandle`
@@ -25,7 +25,7 @@ can also add `Dispatch` nodes.
 
 `Combine` is the host-side dual of `Bind`: an N→1 combinator that waits on a
 fixed set of dep slots and then runs an arbitrary host closure
-([`CombineFinish`](../src/dispatch/kfunction.rs)) over their resolved values.
+([`CombineFinish`](../src/runtime/machine/kfunction.rs)) over their resolved values.
 List- and dict-literal planners use it; the construction logic — including
 already-resolved literal scalars that don't need a dep slot — lives in the
 closure's capture rather than in fixed-shape variants. Body-finalization for
@@ -46,7 +46,7 @@ BodyResult { Value(&KObject) | Tail(KExpression) | Err(KError) }
 
 When a body cannot produce its result inline — its expression has nested
 sub-expressions whose own evaluation hasn't run yet — the slot's work is
-rewritten to `Lift { from: NodeId }` (a [`NodeWork`](../src/execute/nodes.rs)
+rewritten to `Lift { from: NodeId }` (a [`NodeWork`](../src/runtime/machine/execute/nodes.rs)
 variant). The Lift shim parks on the spawned `Bind`'s notify-list, waits
 for that slot's terminal write, and copies the result into its own slot when
 it runs. The original slot keeps its frame and notify-list across the
@@ -61,7 +61,7 @@ The scheduler's edges point producer → consumer. Each slot carries a
 unresolved deps. When a slot writes a terminal `Value` or `Err`, the
 notify-walk drains its `notify_list`, decrements each consumer's
 `pending_deps`, and pushes any zero-counter consumer onto the run-set
-([`Scheduler::notify_consumers`](../src/execute/scheduler.rs)). Consumers
+([`Scheduler::notify_consumers`](../src/runtime/machine/execute/scheduler.rs)). Consumers
 arrive on the run-set only when actually ready; there is no poll-and-requeue.
 
 The run-set has two priority bands. Internal work goes through `ready_set`
@@ -72,7 +72,7 @@ execute loop drains `ready_set` first, then `queue`.
 
 ## Tail-call optimization
 
-[`BodyResult::Tail(KExpression)`](../src/dispatch/kfunction.rs) makes a tail
+[`BodyResult::Tail(KExpression)`](../src/runtime/machine/kfunction.rs) makes a tail
 return rewrite the **current scheduler slot's work** to a fresh
 `Dispatch(expr)` and re-run in place — no new node allocated. Both deferring
 builtins (`match_case`, `KFunction::invoke` for user-fns) are tail by
@@ -162,7 +162,7 @@ same property: a lookup whose target binder has dispatched but not yet
 executed parks on the producer instead of failing with `UnboundName`. The
 mechanism lives in two pieces.
 
-A new [`Scope::placeholders`](../src/dispatch/runtime/scope.rs) sidecar — a
+A new [`Scope::placeholders`](../src/runtime/machine/core/scope.rs) sidecar — a
 `RefCell<HashMap<String, NodeId>>` — sits parallel to `data`. When a binder
 dispatches, its `pre_run` hook (a per-`KFunction` extractor that pulls the
 to-be-bound name structurally out of the expression's parts) installs
@@ -177,7 +177,7 @@ and `register_function` remove their own placeholder before inserting into
 `data` / `functions`, so the two tables are mutually exclusive at any
 moment.
 
-The execute side — [`run_dispatch`](../src/execute/run.rs) — handles the
+The execute side — [`run_dispatch`](../src/runtime/machine/execute/run.rs) — handles the
 park. A bare-name dispatch slot (`(some_var)`) hits the **bare-name
 short-circuit** that resolves the name directly: `Value` returns inline,
 `Placeholder` rewrites the slot's work to `Lift { from: producer_id }`

@@ -8,9 +8,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::builtins::default_scope;
-use koan::dispatch::{KObject, RuntimeArena, Scope};
-use koan::execute::Scheduler;
+use koan::runtime::builtins::default_scope;
+use koan::runtime::model::KObject;
+use koan::runtime::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through
@@ -127,7 +127,7 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
 /// roadmap item.
 #[test]
 fn producer_error_propagates_to_parked_consumer() {
-    use koan::dispatch::KErrorKind;
+    use koan::runtime::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);

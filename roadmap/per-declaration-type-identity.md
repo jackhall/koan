@@ -1,6 +1,6 @@
 # Per-declaration type identity for structs and tagged unions
 
-**Problem.** [`KType`](../src/dispatch/types/ktype.rs) carries opaquely-ascribed
+**Problem.** [`KType`](../src/runtime/model/types/ktype.rs) carries opaquely-ascribed
 module abstract types as `KType::ModuleType { scope_id, name }`, so two
 opaque ascriptions of the same source module mint observably distinct types.
 Flat user-defined struct and tagged-union types do not get the same

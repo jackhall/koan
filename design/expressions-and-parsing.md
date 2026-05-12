@@ -31,7 +31,7 @@ system.
 
 ## `KExpression` shape
 
-Output is one [`KExpression`](../src/parse/kexpression.rs) per top-level line:
+Output is one [`KExpression`](../src/ast.rs) per top-level line:
 an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
 nested `Expression`, `ListLiteral`, `DictLiteral`, or typed `Literal`.
 
@@ -68,8 +68,8 @@ A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
-[`SchedulerHandle::add_dispatch`](../src/dispatch/runtime/scope.rs) submits a child
-node directly, while [`BodyResult::Tail`](../src/dispatch/kfunction.rs) — used
+[`SchedulerHandle::add_dispatch`](../src/runtime/machine/core/scope.rs) submits a child
+node directly, while [`BodyResult::Tail`](../src/runtime/machine/kfunction.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.
 
@@ -117,9 +117,9 @@ following `(` clears it by opening an `Expression` frame tagged with the head
 keyword. On frame-close, the body is wrapped in an inner `Expression` part and
 prepended with the head, producing the AST shape `(QUOTE <body>)` /
 `(EVAL <body>)` that the QUOTE / EVAL builtins dispatch on. The
-[QUOTE](../src/builtins/quote.rs) builtin's signature consumes a
+[QUOTE](../src/runtime/builtins/quote.rs) builtin's signature consumes a
 `KExpression`-typed slot and returns the captured AST as a value;
-[EVAL](../src/builtins/eval.rs)'s slot is `Any` so the scheduler
+[EVAL](../src/runtime/builtins/eval.rs)'s slot is `Any` so the scheduler
 eagerly evaluates the operand first, after which the body checks the result is
 a `KExpression` and tail-dispatches the inner AST in a fresh `CallArena`
 (mirroring `MATCH`'s per-call frame so free names resolve against the

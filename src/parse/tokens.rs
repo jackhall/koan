@@ -12,8 +12,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::dispatch::is_keyword_token;
-use crate::parse::kexpression::{ExpressionPart, KLiteral, TypeExpr};
+use crate::runtime::model::is_keyword_token;
+use crate::ast::{ExpressionPart, KLiteral, TypeExpr};
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
@@ -171,7 +171,7 @@ fn read_atom<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, Stri
 #[cfg(test)]
 mod tests {
     use super::classify_token;
-    use crate::parse::kexpression::{ExpressionPart, KLiteral};
+    use crate::ast::{ExpressionPart, KLiteral};
 
     fn describe(p: &ExpressionPart<'_>) -> String {
         match p {
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn ascription_compound_tokens_classify_as_keywords() {
-        use crate::dispatch::is_keyword_token;
+        use crate::runtime::model::is_keyword_token;
         assert!(is_keyword_token(":|"));
         assert!(is_keyword_token(":!"));
     }

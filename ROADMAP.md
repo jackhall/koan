@@ -81,7 +81,12 @@ Type-tokens symmetrically with Identifiers in both the §7 auto-wrap
 and §8 replay-park rails, so `LET T = Number` and `IntOrd :| OrderedSig`
 ride the same scheduler paths as `LET y = z` and let the parallel
 `Type, Type` ascription overload plus the Type-token branches of
-`resolve_module` / `resolve_signature` collapse out of the dispatcher).
+`resolve_module` / `resolve_signature` collapse out of the dispatcher),
+and the crate module restructure (parsed-expression types hoisted to a
+top-level `crate::ast`; `dispatch + execute + builtins` grouped under
+`crate::runtime` as `model` / `machine` / `builtins`, cutting the
+LOC-weighted module-graph fractal complexity score reported by
+`tools/modgraph.py` from 126.43 to 88.01).
 The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
@@ -97,12 +102,7 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
-- [Crate module restructure — runtime grouping with hoisted AST](roadmap/crate-module-restructure-runtime-grouping.md)
-  — pure Rust-side rename: hoist `parse::kexpression` to `crate::ast`, group
-  `dispatch + execute + builtins` under `crate::runtime` (with a
-  `model` / `machine` / `builtins` split). Cuts the LOC-weighted fractal
-  complexity score from 126.43 to 89.54 (`tools/modgraph.py`); no language
-  surface or behavior changes.
+
 ## Open items
 
 ### Memory and runtime substrate

@@ -2,7 +2,7 @@
 //! length-/identifier-/colon-/dup-name scaffolding for named-value pairs and typed
 //! field lists; the per-slot interpretation is supplied by a `parse_third` closure.
 
-use crate::parse::kexpression::{ExpressionPart, KExpression};
+use crate::ast::{ExpressionPart, KExpression};
 
 /// Walk `expr.parts` as repeated `<Identifier(name)> <Keyword(":")> <slot>` triples and
 /// return an ordered list of `(name, T)` pairs.

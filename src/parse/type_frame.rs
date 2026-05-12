@@ -9,7 +9,7 @@
 //! `>`-after-`-` rule in `build_tree` keeps `->` contiguous, so a stray `-` or `>` never
 //! reaches this frame as separate parts.
 
-use crate::parse::kexpression::{ExpressionPart, TypeExpr, TypeParams};
+use crate::ast::{ExpressionPart, TypeExpr, TypeParams};
 
 pub(super) struct TypeFrame<'a> {
     pub(super) name: String,

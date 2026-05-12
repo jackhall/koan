@@ -5,31 +5,31 @@ from the scheduler that drives value evaluation. Three concrete gaps:
 
 - *Deferred per-lookup elaboration.* First-class type values in the runtime
   are stored as
-  [`KObject::TypeExprValue(TypeExpr)`](../src/dispatch/values/kobject.rs) — the
-  parser's surface form, not the elaborated [`KType`](../src/dispatch/types/ktype.rs).
+  [`KObject::TypeExprValue(TypeExpr)`](../src/runtime/model/values/kobject.rs) — the
+  parser's surface form, not the elaborated [`KType`](../src/runtime/model/types/ktype.rs).
   Resolution is deferred until consultation:
-  [`ScopeResolver::resolve`](../src/dispatch/types/resolver.rs)
+  [`ScopeResolver::resolve`](../src/runtime/model/types/resolver.rs)
   re-elaborates the stored `TypeExpr` against the *current* scope on every
   lookup, using
-  [`KType::from_type_expr`](../src/dispatch/types/ktype_resolution.rs) with a
-  [`NoopResolver`](../src/dispatch/types/resolver.rs) on the recursive arm to
+  [`KType::from_type_expr`](../src/runtime/model/types/ktype_resolution.rs) with a
+  [`NoopResolver`](../src/runtime/model/types/resolver.rs) on the recursive arm to
   suppress further shadowing inside type parameters. The runtime carries two
   type representations in parallel (`TypeExpr` for stored values, `KType` for
   dispatch slots), and consumers throughout dispatch reach into `TypeExpr`
   for `.name` and `.params`
-  ([`attr.rs`](../src/builtins/attr.rs),
-  [`let_binding.rs`](../src/builtins/let_binding.rs),
-  [`argument_bundle.rs`](../src/dispatch/kfunction/argument_bundle.rs),
-  [`type_call.rs`](../src/builtins/type_call.rs),
-  [`type_ops.rs`](../src/builtins/type_ops.rs),
-  [`value_lookup.rs`](../src/builtins/value_lookup.rs),
-  [`struct_def.rs`](../src/builtins/struct_def.rs),
-  [`fn_def.rs`](../src/builtins/fn_def.rs),
-  [`module.rs`](../src/dispatch/values/module.rs)).
+  ([`attr.rs`](../src/runtime/builtins/attr.rs),
+  [`let_binding.rs`](../src/runtime/builtins/let_binding.rs),
+  [`argument_bundle.rs`](../src/runtime/machine/kfunction/argument_bundle.rs),
+  [`type_call.rs`](../src/runtime/builtins/type_call.rs),
+  [`type_ops.rs`](../src/runtime/builtins/type_ops.rs),
+  [`value_lookup.rs`](../src/runtime/builtins/value_lookup.rs),
+  [`struct_def.rs`](../src/runtime/builtins/struct_def.rs),
+  [`fn_def.rs`](../src/runtime/builtins/fn_def.rs),
+  [`module.rs`](../src/runtime/model/values/module.rs)).
 - *Synchronous FN-signature elaboration.* Parens-wrapped type expressions in
   FN parameter positions (`xs: (LIST_OF Number)`) aren't sub-dispatched:
   `parse_fn_param_list` in
-  [`builtins/fn_def.rs`](../src/builtins/fn_def.rs) only accepts
+  [`builtins/fn_def.rs`](../src/runtime/builtins/fn_def.rs) only accepts
   `ExpressionPart::Type(t)` triples and routes them through the synchronous
   `KType::from_type_expr`. FN-def's `ScopeResolver` does a synchronous
   `scope.lookup(name)` and returns `None` rather than parking on a
@@ -39,7 +39,7 @@ from the scheduler that drives value evaluation. Three concrete gaps:
   today's tests work around this by putting MODULE / SIG declarations in a
   prior batch. Value-name forward references already park on placeholders
   via the
-  [`Scope::placeholders`](../src/dispatch/runtime/scope.rs) sidecar and the
+  [`Scope::placeholders`](../src/runtime/machine/core/scope.rs) sidecar and the
   scheduler's `notify_list` / `pending_deps` machinery — the type-name path
   is the gap.
 - *Recursive type definitions.* `STRUCT Tree { children: List<Tree> }` and
@@ -82,7 +82,7 @@ never terminates).
   fired. Trivially cyclic aliases (`LET T = T`) surface as a structured
   error rather than a stack overflow.
 - *Diagnostics gain a `KType` renderer.* Type-value printing
-  ([`kobject.rs`](../src/dispatch/values/kobject.rs)) routes through a
+  ([`kobject.rs`](../src/runtime/model/values/kobject.rs)) routes through a
   `KType::render` instead of `TypeExpr::render`. Error messages that today
   print `TypeExpr` surface text print elaborated `KType` instead, with
   `Mu` / `RecursiveRef` rendered as the binder name (e.g. `Tree`) so
@@ -145,7 +145,7 @@ never terminates).
   position written `xs: (LIST_OF MyType)` schedules the parens-wrapped
   part as a sub-Dispatch; its `KObject::KTypeValue` result splices in via
   the standard `Bind` path. An `elaborate_type_expr` helper in
-  [`src/dispatch/types/resolver.rs`](../src/dispatch/types/resolver.rs)
+  [`src/dispatch/types/resolver.rs`](../src/runtime/model/types/resolver.rs)
   is the shared entry point.
 - *Bare type identifiers park on scheduler placeholders — decided.*
   FN-def's signature elaboration consults `Scope::placeholders` extended
