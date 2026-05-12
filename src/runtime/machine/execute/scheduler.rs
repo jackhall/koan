@@ -4,9 +4,11 @@ use crate::runtime::model::KObject;
 use crate::runtime::machine::{CallArena, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
 use crate::ast::KExpression;
 
-use super::nodes::{DepEdge, Node, NodeOutput, NodeWork};
+use super::nodes::{Node, NodeOutput, NodeWork};
+use dep_graph::DepGraph;
 use work_queues::WorkQueues;
 
+mod dep_graph;
 mod execute;
 mod submit;
 mod work_queues;
@@ -38,22 +40,11 @@ pub struct Scheduler<'a> {
     /// Scoped to `scheduler/` (matches `WorkQueues`'s `pub(super)`); no caller outside
     /// this module touches it.
     pub(in crate::runtime::machine::execute::scheduler) queues: WorkQueues,
-    /// 1:1 with `nodes`: forward edges (producer -> consumer slot indices). Cleared on
-    /// `free()` so a reused slot doesn't inherit phantom edges.
-    pub(super) notify_list: Vec<Vec<usize>>,
-    /// 1:1 with `nodes`: count of deps whose terminal result hasn't yet been observed by
-    /// this slot's notify-decrement. Reaches zero -> slot routed via
-    /// [`WorkQueues::push_woken`].
-    pub(super) pending_deps: Vec<usize>,
-    /// 1:1 with `nodes`: backward edges (consumer -> producer slots), tagged by kind.
-    /// `DepEdge::Owned` marks a sub-slot this slot is responsible for reclaiming
-    /// (Bind subs, Combine deps, Lift's `from`); `DepEdge::Notify` marks a sibling
-    /// producer this slot only parked on for wake notification (bare-name short-circuit,
-    /// replay-park). `notify_list` is the forward analogue;
-    /// `free()` walks this sidecar but recurses only into `Owned` so park edges can
-    /// never transit the reclaim walk into unrelated slots. Cleared by `run_bind` /
-    /// `run_combine` after they eagerly free their deps on the success path.
-    pub(super) dep_edges: Vec<Vec<DepEdge>>,
+    /// Tri-vector dependency state (forward notify edges, pending-deps counters,
+    /// backward Owned/Notify edges) bundled behind an enforced surface that
+    /// keeps the three vectors in lockstep. See `dep_graph.rs` for the
+    /// invariants and the small set of mutation entry points.
+    pub(in crate::runtime::machine::execute) deps: DepGraph,
     /// Reclaimed slot indices. `add()` pulls from here before extending the vecs, so
     /// transient-node reclamation gives constant scheduler memory across tail-recursive
     /// bodies.
@@ -70,9 +61,7 @@ impl<'a> Scheduler<'a> {
             nodes: Vec::new(),
             results: Vec::new(),
             queues: WorkQueues::new(),
-            notify_list: Vec::new(),
-            pending_deps: Vec::new(),
-            dep_edges: Vec::new(),
+            deps: DepGraph::new(),
             free_list: Vec::new(),
             active_frame: None,
         }

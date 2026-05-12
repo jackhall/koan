@@ -114,16 +114,22 @@ The net effect: recursive bodies whose only persistent state is the call
 result run in O(1) scheduler memory across iterations, with the per-iteration
 fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
-Bookkeeping lives in three `Scheduler` sidecars: `notify_list:
+Bookkeeping lives in a single
+[`DepGraph`](../src/runtime/machine/execute/scheduler/dep_graph.rs) sub-struct
+on `Scheduler` that bundles three parallel vectors — `notify_list:
 Vec<Vec<NodeId>>` (each producer's dependent list), `pending_deps: Vec<usize>`
-(each consumer's unresolved-dep counter), and `dep_edges:
-Vec<Vec<DepEdge>>` (each slot's backward edges to producers it depends on,
-tagged `Owned` or `Notify`; the `Owned` arm carries the ownership tree the
-free walk follows, and the `Notify` arm carries park-only edges that the
-walk skips). The `free_list: Vec<usize>` carries indices whose
-`nodes`/`results`/`notify_list`/`pending_deps`/`dep_edges` entries
-are cleared and ready for reuse. See also [memory-model.md § Performance
-notes](memory-model.md).
+(each consumer's unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>`
+(each slot's backward edges to producers it depends on, tagged `Owned` or
+`Notify`; the `Owned` arm carries the ownership tree the free walk follows,
+and the `Notify` arm carries park-only edges that the walk skips). The three
+vectors are kept private and mutated only through a small surface
+(`extend_for_new_slot`, `reset_slot_deps`, `add_owned_edge`, `add_park_edge`,
+`drain_notify`, `owned_children`, `clear_dep_edges`) so every change preserves
+the tri-vector invariant atomically — every forward edge in `notify_list[p]`
+has a matching backward entry in `dep_edges[c]` and contributes 1 to
+`pending_deps[c]`. The `free_list: Vec<usize>` carries indices whose
+`nodes`/`results`/`DepGraph` entries are cleared and ready for reuse. See
+also [memory-model.md § Performance notes](memory-model.md).
 
 A known limitation: each top-level dispatch retains two persistent slots —
 the entry `Lift` slot returned to the user, and the `Bind` it lifts from
@@ -209,13 +215,15 @@ the re-dispatch finds the binding in `data` and proceeds. If the producer
 already terminalized with an error, the consumer's replay-park surfaces
 it with a `<replay-park>` frame rather than parking on a dead slot.
 
-The bare-name short-circuit and replay-park push a
-`DepEdge::Notify(producer)` into the consumer's `dep_edges` entry — the
-same backward-edge sidecar that holds `DepEdge::Owned(child)` for sub-slots
-the consumer owns. `register_slot_deps` walks every entry to install the
-forward `notify_list` edge regardless of kind, but `free()` recurses only
-into `Owned` arms, so a consumer's reclamation cannot transit a park edge
-into a sibling producer's subtree. Same-scope rebind of a value name surfaces
+The bare-name short-circuit and replay-park call `DepGraph::add_park_edge`,
+which records a `DepEdge::Notify(producer)` in the consumer's `dep_edges` entry
+alongside the `DepEdge::Owned(child)` entries that mark sub-slots the consumer
+owns. `add_park_edge` and its `add_owned_edge` sibling each install the
+forward `notify_list[producer]` wake and the `pending_deps[consumer]` bump
+atomically with the backward record, so a park-edge install is one atomic
++1 across the three vectors. `free()` recurses only into `Owned` arms, so a
+consumer's reclamation cannot transit a park edge into a sibling producer's
+subtree. Same-scope rebind of a value name surfaces
 as `KErrorKind::Rebind`; an `FN` overload duplicating an existing exact
 signature surfaces as `KErrorKind::DuplicateOverload`. Type bindings share
 this placeholder mechanism: a type-binding site registers in

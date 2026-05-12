@@ -3,7 +3,8 @@ use crate::runtime::model::KObject;
 use crate::runtime::machine::{NodeId, RuntimeArena};
 use crate::ast::{ExpressionPart, KExpression, KLiteral};
 
-use super::super::nodes::{DepEdge, NodeOutput, NodeWork};
+use super::super::nodes::{NodeOutput, NodeWork};
+use super::dep_graph::DepEdge;
 use super::Scheduler;
 
 fn let_expr<'a>(name: &str, value: f64) -> KExpression<'a> {
@@ -85,9 +86,9 @@ fn free_reclaims_owned_subtree() {
     sched.results[s1] = Some(NodeOutput::Value(value));
     sched.results[s2] = Some(NodeOutput::Value(value));
     sched.results[s3] = Some(NodeOutput::Value(value));
-    sched.dep_edges[s0] = vec![DepEdge::Owned(NodeId(s1))];
-    sched.dep_edges[s1] = vec![DepEdge::Owned(NodeId(s2))];
-    sched.dep_edges[s2] = vec![DepEdge::Owned(NodeId(s3))];
+    sched.deps.set_dep_edges(s0, vec![DepEdge::Owned(NodeId(s1))]);
+    sched.deps.set_dep_edges(s1, vec![DepEdge::Owned(NodeId(s2))]);
+    sched.deps.set_dep_edges(s2, vec![DepEdge::Owned(NodeId(s3))]);
 
     sched.free(s1);
 
@@ -95,11 +96,12 @@ fn free_reclaims_owned_subtree() {
     assert!(sched.results[s1].is_none(), "s1 result cleared");
     assert!(sched.results[s2].is_none(), "s2 result cleared");
     assert!(sched.results[s3].is_none(), "s3 result cleared");
-    assert!(sched.dep_edges[s1].is_empty(), "s1 deps drained");
-    assert!(sched.dep_edges[s2].is_empty(), "s2 deps drained");
-    assert_eq!(sched.dep_edges[s0].len(), 1, "s0 edges untouched");
+    assert!(sched.deps.dep_edges_at(s1).is_empty(), "s1 deps drained");
+    assert!(sched.deps.dep_edges_at(s2).is_empty(), "s2 deps drained");
+    let s0_edges = sched.deps.dep_edges_at(s0);
+    assert_eq!(s0_edges.len(), 1, "s0 edges untouched");
     assert!(
-        matches!(sched.dep_edges[s0][0], DepEdge::Owned(id) if id.index() == s1),
+        matches!(s0_edges[0], DepEdge::Owned(id) if id.index() == s1),
         "s0 still owns s1",
     );
     let mut freed: Vec<usize> = sched.free_list.to_vec();
@@ -159,12 +161,12 @@ fn free_does_not_recurse_through_notify_edges() {
     // walk into it: a self-loop would never be installed in the real scheduler,
     // but it lets us assert the walk stopped at the Notify edge by checking the
     // list is still intact after free.
-    sched.dep_edges[s_owner] = vec![
+    sched.deps.set_dep_edges(s_owner, vec![
         DepEdge::Owned(NodeId(s_owned)),
         DepEdge::Notify(NodeId(s_sibling)),
-    ];
-    sched.dep_edges[s_owned] = Vec::new();
-    sched.dep_edges[s_sibling] = vec![DepEdge::Owned(NodeId(s_sibling))];
+    ]);
+    sched.deps.set_dep_edges(s_owned, Vec::new());
+    sched.deps.set_dep_edges(s_sibling, vec![DepEdge::Owned(NodeId(s_sibling))]);
 
     sched.free(s_owner);
 
@@ -178,7 +180,7 @@ fn free_does_not_recurse_through_notify_edges() {
         "sibling's result must survive free of a slot that only parked on it",
     );
     assert_eq!(
-        sched.dep_edges[s_sibling].len(),
+        sched.deps.dep_edges_at(s_sibling).len(),
         1,
         "sibling's dep_edges must survive (the free walk stopped at the Notify edge)",
     );
@@ -209,7 +211,7 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
 
     let freed: std::collections::HashSet<usize> =
         sched.free_list.iter().copied().collect();
-    for (producer_idx, consumers) in sched.notify_list.iter().enumerate() {
+    for (producer_idx, consumers) in sched.deps.notify_list_iter() {
         for &consumer in consumers {
             assert!(
                 !freed.contains(&consumer),

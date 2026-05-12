@@ -46,7 +46,7 @@ impl<'a> Scheduler<'a> {
     /// in `run_dispatch`, never on Bind /
     /// Combine, so clearing the list cannot drop a wake intent.
     fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
-        self.dep_edges[idx].clear();
+        self.deps.clear_dep_edges(idx);
         for d in dep_indices {
             self.free(d);
         }
@@ -120,10 +120,11 @@ impl<'a> Scheduler<'a> {
     /// `defer_to_lift`'s post-Bind shape but for body-driven combinator planning (MODULE
     /// and SIG body wrap-up via `add_combine`).
     ///
-    /// `idx` is the executing slot. Needed so the `DeferTo` arm can push `id` into
-    /// `dep_edges[idx]` (as `Owned`, via `defer_to_lift`) before returning the
-    /// `Replace` — without that push, `register_slot_deps` sees an empty dep list and
-    /// re-enqueues the Lift before the producer runs.
+    /// `idx` is the executing slot. Needed so the `DeferTo` arm can install an
+    /// `Owned` edge for `id` via `defer_to_lift` (which calls `DepGraph::add_owned_edge`)
+    /// before returning the `Replace` — without that install, the Replace gate's
+    /// `pending_count(idx)` read sees zero and re-enqueues the Lift before the
+    /// producer runs.
     pub(in crate::runtime::machine::execute) fn invoke_to_step(
         &mut self,
         future: KFuture<'a>,

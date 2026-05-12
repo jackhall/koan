@@ -75,45 +75,14 @@ pub(super) struct Node<'a> {
 
 /// `NodeId`s a node must read before running, or `None` if it has no read-deps.
 /// `Dispatch` returns `None` because it only spawns; it never reads results.
+///
+/// `DepEdge` and the `work_owned_edges` builder it feeds live in
+/// `scheduler/dep_graph.rs` alongside the tri-vector state they populate.
 pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
         NodeWork::Dispatch(_) => None,
         NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
         NodeWork::Combine { deps, .. } => Some(deps.clone()),
         NodeWork::Lift { from } => Some(vec![*from]),
-    }
-}
-
-/// A backward edge stored in `Scheduler::dep_edges[idx]`. `Owned` marks slots `idx` is
-/// responsible for reclaiming (sub-Dispatches a Bind spawned, the producer a Lift wraps);
-/// `Notify` marks producer slots `idx` only parked on for wake notification (the
-/// bare-name short-circuit and replay-park push these — the producer is a
-/// sibling slot `idx` does not own). `Scheduler::register_slot_deps` walks both kinds
-/// to install notify edges; `Scheduler::free` recurses only into `Owned`, so the
-/// reclaim walk cannot transit through park edges into unrelated slot graphs.
-#[derive(Copy, Clone, Debug)]
-pub(super) enum DepEdge {
-    Owned(NodeId),
-    Notify(NodeId),
-}
-
-impl DepEdge {
-    /// Read the producer slot index regardless of edge kind. Used by
-    /// `register_slot_deps`, which installs a wake edge for either variant.
-    pub(super) fn node_id(self) -> NodeId {
-        match self {
-            DepEdge::Owned(id) | DepEdge::Notify(id) => id,
-        }
-    }
-}
-
-/// Owned-edge sidecar populated at `add()` time: every dep `work_deps` reports comes
-/// from the work's own subs/deps/from field, so the spawning slot owns it. `Dispatch`
-/// produces an empty list. Notify edges (bare-name short-circuit, replay-park) are not
-/// produced here — they're pushed at the call site in `run_dispatch`.
-pub(super) fn work_owned_edges<'a>(work: &NodeWork<'a>) -> Vec<DepEdge> {
-    match work_deps(work) {
-        Some(ids) => ids.into_iter().map(DepEdge::Owned).collect(),
-        None => Vec::new(),
     }
 }

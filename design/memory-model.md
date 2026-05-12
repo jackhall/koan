@@ -132,24 +132,30 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 ## Performance notes
 
 The push/notify scheduler ([execution-model.md § Push/notify dependency
-edges](execution-model.md#pushnotify-dependency-edges)) carries three
-`Vec`-shaped sidecars on `Scheduler`: `notify_list: Vec<Vec<NodeId>>` (each
-producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
-unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>` (each slot's
-backward edges to producers, tagged `DepEdge::Owned(NodeId)` for sub-slots
-the consumer is responsible for reclaiming and `DepEdge::Notify(NodeId)`
-for sibling producers the consumer only parked on for wake notification).
-All three are 1:1 with `nodes`. A fourth sidecar, `free_list: Vec<usize>`,
-holds recyclable indices that `add()` pulls from before extending the vecs.
+edges](execution-model.md#pushnotify-dependency-edges)) carries a
+[`DepGraph`](../src/runtime/machine/execute/scheduler/dep_graph.rs) sub-struct
+on `Scheduler` that bundles three `Vec`-shaped fields: `notify_list:
+Vec<Vec<NodeId>>` (each producer's dependent list), `pending_deps: Vec<usize>`
+(each consumer's unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>`
+(each slot's backward edges to producers, tagged `DepEdge::Owned(NodeId)`
+for sub-slots the consumer is responsible for reclaiming and
+`DepEdge::Notify(NodeId)` for sibling producers the consumer only parked on
+for wake notification). All three are 1:1 with `nodes`; the fields are
+private and mutated only through `DepGraph`'s atomic-update methods, so the
+tri-vector invariant (every forward edge in `notify_list[p]` matched by a
+backward `dep_edges[c]` entry and a +1 in `pending_deps[c]`) is enforced by
+the surface rather than by convention. A separate sidecar on `Scheduler`,
+`free_list: Vec<usize>`, holds recyclable indices that `add()` pulls from
+before extending the vecs.
 
 Transient-node reclamation runs at the end of `run_bind` / `run_combine`:
 once a Bind has spliced its dep results into `expr.parts` (or a Combine's
 finish closure has produced its result), `Scheduler::free` walks the consumer's
-`dep_edges` entry recursively and recycles each owned sub-slot's indices.
-The walk recurses only into `DepEdge::Owned` arms; `Notify` arms are
-dropped on the floor so reclaiming a consumer cannot reach a sibling
-producer's subtree through a park edge. It skips any still-live slot via
-the `nodes[i].is_some()` guard, so a free that dives into another in-flight
+edges via `DepGraph::owned_children` and recycles each owned sub-slot's
+indices. The walk only yields `DepEdge::Owned` arms (`Notify` arms are filtered
+inside `DepGraph`), so reclaiming a consumer cannot reach a sibling producer's
+subtree through a park edge. It skips any still-live slot via the
+`nodes[i].is_some()` guard, so a free that dives into another in-flight
 user-fn call leaves that subtree for that call's own reclamation.
 
 ## Verification

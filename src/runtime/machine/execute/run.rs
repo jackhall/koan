@@ -10,7 +10,7 @@
 
 use crate::runtime::machine::NodeId;
 
-use super::nodes::{DepEdge, NodeStep, NodeWork};
+use super::nodes::{NodeStep, NodeWork};
 use super::scheduler::Scheduler;
 
 mod dispatch;
@@ -30,7 +30,10 @@ impl<'a> Scheduler<'a> {
     /// `[Notify(producer), …, Owned(bind_id)]` — exactly the case `free`'s
     /// `Owned`-only recursion handles correctly.
     pub(super) fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'a> {
-        self.dep_edges[idx].push(DepEdge::Owned(bind_id));
+        // `bind_id` was just spawned by this slot — fresh slot, terminal not yet
+        // computed, so the producer-not-terminal precondition for `add_owned_edge`
+        // holds. Atomic +1 across the three vectors closes the deferred-fixup gap.
+        self.deps.add_owned_edge(bind_id, NodeId(idx));
         NodeStep::Replace {
             work: NodeWork::Lift { from: bind_id },
             frame: None,

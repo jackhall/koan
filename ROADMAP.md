@@ -61,12 +61,21 @@ Type-tokens symmetrically with Identifiers in both the §7 auto-wrap and §8
 replay-park rails, so `LET T = Number` and `IntOrd :| OrderedSig` ride the
 same scheduler paths as `LET y = z` and let the parallel `Type, Type`
 ascription overload plus the Type-token branches of `resolve_module` /
-`resolve_signature` collapse out of the dispatcher), and scheduler refactor
+`resolve_signature` collapse out of the dispatcher), scheduler refactor
 phase 1 (the two raw `queue` + `ready_set` fields on `Scheduler<'a>` collapsed
 into a single `queues: WorkQueues` sub-struct whose five named entry points —
 `pop_next`, `push_top_level`, `push_internal`, `push_internal_front`,
 `push_woken` — type-enforce the routing and priority rules that the call sites
-in `submit.rs` and `execute.rs` previously restated by hand). The next
+in `submit.rs` and `execute.rs` previously restated by hand), and scheduler
+refactor phase 2 (the three tri-vector dependency fields `notify_list` +
+`pending_deps` + `dep_edges` collapsed into a single `deps: DepGraph`
+sub-struct whose `add_owned_edge` / `add_park_edge` / `extend_for_new_slot`
+/ `reset_slot_deps` / `drain_notify` / `owned_children` surface keeps the
+three vectors in lockstep atomically — every forward edge in
+`notify_list[p]` has a matching backward entry in `dep_edges[c]` and
+contributes 1 to `pending_deps[c]`, so the deferred-fixup gap where
+`run_dispatch` / `defer_to_lift` pushed raw and relied on a later
+`register_slot_deps` call closes). The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -81,11 +90,6 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
-- [Scheduler refactor phase 2 — Extract `DepGraph`](roadmap/scheduler-2-depgraph.md) —
-  wrap `notify_list` + `pending_deps` + `dep_edges` in a `DepGraph` sub-struct.
-  Two `add_*_edge` methods become the only edge-addition paths and close the
-  deferred-fixup gap where `run_dispatch` / `defer_to_lift` push raw and rely
-  on a later `register_slot_deps` call.
 
 ## Open items
 

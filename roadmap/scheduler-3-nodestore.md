@@ -97,12 +97,13 @@ open-coded:
   split.
 - *Cross-struct composition — decided.* Three methods stay on `Scheduler`
   and orchestrate calls into the sub-structs:
-  - `Scheduler::add` calls `store.alloc_slot(...)`, then
-    `deps.reset_slot_deps(idx, owned_edges)` for the recycle case (or
-    nothing extra for the extend case, since `alloc_slot` extends both
-    halves of the index space and `extend_for_new_slot` on `DepGraph`
-    extends the dep half), then `deps.register_slot_deps(idx)`, then
-    routes to `queues`.
+  - `Scheduler::add` pre-filters `owned_edges` to the not-yet-terminal
+    producers, calls `store.alloc_slot(...)`, then routes to either
+    `deps.reset_slot_deps(idx, owned_edges, &pending_producers)` (recycle
+    case) or `deps.extend_for_new_slot(idx, owned_edges, &pending_producers)`
+    (extend case); both `DepGraph` methods install the forward wakes and
+    pending count in one atomic body. Then routes to `queues` based on the
+    returned pending count.
   - `Scheduler::finalize(idx, output)` calls `store.finalize(idx,
     output)`, then `for c in self.deps.drain_notify(idx) {
     self.queues.push_woken(c) }`. The four `execute.rs` call sites
@@ -142,12 +143,6 @@ open-coded:
 ## Dependencies
 
 **Requires:**
-- [Scheduler refactor phase 2 — Extract `DepGraph`](scheduler-2-depgraph.md) —
-  `NodeStore::finalize`'s natural shape composes with
-  `DepGraph::drain_notify`. `Scheduler::finalize`'s orchestrating body
-  is `let woken = self.store.finalize(idx, output); for c in
-  self.deps.drain_notify(idx) { self.queues.push_woken(c) }` — designing
-  `NodeStore::finalize` before `DepGraph`'s API is fixed risks churn.
 
 **Unblocks:** none on the language roadmap. The partitioning this
 phase lands is plausibly useful substrate for the JIT-snapshot

@@ -1,7 +1,7 @@
 use crate::runtime::machine::{Frame, KError, KErrorKind, Scope};
 
 use super::super::lift::lift_kobject;
-use super::super::nodes::{DepEdge, Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
@@ -117,8 +117,13 @@ impl<'a> Scheduler<'a> {
                         frame: next_frame,
                         function: next_function,
                     });
-                    let pending = self.register_slot_deps(idx);
-                    if pending == 0 {
+                    // Replace return sites either install their own edges via
+                    // `add_owned_edge` / `add_park_edge` before returning (run_dispatch
+                    // bare-name and replay-park branches, defer_to_lift) or have nothing
+                    // to install (BodyResult::Tail rewrites to a Dispatch whose
+                    // work_owned_edges is empty, and reclaim_deps cleared dep_edges[idx]
+                    // beforehand). So pending_count(idx) is authoritative here.
+                    if self.deps.pending_count(idx) == 0 {
                         self.queues.push_after_replace(idx);
                     }
                 }
@@ -135,12 +140,8 @@ impl<'a> Scheduler<'a> {
     /// scrubbed from every producer's `notify_list` before the producer drains (see the
     /// `freed_slot_does_not_appear_in_other_notify_lists` test).
     pub(super) fn notify_consumers(&mut self, idx: usize) {
-        let notifees = std::mem::take(&mut self.notify_list[idx]);
-        for consumer in notifees {
-            self.pending_deps[consumer] -= 1;
-            if self.pending_deps[consumer] == 0 {
-                self.queues.push_woken(consumer);
-            }
+        for consumer in self.deps.drain_notify(idx) {
+            self.queues.push_woken(consumer);
         }
     }
 
@@ -159,14 +160,11 @@ impl<'a> Scheduler<'a> {
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
             if self.nodes[i].is_some() { continue; }
-            if self.results[i].is_none() && self.dep_edges[i].is_empty() {
+            if self.results[i].is_none() && self.deps.is_dep_edges_empty(i) {
                 continue;
             }
-            let edges = std::mem::take(&mut self.dep_edges[i]);
-            for edge in edges {
-                if let DepEdge::Owned(id) = edge {
-                    stack.push(id.index());
-                }
+            for child in self.deps.owned_children(i) {
+                stack.push(child.index());
             }
             self.results[i] = None;
             self.free_list.push(i);

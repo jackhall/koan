@@ -1,7 +1,8 @@
 use crate::runtime::machine::{CombineFinish, NodeId, Scope};
 use crate::ast::KExpression;
 
-use super::super::nodes::{work_owned_edges, Node, NodeWork};
+use super::super::nodes::{Node, NodeWork};
+use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
 /// Walk `scope` and its outer chain, looking for a function in `functions[expr.untyped_key()]`
@@ -59,22 +60,27 @@ impl<'a> Scheduler<'a> {
         // Inherit the active slot's frame so sub-slots spawned during a user-fn body's run
         // keep that body's per-call arena alive until they finalize.
         let frame = self.active_frame.clone();
+        // Pre-filter owned-edge producers to those not yet terminal — only those
+        // need a wake installed. Already-terminal producers are skipped because
+        // their notify-walk has already happened. `DepGraph` stays oblivious to
+        // results storage; the filter lives at the call site.
+        let pending_producers: Vec<NodeId> = owned_edges
+            .iter()
+            .map(|e| e.node_id())
+            .filter(|p| !self.is_result_ready(*p))
+            .collect();
         let idx = match self.free_list.pop() {
             Some(i) => {
                 self.nodes[i] = Some(Node { work, scope, frame, function: None });
                 self.results[i] = None;
-                self.notify_list[i].clear();
-                self.pending_deps[i] = 0;
-                self.dep_edges[i] = owned_edges;
+                self.deps.reset_slot_deps(NodeId(i), owned_edges, &pending_producers);
                 i
             }
             None => {
                 let i = self.nodes.len();
                 self.nodes.push(Some(Node { work, scope, frame, function: None }));
                 self.results.push(None);
-                self.notify_list.push(Vec::new());
-                self.pending_deps.push(0);
-                self.dep_edges.push(owned_edges);
+                self.deps.extend_for_new_slot(NodeId(i), owned_edges, &pending_producers);
                 i
             }
         };
@@ -84,8 +90,7 @@ impl<'a> Scheduler<'a> {
         if let Some(name) = placeholder_install {
             let _ = scope.install_placeholder(name, NodeId(idx));
         }
-        let pending = self.register_slot_deps(idx);
-        if pending == 0 {
+        if pending_producers.is_empty() {
             if self.active_frame.is_none() && no_deps {
                 self.queues.push_fresh(idx);
             } else {
@@ -93,25 +98,5 @@ impl<'a> Scheduler<'a> {
             }
         }
         NodeId(idx)
-    }
-
-    /// Register `idx` as a consumer on each not-yet-terminal dep recorded in
-    /// `dep_edges[idx]`, returning the count installed. Already-terminal producers
-    /// are skipped — their notify-walk has already happened. Both `Owned` and `Notify`
-    /// edges install a wake edge here: the kind distinction matters only at reclaim
-    /// time (`free` recurses only into `Owned`).
-    pub(super) fn register_slot_deps(&mut self, idx: usize) -> usize {
-        let mut pending = 0usize;
-        let n = self.dep_edges[idx].len();
-        for i in 0..n {
-            let dep = self.dep_edges[idx][i].node_id().index();
-            if self.is_result_ready(NodeId(dep)) {
-                continue;
-            }
-            self.notify_list[dep].push(idx);
-            pending += 1;
-        }
-        self.pending_deps[idx] = pending;
-        pending
     }
 }

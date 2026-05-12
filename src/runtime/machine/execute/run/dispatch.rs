@@ -2,7 +2,7 @@ use crate::runtime::model::Parseable;
 use crate::runtime::machine::{Frame, KError, NodeId, Resolution, Scope};
 use crate::ast::{ExpressionPart, KExpression};
 
-use super::super::nodes::{DepEdge, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 
 /// Idempotent on a replay-park re-dispatch. Errors with `Rebind` if `data` or
@@ -65,9 +65,13 @@ impl<'a> Scheduler<'a> {
                 Resolution::Placeholder(producer_id) => {
                     // Notify edge, not Owned: the producer is a sibling slot this Lift
                     // only parks on for a wake — it is not part of this slot's reclaim
-                    // subtree. Bookkeeping: `register_slot_deps` will still install the
-                    // forward wake on `notify_list[producer]`; `free` will skip past it.
-                    self.dep_edges[idx].push(DepEdge::Notify(producer_id));
+                    // subtree. `add_park_edge` installs the forward wake on
+                    // `notify_list[producer]` and bumps `pending_deps[idx]` in the same
+                    // atomic body; `free` skips past Notify edges via `owned_children`.
+                    // Producer-not-terminal precondition: `Resolution::Placeholder` is
+                    // only returned between submission and terminalization of the
+                    // placeholder's slot, so `producer_id` is not yet terminal here.
+                    self.deps.add_park_edge(producer_id, NodeId(idx));
                     return Ok(NodeStep::Replace {
                         work: NodeWork::Lift { from: producer_id },
                         frame: None,
@@ -149,8 +153,11 @@ impl<'a> Scheduler<'a> {
                     // Notify edges: replay-park parks on sibling producers (often
                     // top-level slots) the rewritten Dispatch does not own. `free` must
                     // not transit through these into the producer's subtree.
+                    // Producer-not-terminal precondition: `producers_to_wait` is built
+                    // from `is_result_ready(p) == false` above, so every `p` here is
+                    // known-not-terminal at install time.
                     for p in &producers_to_wait {
-                        self.dep_edges[idx].push(DepEdge::Notify(*p));
+                        self.deps.add_park_edge(*p, NodeId(idx));
                     }
                     return Ok(NodeStep::Replace {
                         work: NodeWork::Dispatch(rewritten),
