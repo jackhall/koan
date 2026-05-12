@@ -97,6 +97,15 @@ without first landing something else:
   `UNION` so two distinct declarations report distinct types.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
+- [Simplify `runtime::machine` and shrink AI context cost](roadmap/simplify-and-shrink-context.md)
+  — `runtime::machine` owns ~60% of the crate's fractal coupling index and four
+  non-test files exceed 600 lines; score reshuffles via `modgraph_rewrite.py`,
+  split the largest files, then trim scheduler tests the sub-struct extractions
+  made redundant.
+- [Fold the dispatcher into `Scope`, `KFunction`, and `ExpressionSignature`](roadmap/fold-dispatcher.md)
+  — delete `core/dispatcher.rs` (663 lines) by redistributing its pieces to
+  their natural homes and folding four redundant scope-chain walks per call
+  site into one `Scope::resolve` entry point.
 
 ## Open items
 
