@@ -380,12 +380,6 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Resolve `expr` to a callable, walking `outer` on miss. Ambiguity at the inner scope
-    /// does *not* fall through — it surfaces rather than being silently shadowed.
-    pub fn dispatch(&self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
-        super::dispatcher::dispatch(self, expr)
-    }
-
     pub fn lookup_kfunction(&self, name: &str) -> Option<&'a KFunction<'a>> {
         match self.lookup(name)? {
             KObject::KFunction(f, _) => Some(*f),
@@ -393,18 +387,159 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Pick a matching function with at least one `KType::KExpression` slot bound by an
-    /// `ExpressionPart::Expression`. Returns the indices of the *eager* `Expression` parts;
-    /// lazy ones stay in place for the receiving builtin to dispatch.
-    pub fn lazy_candidate(&self, expr: &KExpression<'_>) -> Option<Vec<usize>> {
-        super::dispatcher::lazy_candidate(self, expr)
+    /// Single-pass overload resolution: walks `outer` performing **strict-then-tentative
+    /// per scope** (both passes consult the same scope's bucket before descending), so an
+    /// inner-scope tentative match shadows an outer-scope strict one, mirroring lexical
+    /// scoping. Ambiguity surfaces at the first scope where the strict pass ties — it does
+    /// NOT fall through to `outer` (silently shadowing an inner conflict would hide a real
+    /// author error).
+    ///
+    /// Outcomes:
+    /// - [`ResolveOutcome::Resolved`]: a unique overload was picked. The carried
+    ///   [`Resolved`] bundles the function plus the per-slot classification
+    ///   ([`KFunction::classify_for_pick`]) plus an optional `placeholder_name` extracted
+    ///   from the picked function's `pre_run` (the binder-side name to install at dispatch
+    ///   time).
+    /// - [`ResolveOutcome::Ambiguous(n)`]: the strict pass at some scope produced `n ≥ 2`
+    ///   equally-specific candidates. No further scopes consulted.
+    /// - [`ResolveOutcome::Deferred`]: nothing matched anywhere on the chain, but `expr`
+    ///   contains at least one nested `Expression` / `ListLiteral` / `DictLiteral` part —
+    ///   eagerly evaluating those subs may produce a `Future(_)` that matches a typed slot
+    ///   the bare expression couldn't. The scheduler falls through to its eager-sub loop
+    ///   on this variant. Covers shapes like `((deep_call) + 1)` where a typed `+`
+    ///   overload only matches after `deep_call` resolves.
+    /// - [`ResolveOutcome::Unmatched`]: no match anywhere, and no eager parts to wait on
+    ///   either — a real dispatch failure the caller surfaces as an error.
+    pub fn resolve_dispatch<'e>(&'a self, expr: &KExpression<'e>) -> ResolveOutcome<'a> {
+        let key = expr.untyped_key();
+        let mut current: Option<&'a Scope<'a>> = Some(self);
+        while let Some(scope) = current {
+            let functions = scope.functions.borrow();
+            if let Some(bucket) = functions.get(&key) {
+                // Strict pass within this scope.
+                let strict: Vec<&'a KFunction<'a>> = bucket
+                    .iter()
+                    .copied()
+                    .filter(|f| f.signature.matches(expr))
+                    .collect();
+                let strict_sigs: Vec<&crate::runtime::model::types::ExpressionSignature> =
+                    strict.iter().map(|f| &f.signature).collect();
+                match crate::runtime::model::types::ExpressionSignature::most_specific(&strict_sigs)
+                {
+                    Some(i) => {
+                        let picked = strict[i];
+                        return ResolveOutcome::Resolved(build_resolved(picked, expr));
+                    }
+                    None if !strict.is_empty() => {
+                        // Tie inside this scope — surface ambiguity rather than fall through.
+                        return ResolveOutcome::Ambiguous(strict.len());
+                    }
+                    None => {}
+                }
+                // Tentative (auto-wrap) pass within the same scope.
+                let tentative: Vec<&'a KFunction<'a>> = bucket
+                    .iter()
+                    .copied()
+                    .filter(|f| f.accepts_for_wrap(expr))
+                    .collect();
+                let tentative_sigs: Vec<&crate::runtime::model::types::ExpressionSignature> =
+                    tentative.iter().map(|f| &f.signature).collect();
+                match crate::runtime::model::types::ExpressionSignature::most_specific(
+                    &tentative_sigs,
+                ) {
+                    Some(i) => {
+                        let picked = tentative[i];
+                        return ResolveOutcome::Resolved(build_resolved(picked, expr));
+                    }
+                    None if !tentative.is_empty() => {
+                        // Tentative-pass ambiguity: the wrap pass mustn't speculatively
+                        // transform an expression with multiple equally-loose candidates.
+                        // Fall through to `outer` rather than surfacing `Ambiguous` — the
+                        // tentative pass is already a relaxation, and an outer scope's
+                        // strict pick is the stronger signal.
+                    }
+                    None => {}
+                }
+            }
+            drop(functions);
+            current = scope.outer;
+        }
+        // Nothing matched on the chain. Distinguish a flat-unbound shape from one whose
+        // dispatch can't pick *yet* because nested subs need to evaluate first — the
+        // scheduler's eager-sub loop will rebuild with `Future(_)` parts and re-dispatch.
+        if expr_has_eager_part(expr) {
+            ResolveOutcome::Deferred
+        } else {
+            ResolveOutcome::Unmatched
+        }
     }
+}
 
-    /// Extended `lazy_candidate` returning eager-Expression, auto-wrap, and forward-ref
-    /// index sets for the picked function. `None` if no unique shape match.
-    pub fn shape_pick(&self, expr: &KExpression<'_>) -> Option<ShapePick> {
-        super::dispatcher::shape_pick(self, expr)
+/// True iff `expr` carries any `Expression` / `ListLiteral` / `DictLiteral` part — the
+/// shapes the scheduler's eager loop would schedule as sub-Dispatches. Drives the
+/// [`ResolveOutcome::Deferred`] vs [`ResolveOutcome::Unmatched`] split: a nested-call shape
+/// like `((deep_call) + 1)` defers (today's behavior); a flat unbound name `nope` is
+/// unmatched.
+fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
+    expr.parts.iter().any(|p| {
+        matches!(
+            p,
+            crate::ast::ExpressionPart::Expression(_)
+                | crate::ast::ExpressionPart::ListLiteral(_)
+                | crate::ast::ExpressionPart::DictLiteral(_)
+        )
+    })
+}
+
+/// Pack a picked function + classification + `pre_run`-extracted placeholder name into a
+/// [`Resolved`]. The sole producer of `Resolved`'s three index vectors — disjointness lives
+/// here via [`KFunction::classify_for_pick`].
+fn build_resolved<'a>(
+    picked: &'a KFunction<'a>,
+    expr: &KExpression<'_>,
+) -> Resolved<'a> {
+    let classified = picked.classify_for_pick(expr);
+    let placeholder_name = picked.pre_run.and_then(|extractor| extractor(expr));
+    Resolved {
+        function: picked,
+        placeholder_name,
+        eager_indices: classified.eager_indices,
+        wrap_indices: classified.wrap_indices,
+        ref_name_indices: classified.ref_name_indices,
+        picked_has_pre_run: classified.picked_has_pre_run,
     }
+}
+
+/// A successful resolution: which function was picked, what placeholder name (if any) to
+/// install at dispatch time, and the per-slot index buckets a downstream scheduler driver
+/// needs to do auto-wrap, replay-park, and eager-sub scheduling. The three index vectors
+/// are disjoint by construction over disjoint `(SignatureElement, ExpressionPart)` shapes
+/// — see [`crate::runtime::machine::kfunction::ClassifiedSlots`].
+pub struct Resolved<'a> {
+    pub function: &'a KFunction<'a>,
+    pub placeholder_name: Option<String>,
+    /// `Some(indices)` iff the picked function is a lazy candidate (its signature has at
+    /// least one `KType::KExpression` slot bound by an `ExpressionPart::Expression`). The
+    /// carried indices are the *eager* `Expression` parts — those in non-`KExpression`
+    /// slots — to schedule as sub-Dispatches; the lazy ones stay in place for the
+    /// receiving builtin to dispatch itself. `None` when the function isn't a lazy
+    /// candidate; the scheduler then schedules every eager-shaped part as a sub.
+    pub eager_indices: Option<Vec<usize>>,
+    pub wrap_indices: Vec<usize>,
+    pub ref_name_indices: Vec<usize>,
+    pub picked_has_pre_run: bool,
+}
+
+/// Outcome of [`Scope::resolve_dispatch`]. See that method's docstring for the meaning of
+/// each variant. The `Resolved | Ambiguous | Deferred | Unmatched` split is the
+/// load-bearing typing — the scheduler's dispatch driver matches on it directly to choose
+/// between immediate bind, ambiguity error, eager-sub scheduling, and dispatch-failed
+/// error.
+pub enum ResolveOutcome<'a> {
+    Resolved(Resolved<'a>),
+    Ambiguous(usize),
+    Deferred,
+    Unmatched,
 }
 
 /// `Conflict` is reserved for borrow contention; semantic errors come through `Err(KError)`.
@@ -452,23 +587,6 @@ fn signatures_exact_equal(
         (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => ax.ktype == ay.ktype,
         _ => false,
     })
-}
-
-/// Per-slot classification for [`Scope::shape_pick`]:
-/// - `eager_indices`: `Expression` parts to schedule as eager sub-Dispatches.
-/// - `wrap_indices`: bare-Identifier parts in non-literal-name slots to auto-wrap as
-///   sub-Dispatches.
-/// - `ref_name_indices`: bare-Identifier parts in literal-name slots (`KType::Identifier`
-///   / `KType::TypeExprRef`) of a non-`pre_run` function; candidates for replay-park.
-///
-/// `picked_has_pre_run` distinguishes binder-shaped expressions (literal-name slots are
-/// declarations) from call-shaped expressions (literal-name slots are references that may
-/// need to park).
-pub struct ShapePick {
-    pub eager_indices: Vec<usize>,
-    pub wrap_indices: Vec<usize>,
-    pub ref_name_indices: Vec<usize>,
-    pub picked_has_pre_run: bool,
 }
 
 #[cfg(test)]
@@ -641,5 +759,270 @@ mod tests {
         scope.bind_value("x".to_string(), v).unwrap();
         assert!(scope.placeholders.borrow().get("x").is_none());
         assert!(matches!(scope.resolve("x"), Resolution::Value(KObject::Number(n)) if *n == 42.0));
+    }
+
+    // -------- resolve_dispatch smoke tests --------
+
+    use super::ResolveOutcome;
+    use crate::ast::{ExpressionPart, KExpression, KLiteral};
+    use crate::runtime::builtins::register_builtin;
+    use crate::runtime::builtins::test_support::{marker, one_slot_sig};
+    use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+
+    fn body_a<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "a")) }
+    fn body_b<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "b")) }
+
+    fn two_slot_sig(a: KType, b: KType) -> ExpressionSignature {
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Argument(Argument { name: "a".into(), ktype: a }),
+                SignatureElement::Keyword("OP".into()),
+                SignatureElement::Argument(Argument { name: "b".into(), ktype: b }),
+            ],
+        }
+    }
+
+    /// Successful pick on an overload registered in the current scope: the carried
+    /// `Resolved` exposes the classifier's per-slot indices (here, an Identifier in an
+    /// `Any` slot lands in `wrap_indices`).
+    #[test]
+    fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
+        let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
+        match scope.resolve_dispatch(&expr) {
+            ResolveOutcome::Resolved(r) => {
+                assert_eq!(r.wrap_indices, vec![0]);
+                assert!(r.ref_name_indices.is_empty());
+                assert!(!r.picked_has_pre_run);
+            }
+            _ => panic!("expected Resolved for known overload"),
+        }
+    }
+
+    /// Tied strict overloads (`<Number> OP <Any>` vs `<Any> OP <Number>` against `5 OP 7`)
+    /// surface as `Ambiguous(2)` at the scope where the tie occurs.
+    #[test]
+    fn resolve_returns_ambiguous_for_tied_overloads() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        register_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
+        register_builtin(scope, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Literal(KLiteral::Number(5.0)),
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Literal(KLiteral::Number(7.0)),
+            ],
+        };
+        match scope.resolve_dispatch(&expr) {
+            ResolveOutcome::Ambiguous(n) => assert_eq!(n, 2),
+            _ => panic!("expected Ambiguous(2) for tied overloads"),
+        }
+    }
+
+    /// Inner scope has no matching overload; resolution descends to `outer` and picks
+    /// there.
+    #[test]
+    fn resolve_walks_outer_chain_on_unmatched() {
+        let arena = RuntimeArena::new();
+        let outer = run_root_bare(&arena);
+        register_builtin(outer, "ONE", one_slot_sig("v", KType::Any), body_a);
+        let inner = arena.alloc_scope(outer.child_for_call());
+        let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
+        assert!(matches!(inner.resolve_dispatch(&expr), ResolveOutcome::Resolved(_)));
+    }
+
+    /// Inner ambiguity does NOT fall through to `outer`: the outer scope has a
+    /// non-ambiguous overload, but resolution still reports Ambiguous from the inner tie.
+    #[test]
+    fn resolve_does_not_descend_outer_on_inner_ambiguity() {
+        let arena = RuntimeArena::new();
+        let outer = run_root_bare(&arena);
+        register_builtin(outer, "OUTER", two_slot_sig(KType::Number, KType::Number), body_a);
+        let inner = arena.alloc_scope(outer.child_for_call());
+        register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
+        register_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Literal(KLiteral::Number(5.0)),
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Literal(KLiteral::Number(7.0)),
+            ],
+        };
+        match inner.resolve_dispatch(&expr) {
+            ResolveOutcome::Ambiguous(_) => {}
+            _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
+        }
+    }
+
+    /// A pre_run-bearing overload (here a synthetic LET-like binder) populates
+    /// `placeholder_name` from its extractor.
+    #[test]
+    fn resolve_carries_placeholder_name_for_pre_run_function() {
+        use crate::runtime::builtins::register_builtin_with_pre_run;
+        fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
+            // Mirror LET's shape: expression's 2nd part is the binder Identifier.
+            match expr.parts.get(1) {
+                Some(ExpressionPart::Identifier(n)) => Some(n.clone()),
+                _ => None,
+            }
+        }
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("LETLIKE".into()),
+                SignatureElement::Argument(Argument { name: "n".into(), ktype: KType::Identifier }),
+                SignatureElement::Keyword("=".into()),
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
+            ],
+        };
+        register_builtin_with_pre_run(scope, "LETLIKE", sig, body_a, Some(name_extractor));
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("LETLIKE".into()),
+                ExpressionPart::Identifier("foo".into()),
+                ExpressionPart::Keyword("=".into()),
+                ExpressionPart::Literal(KLiteral::Number(1.0)),
+            ],
+        };
+        match scope.resolve_dispatch(&expr) {
+            ResolveOutcome::Resolved(r) => {
+                assert_eq!(r.placeholder_name.as_deref(), Some("foo"));
+                assert!(r.picked_has_pre_run);
+            }
+            _ => panic!("expected Resolved with placeholder_name"),
+        }
+    }
+
+    /// The tentative pass only fires when strict picked nothing at the same scope.
+    /// Register only a `<Identifier>` overload; calling with a `Number` literal must miss
+    /// strictly *and* tentatively (Literal is not a bare name), giving Unmatched at
+    /// run-root.
+    #[test]
+    fn resolve_tentative_falls_back_only_when_strict_empty() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        register_builtin(scope, "ONE_ID", one_slot_sig("v", KType::Identifier), body_a);
+        let expr = KExpression { parts: vec![ExpressionPart::Literal(KLiteral::Number(5.0))] };
+        assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Unmatched));
+    }
+
+    /// A nested-Expression shape `((deep_call) + 1)` returns `Deferred`: the typed `+`
+    /// overload doesn't strictly match (Expression in Number slot) and doesn't tentatively
+    /// match either (Expression isn't a bare name), but eager evaluation of `(deep_call)`
+    /// may produce a `Future(Number)` that the post-Bind re-dispatch picks. Distinct from
+    /// `Unmatched` — the scheduler falls through to its eager-sub loop on `Deferred`.
+    #[test]
+    fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        register_builtin(scope, "PLUS", two_slot_sig(KType::Number, KType::Number), body_a);
+        let inner = KExpression {
+            parts: vec![ExpressionPart::Identifier("deep_call".into())],
+        };
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Expression(Box::new(inner)),
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Literal(KLiteral::Number(1.0)),
+            ],
+        };
+        assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Deferred));
+    }
+
+    // -------- unit-level dispatch tests on `resolve_dispatch` --------
+    //
+    // Cover overload-resolution behaviors at the `resolve_dispatch` boundary. The
+    // end-to-end variants that drive `Scheduler::execute` live with the rest of the
+    // scheduler integration tests at `execute::scheduler::tests`.
+
+    use crate::runtime::builtins::default_scope;
+
+    fn body_number_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "number_any")) }
+    fn body_any_number<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "any_number")) }
+
+    /// Parent owns the LET builtin; child has no functions of its own. `resolve_dispatch`
+    /// against the child must climb to the parent.
+    #[test]
+    fn resolve_walks_outer_chain_to_find_builtin() {
+        let arena = RuntimeArena::new();
+        let outer = default_scope(&arena, Box::new(std::io::sink()));
+        let inner = arena.alloc_scope(outer.child_for_call());
+
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("LET".into()),
+                ExpressionPart::Identifier("x".into()),
+                ExpressionPart::Keyword("=".into()),
+                ExpressionPart::Literal(KLiteral::Number(1.0)),
+            ],
+        };
+
+        assert!(
+            matches!(inner.resolve_dispatch(&expr), ResolveOutcome::Resolved(_)),
+            "child scope should inherit LET from outer",
+        );
+    }
+
+    /// No overload anywhere on the chain, and no nested eager parts → `Unmatched`.
+    #[test]
+    fn resolve_dispatch_with_no_outer_and_no_match_is_unmatched() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let expr = KExpression {
+            parts: vec![ExpressionPart::Identifier("nope".into())],
+        };
+        assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Unmatched));
+    }
+
+    /// `<Number> OP <Any>` vs `<Any> OP <Number>` against `5 OP 7` are incomparable: each is
+    /// more specific in one slot and less in the other. `resolve_dispatch` reports
+    /// `Ambiguous`; the integration path surfaces the same error via Scheduler::execute.
+    #[test]
+    fn dispatch_errors_on_ambiguous_overlap() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        register_builtin(scope, "number_any", two_slot_sig(KType::Number, KType::Any), body_number_any);
+        register_builtin(scope, "any_number", two_slot_sig(KType::Any, KType::Number), body_any_number);
+
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Literal(KLiteral::Number(5.0)),
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Literal(KLiteral::Number(7.0)),
+            ],
+        };
+        assert!(
+            matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Ambiguous(_)),
+            "equally-specific overloads should produce an Ambiguous outcome",
+        );
+    }
+
+    /// Ambiguous shape (two equally-specific overloads matching) surfaces as
+    /// `ResolveOutcome::Ambiguous` — the wrap pass mustn't speculatively transform an
+    /// ambiguous expression. Semantics sharpen vs. today's `shape_pick → None`: that arm
+    /// collapsed ambiguity and no-match into one variant; the new surface separates them.
+    #[test]
+    fn resolve_returns_ambiguous_for_overlap_that_shape_pick_returned_none_for() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        register_builtin(scope, "OP_NA", two_slot_sig(KType::Number, KType::Any), body_number_any);
+        register_builtin(scope, "OP_AN", two_slot_sig(KType::Any, KType::Number), body_any_number);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Literal(KLiteral::Number(5.0)),
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Literal(KLiteral::Number(7.0)),
+            ],
+        };
+        assert!(
+            matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Ambiguous(_)),
+            "ambiguous overlap → Ambiguous",
+        );
     }
 }

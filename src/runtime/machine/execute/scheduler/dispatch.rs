@@ -1,67 +1,102 @@
 use crate::runtime::model::Parseable;
-use crate::runtime::machine::{Frame, KError, NodeId, Resolution, Scope};
+use crate::runtime::machine::{
+    Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Resolved, Scope,
+};
 use crate::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
-/// Idempotent on a replay-park re-dispatch. Errors with `Rebind` if `data` or
-/// `placeholders` already holds `name` and the existing entry doesn't match `idx`.
-fn install_dispatch_placeholder<'a>(
-    expr: &KExpression<'a>,
-    scope: &'a Scope<'a>,
-    idx: usize,
-) -> Result<(), KError> {
-    let key = expr.untyped_key();
-    // Placeholder installs land in the dispatching scope, not the scope the candidate
-    // was found in — placeholders track dispatch-time intent local to the call site.
-    let mut current: Option<&Scope<'a>> = Some(scope);
-    while let Some(s) = current {
-        let candidate = {
-            let functions = s.functions.borrow();
-            let mut found: Option<String> = None;
-            if let Some(bucket) = functions.get(&key) {
-                for f in bucket.iter() {
-                    if let Some(extractor) = f.pre_run {
-                        if let Some(name) = extractor(expr) {
-                            found = Some(name);
-                            break;
-                        }
-                    }
-                }
-            }
-            found
-        };
-        if let Some(name) = candidate {
-            return scope.install_placeholder(name, NodeId(idx));
-        }
-        current = s.outer;
-    }
-    Ok(())
-}
-
 impl<'a> Scheduler<'a> {
+    /// Dispatch driver: a linear pipeline through five phases.
+    ///
+    /// 1. **`try_short_circuit`** — bare-name match in the current scope. A `Value` hit
+    ///    terminates immediately; a `Placeholder` hit installs a park edge and rewrites the
+    ///    slot to a `Lift`. `Unbound` and non-bare-name shapes fall through.
+    /// 2. **`Scope::resolve_dispatch`** — one chain walk yielding a [`Resolved`],
+    ///    `Ambiguous(n)`, `Deferred`, or `Unmatched`. `Ambiguous` / `Unmatched` short-circuit
+    ///    to a structured error; `Deferred` jumps to phase 5; `Resolved` continues.
+    /// 3. **Placeholder install** — if the picked function carried a `pre_run` extractor,
+    ///    install its dispatch-time name placeholder against this slot's `NodeId`.
+    /// 4. **`apply_auto_wrap` + `try_replay_park`** — rewrite the expression's
+    ///    `wrap_indices` parts into sub-Dispatches; check `ref_name_indices` for
+    ///    already-errored producers, parking on the rest.
+    /// 5. **`schedule_deps`** — schedule the resolution's `eager_indices` plus any other
+    ///    `Expression` / `ListLiteral` / `DictLiteral` parts as sub-nodes, building a
+    ///    `Bind` slot. If no subs needed, bind the function directly and step to its
+    ///    body.
+    ///
     /// See [design/execution-model.md § Dispatch-time name placeholders](../../../../../design/execution-model.md#dispatch-time-name-placeholders)
     /// for the bare-name short-circuit, placeholder install, auto-wrap pass, and
-    /// replay-park rules referenced below.
+    /// replay-park rules referenced above.
     pub(super) fn run_dispatch(
         &mut self,
         expr: KExpression<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        // Placeholder install: a `Rebind` here surfaces as Done(Err) so other slots keep draining.
-        if let Err(e) = install_dispatch_placeholder(&expr, scope, idx) {
-            return Ok(NodeStep::Done(NodeOutput::Err(e)));
+        // Phase 1.
+        if let Some(step) = self.try_short_circuit(&expr, scope, idx) {
+            return Ok(step);
         }
 
-        // Bare-name short-circuit. Unbound falls through so `value_lookup`'s
-        // body produces the structured `UnboundName` error.
+        // Phase 2. `Ambiguous` / `Unmatched` propagate as `Err` (rather than
+        // `NodeStep::Done(NodeOutput::Err(_))`) so they surface at `Scheduler::execute`'s
+        // return value, matching today's `scope.dispatch(...)?` shape.
+        let resolved = match scope.resolve_dispatch(&expr) {
+            ResolveOutcome::Resolved(r) => r,
+            ResolveOutcome::Ambiguous(n) => {
+                return Err(KError::new(KErrorKind::AmbiguousDispatch {
+                    expr: expr.summarize(),
+                    candidates: n,
+                }));
+            }
+            ResolveOutcome::Unmatched => {
+                return Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: expr.summarize(),
+                    reason: "no matching function".to_string(),
+                }));
+            }
+            ResolveOutcome::Deferred => {
+                // No overload picks against the bare shape, but the expression carries
+                // eager parts whose evaluation may surface matching types. Schedule them
+                // through the standard eager fallthrough and rebind on completion.
+                return Ok(self.schedule_eager_fallthrough(expr, scope, idx));
+            }
+        };
+
+        // Phase 2.5: install dispatch-time placeholder for the binder slot, if any.
+        if let Some(name) = resolved.placeholder_name.as_ref() {
+            if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx)) {
+                return Ok(NodeStep::Done(NodeOutput::Err(e)));
+            }
+        }
+
+        // Phase 3: pure-transform auto-wrap.
+        let rewritten = apply_auto_wrap(expr, &resolved.wrap_indices);
+
+        // Phase 4: replay-park check.
+        match self.try_replay_park(&rewritten, &resolved, scope, idx) {
+            ReplayParkResult::Done(step) => return Ok(step),
+            ReplayParkResult::Continue => {}
+        }
+
+        // Phase 5: schedule eager subs from the resolution's indices.
+        Ok(self.schedule_deps(rewritten, &resolved, scope, idx))
+    }
+
+    /// Phase 1. Bare-name short-circuit. `Some(step)` only fires on `Value` (terminate with
+    /// the bound value) or `Placeholder` (install park edge, rewrite to `Lift`). `Unbound`
+    /// and non-bare-name shapes return `None` for the caller to continue.
+    fn try_short_circuit(
+        &mut self,
+        expr: &KExpression<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Option<NodeStep<'a>> {
         if let [ExpressionPart::Identifier(name)] = expr.parts.as_slice() {
             match scope.resolve(name) {
-                Resolution::Value(obj) => {
-                    return Ok(NodeStep::Done(NodeOutput::Value(obj)));
-                }
+                Resolution::Value(obj) => Some(NodeStep::Done(NodeOutput::Value(obj))),
                 Resolution::Placeholder(producer_id) => {
                     // Notify edge, not Owned: the producer is a sibling slot this Lift
                     // only parks on for a wake — it is not part of this slot's reclaim
@@ -72,128 +107,181 @@ impl<'a> Scheduler<'a> {
                     // only returned between submission and terminalization of the
                     // placeholder's slot, so `producer_id` is not yet terminal here.
                     self.deps.add_park_edge(producer_id, NodeId(idx));
-                    return Ok(NodeStep::Replace {
+                    Some(NodeStep::Replace {
                         work: NodeWork::Lift { from: producer_id },
                         frame: None,
                         function: None,
-                    });
+                    })
                 }
-                Resolution::Unbound => {}
+                // Unbound falls through so `value_lookup`'s body produces the structured
+                // `UnboundName` error.
+                Resolution::Unbound => None,
             }
+        } else {
+            None
         }
+    }
 
-        let expr = match scope.shape_pick(&expr) {
-            Some(pick) => {
-                // Auto-wrap: bare-Identifier or bare leaf Type-token in a value slot becomes
-                // a single-name sub-Expression so it re-enters via the bare-name short-circuit
-                // and routes through the Identifier or TypeExprRef overload of `value_lookup`.
-                let mut parts = expr.parts;
-                for i in pick.wrap_indices {
-                    let placeholder = ExpressionPart::Identifier(String::new());
-                    let original = std::mem::replace(&mut parts[i], placeholder);
-                    parts[i] = match original {
-                        ExpressionPart::Identifier(name) => {
-                            ExpressionPart::Expression(Box::new(KExpression {
-                                parts: vec![ExpressionPart::Identifier(name)],
-                            }))
-                        }
-                        ExpressionPart::Type(t) => {
-                            ExpressionPart::Expression(Box::new(KExpression {
-                                parts: vec![ExpressionPart::Type(t)],
-                            }))
-                        }
-                        // wrap_indices is built from is_bare_name parts; any other variant
-                        // is a classifier bug. Restore the part rather than panic.
-                        other => other,
-                    };
+    /// Phase 4. Walk `resolved.ref_name_indices` against `expr`: a slot whose name resolves
+    /// to a still-pending placeholder needs a park edge; a slot whose producer already
+    /// terminalized with an error propagates that error. Returns `Continue` when the slot
+    /// can proceed to phase 5, or `Done` when a park or propagation took over.
+    fn try_replay_park(
+        &mut self,
+        expr: &KExpression<'a>,
+        resolved: &Resolved<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> ReplayParkResult<'a> {
+        let mut producers_to_wait: Vec<NodeId> = Vec::new();
+        for &i in &resolved.ref_name_indices {
+            let name = match expr.parts.get(i) {
+                Some(ExpressionPart::Identifier(n)) => n.as_str(),
+                // Bare leaf Type-tokens in literal-name slots park on the same placeholder
+                // rails as Identifier — `IntOrd :| OrderedSig` waits on a forward-declared
+                // `MODULE IntOrd` the same way `LET y = (x)` waits on `LET x = …`.
+                // Parameterized Type parts (List<…>, etc.) are structural type-syntax, not
+                // look-up targets.
+                Some(ExpressionPart::Type(t))
+                    if matches!(t.params, crate::ast::TypeParams::None) =>
+                {
+                    t.name.as_str()
                 }
-                let rewritten = KExpression { parts };
-
-                // Replay-park check. A `ref_name_indices` slot whose producer has
-                // already terminalized but whose placeholder is still set means the
-                // producer errored (success would have cleared the placeholder via
-                // `bind_value`); propagate the error rather than parking on a dead slot.
-                let mut producers_to_wait: Vec<NodeId> = Vec::new();
-                for i in pick.ref_name_indices {
-                    let name = match rewritten.parts.get(i) {
-                        Some(ExpressionPart::Identifier(n)) => n.as_str(),
-                        // Bare leaf Type-tokens in literal-name slots park on the same
-                        // placeholder rails as Identifier — `IntOrd :| OrderedSig` waits
-                        // on a forward-declared `MODULE IntOrd` the same way `LET y = (x)`
-                        // waits on `LET x = …`. Parameterized Type parts (List<…>, etc.)
-                        // are structural type-syntax, not look-up targets.
-                        Some(ExpressionPart::Type(t))
-                            if matches!(t.params, crate::ast::TypeParams::None) =>
-                        {
-                            t.name.as_str()
+                // wrap_indices and ref_name_indices are disjoint by construction.
+                _ => continue,
+            };
+            match scope.resolve(name) {
+                Resolution::Placeholder(producer_id) => {
+                    if self.is_result_ready(producer_id) {
+                        // A `ref_name_indices` slot whose producer has already
+                        // terminalized but whose placeholder is still set means the
+                        // producer errored (success would have cleared the placeholder
+                        // via `bind_value`); propagate the error rather than parking on a
+                        // dead slot.
+                        if let Err(e) = self.read_result(producer_id) {
+                            let frame = Frame {
+                                function: "<replay-park>".to_string(),
+                                expression: expr.summarize(),
+                            };
+                            let propagated = e.clone_for_propagation().with_frame(frame);
+                            return ReplayParkResult::Done(NodeStep::Done(NodeOutput::Err(
+                                propagated,
+                            )));
                         }
-                        // wrap_indices and ref_name_indices are disjoint by construction.
-                        _ => continue,
-                    };
-                    match scope.resolve(name) {
-                        Resolution::Placeholder(producer_id) => {
-                            if self.is_result_ready(producer_id) {
-                                if let Err(e) = self.read_result(producer_id) {
-                                    let frame = Frame {
-                                        function: "<replay-park>".to_string(),
-                                        expression: rewritten.summarize(),
-                                    };
-                                    let propagated = e.clone_for_propagation().with_frame(frame);
-                                    return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
-                                }
-                            } else {
-                                producers_to_wait.push(producer_id);
-                            }
-                        }
-                        Resolution::Value(_) | Resolution::Unbound => {}
+                    } else {
+                        producers_to_wait.push(producer_id);
                     }
                 }
-
-                if !producers_to_wait.is_empty() {
-                    // Notify edges: replay-park parks on sibling producers (often
-                    // top-level slots) the rewritten Dispatch does not own. `free` must
-                    // not transit through these into the producer's subtree.
-                    // Producer-not-terminal precondition: `producers_to_wait` is built
-                    // from `is_result_ready(p) == false` above, so every `p` here is
-                    // known-not-terminal at install time.
-                    for p in &producers_to_wait {
-                        self.deps.add_park_edge(*p, NodeId(idx));
-                    }
-                    return Ok(NodeStep::Replace {
-                        work: NodeWork::Dispatch(rewritten),
-                        frame: None,
-                        function: None,
-                    });
-                }
-
-                rewritten
+                Resolution::Value(_) | Resolution::Unbound => {}
             }
-            None => expr,
-        };
-
-        if let Some(eager_indices) = scope.lazy_candidate(&expr) {
-            let mut parts = expr.parts;
-            let mut subs = Vec::with_capacity(eager_indices.len());
-            for i in eager_indices {
-                let inner = match std::mem::replace(
-                    &mut parts[i],
-                    ExpressionPart::Identifier(String::new()),
-                ) {
-                    ExpressionPart::Expression(boxed) => *boxed,
-                    _ => unreachable!("lazy_candidate only flags Expression parts"),
-                };
-                let sub_id = self.add(NodeWork::Dispatch(inner), scope);
-                subs.push((i, sub_id));
-            }
-            let parent = KExpression { parts };
-            if subs.is_empty() {
-                let future = scope.dispatch(parent)?;
-                return Ok(self.invoke_to_step(future, scope, idx));
-            }
-            let bind_id = self.add(NodeWork::Bind { expr: parent, subs }, scope);
-            return Ok(self.defer_to_lift(idx, bind_id));
         }
+        if !producers_to_wait.is_empty() {
+            // Notify edges: replay-park parks on sibling producers (often top-level slots)
+            // the rewritten Dispatch does not own. `free` must not transit through these
+            // into the producer's subtree. Producer-not-terminal precondition:
+            // `producers_to_wait` is built from `is_result_ready(p) == false` above, so
+            // every `p` here is known-not-terminal at install time.
+            for p in &producers_to_wait {
+                self.deps.add_park_edge(*p, NodeId(idx));
+            }
+            return ReplayParkResult::Done(NodeStep::Replace {
+                work: NodeWork::Dispatch(expr.clone()),
+                frame: None,
+                function: None,
+            });
+        }
+        ReplayParkResult::Continue
+    }
 
+    /// Phase 5 — `Resolved` arm. Single loop over `expr.parts` branching on whether the
+    /// picked function is a lazy candidate (`resolved.eager_indices.is_some()`):
+    /// - **Lazy candidate** (the picked sig has a `KType::KExpression` slot bound by an
+    ///   `ExpressionPart::Expression`): only the carried `eager_indices` — `Expression`
+    ///   parts in *non-*`KExpression` slots — schedule as sub-Dispatches; every other
+    ///   part rides through unchanged (including lazy `Expression` parts in `KExpression`
+    ///   slots, which the receiving builtin dispatches itself).
+    /// - **Not a lazy candidate**: schedule every `Expression` / `ListLiteral` /
+    ///   `DictLiteral` part as a sub.
+    ///
+    /// If no subs were scheduled, bind the picked function directly and step into its
+    /// body via `invoke_to_step`.
+    fn schedule_deps(
+        &mut self,
+        expr: KExpression<'a>,
+        resolved: &Resolved<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        let mut new_parts = Vec::with_capacity(expr.parts.len());
+        let mut subs: Vec<(usize, NodeId)> = Vec::new();
+        match resolved.eager_indices.as_deref() {
+            Some(eager_indices) => {
+                for (i, part) in expr.parts.into_iter().enumerate() {
+                    if eager_indices.contains(&i) {
+                        let inner = match part {
+                            ExpressionPart::Expression(boxed) => *boxed,
+                            // `eager_indices` came from `KFunction::lazy_eager_indices`,
+                            // which only flags `Expression` parts.
+                            _ => unreachable!("eager_indices only flags Expression parts"),
+                        };
+                        let sub_id = self.add(NodeWork::Dispatch(inner), scope);
+                        subs.push((i, sub_id));
+                        new_parts.push(ExpressionPart::Identifier(String::new()));
+                    } else {
+                        new_parts.push(part);
+                    }
+                }
+            }
+            None => {
+                for (i, part) in expr.parts.into_iter().enumerate() {
+                    match part {
+                        ExpressionPart::Expression(boxed) => {
+                            let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
+                            subs.push((i, sub_id));
+                            new_parts.push(ExpressionPart::Identifier(String::new()));
+                        }
+                        ExpressionPart::ListLiteral(items) => {
+                            let agg_id = self.schedule_list_literal(items, scope);
+                            subs.push((i, agg_id));
+                            new_parts.push(ExpressionPart::Identifier(String::new()));
+                        }
+                        ExpressionPart::DictLiteral(pairs) => {
+                            let agg_id = self.schedule_dict_literal(pairs, scope);
+                            subs.push((i, agg_id));
+                            new_parts.push(ExpressionPart::Identifier(String::new()));
+                        }
+                        other => new_parts.push(other),
+                    }
+                }
+            }
+        }
+        let new_expr = KExpression { parts: new_parts };
+        if subs.is_empty() {
+            // No subs: bind the picked function directly. Spliced `Future(&'a KObject)`
+            // references survive `results[dep] = None` because the objects live in arenas
+            // tied to lexical scope.
+            match resolved.function.bind(new_expr) {
+                Ok(future) => self.invoke_to_step(future, scope, idx),
+                Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+            }
+        } else {
+            let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
+            self.defer_to_lift(idx, bind_id)
+        }
+    }
+
+    /// Phase 5 — `Deferred` arm. No overload matched the bare shape, but the expression
+    /// carries eager parts. Schedule every `Expression` / `ListLiteral` / `DictLiteral`
+    /// part as a sub-Dispatch and build a `Bind` slot. After the subs resolve,
+    /// `run_bind` calls `Scope::resolve_dispatch` again on the rewritten expression with
+    /// `Future(_)` parts — typed slots that rejected `Expression` accept the resulting
+    /// `Future(KObject)`.
+    fn schedule_eager_fallthrough(
+        &mut self,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
         let mut new_parts = Vec::with_capacity(expr.parts.len());
         let mut subs: Vec<(usize, NodeId)> = Vec::new();
         for (i, part) in expr.parts.into_iter().enumerate() {
@@ -201,7 +289,6 @@ impl<'a> Scheduler<'a> {
                 ExpressionPart::Expression(boxed) => {
                     let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
                     subs.push((i, sub_id));
-                    // Slot overwritten with `Future(result)` at Bind time.
                     new_parts.push(ExpressionPart::Identifier(String::new()));
                 }
                 ExpressionPart::ListLiteral(items) => {
@@ -218,11 +305,45 @@ impl<'a> Scheduler<'a> {
             }
         }
         let new_expr = KExpression { parts: new_parts };
-        if subs.is_empty() {
-            let future = scope.dispatch(new_expr)?;
-            return Ok(self.invoke_to_step(future, scope, idx));
-        }
+        // `Deferred` implies `expr_has_eager_part(&expr) == true`, so `subs` is non-empty
+        // by construction.
+        debug_assert!(
+            !subs.is_empty(),
+            "Deferred ⇒ at least one eager part; got zero subs",
+        );
         let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
-        Ok(self.defer_to_lift(idx, bind_id))
+        self.defer_to_lift(idx, bind_id)
     }
+}
+
+/// Phase 3. Pure transform: rewrite each `wrap_indices` slot's bare-Identifier or bare
+/// leaf Type-token into a single-name sub-Expression so it re-enters via the bare-name
+/// short-circuit and routes through the Identifier or TypeExprRef overload of
+/// `value_lookup`. Other variants fall through unchanged — `wrap_indices` is built from
+/// is-bare-name parts, so any other variant would be a classifier bug; restore rather than
+/// panic.
+fn apply_auto_wrap<'a>(expr: KExpression<'a>, wrap_indices: &[usize]) -> KExpression<'a> {
+    let mut parts = expr.parts;
+    for &i in wrap_indices {
+        let placeholder = ExpressionPart::Identifier(String::new());
+        let original = std::mem::replace(&mut parts[i], placeholder);
+        parts[i] = match original {
+            ExpressionPart::Identifier(name) => ExpressionPart::Expression(Box::new(KExpression {
+                parts: vec![ExpressionPart::Identifier(name)],
+            })),
+            ExpressionPart::Type(t) => ExpressionPart::Expression(Box::new(KExpression {
+                parts: vec![ExpressionPart::Type(t)],
+            })),
+            other => other,
+        };
+    }
+    KExpression { parts }
+}
+
+/// Replay-park branch result: `Done` means a park was installed or a producer-error was
+/// propagated and the caller should short-circuit; `Continue` means no park needed and the
+/// caller should proceed to phase 5.
+enum ReplayParkResult<'a> {
+    Done(NodeStep<'a>),
+    Continue,
 }

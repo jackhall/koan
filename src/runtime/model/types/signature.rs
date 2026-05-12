@@ -109,6 +109,24 @@ impl ExpressionSignature {
             (true, true) => Specificity::Incomparable,
         }
     }
+
+    /// Pairwise specificity tournament across a slice of co-bucket signatures. Returns
+    /// `Some(i)` iff `candidates[i]` is strictly more specific than every other candidate
+    /// (`StrictlyMore` against all peers, not `StrictlyMore | Equal` — `Equal` against any
+    /// peer means there's a same-arg-type duplicate, which must surface as ambiguity rather
+    /// than silently win). `None` for an empty slice or any no-clear-winner case; callers
+    /// distinguish via `candidates.is_empty()`.
+    pub fn most_specific(candidates: &[&ExpressionSignature]) -> Option<usize> {
+        candidates
+            .iter()
+            .enumerate()
+            .find(|(i, a)| {
+                candidates.iter().enumerate().all(|(j, b)| {
+                    *i == j || matches!(a.specificity_vs(b), Specificity::StrictlyMore)
+                })
+            })
+            .map(|(i, _)| i)
+    }
 }
 
 pub enum SignatureElement {
@@ -126,5 +144,43 @@ pub struct Argument {
 impl Argument {
     pub fn matches(&self, part: &ExpressionPart<'_>) -> bool {
         self.ktype.accepts_part(part)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one_slot(kt: KType) -> ExpressionSignature {
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: kt,
+            })],
+        }
+    }
+
+    #[test]
+    fn most_specific_picks_number_over_any() {
+        let any = one_slot(KType::Any);
+        let num = one_slot(KType::Number);
+        let cands: Vec<&ExpressionSignature> = vec![&any, &num];
+        assert_eq!(ExpressionSignature::most_specific(&cands), Some(1));
+    }
+
+    #[test]
+    fn most_specific_returns_none_for_empty() {
+        let cands: Vec<&ExpressionSignature> = Vec::new();
+        assert_eq!(ExpressionSignature::most_specific(&cands), None);
+    }
+
+    #[test]
+    fn most_specific_returns_none_when_tied() {
+        // Two `Number` overloads tie under `Equal` — ambiguity must surface, not a winner.
+        let a = one_slot(KType::Number);
+        let b = one_slot(KType::Number);
+        let cands: Vec<&ExpressionSignature> = vec![&a, &b];
+        assert_eq!(ExpressionSignature::most_specific(&cands), None);
     }
 }

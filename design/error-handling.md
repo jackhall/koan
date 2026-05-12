@@ -41,9 +41,13 @@ The scheduler walks errors along the dependency edges: a slot's terminal
 write the error into their own slot. Errors flow to the top level; the CLI
 formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
-[`Scope::dispatch`](../src/runtime/machine/core/scope.rs) and `KFunction::bind` return
-`Result<KFuture, KError>` — dispatch failures (no match, ambiguous overload,
-arity mismatch in bind) flow through the same channel as builtin errors.
+Dispatch failures (no match, ambiguous overload, arity mismatch in bind) flow
+through the same channel as builtin errors:
+[`Scope::resolve_dispatch`](../src/runtime/machine/core/scope.rs) returns a
+`ResolveOutcome` whose `Ambiguous` and `Unmatched` arms the scheduler driver
+converts to `Err(KError)` with `KErrorKind::AmbiguousDispatch` /
+`DispatchFailed`, and `KFunction::bind` returns `Result<KFuture, KError>` on
+arity mismatch.
 [`Scheduler::execute`](../src/runtime/machine/execute/scheduler.rs) and
 [`interpret`](../src/runtime/machine/execute/interpret.rs) return `Result<(), KError>` to
 complete the surfacing.

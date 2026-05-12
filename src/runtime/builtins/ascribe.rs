@@ -161,8 +161,8 @@ fn resolve_module_and_signature<'a>(
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Both ascription operators take already-evaluated `Module` / `Signature` values.
     // Bare Type-token operands (`IntOrd :| OrderedSig`) ride the unified auto-wrap +
-    // replay-park rails in `classify_for_pick` — they sub-dispatch through the
-    // `value_lookup`-TypeExprRef overload to a `Future(KModule)` / `Future(KSignature)`,
+    // replay-park rails in [`KFunction::classify_for_pick`] — they sub-dispatch through
+    // the `value_lookup`-TypeExprRef overload to a `Future(KModule)` / `Future(KSignature)`,
     // which then matches these slots strictly. No parallel Type-Type overload required.
     register_builtin(
         scope,

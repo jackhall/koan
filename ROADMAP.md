@@ -39,11 +39,14 @@ and dict-literal planning collapsed into a single `Combine` scheduler variant
 whose host-side `finish` closure captures the construction logic and folds
 already-resolved literal scalars in alongside dep results; module/signature
 resolution lives next to the `Module` / `Signature` types and serves both
-ascription operators and `MODULE_TYPE_OF`), the dispatcher extraction (overload
-resolution lifted out of `Scope` into a dedicated `dispatcher.rs` of free
-functions taking `&Scope`; `Scope::dispatch` and `Scope::lazy_candidate` are
-now thin forwarders so `scope.rs` is back to lexical-environment storage and
-direct mutators only), dispatch-time name placeholders (binders install a
+ascription operators and `MODULE_TYPE_OF`), the dispatcher fold (overload
+resolution now lives as one `Scope::resolve_dispatch` chain walk returning a
+four-variant `ResolveOutcome` — `Resolved` carries the per-slot
+auto-wrap / replay-park / eager-sub index buckets via
+`KFunction::classify_for_pick`, specificity ranking is
+`ExpressionSignature::most_specific`, the scheduler driver is a five-phase
+linear pipeline, and the standalone `core/dispatcher.rs` plus its
+`install_dispatch_placeholder` helper are gone), dispatch-time name placeholders (binders install a
 `name → producer NodeId` entry in a new `Scope::placeholders` sidecar at
 dispatch time; bare-identifier slot lookups whose target binder has dispatched
 but not yet executed park on the producer via the existing `notify_list` /
@@ -98,14 +101,10 @@ without first landing something else:
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
 - [Simplify `runtime::machine` and shrink AI context cost](roadmap/simplify-and-shrink-context.md)
-  — `runtime::machine` owns ~60% of the crate's fractal coupling index and four
+  — `runtime::machine` owns ~60% of the crate's fractal coupling index and three
   non-test files exceed 600 lines; score reshuffles via `modgraph_rewrite.py`,
   split the largest files, then trim scheduler tests the sub-struct extractions
   made redundant.
-- [Fold the dispatcher into `Scope`, `KFunction`, and `ExpressionSignature`](roadmap/fold-dispatcher.md)
-  — delete `core/dispatcher.rs` (663 lines) by redistributing its pieces to
-  their natural homes and folding four redundant scope-chain walks per call
-  site into one `Scope::resolve` entry point.
 
 ## Open items
 

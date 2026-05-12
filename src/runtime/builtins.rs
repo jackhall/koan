@@ -58,10 +58,11 @@ pub(crate) fn register_builtin_with_pre_run<'a>(
 
 /// Build a run-root scope populated with the language's builtin `KFunction`s.
 ///
-/// Registration order does not affect dispatch: `Scope::dispatch` buckets by untyped signature
-/// shape and picks overloads by `KType` specificity. `value_lookup` (single `Identifier` slot)
-/// and `value_pass` (single `Any` slot) share the bucket `[Slot]`; `value_lookup` wins for
-/// inputs like `(some_var)` because `Identifier` is more specific than `Any`.
+/// Registration order does not affect dispatch: [`Scope::resolve_dispatch`] buckets by
+/// untyped signature shape and picks overloads by `KType` specificity. `value_lookup`
+/// (single `Identifier` slot) and `value_pass` (single `Any` slot) share the bucket
+/// `[Slot]`; `value_lookup` wins for inputs like `(some_var)` because `Identifier` is
+/// more specific than `Any`.
 pub fn default_scope<'a>(
     arena: &'a crate::runtime::machine::core::RuntimeArena,
     out: Box<dyn std::io::Write + 'a>,

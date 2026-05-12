@@ -19,7 +19,7 @@ use std::rc::Rc;
 use crate::ast::{ExpressionPart, KExpression};
 
 use crate::runtime::machine::core::{KError, KErrorKind, KFuture, Scope};
-use crate::runtime::model::types::{ExpressionSignature, Parseable, SignatureElement};
+use crate::runtime::model::types::{ExpressionSignature, KType, Parseable, SignatureElement};
 use crate::runtime::model::values::{parse_named_value_pairs, KObject};
 
 pub mod argument_bundle;
@@ -51,6 +51,30 @@ pub struct KFunction<'a> {
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE); `None` for
     /// everything else. See [`PreRunFn`].
     pub pre_run: Option<PreRunFn>,
+}
+
+/// Per-slot classification produced by [`KFunction::classify_for_pick`]:
+/// - `eager_indices`: `Some(indices)` iff the picked function is a *lazy candidate* (has at
+///   least one `KType::KExpression` slot bound by an `ExpressionPart::Expression`); the
+///   carried indices are the `Expression` parts in *non*-`KExpression` slots that must
+///   evaluate eagerly. `None` when the function isn't a lazy candidate — the scheduler
+///   then schedules every eager-shaped part (`Expression` / `ListLiteral` / `DictLiteral`)
+///   as a sub-Dispatch.
+/// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
+///   auto-wrap as sub-Dispatches.
+/// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots
+///   (`KType::Identifier` / `KType::TypeExprRef`) of a non-`pre_run` function; candidates
+///   for replay-park.
+///
+/// `picked_has_pre_run` distinguishes binder-shaped expressions (literal-name slots are
+/// declarations) from call-shaped expressions (literal-name slots are references that may
+/// need to park). The three index vectors are disjoint by construction over disjoint
+/// `(SignatureElement, ExpressionPart)` shapes — `classify_for_pick` is the sole producer.
+pub struct ClassifiedSlots {
+    pub eager_indices: Option<Vec<usize>>,
+    pub wrap_indices: Vec<usize>,
+    pub ref_name_indices: Vec<usize>,
+    pub picked_has_pre_run: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -93,6 +117,136 @@ impl<'a> KFunction<'a> {
             })
             .collect();
         format!("fn({})", parts.join(" "))
+    }
+
+    /// Lazy-candidate shape check for this function: is `self` a viable lazy match for
+    /// `expr`, and if so what are the indices of its eager-Expression parts? Returns `None`
+    /// when this function isn't a lazy candidate (length mismatch, fixed-token mismatch, no
+    /// `KExpression` slot binding an `Expression` part, or any other arg-type mismatch).
+    /// Lazy means at least one `KType::KExpression` slot is bound by an
+    /// `ExpressionPart::Expression`; the caller schedules the eager indices as deps and
+    /// leaves the lazy ones in place for the receiving builtin to dispatch itself.
+    pub fn lazy_eager_indices(&self, expr: &KExpression<'_>) -> Option<Vec<usize>> {
+        let sig = &self.signature;
+        if sig.elements.len() != expr.parts.len() {
+            return None;
+        }
+        let mut eager_indices: Vec<usize> = Vec::new();
+        let mut has_lazy_slot = false;
+        for (i, (el, part)) in sig.elements.iter().zip(expr.parts.iter()).enumerate() {
+            match (el, part) {
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
+                (SignatureElement::Keyword(_), _) => return None,
+                (SignatureElement::Argument(arg), part) => match (&arg.ktype, part) {
+                    (KType::KExpression, ExpressionPart::Expression(_)) => {
+                        has_lazy_slot = true;
+                    }
+                    (KType::KExpression, _) => return None,
+                    (_, ExpressionPart::Expression(_)) => {
+                        // Speculative: assume the eager-evaluated result will type-match at
+                        // late dispatch. If not, dispatch will fail at that point.
+                        eager_indices.push(i);
+                    }
+                    (_, other) => {
+                        if !arg.matches(other) {
+                            return None;
+                        }
+                    }
+                },
+            }
+        }
+        if has_lazy_slot { Some(eager_indices) } else { None }
+    }
+
+    /// Auto-wrap-permissive shape check: bare-Identifier and bare-Type parts in a slot whose
+    /// declared type is neither `Identifier` nor `TypeExprRef` are tentatively accepted (the
+    /// auto-wrap pass will rewrite them into sub-Dispatches whose results type-check at
+    /// late dispatch). All other slot/part pairings reuse the normal `Argument::matches`
+    /// check. Mirrors the strict matcher except for the bare-name-in-value-slot allowance —
+    /// covers both `MAKESET some_var` (Identifier) and `MAKESET IntOrd` (Type-token).
+    pub fn accepts_for_wrap(&self, expr: &KExpression<'_>) -> bool {
+        let sig = &self.signature;
+        if sig.elements.len() != expr.parts.len() {
+            return false;
+        }
+        for (el, part) in sig.elements.iter().zip(expr.parts.iter()) {
+            match (el, part) {
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
+                (SignatureElement::Keyword(_), _) => return false,
+                (SignatureElement::Argument(arg), part) => {
+                    let is_bare_name = matches!(
+                        part,
+                        ExpressionPart::Identifier(_)
+                            | ExpressionPart::Type(crate::ast::TypeExpr {
+                                params: crate::ast::TypeParams::None,
+                                ..
+                            })
+                    );
+                    if is_bare_name
+                        && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
+                    {
+                        continue;
+                    }
+                    if !arg.matches(part) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Per-slot classification: classify `expr`'s slots against `self`'s signature into
+    /// three disjoint index buckets — `eager_indices`, `wrap_indices`, `ref_name_indices` —
+    /// plus a `picked_has_pre_run` flag. Identifier and bare leaf Type-token
+    /// (`TypeParams::None`) parts are treated symmetrically — both name-shaped parts ride
+    /// the same wrap-or-park rails, so `LET T = Number` and `LET y = z` (and their
+    /// forward-reference variants) walk identical scheduler paths.
+    ///
+    /// Disjointness is guaranteed by construction: each slot's `(SignatureElement,
+    /// ExpressionPart)` shape lands in at most one bucket. The classifier is the sole
+    /// producer of these vectors; the downstream scheduler may rely on the invariant.
+    pub fn classify_for_pick(&self, expr: &KExpression<'_>) -> ClassifiedSlots {
+        let eager_indices = self.lazy_eager_indices(expr);
+        let mut wrap_indices: Vec<usize> = Vec::new();
+        let mut ref_name_indices: Vec<usize> = Vec::new();
+        let picked_has_pre_run = self.pre_run.is_some();
+        for (i, (el, part)) in self.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
+            let SignatureElement::Argument(arg) = el else { continue };
+            let is_bare_name = matches!(
+                part,
+                ExpressionPart::Identifier(_)
+                    | ExpressionPart::Type(crate::ast::TypeExpr {
+                        params: crate::ast::TypeParams::None,
+                        ..
+                    })
+            );
+            if !is_bare_name {
+                continue;
+            }
+            match &arg.ktype {
+                // Bare name in literal-name slot: replay-park iff the picked function isn't
+                // a binder. Binders' literal-name slots are *declarations*; the slot already
+                // owns the name and must not park on its own placeholder.
+                KType::Identifier | KType::TypeExprRef => {
+                    if !picked_has_pre_run {
+                        ref_name_indices.push(i);
+                    }
+                }
+                // Bare name in any other slot (including `Any`): auto-wrap. The wrap
+                // rewrites the part into a sub-Dispatch that re-enters via the bare-name
+                // short-circuit and routes through the Identifier / TypeExprRef overload of
+                // `value_lookup`. Covers both `LET y = z` and `LET T = Number` /
+                // `MAKESET IntOrd` symmetrically.
+                _ => wrap_indices.push(i),
+            }
+        }
+        ClassifiedSlots {
+            eager_indices,
+            wrap_indices,
+            ref_name_indices,
+            picked_has_pre_run,
+        }
     }
 
     pub fn bind(&'a self, expr: KExpression<'a>) -> Result<KFuture<'a>, KError> {
@@ -194,5 +348,199 @@ impl<'a> KFunction<'a> {
             }
         }
         BodyResult::tail(KExpression { parts })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{KLiteral, TypeExpr};
+    use crate::runtime::builtins::test_support::{marker, run_root_bare};
+    use crate::runtime::builtins::{default_scope, register_builtin};
+    use crate::runtime::machine::core::{RuntimeArena, Scope};
+    use crate::runtime::model::types::{Argument, ExpressionSignature, KType};
+
+    fn body_any<'a>(
+        s: &'a Scope<'a>,
+        _h: &mut dyn SchedulerHandle<'a>,
+        _a: ArgumentBundle<'a>,
+    ) -> BodyResult<'a> {
+        BodyResult::Value(marker(s, "any"))
+    }
+
+    /// Walk the scope chain and return the first overload whose strict-or-tentative shape
+    /// matches `expr` — the chain-walk half of [`Scope::resolve_dispatch`], factored out
+    /// here so the migrated tests can assert on `f.classify_for_pick(&expr)` directly
+    /// without re-invoking the full resolution outcome.
+    fn find_match<'a>(
+        scope: &'a Scope<'a>,
+        expr: &KExpression<'_>,
+    ) -> Option<&'a KFunction<'a>> {
+        let key = expr.untyped_key();
+        let mut current: Option<&Scope<'a>> = Some(scope);
+        while let Some(s) = current {
+            let functions = s.functions.borrow();
+            if let Some(bucket) = functions.get(&key) {
+                for f in bucket.iter() {
+                    if f.signature.matches(expr) {
+                        return Some(*f);
+                    }
+                }
+                for f in bucket.iter() {
+                    if f.accepts_for_wrap(expr) {
+                        return Some(*f);
+                    }
+                }
+            }
+            current = s.outer;
+        }
+        None
+    }
+
+    /// A function whose signature is `OP <v:Number>` classified against `OP someName` (where
+    /// `someName` is a bare Identifier in a Number-typed slot) returns `wrap_indices = [1]`
+    /// and no ref_name_indices — the dispatcher will wrap `someName` as a sub-Dispatch so
+    /// it resolves through `value_lookup` (or the bare-name short-circuit, if the name is
+    /// bound).
+    #[test]
+    fn classify_returns_wrap_indices_for_value_slot_identifiers() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("OP".into()),
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Number }),
+            ],
+        };
+        register_builtin(scope, "OP", sig, body_any);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Identifier("someName".into()),
+            ],
+        };
+        let f = find_match(scope, &expr).expect("OP <Number> should match");
+        let pick = f.classify_for_pick(&expr);
+        assert_eq!(pick.wrap_indices, vec![1]);
+        assert!(pick.ref_name_indices.is_empty());
+        assert!(!pick.picked_has_pre_run);
+    }
+
+    /// `call_by_name`'s shape — `<verb:Identifier> <args:KExpression>` — picked against
+    /// `myFn (x: 1)` returns ref_name_indices = [0]: the Identifier slot is a literal-name
+    /// reference and the function has no pre_run, so replay-park will check whether `myFn`
+    /// resolves to a placeholder.
+    #[test]
+    fn classify_returns_ref_name_indices_for_non_pre_run_function() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let inner = KExpression {
+            parts: vec![
+                ExpressionPart::Identifier("x".into()),
+                ExpressionPart::Keyword(":".into()),
+                ExpressionPart::Literal(KLiteral::Number(1.0)),
+            ],
+        };
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Identifier("myFn".into()),
+                ExpressionPart::Expression(Box::new(inner)),
+            ],
+        };
+        let f = find_match(scope, &expr)
+            .expect("call_by_name should match Identifier-leading expression");
+        let pick = f.classify_for_pick(&expr);
+        assert!(pick.ref_name_indices.contains(&0));
+        assert!(!pick.picked_has_pre_run);
+    }
+
+    /// LET's name slot is `Identifier` (or `TypeExprRef`), but LET has `pre_run = Some(_)` —
+    /// so `classify_for_pick` should NOT include the name slot in `ref_name_indices`.
+    /// Binder literal-name slots are *declarations*, not references; replay-park must skip
+    /// them.
+    #[test]
+    fn classify_skips_ref_name_indices_for_pre_run_function() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("LET".into()),
+                ExpressionPart::Identifier("x".into()),
+                ExpressionPart::Keyword("=".into()),
+                ExpressionPart::Literal(KLiteral::Number(1.0)),
+            ],
+        };
+        let f = find_match(scope, &expr).expect("LET should match");
+        let pick = f.classify_for_pick(&expr);
+        assert!(pick.picked_has_pre_run);
+        assert!(
+            pick.ref_name_indices.is_empty(),
+            "LET's Identifier name slot is a declaration, not a reference; \
+             should not be ref_name_index. Got {:?}",
+            pick.ref_name_indices,
+        );
+    }
+
+    /// A non-pre_run function whose slot is `TypeExprRef`, classified against a bare leaf
+    /// Type-token, lands the Type slot in `ref_name_indices` the same way an Identifier in
+    /// an Identifier slot does — replay-park parks the call on the Type-token's
+    /// placeholder. Symmetry pinned by
+    /// [design/execution-model.md § Dispatch-time name placeholders](../../../design/execution-model.md#dispatch-time-name-placeholders).
+    #[test]
+    fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("OP".into()),
+                SignatureElement::Argument(Argument {
+                    name: "v".into(),
+                    ktype: KType::TypeExprRef,
+                }),
+            ],
+        };
+        register_builtin(scope, "OP", sig, body_any);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Type(TypeExpr::leaf("IntOrd".into())),
+            ],
+        };
+        let f = find_match(scope, &expr).expect("OP <TypeExprRef> should match");
+        let pick = f.classify_for_pick(&expr);
+        assert_eq!(pick.ref_name_indices, vec![1]);
+        assert!(pick.wrap_indices.is_empty());
+        assert!(!pick.picked_has_pre_run);
+    }
+
+    /// Companion to the literal-name slot case: a bare leaf Type-token in an `Any` slot of a
+    /// non-binder lands in `wrap_indices` so the auto-wrap pass rewrites it into a
+    /// sub-Dispatch that resolves through the TypeExprRef overload of `value_lookup`.
+    /// `LET T = Number` walks the same wrap path as `LET y = z`.
+    #[test]
+    fn classify_type_token_in_any_slot_returns_wrap_indices() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("OP".into()),
+                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
+            ],
+        };
+        register_builtin(scope, "OP", sig, body_any);
+        let expr = KExpression {
+            parts: vec![
+                ExpressionPart::Keyword("OP".into()),
+                ExpressionPart::Type(TypeExpr::leaf("Number".into())),
+            ],
+        };
+        let f = find_match(scope, &expr).expect("OP <Any> should match");
+        let pick = f.classify_for_pick(&expr);
+        assert_eq!(pick.wrap_indices, vec![1]);
+        assert!(pick.ref_name_indices.is_empty());
+        assert!(!pick.picked_has_pre_run);
     }
 }

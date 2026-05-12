@@ -73,7 +73,7 @@ The output is one [`KExpression`](src/ast.rs) per top-level line: an ordered seq
 
 ### dispatch — `KExpression` → `KFuture` against a `Scope`
 
-A [`Scope`](src/runtime/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. `Scope::dispatch` scans registered functions for one whose [`ExpressionSignature`](src/runtime/machine/kfunction.rs) matches the incoming expression — signatures are an ordered mix of fixed `Token`s and typed `Argument` slots — then `bind`s the expression into a [`KFuture`](src/runtime/machine/core/scope.rs): the resolved function plus its `ArgumentBundle`, ready to run but not yet executed.
+A [`Scope`](src/runtime/machine/core/scope.rs) is a lexical environment: parent link, name → value bindings, an indexed list of functions, and a pluggable output sink. `Scope::resolve_dispatch` walks the scope chain in a single pass and returns a [`ResolveOutcome`](src/runtime/machine/core/scope.rs) — `Resolved` (a unique pick, classified per slot), `Ambiguous(n)` (strict-mode tie), `Deferred` (no match yet but nested subs may unblock one), or `Unmatched` (a real dispatch failure). [`ExpressionSignature`](src/runtime/machine/kfunction.rs)s mix fixed `Token`s and typed `Argument` slots; on `Resolved` the scheduler `bind`s the resolved function into a [`KFuture`](src/runtime/machine/core/scope.rs) — the function plus its `ArgumentBundle`, ready to run but not yet executed.
 
 Runtime values are [`KObject`](src/runtime/model/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/runtime/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/runtime/builtins.rs) and produce the default root scope.
 
@@ -95,9 +95,11 @@ builtin), [model/](src/runtime/model) (the value/type vocabulary —
 [types/](src/runtime/model/types) for `KType`/signatures/traits and
 [values/](src/runtime/model/values) for `KObject`/`KKey`/struct & union construction),
 and [machine/](src/runtime/machine) (the execution engine — [kfunction.rs](src/runtime/machine/kfunction.rs)
-ties model and builtins to dispatch, [core/](src/runtime/machine/core) holds
-arenas/`Scope`/`KError`/the dispatcher, and [execute/](src/runtime/machine/execute)
-holds the scheduler and the `interpret` glue).
+ties model and builtins to dispatch and owns the shape-classification predicates
+that decide what each slot evaluates eagerly vs. lazily, [core/](src/runtime/machine/core)
+holds arenas/`Scope`/`KError` (overload resolution is one
+`Scope::resolve_dispatch` method that returns a `ResolveOutcome`), and
+[execute/](src/runtime/machine/execute) holds the scheduler and the `interpret` glue).
 
 Within those sub-modules, the `k`-prefix marks files built around a single
 eponymous Koan-runtime type: [kobject.rs](src/runtime/model/values/kobject.rs) defines `KObject`,
@@ -108,9 +110,11 @@ eponymous Koan-runtime type: [kobject.rs](src/runtime/model/values/kobject.rs) d
 [ktraits.rs](src/runtime/model/types/ktraits.rs) holds the `K*`-typed core traits.
 Files without the prefix are infrastructure that don't introduce a single namesake type:
 [arena.rs](src/runtime/machine/core/arena.rs) (allocation),
-[scope.rs](src/runtime/machine/core/scope.rs) (lexical environment),
-[dispatcher.rs](src/runtime/machine/core/dispatcher.rs) (overload resolution),
-[signature.rs](src/runtime/model/types/signature.rs) (dispatch shapes and specificity),
+[scope.rs](src/runtime/machine/core/scope.rs) (lexical environment plus the
+`Scope::resolve_dispatch` overload-resolution walk and `Resolved` /
+`ResolveOutcome` types),
+[signature.rs](src/runtime/model/types/signature.rs) (dispatch shapes and specificity,
+including `ExpressionSignature::most_specific` for the per-bucket tournament),
 [builtins.rs](src/runtime/builtins.rs) (registry),
 [tagged_union.rs](src/runtime/model/values/tagged_union.rs) (shared structure),
 [struct_value.rs](src/runtime/model/values/struct_value.rs) (shared structure),
@@ -186,9 +190,8 @@ src/
         ├── core.rs       module surface for core/
         ├── core/
         │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
-        │   ├── dispatcher.rs  overload resolution: pick / specificity / lazy-candidate
         │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
-        │   └── scope.rs       Scope and KFuture
+        │   └── scope.rs       Scope, KFuture, plus Scope::resolve_dispatch and the Resolved / ResolveOutcome types
         ├── execute.rs
         └── execute/
             ├── scheduler.rs   Scheduler struct, execute loop, KFunction::invoke bridge; dep_graph/, node_store/, submit/, work_queues/, tests under it

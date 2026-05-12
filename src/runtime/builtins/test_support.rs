@@ -1,5 +1,7 @@
 //! Shared test-only scaffolding for the builtin tests: a `Write` sink that captures PRINT
-//! output, the parse/run/run_err harness over the dispatcher, and run-root scope constructors.
+//! output, the parse/run/run_err harness over the dispatcher, run-root scope constructors,
+//! and a handful of dispatch-test signature/marker builders shared between
+//! `core::scope::tests` and `execute::scheduler::tests`.
 //!
 //! All items are `pub(crate)` and the module is gated `#[cfg(test)]` at its declaration site.
 
@@ -8,6 +10,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::runtime::model::KObject;
+use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement};
 use crate::runtime::machine::{KError, RuntimeArena, Scope};
 use crate::runtime::machine::execute::Scheduler;
 use crate::ast::KExpression;
@@ -83,4 +86,23 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
         sched.add_dispatch(expr, scope);
     }
     sched.execute().expect("scheduler should succeed");
+}
+
+/// Allocate a labeled marker object on `scope`'s arena. Dispatch tests register builtins
+/// whose bodies return distinct markers (`"identifier"`, `"any"`, …) so the test asserts
+/// which overload won by inspecting the produced string.
+pub(crate) fn marker<'a>(scope: &'a Scope<'a>, label: &'static str) -> &'a KObject<'a> {
+    scope.arena.alloc_object(KObject::KString(label.into()))
+}
+
+/// Build a one-argument signature (`<name: kt>`) returning `Any`. Used by dispatch-test
+/// builtins on both sides of the scope/scheduler split.
+pub(crate) fn one_slot_sig(name: &str, kt: KType) -> ExpressionSignature {
+    ExpressionSignature {
+        return_type: KType::Any,
+        elements: vec![SignatureElement::Argument(Argument {
+            name: name.into(),
+            ktype: kt,
+        })],
+    }
 }

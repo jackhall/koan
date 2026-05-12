@@ -234,8 +234,30 @@ mod tests {
     use super::*;
     use crate::runtime::builtins::default_scope;
     use crate::runtime::model::KObject;
-    use crate::runtime::machine::CallArena;
+    use crate::runtime::machine::{CallArena, KError, KErrorKind, ResolveOutcome, Scope};
     use crate::parse::parse;
+    use crate::runtime::model::Parseable;
+
+    /// Test-only `(scope, expr) → KFuture` driver for one-shot bind without spinning a
+    /// `Scheduler`. Not production API — the scheduler drives all real dispatches.
+    fn dispatch_for_test<'a>(
+        scope: &'a Scope<'a>,
+        expr: KExpression<'a>,
+    ) -> Result<KFuture<'a>, KError> {
+        match scope.resolve_dispatch(&expr) {
+            ResolveOutcome::Resolved(r) => r.function.bind(expr),
+            ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
+                expr: expr.summarize(),
+                candidates: n,
+            })),
+            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
+                Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: expr.summarize(),
+                    reason: "no matching function".to_string(),
+                }))
+            }
+        }
+    }
 
     /// A KFuture with no descendant borrow into the dying arena must lift to
     /// `frame: None` — anchoring would over-keep the arena. The dummy KFunction
@@ -262,7 +284,7 @@ mod tests {
 
         let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
         let parsed = exprs.remove(0);
-        let future = scope.dispatch(parsed).expect("dispatch should succeed");
+        let future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
         let kf_obj = KObject::KFuture(future, None);
 
         let strong_before = Rc::strong_count(&dying);
@@ -310,7 +332,7 @@ mod tests {
 
         let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
         let parsed = exprs.remove(0);
-        let mut future = scope.dispatch(parsed).expect("dispatch should succeed");
+        let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
         let inside: &KObject = dying.arena().alloc_object(KObject::Number(7.0));
         future.parsed.parts.push(ExpressionPart::Future(inside));
         let kf_obj = KObject::KFuture(future, None);

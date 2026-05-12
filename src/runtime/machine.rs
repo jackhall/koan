@@ -15,5 +15,8 @@ pub use kfunction::{
     ArgumentBundle, Body, BodyResult, CombineFinish, KFunction, NodeId, SchedulerHandle,
 };
 pub(crate) use kfunction::substitute_params;
-pub use core::{CallArena, Frame, KError, KErrorKind, KFuture, Resolution, RuntimeArena, Scope};
+pub use core::{
+    CallArena, Frame, KError, KErrorKind, KFuture, ResolveOutcome, Resolution, Resolved,
+    RuntimeArena, Scope,
+};
 pub use execute::{Scheduler, interpret, interpret_with_writer};

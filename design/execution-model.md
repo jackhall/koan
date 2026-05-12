@@ -191,7 +191,7 @@ same property: a lookup whose target binder has dispatched but not yet
 executed parks on the producer instead of failing with `UnboundName`. The
 mechanism lives in two pieces.
 
-A new [`Scope::placeholders`](../src/runtime/machine/core/scope.rs) sidecar — a
+A [`Scope::placeholders`](../src/runtime/machine/core/scope.rs) sidecar — a
 `RefCell<HashMap<String, NodeId>>` — sits parallel to `data`. When a binder
 dispatches, its `pre_run` hook (a per-`KFunction` extractor that pulls the
 to-be-bound name structurally out of the expression's parts) installs
@@ -206,31 +206,62 @@ and `register_function` remove their own placeholder before inserting into
 `data` / `functions`, so the two tables are mutually exclusive at any
 moment.
 
-The execute side — [`run_dispatch`](../src/runtime/machine/execute/scheduler/dispatch.rs) — handles the
-park. A bare-name dispatch slot (`(some_var)`) hits the **bare-name
-short-circuit** that resolves the name directly: `Value` returns inline,
-`Placeholder` rewrites the slot's work to `Lift { from: producer_id }`
-(the same shim `BodyResult::Tail` uses for sub-Bind waits), `Unbound`
-falls through to `value_lookup`'s structured error. The **auto-wrap
-pass** (carrier: `ShapePick::wrap_indices`) promotes bare-name parts in
-*value-typed* slots of any picked function to single-part sub-expressions
-so they re-enter `run_dispatch` and route through the bare-name
-short-circuit. Both `ExpressionPart::Identifier` and bare leaf
-`ExpressionPart::Type` (a Type-token with no `<…>` parameters) are
-bare-name parts here and ride identical rails: `LET y = z` and
-`LET T = Number` walk the same wrap → sub-dispatch → `value_lookup` path,
-the first through the `Identifier` overload and the second through the
-`TypeExprRef` overload of `value_lookup`. Multi-name forward references
-compose as N independent sub-Dispatches. The **replay-park** (carrier:
-`ShapePick::ref_name_indices`) covers the literal-name slots that *don't*
-sub-dispatch (`call_by_name`'s verb, `ATTR`'s identifier-lhs,
-`type_call`'s verb, ascription's `m` / `s` slots): if any of those names
-— Identifier or bare leaf Type-token — resolves to a placeholder whose
-producer hasn't terminalized, the outer slot's work is rewritten to
-`Dispatch(same_expr)` and parked on the producer's notify-list; on wake
-the re-dispatch finds the binding in `data` and proceeds. If the producer
-already terminalized with an error, the consumer's replay-park surfaces
-it with a `<replay-park>` frame rather than parking on a dead slot.
+The execute side — [`run_dispatch`](../src/runtime/machine/execute/scheduler/dispatch.rs) — is a
+five-phase linear pipeline: a bare-name short-circuit, the chain-walked
+resolution, the placeholder install, the auto-wrap + replay-park rewrite,
+and the dep schedule. Phase 2 calls
+[`Scope::resolve_dispatch`](../src/runtime/machine/core/scope.rs) once and
+matches on its [`ResolveOutcome`](../src/runtime/machine/core/scope.rs):
+`Resolved(r)` continues into phase 3 with the picked function plus the
+per-slot index buckets `r` carries (`wrap_indices`, `ref_name_indices`,
+`eager_indices`); `Ambiguous(n)` and `Unmatched` surface as
+`AmbiguousDispatch` / `DispatchFailed` errors; `Deferred` (no match against
+the bare shape but the expression carries nested `Expression` /
+`ListLiteral` / `DictLiteral` parts whose evaluation may produce typed
+`Future(_)` parts that match) jumps to phase 5's eager-fallthrough loop and
+re-dispatches via [`run_bind`](../src/runtime/machine/execute/scheduler/finish.rs)
+after subs resolve.
+
+The four rails the resolution feeds:
+
+- **Bare-name short-circuit** (phase 1, runs before resolution). A
+  single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
+  directly: `Value` returns inline, `Placeholder` rewrites the slot's work
+  to `Lift { from: producer_id }` (the same shim `BodyResult::Tail` uses for
+  sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
+  produces the structured error.
+- **Placeholder install** (phase 3). If the picked function carries a
+  `pre_run` extractor, `Resolved.placeholder_name` is its result and the
+  driver installs `name → NodeId(idx)` on the dispatching scope. A
+  `Rebind` collision here surfaces as a `Done(Err(_))` step so other slots
+  keep draining.
+- **Auto-wrap pass** (phase 4, carrier: `Resolved.wrap_indices`). Promotes
+  bare-name parts in *value-typed* slots of the picked function to
+  single-part sub-expressions so they re-enter `run_dispatch` and route
+  through the bare-name short-circuit. Both `ExpressionPart::Identifier`
+  and bare leaf `ExpressionPart::Type` (a Type-token with no `<…>`
+  parameters) are bare-name parts here and ride identical rails: `LET y = z`
+  and `LET T = Number` walk the same wrap → sub-dispatch → `value_lookup`
+  path, the first through the `Identifier` overload and the second
+  through the `TypeExprRef` overload of `value_lookup`. Multi-name forward
+  references compose as N independent sub-Dispatches.
+- **Replay-park** (phase 4, carrier: `Resolved.ref_name_indices`). Covers
+  literal-name slots that *don't* sub-dispatch (`call_by_name`'s verb,
+  `ATTR`'s identifier-lhs, `type_call`'s verb, ascription's `m` / `s`
+  slots): if any of those names — Identifier or bare leaf Type-token —
+  resolves to a placeholder whose producer hasn't terminalized, the outer
+  slot's work is rewritten to `Dispatch(same_expr)` and parked on the
+  producer's notify-list; on wake the re-dispatch finds the binding in
+  `data` and proceeds. If the producer already terminalized with an error,
+  the consumer's replay-park surfaces it with a `<replay-park>` frame
+  rather than parking on a dead slot.
+
+`Resolved`'s three index vectors (`wrap_indices` /  `ref_name_indices` /
+`eager_indices`) are disjoint by construction: each slot's
+`(SignatureElement, ExpressionPart)` shape lands in at most one bucket.
+[`KFunction::classify_for_pick`](../src/runtime/machine/kfunction.rs) is
+the sole producer, so the disjointness invariant lives in one place rather
+than as comment-enforced rules across the scheduler driver.
 
 The bare-name short-circuit and replay-park call `DepGraph::add_park_edge`,
 which records a `DepEdge::Notify(producer)` in the consumer's `dep_edges` entry

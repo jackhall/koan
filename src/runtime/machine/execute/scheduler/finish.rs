@@ -1,5 +1,7 @@
 use crate::runtime::model::{KObject, Parseable};
-use crate::runtime::machine::{BodyResult, CombineFinish, Frame, KError, KFuture, NodeId, Scope};
+use crate::runtime::machine::{
+    BodyResult, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId, ResolveOutcome, Scope,
+};
 use crate::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
@@ -32,10 +34,28 @@ impl<'a> Scheduler<'a> {
         }
         // Spliced `Future(&'a KObject)` references survive `results[dep] = None`
         // because the objects live in arenas tied to lexical scope. Reclaim happens
-        // before `scope.dispatch` so the dispatched body's `add()` calls can recycle
-        // the indices immediately.
+        // before resolution so the dispatched body's `add()` calls can recycle the
+        // indices immediately.
         self.reclaim_deps(idx, dep_indices);
-        let future = scope.dispatch(expr)?;
+        let future = match scope.resolve_dispatch(&expr) {
+            ResolveOutcome::Resolved(r) => r.function.bind(expr)?,
+            ResolveOutcome::Ambiguous(n) => {
+                return Err(KError::new(KErrorKind::AmbiguousDispatch {
+                    expr: expr.summarize(),
+                    candidates: n,
+                }));
+            }
+            // `Deferred` shouldn't reach here: every Expression/ListLiteral/DictLiteral
+            // part was scheduled before this Bind, and after reclaim the slots now hold
+            // `Future(_)`. Treat as a defensive dispatch failure rather than re-entering
+            // the eager loop (which would risk a no-progress cycle).
+            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
+                return Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: expr.summarize(),
+                    reason: "no matching function".to_string(),
+                }));
+            }
+        };
         Ok(self.invoke_to_step(future, scope, idx))
     }
 

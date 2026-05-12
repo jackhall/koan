@@ -15,7 +15,8 @@ pub use ktype::KType;
 #[allow(unused_imports)]
 pub use resolver::{NoopResolver, ScopeResolver, TypeResolver};
 pub use signature::{
-    Argument, ExpressionSignature, SignatureElement, Specificity, UntypedElement, UntypedKey,
-    is_keyword_token,
+    Argument, ExpressionSignature, SignatureElement, UntypedElement, UntypedKey, is_keyword_token,
 };
+#[allow(unused_imports)]
+pub use signature::Specificity;
 pub use typed_field_list::parse_typed_field_list;
