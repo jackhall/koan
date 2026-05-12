@@ -8,11 +8,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::dispatch::builtins::default_scope;
-use koan::dispatch::runtime::{RuntimeArena, Scope};
-use koan::dispatch::values::KObject;
-use koan::execute::scheduler::Scheduler;
-use koan::parse::expression_tree::parse;
+use koan::runtime::builtins::default_scope;
+use koan::runtime::model::KObject;
+use koan::runtime::machine::{RuntimeArena, Scheduler, Scope};
+use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through
 /// the scheduler, and return both the captured PRINT output and the root scope so tests
@@ -54,7 +53,7 @@ fn module_body_forward_reference_resolves() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&arena, captured, "MODULE Mod = ((LET y = x) (LET x = 1))");
     let m = match scope.lookup("Mod") {
-        Some(KObject::KModule(m)) => *m,
+        Some(KObject::KModule(m, _)) => *m,
         _ => panic!("Mod should be a module"),
     };
     let data = m.child_scope().data.borrow();
@@ -128,7 +127,7 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
 /// roadmap item.
 #[test]
 fn producer_error_propagates_to_parked_consumer() {
-    use koan::dispatch::runtime::KErrorKind;
+    use koan::runtime::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);

@@ -1,6 +1,6 @@
 # Per-declaration type identity for structs and tagged unions
 
-**Problem.** [`KType`](../src/dispatch/types/ktype.rs) carries opaquely-ascribed
+**Problem.** [`KType`](../src/runtime/model/types/ktype.rs) carries opaquely-ascribed
 module abstract types as `KType::ModuleType { scope_id, name }`, so two
 opaque ascriptions of the same source module mint observably distinct types.
 Flat user-defined struct and tagged-union types do not get the same
@@ -52,6 +52,13 @@ encoding the identity.
   declared as `Struct` (today: matches any struct) needs a migration story
   — either widen to a wildcard slot that accepts any declared struct, or
   treat the bare `Struct` shape as a parse error in slot position.
+- *Recursive declarations — decided.* Schemas with self-references
+  elaborate to `KType::RecursiveRef(name)` per [eager type elaboration
+  with placeholder-based recursion](eager-type-elaboration.md); this
+  work's `{ scope_id, name }` carrier inherits the binder name, and
+  `RecursiveRef` resolution finds the concrete identity by walking the
+  enclosing schema-binder context. The recursion encoding does not
+  change shape when this work lands.
 - *Module-system relationship — decided.* This is not part of the
   module-system staged work — opaque-ascription types and user-defined
   types are conceptually distinct (one is an abstraction barrier, the

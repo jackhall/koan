@@ -33,8 +33,8 @@ cargo fmt --all -- --check
 Run these locally before pushing. Clippy is configured per-crate in
 [Cargo.toml](Cargo.toml); per-site `#[allow(...)]` is fine when the lint is
 wrong (e.g., the `clippy::unnecessary_cast` allows in
-[src/dispatch/runtime/arena.rs](src/dispatch/runtime/arena.rs) and
-[src/dispatch/values/module.rs](src/dispatch/values/module.rs) where the
+[src/runtime/machine/core/arena.rs](src/runtime/machine/core/arena.rs) and
+[src/runtime/model/values/module.rs](src/runtime/model/values/module.rs) where the
 through-`'static` cast is required by the lifetime-erasure pattern).
 
 ## Miri audit slate
@@ -78,13 +78,13 @@ Use the most-recent entry as the baseline expectation when scheduling a run.
 22 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the command above.
 
-**Singleton transmutes** ([src/dispatch/runtime/arena.rs](src/dispatch/runtime/arena.rs)) — the `'static`→`'a`
+**Singleton transmutes** ([src/runtime/machine/core/arena.rs](src/runtime/machine/core/arena.rs)) — the `'static`→`'a`
 re-annotation on the `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` shared singletons.
 
 - `singleton_ref_independent_of_arena_lifetime`
 - `singletons_aliasable`
 
-**`CallArena` lifetime erasure** ([src/dispatch/runtime/arena.rs](src/dispatch/runtime/arena.rs)) — the
+**`CallArena` lifetime erasure** ([src/runtime/machine/core/arena.rs](src/runtime/machine/core/arena.rs)) — the
 `*const Scope<'static>` round-trip plus the `Rc<CallArena>` chain that keeps
 per-call arenas pinned across re-borrow.
 
@@ -94,36 +94,36 @@ per-call arenas pinned across re-borrow.
 - `call_arena_chained_outer_frame_walkable`
 - `call_arena_scope_re_anchored_into_struct_alongside_rc`
 
-**`RuntimeArena` interior mutation under live borrows** ([src/dispatch/runtime/arena.rs](src/dispatch/runtime/arena.rs)).
+**`RuntimeArena` interior mutation under live borrows** ([src/runtime/machine/core/arena.rs](src/runtime/machine/core/arena.rs)).
 
 - `runtime_arena_alloc_while_prior_ref_live`
 
-**Cycle gate** ([src/dispatch/runtime/arena.rs](src/dispatch/runtime/arena.rs)) — `alloc_object` redirects
+**Cycle gate** ([src/runtime/machine/core/arena.rs](src/runtime/machine/core/arena.rs)) — `alloc_object` redirects
 a value carrying a self-anchored `Rc<CallArena>` to the escape arena, breaking
 the storage cycle that closure-escape returns can otherwise produce.
 
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
 
-**Closure escape and TCO replace** ([src/dispatch/builtins/call_by_name.rs](src/dispatch/builtins/call_by_name.rs)) — a closure
+**Closure escape and TCO replace** ([src/runtime/builtins/call_by_name.rs](src/runtime/builtins/call_by_name.rs)) — a closure
 returned from its defining frame remains invocable, including with parameters
 whose values are arena-allocated in the dying frame.
 
 - `closure_escapes_outer_call_and_remains_invocable`
 - `escaped_closure_with_param_returns_body_value`
 
-**`Scope::add` re-entry** ([src/dispatch/runtime/scope.rs](src/dispatch/runtime/scope.rs)) — adding a binding while
+**`Scope::add` re-entry** ([src/runtime/machine/core/scope.rs](src/runtime/machine/core/scope.rs)) — adding a binding while
 a `data` borrow is live queues onto a pending list and drains on borrow drop,
 so the conditional-defer path doesn't violate the `RefCell` invariant.
 
 - `add_during_active_data_borrow_queues_and_drains`
 
-**MATCH on `Tagged` recursion** ([src/dispatch/builtins/match_case.rs](src/dispatch/builtins/match_case.rs)) — the
+**MATCH on `Tagged` recursion** ([src/runtime/builtins/match_case.rs](src/runtime/builtins/match_case.rs)) — the
 `outer_frame` chain keeps the call-site arena alive across TCO replace when a
 user-fn recurses through a `Tagged` parameter via MATCH.
 
 - `recursive_tagged_match_no_uaf`
 
-**KFuture anchor decision** ([src/execute/lift.rs](src/execute/lift.rs)) — the targeted anchor: a KFuture
+**KFuture anchor decision** ([src/runtime/machine/execute/lift.rs](src/runtime/machine/execute/lift.rs)) — the targeted anchor: a KFuture
 whose descendants don't borrow into the dying arena lifts with `frame: None`;
 one with a `Future(&KObject)` allocated in the dying arena anchors with
 `frame: Some(rc)`.
@@ -131,13 +131,13 @@ one with a `Future(&KObject)` allocated in the dying arena anchors with
 - `unanchored_kfuture_no_arena_borrow_does_not_anchor`
 - `unanchored_kfuture_with_arena_borrow_does_anchor`
 
-**Per-call arena reclamation** ([src/dispatch/builtins/fn_def.rs](src/dispatch/builtins/fn_def.rs)) — repeated user-fn
+**Per-call arena reclamation** ([src/runtime/builtins/fn_def.rs](src/runtime/builtins/fn_def.rs)) — repeated user-fn
 calls grow the run-root arena by one lifted return value per call, with all
 per-call scaffolding freed at call return.
 
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call`
 
-**Module / Signature lifetime erasure** ([src/dispatch/values/module.rs](src/dispatch/values/module.rs)) — `Module`
+**Module / Signature lifetime erasure** ([src/runtime/model/values/module.rs](src/runtime/model/values/module.rs)) — `Module`
 and `Signature` carry their captured scope as `*const Scope<'static>` and
 re-attach `'a` via transmute on access; `Module::type_members` mutates a
 `RefCell<HashMap>` while a `&'a Module<'a>` is live (the opaque-ascription
@@ -147,7 +147,7 @@ shape).
 - `signature_decl_scope_transmute_does_not_dangle`
 - `module_type_members_refcell_mutation_with_held_module_ref`
 
-**MODULE body Combine continuation** ([src/dispatch/builtins/module_def.rs](src/dispatch/builtins/module_def.rs)) — the
+**MODULE body Combine continuation** ([src/runtime/builtins/module_def.rs](src/runtime/builtins/module_def.rs)) — the
 MODULE body schedules a `Combine` whose `finish` closure captures the child
 scope and runs on the outer scheduler's main loop after every body statement
 terminalizes. The captured-reference and finalize-write shapes are the
@@ -156,8 +156,8 @@ site, exercised through the actual scheduler path.
 
 - `module_body_dispatch_does_not_dangle`
 
-**Dispatch-time placeholder parking** ([src/execute/run.rs](src/execute/run.rs)) — the §1
-single-Identifier short-circuit and the §8 replay-park (per
+**Dispatch-time placeholder parking** ([src/runtime/machine/execute/run.rs](src/runtime/machine/execute/run.rs)) — the bare-Identifier
+short-circuit and the replay-park (per
 [design/execution-model.md § Dispatch-time name placeholders](design/execution-model.md#dispatch-time-name-placeholders))
 both rewrite a parked slot's work and walk the producer's terminal `&KObject`
 out of `results[from]` after the notify-walk wakes the consumer. The reference

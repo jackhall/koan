@@ -6,11 +6,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::dispatch::builtins::default_scope;
-use koan::dispatch::runtime::{KError, KErrorKind, RuntimeArena, Scope};
-use koan::dispatch::values::KObject;
-use koan::execute::scheduler::Scheduler;
-use koan::parse::expression_tree::parse;
+use koan::runtime::builtins::default_scope;
+use koan::runtime::model::KObject;
+use koan::runtime::machine::{KError, KErrorKind, RuntimeArena, Scheduler, Scope};
+use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 impl std::io::Write for SharedBuf {
@@ -122,7 +121,7 @@ fn cross_scope_shadowing_succeeds() {
     assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
     // Module's x is 99.
     let m = match scope.lookup("Mod") {
-        Some(KObject::KModule(m)) => *m,
+        Some(KObject::KModule(m, _)) => *m,
         _ => panic!("Mod should be a module"),
     };
     let data = m.child_scope().data.borrow();

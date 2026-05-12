@@ -9,15 +9,15 @@ source ──▶ parse ──▶ dispatch ──▶ execute
 
 Dispatch and execution are deliberately separate stages. **Dispatch** does
 name-resolution and signature-matching: given a `KExpression` and a `Scope`, it
-returns a [`KFuture`](../src/dispatch/runtime/scope.rs) — the resolved `&KFunction` plus
+returns a [`KFuture`](../src/runtime/machine/core/scope.rs) — the resolved `&KFunction` plus
 its `ArgumentBundle`, ready to run but not yet executed. **Execution** is what
-the [`Scheduler`](../src/execute/scheduler.rs) does: it owns a DAG of deferred
+the [`Scheduler`](../src/runtime/machine/execute/scheduler.rs) does: it owns a DAG of deferred
 work, decides when each `KFuture` runs, and hands its body the live scope.
 
 ## Dispatch as a scheduler node
 
 The scheduler models dispatch itself as a node type — `Dispatch(KExpression)`.
-[`schedule_expr`](../src/execute/interpret.rs) collapses to "add a `Dispatch`
+[`schedule_expr`](../src/runtime/machine/execute/interpret.rs) collapses to "add a `Dispatch`
 node per top-level expression"; the rest is dynamic. At run time a `Dispatch`
 walks its expression's parts, spawns sub-`Dispatch`/`Bind`/`Combine` nodes for
 nested sub-expressions, and a builtin body holding `&mut dyn SchedulerHandle`
@@ -25,7 +25,7 @@ can also add `Dispatch` nodes.
 
 `Combine` is the host-side dual of `Bind`: an N→1 combinator that waits on a
 fixed set of dep slots and then runs an arbitrary host closure
-([`CombineFinish`](../src/dispatch/kfunction.rs)) over their resolved values.
+([`CombineFinish`](../src/runtime/machine/kfunction.rs)) over their resolved values.
 List- and dict-literal planners use it; the construction logic — including
 already-resolved literal scalars that don't need a dep slot — lives in the
 closure's capture rather than in fixed-shape variants. Body-finalization for
@@ -46,7 +46,7 @@ BodyResult { Value(&KObject) | Tail(KExpression) | Err(KError) }
 
 When a body cannot produce its result inline — its expression has nested
 sub-expressions whose own evaluation hasn't run yet — the slot's work is
-rewritten to `Lift { from: NodeId }` (a [`NodeWork`](../src/execute/nodes.rs)
+rewritten to `Lift { from: NodeId }` (a [`NodeWork`](../src/runtime/machine/execute/nodes.rs)
 variant). The Lift shim parks on the spawned `Bind`'s notify-list, waits
 for that slot's terminal write, and copies the result into its own slot when
 it runs. The original slot keeps its frame and notify-list across the
@@ -61,18 +61,24 @@ The scheduler's edges point producer → consumer. Each slot carries a
 unresolved deps. When a slot writes a terminal `Value` or `Err`, the
 notify-walk drains its `notify_list`, decrements each consumer's
 `pending_deps`, and pushes any zero-counter consumer onto the run-set
-([`Scheduler::notify_consumers`](../src/execute/scheduler.rs)). Consumers
+([`Scheduler::notify_consumers`](../src/runtime/machine/execute/scheduler.rs)). Consumers
 arrive on the run-set only when actually ready; there is no poll-and-requeue.
 
-The run-set has two priority bands. Internal work goes through `ready_set`
-(populated by the notify-walk and by ready-on-arrival nodes registered in
-`add()`). Top-level `add_dispatch` calls go through a separate FIFO `queue`
-so independent top-level expressions execute in submission order. The
-execute loop drains `ready_set` first, then `queue`.
+The run-set has two priority bands managed by
+[`WorkQueues`](../src/runtime/machine/execute/scheduler/work_queues.rs). Internal
+work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
+nodes registered in `add()` — routes through `WorkQueues::push_internal` /
+`push_internal_front` / `push_woken`. Top-level `add_dispatch` calls route
+through `WorkQueues::push_top_level` so independent top-level expressions
+execute in submission order. The execute loop drains via `WorkQueues::pop_next`,
+which yields internal slots ahead of top-level slots; the routing rule (which
+band a push lands in) and the priority rule (which band a pop drains first)
+are both enforced by the wrapper's method surface rather than restated at each
+call site.
 
 ## Tail-call optimization
 
-[`BodyResult::Tail(KExpression)`](../src/dispatch/kfunction.rs) makes a tail
+[`BodyResult::Tail(KExpression)`](../src/runtime/machine/kfunction.rs) makes a tail
 return rewrite the **current scheduler slot's work** to a fresh
 `Dispatch(expr)` and re-run in place — no new node allocated. Both deferring
 builtins (`match_case`, `KFunction::invoke` for user-fns) are tail by
@@ -99,7 +105,7 @@ Reclamation runs at the end of `run_bind` / `run_combine`. Once a Bind has
 read its dep results and spliced them into `expr.parts` as `Future(value)`
 (or a Combine's finish closure has produced its result), the dep slots are
 unreachable: a sub-Dispatch is owned by exactly one Bind / Combine, recorded
-in the consumer's `node_dependencies` entry.
+in the consumer's `dep_edges` entry as a `DepEdge::Owned(NodeId)`.
 Free walks recursively, recycling each dep's own dep tree, and stops at any
 still-live slot via `nodes[i].is_some()` — so a free that dives into another
 in-flight user-fn call leaves that subtree for that call's own reclamation.
@@ -110,11 +116,12 @@ fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Bookkeeping lives in three `Scheduler` sidecars: `notify_list:
 Vec<Vec<NodeId>>` (each producer's dependent list), `pending_deps: Vec<usize>`
-(each consumer's unresolved-dep counter), and `node_dependencies:
-Vec<Vec<usize>>` (each Bind/Combine slot's owned sub-slot indices, captured
-at `add()` time before `take()` consumes the work and used by `free()` to
-walk the ownership tree). The `free_list: Vec<usize>` carries indices whose
-`nodes`/`results`/`notify_list`/`pending_deps`/`node_dependencies` entries
+(each consumer's unresolved-dep counter), and `dep_edges:
+Vec<Vec<DepEdge>>` (each slot's backward edges to producers it depends on,
+tagged `Owned` or `Notify`; the `Owned` arm carries the ownership tree the
+free walk follows, and the `Notify` arm carries park-only edges that the
+walk skips). The `free_list: Vec<usize>` carries indices whose
+`nodes`/`results`/`notify_list`/`pending_deps`/`dep_edges` entries
 are cleared and ready for reuse. See also [memory-model.md § Performance
 notes](memory-model.md).
 
@@ -161,7 +168,7 @@ same property: a lookup whose target binder has dispatched but not yet
 executed parks on the producer instead of failing with `UnboundName`. The
 mechanism lives in two pieces.
 
-A new [`Scope::placeholders`](../src/dispatch/runtime/scope.rs) sidecar — a
+A new [`Scope::placeholders`](../src/runtime/machine/core/scope.rs) sidecar — a
 `RefCell<HashMap<String, NodeId>>` — sits parallel to `data`. When a binder
 dispatches, its `pre_run` hook (a per-`KFunction` extractor that pulls the
 to-be-bound name structurally out of the expression's parts) installs
@@ -176,31 +183,47 @@ and `register_function` remove their own placeholder before inserting into
 `data` / `functions`, so the two tables are mutually exclusive at any
 moment.
 
-The execute side — [`run_dispatch`](../src/execute/run.rs) — handles the
-park. A bare-Identifier dispatch slot (`(some_var)`) hits a §1 short-circuit
-that resolves the name directly: `Value` returns inline, `Placeholder`
-rewrites the slot's work to `Lift { from: producer_id }` (the same shim
-`BodyResult::Tail` uses for sub-Bind waits), `Unbound` falls through to
-`value_lookup`'s structured error. The §7 auto-wrap promotes bare
-identifiers in *value-typed* slots of any picked function to single-Identifier
-sub-expressions so they re-enter `run_dispatch` and route through §1; this
-is why `LET y = z` looks up `z` rather than binding `y` to the literal
-string `"z"`. Multi-name forward references compose as N independent
-sub-Dispatches. The §8 replay-park covers the literal-name slots that
-*don't* sub-dispatch (`call_by_name`'s verb, `ATTR`'s identifier-lhs,
-`type_call`'s verb): if any of those names resolves to a placeholder whose
+The execute side — [`run_dispatch`](../src/runtime/machine/execute/run.rs) — handles the
+park. A bare-name dispatch slot (`(some_var)`) hits the **bare-name
+short-circuit** that resolves the name directly: `Value` returns inline,
+`Placeholder` rewrites the slot's work to `Lift { from: producer_id }`
+(the same shim `BodyResult::Tail` uses for sub-Bind waits), `Unbound`
+falls through to `value_lookup`'s structured error. The **auto-wrap
+pass** (carrier: `ShapePick::wrap_indices`) promotes bare-name parts in
+*value-typed* slots of any picked function to single-part sub-expressions
+so they re-enter `run_dispatch` and route through the bare-name
+short-circuit. Both `ExpressionPart::Identifier` and bare leaf
+`ExpressionPart::Type` (a Type-token with no `<…>` parameters) are
+bare-name parts here and ride identical rails: `LET y = z` and
+`LET T = Number` walk the same wrap → sub-dispatch → `value_lookup` path,
+the first through the `Identifier` overload and the second through the
+`TypeExprRef` overload of `value_lookup`. Multi-name forward references
+compose as N independent sub-Dispatches. The **replay-park** (carrier:
+`ShapePick::ref_name_indices`) covers the literal-name slots that *don't*
+sub-dispatch (`call_by_name`'s verb, `ATTR`'s identifier-lhs,
+`type_call`'s verb, ascription's `m` / `s` slots): if any of those names
+— Identifier or bare leaf Type-token — resolves to a placeholder whose
 producer hasn't terminalized, the outer slot's work is rewritten to
-`Dispatch(same_expr)` and parked on the producer's notify-list; on wake the
-re-dispatch finds the binding in `data` and proceeds. If the producer
-already terminalized with an error, the consumer's replay-park surfaces it
-with a `<replay-park>` frame rather than parking on a dead slot.
+`Dispatch(same_expr)` and parked on the producer's notify-list; on wake
+the re-dispatch finds the binding in `data` and proceeds. If the producer
+already terminalized with an error, the consumer's replay-park surfaces
+it with a `<replay-park>` frame rather than parking on a dead slot.
 
-The new edges are notify-only (consumer→producer for waking, no ownership
-transfer), so `node_dependencies` — the parent → owned-children sidecar that
-`free()` walks — stays untouched. Same-scope rebind of a value name surfaces
+The bare-name short-circuit and replay-park push a
+`DepEdge::Notify(producer)` into the consumer's `dep_edges` entry — the
+same backward-edge sidecar that holds `DepEdge::Owned(child)` for sub-slots
+the consumer owns. `register_slot_deps` walks every entry to install the
+forward `notify_list` edge regardless of kind, but `free()` recurses only
+into `Owned` arms, so a consumer's reclamation cannot transit a park edge
+into a sibling producer's subtree. Same-scope rebind of a value name surfaces
 as `KErrorKind::Rebind`; an `FN` overload duplicating an existing exact
-signature surfaces as `KErrorKind::DuplicateOverload`; recursive type
-definitions deadlock under the uniform-park rule and are tracked separately.
+signature surfaces as `KErrorKind::DuplicateOverload`. Type bindings share
+this placeholder mechanism: a type-binding site registers in
+`Scope::placeholders` exactly like a value binding, external lookups park
+the same way, and self-references during a binding's own elaboration
+short-circuit through the elaborator's threaded-set recognition (see
+[type-system.md § Type elaboration](type-system.md#type-elaboration)) so
+recursive type definitions don't deadlock on their own placeholder.
 
 ## Open work
 
@@ -210,11 +233,14 @@ definitions deadlock under the uniform-park rule and are tracked separately.
   `Dispatch` and `Bind` machinery — type-returning builtins on the value
   path, `Bind` as the refinement-and-wake-up mechanism, and stage 5
   implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
-  node kind. Module-system
-  [stage 2](../roadmap/module-system-2-scheduler.md) lands the type-builtin
-  substrate end-to-end through FN signatures;
+  node kind.
+  [Eager type elaboration](../roadmap/eager-type-elaboration.md) lands the
+  scheduler-driven type-elaboration substrate end-to-end through FN
+  signatures, including placeholder-based recursive type definitions;
+  module-system [stage 2](../roadmap/module-system-2-scheduler.md) layers
+  higher-kinded slots and sharing constraints on top;
   [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
-  implicit search on top.
+  implicit search.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

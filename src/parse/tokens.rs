@@ -12,8 +12,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::dispatch::types::is_keyword_token;
-use crate::parse::kexpression::{ExpressionPart, KLiteral, TypeExpr};
+use crate::runtime::model::is_keyword_token;
+use crate::ast::{ExpressionPart, KLiteral, TypeExpr};
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
@@ -171,7 +171,7 @@ fn read_atom<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, Stri
 #[cfg(test)]
 mod tests {
     use super::classify_token;
-    use crate::parse::kexpression::{ExpressionPart, KLiteral};
+    use crate::ast::{ExpressionPart, KLiteral};
 
     fn describe(p: &ExpressionPart<'_>) -> String {
         match p {
@@ -319,7 +319,7 @@ mod tests {
         assert!(classify("?foo").is_err());
     }
 
-    // Module-system stage 1 §2 token-classification tests.
+    // Token-classification tests.
 
     #[test]
     fn keyword_two_uppercase_no_lowercase() {
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn uppercase_with_digits_no_lowercase_is_parse_error() {
-        // `K9` — uppercase first, no lowercase. The §2 rule rejects this rather than letting
+        // `K9` — uppercase first, no lowercase. The token-classification rule rejects this rather than letting
         // it fall through to Identifier (which would silently shadow a future type-position
         // binding).
         assert!(classify("K9").is_err());
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn ascription_compound_tokens_classify_as_keywords() {
-        use crate::dispatch::types::is_keyword_token;
+        use crate::runtime::model::is_keyword_token;
         assert!(is_keyword_token(":|"));
         assert!(is_keyword_token(":!"));
     }

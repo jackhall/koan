@@ -3,7 +3,7 @@
 **Problem.** Stages 1-2 give an explicit module language: every functor
 application, every module-typed argument, every signature constraint is
 written by hand. For everyday generic code this is verbose. The
-[`KType::Module`](../src/dispatch/types/ktype.rs) slot kind that stage 1
+[`KType::Module`](../src/runtime/model/types/ktype.rs) slot kind that stage 1
 shipped accepts any module value regardless of which signature it satisfies,
 so even the explicit-module path lacks the signature-bound dispatch a
 generic-function call site needs. Stage 5 introduces **implicit module

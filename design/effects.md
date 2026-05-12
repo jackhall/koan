@@ -36,7 +36,7 @@ operations:
   module-system stage 4 take `Random` as an explicit parameter (until
   stage 5 makes it implicit).
 - **`IO`** — read/write byte streams. Replaces the
-  [`Scope::out`](../src/dispatch/runtime/scope.rs) `Box<dyn Write>` channel.
+  [`Scope::out`](../src/runtime/machine/core/scope.rs) `Box<dyn Write>` channel.
 - **`Time`** — clock reads.
 - *(others as the language grows)* — file IO, network, environment.
 
@@ -68,7 +68,7 @@ single channel: a default handler performs them; a test handler captures
 them; a replay handler feeds recorded results.
 
 The Rust-side
-[`Monadic`](../src/dispatch/types/ktraits.rs) trait, currently scaffolding
+[`Monadic`](../src/runtime/model/types/ktraits.rs) trait, currently scaffolding
 for `Option`, becomes the bridge between the in-language `Monad`
 signature and the runtime's effect drainage. It implements the carrier
 shape the runtime uses for `Effectful<T>` — a value paired with pending

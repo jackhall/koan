@@ -1,14 +1,14 @@
 # Memory model and scoping rules
 
-Every `KObject` lives in a [`RuntimeArena`](../src/dispatch/runtime/arena.rs). Top-level
+Every `KObject` lives in a [`RuntimeArena`](../src/runtime/machine/core/arena.rs). Top-level
 work allocates into the **run-root arena**; each user-fn call gets its own
-**per-call `RuntimeArena`** owned by [`CallArena`](../src/dispatch/runtime/arena.rs),
+**per-call `RuntimeArena`** owned by [`CallArena`](../src/runtime/machine/core/arena.rs),
 freed when the call's slot finalizes.
 
 ## Scoping: lexical
 
 Free names in a user-fn body resolve through the function's **definition**
-scope, carried on [`KFunction.captured`](../src/dispatch/kfunction.rs) — not the
+scope, carried on [`KFunction.captured`](../src/runtime/machine/kfunction.rs) — not the
 call-site scope. Top-level `FN` definitions capture the run-root, so their free
 names resolve through it; nested `FN`s correctly close over their enclosing
 locals.
@@ -21,7 +21,7 @@ the call-site scope and pin every prior frame's bindings alive.
 
 When a per-call value gets lifted out of its dying frame (typically: a closure
 returned from a body, or any value depending on closure-internal state),
-[`lift_kobject`](../src/execute/lift.rs) rebuilds it in the destination arena.
+[`lift_kobject`](../src/runtime/machine/execute/lift.rs) rebuilds it in the destination arena.
 Two `KObject` variants carry an optional `Rc<CallArena>` that anchors the
 underlying per-call arena alive when needed:
 
@@ -58,7 +58,7 @@ holding a closure — the lift-on-return machinery attaches the per-call frame's
 `Rc` to the closure, then a re-allocation of the composite (via `value_pass`,
 `Combine`, etc.) lands the composite back in the per-call arena.
 
-[`RuntimeArena`](../src/dispatch/runtime/arena.rs) carries an
+[`RuntimeArena`](../src/runtime/machine/core/arena.rs) carries an
 `escape: Option<*const RuntimeArena>` set by `CallArena::new` to the outer
 scope's arena address. `alloc_object` walks the incoming value's composite
 tree (`obj_anchors_to`, mirroring `KObject::deep_clone`'s shape) and, on
@@ -77,7 +77,7 @@ A user-fn call's per-call frame is anchored by lexical scoping: the new frame's
 child scope's `outer` is the FN's *captured* scope (run-root for top-level FNs),
 which outlives every per-call frame. Builtins that build their own per-call
 frame don't always have that property —
-[MATCH](../src/dispatch/builtins/match_case.rs) constructs a frame whose child
+[MATCH](../src/runtime/builtins/match_case.rs) constructs a frame whose child
 scope's `outer` is the **call-site** scope, so free names in the branch body
 resolve against the surrounding call. When the call site itself lives in a
 per-call arena (MATCH inside a user-fn body), the new frame's `outer` pointer
@@ -85,11 +85,11 @@ borrows into that arena, and a TCO replace that drops the call-site frame
 leaves the new frame with a dangling `outer`.
 
 The fix is a frame-chain Rc on
-[`CallArena`](../src/dispatch/runtime/arena.rs): `outer_frame:
+[`CallArena`](../src/runtime/machine/core/arena.rs): `outer_frame:
 Option<Rc<CallArena>>` keeps the parent frame alive whenever the child's
 `outer` points into per-call memory. The scheduler exposes the active slot's
 frame Rc through
-[`SchedulerHandle::current_frame`](../src/dispatch/kfunction.rs), which MATCH
+[`SchedulerHandle::current_frame`](../src/runtime/machine/kfunction.rs), which MATCH
 clones into its `CallArena::new` call. `Scheduler::active_frame` is set per
 slot run and inherited by `add()` so spawned sub-dispatch / sub-bind /
 sub-combine slots also see the right ancestor. Top-level FN invokes pass
@@ -99,7 +99,7 @@ chain is needed and TCO recursion stays bounded).
 ## Fast path
 
 If a dying arena allocated zero `KFunction`s
-([`functions_is_empty`](../src/dispatch/runtime/arena.rs)), no descendant `&KFunction`
+([`functions_is_empty`](../src/runtime/machine/core/arena.rs)), no descendant `&KFunction`
 can point into it, and `lift_kobject` collapses to a plain `deep_clone`. Owned
 variants (`Number`, `KString`, `Bool`, `Null`) `deep_clone` unconditionally —
 mildly wasteful for the "value already in dest arena" case, which the design
@@ -107,10 +107,10 @@ accepts in exchange for not maintaining full arena-provenance tracking.
 
 ## Re-entrant `Scope::add`
 
-[`Scope::add`](../src/dispatch/runtime/scope.rs) tries `try_borrow_mut` on
+[`Scope::add`](../src/runtime/machine/core/scope.rs) tries `try_borrow_mut` on
 `data`/`functions` and falls back to a `pending` queue when a borrow is already
 held; the scheduler drains the queue between dispatch nodes via
-[`drain_pending`](../src/dispatch/runtime/scope.rs). The hot path (no concurrent borrow)
+[`drain_pending`](../src/runtime/machine/core/scope.rs). The hot path (no concurrent borrow)
 is the same direct insert as before — no measured overhead. Re-entrant writes
 that would have panicked now queue silently and become visible after the
 iterating borrow releases, with snapshot-iteration semantics for the iterator.
@@ -124,7 +124,7 @@ Several "must hold" rules are encoded in types rather than checked at runtime:
 - `KFunction::captured_scope() -> &'a Scope<'a>` is non-optional.
 - The running scope passes through `SchedulerHandle::add_dispatch(expr, scope)`
   directly, so dispatch sites carry their scope explicitly.
-- [`RuntimeArena::alloc_function`](../src/dispatch/runtime/arena.rs) `debug_assert`s
+- [`RuntimeArena::alloc_function`](../src/runtime/machine/core/arena.rs) `debug_assert`s
   arena-identity between the function and its captured scope, catching a
   misallocated KFunction at the allocation site rather than later as a
   use-after-free in `lift_kobject`'s fast path.
@@ -135,42 +135,45 @@ The push/notify scheduler ([execution-model.md § Push/notify dependency
 edges](execution-model.md#pushnotify-dependency-edges)) carries three
 `Vec`-shaped sidecars on `Scheduler`: `notify_list: Vec<Vec<NodeId>>` (each
 producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
-unresolved-dep counter), and `node_dependencies: Vec<Vec<usize>>` (each
-Bind/Combine slot's owned sub-slot indices, captured at `add()` time
-before `take()` consumes the work). All three are 1:1 with `nodes`.
-A fourth sidecar, `free_list: Vec<usize>`, holds recyclable indices that
-`add()` pulls from before extending the vecs.
+unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>` (each slot's
+backward edges to producers, tagged `DepEdge::Owned(NodeId)` for sub-slots
+the consumer is responsible for reclaiming and `DepEdge::Notify(NodeId)`
+for sibling producers the consumer only parked on for wake notification).
+All three are 1:1 with `nodes`. A fourth sidecar, `free_list: Vec<usize>`,
+holds recyclable indices that `add()` pulls from before extending the vecs.
 
 Transient-node reclamation runs at the end of `run_bind` / `run_combine`:
 once a Bind has spliced its dep results into `expr.parts` (or a Combine's
 finish closure has produced its result), `Scheduler::free` walks the consumer's
-`node_dependencies` entry recursively and recycles each owned sub-slot's
-indices. The walk skips any still-live slot via the `nodes[i].is_some()`
-guard, so a free that dives into another in-flight user-fn call leaves
-that subtree for that call's own reclamation.
+`dep_edges` entry recursively and recycles each owned sub-slot's indices.
+The walk recurses only into `DepEdge::Owned` arms; `Notify` arms are
+dropped on the floor so reclaiming a consumer cannot reach a sibling
+producer's subtree through a park edge. It skips any still-live slot via
+the `nodes[i].is_some()` guard, so a free that dives into another in-flight
+user-fn call leaves that subtree for that call's own reclamation.
 
 ## Verification
 
-- [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/dispatch/builtins/fn_def.rs)
+- [`repeated_user_fn_calls_do_not_grow_run_root_per_call`](../src/runtime/builtins/fn_def.rs)
   asserts 50 ECHO calls grow the run-root arena by exactly 50 — one lifted
   return value per call, with all per-call scaffolding freed at call return.
 - Closure-escape tests
-  ([`closure_escapes_outer_call_and_remains_invocable`](../src/dispatch/builtins/call_by_name.rs),
-  [`escaped_closure_with_param_returns_body_value`](../src/dispatch/builtins/call_by_name.rs))
+  ([`closure_escapes_outer_call_and_remains_invocable`](../src/runtime/builtins/call_by_name.rs),
+  [`escaped_closure_with_param_returns_body_value`](../src/runtime/builtins/call_by_name.rs))
   confirm a closure returned from its defining frame remains invocable.
-- [`add_during_active_data_borrow_queues_and_drains`](../src/dispatch/runtime/scope.rs)
+- [`add_during_active_data_borrow_queues_and_drains`](../src/runtime/machine/core/scope.rs)
   holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms
   the queued write applied — exercising the conditional-defer path.
-- [`recursive_tagged_match_no_uaf`](../src/dispatch/builtins/match_case.rs)
+- [`recursive_tagged_match_no_uaf`](../src/runtime/builtins/match_case.rs)
   runs a user-fn that recurses through a `Tagged` parameter via MATCH, exercising
   the `outer_frame` chain that keeps the call-site arena alive across TCO replace.
-- [`unanchored_kfuture_no_arena_borrow_does_not_anchor`](../src/execute/lift.rs)
+- [`unanchored_kfuture_no_arena_borrow_does_not_anchor`](../src/runtime/machine/execute/lift.rs)
   and
-  [`unanchored_kfuture_with_arena_borrow_does_anchor`](../src/execute/lift.rs)
+  [`unanchored_kfuture_with_arena_borrow_does_anchor`](../src/runtime/machine/execute/lift.rs)
   cover both sides of the targeted KFuture anchor: a KFuture whose descendants
   don't borrow into the dying arena lifts with `frame: None`, while one with a
   `Future(&KObject)` allocated in the dying arena anchors with `frame: Some(rc)`.
-- [`alloc_object_redirects_self_anchored_value_to_escape_arena`](../src/dispatch/runtime/arena.rs)
+- [`alloc_object_redirects_self_anchored_value_to_escape_arena`](../src/runtime/machine/core/arena.rs)
   locks in the cycle gate: a value carrying an `Rc<CallArena>` whose `arena()`
   is the receiving arena allocates into the escape arena instead, with the
   per-call arena's storage left untouched.
