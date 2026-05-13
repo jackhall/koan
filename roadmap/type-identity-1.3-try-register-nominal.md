@@ -28,10 +28,10 @@ side collides) needs to live in `Bindings` since it owns both maps.
 
 ## Dependencies
 
-**Requires:**
-
-- [Stage 1.2 — `Bindings::types` map and `try_register_type`](type-identity-1.2-bindings-types-map.md)
-  — needs the `types` map to write into.
+**Requires:** none — foundation. Builds on the shipped `Bindings::types`
+map and `try_apply_type` write path in
+[`bindings.rs`](../src/runtime/machine/core/bindings.rs); the dual-write
+primitive layered here borrows `types` then `data` atomically.
 
 **Unblocks:**
 

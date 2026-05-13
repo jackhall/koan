@@ -1,9 +1,14 @@
-//! The lexical binding façade: three co-mutating `RefCell` maps (`data`, `functions`,
-//! `placeholders`) plus the shared validated write path [`Bindings::try_apply`] that keeps
-//! the dual-map invariant — every `data[name]` entry wrapping a `KFunction` lives in
-//! `functions[signature.untyped_key()]` — in one place. Lives in its own module so the
-//! façade's surface (write methods + read handles) stays focused; [`Scope`] embeds it by
-//! value so all interior borrows arbitrate against one another.
+//! The lexical binding façade: four co-mutating `RefCell` maps (`types`, `data`,
+//! `functions`, `placeholders`) plus the shared validated write paths
+//! ([`Bindings::try_apply`] for `data`/`functions`, [`Bindings::try_apply_type`] for
+//! `types`) that keep the dual-map invariant — every `data[name]` entry wrapping a
+//! `KFunction` lives in `functions[signature.untyped_key()]` — in one place. The
+//! `types` map (added in stage 1.2 of per-type identity) is the dedicated home for
+//! type-side bindings; it is currently unused (stage 1.4 wires `Scope::register_type`
+//! into it). Borrow discipline across the four maps: `types → functions → data`,
+//! with `types` only acquired when writing types. Lives in its own module so the
+//! façade's surface (write methods + read handles) stays focused; [`Scope`] embeds it
+//! by value so all interior borrows arbitrate against one another.
 //!
 //! `ApplyOutcome` is `pub` so [`scope`](super::scope)'s match arms on the
 //! [`Bindings::try_bind_value`] / [`Bindings::try_register_function`] results compile, but
@@ -14,12 +19,14 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
 use crate::runtime::machine::kfunction::{KFunction, NodeId};
-use crate::runtime::model::types::UntypedKey;
+use crate::runtime::model::types::{KType, UntypedKey};
 use crate::runtime::model::values::KObject;
 
 use super::kerror::{KError, KErrorKind};
 
-/// Façade owning the three co-mutating `RefCell` maps that back every lexical binding:
+/// Façade owning the four co-mutating `RefCell` maps that back every lexical binding:
+/// `types` (name → `&KType`, the dedicated type-binding home introduced in stage 1.2 of
+/// per-type identity; no consumer reads it yet — wiring lands in stage 1.4),
 /// `data` (name → value), `functions` (untyped-signature bucket → overloads), and
 /// `placeholders` (name → producer NodeId for dispatch-time forward references).
 ///
@@ -27,11 +34,19 @@ use super::kerror::{KError, KErrorKind};
 /// every `data[name]` entry wrapping a `KFunction` lives in
 /// `functions[signature.untyped_key()]` — in one place, and unifies dedupe (`ptr::eq`
 /// fast-path then `signatures_exact_equal`) across the LET-binds-FN and `FN`-decl paths.
+/// [`Bindings::try_apply_type`] is the parallel write primitive for the `types` map; it
+/// borrows only `types`, so it composes cleanly with code holding live `data`/`functions`
+/// borrows.
+///
+/// Borrow discipline across the four maps: `types → functions → data`. `types` is only
+/// acquired by the type-side write path, so the existing `functions → data` ordering used
+/// by [`Bindings::try_apply`] is unaffected.
 ///
 /// Lifetime `'a` matches the arena lifetime of the stored references; the façade itself
 /// is embedded by value on [`super::scope::Scope`] so all interior borrows arbitrate
 /// against one another.
 pub struct Bindings<'a> {
+    types: RefCell<HashMap<String, &'a KType>>,
     data: RefCell<HashMap<String, &'a KObject<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     placeholders: RefCell<HashMap<String, NodeId>>,
@@ -40,6 +55,7 @@ pub struct Bindings<'a> {
 impl<'a> Bindings<'a> {
     pub fn new() -> Self {
         Self {
+            types: RefCell::new(HashMap::new()),
             data: RefCell::new(HashMap::new()),
             functions: RefCell::new(HashMap::new()),
             placeholders: RefCell::new(HashMap::new()),
@@ -64,6 +80,13 @@ impl<'a> Bindings<'a> {
     /// [`Bindings::data`].
     pub fn placeholders(&self) -> Ref<'_, HashMap<String, NodeId>> {
         self.placeholders.borrow()
+    }
+
+    /// Read-only handle for the type-side resolver path landing in stage 1.4
+    /// (`Scope::resolve_type`) and the eventual type-class consumer migration.
+    /// Same `Ref<'_, _>` semantics as [`Bindings::data`].
+    pub fn types(&self) -> Ref<'_, HashMap<String, &'a KType>> {
+        self.types.borrow()
     }
 
     /// LET-style value bind. Errors `Rebind` if `data[name]` already exists. When `obj`
@@ -96,6 +119,21 @@ impl<'a> Bindings<'a> {
         obj: &'a KObject<'a>,
     ) -> Result<ApplyOutcome, KError> {
         self.try_apply(name, obj, Some(fn_ref))
+    }
+
+    /// Register `name` → `kt` in the dedicated type-binding map. Errors `Rebind`
+    /// if `types[name]` already exists; returns `Ok(Conflict)` on borrow
+    /// contention (caller queues — same shape as [`Bindings::try_bind_value`]
+    /// and [`Bindings::try_register_function`]). Best-effort placeholder clear
+    /// on success.
+    ///
+    /// Unused at land time — wired into `Scope::register_type` in stage 1.4.
+    pub fn try_register_type(
+        &self,
+        name: &str,
+        kt: &'a KType,
+    ) -> Result<ApplyOutcome, KError> {
+        self.try_apply_type(name, kt)
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`.
@@ -161,6 +199,34 @@ impl<'a> Bindings<'a> {
             }
         }
         Ok(())
+    }
+
+    /// The shared write path for type bindings. Borrows `types` only — no
+    /// `data`/`functions` involvement, since this primitive writes a single
+    /// map. `try_register_nominal` (stage 1.3) layers the dual-write on top
+    /// of this helper's contract.
+    ///
+    /// `Conflict` is reserved for borrow contention; `Err(Rebind)` is the
+    /// semantic-rejection path. On success, also clears any matching
+    /// placeholder (best-effort, mirrors `try_apply`'s tail).
+    fn try_apply_type(
+        &self,
+        name: &str,
+        kt: &'a KType,
+    ) -> Result<ApplyOutcome, KError> {
+        let mut types = match self.types.try_borrow_mut() {
+            Ok(t) => t,
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        };
+        if types.contains_key(name) {
+            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+        }
+        types.insert(name.to_string(), kt);
+        drop(types);
+        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
+            ph.remove(name);
+        }
+        Ok(ApplyOutcome::Applied)
     }
 
     /// The shared write path. Borrows `functions` first (only when `fn_part.is_some()`),
@@ -272,4 +338,87 @@ fn signatures_exact_equal(
         (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => ax.ktype == ay.ktype,
         _ => false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit coverage for the stage-1.2 `types` map and its `try_register_type` write
+    //! primitive. The primitive has no consumer yet (stage 1.4 wires
+    //! `Scope::register_type`), so these tests directly exercise `Bindings` against a
+    //! `RuntimeArena`-allocated `&KType`.
+
+    use super::*;
+    use crate::runtime::machine::core::arena::RuntimeArena;
+    use crate::runtime::model::types::KType;
+
+    #[test]
+    fn try_register_type_inserts_into_types_map() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        let outcome = bindings
+            .try_register_type("Foo", kt)
+            .expect("try_register_type should succeed on fresh bindings");
+        assert!(matches!(outcome, ApplyOutcome::Applied));
+        // Type-side storage is the only home for this binding — `data` stays empty.
+        let stored = *bindings.types().get("Foo").expect("Foo should be in types map");
+        assert!(std::ptr::eq(stored, kt));
+        assert!(bindings.data().get("Foo").is_none());
+    }
+
+    #[test]
+    fn try_register_type_rejects_collision_with_rebind() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt1: &KType = arena.alloc_ktype(KType::Number);
+        let kt2: &KType = arena.alloc_ktype(KType::Str);
+        bindings.try_register_type("Foo", kt1).expect("first register should succeed");
+        let err = match bindings.try_register_type("Foo", kt2) {
+            Err(e) => e,
+            Ok(_) => panic!("second register on same name should error, not succeed"),
+        };
+        assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
+        // First binding remains intact — the collision must not overwrite.
+        let stored = *bindings.types().get("Foo").expect("Foo should still be present");
+        assert!(std::ptr::eq(stored, kt1));
+    }
+
+    #[test]
+    fn try_register_type_yields_conflict_on_live_types_borrow() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        let _r = bindings.types();
+        let outcome = bindings
+            .try_register_type("Foo", kt)
+            .expect("conflict path returns Ok(Conflict), not Err");
+        assert!(matches!(outcome, ApplyOutcome::Conflict));
+        // Live read borrow blocked the write; nothing was inserted.
+        assert!(_r.get("Foo").is_none());
+    }
+
+    #[test]
+    fn try_register_type_clears_matching_placeholder() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        bindings
+            .try_install_placeholder("Bar".to_string(), NodeId(7))
+            .expect("placeholder install should succeed on fresh bindings");
+        assert!(bindings.placeholders().contains_key("Bar"));
+        bindings
+            .try_register_type("Bar", kt)
+            .expect("type register should succeed and clear placeholder");
+        assert!(!bindings.placeholders().contains_key("Bar"));
+    }
+
+    #[test]
+    fn try_register_type_does_not_touch_data_or_functions() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        bindings.try_register_type("Foo", kt).expect("register should succeed");
+        assert!(bindings.data().is_empty());
+        assert!(bindings.functions().is_empty());
+    }
 }

@@ -292,8 +292,10 @@ consult `types`, identifier tokens consult `data`.
   `Scope::resolve_type`, dispatch routing by token kind, bind-time
   diagnostic for type-class LHS with non-type RHS. The arena slot
   ([`RuntimeArena::alloc_ktype`](../src/runtime/machine/core/arena.rs))
-  has landed; remaining sub-items are
-  [1.2](../roadmap/type-identity-1.2-bindings-types-map.md) (types map),
+  and the
+  [`Bindings::types` map plus `try_register_type` write primitive](../src/runtime/machine/core/bindings.rs)
+  have landed (storage is live; no consumer reads it yet). Remaining
+  sub-items are
   [1.3](../roadmap/type-identity-1.3-try-register-nominal.md) (dual-write
   primitive), [1.4](../roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
   (`Scope::resolve_type` + rewire with fallback),

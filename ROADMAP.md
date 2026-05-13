@@ -45,7 +45,11 @@ support and `LET Ty = Ty` cycle detection, FN parameter slots written
 `parse_fn_param_list`, and the `NoopResolver` / `TypeResolver` /
 `ScopeResolver` seam plus the legacy `parse_typed_field_list` deleted so
 scope-aware elaboration goes exclusively through the scheduler-driven
-`elaborate_type_expr`). The next signature revision after error handling lands
+`elaborate_type_expr`); and the type-identity stage 1 substrate
+([`RuntimeArena::alloc_ktype`](src/runtime/machine/core/arena.rs) plus the
+[`Bindings::types` map and `try_register_type` write primitive](src/runtime/machine/core/bindings.rs))
+that the remaining stage 1 sub-items wire `Scope::register_type` and
+`Scope::resolve_type` onto. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -55,6 +59,13 @@ dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
+- [Type identity stage 1.3 — `try_register_nominal` dual-write primitive](roadmap/type-identity-1.3-try-register-nominal.md)
+  — transactional helper that stage 3's STRUCT/UNION/MODULE migration wires onto.
+  Builds on the shipped `Bindings::types` map plus `try_register_type` primitive.
+- [Type identity stage 1.4 — `Scope::resolve_type` and `register_type` rewire](roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
+  — flips builtin type storage from `data` to `types`; ships with a
+  temporary `Scope::resolve` fallback so unmigrated consumers stay green
+  until 1.5 deletes it.
 - [Type identity stage 1.6 — `TypeClassBindingExpectsType` bind-time error](roadmap/type-identity-1.6-let-typeclass-bind-error.md)
   — bind-time diagnostic for `LET Foo = 1` (Type-class LHS, non-type
   RHS). Storage-neutral; can ship in parallel with the other stage 1
@@ -104,14 +115,6 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 1.2 — `Bindings::types` map and `try_register_type`](roadmap/type-identity-1.2-bindings-types-map.md)
-  — dedicated type-binding storage; unused at land time, wired by 1.4.
-- [Type identity stage 1.3 — `try_register_nominal` dual-write primitive](roadmap/type-identity-1.3-try-register-nominal.md)
-  — transactional helper that stage 3's STRUCT/UNION/MODULE migration wires onto.
-- [Type identity stage 1.4 — `Scope::resolve_type` and `register_type` rewire](roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
-  — flips builtin type storage from `data` to `types`; ships with a
-  temporary `Scope::resolve` fallback so unmigrated consumers stay green
-  until 1.5 deletes it.
 - [Type identity stage 1.5 — consumer migration and fallback removal](roadmap/type-identity-1.5-consumer-migration.md)
   — every type-name lookup site migrates to `Scope::resolve_type`; the
   1.4 fallback deletes here.

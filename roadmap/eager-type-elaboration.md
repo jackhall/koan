@@ -50,7 +50,7 @@ land:
   use case forces it; current module-system stages do not.
 - *Forward references and partial definitions — deferred.* Whether to
   extend the
-  [stage 1.2 `Bindings::types` map](type-identity-1.2-bindings-types-map.md)
+  [`Bindings::types` map](../src/runtime/machine/core/bindings.rs)
   with a placeholder lane for type names beyond an SCC group (mirroring
   `Bindings::placeholders` for values), or to require source-order
   declaration for non-mutually-recursive aliases, is left open until a

@@ -57,9 +57,11 @@ work: this sub-item moves the storage; the next migrates consumers.
 
 ## Dependencies
 
-**Requires:**
-
-- [Stage 1.2 — `Bindings::types` map and `try_register_type`](type-identity-1.2-bindings-types-map.md)
+**Requires:** none — foundation. Builds on the shipped `Bindings::types`
+map plus the `try_register_type` write primitive in
+[`bindings.rs`](../src/runtime/machine/core/bindings.rs); the rewire here
+calls that primitive from `Scope::register_type` and the new `defer_type`
+queue drain.
 
 **Unblocks:**
 
