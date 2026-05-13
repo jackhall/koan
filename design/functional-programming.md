@@ -90,8 +90,8 @@ system](module-system.md). Modular implicits
 ([stage 5](../roadmap/module-system-5-modular-implicits.md)) add a second
 kind of dispatch alongside slot-specificity: a function declares an implicit
 module parameter, and the compiler infers and inserts a satisfying module at
-each call site. `sort {M : ORDERED} (xs: List<M.t>)` is an ordinary `FN` in
-the value language whose `M` is resolved by lexical implicit search rather
+each call site. `sort {Mo : ORDERED} (xs: List<Mo.t>)` is an ordinary `FN`
+in the value language whose `Mo` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
 ([stage 2](../roadmap/module-system-2-scheduler.md)) give the *module*
 language the analog of the higher-order story this doc covers — a module

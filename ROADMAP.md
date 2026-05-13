@@ -40,7 +40,7 @@ ignores park edges installed by the single-Identifier short-circuit and
 replay-park); and the eager-type-elaboration phase 1–3 slice plus the
 parens-wrapped / phase-5 cleanup (one canonical runtime type representation,
 scheduler-aware FN / STRUCT / UNION elaboration with self-recursive STRUCT
-support and `LET T = T` cycle detection, FN parameter slots written
+support and `LET Ty = Ty` cycle detection, FN parameter slots written
 `(LIST_OF Number)` / `(DICT_OF Str Number)` scheduling a sub-Dispatch from
 `parse_fn_param_list`, and the `NoopResolver` / `TypeResolver` /
 `ScopeResolver` seam plus the legacy `parse_typed_field_list` deleted so
@@ -55,11 +55,13 @@ dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
-  — extend the `KType::ModuleType` per-declaration identity carrier to `STRUCT` and
-  `UNION` so two distinct declarations report distinct types; ships SCC
-  pre-registration so mutually recursive STRUCT/UNION groups elaborate
-  without deadlocking on each other's placeholders.
+- [Type identity stage 1.1 — `RuntimeArena::alloc_ktype`](roadmap/type-identity-1.1-arena-alloc-ktype.md)
+  — arena slot so the forthcoming `Bindings::types` map carries `&'a
+  KType` directly. Foundation for stage 1's seven sub-items.
+- [Type identity stage 1.6 — `TypeClassBindingExpectsType` bind-time error](roadmap/type-identity-1.6-let-typeclass-bind-error.md)
+  — bind-time diagnostic for `LET Foo = 1` (Type-class LHS, non-type
+  RHS). Storage-neutral; can ship in parallel with the other stage 1
+  sub-items.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
 - [Simplify `runtime::machine` and shrink AI context cost](roadmap/simplify-and-shrink-context.md)
@@ -105,21 +107,37 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
-  — `KType::Struct` and `KType::Tagged` are flat singletons, so two distinct
-  `STRUCT` declarations report the same type. Extend per-declaration identity
-  along the lines of the module system's `KType::ModuleType` carrier, and
-  ship SCC pre-registration on the same declaration surface so mutually
-  recursive STRUCT/UNION groups elaborate without deadlocking.
+- [Type identity stage 1.2 — `Bindings::types` map and `try_register_type`](roadmap/type-identity-1.2-bindings-types-map.md)
+  — dedicated type-binding storage; unused at land time, wired by 1.4.
+- [Type identity stage 1.3 — `try_register_nominal` dual-write primitive](roadmap/type-identity-1.3-try-register-nominal.md)
+  — transactional helper that stage 3's STRUCT/UNION/MODULE migration wires onto.
+- [Type identity stage 1.4 — `Scope::resolve_type` and `register_type` rewire](roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
+  — flips builtin type storage from `data` to `types`; ships with a
+  temporary `Scope::resolve` fallback so unmigrated consumers stay green
+  until 1.5 deletes it.
+- [Type identity stage 1.5 — consumer migration and fallback removal](roadmap/type-identity-1.5-consumer-migration.md)
+  — every type-name lookup site migrates to `Scope::resolve_type`; the
+  1.4 fallback deletes here.
+- [Type identity stage 1.7 — `LET Ty = Number` routes through `register_type`](roadmap/type-identity-1.7-let-type-value-writes-types.md)
+  — Type-class LET aliases write `types`; ascribe scans both maps so
+  SIG abstract-type members stay visible.
+- [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](roadmap/type-identity-2-typename-ref-carrier.md)
+  — replaces the surface-name fallback in the elaborated type language with
+  a `KObject`-side carrier; subsumes eager type elaboration's
+  `KType::Unresolved` deletion and `OnceCell<KType>` late-binding gates.
+- [Type identity stage 3 — `KType::UserType` and per-declaration identity](roadmap/type-identity-3-user-type-and-per-decl.md)
+  — collapses `KType::Struct`/`Tagged`/`ModuleType` into a unified
+  `KType::UserType { kind, scope_id, name }` carrier; SCC discovery via
+  lazy `Bindings::pending_types` dependency tracking so mutually recursive
+  STRUCT/UNION pairs elaborate without deadlocking.
+- [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](roadmap/type-identity-4-newtype.md)
+  — fresh nominal identity over a transparent representation; substrate
+  for stage-4 axioms and stage-5 modular implicits.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
-  — narrow remaining gaps: `OnceCell<KType>` late binding for signature-typed
-  parameters whose type resolves only at functor application time (deferred
-  pending a concrete case the parens-wrapped sub-Dispatch path doesn't cover),
-  and the `KType::Unresolved` deletion (gated on a per-slot
-  reference-vs-declaration opt-in in `classify_for_pick`, or a new `KObject`
-  carrier preserving the surface `TypeExpr` through bind).
+  — module-qualified type-name paths and non-SCC forward references remain
+  deferred pending concrete use cases.
 - [Chained type-binding LETs panic the scheduler](roadmap/chained-type-binding-let-panic.md)
-  — `LET A = ... ; LET B = (... A ...) ; FN (... : B) -> ...` panics in
+  — `LET Aa = ... ; LET Bb = (... Aa ...) ; FN (... : Bb) -> ...` panics in
   `node_store.rs` with "result must be ready by the time it's read"; the bug
   is pre-existing and independent of the eager-type-elaboration parens-wrapped
   / phase-5 slice that surfaced it.

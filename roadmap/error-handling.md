@@ -17,7 +17,7 @@ function raise."
 - *In-language error handling.* User code recovers from runtime errors and
   resumes execution.
 - *Typed user-error returns.* A function's signature carries which
-  user-error values it may raise via `Result<T, E>`, so callers reason
+  user-error values it may raise via `Result<Ty, Er>`, so callers reason
   locally and the type system enforces the discipline.
 - *Privilege boundary.* User code cannot impersonate runtime errors; the
   bridge from builtin to user is explicit catch-and-reraise inside a match
@@ -34,9 +34,9 @@ function raise."
   code cannot raise them. They propagate ambiently through the existing
   `Forward` chain. `KErrorKind` is a closed set; `User` is the only
   variant whose payload is user-extensible.
-- *Typed user errors via `Result<T, E>` — decided.* A function that may
-  raise user errors returns `Result<T, E>` for a user-defined error type
-  `E`. `RAISE` produces a value of `E`; the runtime carries it as
+- *Typed user errors via `Result<Ty, Er>` — decided.* A function that may
+  raise user errors returns `Result<Ty, Er>` for a user-defined error type
+  `Er`. `RAISE` produces a value of `Er`; the runtime carries it as
   `KErrorKind::User(KObject)` through the propagation channel above.
 - *Catch as non-exhaustive match — decided.* Arms cover whichever builtin
   kinds and user-error variants the caller wants to handle; anything else
@@ -51,14 +51,14 @@ design choices:
   `LET` and pass as args. Substrate for the typed surface; needs the
   dispatcher to either short-circuit through error-typed slots or splice
   errors into them.
-- *`Result<T, E>` as a functor.* Lives with
+- *`Result<Ty, Er>` as a functor.* Lives with
   [stage 2](module-system-2-scheduler.md); the typed user-error work is
   gated on it shipping.
 - *Catch-builtins.* The match-form surface. Pattern arms over selected
   `KErrorKind` variants and over the user-error type's variants, with
-  unmatched arms propagating. Requires errors-as-values and `Result<T, E>`.
+  unmatched arms propagating. Requires errors-as-values and `Result<Ty, Er>`.
 - *`RAISE expr` builtin* to construct a `KErrorKind::User(KObject)` from
-  a user-error value. Requires errors-as-values and `Result<T, E>` so the
+  a user-error value. Requires errors-as-values and `Result<Ty, Er>` so the
   value has a typed home.
 - *Source spans on `KExpression`* so frames carry `file:line`. Independent
   of the type-system work and can ship before stage 2.
@@ -70,7 +70,7 @@ design choices:
 
 **Requires:**
 - [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
-  — `Result<T, E>` is a functor-produced module; the catch-builtin and
+  — `Result<Ty, Er>` is a functor-produced module; the catch-builtin and
   `RAISE` items consume it. Errors-as-values, source spans, and
   continue-on-error can ship before stage 2.
 

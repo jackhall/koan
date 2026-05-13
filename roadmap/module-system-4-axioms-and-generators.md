@@ -48,7 +48,8 @@ independent of signatures.
   Generators compose through functor application: a functor body builds
   the result module's `gen` from its parameter's `gen`.
 - *Built-in type generators — decided.* The engine ships `Random`-using
-  generators for `Number`, `Str`, `Bool`, `List<T>`, `Dict<K, V>`, etc. —
+  generators for `Number`, `Str`, `Bool`, `List<Ty>`, `Dict<Ke, Va>`,
+  etc. —
   these are the leaves of the composition story.
 - *Missing-generator policy — decided.* The structural-conformance check
   at ascription rejects modules without a `gen` slot; nothing to skip
@@ -59,7 +60,8 @@ independent of signatures.
   exact algorithm after investigating Hypothesis's implementation.
 - *Sample size and budget — decided.* Sample count scales with the
   generator's type complexity, capped at 100. `Bool` exhausts at 2;
-  `Number` needs a handful; `List<T>` needs more than `T`; `List<List<T>>`
+  `Number` needs a handful; `List<Ty>` needs more than `Ty`;
+  `List<List<Ty>>`
   more again. The engine derives the count from the generator structure
   rather than taking a single global config knob.
 
@@ -69,6 +71,10 @@ independent of signatures.
 - [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
   — generators thread randomness via the `Random` effect module rather than
   ambient entropy.
+- [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](type-identity-4-newtype.md)
+  — per-newtype axiom attachment keys on fresh nominal identity; without
+  NEWTYPE, axioms over distinct-but-same-repr types would have to attach
+  to single-field STRUCT wrappers.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)

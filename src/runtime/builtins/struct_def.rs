@@ -281,7 +281,7 @@ mod tests {
     /// recursion deadlocks because each binder's body parks on the other's placeholder
     /// and neither can ever finalize. Marked `#[ignore]` until batch SCC pre-registration
     /// lands; that work is tracked under
-    /// [per-declaration type identity](../../../roadmap/per-declaration-type-identity.md).
+    /// [per-declaration type identity](../../../roadmap/type-identity-3-user-type-and-per-decl.md).
     /// Sanity check that two unrelated STRUCTs in the same batch don't
     /// spuriously cross-pollinate `RecursiveRef`. `STRUCT A = (x: Number)`,
     /// `STRUCT B = (y: A)` — B's field references A, which is non-recursive; B's schema

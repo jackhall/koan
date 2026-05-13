@@ -145,8 +145,8 @@ Three extensions to the shipped surface
   Positional fill is accepted when slot order is unambiguous.
 - **Type-valued expressions.** `<>` slots accept any expression that
   evaluates to a `KType` or `KModule`, not only bare type-name tokens.
-  `List<M.Type>` is an ATTR access yielding the abstract type of module
-  `M`. The slot's declared kind decides what the engine expects.
+  `List<Mo.Type>` is an ATTR access yielding the abstract type of module
+  `Mo`. The slot's declared kind decides what the engine expects.
 - **Module-kind slots.** Type constructors can declare slots that take
   modules. `Set<Elt: Number, Ord: IntOrd>` works because `Set`'s second
   slot is declared `OrderedSig`-kind. Distinct module values bound to the
@@ -163,10 +163,10 @@ parameter is implicit) is orthogonal — see
 A function can declare an **implicit module parameter**:
 
 ```
-LET sort = (FN (SORT xs: List<M.Type> {M: OrderedSig}) -> List<M.Type> = (...))
+LET sort = (FN (SORT xs: List<Mo.Type> {Mo: OrderedSig}) -> List<Mo.Type> = (...))
 ```
 
-At a call site `(SORT [3, 1, 2])`, the compiler infers `M.Type = Number`,
+At a call site `(SORT [3, 1, 2])`, the compiler infers `Mo.Type = Number`,
 searches in scope for a module satisfying `OrderedSig<Type: Number>`, and
 inserts it. Searching is **lexical**: the candidate set is the implicit
 modules defined in the current module plus those explicitly imported.
@@ -250,9 +250,9 @@ sidecar generator registry.
 
 **Generators compose through functor application.** A functor body that
 constructs the result module's `gen` from the parameter's `gen` —
-`MakeSet(E)`'s `gen` builds set samples by drawing from `E.gen` — gives
+`MakeSet(Er)`'s `gen` builds set samples by drawing from `Er.gen` — gives
 the composed module its generator mechanically. Composition is a
-module-language property; the engine just calls `M.gen` like any other
+module-language property; the engine just calls `Mo.gen` like any other
 operation.
 
 The **property-testing engine** is a Rust-side subsystem of the compiler,
@@ -338,9 +338,7 @@ are pegged.
 **Inference and search reduce to the existing `Dispatch` and `Bind`
 machinery.** Type expressions are evaluated by the same engine values
 are. There is no `Infer` node kind; there is no `ImplicitSearch` node
-kind; there is no `KType::TypeVar`; there is no parallel
-type-registration table; there is no `Scope::types` field. Type bindings
-live in `Scope::data` alongside value bindings.
+kind; there is no `KType::TypeVar`.
 
 The mechanism:
 

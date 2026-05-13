@@ -72,6 +72,10 @@ thread in by searching scope. This is the ergonomic payoff of the design.
   modular implicits ride on the dispatch and execution of module values
   that stage 2 lands, and on the type-builtin substrate stage 2 wires
   end-to-end through FN signatures.
+- [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](type-identity-4-newtype.md)
+  — per-newtype implicit search routing: two implementations of the same
+  signature over the same underlying representation key on distinct
+  NEWTYPEs rather than competing on the same key.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)

@@ -203,7 +203,7 @@ runtime.
 ## Type elaboration
 
 Type elaboration runs in the same scheduler that runs value evaluation.
-A type-binding site (`LET T = ...`, `STRUCT T = ...`, `UNION T = ...`)
+A type-binding site (`LET Ty = ...`, `STRUCT Ty = ...`, `UNION Ty = ...`)
 registers a placeholder in the
 [`Bindings`](../src/runtime/machine/core/scope.rs) façade on `Scope` — the
 same `placeholders` table value bindings use, sitting alongside `data` and
@@ -244,7 +244,7 @@ directly; there is no surface/elaborated split, no per-lookup
 re-elaboration, no parallel `TypeExpr` representation flowing through
 dispatch. Cycle-aware traversals (equality, printing, hashing) carry an
 "inside this `Mu` binder" set so back-references terminate after one
-unfold. Trivially cyclic aliases (`LET T = T`) surface as a structured
+unfold. Trivially cyclic aliases (`LET Ty = Ty`) surface as a structured
 error rather than a stack overflow.
 
 ## Dispatch and slot-specificity
@@ -279,19 +279,41 @@ type identity via `KType::ModuleType`) shipped and is described in the body
 above; the remaining stages live under
 [`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
+The four-stage type-identity arc replaces the surface-name `KType::Unresolved`
+fallback with a `KObject`-side carrier, unifies `KType::Struct` / `Tagged`
+/ `ModuleType` into a single `KType::UserType { kind, scope_id, name }`
+carrier with per-declaration scope-tagged identity, and adds the `NEWTYPE`
+keyword for fresh nominal identity over a transparent representation. The
+binding home splits into two maps (`data` for values, `types` for type
+names), with token-kind-driven lookup at the resolver — Type-class tokens
+consult `types`, identifier tokens consult `data`.
+
+- Type identity stage 1 — foundation: dual-map binding home,
+  `Scope::resolve_type`, dispatch routing by token kind, bind-time
+  diagnostic for type-class LHS with non-type RHS. Split into sub-items
+  [1.1](../roadmap/type-identity-1.1-arena-alloc-ktype.md) (arena slot),
+  [1.2](../roadmap/type-identity-1.2-bindings-types-map.md) (types map),
+  [1.3](../roadmap/type-identity-1.3-try-register-nominal.md) (dual-write
+  primitive), [1.4](../roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
+  (`Scope::resolve_type` + rewire with fallback),
+  [1.5](../roadmap/type-identity-1.5-consumer-migration.md) (consumer
+  migration + fallback removal),
+  [1.6](../roadmap/type-identity-1.6-let-typeclass-bind-error.md)
+  (bind-time error), and
+  [1.7](../roadmap/type-identity-1.7-let-type-value-writes-types.md)
+  (LET-of-type-value routing + ascribe migration).
+- [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](../roadmap/type-identity-2-typename-ref-carrier.md)
+  — parse→bind carrier replacement; subsumes eager type elaboration's
+  `KType::Unresolved` deletion and `OnceCell<KType>` late-binding gates.
+- [Type identity stage 3 — `KType::UserType` and per-declaration identity](../roadmap/type-identity-3-user-type-and-per-decl.md)
+  — variant collapse, dual-write, SCC discovery via lazy
+  `Bindings::pending_types` dependency tracking.
+- [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](../roadmap/type-identity-4-newtype.md)
+  — fresh nominal identity substrate for stage-4 axioms and stage-5
+  modular implicits.
 - [Eager type elaboration with placeholder-based recursion](../roadmap/eager-type-elaboration.md)
-  — narrows remaining gaps in the elaboration mechanism described above:
-  `OnceCell<KType>` late binding for genuine functor application-time
-  cases the parens-wrapped sub-Dispatch path doesn't already cover, and
-  the deletion of the transitional `KType::Unresolved` carrier (gated on a
-  per-slot reference-vs-declaration opt-in in `classify_for_pick` or a new
-  `KObject` carrier preserving the surface `TypeExpr` through bind).
-- [Per-declaration type identity for structs and tagged unions](../roadmap/per-declaration-type-identity.md)
-  — extends the `KType::ModuleType` per-declaration identity carrier
-  to flat `STRUCT` and `UNION` declarations, and ships SCC
-  pre-registration on the same declaration surface so mutually
-  recursive STRUCT/UNION groups elaborate without deadlocking on
-  each other's placeholders.
+  — module-qualified type-name paths and non-SCC forward references remain
+  deferred pending concrete use cases.
 - [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — inferred dispatch on signatures. Lands the multi-parameter dispatch the
   current slot-specificity ranking can't express on its own.

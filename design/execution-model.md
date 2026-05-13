@@ -242,7 +242,7 @@ The four rails the resolution feeds:
   through the bare-name short-circuit. Both `ExpressionPart::Identifier`
   and bare leaf `ExpressionPart::Type` (a Type-token with no `<…>`
   parameters) are bare-name parts here and ride identical rails: `LET y = z`
-  and `LET T = Number` walk the same wrap → sub-dispatch → `value_lookup`
+  and `LET Ty = Number` walk the same wrap → sub-dispatch → `value_lookup`
   path, the first through the `Identifier` overload and the second
   through the `TypeExprRef` overload of `value_lookup`. Multi-name forward
   references compose as N independent sub-Dispatches.
@@ -300,7 +300,7 @@ rail itself cycle-checks before installing the park edge:
 walks the forward `notify_list` graph from the consumer and, if the
 producer is reachable, the replay-park surfaces a `ShapeError("cycle in
 type alias ...")` instead of installing the park edge. That catches the
-trivially-cyclic case (`LET T = T` — the value-side `T` sub-Dispatch is
+trivially-cyclic case (`LET Ty = Ty` — the value-side `Ty` sub-Dispatch is
 the LET binder's `Owned` child and is about to park on its own ancestor)
 generically rather than as a special case in the elaborator.
 

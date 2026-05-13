@@ -26,8 +26,8 @@ The interaction is between the LET-binding-Combine `MyL` opens (parking on
 
 - *Scheduler reliability under composed type aliases.* Type-binding LETs
   compose as the user expects rather than panicking the host on a
-  scheduler-internal contract violation. The pattern `LET A = ... ; LET B =
-  (... A ...) ; FN (... : B) -> ...` becomes uniformly writable without
+  scheduler-internal contract violation. The pattern `LET Aa = ... ; LET
+  Bb = (... Aa ...) ; FN (... : Bb) -> ...` becomes uniformly writable without
   surface-order workarounds.
 - *Diagnostic confidence around the FN-signature Combine path.* Any
   remaining scheduler interactions between type-LET Combine chains and

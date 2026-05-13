@@ -34,11 +34,11 @@ pub enum KType {
     Type,
     /// Singleton tag for every tagged-union value, regardless of declaring schema. Per-declaration
     /// identity is tracked as
-    /// [per-declaration type identity](../../../../roadmap/per-declaration-type-identity.md).
+    /// [per-declaration type identity](../../../../roadmap/type-identity-3-user-type-and-per-decl.md).
     Tagged,
     /// Singleton tag for every user struct, regardless of declaration. Per-declaration identity
     /// is tracked as
-    /// [per-declaration type identity](../../../../roadmap/per-declaration-type-identity.md).
+    /// [per-declaration type identity](../../../../roadmap/type-identity-3-user-type-and-per-decl.md).
     Struct,
     /// Per-module abstract type (`Foo.Type` after opaque ascription). `scope_id` is the
     /// declaring module's child-scope address cast to `usize` — stable for the run because

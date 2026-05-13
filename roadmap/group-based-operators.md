@@ -17,7 +17,7 @@ dispatch correctness in the user's head.
     ascribes one structure under `+`/`-`; `PathJoin : GROUP with type t = Path`
     ascribes another under `/`/`..`. Modular implicits resolve which group module a
     given operator call uses, so a function over "anything that forms a group" is just
-    one with a `{G : GROUP}` implicit parameter. Most expressive option, and falls out
+    one with a `{Gp : GROUP}` implicit parameter. Most expressive option, and falls out
     of the module system without operator-specific machinery.
   - *Group as a syntax-level shorthand.* `GROUP + - OVER Number` (or similar)
     registers both operators and links them in one declaration, without depending on
