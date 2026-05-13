@@ -512,3 +512,65 @@ fn resolve_returns_ambiguous_for_overlap_that_shape_pick_returned_none_for() {
         "ambiguous overlap → Ambiguous",
     );
 }
+
+// -------- stage-1.4 `register_type` rewire + `resolve_type` tests --------
+//
+// Pin the four load-bearing properties of the rewire:
+// - storage flip: `register_type` writes `types`, not `data`;
+// - fallback synthesis: `lookup` still finds builtin type names through the
+//   transient `Scope::resolve` arm scheduled for deletion in stage 1.5;
+// - `resolve_type` outer-chain walk;
+// - inner-scope shadowing of outer type bindings.
+
+#[test]
+fn register_type_inserts_into_types_map_not_data() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_bare(&arena);
+    scope.register_type("Foo".into(), KType::Number);
+    assert!(scope.bindings().types().get("Foo").is_some());
+    assert!(
+        scope.bindings().data().get("Foo").is_none(),
+        "post-1.4: type binding must not appear in data map",
+    );
+}
+
+#[test]
+fn lookup_synthesizes_ktypevalue_from_types_map_via_fallback() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_bare(&arena);
+    scope.register_type("Foo".into(), KType::Number);
+    match scope.lookup("Foo") {
+        Some(KObject::KTypeValue(kt)) => assert!(matches!(kt, KType::Number)),
+        other => panic!(
+            "expected fallback to synthesize KTypeValue, got {}",
+            match other {
+                Some(_) => "Some(<non-KTypeValue>)",
+                None => "None",
+            }
+        ),
+    }
+}
+
+#[test]
+fn resolve_type_walks_outer_chain_and_returns_none_past_root() {
+    let arena = RuntimeArena::new();
+    let root = run_root_bare(&arena);
+    root.register_type("Foo".into(), KType::Number);
+    let child = arena.alloc_scope(Scope::child_under(root));
+    assert!(matches!(child.resolve_type("Foo"), Some(KType::Number)));
+    assert!(
+        child.resolve_type("Nope").is_none(),
+        "unbound name past run-root yields None, not panic",
+    );
+}
+
+#[test]
+fn resolve_type_inner_scope_shadows_outer() {
+    let arena = RuntimeArena::new();
+    let root = run_root_bare(&arena);
+    root.register_type("Foo".into(), KType::Number);
+    let child = arena.alloc_scope(Scope::child_under(root));
+    child.register_type("Foo".into(), KType::Str);
+    assert!(matches!(child.resolve_type("Foo"), Some(KType::Str)));
+    assert!(matches!(root.resolve_type("Foo"), Some(KType::Number)));
+}

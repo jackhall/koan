@@ -23,6 +23,11 @@ use super::bindings::{ApplyOutcome, Bindings};
 enum PendingWrite<'a> {
     Value { name: String, obj: &'a KObject<'a> },
     Function { name: String, fn_ref: &'a KFunction<'a>, obj: &'a KObject<'a> },
+    /// Queued `Scope::register_type` retry. Mirrors `Bindings::try_register_type`'s
+    /// argument shape; the variant tag preserves the `types`-map collision check on
+    /// retry (a single shared retry path would collapse with `Value` and lose the
+    /// `data`-vs-`types` storage distinction).
+    Type { name: String, kt: &'a crate::runtime::model::types::KType },
 }
 
 /// Queue of writes deferred when their `try_borrow_mut` collided. Owned by [`super::scope::Scope`]
@@ -49,6 +54,12 @@ impl<'a> PendingQueue<'a> {
     /// [`Bindings::try_register_function`]'s argument shape.
     pub fn defer_function(&self, name: String, fn_ref: &'a KFunction<'a>, obj: &'a KObject<'a>) {
         self.pending.borrow_mut().push(PendingWrite::Function { name, fn_ref, obj });
+    }
+
+    /// Queue a `Scope::register_type` retry. Mirrors [`Bindings::try_register_type`]'s
+    /// argument shape so the caller's try-then-defer site is symmetric.
+    pub fn defer_type(&self, name: String, kt: &'a crate::runtime::model::types::KType) {
+        self.pending.borrow_mut().push(PendingWrite::Type { name, kt });
     }
 
     /// Apply queued writes through `bindings` between dispatch nodes. Items that still hit
@@ -105,6 +116,20 @@ impl<'a> PendingQueue<'a> {
                         }
                     }
                 }
+                PendingWrite::Type { name, kt } => {
+                    match bindings.try_register_type(&name, kt) {
+                        Ok(ApplyOutcome::Applied) => {}
+                        Ok(ApplyOutcome::Conflict) => {
+                            still_pending.push(PendingWrite::Type { name, kt });
+                        }
+                        Err(_e) => {
+                            debug_assert!(
+                                false,
+                                "PendingQueue::drain hit invariant violation: {_e}",
+                            );
+                        }
+                    }
+                }
             }
         }
         if !still_pending.is_empty() {
@@ -116,5 +141,36 @@ impl<'a> PendingQueue<'a> {
 impl<'a> Default for PendingQueue<'a> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Stage-1.4 coverage for the new `Type` variant on the deferred-write queue.
+    //! Mirrors the structure of the scope-side `add_during_active_data_borrow_queues_and_drains`
+    //! test (`tests.rs`), but reaches directly into `PendingQueue` + `Bindings` so the
+    //! property under test is the queue/drain round-trip rather than any scope-layer wiring.
+
+    use super::*;
+    use crate::runtime::machine::core::arena::RuntimeArena;
+    use crate::runtime::model::types::KType;
+
+    /// `defer_type` queues a write; `drain` replays it through `try_register_type` and
+    /// lands the `&KType` in the `types` map. Pins the symmetry with `defer_value` /
+    /// `defer_function` — the new variant participates in the same drain loop without a
+    /// dedicated entry point.
+    #[test]
+    fn defer_type_queues_and_drain_replays_into_types() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let queue: PendingQueue<'_> = PendingQueue::new();
+        let kt = arena.alloc_ktype(KType::Number);
+        queue.defer_type("Foo".to_string(), kt);
+        // Pre-drain: types map empty.
+        assert!(bindings.types().get("Foo").is_none());
+        queue.drain(&bindings);
+        // Post-drain: replayed through try_register_type into the types map.
+        let stored = *bindings.types().get("Foo").expect("Foo should be in types after drain");
+        assert!(std::ptr::eq(stored, kt));
     }
 }

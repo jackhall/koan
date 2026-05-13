@@ -291,15 +291,18 @@ consult `types`, identifier tokens consult `data`.
 - Type identity stage 1 — foundation: dual-map binding home,
   `Scope::resolve_type`, dispatch routing by token kind, bind-time
   diagnostic for type-class LHS with non-type RHS. The arena slot
-  ([`RuntimeArena::alloc_ktype`](../src/runtime/machine/core/arena.rs))
+  ([`RuntimeArena::alloc_ktype`](../src/runtime/machine/core/arena.rs)),
+  the
+  [`Bindings::types` map plus `try_register_type` and `try_register_nominal` write primitives](../src/runtime/machine/core/bindings.rs),
   and the
-  [`Bindings::types` map plus `try_register_type` and `try_register_nominal` write primitives](../src/runtime/machine/core/bindings.rs)
-  have landed (storage is live; no consumer reads it yet). Remaining
-  sub-items are
-  [1.4](../roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
-  (`Scope::resolve_type` + rewire with fallback),
+  [`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](../src/runtime/machine/core/scope.rs)
+  have landed — builtin type names live in `bindings.types` as
+  arena-allocated `&KType`, with a transient `Scope::resolve` fallback
+  that synthesizes `KObject::KTypeValue(kt.clone())` per lookup so
+  unmigrated consumers keep finding type names through the `data`-side
+  code path. Remaining sub-items are
   [1.5](../roadmap/type-identity-1.5-consumer-migration.md) (consumer
-  migration + fallback removal),
+  migration onto `Scope::resolve_type` and fallback removal),
   [1.6](../roadmap/type-identity-1.6-let-typeclass-bind-error.md)
   (bind-time error), and
   [1.7](../roadmap/type-identity-1.7-let-type-value-writes-types.md)

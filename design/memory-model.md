@@ -107,14 +107,17 @@ accepts in exchange for not maintaining full arena-provenance tracking.
 
 ## Re-entrant scope writes
 
-[`Scope::bind_value`](../src/runtime/machine/core/scope.rs) and
-[`Scope::register_function`](../src/runtime/machine/core/scope.rs) route through
+[`Scope::bind_value`](../src/runtime/machine/core/scope.rs),
+[`Scope::register_function`](../src/runtime/machine/core/scope.rs), and
+[`Scope::register_type`](../src/runtime/machine/core/scope.rs) route through
 the embedded [`Bindings`](../src/runtime/machine/core/bindings.rs) façade's
-`try_apply` helper, which `try_borrow_mut`s `data`/`functions` and returns
+validated write primitives (`try_apply` / `try_register_function` /
+`try_register_type`), which `try_borrow_mut` the relevant map
+(`data` / `functions` / `types`) and return
 `ApplyOutcome::Conflict` when a borrow is already held. The scope then defers
 the write through the embedded
 [`PendingQueue`](../src/runtime/machine/core/pending.rs) façade
-(`defer_value` / `defer_function`); the queue is drained by
+(`defer_value` / `defer_function` / `defer_type`); the queue is drained by
 [`Scope::drain_pending`](../src/runtime/machine/core/scope.rs), invoked by the
 scheduler between dispatch nodes, which calls `PendingQueue::drain(&Bindings)`
 to replay each deferred write through the same validated `Bindings` write path

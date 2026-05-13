@@ -46,8 +46,7 @@ cleanup.
 - *`KObject::TypeNameRef` shape — decided.* `KObject::TypeNameRef(TypeExpr,
   OnceCell<&'a KType>)`. The `TypeExpr` is the parsed surface form; the
   cell memoizes the resolved `&'a KType` from
-  [`Scope::resolve_type`](../src/runtime/machine/core/scope.rs) (added in
-  [stage 1.4](type-identity-1.4-scope-resolve-type-and-rewire.md)).
+  [`Scope::resolve_type`](../src/runtime/machine/core/scope.rs).
   `KObject::ktype()`
   reports `KType::TypeExprRef` (same slot kind as `KTypeValue`) so dispatch
   routing is unchanged.

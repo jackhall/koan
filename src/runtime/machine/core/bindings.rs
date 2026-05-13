@@ -6,13 +6,14 @@
 //! [`Bindings::try_register_nominal`] (stage 1.3) is the transactional dual-write
 //! primitive for nominal declarations (STRUCT / UNION / MODULE), atomically inserting
 //! identity into `types` and the runtime carrier into `data`. The `types` map (added
-//! in stage 1.2 of per-type identity) is the dedicated home for type-side bindings; it
-//! is currently unused — stage 1.3's helper and stage 1.4's `Scope::register_type`
-//! wiring are the eventual consumers. Borrow discipline across the four maps:
-//! `types → functions → data`, with `types` only acquired when writing types. Lives
-//! in its own module so the façade's surface (write methods + read handles) stays
-//! focused; [`Scope`] embeds it by value so all interior borrows arbitrate against
-//! one another.
+//! in stage 1.2 of per-type identity) is the dedicated home for type-side bindings,
+//! populated as of stage 1.4 by `Scope::register_type` (which routes through
+//! [`Bindings::try_register_type`]); `try_register_nominal` will start writing into it
+//! at stage 3 (STRUCT / UNION / MODULE migration). Borrow discipline across the four
+//! maps: `types → functions → data`, with `types` only acquired when writing types.
+//! Lives in its own module so the façade's surface (write methods + read handles)
+//! stays focused; [`Scope`] embeds it by value so all interior borrows arbitrate
+//! against one another.
 //!
 //! `ApplyOutcome` is `pub` so [`scope`](super::scope)'s match arms on the
 //! [`Bindings::try_bind_value`] / [`Bindings::try_register_function`] results compile, but
@@ -133,7 +134,8 @@ impl<'a> Bindings<'a> {
     /// and [`Bindings::try_register_function`]). Best-effort placeholder clear
     /// on success.
     ///
-    /// Unused at land time — wired into `Scope::register_type` in stage 1.4.
+    /// Called by [`super::scope::Scope::register_type`] (rewired in stage 1.4) and
+    /// by [`super::pending::PendingQueue`]'s `Type`-variant drain arm.
     pub fn try_register_type(
         &self,
         name: &str,
@@ -401,10 +403,10 @@ fn signatures_exact_equal(
 #[cfg(test)]
 mod tests {
     //! Unit coverage for the stage-1.2 `types` map and its `try_register_type` write
-    //! primitive, plus the stage-1.3 `try_register_nominal` dual-write primitive. Both
-    //! primitives are unused at land time (stage 1.4 wires `Scope::register_type`;
-    //! stage 3 migrates STRUCT / UNION / MODULE finalize paths onto
-    //! `try_register_nominal`), so these tests directly exercise `Bindings` against
+    //! primitive, plus the stage-1.3 `try_register_nominal` dual-write primitive.
+    //! `try_register_type` is now live (stage 1.4 wired `Scope::register_type` onto it);
+    //! `try_register_nominal` remains unused until stage 3 migrates STRUCT / UNION /
+    //! MODULE finalize paths onto it. These tests directly exercise `Bindings` against
     //! `RuntimeArena`-allocated `&KType` / `&KObject` values.
 
     use super::*;

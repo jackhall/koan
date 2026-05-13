@@ -5,13 +5,14 @@ LHS, type-valued RHS) writes the `types` map via
 `Scope::register_type`, not `data` via `bind_value`. Couples with an
 ascribe migration — without it, SIG abstract-type members become invisible.
 
-**Problem.** After [stage 1.4](type-identity-1.4-scope-resolve-type-and-rewire.md),
-`LET Ty = Number` still routes through `bind_value` (writes `data`). Type
-names introduced by LET therefore live in a different binding home than
-builtin type names (which live in `types`). The asymmetry blocks alias
-transparency: `LET Ty = Number; resolve_type("Ty")` returns `None`, so a
-use site `: Ty` can't pick the `Number` overload via the same `&KType`
-pointer as a direct `: Number` use.
+**Problem.** `LET Ty = Number` still routes through `bind_value` (writes
+`data`). Type names introduced by LET therefore live in a different binding
+home than builtin type names (which live in `bindings.types` as of the
+post-stage-1.4 storage flip — see
+[`scope.rs`](../src/runtime/machine/core/scope.rs)'s `register_type`). The
+asymmetry blocks alias transparency: `LET Ty = Number; resolve_type("Ty")`
+returns `None`, so a use site `: Ty` can't pick the `Number` overload via
+the same `&KType` pointer as a direct `: Number` use.
 
 A coupling: ascription's
 [`is_abstract_type_name`](../src/runtime/builtins/ascribe.rs) helper scans
@@ -59,8 +60,6 @@ migration must ship in the same PR.
 
 **Requires:**
 
-- [Stage 1.4 — `Scope::resolve_type` and `register_type` rewire](type-identity-1.4-scope-resolve-type-and-rewire.md)
-  — `register_type` must already write `types`.
 - [Stage 1.6 — `TypeClassBindingExpectsType` bind-time error](type-identity-1.6-let-typeclass-bind-error.md)
   — the routing change runs only when 1.6's check passes.
 

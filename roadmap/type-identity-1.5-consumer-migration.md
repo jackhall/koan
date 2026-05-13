@@ -1,16 +1,18 @@
 # Type identity stage 1.5 — Consumer migration and fallback removal
 
 Migrates every type-name lookup site to `Scope::resolve_type` and **removes
-the temporary `Scope::resolve` fallback** added in
-[stage 1.4](type-identity-1.4-scope-resolve-type-and-rewire.md). This
-sub-item must land before stage 1 can be considered shipped — leaving the
-fallback in place defeats the migration's purpose.
+the temporary `Scope::resolve` fallback** that synthesizes
+`KObject::KTypeValue` on demand at
+[`scope.rs`](../src/runtime/machine/core/scope.rs). This sub-item must land
+before stage 1 can be considered shipped — leaving the fallback in place
+defeats the migration's purpose.
 
-**Problem.** After [stage 1.4](type-identity-1.4-scope-resolve-type-and-rewire.md),
-builtin types live in `types` but unmigrated consumers still find them
-through the fallback's on-the-fly `KObject::KTypeValue` synthesis.
-Production reads pay the synthesis cost on every type-name lookup, and the
-fallback blurs the binding-home invariant.
+**Problem.** Builtin types live in `bindings.types` (post-stage-1.4 storage
+flip), but unmigrated consumers still find them through the
+[`Scope::resolve`](../src/runtime/machine/core/scope.rs) fallback's
+on-the-fly `KObject::KTypeValue` synthesis. Production reads pay the
+synthesis cost on every type-name lookup, and the fallback blurs the
+binding-home invariant.
 
 **Impact.**
 
@@ -64,8 +66,6 @@ fallback blurs the binding-home invariant.
 
 **Requires:**
 
-- [Stage 1.4 — `Scope::resolve_type` and `register_type` rewire](type-identity-1.4-scope-resolve-type-and-rewire.md)
-  — provides the API consumers migrate onto and the fallback this sub-item removes.
 
 **Unblocks:**
 

@@ -69,8 +69,11 @@ pub fn default_scope<'a>(
 ) -> &'a Scope<'a> {
     let scope = arena.alloc_scope(Scope::run_root(arena, None, out));
 
-    // Builtin type names — bound as `KObject::KTypeValue` via `Scope::register_type` so
-    // the resolver finds them via the same scope-walk path user-defined types use.
+    // Builtin type names — stored in `bindings.types` as arena-allocated `&KType`
+    // via `Scope::register_type` (post-stage-1.4 storage flip). Existing consumers
+    // still read them through `scope.lookup(...)` as `KObject::KTypeValue`; the
+    // transient fallback arm on `Scope::resolve` synthesizes the wrap on demand
+    // until stage 1.5 migrates the readers onto `Scope::resolve_type`.
     scope.register_type("Number".into(), KType::Number);
     scope.register_type("Str".into(), KType::Str);
     scope.register_type("Bool".into(), KType::Bool);

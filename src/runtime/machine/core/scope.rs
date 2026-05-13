@@ -154,23 +154,24 @@ impl<'a> Scope<'a> {
     }
 
     /// Register `name` as a type-valued binding in this scope. The binding lives in
-    /// [`Bindings::data`] as a `KObject::KTypeValue` carrying the elaborated
-    /// [`crate::runtime::model::types::KType`] directly — no surface→elaborated round-trip
-    /// at lookup time, no `TypeExpr` intermediate.
+    /// [`Bindings::types`] as an arena-allocated `&KType` — the dedicated type-side
+    /// storage introduced in stage 1.2 of per-type identity. No `KObject::KTypeValue`
+    /// wrap at the storage layer; consumers that still read types as `KObject` go
+    /// through the temporary fallback arm on [`Self::resolve`] until stage 1.5
+    /// migrates them onto [`Self::resolve_type`].
     ///
-    /// This is the dual of [`Self::register_function`] for the type half of the binding
-    /// surface — the call site that would otherwise reach into `Bindings::data` directly to
-    /// seed builtin type names goes through here so the borrow / arena / pending-defer
-    /// plumbing matches the function path.
-    ///
-    /// Infallible like the function-side `register_builtin` wrapper: a name collision at
-    /// builtin registration is a programming error, so the [`KError`] returned by the
-    /// underlying `bind_value` is dropped. Per-call-site error handling would just bury
-    /// the bug.
+    /// Same conditional-defer shape as [`Self::bind_value`] and
+    /// [`Self::register_function`]: direct write first, queue through
+    /// [`PendingQueue::defer_type`] on borrow conflict. Infallible like the prior
+    /// implementation — a name collision at builtin registration is a programming
+    /// error, so the [`KError`] from `try_register_type` is dropped.
     pub fn register_type(&self, name: String, ktype: crate::runtime::model::types::KType) {
-        let arena = self.arena;
-        let obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(ktype));
-        let _ = self.bind_value(name, obj);
+        let kt_ref: &'a crate::runtime::model::types::KType = self.arena.alloc_ktype(ktype);
+        match self.bindings.try_register_type(&name, kt_ref) {
+            Ok(ApplyOutcome::Applied) => {}
+            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref),
+            Err(_) => {} // see docstring: collisions at builtin registration are bugs.
+        }
     }
 
     /// Apply queued writes between dispatch nodes. Thin delegation to
@@ -202,6 +203,20 @@ impl<'a> Scope<'a> {
         if let Some(id) = self.bindings.placeholders().get(name).copied() {
             return Resolution::Placeholder(id);
         }
+        // ---- TEMPORARY FALLBACK — remove in stage 1.5 ----
+        // Stage 1.4 flips `register_type`'s storage from `data` to `types` but leaves
+        // every existing consumer (`scope.lookup("Number")` etc.) reading the old
+        // `KObject::KTypeValue` path. Synthesize a fresh `KObject::KTypeValue(kt.clone())`
+        // per lookup so those consumers keep finding type names through `resolve`.
+        // Stage 1.5 (`type-identity-1.5-consumer-migration.md`) migrates the readers
+        // onto `Scope::resolve_type` and deletes this arm. The per-lookup `alloc_object`
+        // cost is acceptable for the short bridge window — the lookup count for builtin
+        // type names is bounded by program-source references, not by hot-loop iterations.
+        if let Some(kt) = self.bindings.types().get(name).copied() {
+            let obj = self.arena.alloc_object(KObject::KTypeValue(kt.clone()));
+            return Resolution::Value(obj);
+        }
+        // ---- END FALLBACK ----
         match self.outer {
             Some(outer) => outer.resolve(name),
             None => Resolution::Unbound,
@@ -214,6 +229,26 @@ impl<'a> Scope<'a> {
     /// rather than queueing).
     pub fn install_placeholder(&self, name: String, idx: NodeId) -> Result<(), KError> {
         self.bindings.try_install_placeholder(name, idx)
+    }
+
+    /// Walk the `outer` chain for the nearest `bindings.types[name]`. Type-side
+    /// analogue of [`Self::lookup`] — no `Placeholder` variant (that lane is
+    /// reserved for stage 3's `pending_types` registry).
+    ///
+    /// Drops the `Ref<'_, _>` returned by [`Bindings::types`] before recursing into
+    /// `outer` so a deep chain doesn't accumulate live read borrows — same NLL-safe
+    /// release-before-recurse discipline as [`Self::resolve_dispatch`].
+    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::runtime::model::types::KType> {
+        let mut current: Option<&Scope<'a>> = Some(self);
+        while let Some(scope) = current {
+            let types_guard = scope.bindings.types();
+            if let Some(kt) = types_guard.get(name).copied() {
+                return Some(kt);
+            }
+            drop(types_guard);
+            current = scope.outer;
+        }
+        None
     }
 
     /// Walk the `outer` chain for the nearest scope holding a writer and write `bytes`.

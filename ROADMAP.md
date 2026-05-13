@@ -46,10 +46,14 @@ support and `LET Ty = Ty` cycle detection, FN parameter slots written
 `ScopeResolver` seam plus the legacy `parse_typed_field_list` deleted so
 scope-aware elaboration goes exclusively through the scheduler-driven
 `elaborate_type_expr`); and the type-identity stage 1 substrate
-([`RuntimeArena::alloc_ktype`](src/runtime/machine/core/arena.rs) plus the
-[`Bindings::types` map with the `try_register_type` and `try_register_nominal` write primitives](src/runtime/machine/core/bindings.rs))
-that the remaining stage 1 sub-items wire `Scope::register_type` and
-`Scope::resolve_type` onto. The next signature revision after error handling lands
+([`RuntimeArena::alloc_ktype`](src/runtime/machine/core/arena.rs), the
+[`Bindings::types` map with the `try_register_type` and `try_register_nominal` write primitives](src/runtime/machine/core/bindings.rs),
+and the
+[`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](src/runtime/machine/core/scope.rs))
+— builtin type names now live in `bindings.types` as arena-allocated `&KType`,
+with a transient `Scope::resolve` fallback synthesizing `KObject::KTypeValue`
+on demand so unmigrated consumers keep finding type names through their
+existing code path until stage 1.5 migrates them onto `Scope::resolve_type`. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -59,10 +63,6 @@ dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Type identity stage 1.4 — `Scope::resolve_type` and `register_type` rewire](roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
-  — flips builtin type storage from `data` to `types`; ships with a
-  temporary `Scope::resolve` fallback so unmigrated consumers stay green
-  until 1.5 deletes it.
 - [Type identity stage 1.6 — `TypeClassBindingExpectsType` bind-time error](roadmap/type-identity-1.6-let-typeclass-bind-error.md)
   — bind-time diagnostic for `LET Foo = 1` (Type-class LHS, non-type
   RHS). Storage-neutral; can ship in parallel with the other stage 1
