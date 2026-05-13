@@ -109,15 +109,22 @@ accepts in exchange for not maintaining full arena-provenance tracking.
 
 [`Scope::bind_value`](../src/runtime/machine/core/scope.rs) and
 [`Scope::register_function`](../src/runtime/machine/core/scope.rs) route through
-the embedded [`Bindings`](../src/runtime/machine/core/scope.rs) façade's
+the embedded [`Bindings`](../src/runtime/machine/core/bindings.rs) façade's
 `try_apply` helper, which `try_borrow_mut`s `data`/`functions` and returns
-`ApplyOutcome::Conflict` when a borrow is already held. The scope then enqueues
-the write on `Scope::pending` for replay by
-[`drain_pending`](../src/runtime/machine/core/scope.rs), invoked by the
-scheduler between dispatch nodes. The hot path (no concurrent borrow) is one
-direct insert with the dual-map mirror folded in. Re-entrant writes queue
-silently and become visible after the iterating borrow releases, with
-snapshot-iteration semantics for the iterator.
+`ApplyOutcome::Conflict` when a borrow is already held. The scope then defers
+the write through the embedded
+[`PendingQueue`](../src/runtime/machine/core/pending.rs) façade
+(`defer_value` / `defer_function`); the queue is drained by
+[`Scope::drain_pending`](../src/runtime/machine/core/scope.rs), invoked by the
+scheduler between dispatch nodes, which calls `PendingQueue::drain(&Bindings)`
+to replay each deferred write through the same validated `Bindings` write path
+as a direct insert. The hot path (no concurrent borrow) is one direct insert
+with the dual-map mirror folded in. Re-entrant writes queue silently and
+become visible after the iterating borrow releases, with snapshot-iteration
+semantics for the iterator. Drain-time `Err` returns trip a `debug_assert!`
+in debug builds (by drain time these are invariant violations); release
+builds keep the legacy silent-drop behavior so dispatch nodes never see
+surfaced errors.
 
 ## Structural invariants
 

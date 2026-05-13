@@ -1,11 +1,15 @@
 //! Execution machinery: arenas that own per-run and per-call allocations, the `Scope` that
 //! holds dispatch tables and resolves calls, and the structured `KError` that propagates
-//! failures.
+//! failures. `Bindings` (the lexical binding façade) and `PendingQueue` (the deferred-write
+//! queue) live in their own submodules to keep `scope.rs` focused on dispatch.
 
 mod arena;
+mod bindings;
 mod kerror;
+mod pending;
 mod scope;
 
 pub use arena::{CallArena, RuntimeArena};
+pub use bindings::Bindings;
 pub use kerror::{Frame, KError, KErrorKind};
-pub use scope::{Bindings, KFuture, ResolveOutcome, Resolution, Resolved, Scope};
+pub use scope::{KFuture, ResolveOutcome, Resolution, Resolved, Scope};

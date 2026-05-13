@@ -190,7 +190,9 @@ src/
         ├── core.rs       module surface for core/
         ├── core/
         │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
+        │   ├── bindings.rs    Bindings façade — dual-map (data/functions/placeholders) with the validated try_apply write path
         │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
+        │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
         │   └── scope.rs       Scope, KFuture, plus Scope::resolve_dispatch and the Resolved / ResolveOutcome types
         ├── execute.rs
         └── execute/

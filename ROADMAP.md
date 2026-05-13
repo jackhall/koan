@@ -99,7 +99,14 @@ shared `try_apply` helper enforces the dual-map mirror in one place and
 unifies the dedupe path between `LET f = (FN ...)` and `FN`-decl, closing
 the LET-binds-FN dedupe gap; ascription's bulk-install now routes through
 `try_bulk_install_from` instead of reaching into the underlying maps by
-hand). The next
+hand), and the PendingQueue façade (`Scope::pending` and the
+`PendingWrite` enum lifted into an embedded `PendingQueue<'a>` whose
+`defer_value` / `defer_function` mirror the `Bindings` write surface and
+collapse the try-then-defer pattern to one match arm per write kind;
+`drain(&Bindings<'a>)` routes deferred retries through the same validated
+write path as direct writes, and a debug-only `debug_assert!` on drain-time
+errors surfaces queue/dispatch interaction bugs that the production
+silent-`Err`-drop hid). The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -119,10 +126,6 @@ without first landing something else:
   non-test files exceed 600 lines; score reshuffles via `modgraph_rewrite.py`,
   split the largest files, then trim scheduler tests the sub-struct extractions
   made redundant.
-- [Lift Scope::pending into a PendingQueue façade](roadmap/pending-queue-facade.md)
-  — wrap `Scope::pending` and `PendingWrite` so the try-then-defer pattern
-  collapses to one match arm per write kind and drain-time errors surface
-  via `debug_assert!`.
 
 ## Open items
 
