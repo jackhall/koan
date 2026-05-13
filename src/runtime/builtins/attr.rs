@@ -84,6 +84,11 @@ pub fn body_type_lhs<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
+    // Stays on `scope.lookup`: the Type-classed lhs (`Foo` in `Foo.x`) resolves to a
+    // nominal *value*-side binding — `KObject::KModule` / `StructType` / `TaggedUnionType`
+    // — that lives in `bindings.data`. The post-stage-1.5 `Scope::resolve_type` walks
+    // `bindings.types`, where those nominal value carriers don't live until stage 3
+    // dual-writes a `KType::UserType` next to them.
     let target = match scope.lookup(&s_name) {
         Some(obj) => obj,
         None => return err(KError::new(KErrorKind::UnboundName(s_name))),
@@ -186,6 +191,13 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
             m.child_scope().arena.alloc_object(KObject::KTypeValue(kt)),
         );
     }
+    // Module-member access reads the module's child-scope `data` map directly:
+    // `LET`-bound and `FN`-bound members live there, and that's the value side of
+    // the binding (the identifier-classed read path). Type-side names that
+    // appeared as `LET T = ...` inside the module body land here too via
+    // `KObject::KTypeValue` carriers until stage 1.7 reroutes them through
+    // `register_type`. Going through `Scope::resolve_type` here would miss
+    // every one of those bindings.
     let scope = m.child_scope();
     if let Some(obj) = scope.bindings().data().get(field).copied() {
         return BodyResult::Value(obj);

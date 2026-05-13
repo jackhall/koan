@@ -513,14 +513,17 @@ fn resolve_returns_ambiguous_for_overlap_that_shape_pick_returned_none_for() {
     );
 }
 
-// -------- stage-1.4 `register_type` rewire + `resolve_type` tests --------
+// -------- `register_type` rewire + `resolve_type` tests --------
 //
-// Pin the four load-bearing properties of the rewire:
+// Pin the three load-bearing properties of the rewire:
 // - storage flip: `register_type` writes `types`, not `data`;
-// - fallback synthesis: `lookup` still finds builtin type names through the
-//   transient `Scope::resolve` arm scheduled for deletion in stage 1.5;
 // - `resolve_type` outer-chain walk;
 // - inner-scope shadowing of outer type bindings.
+//
+// Stage 1.5 deleted the transient `Scope::resolve` fallback that previously
+// synthesized a `KObject::KTypeValue` from the same `types` map at `lookup`
+// time — the corresponding test for that fallback (deleted with it) is no
+// longer part of this slate.
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {
@@ -532,23 +535,6 @@ fn register_type_inserts_into_types_map_not_data() {
         scope.bindings().data().get("Foo").is_none(),
         "post-1.4: type binding must not appear in data map",
     );
-}
-
-#[test]
-fn lookup_synthesizes_ktypevalue_from_types_map_via_fallback() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    scope.register_type("Foo".into(), KType::Number);
-    match scope.lookup("Foo") {
-        Some(KObject::KTypeValue(kt)) => assert!(matches!(kt, KType::Number)),
-        other => panic!(
-            "expected fallback to synthesize KTypeValue, got {}",
-            match other {
-                Some(_) => "Some(<non-KTypeValue>)",
-                None => "None",
-            }
-        ),
-    }
 }
 
 #[test]

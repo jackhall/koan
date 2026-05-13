@@ -294,17 +294,26 @@ consult `types`, identifier tokens consult `data`.
   ([`RuntimeArena::alloc_ktype`](../src/runtime/machine/core/arena.rs)),
   the
   [`Bindings::types` map plus `try_register_type` and `try_register_nominal` write primitives](../src/runtime/machine/core/bindings.rs),
+  the
+  [`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](../src/runtime/machine/core/scope.rs),
   and the
-  [`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](../src/runtime/machine/core/scope.rs)
-  have landed — builtin type names live in `bindings.types` as
-  arena-allocated `&KType`, with a transient `Scope::resolve` fallback
-  that synthesizes `KObject::KTypeValue(kt.clone())` per lookup so
-  unmigrated consumers keep finding type names through the `data`-side
-  code path. Remaining sub-items are
-  [1.5](../roadmap/type-identity-1.5-consumer-migration.md) (consumer
-  migration onto `Scope::resolve_type` and fallback removal),
+  [consumer migration onto `Scope::resolve_type` with `Scope::resolve`'s transient fallback deleted](../src/runtime/builtins/value_lookup.rs)
+  have landed. Builtin type names live in `bindings.types` as
+  arena-allocated `&KType`. Type-token reads (the `TypeExprRef` overload
+  of `value_lookup` and the bare-leaf arm of `elaborate_type_expr`)
+  consult `Scope::resolve_type` first; the sole `KObject::KTypeValue`
+  synthesis site for dispatch transport lives in
+  [`value_lookup::body_type_expr`](../src/runtime/builtins/value_lookup.rs),
+  which mints `KObject::KTypeValue(kt.clone())` on a `resolve_type` hit.
+  On a `resolve_type` miss, both readers fall through to `Scope::resolve`
+  to pick up value-side nominal carriers — `KObject::KModule` from
+  `MODULE`, `KObject::StructType` from `STRUCT`, `KObject::TaggedUnionType`
+  from `UNION`, `KObject::KSignature` from `SIG`, and the
+  `KObject::KTypeValue` that `LET Ty = ...` still writes into `data`
+  pre-stage-1.7 — none of which live in `bindings.types` until stage 3
+  dual-writes a `KType::UserType` next to them. Remaining sub-items are
   [1.6](../roadmap/type-identity-1.6-let-typeclass-bind-error.md)
-  (bind-time error), and
+  (bind-time error) and
   [1.7](../roadmap/type-identity-1.7-let-type-value-writes-types.md)
   (LET-of-type-value routing + ascribe migration).
 - [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](../roadmap/type-identity-2-typename-ref-carrier.md)

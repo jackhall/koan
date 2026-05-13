@@ -91,9 +91,6 @@ cleanup.
 
 **Requires:**
 
-- [Type identity stage 1.5 — consumer migration and fallback removal](type-identity-1.5-consumer-migration.md)
-  — the `TypeNameRef` carrier resolves through `Scope::resolve_type` with
-  no `Scope::resolve` fallback for type names.
 - [Type identity stage 1.7 — `LET Ty = Number` routes through `register_type`](type-identity-1.7-let-type-value-writes-types.md)
   — Type-class LET aliases live in `types`, so the carrier's resolution
   picks them up uniformly with builtin types.

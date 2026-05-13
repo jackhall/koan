@@ -5,9 +5,10 @@
 //! the caller can install dep edges and re-run the elaboration on wake.
 //!
 //! The phase-2 transitional `TypeResolver` trait (`NoopResolver`, `ScopeResolver`) is
-//! deleted: bindings now store `KObject::KTypeValue(KType)` directly, and consumers go
-//! through [`elaborate_type_expr`] when scope-aware lookup is needed or
-//! [`KType::from_type_expr`] when only the builtin table matters.
+//! deleted: type-name bindings live in [`Scope::bindings`]'s `types` map (stage-1 of
+//! per-type identity), and consumers go through [`elaborate_type_expr`] when
+//! scope-aware lookup is needed or [`KType::from_type_expr`] when only the builtin
+//! table matters.
 
 use std::collections::HashSet;
 
@@ -71,10 +72,13 @@ impl<'s, 'a> Elaborator<'s, 'a> {
 /// Walk a `TypeExpr` against the elaborator's scope. Container / function shapes recurse,
 /// accumulating any `Park` producers across inner slots into a single combined park list
 /// so the caller can register every dep at once. Bare-leaf names route through the
-/// elaborator's threaded set first (recursive back-edge), then `Scope::resolve`
-/// (`Value(KTypeValue) | Value(KSignature) | Placeholder | Unbound`), then
-/// `KType::from_name` for the builtin table. A genuinely unbound leaf surfaces as
-/// `ElabResult::Unbound`.
+/// elaborator's threaded set first (recursive back-edge), then `Scope::resolve_type` for
+/// every type-side binding (builtin type names plus future stage-3 user types), then
+/// falling through to `Scope::resolve` for the value-side carriers still on `data`
+/// (`KTypeValue` from `LET T = ...`, `KSignature`, `StructType`, `TaggedUnionType`,
+/// `Placeholder`), then `KType::from_name` as a final fallback covering test fixtures
+/// that skip `default_scope`'s builtin registration. A genuinely unbound leaf surfaces
+/// as `ElabResult::Unbound`.
 pub fn elaborate_type_expr(
     el: &mut Elaborator<'_, '_>,
     t: &TypeExpr,
@@ -85,8 +89,22 @@ pub fn elaborate_type_expr(
                 el.fired_self_ref_for.insert(name.clone());
                 return ElabResult::Done(KType::RecursiveRef(name.clone()));
             }
+            // Type-side first: walk `bindings.types` via `resolve_type`. Owns every
+            // builtin type name post-stage-1.4 and will own stage-3 `KType::UserType`
+            // entries. The `Scope::resolve` fallback that previously synthesized a
+            // `KObject::KTypeValue` from this same map at lookup time is gone — the
+            // `resolve_type` call here covers that path directly.
+            if let Some(kt) = el.scope.resolve_type(name) {
+                return ElabResult::Done(kt.clone());
+            }
             match el.scope.resolve(name) {
                 Resolution::Value(obj) => match obj {
+                    // `LET MyList = (LIST_OF Number)` writes a `KObject::KTypeValue`
+                    // into `bindings.data` (LET's Identifier / TypeExprRef LHS path
+                    // both land here pre-stage-1.7). Read the carried `KType` back
+                    // directly. Stage 1.7 flips LET to call `register_type` instead;
+                    // when it lands, the `resolve_type` step above will catch these
+                    // hits and this arm can delete.
                     KObject::KTypeValue(kt) => ElabResult::Done(kt.clone()),
                     KObject::KSignature(s) => ElabResult::Done(KType::SignatureBound {
                         sig_id: s.sig_id(),

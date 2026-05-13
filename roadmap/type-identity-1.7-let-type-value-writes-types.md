@@ -51,6 +51,17 @@ migration must ship in the same PR.
   `fn_def/tests/module_stage2.rs:20` switch their `scope.lookup("ty")`
   assertions to `scope.resolve_type("ty")`.
 
+- *Delete the resolver's `KObject::KTypeValue` arm — decided.* The
+  bare-leaf fall-through in
+  [`resolver.rs`](../src/runtime/model/types/resolver.rs)'s
+  `elaborate_type_expr` carries a `Resolution::Value(KObject::KTypeValue(kt))`
+  branch that exists solely because `LET T = ...` still writes
+  `bindings.data`. Once LET routes through `register_type`, the
+  `resolve_type` step above the `scope.resolve` fall-through catches every
+  `LET`-bound type name and this arm becomes dead. Delete it inside this
+  PR — the inline comment at the arm already pins stage 1.7 as the
+  removal trigger.
+
 - *Pairing ascribe migration with LET routing — decided.* The alternative
   (defer LET routing entirely until stage 3) carries the asymmetry across
   stages 1–2. Migrating ascribe to scan both maps is the local cost paid

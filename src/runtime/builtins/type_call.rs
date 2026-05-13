@@ -35,6 +35,12 @@ pub fn body<'a>(
             )));
         }
     };
+    // Stays on `scope.lookup`: the verb (`Maybe` in `Maybe (some 42)`) resolves to a
+    // nominal *value*-side binding — `KObject::TaggedUnionType` from UNION,
+    // `KObject::StructType` from STRUCT — that lives in `bindings.data`. The
+    // post-stage-1.5 `Scope::resolve_type` walks `bindings.types`, where those
+    // nominal value carriers don't live until stage 3 dual-writes a
+    // `KType::UserType` next to them.
     match scope.lookup(&verb) {
         Some(obj) => match dispatch_constructor(obj, args_expr.parts) {
             Some(result) => result,

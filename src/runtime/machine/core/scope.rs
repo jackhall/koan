@@ -156,9 +156,10 @@ impl<'a> Scope<'a> {
     /// Register `name` as a type-valued binding in this scope. The binding lives in
     /// [`Bindings::types`] as an arena-allocated `&KType` — the dedicated type-side
     /// storage introduced in stage 1.2 of per-type identity. No `KObject::KTypeValue`
-    /// wrap at the storage layer; consumers that still read types as `KObject` go
-    /// through the temporary fallback arm on [`Self::resolve`] until stage 1.5
-    /// migrates them onto [`Self::resolve_type`].
+    /// wrap at the storage layer. Type-name reads go through [`Self::resolve_type`]
+    /// (post-stage-1.5), with the sole `KObject::KTypeValue` synthesis site for
+    /// dispatch transport living in
+    /// [`crate::runtime::builtins::value_lookup::body_type_expr`].
     ///
     /// Same conditional-defer shape as [`Self::bind_value`] and
     /// [`Self::register_function`]: direct write first, queue through
@@ -196,6 +197,10 @@ impl<'a> Scope<'a> {
     /// per scope, checking `data` then `placeholders`** — an inner scope's placeholder
     /// shadows an outer scope's value binding for the same name (the inner producer hasn't
     /// finalized yet, so the consumer must park on it rather than read through to the outer).
+    ///
+    /// Type-side bindings (`bindings.types`) are *not* consulted here — type-name reads
+    /// go through [`Self::resolve_type`] post-stage-1.5. The brief stage-1.4 fallback
+    /// arm that synthesized a `KObject::KTypeValue` on demand is gone.
     pub fn resolve(&self, name: &str) -> Resolution<'a> {
         if let Some(obj) = self.bindings.data().get(name).copied() {
             return Resolution::Value(obj);
@@ -203,20 +208,6 @@ impl<'a> Scope<'a> {
         if let Some(id) = self.bindings.placeholders().get(name).copied() {
             return Resolution::Placeholder(id);
         }
-        // ---- TEMPORARY FALLBACK — remove in stage 1.5 ----
-        // Stage 1.4 flips `register_type`'s storage from `data` to `types` but leaves
-        // every existing consumer (`scope.lookup("Number")` etc.) reading the old
-        // `KObject::KTypeValue` path. Synthesize a fresh `KObject::KTypeValue(kt.clone())`
-        // per lookup so those consumers keep finding type names through `resolve`.
-        // Stage 1.5 (`type-identity-1.5-consumer-migration.md`) migrates the readers
-        // onto `Scope::resolve_type` and deletes this arm. The per-lookup `alloc_object`
-        // cost is acceptable for the short bridge window — the lookup count for builtin
-        // type names is bounded by program-source references, not by hot-loop iterations.
-        if let Some(kt) = self.bindings.types().get(name).copied() {
-            let obj = self.arena.alloc_object(KObject::KTypeValue(kt.clone()));
-            return Resolution::Value(obj);
-        }
-        // ---- END FALLBACK ----
         match self.outer {
             Some(outer) => outer.resolve(name),
             None => Resolution::Unbound,

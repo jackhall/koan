@@ -154,13 +154,24 @@ Three ancillary gaps the same surface admits:
   arm (`ktype_predicates.rs:155-162`, `resolver.rs:101-102`) migrates
   before the stage's PR can land green.
 
+- *Delete `body_type_expr`'s `scope.lookup` fall-through — decided.* The
+  `<v:TypeExprRef>` overload in
+  [`value_lookup.rs`](../src/runtime/builtins/value_lookup.rs) tries
+  `Scope::resolve_type` first, then falls through to `scope.lookup` to
+  catch Type-classed *names* whose nominal value-side carriers still live
+  in `bindings.data` (`KObject::KModule` from `MODULE Foo`, `StructType`
+  from `STRUCT Foo`, `TaggedUnionType` from `UNION Foo`, `KSignature` from
+  `SIG Foo`). Stage 3's dual-write through `try_register_nominal` puts a
+  `&KType::UserType` for each of those nominal names into
+  `bindings.types`, so the initial `resolve_type` step catches them and
+  the `scope.lookup` fall-through becomes dead. Delete it inside this
+  PR — the single-home invariant ("type names resolve via `resolve_type`
+  only") is the explicit payoff.
+
 ## Dependencies
 
 **Requires:**
 
-- [Type identity stage 1.5 — consumer migration and fallback removal](type-identity-1.5-consumer-migration.md)
-  — `KType::UserType` resolution rides on `Scope::resolve_type` with the
-  fallback gone.
 - [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](type-identity-2-typename-ref-carrier.md)
   — collapsing `KType::Struct` / `Tagged` / `ModuleType` into
   `KType::UserType` is cleaner once `KType::Unresolved` is already gone.

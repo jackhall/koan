@@ -48,12 +48,17 @@ scope-aware elaboration goes exclusively through the scheduler-driven
 `elaborate_type_expr`); and the type-identity stage 1 substrate
 ([`RuntimeArena::alloc_ktype`](src/runtime/machine/core/arena.rs), the
 [`Bindings::types` map with the `try_register_type` and `try_register_nominal` write primitives](src/runtime/machine/core/bindings.rs),
-and the
-[`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](src/runtime/machine/core/scope.rs))
-— builtin type names now live in `bindings.types` as arena-allocated `&KType`,
-with a transient `Scope::resolve` fallback synthesizing `KObject::KTypeValue`
-on demand so unmigrated consumers keep finding type names through their
-existing code path until stage 1.5 migrates them onto `Scope::resolve_type`. The next signature revision after error handling lands
+the
+[`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](src/runtime/machine/core/scope.rs),
+and the [stage-1.5 consumer migration](src/runtime/builtins/value_lookup.rs)
+that flips type-name reads onto `Scope::resolve_type` and deletes the
+transient `Scope::resolve` fallback) — builtin type names live in
+`bindings.types` as arena-allocated `&KType`, Type-token reads consult
+`Scope::resolve_type` first (with the sole `KObject::KTypeValue` synthesis
+site for dispatch transport now living in `value_lookup::body_type_expr`),
+and value-side nominal carriers (`KModule`, `StructType`, `TaggedUnionType`,
+`KSignature`) fall through to `Scope::resolve` until stage 3 dual-writes a
+`KType::UserType` next to them. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -112,9 +117,6 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 1.5 — consumer migration and fallback removal](roadmap/type-identity-1.5-consumer-migration.md)
-  — every type-name lookup site migrates to `Scope::resolve_type`; the
-  1.4 fallback deletes here.
 - [Type identity stage 1.7 — `LET Ty = Number` routes through `register_type`](roadmap/type-identity-1.7-let-type-value-writes-types.md)
   — Type-class LET aliases write `types`; ascribe scans both maps so
   SIG abstract-type members stay visible.
