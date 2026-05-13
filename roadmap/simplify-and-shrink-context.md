@@ -1,21 +1,23 @@
 # Simplify runtime::machine and shrink AI context cost
 
-**Problem.** Two forms of bloat hold koan back. *Structural:* the
-`runtime::machine` subtree dominates the module-graph fractal index — at HEAD
-(`273721f`) `koan::runtime` scores cross=220 / feedback=21 / index=262 and the
-`machine` child alone is cross=48 / fb=6 / index=60, roughly 60% of the
-crate-wide Σ index·loc (1,935,797; loc-normalized 87.87). Back-edges still
-tangle `machine::core`, `machine::execute`, and `machine::kfunction`.
-*Context-cost:* three non-test files exceed 600 lines —
-[scope.rs](../src/runtime/machine/core/scope.rs) (~1170, carrying the
-`Bindings` façade, `resolve_dispatch` walk, and its test module),
+**Problem.** Two forms of bloat hold koan back. *Structural:* at HEAD
+(`0e38fab`) the dominant knot has moved up a level from `runtime::machine`
+into `runtime` itself — `koan::runtime` scores cross=220 / feedback=21 /
+index=262 and accounts for ~69% of the crate-wide Σ index·loc (2,011,270;
+loc-normalized 88.46). 18 of the 21 back-edges run `model → machine`: the
+data layer reaches into runtime machinery instead of sitting under it.
+Inside `machine` itself the score has come down (cross=52 / fb=8 / index=68
+after the Bindings / PendingQueue / scope-test-split work), with a residual
+`core → kfunction` tangle (8 back-edges). *Context-cost:* three non-test
+files still exceed 550 lines —
+[interpret.rs](../src/runtime/machine/execute/interpret.rs) (619),
 [ascribe.rs](../src/runtime/builtins/ascribe.rs) (614),
-[interpret.rs](../src/runtime/machine/execute/interpret.rs) (619). The
-scheduler's two test files
-([tests.rs](../src/runtime/machine/execute/scheduler/tests.rs) 382 lines / 12
-tests, [run_tests.rs](../src/runtime/machine/execute/scheduler/run_tests.rs)
-244 lines / 15 tests) still carry assertions that the recent DepGraph and
-NodeStore sub-struct extractions made type-impossible.
+[kfunction.rs](../src/runtime/machine/kfunction.rs) (561). The scheduler's
+two test files
+([tests.rs](../src/runtime/machine/execute/scheduler/tests.rs) 486 lines,
+[run_tests.rs](../src/runtime/machine/execute/scheduler/run_tests.rs) 244
+lines) still carry assertions that the recent DepGraph and NodeStore
+sub-struct extractions made type-impossible.
 
 **Impact.**
 
@@ -37,15 +39,25 @@ NodeStore sub-struct extractions made type-impossible.
 
 **Directions.**
 
-- *Structural reshuffle of `runtime::machine` — open.* Candidate partitions
-  (merging `kfunction` into `execute`, hoisting shared types up to `machine`)
-  score via [tools/modgraph_rewrite.py](../tools/modgraph_rewrite.py) plus
-  `modgraph.py --fractal koan` against the rewritten DOT. Adopt only
-  reshuffles whose loc-normalized score drops by more than rounding noise off
-  the 87.87 baseline; otherwise the file moves aren't paying for themselves.
-- *Split the three 600+-line files — open.* Each is plausibly 2–3 focused
-  submodules, but the right split for `scope.rs` / `ascribe.rs` /
-  `interpret.rs` depends on which partition wins above. Score candidate
+- *Break the `model → machine` back-edges — open.* The dominant knot is no
+  longer inside `runtime::machine` (down to cross=52 / fb=8 / index=68); it is
+  one level up, where `runtime::model` reaches into `runtime::machine` 18
+  times. Those 18 back-edges drive most of `runtime`'s index=262 and
+  `runtime::model` accounts for ~69% of the crate-wide Σ index·loc at HEAD
+  (2,011,270; loc-normalized 88.46). Identify what `model::types` and
+  `model::values` reach into `machine` for (Scope, KFunction, Arena handles,
+  scheduler types) and either (a) lift the offending APIs out of `model` into
+  `machine`, or (b) demote the shared substrate from `machine` to a sibling
+  of `model` so the dependency points downward. Score candidates with
+  [tools/modgraph_rewrite.py](../tools/modgraph_rewrite.py) plus `modgraph.py
+  --fractal koan`; adopt only reshuffles whose loc-normalized score drops by
+  more than rounding noise off the 88.46 baseline. The smaller `core →
+  kfunction` tangle inside `machine` (8 back-edges, ~8% of total) is a
+  secondary target — bundle it into the same reshuffle only if a single
+  partition addresses both.
+- *Split the three remaining 550+-line files — open.* Each is plausibly 2–3
+  focused submodules, but the right split for `interpret.rs` / `ascribe.rs`
+  / `kfunction.rs` depends on which partition wins above. Score candidate
   splits in the same `modgraph_rewrite.py` pass so LOC redistribution and
   edge re-classification are evaluated together.
 - *Trim scheduler tests against the new sub-struct surface — decided.* Delete
