@@ -281,13 +281,17 @@ above; the remaining stages live under
 
 - [Eager type elaboration with placeholder-based recursion](../roadmap/eager-type-elaboration.md)
   — closes the remaining gaps in the elaboration mechanism described
-  above: SCC pre-registration so mutually recursive STRUCT/UNION groups
-  elaborate without deadlocking on each other's placeholders,
-  parens-wrapped FN-parameter sub-dispatch (`xs: (LIST_OF MyType)`),
-  `OnceCell<KType>` late binding for signature-typed parameters whose
-  type only resolves at functor application time, and the phase-5
-  cleanup that retires `NoopResolver` and the transitional
-  `KType::Unresolved` carrier.
+  above: parens-wrapped FN-parameter sub-dispatch
+  (`xs: (LIST_OF MyType)`), `OnceCell<KType>` late binding for
+  signature-typed parameters whose type only resolves at functor
+  application time, and the phase-5 cleanup that retires `NoopResolver`
+  and the transitional `KType::Unresolved` carrier.
+- [Per-declaration type identity for structs and tagged unions](../roadmap/per-declaration-type-identity.md)
+  — extends the `KType::ModuleType` per-declaration identity carrier
+  to flat `STRUCT` and `UNION` declarations, and ships SCC
+  pre-registration on the same declaration surface so mutually
+  recursive STRUCT/UNION groups elaborate without deadlocking on
+  each other's placeholders.
 - [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — inferred dispatch on signatures. Lands the multi-parameter dispatch the
   current slot-specificity ranking can't express on its own.

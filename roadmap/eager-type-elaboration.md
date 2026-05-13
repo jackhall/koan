@@ -3,27 +3,15 @@
 Phases 1–2 (one canonical runtime type representation) and a meaningful slice
 of phase 3 (scheduler-aware FN / STRUCT / UNION elaboration with self-recursive
 STRUCT support and `LET T = T` cycle detection) have landed. The remaining
-work — mutual STRUCT recursion (SCC pre-registration), parens-wrapped FN
-parameter types, and the phase-5 cleanup that deletes `NoopResolver` and
-`KType::Unresolved` — is captured below.
+work — parens-wrapped FN parameter types and the phase-5 cleanup that deletes
+`NoopResolver` and `KType::Unresolved` — is captured below. Mutual STRUCT /
+UNION recursion (SCC pre-registration) was originally part of this item; it
+now ships with [per-declaration type identity for structs and tagged
+unions](per-declaration-type-identity.md), since both touch the same
+STRUCT/UNION declaration surface.
 
-**Problem.** Three concrete gaps remain after the phase-1–3 landing:
+**Problem.** Two concrete gaps remain after the phase-1–3 landing:
 
-- *Mutual STRUCT recursion.* A self-recursive STRUCT
-  (`STRUCT Tree = (children: List<Tree>)`) elaborates cleanly via the
-  threaded-set self-reference recognition implemented in
-  [`Elaborator`](../src/runtime/model/types/resolver.rs), but a mutually
-  recursive pair (`STRUCT TreeA = (b: TreeB)` /
-  `STRUCT TreeB = (a: TreeA)`) deadlocks: each STRUCT parks on the other's
-  placeholder via the Combine path in
-  [`struct_def.rs`](../src/runtime/builtins/struct_def.rs) and neither ever
-  finalizes. The
-  [`mutually_recursive_struct_pair`](../src/runtime/builtins/struct_def.rs)
-  test in
-  [`struct_def.rs`](../src/runtime/builtins/struct_def.rs) is `#[ignore]`d
-  until the SCC pre-registration arrives. Self-recursive UNION uses the
-  same threaded-set mechanism today (the binder seeds its own name) but
-  inherits the same gap for the mutually recursive case.
 - *Parens-wrapped FN parameter types.* `parse_fn_param_list` in
   [`fn_def/signature.rs`](../src/runtime/builtins/fn_def/signature.rs) still
   only accepts `ExpressionPart::Type(t)` triples; a parameter written
@@ -50,11 +38,6 @@ parameter types, and the phase-5 cleanup that deletes `NoopResolver` and
 
 **Impact.**
 
-- *Mutually recursive declarations are first-class.* `STRUCT TreeA { b:
-  TreeB } / STRUCT TreeB { a: TreeA }` elaborates as a unit, with
-  cross-references becoming `KType::RecursiveRef` at the binder boundary
-  the same way the self-recursive case already does. The currently
-  `#[ignore]`d test moves to passing without special-casing.
 - *Type expressions assemble end-to-end inside FN signatures.* A FN
   parameter typed `xs: (LIST_OF MyType)` schedules the parens-wrapped
   part as a sub-Dispatch and splices the resulting `KType` in via the
@@ -73,22 +56,6 @@ parameter types, and the phase-5 cleanup that deletes `NoopResolver` and
 
 **Directions.**
 
-- *Mutual recursion via SCC pre-registration — decided.* At top-level,
-  batch-register every name in a strongly-connected declaration group as a
-  scheduler placeholder before elaborating any body, and seed the
-  elaborator's threaded set with all SCC member names. Any back-reference
-  from any SCC member's body to any other member's name returns
-  `RecursiveRef(name)` directly. SCC discovery rides on the existing
-  scheduler (each binding's body elaboration is scheduler work; mutual
-  references inside the SCC short-circuit, mutual references outside the
-  SCC park on each other's placeholders the same way value forward
-  references park). Today's per-binder threaded-set seeding (each
-  STRUCT/UNION seeds only its own name in
-  [`struct_def.rs`](../src/runtime/builtins/struct_def.rs) /
-  [`union.rs`](../src/runtime/builtins/union.rs)) was a deliberate
-  narrowing — batch-wide seeding without SCC discovery would mis-mark
-  non-recursive cross-references as `RecursiveRef`. SCC discovery closes
-  the gap without that hazard.
 - *Parens-wrapped type expressions sub-dispatch — decided.* A parameter
   position written `xs: (LIST_OF MyType)` schedules the parens-wrapped
   part as a sub-Dispatch; its `KObject::KTypeValue` result splices in via
@@ -119,19 +86,13 @@ parameter types, and the phase-5 cleanup that deletes `NoopResolver` and
   (already path-shaped) or a new `KType::Qualified(Path)` variant is
   needed. Decision deferred until a use case forces it; the current
   module-system stages don't.
-- *Recursion encoding key — decided.* `KType::RecursiveRef(String)` keys
-  by binder name only. When [per-declaration type identity for structs
-  and tagged unions](per-declaration-type-identity.md) ships, its
-  `{ scope_id, name }` carrier inherits the same name; `RecursiveRef`
-  resolution walks the enclosing `Mu` or schema-binder context to find
-  the concrete identity. No rework of the recursion encoding required
-  when per-declaration-identity lands.
 - *Forward references and partial definitions — open.* Eager elaboration
-  means a type alias's RHS must resolve at bind time. Mutual recursion is
-  handled by the SCC pre-registration above, but a binding whose RHS
-  references a name not yet introduced (e.g. a top-level `LET T = U` where
-  `U` is declared later in source) still fails. Whether to extend
-  `Scope::placeholders` to typed names beyond the SCC group, or to require
+  means a type alias's RHS must resolve at bind time. Mutual STRUCT/UNION
+  recursion ships with [per-declaration type identity for structs and
+  tagged unions](per-declaration-type-identity.md), but a binding whose
+  RHS references a name not yet introduced (e.g. a top-level `LET T = U`
+  where `U` is declared later in source) still fails. Whether to extend
+  `Scope::placeholders` to typed names beyond an SCC group, or to require
   source-order declaration for non-mutually-recursive aliases, is left
   open until a real use case appears.
 

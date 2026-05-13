@@ -273,14 +273,15 @@ mod tests {
         }
     }
 
-    /// Phase 3 — mutually recursive STRUCTs. `STRUCT TreeA = (b: TreeB)` and
+    /// Mutually recursive STRUCTs. `STRUCT TreeA = (b: TreeB)` and
     /// `STRUCT TreeB = (a: TreeA)` submitted in the same batch must both finalize with
     /// their schemas carrying `RecursiveRef` to each other. The current implementation
     /// only handles single-binder self-recursion via the elaborator's threaded set; mutual
     /// recursion deadlocks because each binder's body parks on the other's placeholder
-    /// and neither can ever finalize. Marked `#[ignore]` until SCC pre-registration
-    /// lands.
-    /// Phase 3 — sanity check that two unrelated STRUCTs in the same batch don't
+    /// and neither can ever finalize. Marked `#[ignore]` until batch SCC pre-registration
+    /// lands; that work is tracked under
+    /// [per-declaration type identity](../../../roadmap/per-declaration-type-identity.md).
+    /// Sanity check that two unrelated STRUCTs in the same batch don't
     /// spuriously cross-pollinate `RecursiveRef`. `STRUCT A = (x: Number)`,
     /// `STRUCT B = (y: A)` — B's field references A, which is non-recursive; B's schema
     /// must record `KType::Struct` (or the StructType-shaped reference) for `y`, never a

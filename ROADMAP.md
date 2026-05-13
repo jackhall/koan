@@ -118,7 +118,9 @@ without first landing something else:
 
 - [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
   — extend the `KType::ModuleType` per-declaration identity carrier to `STRUCT` and
-  `UNION` so two distinct declarations report distinct types.
+  `UNION` so two distinct declarations report distinct types; ships SCC
+  pre-registration so mutually recursive STRUCT/UNION groups elaborate
+  without deadlocking on each other's placeholders.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
 - [Simplify `runtime::machine` and shrink AI context cost](roadmap/simplify-and-shrink-context.md)
@@ -167,13 +169,15 @@ the rest incrementally, each producing a usable end state.
 - [Per-declaration type identity for structs and tagged unions](roadmap/per-declaration-type-identity.md)
   — `KType::Struct` and `KType::Tagged` are flat singletons, so two distinct
   `STRUCT` declarations report the same type. Extend per-declaration identity
-  along the lines of the module system's `KType::ModuleType` carrier.
+  along the lines of the module system's `KType::ModuleType` carrier, and
+  ship SCC pre-registration on the same declaration surface so mutually
+  recursive STRUCT/UNION groups elaborate without deadlocking.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
-  — make type elaboration scheduler-driven the same way value evaluation is;
-  replace `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`
-  for one canonical runtime type representation; add `KType::Mu` and
-  `KType::RecursiveRef` so recursive type definitions elaborate via threaded-set
-  self-reference recognition without deadlocking on their own placeholder.
+  — finish the scheduler-driven elaborator: parens-wrapped FN-parameter
+  sub-dispatch (`xs: (LIST_OF MyType)`), `OnceCell<KType>` late binding for
+  signature-typed parameters whose type only resolves at functor application
+  time, and the phase-5 cleanup that retires `NoopResolver` and
+  `KType::Unresolved`.
 
 ### Surface and ergonomics
 

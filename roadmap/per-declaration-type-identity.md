@@ -16,6 +16,20 @@ below `KType`, so dispatch cannot select on it. The `Tagged` and `Struct`
 variants in `KType` document this gap with prose comments rather than
 encoding the identity.
 
+The same STRUCT/UNION declaration surface also carries a recursion gap.
+A self-recursive STRUCT (`STRUCT Tree = (children: List<Tree>)`) elaborates
+cleanly via the threaded-set self-reference recognition shipped with
+[eager type elaboration](eager-type-elaboration.md), but a mutually
+recursive pair (`STRUCT TreeA = (b: TreeB)` /
+`STRUCT TreeB = (a: TreeA)`) deadlocks: each STRUCT parks on the other's
+placeholder via the Combine path in
+[`struct_def.rs`](../src/runtime/builtins/struct_def.rs) and neither ever
+finalizes. The
+[`mutually_recursive_struct_pair`](../src/runtime/builtins/struct_def.rs)
+test is `#[ignore]`d until batch SCC pre-registration lands. Self-recursive
+UNION uses the same threaded-set mechanism today (the binder seeds its own
+name) but inherits the same gap for the mutually recursive case.
+
 **Impact.**
 
 - *Per-declaration nominal identity for structs and tagged unions.* `Foo`
@@ -30,6 +44,13 @@ encoding the identity.
   declaration-keyed registration of operations (struct-specific methods,
   union-specific destructors, type-class-style dispatch outside the module
   system) has a stable identity to key on.
+- *Mutually recursive STRUCT/UNION declarations elaborate as a unit.*
+  `STRUCT TreeA = (b: TreeB)` / `STRUCT TreeB = (a: TreeA)` elaborates
+  without deadlocking; cross-references become `KType::RecursiveRef` at
+  the binder boundary the same way the self-recursive case already does.
+  The currently `#[ignore]`d
+  [`mutually_recursive_struct_pair`](../src/runtime/builtins/struct_def.rs)
+  test moves to passing without special-casing.
 
 **Directions.**
 
@@ -59,6 +80,25 @@ encoding the identity.
   `RecursiveRef` resolution finds the concrete identity by walking the
   enclosing schema-binder context. The recursion encoding does not
   change shape when this work lands.
+- *Mutual recursion via SCC pre-registration — decided.* At top-level,
+  batch-register every binder name in a strongly-connected STRUCT/UNION
+  declaration group as a scheduler placeholder before any body
+  elaborates, and seed the elaborator's threaded set with all SCC member
+  names. Any back-reference from any SCC member's body to any other
+  member returns `RecursiveRef(name)` directly. SCC discovery rides on
+  the existing scheduler — each binding's body elaboration is scheduler
+  work; mutual references inside the SCC short-circuit, mutual
+  references outside the SCC park on each other's placeholders the same
+  way value forward references park. Today's per-binder threaded-set
+  seeding (each STRUCT/UNION seeds only its own name in
+  [`struct_def.rs`](../src/runtime/builtins/struct_def.rs) /
+  [`union.rs`](../src/runtime/builtins/union.rs)) was a deliberate
+  narrowing — batch-wide seeding without SCC discovery would mis-mark
+  non-recursive cross-references as `RecursiveRef`. SCC discovery closes
+  the gap without that hazard. The work ships under this item rather
+  than under [eager type elaboration](eager-type-elaboration.md) because
+  the STRUCT/UNION declaration surface that records the new identity
+  carrier is the same surface that needs to batch-register the SCC.
 - *Module-system relationship — decided.* This is not part of the
   module-system staged work — opaque-ascription types and user-defined
   types are conceptually distinct (one is an abstraction barrier, the
