@@ -4,6 +4,7 @@ use std::rc::Rc;
 use typed_arena::Arena;
 
 use crate::runtime::machine::kfunction::KFunction;
+use crate::runtime::model::types::KType;
 use crate::runtime::model::values::{KObject, Module, Signature};
 use super::scope::Scope;
 
@@ -25,6 +26,10 @@ pub struct RuntimeArena {
     scopes: Arena<Scope<'static>>,
     modules: Arena<Module<'static>>,
     signatures: Arena<Signature<'static>>,
+    /// `KType` has no lifetime parameter, so storage is direct — no `<'static>` erasure,
+    /// no transmute apparatus in `alloc_ktype`. Backs the per-type identity binding storage
+    /// (`Bindings::types` map) introduced in stage 1.2.
+    ktypes: Arena<KType>,
     /// Stable addresses of every `KObject` allocated here. Backs `owns_object` membership
     /// queries via a linear scan (no deref, no borrow). `usize` rather than `*const _` keeps
     /// the field lifetime-erased and `Send`/`Sync`-neutral.
@@ -43,6 +48,7 @@ impl RuntimeArena {
             scopes: Arena::new(),
             modules: Arena::new(),
             signatures: Arena::new(),
+            ktypes: Arena::new(),
             allocated_objects: RefCell::new(Vec::new()),
             escape: None,
         }
@@ -57,6 +63,7 @@ impl RuntimeArena {
             scopes: Arena::new(),
             modules: Arena::new(),
             signatures: Arena::new(),
+            ktypes: Arena::new(),
             allocated_objects: RefCell::new(Vec::new()),
             escape: Some(escape),
         }
@@ -138,6 +145,13 @@ impl RuntimeArena {
         unsafe { std::mem::transmute::<&'a mut Signature<'static>, &'a Signature<'a>>(stored) }
     }
 
+    /// Allocate a `KType` into the run-lifetime store. No lifetime erasure: `KType` carries
+    /// no lifetime parameter, so storage is direct and the returned `&'a KType` is a plain
+    /// coerce of `typed_arena::Arena::alloc`'s `&'a mut KType`. No `unsafe` is required.
+    pub fn alloc_ktype<'a>(&'a self, t: KType) -> &'a KType {
+        self.ktypes.alloc(t)
+    }
+
     /// Whether the functions sub-arena holds zero `KFunction`s. When true, no value can hold
     /// a `&KFunction` pointing into this arena — see the `alloc_function` invariant.
     pub fn functions_is_empty(&self) -> bool { self.functions.len() == 0 }
@@ -168,9 +182,18 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
 
 #[cfg(test)]
 impl RuntimeArena {
-    /// Total number of values stored across the three sub-arenas (test-only).
+    /// Total number of values stored across all six sub-arenas (test-only). Each `alloc_*`
+    /// method writes to exactly one sub-arena, so this is the precise allocation count
+    /// without double-counting — a `KObject::KModule(&Module, _)` value, for example, occupies
+    /// one slot in `objects` and the referenced `&Module` occupies an independent slot in
+    /// `modules`.
     pub fn alloc_count(&self) -> usize {
-        self.objects.len() + self.functions.len() + self.scopes.len()
+        self.objects.len()
+            + self.functions.len()
+            + self.scopes.len()
+            + self.modules.len()
+            + self.signatures.len()
+            + self.ktypes.len()
     }
 }
 
@@ -312,6 +335,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::builtins::default_scope;
+    use crate::runtime::model::types::KType;
 
     #[test]
     fn null_singleton_returns_null_kobject() {
@@ -435,6 +459,17 @@ mod tests {
         let r2 = a.alloc_object(KObject::Number(2.0));
         assert!(matches!(r1, KObject::Number(n) if *n == 1.0));
         assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
+    }
+
+    /// `alloc_ktype` returns an arena-lifetime `&KType` and bumps `alloc_count` by one. Pins
+    /// the new sub-arena's accounting alongside the no-`unsafe`, no-transmute storage path.
+    #[test]
+    fn alloc_ktype_returns_arena_lifetime_ref_and_counts() {
+        let a = RuntimeArena::new();
+        let baseline = a.alloc_count();
+        let t: &KType = a.alloc_ktype(KType::Number);
+        assert!(matches!(t, KType::Number));
+        assert_eq!(a.alloc_count(), baseline + 1);
     }
 
     /// Cycle gate: alloc'ing a value that anchors back at the receiving arena via an

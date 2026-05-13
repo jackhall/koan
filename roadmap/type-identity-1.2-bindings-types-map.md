@@ -46,10 +46,7 @@ half.
 
 ## Dependencies
 
-**Requires:**
-
-- [Stage 1.1 — `RuntimeArena::alloc_ktype`](type-identity-1.1-arena-alloc-ktype.md)
-  — `try_register_type` consumes `&'a KType` references the arena mints.
+**Requires:** none — foundation.
 
 **Unblocks:**
 

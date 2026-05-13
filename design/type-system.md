@@ -290,8 +290,9 @@ consult `types`, identifier tokens consult `data`.
 
 - Type identity stage 1 — foundation: dual-map binding home,
   `Scope::resolve_type`, dispatch routing by token kind, bind-time
-  diagnostic for type-class LHS with non-type RHS. Split into sub-items
-  [1.1](../roadmap/type-identity-1.1-arena-alloc-ktype.md) (arena slot),
+  diagnostic for type-class LHS with non-type RHS. The arena slot
+  ([`RuntimeArena::alloc_ktype`](../src/runtime/machine/core/arena.rs))
+  has landed; remaining sub-items are
   [1.2](../roadmap/type-identity-1.2-bindings-types-map.md) (types map),
   [1.3](../roadmap/type-identity-1.3-try-register-nominal.md) (dual-write
   primitive), [1.4](../roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)

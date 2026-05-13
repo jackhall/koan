@@ -59,7 +59,6 @@ work: this sub-item moves the storage; the next migrates consumers.
 
 **Requires:**
 
-- [Stage 1.1 — `RuntimeArena::alloc_ktype`](type-identity-1.1-arena-alloc-ktype.md)
 - [Stage 1.2 — `Bindings::types` map and `try_register_type`](type-identity-1.2-bindings-types-map.md)
 
 **Unblocks:**

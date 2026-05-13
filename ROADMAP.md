@@ -55,9 +55,6 @@ dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Type identity stage 1.1 — `RuntimeArena::alloc_ktype`](roadmap/type-identity-1.1-arena-alloc-ktype.md)
-  — arena slot so the forthcoming `Bindings::types` map carries `&'a
-  KType` directly. Foundation for stage 1's seven sub-items.
 - [Type identity stage 1.6 — `TypeClassBindingExpectsType` bind-time error](roadmap/type-identity-1.6-let-typeclass-bind-error.md)
   — bind-time diagnostic for `LET Foo = 1` (Type-class LHS, non-type
   RHS). Storage-neutral; can ship in parallel with the other stage 1
