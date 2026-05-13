@@ -293,11 +293,10 @@ consult `types`, identifier tokens consult `data`.
   diagnostic for type-class LHS with non-type RHS. The arena slot
   ([`RuntimeArena::alloc_ktype`](../src/runtime/machine/core/arena.rs))
   and the
-  [`Bindings::types` map plus `try_register_type` write primitive](../src/runtime/machine/core/bindings.rs)
+  [`Bindings::types` map plus `try_register_type` and `try_register_nominal` write primitives](../src/runtime/machine/core/bindings.rs)
   have landed (storage is live; no consumer reads it yet). Remaining
   sub-items are
-  [1.3](../roadmap/type-identity-1.3-try-register-nominal.md) (dual-write
-  primitive), [1.4](../roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
+  [1.4](../roadmap/type-identity-1.4-scope-resolve-type-and-rewire.md)
   (`Scope::resolve_type` + rewire with fallback),
   [1.5](../roadmap/type-identity-1.5-consumer-migration.md) (consumer
   migration + fallback removal),

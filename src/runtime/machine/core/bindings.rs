@@ -2,13 +2,17 @@
 //! `functions`, `placeholders`) plus the shared validated write paths
 //! ([`Bindings::try_apply`] for `data`/`functions`, [`Bindings::try_apply_type`] for
 //! `types`) that keep the dual-map invariant — every `data[name]` entry wrapping a
-//! `KFunction` lives in `functions[signature.untyped_key()]` — in one place. The
-//! `types` map (added in stage 1.2 of per-type identity) is the dedicated home for
-//! type-side bindings; it is currently unused (stage 1.4 wires `Scope::register_type`
-//! into it). Borrow discipline across the four maps: `types → functions → data`,
-//! with `types` only acquired when writing types. Lives in its own module so the
-//! façade's surface (write methods + read handles) stays focused; [`Scope`] embeds it
-//! by value so all interior borrows arbitrate against one another.
+//! `KFunction` lives in `functions[signature.untyped_key()]` — in one place.
+//! [`Bindings::try_register_nominal`] (stage 1.3) is the transactional dual-write
+//! primitive for nominal declarations (STRUCT / UNION / MODULE), atomically inserting
+//! identity into `types` and the runtime carrier into `data`. The `types` map (added
+//! in stage 1.2 of per-type identity) is the dedicated home for type-side bindings; it
+//! is currently unused — stage 1.3's helper and stage 1.4's `Scope::register_type`
+//! wiring are the eventual consumers. Borrow discipline across the four maps:
+//! `types → functions → data`, with `types` only acquired when writing types. Lives
+//! in its own module so the façade's surface (write methods + read handles) stays
+//! focused; [`Scope`] embeds it by value so all interior borrows arbitrate against
+//! one another.
 //!
 //! `ApplyOutcome` is `pub` so [`scope`](super::scope)'s match arms on the
 //! [`Bindings::try_bind_value`] / [`Bindings::try_register_function`] results compile, but
@@ -36,7 +40,9 @@ use super::kerror::{KError, KErrorKind};
 /// fast-path then `signatures_exact_equal`) across the LET-binds-FN and `FN`-decl paths.
 /// [`Bindings::try_apply_type`] is the parallel write primitive for the `types` map; it
 /// borrows only `types`, so it composes cleanly with code holding live `data`/`functions`
-/// borrows.
+/// borrows. [`Bindings::try_register_nominal`] composes `types` + `data` writes
+/// transactionally for nominal declarations (no `functions` involvement — nominal
+/// carriers are not callable verbs).
 ///
 /// Borrow discipline across the four maps: `types → functions → data`. `types` is only
 /// acquired by the type-side write path, so the existing `functions → data` ordering used
@@ -136,6 +142,57 @@ impl<'a> Bindings<'a> {
         self.try_apply_type(name, kt)
     }
 
+    /// Transactional dual-write for nominal declarations (STRUCT / UNION / MODULE):
+    /// inserts identity `kt` into `types[name]` and runtime carrier `obj` into
+    /// `data[name]` atomically. Borrow order is `types → data` (the `functions` map
+    /// is deliberately untouched — nominal carriers are not callable verbs).
+    ///
+    /// Contract:
+    /// - Returns `Ok(Conflict)` if either `types` or `data` is borrowed elsewhere,
+    ///   with no write attempted (mirrors [`Bindings::try_bind_value`] /
+    ///   [`Bindings::try_register_function`] queueing).
+    /// - Returns `Err(Rebind)` if *either* `types[name]` or `data[name]` already
+    ///   exists. The pre-check runs before any insert, so a collision on either
+    ///   side leaves both maps untouched — no partial write to roll back.
+    /// - On success inserts into both maps, then best-effort clears any matching
+    ///   `placeholders[name]` (same tail as [`Bindings::try_apply`] /
+    ///   [`Bindings::try_apply_type`]).
+    ///
+    /// Unused at land time — stage 3 (`KType::UserType` and per-declaration
+    /// identity) migrates STRUCT / UNION / MODULE finalize paths onto this
+    /// primitive.
+    pub fn try_register_nominal(
+        &self,
+        name: &str,
+        kt: &'a KType,
+        obj: &'a KObject<'a>,
+    ) -> Result<ApplyOutcome, KError> {
+        let mut types = match self.types.try_borrow_mut() {
+            Ok(t) => t,
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        };
+        let mut data = match self.data.try_borrow_mut() {
+            Ok(d) => d,
+            Err(_) => {
+                // Drop the `types` handle implicitly on return; no write happened
+                // yet, so nothing to roll back.
+                drop(types);
+                return Ok(ApplyOutcome::Conflict);
+            }
+        };
+        if types.contains_key(name) || data.contains_key(name) {
+            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+        }
+        types.insert(name.to_string(), kt);
+        data.insert(name.to_string(), obj);
+        drop(data);
+        drop(types);
+        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
+            ph.remove(name);
+        }
+        Ok(ApplyOutcome::Applied)
+    }
+
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`.
     ///
     /// Lenient when `data[name]` already holds a `KObject::KFunction`: silent no-op.
@@ -201,10 +258,11 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// The shared write path for type bindings. Borrows `types` only — no
-    /// `data`/`functions` involvement, since this primitive writes a single
-    /// map. `try_register_nominal` (stage 1.3) layers the dual-write on top
-    /// of this helper's contract.
+    /// The shared write path for type-only bindings. Borrows `types` only —
+    /// no `data`/`functions` involvement, since this primitive writes a single
+    /// map. [`Bindings::try_register_nominal`] inlines an analogous
+    /// `types → data` pre-check + insert (rather than reusing this helper)
+    /// because it adds the second-map dependency to the transaction.
     ///
     /// `Conflict` is reserved for borrow contention; `Err(Rebind)` is the
     /// semantic-rejection path. On success, also clears any matching
@@ -343,13 +401,16 @@ fn signatures_exact_equal(
 #[cfg(test)]
 mod tests {
     //! Unit coverage for the stage-1.2 `types` map and its `try_register_type` write
-    //! primitive. The primitive has no consumer yet (stage 1.4 wires
-    //! `Scope::register_type`), so these tests directly exercise `Bindings` against a
-    //! `RuntimeArena`-allocated `&KType`.
+    //! primitive, plus the stage-1.3 `try_register_nominal` dual-write primitive. Both
+    //! primitives are unused at land time (stage 1.4 wires `Scope::register_type`;
+    //! stage 3 migrates STRUCT / UNION / MODULE finalize paths onto
+    //! `try_register_nominal`), so these tests directly exercise `Bindings` against
+    //! `RuntimeArena`-allocated `&KType` / `&KObject` values.
 
     use super::*;
     use crate::runtime::machine::core::arena::RuntimeArena;
     use crate::runtime::model::types::KType;
+    use crate::runtime::model::values::KObject;
 
     #[test]
     fn try_register_type_inserts_into_types_map() {
@@ -420,5 +481,98 @@ mod tests {
         bindings.try_register_type("Foo", kt).expect("register should succeed");
         assert!(bindings.data().is_empty());
         assert!(bindings.functions().is_empty());
+    }
+
+    #[test]
+    fn try_register_nominal_inserts_into_both_maps() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+        let outcome = bindings
+            .try_register_nominal("Foo", kt, obj)
+            .expect("try_register_nominal should succeed on fresh bindings");
+        assert!(matches!(outcome, ApplyOutcome::Applied));
+        // Dual-write: both maps hold the exact pointers we supplied.
+        let stored_kt = *bindings.types().get("Foo").expect("Foo should be in types map");
+        let stored_obj = *bindings.data().get("Foo").expect("Foo should be in data map");
+        assert!(std::ptr::eq(stored_kt, kt));
+        assert!(std::ptr::eq(stored_obj, obj));
+    }
+
+    #[test]
+    fn try_register_nominal_rejects_collision_in_types_with_rebind() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt_existing: &KType = arena.alloc_ktype(KType::Number);
+        let kt_new: &KType = arena.alloc_ktype(KType::Str);
+        let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+        bindings
+            .try_register_type("Foo", kt_existing)
+            .expect("pre-seed types[Foo] should succeed");
+        let err = match bindings.try_register_nominal("Foo", kt_new, obj) {
+            Err(e) => e,
+            Ok(_) => panic!("collision on types side must Err(Rebind), not Ok"),
+        };
+        assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
+        // Pre-check rejected the transaction before either insert: data side untouched.
+        assert!(bindings.data().get("Foo").is_none());
+        // First types binding survives intact.
+        let stored = *bindings.types().get("Foo").expect("Foo should still be in types");
+        assert!(std::ptr::eq(stored, kt_existing));
+    }
+
+    #[test]
+    fn try_register_nominal_rejects_collision_in_data_with_rebind() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        let obj_existing: &KObject<'_> = arena.alloc_object(KObject::Number(42.0));
+        let obj_new: &KObject<'_> = arena.alloc_object(KObject::Number(7.0));
+        bindings
+            .try_bind_value("Foo", obj_existing)
+            .expect("pre-seed data[Foo] should succeed");
+        let err = match bindings.try_register_nominal("Foo", kt, obj_new) {
+            Err(e) => e,
+            Ok(_) => panic!("collision on data side must Err(Rebind), not Ok"),
+        };
+        assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
+        // Pre-check rejected the transaction before either insert: types side untouched.
+        assert!(bindings.types().get("Foo").is_none());
+        // First data binding survives intact.
+        let stored = *bindings.data().get("Foo").expect("Foo should still be in data");
+        assert!(std::ptr::eq(stored, obj_existing));
+    }
+
+    #[test]
+    fn try_register_nominal_yields_conflict_on_live_types_borrow() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+        let _r = bindings.types();
+        let outcome = bindings
+            .try_register_nominal("Foo", kt, obj)
+            .expect("conflict path returns Ok(Conflict), not Err");
+        assert!(matches!(outcome, ApplyOutcome::Conflict));
+        // Borrow contention on `types` blocked the write: both maps untouched.
+        assert!(_r.get("Foo").is_none());
+        assert!(bindings.data().get("Foo").is_none());
+    }
+
+    #[test]
+    fn try_register_nominal_clears_matching_placeholder() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        let kt: &KType = arena.alloc_ktype(KType::Number);
+        let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+        bindings
+            .try_install_placeholder("Bar".to_string(), NodeId(7))
+            .expect("placeholder install should succeed on fresh bindings");
+        assert!(bindings.placeholders().contains_key("Bar"));
+        bindings
+            .try_register_nominal("Bar", kt, obj)
+            .expect("nominal register should succeed and clear placeholder");
+        assert!(!bindings.placeholders().contains_key("Bar"));
     }
 }

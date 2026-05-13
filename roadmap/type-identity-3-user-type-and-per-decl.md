@@ -3,8 +3,9 @@
 Stage 3 of the four-stage type-identity arc. Collapses `KType::Struct`,
 `KType::Tagged`, and `KType::ModuleType` into a unified `KType::UserType {
 kind, scope_id, name }` carrier; threads identity onto every STRUCT / UNION
-/ MODULE value via the dual-write primitive shipped in
-[stage 1.3](type-identity-1.3-try-register-nominal.md); ships SCC
+/ MODULE value via the shipped
+[`Bindings::try_register_nominal`](../src/runtime/machine/core/bindings.rs)
+dual-write primitive; ships SCC
 discovery via
 lazy dependency tracking so mutually recursive STRUCT / UNION pairs
 elaborate without deadlocking; adds the bare-`Struct` / `Tagged` wildcard
@@ -95,8 +96,9 @@ Three ancillary gaps the same surface admits:
   the `String::clone` cost is the same cost `ModuleType.name()` pays today.
 
 - *Dual-write — decided.* STRUCT / UNION / MODULE declarations write both
-  maps via `Bindings::try_register_nominal` (shipped in
-  [stage 1.3](type-identity-1.3-try-register-nominal.md)): identity into
+  maps via the shipped
+  [`Bindings::try_register_nominal`](../src/runtime/machine/core/bindings.rs):
+  identity into
   `types["Foo"] = &KType::UserType{..}`, runtime payload into `data["Foo"]`
   as the existing carrier (`KObject::StructType` / `TaggedUnionType` /
   `KModule`). Transactional — pre-check both maps before either write
@@ -156,9 +158,6 @@ Three ancillary gaps the same surface admits:
 
 **Requires:**
 
-- [Type identity stage 1.3 — `try_register_nominal` dual-write primitive](type-identity-1.3-try-register-nominal.md)
-  — STRUCT / UNION / MODULE finalize paths wire onto the transactional
-  helper this stage's dual-write builds on.
 - [Type identity stage 1.5 — consumer migration and fallback removal](type-identity-1.5-consumer-migration.md)
   — `KType::UserType` resolution rides on `Scope::resolve_type` with the
   fallback gone.
