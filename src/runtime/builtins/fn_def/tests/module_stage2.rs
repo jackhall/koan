@@ -4,53 +4,44 @@ use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_s
 use crate::runtime::model::KObject;
 use crate::runtime::machine::RuntimeArena;
 
-/// Verify that `LET MyList = (LIST_OF Number)` binds a `TypeExprValue` carrying the
-/// surface `List` form. The bound value can then be lowered to `KType::List(Number)`
-/// via `KType::from_type_expr` — the ScopeResolver path uses exactly that.
+/// Verify that `LET MyList = (LIST_OF Number)` binds a `KTypeValue` carrying the
+/// elaborated `KType::List(Number)` directly. Post-`KTypeValue` migration the surface
+/// form is gone from the runtime; consumers operate on the structural `KType`.
 #[test]
-fn list_of_let_binding_is_type_expr_value() {
+fn list_of_let_binding_is_ktype_value() {
+    use crate::runtime::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
     let data = scope.bindings().data();
     let entry = data.get("MyList").expect("MyList should be bound");
     match entry {
-        KObject::TypeExprValue(t) => {
-            assert_eq!(t.name, "List");
+        KObject::KTypeValue(kt) => {
+            assert_eq!(*kt, KType::List(Box::new(KType::Number)));
         }
-        other => panic!("expected TypeExprValue, got ktype={}", other.ktype().name()),
+        other => panic!("expected KTypeValue, got ktype={}", other.ktype().name()),
     }
 }
 
-/// `ScopeResolver` lowers a `TypeExprValue` binding to a `KType` when consulted by
-/// `from_type_expr`. Direct unit test of the resolver's contract — independent of the
-/// scheduler's top-level-statement ordering (see caveat below).
+/// `ScopeResolver` reads a `KTypeValue` binding back as its stored `KType`.
 ///
 /// **Caveat — top-level statement ordering.** Today `LET MyList = (LIST_OF Number)`
 /// followed by `FN (USE xs: MyList) ...` doesn't work end-to-end because the LET's
 /// `value` slot is an `Expression` (the `(LIST_OF Number)` sub-expression), so the LET
 /// becomes a Bind waiting on a sub-Dispatch — and the next top-level statement (the
-/// FN) runs before the Bind resolves. Sequencing this requires either ordering top-
-/// level statements as deps of one another or hoisting type-expression evaluation
-/// ahead of FN-body execution. Tracked as a stage-2 follow-up; the resolver itself
+/// FN) runs before the Bind resolves. Phase 3 of eager-type-elaboration closes this by
+/// parking the FN signature elaboration on the LET's placeholder. The resolver itself
 /// already does the right thing once the binding is present.
 #[test]
-fn scope_resolver_lowers_type_expr_value_binding() {
+fn scope_resolver_lowers_ktype_value_binding() {
     use crate::runtime::model::KType;
     use crate::runtime::model::types::{ScopeResolver, TypeResolver};
-    use crate::ast::{TypeExpr, TypeParams};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
     let resolver = ScopeResolver::new(scope);
-    // MyList resolves through the scope.
     let resolved = resolver.resolve("MyList").expect("MyList should resolve");
     assert_eq!(resolved, KType::List(Box::new(KType::Number)));
-    // from_type_expr forwards to the resolver before falling back to from_name; so
-    // `Number` (a builtin) still resolves, and `MyList` resolves via scope.
-    let mylist_te = TypeExpr { name: "MyList".into(), params: TypeParams::None };
-    let kt = KType::from_type_expr(&mylist_te, &resolver).expect("from_type_expr ok");
-    assert_eq!(kt, KType::List(Box::new(KType::Number)));
 }
 
 /// FN-def integration: a parameter typed `E: OrderedSig` lowers via `ScopeResolver`
@@ -62,12 +53,14 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::runtime::model::{Argument, KType, SignatureElement};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // Two batches: SIG resolves to a `KSignature` binding (its Combine finalizes)
-    // before the FN runs and synchronously consults `ScopeResolver`. Same shape as
-    // `scope_resolver_lowers_type_expr_value_binding` above — the synchronous
-    // type-name resolution doesn't park on placeholders today (caveat noted there).
-    run(scope, "SIG OrderedSig = (LET compare = 0)");
-    run(scope, "FN (USE_ORD elem: OrderedSig) -> Null = (PRINT \"ok\")");
+    // Phase 3: single batch — the FN's signature elaboration parks on `OrderedSig`'s
+    // SIG placeholder and the Combine wakes it once the SIG finalizes. Previously
+    // required two batches because the synchronous type-name resolution didn't park.
+    run(
+        scope,
+        "SIG OrderedSig = (LET compare = 0)\n\
+         FN (USE_ORD elem: OrderedSig) -> Null = (PRINT \"ok\")",
+    );
     let data = scope.bindings().data();
     let sig_id = match data.get("OrderedSig") {
         Some(KObject::KSignature(s)) => s.sig_id(),
@@ -92,6 +85,37 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
         }
         _ => panic!("expected [Keyword(USE_ORD), Argument(elem: SignatureBound)]"),
     }
+}
+
+/// End-to-end park-on-LET-placeholder: a `LET MyList = (LIST_OF Number)` followed in the
+/// same batch by a `FN (USE xs: MyList) -> ...` previously failed because FN-def's
+/// signature elaboration ran synchronously and the LET hadn't finalized. Post-phase-3 the
+/// FN body parks on the LET's placeholder via a Combine and re-runs the elaboration
+/// against the now-final scope.
+#[test]
+fn let_then_fn_in_same_batch_works() {
+    use crate::runtime::builtins::default_scope;
+    use crate::runtime::machine::execute::Scheduler;
+    use crate::parse::parse;
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let mut sched = Scheduler::new();
+    let exprs = parse(
+        "LET MyList = (LIST_OF Number)\n\
+         FN (USE xs: MyList) -> Number = (1)",
+    )
+    .unwrap();
+    for e in exprs {
+        sched.add_dispatch(e, scope);
+    }
+    sched.execute().unwrap();
+    let data = scope.bindings().data();
+    assert!(
+        data.get("MyList").is_some(),
+        "MyList should be bound after the batch executes",
+    );
+    let use_fn = data.get("USE").expect("USE should be bound by the FN definition");
+    assert!(matches!(use_fn, KObject::KFunction(_, _)));
 }
 
 /// Module-system stage 2 (functor slice). End-to-end shape mirror of

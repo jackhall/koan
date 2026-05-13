@@ -8,9 +8,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{KExpression, TypeExpr, TypeParams};
+use crate::ast::KExpression;
 
 use crate::runtime::machine::core::{KError, KErrorKind};
+use crate::runtime::model::types::KType;
 use crate::runtime::model::values::KObject;
 
 /// Name to resolved value, produced by `KFunction::bind` and consumed by the body.
@@ -54,36 +55,61 @@ pub(crate) fn extract_kexpression<'a>(
     }
 }
 
-/// Take ownership of the structured `TypeExpr` carried by a `KType::TypeExprRef` slot.
-/// Resolve preserves the parser's `TypeExpr` as `KObject::TypeExprValue` so parameterized
-/// types (`List<Number>`, `Function<(N) -> S>`) survive into the builtin's body intact.
-pub(crate) fn extract_type_expr<'a>(
+/// Take ownership of the elaborated `KType` carried by a `KType::TypeExprRef` slot.
+/// Bindings now store `KObject::KTypeValue(kt)` directly; this helper pulls the inner
+/// `KType` out, cloning if the bundle is not the sole `Rc` holder.
+pub(crate) fn extract_ktype<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,
-) -> Option<TypeExpr> {
+) -> Option<KType> {
     let rc = bundle.args.remove(name)?;
     match Rc::try_unwrap(rc) {
-        Ok(KObject::TypeExprValue(t)) => Some(t),
+        Ok(KObject::KTypeValue(t)) => Some(t),
         Ok(_) => None,
         Err(rc) => match &*rc {
-            KObject::TypeExprValue(t) => Some(t.clone()),
+            KObject::KTypeValue(t) => Some(t.clone()),
             _ => None,
         },
     }
 }
 
-/// Resolve a `KType::TypeExprRef` slot to its bare type name, rejecting parameterized
-/// forms (`Foo<X>`). `surface` is the surface-form keyword (`"STRUCT"`, `"UNION"`, ...)
-/// embedded in the `ShapeError` message.
+/// Resolve a `KType::TypeExprRef` slot to its bare type name. After the
+/// `KObject::TypeExprValue → KObject::KTypeValue` migration, the slot's payload is an
+/// elaborated `KType`; only leaf-named variants are valid binder / constructor / type-call
+/// names. Parameterized forms (`List<X>`), function types, `Mu` / `RecursiveRef`, and the
+/// other structural variants are rejected as `ShapeError`. `surface` is the surface-form
+/// keyword (`"STRUCT"`, `"UNION"`, …) embedded in the message.
 pub(crate) fn extract_bare_type_name<'a>(
     bundle: &ArgumentBundle<'a>,
     name: &str,
     surface: &str,
 ) -> Result<String, KError> {
     match bundle.get(name) {
-        Some(KObject::TypeExprValue(t)) => match &t.params {
-            TypeParams::None => Ok(t.name.clone()),
-            _ => Err(KError::new(KErrorKind::ShapeError(format!(
+        Some(KObject::KTypeValue(t)) => match t {
+            // Leaf-named variants: surface name is the user-facing identifier.
+            KType::Number
+            | KType::Str
+            | KType::Bool
+            | KType::Null
+            | KType::Identifier
+            | KType::KExpression
+            | KType::TypeExprRef
+            | KType::Type
+            | KType::Tagged
+            | KType::Struct
+            | KType::Module
+            | KType::Signature
+            | KType::Any
+            | KType::ModuleType { .. }
+            | KType::SignatureBound { .. }
+            | KType::Unresolved(_) => Ok(t.name()),
+            // Structural / recursive shapes are not valid binder names — the caller wants
+            // a leaf identifier, not a parameterized container.
+            KType::List(_)
+            | KType::Dict(_, _)
+            | KType::KFunction { .. }
+            | KType::Mu { .. }
+            | KType::RecursiveRef(_) => Err(KError::new(KErrorKind::ShapeError(format!(
                 "{surface} {name} must be a bare type name, got `{}`",
                 t.render(),
             )))),

@@ -280,10 +280,14 @@ above; the remaining stages live under
 [`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
 - [Eager type elaboration with placeholder-based recursion](../roadmap/eager-type-elaboration.md)
-  — replaces `KObject::TypeExprValue(TypeExpr)` with `KObject::KTypeValue(KType)`
-  for one canonical runtime type representation; adds `KType::Mu` and
-  `KType::RecursiveRef` so the type-elaboration mechanism described above
-  ships end-to-end.
+  — closes the remaining gaps in the elaboration mechanism described
+  above: SCC pre-registration so mutually recursive STRUCT/UNION groups
+  elaborate without deadlocking on each other's placeholders,
+  parens-wrapped FN-parameter sub-dispatch (`xs: (LIST_OF MyType)`),
+  `OnceCell<KType>` late binding for signature-typed parameters whose
+  type only resolves at functor application time, and the phase-5
+  cleanup that retires `NoopResolver` and the transitional
+  `KType::Unresolved` carrier.
 - [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — inferred dispatch on signatures. Lands the multi-parameter dispatch the
   current slot-specificity ranking can't express on its own.

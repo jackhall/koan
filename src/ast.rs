@@ -125,14 +125,32 @@ impl<'a> ExpressionPart<'a> {
     }
 
     /// Slot-aware resolve. Identical to `resolve` for every variant except `Type`: when the
-    /// receiving slot is `KType::TypeExprRef`, the structured `TypeExpr` is preserved as a
-    /// `KObject::TypeExprValue` rather than flattened to a name string, so parameterized
-    /// types like `List<Number>` survive into the binding.
+    /// receiving slot is `KType::TypeExprRef`, the surface `TypeExpr` is lowered into an
+    /// elaborated `KType` and packaged as `KObject::KTypeValue` so consumers downstream
+    /// operate on the unified runtime type representation rather than parser surface syntax.
+    ///
+    /// Phase-2 transitional behavior: lowering goes through
+    /// `KType::from_type_expr(t, &NoopResolver)` — scope-aware elaboration (forward
+    /// references to LET-bound type names) is added in phase 3 via the scheduler-driven
+    /// elaborator that runs at FN-def time, not here. By phase 5 the only `Type(t)` parts
+    /// reaching `resolve_for` are bare leaves whose names resolve through `from_name`'s
+    /// builtin table (because user-bound names land via `Future(KObject::KTypeValue(_))`
+    /// after their LET / STRUCT / UNION binder's body finalizes), at which point this
+    /// helper becomes a thin lowering.
     pub fn resolve_for(&self, slot: &crate::runtime::model::KType) -> KObject<'a> {
-        if let (ExpressionPart::Type(t), crate::runtime::model::KType::TypeExprRef) =
-            (self, slot)
-        {
-            return KObject::TypeExprValue(t.clone());
+        use crate::runtime::model::types::{KType, NoopResolver};
+        if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
+            // Lower parameterized forms (`List<Number>`, `Function<...>`) via
+            // `from_type_expr` so the structural shape survives. Bare leaves whose name
+            // isn't a builtin (`Point`, `IntOrd`, `MyList`) lower to
+            // `KType::Unresolved(name)` — a phase-2 transitional carrier for the surface
+            // name; phase 3 replaces it via the scheduler-driven elaborator and phase 5
+            // removes the variant entirely.
+            let kt = KType::from_type_expr(t, &NoopResolver).unwrap_or_else(|_| {
+                KType::from_name(&t.name)
+                    .unwrap_or_else(|| KType::Unresolved(t.name.clone()))
+            });
+            return KObject::KTypeValue(kt);
         }
         self.resolve()
     }

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::ast::{KExpression, TypeExpr};
+use crate::ast::KExpression;
 use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::machine::core::{CallArena, KFuture};
 use crate::runtime::model::types::{KType, Parseable, Serializable, SignatureElement};
@@ -42,10 +42,12 @@ pub enum KObject<'a> {
         type_name: String,
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
-    /// First-class type expression: preserves the structured `TypeExpr` across the parser→
-    /// dispatch boundary so consumers like FN's return-type slot recover the full
-    /// parameterized form rather than just a bare type name. Internal-only.
-    TypeExprValue(TypeExpr),
+    /// First-class type value carrying the elaborated `KType` directly. The parser's
+    /// surface `TypeExpr` is lowered at the seam (`ExpressionPart::resolve_for` for bare
+    /// `Type(_)` tokens, the type-builtins for parameterized sub-dispatches) so consumers
+    /// downstream never see surface syntax again. Slot kind is still `KType::TypeExprRef`;
+    /// the slot is the dispatch-position marker, the variant is the runtime value.
+    KTypeValue(KType),
     /// `Option<Rc<CallArena>>` mirrors `KFunction`'s lifecycle anchor: a `Module` whose
     /// child scope was alloc'd inside a per-call frame (a functor body's freshly-built
     /// `MODULE Result = (...)`) carries the frame's `Rc` so the captured scope outlives
@@ -82,7 +84,7 @@ impl<'a> KObject<'a> {
             KObject::StructType { .. } => KType::Type,
             KObject::Tagged { .. } => KType::Tagged,
             KObject::Struct { .. } => KType::Struct,
-            KObject::TypeExprValue(_) => KType::TypeExprRef,
+            KObject::KTypeValue(_) => KType::TypeExprRef,
             KObject::KModule(_, _) => KType::Module,
             KObject::KSignature(_) => KType::Signature,
         }
@@ -114,7 +116,7 @@ impl<'a> KObject<'a> {
                 type_name: type_name.clone(),
                 fields: Rc::clone(fields),
             },
-            KObject::TypeExprValue(t) => KObject::TypeExprValue(t.clone()),
+            KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
             KObject::KModule(m, frame) => KObject::KModule(m, frame.clone()),
             KObject::KSignature(s) => KObject::KSignature(s),
         }
@@ -157,9 +159,9 @@ impl<'a> KObject<'a> {
         }
     }
 
-    pub fn as_type_expr(&self) -> Option<&TypeExpr> {
+    pub fn as_ktype(&self) -> Option<&KType> {
         match self {
-            KObject::TypeExprValue(t) => Some(t),
+            KObject::KTypeValue(t) => Some(t),
             _ => None,
         }
     }
@@ -228,7 +230,7 @@ impl<'a> Parseable for KObject<'a> {
                 format!("{}({})", type_name, parts.join(", "))
             }
             KObject::Null => "null".to_string(),
-            KObject::TypeExprValue(t) => t.render(),
+            KObject::KTypeValue(t) => t.render(),
             KObject::KModule(m, _) => format!("module {}", m.path),
             KObject::KSignature(s) => format!("sig {}", s.path),
         }
@@ -323,5 +325,14 @@ mod tests {
             KObject::KString("x".into()),
         ]));
         assert!(t.matches_value(&mixed));
+    }
+
+    #[test]
+    fn ktype_value_round_trips_through_summarize() {
+        // `KObject::KTypeValue` summarizes through `KType::render`, mirroring the surface
+        // form a user would write. Pins the post-refactor diagnostic shape.
+        let v = KObject::KTypeValue(KType::List(Box::new(KType::Number)));
+        use crate::runtime::model::types::Parseable;
+        assert_eq!(v.summarize(), "List<Number>");
     }
 }

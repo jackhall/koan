@@ -1,11 +1,13 @@
 mod signature;
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
-use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
-use crate::runtime::model::types::ScopeResolver;
+use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
+use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 
-use crate::runtime::machine::kfunction::argument_bundle::{extract_kexpression, extract_type_expr};
+use crate::runtime::machine::kfunction::argument_bundle::{extract_kexpression, extract_ktype};
 use super::{err, register_builtin_with_pre_run};
+
+use signature::ParamListOutcome;
 
 pub(crate) use signature::pre_run;
 
@@ -31,7 +33,7 @@ pub(crate) use signature::pre_run;
 /// the signature are rejected with a `ShapeError`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let signature_expr = match extract_kexpression(&mut bundle, "signature") {
@@ -42,25 +44,13 @@ pub fn body<'a>(
             )));
         }
     };
-    let return_type_expr = match extract_type_expr(&mut bundle, "return_type") {
+    let return_type_raw = match extract_ktype(&mut bundle, "return_type") {
         Some(t) => t,
         None => {
             return err(KError::new(KErrorKind::ShapeError(
                 "FN return-type slot must be a type expression (e.g. `Number`, `List<Str>`)"
                     .to_string(),
             )));
-        }
-    };
-    // ScopeResolver walks the surrounding scope's bindings first so user-defined types
-    // (`LET MyList = (LIST_OF Number)`) shadow builtins. Stage-2 substrate per the
-    // [module-system stage 2 plan](../../../roadmap/module-system-2-scheduler.md).
-    let resolver = ScopeResolver::new(scope);
-    let return_type = match KType::from_type_expr(&return_type_expr, &resolver) {
-        Ok(t) => t,
-        Err(msg) => {
-            return err(KError::new(KErrorKind::ShapeError(format!(
-                "FN return-type slot: {msg}"
-            ))));
         }
     };
     let body_expr = match extract_kexpression(&mut bundle, "body") {
@@ -77,10 +67,100 @@ pub fn body<'a>(
     // on the last statement, backward refs across statements work, forward refs do not.
     let body_expr = super::cons::fold_multi_statement(body_expr);
 
-    let elements = match signature::parse_fn_param_list(&signature_expr, &resolver) {
-        Ok(es) => es,
-        Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
+    // Phase-3 elaborator: parameter-type leaf names park on outstanding type-binding
+    // placeholders, so a `LET MyList = (LIST_OF Number)` dispatched in the same batch
+    // wakes the FN's signature elaboration when its body finalizes.
+    let mut elaborator = Elaborator::new(scope);
+
+    // Step 1: elaborate the return type. Three outcomes — concrete `KType`, parking on
+    // producers (carries the original unresolved name so the Combine finish re-runs the
+    // leaf elaboration), or a structured error.
+    enum ReturnTypeState {
+        Done(KType),
+        Pending(String, Vec<crate::runtime::machine::NodeId>),
+    }
+    let return_type_state = match return_type_raw {
+        KType::Unresolved(name) => match elaborate_type_expr(
+            &mut elaborator,
+            &crate::ast::TypeExpr::leaf(name.clone()),
+        ) {
+            ElabResult::Done(kt) => ReturnTypeState::Done(kt),
+            ElabResult::Park(producers) => ReturnTypeState::Pending(name, producers),
+            ElabResult::Unbound(_) => match KType::from_name(&name) {
+                Some(kt) => ReturnTypeState::Done(kt),
+                None => {
+                    return err(KError::new(KErrorKind::ShapeError(format!(
+                        "FN return-type slot: unknown type name `{name}`"
+                    ))));
+                }
+            },
+        },
+        kt => ReturnTypeState::Done(kt),
     };
+
+    // Step 2: elaborate the parameter list.
+    let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
+        ParamListOutcome::Done(es) => Ok(es),
+        ParamListOutcome::Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
+        ParamListOutcome::Park(producers) => Err(producers),
+    };
+
+    // Step 3: route to synchronous-finalize or Combine-deferred based on parking state.
+    match (return_type_state, params) {
+        (ReturnTypeState::Done(rt), Ok(elements)) => {
+            finalize_fn(scope, elements, rt, body_expr)
+        }
+        (ReturnTypeState::Done(rt), Err(producers)) => defer_via_combine(
+            scope,
+            sched,
+            signature_expr,
+            ReturnTypeCapture::Resolved(rt),
+            producers,
+            body_expr,
+        ),
+        (ReturnTypeState::Pending(name, mut producers), Ok(_)) => {
+            // Param-types fully elaborated synchronously, but the return type parked. The
+            // Combine finish re-runs both walks against the now-final scope for symmetry.
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                ReturnTypeCapture::Unresolved(name),
+                std::mem::take(&mut producers),
+                body_expr,
+            )
+        }
+        (ReturnTypeState::Pending(name, rt_producers), Err(mut producers)) => {
+            producers.extend(rt_producers);
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                ReturnTypeCapture::Unresolved(name),
+                producers,
+                body_expr,
+            )
+        }
+    }
+}
+
+/// Carrier for the return type across the Combine boundary. `Resolved` means we already
+/// have a concrete `KType` and the Combine finish skips re-elaboration; `Unresolved` means
+/// we parked on the leaf name and the finish runs `elaborate_type_expr` against the
+/// now-final scope.
+enum ReturnTypeCapture {
+    Resolved(KType),
+    Unresolved(String),
+}
+
+/// Build the `KFunction` and register it in `scope`. Shared between the synchronous
+/// (no-park) path and the Combine-finish path.
+fn finalize_fn<'a>(
+    scope: &'a Scope<'a>,
+    elements: Vec<SignatureElement>,
+    return_type: KType,
+    body_expr: crate::ast::KExpression<'a>,
+) -> BodyResult<'a> {
     // Pick the first Keyword as the data-table key. `Bindings::functions` does the load-
     // bearing dispatch lookup by signature; `Bindings::data` is mostly for discoverability
     // and shadow-by-name semantics, neither of which has a single right answer for a
@@ -121,6 +201,63 @@ pub fn body<'a>(
     // `LET f = (FN ...)` to capture a callable handle, which the dispatch fallback for
     // identifier-bound KFunctions can then invoke.
     BodyResult::Value(obj)
+}
+
+/// Schedule a `Combine` over `producers` and re-run the signature elaboration in the
+/// finish closure. Mirrors MODULE / SIG's `BodyResult::DeferTo` shape: the FN's terminal
+/// lifts off the Combine's terminal, so the parent scope's binding lands at Combine-finish
+/// time. The original `signature_expr` and `body_expr` are moved into the closure.
+fn defer_via_combine<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    signature_expr: crate::ast::KExpression<'a>,
+    return_type_capture: ReturnTypeCapture,
+    producers: Vec<crate::runtime::machine::NodeId>,
+    body_expr: crate::ast::KExpression<'a>,
+) -> BodyResult<'a> {
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+        // Producers have finalized — re-elaborate against the now-stable scope. The
+        // elaborator's `Park` arm cannot fire again because every parked producer is
+        // terminal by the Combine-finish invariant; if it does, that's a regression
+        // worth surfacing as a structured error rather than re-parking forever.
+        let mut elaborator = Elaborator::new(scope);
+        let return_type = match &return_type_capture {
+            ReturnTypeCapture::Resolved(kt) => kt.clone(),
+            ReturnTypeCapture::Unresolved(name) => match elaborate_type_expr(
+                &mut elaborator,
+                &crate::ast::TypeExpr::leaf(name.clone()),
+            ) {
+                ElabResult::Done(kt) => kt,
+                ElabResult::Park(_) => {
+                    return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                        "FN return type parked after Combine wake".to_string(),
+                    )));
+                }
+                ElabResult::Unbound(_) => match KType::from_name(name) {
+                    Some(kt) => kt,
+                    None => {
+                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                            "FN return-type slot: unknown type name `{name}`"
+                        ))));
+                    }
+                },
+            },
+        };
+        let elements = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
+            ParamListOutcome::Done(es) => es,
+            ParamListOutcome::Err(msg) => {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg)));
+            }
+            ParamListOutcome::Park(_) => {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                    "FN signature elaboration parked again after Combine wake".to_string(),
+                )));
+            }
+        };
+        finalize_fn(scope, elements, return_type, body_expr.clone())
+    });
+    let combine_id = sched.add_combine(producers, scope, finish);
+    BodyResult::DeferTo(combine_id)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

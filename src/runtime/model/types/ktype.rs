@@ -64,6 +64,24 @@ pub enum KType {
     SignatureBound { sig_id: usize, sig_path: String },
     /// Meta-type for first-class module signatures (`KObject::KSignature`).
     Signature,
+    /// Recursive type binder. `body` describes the unfolded shape with `binder` in scope as a
+    /// `RecursiveRef` for self-references. `name()` renders as the binder name so diagnostics
+    /// stay readable (e.g. `Tree` rather than `Mu Tree. List<Tree>`). Constructed only by the
+    /// scheduler-driven elaborator on top-level type-binding sites where a self-reference
+    /// fired during body elaboration.
+    Mu { binder: String, body: Box<KType> },
+    /// Back-reference to an enclosing `Mu`'s binder. Equality is by binder name only — the
+    /// concrete identity is recovered from the surrounding `Mu` context. Never constructed
+    /// from user source directly; only the elaborator emits it.
+    RecursiveRef(String),
+    /// Phase-2 transitional variant: a bare-leaf type name (`Point`, `IntOrd`, `MyList`)
+    /// whose `from_name` lookup didn't succeed at parser-side `resolve_for` time. Carries
+    /// the surface name so downstream consumers (`extract_bare_type_name`,
+    /// `dispatch_constructor`, ATTR's TypeExprRef-lhs lookup) can still recover the user's
+    /// identifier. Phase 3's scheduler-driven elaborator replaces this with a proper
+    /// scope-aware resolution at FN-def / LET / STRUCT body time; phase 5 deletes the
+    /// variant entirely.
+    Unresolved(String),
     Any,
 }
 
@@ -92,8 +110,17 @@ impl KType {
             KType::Module => "Module".into(),
             KType::SignatureBound { sig_path, .. } => sig_path.clone(),
             KType::Signature => "Signature".into(),
+            KType::Mu { binder, .. } => binder.clone(),
+            KType::RecursiveRef(name) => name.clone(),
+            KType::Unresolved(name) => name.clone(),
             KType::Any => "Any".into(),
         }
+    }
+
+    /// Stable entry point for diagnostic rendering. Currently delegates to `name()`; reserved
+    /// for cycle-aware printing without churning call sites when the renderer is upgraded.
+    pub fn render(&self) -> String {
+        self.name()
     }
 }
 
@@ -129,5 +156,20 @@ mod tests {
             ret: Box::new(KType::Any),
         };
         assert_eq!(t.name(), "Function<() -> Any>");
+    }
+
+    #[test]
+    fn name_renders_mu_as_binder() {
+        let t = KType::Mu {
+            binder: "Tree".into(),
+            body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
+        };
+        assert_eq!(t.name(), "Tree");
+    }
+
+    #[test]
+    fn name_renders_recursive_ref_as_name() {
+        let t = KType::RecursiveRef("Tree".into());
+        assert_eq!(t.name(), "Tree");
     }
 }

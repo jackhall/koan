@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::io::Write;
 
-use crate::ast::{KExpression, TypeExpr, TypeParams};
+use crate::ast::KExpression;
 
 use crate::runtime::machine::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::runtime::model::values::KObject;
@@ -154,34 +154,22 @@ impl<'a> Scope<'a> {
     }
 
     /// Register `name` as a type-valued binding in this scope. The binding lives in
-    /// [`Bindings::data`] as a `KObject::TypeExprValue` carrying the bare-leaf surface form
-    /// (`TypeExpr { name, params: None }`); the type resolver re-elaborates it to a
-    /// [`crate::runtime::model::types::KType`] on lookup via
-    /// [`crate::runtime::model::types::KType::from_type_expr`], which falls back to
-    /// [`crate::runtime::model::types::KType::from_name`] for the parameterless leaf.
+    /// [`Bindings::data`] as a `KObject::KTypeValue` carrying the elaborated
+    /// [`crate::runtime::model::types::KType`] directly — no surface→elaborated round-trip
+    /// at lookup time, no `TypeExpr` intermediate.
     ///
     /// This is the dual of [`Self::register_function`] for the type half of the binding
     /// surface — the call site that would otherwise reach into `Bindings::data` directly to
     /// seed builtin type names goes through here so the borrow / arena / pending-defer
-    /// plumbing matches the function path. The `_ktype` parameter mirrors how
-    /// `register_function` carries the function value: it documents what the binding
-    /// resolves to and guards against drift between the registered name and the resolver's
-    /// `from_name` mapping (debug-asserted), even though storage is the surface form.
+    /// plumbing matches the function path.
     ///
     /// Infallible like the function-side `register_builtin` wrapper: a name collision at
     /// builtin registration is a programming error, so the [`KError`] returned by the
     /// underlying `bind_value` is dropped. Per-call-site error handling would just bury
     /// the bug.
-    pub fn register_type(&self, name: String, _ktype: crate::runtime::model::types::KType) {
-        debug_assert_eq!(
-            crate::runtime::model::types::KType::from_name(&name),
-            Some(_ktype.clone()),
-            "register_type({name:?}, {:?}): name does not match KType::from_name",
-            _ktype,
-        );
+    pub fn register_type(&self, name: String, ktype: crate::runtime::model::types::KType) {
         let arena = self.arena;
-        let te = TypeExpr { name: name.clone(), params: TypeParams::None };
-        let obj: &'a KObject<'a> = arena.alloc_object(KObject::TypeExprValue(te));
+        let obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(ktype));
         let _ = self.bind_value(name, obj);
     }
 

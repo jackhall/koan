@@ -66,7 +66,11 @@ pub fn body_type_lhs<'a>(
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_name = match bundle.get("s") {
-        Some(KObject::TypeExprValue(t)) => t.name.clone(),
+        // Post-`KTypeValue` migration: the lhs's surface name is `KType::name()`. For a
+        // user-typed `Foo.x`, the parser-side `resolve_for` lifted `Foo` to
+        // `KTypeValue(KType::ModuleType { name: "Foo", .. })` or a similarly leaf-named
+        // variant; `name()` returns the user-facing identifier in either case.
+        Some(KObject::KTypeValue(t)) => t.name(),
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
@@ -125,9 +129,9 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
     match bundle.get("field") {
         Some(KObject::KString(s)) => Ok(s.clone()),
         // Module-system stage 1: a Type-classed field (e.g. `Foo.SubModule.x`) lands here as
-        // a `TypeExprValue`. The bare leaf name is what we need to look up in the enclosing
-        // module's scope — same as the Identifier path.
-        Some(KObject::TypeExprValue(t)) => Ok(t.name.clone()),
+        // a `KTypeValue`. `name()` returns the bare leaf identifier — same shape as the
+        // Identifier path.
+        Some(KObject::KTypeValue(t)) => Ok(t.name()),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "field".to_string(),
             expected: "Identifier".to_string(),
@@ -174,15 +178,12 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
         }));
     };
     // Type-position fallback: opaque ascription's `type_members` map (e.g., `IntOrd.Type`
-    // resolves to a `KType::ModuleType`). Returned as a `KObject::TypeExprValue` so the
-    // value flows through any "expects a type" position — same as a bare type-token.
-    if let Some(_kt) = m.type_members.borrow().get(field).cloned() {
-        // For now, return a TypeExprValue carrying the abstract type's surface name. The
-        // ascription stage 1 path mints fresh ModuleType variants here; consumers reading
-        // back the type should compare via `KType::matches_value`.
-        let te = crate::ast::TypeExpr::leaf(field.to_string());
+    // resolves to a `KType::ModuleType`). The stored `KType` is the abstract type's actual
+    // identity — return it directly as a `KTypeValue` so identity comparisons downstream
+    // see the per-module `{ scope_id, name }` rather than a freshly elaborated leaf.
+    if let Some(kt) = m.type_members.borrow().get(field).cloned() {
         return BodyResult::Value(
-            m.child_scope().arena.alloc_object(KObject::TypeExprValue(te)),
+            m.child_scope().arena.alloc_object(KObject::KTypeValue(kt)),
         );
     }
     let scope = m.child_scope();

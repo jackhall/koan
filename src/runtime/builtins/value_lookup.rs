@@ -17,19 +17,26 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     let v = match bundle.get("v") {
         Some(KObject::KString(s)) => s.clone(),
-        Some(KObject::TypeExprValue(t)) => {
-            if !matches!(t.params, crate::ast::TypeParams::None) {
+        // After the `KTypeValue` migration, the `TypeExprRef` overload sees an elaborated
+        // `KType`; structural shapes (`List<X>`, function types, `Mu` / `RecursiveRef`)
+        // aren't lookup targets — only leaf-named variants are.
+        Some(KObject::KTypeValue(t)) => match t {
+            KType::List(_)
+            | KType::Dict(_, _)
+            | KType::KFunction { .. }
+            | KType::Mu { .. }
+            | KType::RecursiveRef(_) => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "value_lookup: parameterized type expression `{}` is not a value-lookup target",
                     t.render()
                 ))));
             }
-            t.name.clone()
-        }
+            _ => t.name(),
+        },
         other => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "v".to_string(),
-                expected: "KString or TypeExprValue".to_string(),
+                expected: "KString or KTypeValue".to_string(),
                 got: match other {
                     Some(o) => o.summarize(),
                     None => "(missing)".to_string(),

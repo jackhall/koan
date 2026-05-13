@@ -216,14 +216,14 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     );
 }
 
-/// Substrate cross-check: `LET ty = Number` still binds `ty` to a `TypeExprValue`
+/// Substrate cross-check: `LET ty = Number` still binds `ty` to a `KTypeValue`
 /// carrying the `Number` leaf. After the unification, the value flows through the
-/// wrap → `value_lookup`-TypeExprRef path rather than the literal `TypeExprValue`
+/// wrap → `value_lookup`-TypeExprRef path rather than the literal `KTypeValue`
 /// carve-out; the observable binding must be identical to the literal path. (Lowercase
 /// LHS because single-letter uppercase tokens don't classify as Type names.)
 #[test]
-fn let_t_equals_number_still_binds_type_expr_value() {
-    use crate::ast::TypeParams;
+fn let_t_equals_number_still_binds_ktype_value() {
+    use crate::runtime::model::KType;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
@@ -232,12 +232,11 @@ fn let_t_equals_number_still_binds_type_expr_value() {
     }
     sched.execute().unwrap();
     match scope.lookup("ty") {
-        Some(KObject::TypeExprValue(t)) => {
-            assert_eq!(t.name, "Number");
-            assert!(matches!(t.params, TypeParams::None));
+        Some(KObject::KTypeValue(t)) => {
+            assert_eq!(*t, KType::Number);
         }
         other => panic!(
-            "ty should bind to TypeExprValue(Number), got {:?}",
+            "ty should bind to KTypeValue(Number), got {:?}",
             other.map(|o| o.ktype())
         ),
     }

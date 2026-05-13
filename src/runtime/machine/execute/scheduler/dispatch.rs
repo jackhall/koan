@@ -168,6 +168,15 @@ impl<'a> Scheduler<'a> {
                                 propagated,
                             )));
                         }
+                    } else if self.deps.would_create_cycle(producer_id, NodeId(idx)) {
+                        // Trivial cycle: `LET Ty = Ty` — the value-side `Ty` sub-Dispatch
+                        // is an Owned child of the LET binder and is about to park on
+                        // that same LET's placeholder. Parking would deadlock; surface a
+                        // structured cycle error instead.
+                        let kerr = KError::new(KErrorKind::ShapeError(format!(
+                            "cycle in type alias `{name}`",
+                        )));
+                        return ReplayParkResult::Done(NodeStep::Done(NodeOutput::Err(kerr)));
                     } else {
                         producers_to_wait.push(producer_id);
                     }

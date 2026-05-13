@@ -18,7 +18,22 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => s.clone(),
-        Some(KObject::TypeExprValue(t)) => t.name.clone(),
+        // The `TypeExprRef` overload routes through `KTypeValue(kt)` post-refactor; only
+        // leaf-named variants are valid binder names. Structural shapes (`List<X>`,
+        // function types, `Mu` / `RecursiveRef`) are rejected as `ShapeError`.
+        Some(KObject::KTypeValue(t)) => match t {
+            KType::List(_)
+            | KType::Dict(_, _)
+            | KType::KFunction { .. }
+            | KType::Mu { .. }
+            | KType::RecursiveRef(_) => {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "LET name must be a bare type name, got `{}`",
+                    t.render(),
+                ))));
+            }
+            _ => t.name(),
+        },
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "name".to_string(),
@@ -151,6 +166,36 @@ mod tests {
         // After execute, placeholders should not contain "hello" — bind_value cleared it.
         assert!(scope.bindings().placeholders().get("hello").is_none());
         assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
+    }
+
+    /// Phase 3: `LET T = T` is a trivially cyclic alias — the RHS references the binder
+    /// itself. The dispatcher detects the placeholder-points-at-self condition and
+    /// surfaces a structured `ShapeError` rather than parking the sub-Dispatch on its own
+    /// ancestor (which would deadlock).
+    #[test]
+    fn let_t_cycle_errors() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::machine::execute::Scheduler;
+        use crate::runtime::machine::KErrorKind;
+        use crate::runtime::builtins::default_scope;
+        use crate::parse::parse;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let exprs = parse("LET Ty = Ty").unwrap();
+        let mut ids = Vec::new();
+        for e in exprs {
+            ids.push(sched.add_dispatch(e, scope));
+        }
+        sched.execute().expect("execute does not surface per-slot errors");
+        let res = sched.read_result(ids[0]);
+        match res {
+            Err(e) => assert!(
+                matches!(&e.kind, KErrorKind::ShapeError(msg) if msg.contains("cycle")),
+                "expected ShapeError mentioning cycle, got {e}",
+            ),
+            Ok(v) => panic!("expected cycle error, got value {:?}", v.ktype()),
+        }
     }
 
     #[test]

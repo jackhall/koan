@@ -2,8 +2,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
-use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::types::{parse_typed_field_list, ScopeResolver};
+use crate::runtime::machine::{
+    ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
+    SchedulerHandle,
+};
+use crate::runtime::model::types::{
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+};
 
 use crate::ast::KExpression;
 
@@ -29,7 +34,7 @@ use super::{err, register_builtin_with_pre_run};
 /// at runtime, sharing the meta-type with `STRUCT`-produced schemas.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let schema_expr = match extract_kexpression(&mut bundle, "schema") {
@@ -40,37 +45,97 @@ pub fn body<'a>(
             )));
         }
     };
-    let resolver = ScopeResolver::new(scope);
-    let fields = match parse_typed_field_list(&schema_expr, "UNION schema", &resolver) {
-        Ok(f) => f,
-        Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
+    // Pull the optional binder name eagerly: the named form seeds the threaded set with
+    // its own name so a self-recursive UNION (`UNION List = (cons: List, nil: Null)`)
+    // resolves to a `RecursiveRef` on the tag's KType. The anonymous form passes an empty
+    // threaded set.
+    let bound_name = if bundle.get("name").is_some() {
+        match extract_bare_type_name(&bundle, "name", "UNION") {
+            Ok(n) => Some(n),
+            Err(e) => return err(e),
+        }
+    } else {
+        None
     };
+    let mut elaborator = match &bound_name {
+        Some(name) => Elaborator::new(scope).with_threaded([name.clone()]),
+        None => Elaborator::new(scope),
+    };
+    let outcome =
+        parse_typed_field_list_via_elaborator(&schema_expr, "UNION schema", &mut elaborator);
+    match outcome {
+        FieldListOutcome::Done(fields) => finalize_union(scope, bound_name, fields),
+        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
+        FieldListOutcome::Park(producers) => defer_union_via_combine(
+            scope,
+            sched,
+            bound_name,
+            schema_expr,
+            producers,
+        ),
+    }
+}
+
+fn finalize_union<'a>(
+    scope: &'a Scope<'a>,
+    bound_name: Option<String>,
+    fields: Vec<(String, KType)>,
+) -> BodyResult<'a> {
     if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
             "UNION schema must have at least one tag".to_string(),
         )));
     }
     // UNION addresses by tag name and doesn't care about declaration order; flatten the
-    // ordered field list (which `parse_typed_field_list` shares with `STRUCT`) into a
-    // HashMap. Duplicate detection has already happened in the helper.
+    // ordered field list (which `parse_typed_field_list_via_elaborator` shares with
+    // `STRUCT`) into a HashMap. Duplicate detection has already happened in the helper.
     let schema: HashMap<String, KType> = fields.into_iter().collect();
     let arena = scope.arena;
     let union_obj: &'a KObject<'a> =
         arena.alloc_object(KObject::TaggedUnionType(Rc::new(schema)));
-    // The named form supplies a `name` slot; the anonymous form omits it. Only validate
-    // the slot's shape (and bind into scope) when it's present — `extract_bare_type_name`
-    // would otherwise treat absence as `MissingArg`, which is wrong here.
-    if bundle.get("name").is_some() {
-        match extract_bare_type_name(&bundle, "name", "UNION") {
-            Ok(name) => {
-                if let Err(e) = scope.bind_value(name, union_obj) {
-                    return err(e);
-                }
-            }
-            Err(e) => return err(e),
+    if let Some(name) = bound_name {
+        if let Err(e) = scope.bind_value(name, union_obj) {
+            return err(e);
         }
     }
     BodyResult::Value(union_obj)
+}
+
+fn defer_union_via_combine<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    bound_name: Option<String>,
+    schema_expr: KExpression<'a>,
+    producers: Vec<NodeId>,
+) -> BodyResult<'a> {
+    let captured_name = bound_name.clone();
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+        let mut elaborator = match &captured_name {
+            Some(name) => Elaborator::new(scope).with_threaded([name.clone()]),
+            None => Elaborator::new(scope),
+        };
+        match parse_typed_field_list_via_elaborator(
+            &schema_expr,
+            "UNION schema",
+            &mut elaborator,
+        ) {
+            FieldListOutcome::Done(fields) => finalize_union(scope, captured_name.clone(), fields),
+            FieldListOutcome::Err(msg) => BodyResult::Err(
+                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
+                    function: "<union>".to_string(),
+                    expression: format!(
+                        "UNION {} schema",
+                        captured_name.as_deref().unwrap_or("<anonymous>")
+                    ),
+                }),
+            ),
+            FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                "UNION schema elaboration parked again after Combine wake".to_string(),
+            ))),
+        }
+    });
+    let combine_id = sched.add_combine(producers, scope, finish);
+    BodyResult::DeferTo(combine_id)
 }
 
 /// Dispatch-time placeholder extractor for the *named* UNION form (`UNION Foo = (...)`).

@@ -2,38 +2,55 @@
 //!
 //! Two entry points:
 //! - [`parse_fn_param_list`] — the full structural parse used by [`super::body`] at FN
-//!   construction time.
+//!   construction time. Returns a `ParamListOutcome` so the caller can route through a
+//!   `Combine` when one or more parameter-type names resolve to a pending placeholder.
 //! - [`pre_run`] — the dispatch-time placeholder extractor used by `register` to
 //!   announce the function's name before its body runs.
 
-use crate::runtime::model::{Argument, KType, SignatureElement};
-use crate::runtime::model::types::TypeResolver;
+use crate::runtime::model::{Argument, SignatureElement};
+use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::runtime::machine::NodeId;
 use crate::ast::{ExpressionPart, KExpression};
 
+/// Result of one walk over an FN signature's part list.
+pub(super) enum ParamListOutcome {
+    /// Every parameter type elaborated against the captured scope; the resulting
+    /// `SignatureElement`s are ready to bind.
+    Done(Vec<SignatureElement>),
+    /// One or more parameter-type leaf names resolved to scheduler placeholders that
+    /// hadn't finalized at FN-def time. The caller schedules a `Combine` over
+    /// `producers`; when every producer terminalizes, the closure re-runs
+    /// `parse_fn_param_list` against the (now-final) scope and finalizes the FN.
+    Park(Vec<NodeId>),
+    /// A structural / unbound / cycle error surfaced during elaboration. The caller wraps
+    /// in `ShapeError`.
+    Err(String),
+}
+
 /// Convert the captured FN-parameter-list `KExpression` into a list of `SignatureElement`s.
-/// (Module signatures — `Signature`, declared via `SIG` — are a different concept; this
-/// function only handles the FN parameter list.) Walks the parts left-to-right, consuming
-/// bare `Keyword` parts as fixed tokens and `Identifier(name) Keyword(":") Type(t)` triples
-/// as typed `Argument` slots. Bare identifiers without a `: Type` annotation, unknown type
-/// names, stray `:` or `Type` parts, and any other variant (`Literal`, `Expression`,
-/// `ListLiteral`, `DictLiteral`, `Future`) yield an `Err(message)` for the caller to wrap
-/// in `ShapeError`. The colon keyword is consumed only as part of a triple — a stray `:`
-/// outside that shape is a shape error.
+/// Walks the parts left-to-right, consuming bare `Keyword` parts as fixed tokens and
+/// `Identifier(name) Keyword(":") Type(t)` triples as typed `Argument` slots. Stray `:`,
+/// stray `Type`, missing `: Type` annotations, and other malformed shapes surface as
+/// `ParamListOutcome::Err(msg)`.
 ///
-/// The `resolver` is forwarded into `KType::from_type_expr` for each parameter type so
-/// user-defined types in the surrounding scope can shadow builtins. Stage-2 substrate per
-/// the [module-system stage 2 plan](../../../../roadmap/module-system-2-scheduler.md).
+/// Type-name resolution rides on the scheduler-aware [`elaborate_type_expr`]: it consults
+/// the captured scope's `placeholders` map alongside its `data` map, returning
+/// `ElabResult::Park(producers)` for type-binding names that have dispatched but not
+/// finalized. Multiple parking producers accumulate across the whole signature walk so the
+/// caller can register every blocker in one Combine.
 pub(super) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
-    resolver: &dyn TypeResolver,
-) -> Result<Vec<SignatureElement>, String> {
+    elaborator: &mut Elaborator<'_, '_>,
+) -> ParamListOutcome {
     let parts = &signature.parts;
     let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
+    let mut parks: Vec<NodeId> = Vec::new();
+    let mut first_err: Option<String> = None;
     let mut i = 0;
     while i < parts.len() {
         match &parts[i] {
             ExpressionPart::Keyword(s) if s == ":" => {
-                return Err(
+                return ParamListOutcome::Err(
                     "FN signature has a stray `:` outside a `<name>: <Type>` triple".to_string(),
                 );
             }
@@ -46,17 +63,27 @@ pub(super) fn parse_fn_param_list<'a>(
                 let ty = parts.get(i + 2);
                 match (colon, ty) {
                     (Some(ExpressionPart::Keyword(c)), Some(ExpressionPart::Type(t))) if c == ":" => {
-                        let ktype = KType::from_type_expr(t, resolver).map_err(|e| {
-                            format!("{e} in FN signature for parameter `{name}`")
-                        })?;
-                        elements.push(SignatureElement::Argument(Argument {
-                            name: name.clone(),
-                            ktype,
-                        }));
+                        match elaborate_type_expr(elaborator, t) {
+                            ElabResult::Done(kt) => {
+                                elements.push(SignatureElement::Argument(Argument {
+                                    name: name.clone(),
+                                    ktype: kt,
+                                }));
+                            }
+                            ElabResult::Park(producers) => {
+                                parks.extend(producers);
+                            }
+                            ElabResult::Unbound(msg) if first_err.is_none() => {
+                                first_err = Some(format!(
+                                    "{msg} in FN signature for parameter `{name}`"
+                                ));
+                            }
+                            ElabResult::Unbound(_) => {}
+                        }
                         i += 3;
                     }
                     _ => {
-                        return Err(format!(
+                        return ParamListOutcome::Err(format!(
                             "FN signature parameter `{name}` requires a `: Type` annotation \
                              (e.g. `{name}: Number`)",
                         ));
@@ -64,20 +91,26 @@ pub(super) fn parse_fn_param_list<'a>(
                 }
             }
             ExpressionPart::Type(t) => {
-                return Err(format!(
+                return ParamListOutcome::Err(format!(
                     "FN signature has a stray type `{}` outside a `<name>: <Type>` triple",
                     t.render(),
                 ));
             }
             other => {
-                return Err(format!(
+                return ParamListOutcome::Err(format!(
                     "FN signature part `{}` is not a Keyword, Identifier, or `<name>: <Type>` triple",
                     other.summarize(),
                 ));
             }
         }
     }
-    Ok(elements)
+    if let Some(msg) = first_err {
+        return ParamListOutcome::Err(msg);
+    }
+    if !parks.is_empty() {
+        return ParamListOutcome::Park(parks);
+    }
+    ParamListOutcome::Done(elements)
 }
 
 /// Dispatch-time placeholder extractor for FN. The signature slot at `parts[1]` is an

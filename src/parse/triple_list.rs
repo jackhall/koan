@@ -17,7 +17,7 @@ use crate::ast::{ExpressionPart, KExpression};
 pub fn parse_triple_list<'a, T>(
     expr: &KExpression<'a>,
     context: &str,
-    parse_third: impl Fn(&ExpressionPart<'a>, &str) -> Result<T, String>,
+    mut parse_third: impl FnMut(&ExpressionPart<'a>, &str) -> Result<T, String>,
 ) -> Result<Vec<(String, T)>, String> {
     let parts = &expr.parts;
     if !parts.len().is_multiple_of(3) {

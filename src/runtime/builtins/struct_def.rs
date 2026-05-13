@@ -1,8 +1,13 @@
 use std::rc::Rc;
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
-use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::types::{parse_typed_field_list, ScopeResolver};
+use crate::runtime::machine::{
+    ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
+    SchedulerHandle,
+};
+use crate::runtime::model::types::{
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+};
 
 use crate::ast::KExpression;
 
@@ -28,10 +33,10 @@ use super::{err, register_builtin_with_pre_run};
 /// constructor downstream via the type-call dispatch path.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    // `TypeExprRef`-typed slot resolves to `KObject::TypeExprValue(t)`. The name slot wants
+    // `TypeExprRef`-typed slot resolves to `KObject::KTypeValue(kt)`. The name slot wants
     // a bare leaf — reject parameterized forms like `Point<X>` at definition time.
     let name = match extract_bare_type_name(&bundle, "name", "STRUCT") {
         Ok(n) => n,
@@ -45,11 +50,35 @@ pub fn body<'a>(
             )));
         }
     };
-    let resolver = ScopeResolver::new(scope);
-    let fields = match parse_typed_field_list(&schema_expr, "STRUCT schema", &resolver) {
-        Ok(f) => f,
-        Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
-    };
+    // Phase-3 elaborator: seeds the threaded set with this STRUCT's binder name so a
+    // self-reference (`STRUCT Tree { children: List<Tree> }`) resolves to
+    // `KType::RecursiveRef("Tree")` rather than parking on the binder's own placeholder.
+    let mut elaborator = Elaborator::new(scope).with_threaded([name.clone()]);
+    let outcome = parse_typed_field_list_via_elaborator(
+        &schema_expr,
+        "STRUCT schema",
+        &mut elaborator,
+    );
+    match outcome {
+        FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields),
+        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
+        FieldListOutcome::Park(producers) => defer_struct_via_combine(
+            scope,
+            sched,
+            name,
+            schema_expr,
+            producers,
+        ),
+    }
+}
+
+/// Build and bind the `KObject::StructType` once every field type has elaborated.
+/// Shared between the synchronous (no-park) path and the Combine-finish path.
+fn finalize_struct<'a>(
+    scope: &'a Scope<'a>,
+    name: String,
+    fields: Vec<(String, KType)>,
+) -> BodyResult<'a> {
     if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
             "STRUCT schema must have at least one field".to_string(),
@@ -64,6 +93,42 @@ pub fn body<'a>(
         return err(e);
     }
     BodyResult::Value(struct_obj)
+}
+
+/// Schedule a `Combine` over `producers` and re-run the schema elaboration in the finish
+/// closure. Same shape MODULE / SIG / FN-def use post-phase-3.
+fn defer_struct_via_combine<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    name: String,
+    schema_expr: KExpression<'a>,
+    producers: Vec<NodeId>,
+) -> BodyResult<'a> {
+    let name_for_finish = name.clone();
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+        // Producers terminalized — re-elaborate against the now-final scope.
+        let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
+        match parse_typed_field_list_via_elaborator(
+            &schema_expr,
+            "STRUCT schema",
+            &mut elaborator,
+        ) {
+            FieldListOutcome::Done(fields) => {
+                finalize_struct(scope, name_for_finish.clone(), fields)
+            }
+            FieldListOutcome::Err(msg) => BodyResult::Err(
+                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
+                    function: "<struct>".to_string(),
+                    expression: format!("STRUCT {} schema", name_for_finish),
+                }),
+            ),
+            FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                "STRUCT schema elaboration parked again after Combine wake".to_string(),
+            ))),
+        }
+    });
+    let combine_id = sched.add_combine(producers, scope, finish);
+    BodyResult::DeferTo(combine_id)
 }
 
 /// Dispatch-time placeholder extractor for STRUCT. The name slot at `parts[1]` is a
@@ -182,6 +247,86 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
             "expected ShapeError on duplicate field, got {err}",
         );
+    }
+
+    /// Phase 3 — self-recursive STRUCT: `STRUCT Tree = (children: List<Tree>)` elaborates
+    /// with the field type carrying `KType::RecursiveRef("Tree")` inside `KType::List(...)`.
+    /// The elaborator's threaded set seeded with the binder's own name short-circuits the
+    /// self-reference to `RecursiveRef` rather than parking on the binder's placeholder.
+    #[test]
+    fn recursive_struct_tree_elaborates_with_recursive_ref_on_field() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run_one(scope, parse_one("STRUCT Tree = (children: List<Tree>)"));
+        let data = scope.bindings().data();
+        match data.get("Tree").expect("Tree should be bound") {
+            KObject::StructType { name, fields } => {
+                assert_eq!(name, "Tree");
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].0, "children");
+                assert_eq!(
+                    fields[0].1,
+                    KType::List(Box::new(KType::RecursiveRef("Tree".into()))),
+                );
+            }
+            other => panic!("expected StructType, got {:?}", other.ktype()),
+        }
+    }
+
+    /// Phase 3 — mutually recursive STRUCTs. `STRUCT TreeA = (b: TreeB)` and
+    /// `STRUCT TreeB = (a: TreeA)` submitted in the same batch must both finalize with
+    /// their schemas carrying `RecursiveRef` to each other. The current implementation
+    /// only handles single-binder self-recursion via the elaborator's threaded set; mutual
+    /// recursion deadlocks because each binder's body parks on the other's placeholder
+    /// and neither can ever finalize. Marked `#[ignore]` until SCC pre-registration
+    /// lands.
+    /// Phase 3 — sanity check that two unrelated STRUCTs in the same batch don't
+    /// spuriously cross-pollinate `RecursiveRef`. `STRUCT A = (x: Number)`,
+    /// `STRUCT B = (y: A)` — B's field references A, which is non-recursive; B's schema
+    /// must record `KType::Struct` (or the StructType-shaped reference) for `y`, never a
+    /// `RecursiveRef`. Per-binder threaded-set seeding handles this — only the binder's
+    /// own name is in its threaded set.
+    #[test]
+    fn mutual_non_recursive_pair_does_not_wrap_either() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        use crate::runtime::machine::execute::Scheduler;
+        use crate::parse::parse;
+        let mut sched = Scheduler::new();
+        for e in parse("STRUCT Aa = (x: Number)\nSTRUCT Bb = (y: Aa)").unwrap() {
+            sched.add_dispatch(e, scope);
+        }
+        sched.execute().unwrap();
+        let data = scope.bindings().data();
+        let b_fields = match data.get("Bb") {
+            Some(KObject::StructType { fields, .. }) => fields.clone(),
+            other => panic!("expected Bb to be a StructType, got {:?}", other.map(|o| o.ktype())),
+        };
+        // `y`'s recorded KType is whatever the elaborator pulls out of `Aa`'s binding —
+        // which is `KObject::StructType` (matches `KType::Struct`) — not `RecursiveRef`.
+        assert_eq!(b_fields[0].0, "y");
+        assert!(
+            !matches!(b_fields[0].1, KType::RecursiveRef(_)),
+            "Bb's `y` field must not be wrapped in RecursiveRef, got {:?}",
+            b_fields[0].1,
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn mutually_recursive_struct_pair() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        use crate::runtime::machine::execute::Scheduler;
+        use crate::parse::parse;
+        let mut sched = Scheduler::new();
+        for e in parse("STRUCT TreeA = (b: TreeB)\nSTRUCT TreeB = (a: TreeA)").unwrap() {
+            sched.add_dispatch(e, scope);
+        }
+        sched.execute().unwrap();
+        let data = scope.bindings().data();
+        assert!(matches!(data.get("TreeA"), Some(KObject::StructType { .. })));
+        assert!(matches!(data.get("TreeB"), Some(KObject::StructType { .. })));
     }
 
     #[test]

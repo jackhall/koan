@@ -162,6 +162,37 @@ impl DepGraph {
         self.dep_edges[consumer.index()].push(DepEdge::Notify(producer));
     }
 
+    /// Forward-reachable cycle check used by replay-park: returns `true` iff `producer`
+    /// is reachable from `consumer` along the forward `notify_list` wake graph (i.e.,
+    /// `consumer` already wakes — directly or transitively — the same slot the caller
+    /// is about to park `consumer` on). That's a trivial self-cycle (`LET Ty = Ty` — the
+    /// sub-Dispatch is the LET binder's Owned child and would park on its own ancestor),
+    /// and parking would deadlock. Caller surfaces the situation as a structured error
+    /// instead of installing the park edge.
+    ///
+    /// The walk is bounded by the current graph size; visited tracking avoids revisits
+    /// in the rare case of a diamond. Cheap in practice — replay-park parks are
+    /// infrequent and the wake graph for a single in-flight binder is shallow.
+    pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
+        if producer == consumer {
+            return true;
+        }
+        let mut stack: Vec<usize> = vec![consumer.index()];
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        while let Some(node) = stack.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            for &next in &self.notify_list[node] {
+                if next == producer.index() {
+                    return true;
+                }
+                stack.push(next);
+            }
+        }
+        false
+    }
+
     /// Atomic batch decrement across the wake-pending pair. Drains
     /// `notify_list[producer_idx]` and returns the consumers whose
     /// `pending_deps` hit zero — the caller routes those through

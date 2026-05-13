@@ -41,6 +41,13 @@ impl KType {
             // they're disjoint slot types — so this predicate stays `false` for that case
             // by falling through to the wildcard.
             (SignatureBound { .. }, Module) => true,
+            // Phase 1: `Mu`-vs-`Mu` with the same binder name recurses on bodies. Different
+            // binders are incomparable. Real cycle-aware structural ordering is a phase-3+
+            // concern; phase 1 only needs the trivial reflexive shape so the variants don't
+            // poison existing specificity decisions.
+            (Mu { binder: ba, body: a }, Mu { binder: bb, body: b }) if ba == bb => {
+                a.is_more_specific_than(b)
+            }
             _ => false,
         }
     }
@@ -76,6 +83,14 @@ impl KType {
                 KObject::KModule(m, _) => m.compatible_sigs.borrow().contains(sig_id),
                 _ => false,
             },
+            // Phase 1: one-unfold check. Cycle-gating (a threaded "currently unfolding" set)
+            // is a phase-3 concern; today no runtime value carries a `RecursiveRef` so the
+            // unfold can't actually recurse onto one.
+            KType::Mu { body, .. } => body.matches_value(obj),
+            // Phase 1: cycle gate. Inside a `Mu` body the recursive back-edge accepts
+            // anything; phase 3 will tighten this by carrying the enclosing `Mu`'s body
+            // through the predicate's call frame.
+            KType::RecursiveRef(_) => true,
             _ => *self == obj.ktype(),
         }
     }
@@ -130,7 +145,7 @@ impl KType {
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
             KType::TypeExprRef => matches!(
                 part,
-                ExpressionPart::Type(_) | ExpressionPart::Future(KObject::TypeExprValue(_))
+                ExpressionPart::Type(_) | ExpressionPart::Future(KObject::KTypeValue(_))
             ),
             KType::Type => matches!(
                 part,
@@ -169,6 +184,17 @@ impl KType {
                 _ => false,
             },
             KType::Signature => matches!(part, ExpressionPart::Future(KObject::KSignature(_))),
+            // Phase 1: same one-unfold rule as `matches_value`.
+            KType::Mu { body, .. } => body.accepts_part(part),
+            // Phase 1: cycle gate — accept anything until phase 3 introduces a threaded
+            // unfold set.
+            KType::RecursiveRef(_) => true,
+            // Phase 2 transitional: `Unresolved` is a name-carrying placeholder for bare
+            // leaves that didn't resolve via `from_name` at parser-side `resolve_for`
+            // time. It's never a declared *slot* type — slot types are minted by
+            // `from_name` (which doesn't produce `Unresolved`) or by elaboration — so
+            // nothing should ever be filling an `Unresolved`-typed slot. Reject defensively.
+            KType::Unresolved(_) => false,
         }
     }
 }
@@ -244,5 +270,29 @@ mod tests {
         };
         assert!(!unary.is_more_specific_than(&nullary));
         assert!(!nullary.is_more_specific_than(&unary));
+    }
+
+    #[test]
+    fn mu_matches_value_via_one_unfold() {
+        // Phase 1 cycle-gate: `Mu` matches via one unfold of its body. A `RecursiveRef`
+        // inside that body accepts anything for now (phase 3 tightens).
+        let t = KType::Mu {
+            binder: "Tree".into(),
+            body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
+        };
+        // Empty list — element type is unconstrained anyway.
+        let v = KObject::List(vec![].into());
+        assert!(t.matches_value(&v));
+        // Non-list shouldn't pass through.
+        assert!(!t.matches_value(&KObject::Number(1.0)));
+    }
+
+    #[test]
+    fn recursive_ref_accepts_anything_phase_one() {
+        // Phase 1: `RecursiveRef` is a cycle gate that accepts every value. Phase 3
+        // tightens this by threading the enclosing `Mu`'s body through the predicate.
+        let t = KType::RecursiveRef("Tree".into());
+        assert!(t.matches_value(&KObject::Number(1.0)));
+        assert!(t.matches_value(&KObject::List(vec![].into())));
     }
 }

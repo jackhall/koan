@@ -282,6 +282,22 @@ the same way, and self-references during a binding's own elaboration
 short-circuit through the elaborator's threaded-set recognition (see
 [type-system.md § Type elaboration](type-system.md#type-elaboration)) so
 recursive type definitions don't deadlock on their own placeholder.
+FN-signature elaboration plugs into the same mechanism: when
+[`elaborate_type_expr`](../src/runtime/model/types/resolver.rs) hits a
+bare type-name leaf whose binder is in
+`Scope::placeholders` but not yet finalized, it returns
+`ElabResult::Park(producers)` and FN-def's body schedules a `Combine`
+over those producers that re-runs the signature elaboration against the
+now-final scope at finish time. STRUCT and UNION share the same
+elaborator-and-Combine shape for their field-type lists. The replay-park
+rail itself cycle-checks before installing the park edge:
+[`DepGraph::would_create_cycle`](../src/runtime/machine/execute/scheduler/dep_graph.rs)
+walks the forward `notify_list` graph from the consumer and, if the
+producer is reachable, the replay-park surfaces a `ShapeError("cycle in
+type alias ...")` instead of installing the park edge. That catches the
+trivially-cyclic case (`LET T = T` — the value-side `T` sub-Dispatch is
+the LET binder's `Owned` child and is about to park on its own ancestor)
+generically rather than as a special case in the elaborator.
 
 ## Open work
 
