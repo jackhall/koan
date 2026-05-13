@@ -204,9 +204,10 @@ runtime.
 
 Type elaboration runs in the same scheduler that runs value evaluation.
 A type-binding site (`LET T = ...`, `STRUCT T = ...`, `UNION T = ...`)
-registers a placeholder in
-[`Scope::placeholders`](../src/runtime/machine/core/scope.rs) — the same
-sidecar value bindings use — and dispatches its body as scheduler work.
+registers a placeholder in the
+[`Bindings`](../src/runtime/machine/core/scope.rs) façade on `Scope` — the
+same `placeholders` table value bindings use, sitting alongside `data` and
+`functions` — and dispatches its body as scheduler work.
 Lookups of type names from outside the body park on the producer's NodeId
 via `notify_list` / `pending_deps`, the same path value-name forward
 references take ([execution-model.md § Dispatch-time name placeholders](execution-model.md#dispatch-time-name-placeholders)).

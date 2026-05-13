@@ -56,7 +56,7 @@ fn module_body_forward_reference_resolves() {
         Some(KObject::KModule(m, _)) => *m,
         _ => panic!("Mod should be a module"),
     };
-    let data = m.child_scope().data.borrow();
+    let data = m.child_scope().bindings().data();
     assert!(matches!(data.get("y"), Some(KObject::Number(n)) if *n == 1.0));
 }
 

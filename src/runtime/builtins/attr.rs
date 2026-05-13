@@ -186,7 +186,7 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
         );
     }
     let scope = m.child_scope();
-    if let Some(obj) = scope.data.borrow().get(field).copied() {
+    if let Some(obj) = scope.bindings().data().get(field).copied() {
         return BodyResult::Value(obj);
     }
     err(KError::new(KErrorKind::ShapeError(format!(

@@ -7,9 +7,9 @@
 crate-wide Σ index·loc (1,935,797; loc-normalized 87.87). Back-edges still
 tangle `machine::core`, `machine::execute`, and `machine::kfunction`.
 *Context-cost:* three non-test files exceed 600 lines —
-[scope.rs](../src/runtime/machine/core/scope.rs) (~1030, carrying the
-`resolve_dispatch` walk plus its test module),
-[ascribe.rs](../src/runtime/builtins/ascribe.rs) (625),
+[scope.rs](../src/runtime/machine/core/scope.rs) (~1170, carrying the
+`Bindings` façade, `resolve_dispatch` walk, and its test module),
+[ascribe.rs](../src/runtime/builtins/ascribe.rs) (614),
 [interpret.rs](../src/runtime/machine/execute/interpret.rs) (619). The
 scheduler's two test files
 ([tests.rs](../src/runtime/machine/execute/scheduler/tests.rs) 382 lines / 12

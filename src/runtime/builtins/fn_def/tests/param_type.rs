@@ -15,7 +15,7 @@ fn fn_typed_param_records_ktype_on_signature() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
 
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
     let f = match entry {
         KObject::KFunction(f, _) => *f,
@@ -92,7 +92,7 @@ fn fn_param_without_annotation_is_rejected() {
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`x`")),
         "expected ShapeError mentioning `x`, got {err}",
     );
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     assert!(data.get("DOUBLE").is_none(), "DOUBLE should not register");
 }
 

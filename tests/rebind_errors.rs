@@ -124,6 +124,6 @@ fn cross_scope_shadowing_succeeds() {
         Some(KObject::KModule(m, _)) => *m,
         _ => panic!("Mod should be a module"),
     };
-    let data = m.child_scope().data.borrow();
+    let data = m.child_scope().bindings().data();
     assert!(matches!(data.get("x"), Some(KObject::Number(n)) if *n == 99.0));
 }

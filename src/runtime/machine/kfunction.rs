@@ -394,7 +394,7 @@ mod tests {
         let key = expr.untyped_key();
         let mut current: Option<&Scope<'a>> = Some(scope);
         while let Some(s) = current {
-            let functions = s.functions.borrow();
+            let functions = s.bindings().functions();
             if let Some(bucket) = functions.get(&key) {
                 for f in bucket.iter() {
                     if f.signature.matches(expr) {

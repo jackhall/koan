@@ -81,10 +81,10 @@ pub fn body<'a>(
         Ok(es) => es,
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
-    // Pick the first Keyword as the data-table key. `scope.functions` does the load-bearing
-    // dispatch lookup by signature; `scope.data` is mostly for discoverability and
-    // shadow-by-name semantics, neither of which has a single right answer for a multi-token
-    // signature like `(a ADD b)`. First Keyword is a defensible default.
+    // Pick the first Keyword as the data-table key. `Bindings::functions` does the load-
+    // bearing dispatch lookup by signature; `Bindings::data` is mostly for discoverability
+    // and shadow-by-name semantics, neither of which has a single right answer for a
+    // multi-token signature like `(a ADD b)`. First Keyword is a defensible default.
     let name = elements.iter().find_map(|e| match e {
         SignatureElement::Keyword(s) => Some(s.clone()),
         _ => None,

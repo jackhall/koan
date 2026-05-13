@@ -22,7 +22,7 @@ fn fn_registers_user_function_under_keyword_signature() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (GREET) -> Null = (PRINT \"hi\")");
 
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     let entry = data.get("GREET").expect("GREET should be bound");
     let f = match entry {
         KObject::KFunction(f, _) => *f,
@@ -50,7 +50,7 @@ fn fn_rejects_non_keyword_name() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (greet) -> Null = (PRINT \"hi\")");
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     assert!(data.get("greet").is_none());
     assert!(data.get("GREET").is_none());
 }
@@ -158,7 +158,7 @@ fn fn_signature_with_no_keyword_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (x: Number) -> Null = (PRINT \"oops\")");
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     assert!(data.get("x").is_none());
 }
 

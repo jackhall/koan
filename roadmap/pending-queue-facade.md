@@ -43,7 +43,7 @@ on [`Scope`](../src/runtime/machine/core/scope.rs) (scope.rs:48-52, 69).
 - A `debug_assert!` on drain-time errors surfaces queue/dispatch
   interaction bugs immediately in debug builds. Production keeps the
   current `Err(_)`-drop behavior so dispatch nodes never see surfaced
-  errors. After the `Bindings` façade lands, a deferred LET-binds-fn
+  errors. With the `Bindings` façade in place, a deferred LET-binds-fn
   write can legitimately fail with `DuplicateOverload` (structural
   dedupe), so the assert closes a real visibility gap.
 
@@ -72,9 +72,9 @@ on [`Scope`](../src/runtime/machine/core/scope.rs) (scope.rs:48-52, 69).
 
 ## Dependencies
 
-**Requires:** [bindings-facade](bindings-facade.md) — `drain`'s
-`&Bindings<'a>` parameter and the collapsed "try-then-defer" call
-sites depend on `Bindings::try_apply` existing as the shared
-validated write path.
+**Requires:** none. The `Bindings<'a>` façade shipped first as shared
+substrate this work routes through — `drain`'s `&Bindings<'a>` parameter
+and the collapsed "try-then-defer" call sites depend on
+`Bindings::try_apply` existing as the shared validated write path.
 
 **Unblocks:** none.

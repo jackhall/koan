@@ -191,12 +191,13 @@ same property: a lookup whose target binder has dispatched but not yet
 executed parks on the producer instead of failing with `UnboundName`. The
 mechanism lives in two pieces.
 
-A [`Scope::placeholders`](../src/runtime/machine/core/scope.rs) sidecar — a
-`RefCell<HashMap<String, NodeId>>` — sits parallel to `data`. When a binder
-dispatches, its `pre_run` hook (a per-`KFunction` extractor that pulls the
-to-be-bound name structurally out of the expression's parts) installs
-`name → producer NodeId` in the dispatching scope's placeholders. The six
-binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`) opt in via
+A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
+inside the [`Bindings`](../src/runtime/machine/core/scope.rs) façade on
+`Scope`, alongside `data` and `functions`. When a binder dispatches, its
+`pre_run` hook (a per-`KFunction` extractor that pulls the to-be-bound name
+structurally out of the expression's parts) installs `name → producer NodeId`
+in the dispatching scope's placeholders. The six binder builtins (`LET`,
+`FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`) opt in via
 `register_builtin_with_pre_run`; everything else stays placeholder-free.
 `Scope::resolve` walks `data` then `placeholders` in each scope on the chain
 and returns one of three shapes: `Resolution::Value(&KObject)` for a

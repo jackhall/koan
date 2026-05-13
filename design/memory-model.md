@@ -105,15 +105,19 @@ variants (`Number`, `KString`, `Bool`, `Null`) `deep_clone` unconditionally —
 mildly wasteful for the "value already in dest arena" case, which the design
 accepts in exchange for not maintaining full arena-provenance tracking.
 
-## Re-entrant `Scope::add`
+## Re-entrant scope writes
 
-[`Scope::add`](../src/runtime/machine/core/scope.rs) tries `try_borrow_mut` on
-`data`/`functions` and falls back to a `pending` queue when a borrow is already
-held; the scheduler drains the queue between dispatch nodes via
-[`drain_pending`](../src/runtime/machine/core/scope.rs). The hot path (no concurrent borrow)
-is the same direct insert as before — no measured overhead. Re-entrant writes
-that would have panicked now queue silently and become visible after the
-iterating borrow releases, with snapshot-iteration semantics for the iterator.
+[`Scope::bind_value`](../src/runtime/machine/core/scope.rs) and
+[`Scope::register_function`](../src/runtime/machine/core/scope.rs) route through
+the embedded [`Bindings`](../src/runtime/machine/core/scope.rs) façade's
+`try_apply` helper, which `try_borrow_mut`s `data`/`functions` and returns
+`ApplyOutcome::Conflict` when a borrow is already held. The scope then enqueues
+the write on `Scope::pending` for replay by
+[`drain_pending`](../src/runtime/machine/core/scope.rs), invoked by the
+scheduler between dispatch nodes. The hot path (no concurrent borrow) is one
+direct insert with the dual-map mirror folded in. Re-entrant writes queue
+silently and become visible after the iterating borrow releases, with
+snapshot-iteration semantics for the iterator.
 
 ## Structural invariants
 
@@ -175,8 +179,8 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   [`escaped_closure_with_param_returns_body_value`](../src/runtime/builtins/call_by_name.rs))
   confirm a closure returned from its defining frame remains invocable.
 - [`add_during_active_data_borrow_queues_and_drains`](../src/runtime/machine/core/scope.rs)
-  holds a `data` borrow, calls `add`, drops the borrow, drains, and confirms
-  the queued write applied — exercising the conditional-defer path.
+  holds a `data` borrow, calls `bind_value`, drops the borrow, drains, and
+  confirms the queued write applied — exercising the conditional-defer path.
 - [`recursive_tagged_match_no_uaf`](../src/runtime/builtins/match_case.rs)
   runs a user-fn that recurses through a `Tagged` parameter via MATCH, exercising
   the `outer_frame` chain that keeps the call-site arena alive across TCO replace.

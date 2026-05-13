@@ -55,7 +55,7 @@ fn dispatches_independent_expressions_in_order() {
 
     assert!(matches!(sched.read(id1), KObject::Number(n) if *n == 1.0));
     assert!(matches!(sched.read(id2), KObject::Number(n) if *n == 2.0));
-    let data = root.data.borrow();
+    let data = root.bindings().data();
     assert!(data.contains_key("x"));
     assert!(data.contains_key("y"));
 }
@@ -82,7 +82,7 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     sched.add_dispatch(lookup_a, root);
 
     sched.execute().unwrap();
-    let data = root.data.borrow();
+    let data = root.bindings().data();
     assert!(matches!(data.get("b"), Some(KObject::Number(n)) if *n == 10.0));
 }
 

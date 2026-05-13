@@ -12,7 +12,7 @@ fn list_of_let_binding_is_type_expr_value() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     let entry = data.get("MyList").expect("MyList should be bound");
     match entry {
         KObject::TypeExprValue(t) => {
@@ -68,7 +68,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     // type-name resolution doesn't park on placeholders today (caveat noted there).
     run(scope, "SIG OrderedSig = (LET compare = 0)");
     run(scope, "FN (USE_ORD elem: OrderedSig) -> Null = (PRINT \"ok\")");
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     let sig_id = match data.get("OrderedSig") {
         Some(KObject::KSignature(s)) => s.sig_id(),
         other => panic!("OrderedSig should be a signature, got {:?}", other.map(|o| o.ktype())),
@@ -126,12 +126,12 @@ fn functor_body_module_dispatch_does_not_dangle() {
     run(scope, "LET other_set = (MAKESET (int_ord_a))");
 
     // Now read held_set's `inner` member — child_scope_ptr must still be live.
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     let m = match data.get("held_set") {
         Some(KObject::KModule(m, _)) => *m,
         other => panic!("held_set should be a module, got {:?}", other.map(|o| o.ktype())),
     };
-    let inner = m.child_scope().data.borrow().get("inner").copied();
+    let inner = m.child_scope().bindings().data().get("inner").copied();
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
             "held_set.inner must still read 1.0 after subsequent churn");
 }

@@ -29,22 +29,13 @@ pub fn body_opaque<'a>(
     ));
 
     // Mirror the source module's bindings into the new scope by reference (values are
-    // arena-allocated and immutable). Direct insert bypasses `bind_value`/`register_function`
-    // to avoid double-registering functions via both `data` and the bucket loop below.
+    // arena-allocated and immutable). The `try_bulk_install_from` helper snapshots
+    // `src.data`, releases the source guard, and replays each entry through the shared
+    // `try_apply` so the `KFunction → functions` dual-map mirror happens exactly once per
+    // entry — no separate functions-loop needed.
     let src = m.child_scope();
-    {
-        let mut data = new_scope.data.borrow_mut();
-        for (name, obj) in src.data.borrow().iter() {
-            data.insert(name.clone(), obj);
-        }
-    }
-    for (key, bucket) in src.functions.borrow().iter() {
-        new_scope
-            .functions
-            .borrow_mut()
-            .entry(key.clone())
-            .or_default()
-            .extend(bucket.iter().copied());
+    if let Err(e) = new_scope.bindings().try_bulk_install_from(src.bindings()) {
+        return BodyResult::Err(e);
     }
 
     let new_module: &'a Module<'a> = arena.alloc_module(Module::new(m.path.clone(), new_scope));
@@ -52,7 +43,7 @@ pub fn body_opaque<'a>(
     // of the same source yield distinct types — the abstraction-barrier identity property.
     let scope_id = new_module.scope_id();
     let mut minted: Vec<(String, KType)> = Vec::new();
-    for name in s.decl_scope().data.borrow().keys() {
+    for name in s.decl_scope().bindings().data().keys() {
         if is_abstract_type_name(name) {
             minted.push((
                 name.clone(),
@@ -114,8 +105,8 @@ fn shape_check<'a>(
     sig: &crate::runtime::model::values::Signature<'a>,
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
-    let sig_data = sig.decl_scope().data.borrow();
-    let src_data = src_scope.data.borrow();
+    let sig_data = sig.decl_scope().bindings().data();
+    let src_data = src_scope.bindings().data();
     for name in sig_data.keys() {
         if is_abstract_type_name(name) {
             continue;
@@ -210,7 +201,7 @@ mod tests {
              SIG OrderedSig = (LET compare = 0)\n\
              LET IntOrdAbstract = (IntOrd :| OrderedSig)",
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         assert!(matches!(data.get("IntOrdAbstract"), Some(KObject::KModule(_, _))));
     }
 
@@ -224,7 +215,7 @@ mod tests {
              SIG OrderedSig = (LET compare = 0)\n\
              LET IntOrdView = (IntOrd :! OrderedSig)",
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         assert!(matches!(data.get("IntOrdView"), Some(KObject::KModule(_, _))));
     }
 
@@ -265,7 +256,7 @@ mod tests {
                 panic!("expr {} errored: {}", i, e);
             }
         }
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let a = match data.get("FirstAbstract") {
             Some(KObject::KModule(m, _)) => *m,
             _ => panic!("FirstAbstract should be a module"),
@@ -291,7 +282,7 @@ mod tests {
              SIG OrderedSig = (LET compare = 0)\n\
              LET ViewMod = (IntOrd :! OrderedSig)",
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let v = match data.get("ViewMod") {
             Some(KObject::KModule(m, _)) => *m,
             _ => panic!("ViewMod should be a module"),
@@ -325,7 +316,7 @@ mod tests {
              LET IntOrdAbstract = (IntOrd :| OrderedSig)",
         );
 
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let abstract_mod = match data.get("IntOrdAbstract") {
             Some(KObject::KModule(m, _)) => *m,
             other => panic!("IntOrdAbstract should be a module, got {:?}", other.map(|o| o.ktype())),
@@ -342,9 +333,7 @@ mod tests {
         }
         assert_ne!(minted, KType::Number, "opaque IntOrdAbstract.Type must not equal Number");
         let compare = abstract_mod
-            .child_scope()
-            .data
-            .borrow()
+            .child_scope().bindings().data()
             .get("compare")
             .copied();
         assert!(matches!(compare, Some(KObject::Number(n)) if *n == 7.0));
@@ -388,12 +377,12 @@ mod tests {
         );
         run(scope, "LET set_value = (MAKESET int_ord_a)");
 
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let m = match data.get("set_value") {
             Some(KObject::KModule(m, _)) => *m,
             other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
         };
-        let inner = m.child_scope().data.borrow().get("inner").copied();
+        let inner = m.child_scope().bindings().data().get("inner").copied();
         assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0));
     }
 
@@ -416,12 +405,12 @@ mod tests {
         );
         run(scope, "LET set_value = (MAKESET int_ord_a)");
 
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let m = match data.get("set_value") {
             Some(KObject::KModule(m, _)) => *m,
             other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
         };
-        let sample = m.child_scope().data.borrow().get("sample").copied();
+        let sample = m.child_scope().bindings().data().get("sample").copied();
         assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
     }
 
@@ -449,7 +438,7 @@ mod tests {
         run(scope, "LET set_one = (MAKESET (int_ord_a))");
         run(scope, "LET set_two = (MAKESET (int_ord_a))");
 
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let m1 = match data.get("set_one") {
             Some(KObject::KModule(m, _)) => *m,
             other => panic!("set_one should be a module, got ktype={:?}", other.map(|o| o.ktype())),
@@ -535,11 +524,11 @@ mod tests {
         run(scope, "LET ord_set = (MAKESET (int_ord_a))");
         run(scope, "LET hash_set = (MAKESET (int_hash_a))");
 
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let mo = match data.get("ord_set") { Some(KObject::KModule(m, _)) => *m, _ => panic!("ord_set not module") };
         let mh = match data.get("hash_set") { Some(KObject::KModule(m, _)) => *m, _ => panic!("hash_set not module") };
-        let to = mo.child_scope().data.borrow().get("tag").copied();
-        let th = mh.child_scope().data.borrow().get("tag").copied();
+        let to = mo.child_scope().bindings().data().get("tag").copied();
+        let th = mh.child_scope().bindings().data().get("tag").copied();
         assert!(matches!(to, Some(KObject::Number(n)) if *n == 1.0),
                 "OrderedSig call should pick body with tag=1, got {:?}", to.map(|o| o.ktype()));
         assert!(matches!(th, Some(KObject::Number(n)) if *n == 2.0),
@@ -566,12 +555,12 @@ mod tests {
         );
         run(scope, "LET set_value = (MAKESET int_view)");
 
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let m = match data.get("set_value") {
             Some(KObject::KModule(m, _)) => *m,
             other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
         };
-        let sample = m.child_scope().data.borrow().get("sample").copied();
+        let sample = m.child_scope().bindings().data().get("sample").copied();
         assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
     }
 
@@ -596,12 +585,12 @@ mod tests {
         );
         run(scope, "LET set_value = (MAKESET IntOrdA)");
 
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let m = match data.get("set_value") {
             Some(KObject::KModule(m, _)) => *m,
             other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
         };
-        let sample = m.child_scope().data.borrow().get("sample").copied();
+        let sample = m.child_scope().bindings().data().get("sample").copied();
         assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
     }
 
@@ -619,7 +608,7 @@ mod tests {
              MODULE IntOrd = (LET compare = 7)\n\
              LET IntOrdA = (IntOrd :| OrderedSig)",
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         assert!(matches!(data.get("IntOrdA"), Some(KObject::KModule(_, _))));
     }
 }

@@ -123,7 +123,7 @@ mod tests {
             }
             other => panic!("expected StructType, got {:?}", other.ktype()),
         }
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let entry = data.get("Point").expect("Point should be bound in scope");
         assert!(matches!(entry, KObject::StructType { .. }));
     }
@@ -141,7 +141,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run_one(scope, parse_one("STRUCT Backwards = (b: Number, a: Number)"));
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("Backwards").unwrap() {
             KObject::StructType { fields, .. } => {
                 assert_eq!(fields[0].0, "b", "first field should be `b` (declaration order)");

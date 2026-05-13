@@ -107,7 +107,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         let bound = arena.alloc_object(KObject::Number(42.0));
-        scope.data.borrow_mut().insert("foo".to_string(), bound);
+        scope.bind_value("foo".to_string(), bound).unwrap();
 
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::KString("foo".into())));
@@ -148,7 +148,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let outer = run_root_bare(&arena);
         let bound = arena.alloc_object(KObject::Number(7.0));
-        outer.data.borrow_mut().insert("from_outer".to_string(), bound);
+        outer.bind_value("from_outer".to_string(), bound).unwrap();
 
         let inner = arena.alloc_scope(outer.child_for_call());
 

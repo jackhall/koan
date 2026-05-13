@@ -118,7 +118,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (LET x = 1)");
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         assert!(matches!(data.get("OrderedSig"), Some(KObject::KSignature(_))));
     }
 
@@ -127,7 +127,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (LET x = 1)");
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let sig = match data.get("OrderedSig") {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("OrderedSig should be a signature"),
@@ -143,12 +143,12 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET y = 7\nSIG Foo = (LET x = y)");
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let sig = match data.get("Foo") {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("Foo should be a signature"),
         };
-        let inner = sig.decl_scope().data.borrow();
+        let inner = sig.decl_scope().bindings().data();
         assert!(matches!(inner.get("x"), Some(KObject::Number(n)) if *n == 7.0));
     }
 
@@ -160,7 +160,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "SIG Foo = (LET x = nonexistent_name)");
         assert!(
-            scope.data.borrow().get("Foo").is_none(),
+            scope.bindings().data().get("Foo").is_none(),
             "Foo must not bind when its body errors",
         );
     }

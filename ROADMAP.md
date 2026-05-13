@@ -93,7 +93,13 @@ invariant), and the `runtime::machine` unsafe-surface reduction (the
 concentrate the `Frame::scope → 'a`-storage re-anchor where the `'a`
 storage actually lives, and the runtime singletons ride a `Sync`-deriving
 `StaticKValue` enum so `arena.rs` no longer carries a dedicated
-`unsafe impl Sync`). The next
+`unsafe impl Sync`), and the Bindings façade (`Scope::{data, functions,
+placeholders}` lifted into an embedded `Bindings<'a>` sub-struct whose
+shared `try_apply` helper enforces the dual-map mirror in one place and
+unifies the dedupe path between `LET f = (FN ...)` and `FN`-decl, closing
+the LET-binds-FN dedupe gap; ascription's bulk-install now routes through
+`try_bulk_install_from` instead of reaching into the underlying maps by
+hand). The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -113,6 +119,10 @@ without first landing something else:
   non-test files exceed 600 lines; score reshuffles via `modgraph_rewrite.py`,
   split the largest files, then trim scheduler tests the sub-struct extractions
   made redundant.
+- [Lift Scope::pending into a PendingQueue façade](roadmap/pending-queue-facade.md)
+  — wrap `Scope::pending` and `PendingWrite` so the try-then-defer pattern
+  collapses to one match arm per write kind and drain-time errors surface
+  via `debug_assert!`.
 
 ## Open items
 
@@ -123,14 +133,6 @@ without first landing something else:
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
   ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
   stage 2's functor support so the `Wrap` slot can be higher-kinded.
-- [Encapsulate Scope write paths in a Bindings façade](roadmap/bindings-facade.md)
-  — lift `Scope::{data, functions, placeholders}` into a `Bindings<'a>`
-  sub-struct whose shared `try_apply` helper enforces the dual-map mirror
-  and unifies the LET-binds-FN dedupe path.
-- [Lift Scope::pending into a PendingQueue façade](roadmap/pending-queue-facade.md)
-  — wrap `Scope::pending` and `PendingWrite` so the try-then-defer pattern
-  collapses to one match arm per write kind and drain-time errors surface
-  via `debug_assert!`. Requires the Bindings façade.
 
 ### Module system
 

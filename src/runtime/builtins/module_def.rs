@@ -10,7 +10,8 @@
 //! captures the child scope into a [`Module`] value (`name`, `child_scope`, `type_members`
 //! initially empty), allocates it in the parent's arena, and binds it under the module's
 //! name in the parent. Members reachable as `Foo.<member>` go through ATTR's `KModule`
-//! overload (see `attr.rs`), which looks `<member>` up in the captured `child_scope.data`.
+//! overload (see `attr.rs`), which looks `<member>` up in the captured
+//! `child_scope.bindings().data()`.
 //!
 //! The MODULE slot itself returns `BodyResult::DeferTo(combine_id)` so its terminal lifts
 //! off the Combine's terminal — the parent's `Foo` binding lands at Combine-finish time,
@@ -136,7 +137,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "MODULE Foo = (LET x = 1)");
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         assert!(matches!(data.get("Foo"), Some(KObject::KModule(_, _))));
     }
 
@@ -177,12 +178,12 @@ mod tests {
             scope,
             "MODULE Foo = (LET double = (FN (DOUBLE x: Number) -> Number = (x)))",
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let foo = match data.get("Foo") {
             Some(KObject::KModule(m, _)) => *m,
             _ => panic!("Foo should be a module"),
         };
-        assert!(foo.child_scope().data.borrow().contains_key("double"));
+        assert!(foo.child_scope().bindings().data().contains_key("double"));
     }
 
     #[test]
@@ -234,7 +235,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "MODULE Foo = (LET x = nonexistent_name)");
         assert!(
-            scope.data.borrow().get("Foo").is_none(),
+            scope.bindings().data().get("Foo").is_none(),
             "Foo must not bind when its body errors",
         );
     }
@@ -250,12 +251,12 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let foo = match data.get("Foo") {
             Some(KObject::KModule(m, _)) => *m,
             _ => panic!("Foo should be a module"),
         };
-        let inner = foo.child_scope().data.borrow();
+        let inner = foo.child_scope().bindings().data();
         assert!(matches!(inner.get("x"), Some(KObject::Number(n)) if *n == 7.0));
         assert!(matches!(inner.get("z"), Some(KObject::Number(n)) if *n == 11.0));
     }

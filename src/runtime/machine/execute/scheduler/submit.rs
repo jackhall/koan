@@ -13,8 +13,8 @@ fn extract_pre_run_name<'a>(expr: &KExpression<'a>, scope: &'a Scope<'a>) -> Opt
     let key = expr.untyped_key();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
-        let functions = s.functions.borrow();
-        if let Some(bucket) = functions.get(&key) {
+        let functions_guard = s.bindings().functions();
+        if let Some(bucket) = functions_guard.get(&key) {
             for f in bucket.iter() {
                 if let Some(extractor) = f.pre_run {
                     if let Some(name) = extractor(expr) {
@@ -23,7 +23,7 @@ fn extract_pre_run_name<'a>(expr: &KExpression<'a>, scope: &'a Scope<'a>) -> Opt
                 }
             }
         }
-        drop(functions);
+        drop(functions_guard);
         current = s.outer;
     }
     None

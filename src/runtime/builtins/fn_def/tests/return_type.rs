@@ -14,7 +14,7 @@ fn fn_parses_declared_return_type_onto_signature() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
 
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
     let f = match entry {
         KObject::KFunction(f, _) => *f,
@@ -36,7 +36,7 @@ fn fn_without_return_type_annotation_does_not_register() {
         sched.add_dispatch(expr, scope);
     }
     let _ = sched.execute(); // ignore: may or may not error depending on which sub fails first
-    let data = scope.data.borrow();
+    let data = scope.bindings().data();
     assert!(data.get("DOUBLE").is_none(), "DOUBLE should not be registered without -> Type");
 }
 

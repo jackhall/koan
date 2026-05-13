@@ -86,7 +86,7 @@ mod tests {
         let scope = run("LET x = 42\nPRINT \"hello\"\n", &arena, captured.clone());
 
         assert_eq!(captured.borrow().as_slice(), b"hello\n");
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         assert!(matches!(data.get("x"), Some(KObject::Number(n)) if *n == 42.0));
     }
 
@@ -130,7 +130,7 @@ mod tests {
             &arena,
             captured.clone(),
         );
-        assert!(scope.data.borrow().get("y").is_none(), "unmatched branch's LET must not have bound y");
+        assert!(scope.bindings().data().get("y").is_none(), "unmatched branch's LET must not have bound y");
         assert_eq!(captured.borrow().as_slice(), b"after\n");
     }
 
@@ -141,7 +141,7 @@ mod tests {
         let scope = run(r#"(PRINT (LET msg = "hello world!"))"#, &arena, captured.clone());
 
         assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         assert!(matches!(data.get("msg"), Some(KObject::KString(s)) if *s == "hello world!"));
     }
 
@@ -150,7 +150,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run("LET xs = [1 2 3]\n", &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("xs") {
             Some(KObject::List(items)) => {
                 assert_eq!(items.len(), 3);
@@ -166,7 +166,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run("LET xs = []\n", &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("xs") {
             Some(KObject::List(items)) => assert!(items.is_empty()),
             _ => panic!("expected `xs` bound to an empty List"),
@@ -180,7 +180,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run("LET xs = [1 (LET y = 7) 3]\n", &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("xs") {
             Some(KObject::List(items)) => {
                 assert_eq!(items.len(), 3);
@@ -198,7 +198,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run("LET xs = [\n  1\n  2\n  3\n]\n", &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("xs") {
             Some(KObject::List(items)) => {
                 assert_eq!(items.len(), 3);
@@ -214,7 +214,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run("LET xs = [[1 2] [3 4]]\n", &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("xs") {
             Some(KObject::List(outer)) => {
                 assert_eq!(outer.len(), 2);
@@ -263,7 +263,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run("LET d = {}\n", &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => assert!(entries.is_empty()),
             _ => panic!("expected `d` bound to an empty Dict"),
@@ -275,7 +275,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run(r#"LET d = {"a": 1, "b": 2}"#, &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => {
                 assert_eq!(entries.len(), 2);
@@ -291,7 +291,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run(r#"LET d = {1: "a", 2: "b"}"#, &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => {
                 assert_eq!(entries.len(), 2);
@@ -307,7 +307,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run("LET d = {true: 1, false: 0}\n", &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => {
                 assert_eq!(entries.len(), 2);
@@ -327,7 +327,7 @@ mod tests {
             &arena,
             captured,
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => {
                 assert_eq!(entries.len(), 1);
@@ -344,7 +344,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run(r#"LET d = {"a": (LET y = 7)}"#, &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => {
                 assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 7.0));
@@ -363,7 +363,7 @@ mod tests {
             &arena,
             captured,
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => {
                 assert!(matches!(lookup_string_key(entries, "x"), Some(KObject::Number(n)) if *n == 1.0));
@@ -381,7 +381,7 @@ mod tests {
             &arena,
             captured,
         );
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("d") {
             Some(KObject::Dict(entries)) => {
                 assert_eq!(entries.len(), 2);
@@ -397,7 +397,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         let scope = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &arena, captured);
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         match data.get("xs") {
             Some(KObject::List(outer)) => {
                 assert_eq!(outer.len(), 2);

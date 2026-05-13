@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::io::Write;
 
@@ -51,28 +51,252 @@ enum PendingWrite<'a> {
     Function { name: String, fn_ref: &'a KFunction<'a>, obj: &'a KObject<'a> },
 }
 
-/// Lexical environment. `functions` buckets overloads by their *untyped signature* (token
-/// shape with slot types erased) so dispatch can pick between same-shape overloads by
-/// `KType` specificity. Only the root scope holds a writer in `out`; child scopes have
-/// `None` and `write_out` walks `outer` to find one.
+/// Façade owning the three co-mutating `RefCell` maps that back every lexical binding:
+/// `data` (name → value), `functions` (untyped-signature bucket → overloads), and
+/// `placeholders` (name → producer NodeId for dispatch-time forward references).
 ///
-/// All mutable state is interior-mutable (`RefCell`) so a `&'a Scope<'a>` can be shared
-/// across scheduler nodes while builtins still mutate through it.
+/// The shared private [`Bindings::try_apply`] enforces the dual-map invariant —
+/// every `data[name]` entry wrapping a `KFunction` lives in
+/// `functions[signature.untyped_key()]` — in one place, and unifies dedupe (`ptr::eq`
+/// fast-path then `signatures_exact_equal`) across the LET-binds-FN and `FN`-decl paths.
+///
+/// Lifetime `'a` matches the arena lifetime of the stored references; the façade itself
+/// is embedded by value on [`Scope`] so all interior borrows arbitrate against one another.
+pub struct Bindings<'a> {
+    data: RefCell<HashMap<String, &'a KObject<'a>>>,
+    functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
+    placeholders: RefCell<HashMap<String, NodeId>>,
+}
+
+impl<'a> Bindings<'a> {
+    pub fn new() -> Self {
+        Self {
+            data: RefCell::new(HashMap::new()),
+            functions: RefCell::new(HashMap::new()),
+            placeholders: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Read-only handle for the ~12 read sites in builtins and resolver code. The returned
+    /// `Ref<'_, _>` has the lifetime of `&self`, so the usual `for (k, v) in
+    /// scope.bindings().data().iter()` pattern extends the temporary through the loop —
+    /// same semantics as the prior `RefCell::borrow()` calls.
+    pub fn data(&self) -> Ref<'_, HashMap<String, &'a KObject<'a>>> {
+        self.data.borrow()
+    }
+
+    /// Read-only handle for `resolve_dispatch`'s outer-chain walk and the submission-time
+    /// `pre_run` extractor. Same `Ref<'_, _>` semantics as [`Bindings::data`].
+    pub fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<&'a KFunction<'a>>>> {
+        self.functions.borrow()
+    }
+
+    /// Read-only handle for the resolver's placeholder lookup. Same semantics as
+    /// [`Bindings::data`].
+    pub fn placeholders(&self) -> Ref<'_, HashMap<String, NodeId>> {
+        self.placeholders.borrow()
+    }
+
+    /// LET-style value bind. Errors `Rebind` if `data[name]` already exists. When `obj`
+    /// wraps a `KFunction`, the function is *also* mirrored into the `functions` bucket
+    /// keyed by its untyped signature so dispatch finds it — supports `LET f = (FN ...)`
+    /// where the bound name doubles as a callable verb.
+    ///
+    /// `Conflict` outcome means borrow contention (caller queues); `Err` is semantic
+    /// rejection (not queued).
+    pub fn try_bind_value(
+        &self,
+        name: &str,
+        obj: &'a KObject<'a>,
+    ) -> Result<ApplyOutcome, KError> {
+        let fn_part = match obj {
+            KObject::KFunction(f, _) => Some(*f),
+            _ => None,
+        };
+        self.try_apply(name, obj, fn_part)
+    }
+
+    /// FN-style overload registration. Adds `fn_ref` to the `functions` bucket keyed by
+    /// its untyped signature, then inserts `obj` into `data[name]`. Errors:
+    /// - `DuplicateOverload` if the bucket already holds an exact-signature equal function.
+    /// - `Rebind` if `data[name]` holds a non-function.
+    pub fn try_register_function(
+        &self,
+        name: &str,
+        fn_ref: &'a KFunction<'a>,
+        obj: &'a KObject<'a>,
+    ) -> Result<ApplyOutcome, KError> {
+        self.try_apply(name, obj, Some(fn_ref))
+    }
+
+    /// Install a dispatch-time placeholder for `name` -> producer slot `idx`.
+    ///
+    /// Lenient when `data[name]` already holds a `KObject::KFunction`: silent no-op.
+    /// Forward references resolve through the existing function value; a new FN overload
+    /// joins the per-signature bucket on finalize without consumers needing to park.
+    ///
+    /// Errors `Rebind` if `data[name]` holds a non-function or if `placeholders[name]`
+    /// already maps to a *different* `NodeId`. Idempotent if re-entered with the same
+    /// `NodeId`.
+    ///
+    /// Unlike [`Bindings::try_bind_value`] and [`Bindings::try_register_function`], this
+    /// method panics on borrow conflict rather than returning `Conflict` — placeholder
+    /// installs happen at dispatch-time outside the re-entrant-bind hot path, so a conflict
+    /// here indicates a programming error, not a queueable retry.
+    pub fn try_install_placeholder(&self, name: String, idx: NodeId) -> Result<(), KError> {
+        if let Some(existing) = self.data.borrow().get(&name) {
+            if matches!(existing, KObject::KFunction(_, _)) {
+                return Ok(());
+            }
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
+        let mut ph = self.placeholders.borrow_mut();
+        if let Some(existing) = ph.get(&name).copied() {
+            if existing == idx {
+                return Ok(());
+            }
+            return Err(KError::new(KErrorKind::Rebind { name }));
+        }
+        ph.insert(name, idx);
+        Ok(())
+    }
+
+    /// Replay another `Bindings`'s `data` through `try_apply` on self. The single entry
+    /// point for ascription's bulk-install — snapshots the source `data` into a `Vec` and
+    /// releases `src`'s `Ref` before the replay so re-entrant ascription cannot deadlock.
+    /// The shared helper re-mirrors `KFunction` entries into `functions` exactly once, so
+    /// the caller does not need to walk `src.functions` separately (that's the point of
+    /// routing through `try_apply`).
+    ///
+    /// The replay is order-independent: the dispatch bucket is order-insensitive once
+    /// dedupe is applied. Panics on `Conflict` — a fresh `Bindings` should never hit a
+    /// borrow conflict against itself, and a conflict here is a programming error.
+    pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
+        let snapshot: Vec<(String, &'a KObject<'a>)> = src
+            .data()
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        for (name, obj) in snapshot {
+            let fn_part = match obj {
+                KObject::KFunction(f, _) => Some(*f),
+                _ => None,
+            };
+            match self.try_apply(&name, obj, fn_part)? {
+                ApplyOutcome::Applied => {}
+                ApplyOutcome::Conflict => {
+                    unreachable!(
+                        "try_bulk_install_from on a fresh Bindings should not hit borrow conflict",
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The shared write path. Borrows `functions` first (only when `fn_part.is_some()`),
+    /// then `data` — preserves the non-fn shortcut so `register_type`, LET-body, and
+    /// param-binding flows that run under a live outer `functions` borrow stay
+    /// deadlock-free. `Conflict` is reserved for borrow contention; semantic errors come
+    /// through `Err(KError)`.
+    ///
+    /// Unified dedupe: when `fn_part.is_some()` and a same-name `data` entry exists, walk
+    /// the bucket — `ptr::eq` is silent-success short-circuit (preserves intentional
+    /// aliases like `LET g = (f)`), `signatures_exact_equal` is `DuplicateOverload`. Both
+    /// `FN`-decl and `LET`-binds-`FN` paths see both rules. This closes the latent gap
+    /// where `try_apply_value`'s pointer-only dedupe could silently double the bucket on a
+    /// structurally identical but pointer-distinct re-bind.
+    fn try_apply(
+        &self,
+        name: &str,
+        obj: &'a KObject<'a>,
+        fn_part: Option<&'a KFunction<'a>>,
+    ) -> Result<ApplyOutcome, KError> {
+        // Borrow `functions` first only when there is a function-side mirror to write —
+        // skipping otherwise preserves the non-fn shortcut documented above.
+        let mut functions_handle = if fn_part.is_some() {
+            match self.functions.try_borrow_mut() {
+                Ok(g) => Some(g),
+                Err(_) => return Ok(ApplyOutcome::Conflict),
+            }
+        } else {
+            None
+        };
+        let mut data = match self.data.try_borrow_mut() {
+            Ok(d) => d,
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        };
+        // Semantic rejection on existing `data[name]`. The `fn_part.is_some()` and entry-
+        // already-`KFunction` case falls through to bucket dedupe (overload-add path).
+        if let Some(existing) = data.get(name) {
+            match fn_part {
+                None => return Err(KError::new(KErrorKind::Rebind { name: name.to_string() })),
+                Some(_) => {
+                    if !matches!(existing, KObject::KFunction(_, _)) {
+                        return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+                    }
+                }
+            }
+        }
+        if let (Some(f_ref), Some(functions)) = (fn_part, functions_handle.as_mut()) {
+            let key = f_ref.signature.untyped_key();
+            let bucket = functions.entry(key).or_default();
+            let mut already_present = false;
+            for existing in bucket.iter() {
+                if std::ptr::eq(*existing, f_ref) {
+                    already_present = true;
+                    break;
+                }
+                if signatures_exact_equal(&existing.signature, &f_ref.signature) {
+                    return Err(KError::new(KErrorKind::DuplicateOverload {
+                        name: name.to_string(),
+                        signature: existing.summarize(),
+                    }));
+                }
+            }
+            if !already_present {
+                bucket.push(f_ref);
+            }
+        }
+        data.insert(name.to_string(), obj);
+        drop(data);
+        drop(functions_handle);
+        // Best-effort placeholder clear — `try_borrow_mut().ok()` tolerates a caller
+        // holding a placeholder borrow up the stack. Promoting this to `borrow_mut()`
+        // would panic for a previously-tolerated case.
+        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
+            ph.remove(name);
+        }
+        Ok(ApplyOutcome::Applied)
+    }
+}
+
+impl<'a> Default for Bindings<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Lexical environment. `functions` (inside [`Bindings`]) buckets overloads by their
+/// *untyped signature* (token shape with slot types erased) so dispatch can pick between
+/// same-shape overloads by `KType` specificity. Only the root scope holds a writer in
+/// `out`; child scopes have `None` and `write_out` walks `outer` to find one.
+///
+/// All mutable binding state lives in the embedded [`Bindings`] façade (interior-mutable
+/// `RefCell`s), so a `&'a Scope<'a>` can be shared across scheduler nodes while builtins
+/// still mutate through it. The `pending` queue and `out` writer stay on `Scope` because
+/// the queue's retry calls into `Scope`'s shim methods anyway; lifting it is the next
+/// roadmap item (`pending-queue-facade`).
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,
-    pub data: RefCell<HashMap<String, &'a KObject<'a>>>,
-    pub functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
+    /// All three binding maps live here — public so test fixtures can read them as
+    /// `scope.bindings.data()` etc., but writes only flow through the methods.
+    pub bindings: Bindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
     /// Writes that hit a borrow conflict at `bind_value` / `register_function` time.
     /// Drained between dispatch nodes by `drain_pending`; direct writes bypass the queue.
     pending: RefCell<Vec<PendingWrite<'a>>>,
-    /// Dispatch-time name placeholders: a binder's `pre_run` hook installs its declared
-    /// name here, mapped to the producer slot's `NodeId`, before the binder's body runs.
-    /// A consumer looking up the name while the RHS is in flight gets `Placeholder` and
-    /// parks on the producer. The binder removes its placeholder before inserting into
-    /// `data` / `functions`.
-    pub placeholders: RefCell<HashMap<String, NodeId>>,
     /// Lexical-context label set at construction by `child_under_named` (e.g. `"MODULE Foo"`,
     /// `"SIG OrderedSig"`); empty for run-root and ordinary call frames. Record-only;
     /// reserved for future diagnostics.
@@ -83,12 +307,10 @@ impl<'a> Scope<'a> {
     pub fn run_root(arena: &'a RuntimeArena, outer: Option<&'a Scope<'a>>, out: Box<dyn Write + 'a>) -> Self {
         Self {
             outer,
-            data: RefCell::new(HashMap::new()),
-            functions: RefCell::new(HashMap::new()),
+            bindings: Bindings::new(),
             out: RefCell::new(Some(out)),
             arena,
             pending: RefCell::new(Vec::new()),
-            placeholders: RefCell::new(HashMap::new()),
             name: String::new(),
         }
     }
@@ -102,12 +324,10 @@ impl<'a> Scope<'a> {
     pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Scope {
             outer: Some(outer),
-            data: RefCell::new(HashMap::new()),
-            functions: RefCell::new(HashMap::new()),
+            bindings: Bindings::new(),
             out: RefCell::new(None),
             arena: outer.arena,
             pending: RefCell::new(Vec::new()),
-            placeholders: RefCell::new(HashMap::new()),
             name: String::new(),
         }
     }
@@ -116,14 +336,19 @@ impl<'a> Scope<'a> {
     pub fn child_under_named(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
-            data: RefCell::new(HashMap::new()),
-            functions: RefCell::new(HashMap::new()),
+            bindings: Bindings::new(),
             out: RefCell::new(None),
             arena: outer.arena,
             pending: RefCell::new(Vec::new()),
-            placeholders: RefCell::new(HashMap::new()),
             name,
         }
+    }
+
+    /// Borrow the embedded [`Bindings`] façade. Internal callers that need direct access to
+    /// the unified write path (e.g. ascription's `try_bulk_install_from`) reach for this;
+    /// the shim methods below cover the common cases.
+    pub fn bindings(&self) -> &Bindings<'a> {
+        &self.bindings
     }
 
     /// Bind `name` in this scope. Errors `Rebind` if `data` already holds `name`
@@ -133,7 +358,7 @@ impl<'a> Scope<'a> {
     /// Conditional-defer: direct mutation first, falls back to the `pending` queue iff a
     /// borrow conflict would otherwise panic (caller up the stack iterating `data`).
     pub fn bind_value(&self, name: String, obj: &'a KObject<'a>) -> Result<(), KError> {
-        match self.try_apply_value(&name, obj)? {
+        match self.bindings.try_bind_value(&name, obj)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
                 self.pending.borrow_mut().push(PendingWrite::Value { name, obj });
@@ -154,7 +379,7 @@ impl<'a> Scope<'a> {
         fn_ref: &'a KFunction<'a>,
         obj: &'a KObject<'a>,
     ) -> Result<(), KError> {
-        match self.try_apply_function(&name, fn_ref, obj)? {
+        match self.bindings.try_register_function(&name, fn_ref, obj)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
                 self.pending.borrow_mut().push(PendingWrite::Function {
@@ -168,14 +393,14 @@ impl<'a> Scope<'a> {
     }
 
     /// Register `name` as a type-valued binding in this scope. The binding lives in
-    /// [`Scope::data`] as a `KObject::TypeExprValue` carrying the bare-leaf surface form
+    /// [`Bindings::data`] as a `KObject::TypeExprValue` carrying the bare-leaf surface form
     /// (`TypeExpr { name, params: None }`); the type resolver re-elaborates it to a
     /// [`crate::runtime::model::types::KType`] on lookup via
     /// [`crate::runtime::model::types::KType::from_type_expr`], which falls back to
     /// [`crate::runtime::model::types::KType::from_name`] for the parameterless leaf.
     ///
     /// This is the dual of [`Self::register_function`] for the type half of the binding
-    /// surface — the call site that would otherwise reach into `Scope::data` directly to
+    /// surface — the call site that would otherwise reach into `Bindings::data` directly to
     /// seed builtin type names goes through here so the borrow / arena / pending-defer
     /// plumbing matches the function path. The `_ktype` parameter mirrors how
     /// `register_function` carries the function value: it documents what the binding
@@ -199,86 +424,6 @@ impl<'a> Scope<'a> {
         let _ = self.bind_value(name, obj);
     }
 
-    /// Direct-write path for `bind_value`. `Conflict` means borrow contention (caller
-    /// queues); `Err` means semantic rejection (not queued).
-    ///
-    /// When `obj` is a `KObject::KFunction`, the function is *also* mirrored into
-    /// `self.functions[signature_key]` so dispatch by the function's signature shape finds
-    /// it (supports `LET f = (FN ...)` where the bound name doubles as a callable verb).
-    /// Pointer-equality dedupe in the bucket allows intentional LET aliasing
-    /// (`LET g = (f)`) without doubling the entry; structural dedupe would over-trigger.
-    fn try_apply_value(
-        &self,
-        name: &str,
-        obj: &'a KObject<'a>,
-    ) -> Result<ApplyOutcome, KError> {
-        // Borrow `functions` before `data` to match `try_apply_function`'s ordering.
-        let mut functions_handle = if matches!(obj, KObject::KFunction(_, _)) {
-            match self.functions.try_borrow_mut() {
-                Ok(g) => Some(g),
-                Err(_) => return Ok(ApplyOutcome::Conflict),
-            }
-        } else {
-            None
-        };
-        let mut data = match self.data.try_borrow_mut() {
-            Ok(d) => d,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        };
-        if data.contains_key(name) {
-            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
-        }
-        if let (KObject::KFunction(f, _), Some(functions)) = (obj, functions_handle.as_mut()) {
-            let key = f.signature.untyped_key();
-            let bucket = functions.entry(key).or_default();
-            let f_ref: &'a KFunction<'a> = f;
-            if !bucket.iter().any(|existing| std::ptr::eq(*existing, f_ref)) {
-                bucket.push(f_ref);
-            }
-        }
-        data.insert(name.to_string(), obj);
-        drop(data);
-        drop(functions_handle);
-        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.remove(name);
-        }
-        Ok(ApplyOutcome::Applied)
-    }
-
-    /// Direct-write path for `register_function`. Signature-based dedupe rather than
-    /// name-based rebind: pointer-equal re-registration is a silent no-op; structurally
-    /// exact-equal but distinct is `DuplicateOverload`.
-    fn try_apply_function(
-        &self,
-        name: &str,
-        fn_ref: &'a KFunction<'a>,
-        obj: &'a KObject<'a>,
-    ) -> Result<ApplyOutcome, KError> {
-        let mut functions = match self.functions.try_borrow_mut() {
-            Ok(g) => g,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        };
-        let mut data = match self.data.try_borrow_mut() {
-            Ok(d) => d,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        };
-        let key = fn_ref.signature.untyped_key();
-        let bucket = functions.entry(key).or_default();
-        for existing in bucket.iter() {
-            if std::ptr::eq(*existing, fn_ref) {
-                return apply_function_data_insert(&mut data, name, obj, &self.placeholders);
-            }
-            if signatures_exact_equal(&existing.signature, &fn_ref.signature) {
-                return Err(KError::new(KErrorKind::DuplicateOverload {
-                    name: name.to_string(),
-                    signature: existing.summarize(),
-                }));
-            }
-        }
-        bucket.push(fn_ref);
-        apply_function_data_insert(&mut data, name, obj, &self.placeholders)
-    }
-
     /// Apply queued writes between dispatch nodes. Items that still hit a borrow conflict
     /// stay queued (eventually-consistent, not guaranteed-empty after one call). Semantic
     /// failures on retry are silently dropped — there is no caller to surface the error to.
@@ -291,7 +436,7 @@ impl<'a> Scope<'a> {
         for item in pending {
             match item {
                 PendingWrite::Value { name, obj } => {
-                    match self.try_apply_value(&name, obj) {
+                    match self.bindings.try_bind_value(&name, obj) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Value { name, obj });
@@ -300,7 +445,7 @@ impl<'a> Scope<'a> {
                     }
                 }
                 PendingWrite::Function { name, fn_ref, obj } => {
-                    match self.try_apply_function(&name, fn_ref, obj) {
+                    match self.bindings.try_register_function(&name, fn_ref, obj) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
                             still_pending.push(PendingWrite::Function { name, fn_ref, obj });
@@ -329,10 +474,10 @@ impl<'a> Scope<'a> {
     /// shadows an outer scope's value binding for the same name (the inner producer hasn't
     /// finalized yet, so the consumer must park on it rather than read through to the outer).
     pub fn resolve(&self, name: &str) -> Resolution<'a> {
-        if let Some(obj) = self.data.borrow().get(name).copied() {
+        if let Some(obj) = self.bindings.data().get(name).copied() {
             return Resolution::Value(obj);
         }
-        if let Some(id) = self.placeholders.borrow().get(name).copied() {
+        if let Some(id) = self.bindings.placeholders().get(name).copied() {
             return Resolution::Placeholder(id);
         }
         match self.outer {
@@ -341,31 +486,12 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Install a dispatch-time placeholder for `name` -> producer slot `idx`.
-    ///
-    /// Lenient when `data[name]` already holds a `KObject::KFunction`: silent no-op.
-    /// Forward references resolve through the existing function value; a new FN overload
-    /// joins the per-signature bucket on finalize without consumers needing to park.
-    ///
-    /// Errors `Rebind` if `data[name]` holds a non-function or if `placeholders[name]`
-    /// already maps to a *different* `NodeId`. Idempotent if re-entered with the same
-    /// `NodeId`.
+    /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. Thin shim
+    /// over [`Bindings::try_install_placeholder`] — see that method's docstring for the
+    /// `Rebind` rules and the asymmetry with `try_bind_*` (panics on borrow conflict
+    /// rather than queueing).
     pub fn install_placeholder(&self, name: String, idx: NodeId) -> Result<(), KError> {
-        if let Some(existing) = self.data.borrow().get(&name) {
-            if matches!(existing, KObject::KFunction(_, _)) {
-                return Ok(());
-            }
-            return Err(KError::new(KErrorKind::Rebind { name }));
-        }
-        let mut ph = self.placeholders.borrow_mut();
-        if let Some(existing) = ph.get(&name).copied() {
-            if existing == idx {
-                return Ok(());
-            }
-            return Err(KError::new(KErrorKind::Rebind { name }));
-        }
-        ph.insert(name, idx);
-        Ok(())
+        self.bindings.try_install_placeholder(name, idx)
     }
 
     /// Walk the `outer` chain for the nearest scope holding a writer and write `bytes`.
@@ -414,8 +540,8 @@ impl<'a> Scope<'a> {
         let key = expr.untyped_key();
         let mut current: Option<&'a Scope<'a>> = Some(self);
         while let Some(scope) = current {
-            let functions = scope.functions.borrow();
-            if let Some(bucket) = functions.get(&key) {
+            let functions_guard = scope.bindings().functions();
+            if let Some(bucket) = functions_guard.get(&key) {
                 // Strict pass within this scope.
                 let strict: Vec<&'a KFunction<'a>> = bucket
                     .iter()
@@ -461,7 +587,11 @@ impl<'a> Scope<'a> {
                     None => {}
                 }
             }
-            drop(functions);
+            // Drop the borrow before recursing into `outer` — the outer scope's bucket
+            // lookup also calls `bindings().functions()`, and `RefCell` borrows in a
+            // shared chain need explicit release because NLL would not drop the inner
+            // guard early enough on its own.
+            drop(functions_guard);
             current = scope.outer;
         }
         // Nothing matched on the chain. Distinguish a flat-unbound shape from one whose
@@ -530,29 +660,9 @@ pub enum ResolveOutcome<'a> {
 }
 
 /// `Conflict` is reserved for borrow contention; semantic errors come through `Err(KError)`.
-enum ApplyOutcome {
+pub enum ApplyOutcome {
     Applied,
     Conflict,
-}
-
-/// Insert `obj` into `data[name]` if the slot is empty or already holds a `KFunction`;
-/// otherwise `Rebind`. Clears the matching placeholder on success.
-fn apply_function_data_insert<'a>(
-    data: &mut std::cell::RefMut<'_, HashMap<String, &'a KObject<'a>>>,
-    name: &str,
-    obj: &'a KObject<'a>,
-    placeholders: &RefCell<HashMap<String, NodeId>>,
-) -> Result<ApplyOutcome, KError> {
-    if let Some(existing) = data.get(name) {
-        if !matches!(existing, KObject::KFunction(_, _)) {
-            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
-        }
-    }
-    data.insert(name.to_string(), obj);
-    if let Ok(mut ph) = placeholders.try_borrow_mut() {
-        ph.remove(name);
-    }
-    Ok(ApplyOutcome::Applied)
 }
 
 /// Structural equality on shape + per-Argument `KType` + return type. Independent of
@@ -610,14 +720,14 @@ mod tests {
 
         let new_entry = arena.alloc_object(KObject::Number(2.0));
         {
-            let snapshot = scope.data.borrow();
+            let snapshot = scope.bindings().data();
             assert!(snapshot.contains_key("pre"));
             scope.bind_value("during".to_string(), new_entry).unwrap();
             assert!(!snapshot.contains_key("during"));
         }
-        assert!(scope.data.borrow().get("during").is_none());
+        assert!(scope.bindings().data().get("during").is_none());
         scope.drain_pending();
-        let after = scope.data.borrow();
+        let after = scope.bindings().data();
         assert!(matches!(after.get("during"), Some(KObject::Number(n)) if *n == 2.0));
     }
 
@@ -662,6 +772,49 @@ mod tests {
             matches!(&err.kind, crate::runtime::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "FOO"),
             "expected DuplicateOverload, got {err}",
         );
+    }
+
+    /// Companion to `register_function_dedupes_exact_signature`: routing a structurally
+    /// identical but pointer-distinct `KFunction` through the LET path
+    /// (`bind_value(KObject::KFunction(...))`) must also trip `DuplicateOverload`. Pre-
+    /// façade the LET path only dedup'd by `ptr::eq`, so a fresh-arena-allocated function
+    /// with matching signature silently doubled the bucket. The unified `try_apply` closes
+    /// this gap. Uses a different name from the prior FN so the test focuses on bucket
+    /// dedupe rather than the `Rebind`-on-existing-name path.
+    #[test]
+    fn bind_value_with_kfunction_dedupes_exact_signature_with_existing_fn() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let f1 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+        let obj1 = arena.alloc_object(KObject::KFunction(f1, None));
+        scope.register_function("FOO".to_string(), f1, obj1).unwrap();
+        // Pointer-distinct, structurally identical signature — fresh arena allocation.
+        let f2 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+        let obj2 = arena.alloc_object(KObject::KFunction(f2, None));
+        let err = scope
+            .bind_value("OTHER_NAME".to_string(), obj2)
+            .unwrap_err();
+        assert!(
+            matches!(&err.kind, crate::runtime::machine::core::KErrorKind::DuplicateOverload { name, .. } if name == "OTHER_NAME"),
+            "expected DuplicateOverload from LET path, got {err}",
+        );
+    }
+
+    /// The `ptr::eq` fast-path still allows intentional aliasing: `LET g = (f)` where the
+    /// same `&KFunction` is bound under a second name must succeed without
+    /// `DuplicateOverload`. This pins the rule that the bucket dedupe is silent-success on
+    /// pointer-equal entries and structural-rejection only on pointer-distinct ones.
+    #[test]
+    fn bind_value_with_kfunction_pointer_equal_alias_no_op() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let f = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+        let obj1 = arena.alloc_object(KObject::KFunction(f, None));
+        let obj2 = arena.alloc_object(KObject::KFunction(f, None));
+        scope.bind_value("FIRST".to_string(), obj1).unwrap();
+        // Re-binding under a *different* name with the same `&KFunction` pointer — the
+        // intentional-alias case. Must succeed.
+        scope.bind_value("ALIAS".to_string(), obj2).unwrap();
     }
 
     #[test]
@@ -744,7 +897,7 @@ mod tests {
         scope.install_placeholder("x".to_string(), NodeId(2)).unwrap();
         let v = arena.alloc_object(KObject::Number(42.0));
         scope.bind_value("x".to_string(), v).unwrap();
-        assert!(scope.placeholders.borrow().get("x").is_none());
+        assert!(scope.bindings().placeholders().get("x").is_none());
         assert!(matches!(scope.resolve("x"), Resolution::Value(KObject::Number(n)) if *n == 42.0));
     }
 

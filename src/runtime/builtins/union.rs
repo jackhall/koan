@@ -139,7 +139,7 @@ mod tests {
             parse_one("UNION Maybe = (some: Number none: Null)"),
         );
         assert!(matches!(result, KObject::TaggedUnionType(_)));
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let entry = data.get("Maybe").expect("Maybe should be bound in scope");
         match entry {
             KObject::TaggedUnionType(schema) => {

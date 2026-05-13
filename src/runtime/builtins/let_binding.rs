@@ -117,7 +117,7 @@ mod tests {
             BodyResult::Err(e) => panic!("LET errored unexpectedly: {e}"),
         };
         assert!(matches!(value, KObject::Number(n) if *n == 42.0));
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let entry = data.get("x").expect("expected binding 'x'");
         assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
     }
@@ -149,7 +149,7 @@ mod tests {
         for e in exprs { sched.add_dispatch(e, scope); }
         sched.execute().unwrap();
         // After execute, placeholders should not contain "hello" — bind_value cleared it.
-        assert!(scope.placeholders.borrow().get("hello").is_none());
+        assert!(scope.bindings().placeholders().get("hello").is_none());
         assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
     }
 
@@ -172,7 +172,7 @@ mod tests {
         sched.execute().unwrap();
 
         assert!(matches!(sched.read(id), KObject::Number(n) if *n == 42.0));
-        let data = scope.data.borrow();
+        let data = scope.bindings().data();
         let entry = data.get("x").expect("expected binding 'x'");
         assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
     }
