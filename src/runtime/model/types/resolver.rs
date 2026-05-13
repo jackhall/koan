@@ -1,12 +1,13 @@
-//! Pluggable type-name resolution. Consulted before the builtin `KType::from_name` table
-//! so a module-local binding can shadow a builtin of the same name.
+//! Scheduler-aware type-name elaboration. Walks a [`TypeExpr`] against a [`Scope`],
+//! threads a "currently elaborating" set so recursive type definitions short-circuit to
+//! [`KType::RecursiveRef`] instead of deadlocking on their own placeholder, and returns
+//! [`ElabResult::Park`] when a referenced type-binding placeholder hasn't finalized so
+//! the caller can install dep edges and re-run the elaboration on wake.
 //!
-//! Phase-3 addition: [`Elaborator`] and [`elaborate_type_expr`] — a scheduler-aware
-//! elaborator that walks a `TypeExpr`, threads a "currently elaborating" set so recursive
-//! type definitions short-circuit to `KType::RecursiveRef` instead of deadlocking on their
-//! own placeholder, and returns `ElabResult::Park(producers)` when a referenced
-//! type-binding placeholder hasn't finalized so the caller can install dep edges and
-//! re-run the elaboration on wake.
+//! The phase-2 transitional `TypeResolver` trait (`NoopResolver`, `ScopeResolver`) is
+//! deleted: bindings now store `KObject::KTypeValue(KType)` directly, and consumers go
+//! through [`elaborate_type_expr`] when scope-aware lookup is needed or
+//! [`KType::from_type_expr`] when only the builtin table matters.
 
 use std::collections::HashSet;
 
@@ -16,48 +17,6 @@ use crate::runtime::machine::core::{Resolution, Scope};
 use crate::runtime::model::values::KObject;
 
 use super::ktype::KType;
-
-pub trait TypeResolver {
-    fn resolve(&self, name: &str) -> Option<KType>;
-}
-
-pub struct NoopResolver;
-
-impl TypeResolver for NoopResolver {
-    fn resolve(&self, _name: &str) -> Option<KType> {
-        None
-    }
-}
-
-pub struct ScopeResolver<'s, 'a> {
-    pub scope: &'s Scope<'a>,
-}
-
-impl<'s, 'a> ScopeResolver<'s, 'a> {
-    pub fn new(scope: &'s Scope<'a>) -> Self {
-        Self { scope }
-    }
-}
-
-impl<'s, 'a> TypeResolver for ScopeResolver<'s, 'a> {
-    fn resolve(&self, name: &str) -> Option<KType> {
-        let bound = self.scope.lookup(name)?;
-        match bound {
-            // Bindings now store the elaborated `KType` directly; clone the stored value
-            // rather than re-elaborating a surface form at every lookup.
-            KObject::KTypeValue(kt) => Some(kt.clone()),
-            // SIG names lower to `SignatureBound` so a FN parameter typed `E: OrderedSig`
-            // gets a per-sig admissibility slot rather than the catch-all `KType::Module`.
-            // `sig_id` is the declaring `Signature`'s stable address; the dispatcher
-            // checks it against the candidate module's `compatible_sigs` set.
-            KObject::KSignature(s) => Some(KType::SignatureBound {
-                sig_id: s.sig_id(),
-                sig_path: s.path.clone(),
-            }),
-            _ => None,
-        }
-    }
-}
 
 /// Outcome of one elaboration walk over a `TypeExpr`.
 #[derive(Debug)]

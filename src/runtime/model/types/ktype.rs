@@ -74,13 +74,24 @@ pub enum KType {
     /// concrete identity is recovered from the surrounding `Mu` context. Never constructed
     /// from user source directly; only the elaborator emits it.
     RecursiveRef(String),
-    /// Phase-2 transitional variant: a bare-leaf type name (`Point`, `IntOrd`, `MyList`)
-    /// whose `from_name` lookup didn't succeed at parser-side `resolve_for` time. Carries
-    /// the surface name so downstream consumers (`extract_bare_type_name`,
-    /// `dispatch_constructor`, ATTR's TypeExprRef-lhs lookup) can still recover the user's
-    /// identifier. Phase 3's scheduler-driven elaborator replaces this with a proper
-    /// scope-aware resolution at FN-def / LET / STRUCT body time; phase 5 deletes the
-    /// variant entirely.
+    /// Bind-time carrier for a bare-leaf type name (`Point`, `IntOrd`, `MyList`) whose
+    /// `from_name` lookup failed at [`crate::ast::ExpressionPart::resolve_for`] time —
+    /// i.e. anything not in [`KType::from_name`]'s builtin table. Carries the surface name
+    /// so downstream consumers (`extract_bare_type_name`, `dispatch_constructor`, ATTR's
+    /// TypeExprRef-lhs lookup, FN return-type elaboration) can recover the user's
+    /// identifier and re-elaborate against `Scope` via [`super::elaborate_type_expr`].
+    ///
+    /// **Why this isn't gone yet.** `resolve_for` runs at `KFunction::bind` time — after
+    /// the dispatcher's per-slot classification but before any body sees the bundle. For
+    /// pre_run-bearing binders (LET, STRUCT, UNION, MODULE, SIG, FN) the dispatcher's
+    /// `classify_for_pick` skips `wrap_indices` / `ref_name_indices` for `TypeExprRef`
+    /// slots because the binder's own name slot is a *declaration*, not a reference;
+    /// FN's return-type slot rides through that same skip and lands here as a non-builtin
+    /// `Type(_)` token. Deleting `Unresolved` requires either a per-slot "I am a
+    /// reference, please wrap" opt-in on `classify_for_pick` (currently coarse: pre_run
+    /// → skip-wrap on all literal-name slots) or a new `KObject` carrier preserving the
+    /// surface `TypeExpr` through bind. Both are out of scope for the eager-type-
+    /// elaboration roadmap item.
     Unresolved(String),
     Any,
 }

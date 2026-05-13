@@ -5,6 +5,7 @@ use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, K
 use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 
 use crate::runtime::machine::kfunction::argument_bundle::{extract_kexpression, extract_ktype};
+use crate::ast::ExpressionPart;
 use super::{err, register_builtin_with_pre_run};
 
 use signature::ParamListOutcome;
@@ -98,27 +99,37 @@ pub fn body<'a>(
         kt => ReturnTypeState::Done(kt),
     };
 
-    // Step 2: elaborate the parameter list.
+    // Step 2: elaborate the parameter list. Three sub-cases:
+    //   * `Done(es)` — every slot resolved synchronously.
+    //   * `Pending { park_producers, sub_dispatches }` — at least one slot needs a
+    //     scheduler wake (placeholder finalization) or a sub-Dispatch (parens-wrapped
+    //     type expression).
+    //   * `Err(_)` — structural / unbound failure surfacing immediately.
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
-        ParamListOutcome::Done(es) => Ok(es),
+        ParamListOutcome::Done(es) => ParamListResult::Done(es),
         ParamListOutcome::Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
-        ParamListOutcome::Park(producers) => Err(producers),
+        ParamListOutcome::Pending { park_producers, sub_dispatches } => {
+            ParamListResult::Pending { park_producers, sub_dispatches }
+        }
     };
 
     // Step 3: route to synchronous-finalize or Combine-deferred based on parking state.
     match (return_type_state, params) {
-        (ReturnTypeState::Done(rt), Ok(elements)) => {
+        (ReturnTypeState::Done(rt), ParamListResult::Done(elements)) => {
             finalize_fn(scope, elements, rt, body_expr)
         }
-        (ReturnTypeState::Done(rt), Err(producers)) => defer_via_combine(
-            scope,
-            sched,
-            signature_expr,
-            ReturnTypeCapture::Resolved(rt),
-            producers,
-            body_expr,
-        ),
-        (ReturnTypeState::Pending(name, mut producers), Ok(_)) => {
+        (ReturnTypeState::Done(rt), ParamListResult::Pending { park_producers, sub_dispatches }) => {
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                ReturnTypeCapture::Resolved(rt),
+                park_producers,
+                sub_dispatches,
+                body_expr,
+            )
+        }
+        (ReturnTypeState::Pending(name, producers), ParamListResult::Done(_)) => {
             // Param-types fully elaborated synchronously, but the return type parked. The
             // Combine finish re-runs both walks against the now-final scope for symmetry.
             defer_via_combine(
@@ -126,22 +137,35 @@ pub fn body<'a>(
                 sched,
                 signature_expr,
                 ReturnTypeCapture::Unresolved(name),
-                std::mem::take(&mut producers),
+                producers,
+                Vec::new(),
                 body_expr,
             )
         }
-        (ReturnTypeState::Pending(name, rt_producers), Err(mut producers)) => {
-            producers.extend(rt_producers);
+        (ReturnTypeState::Pending(name, rt_producers), ParamListResult::Pending { mut park_producers, sub_dispatches }) => {
+            park_producers.extend(rt_producers);
             defer_via_combine(
                 scope,
                 sched,
                 signature_expr,
                 ReturnTypeCapture::Unresolved(name),
-                producers,
+                park_producers,
+                sub_dispatches,
                 body_expr,
             )
         }
     }
+}
+
+/// Local mirror of [`ParamListOutcome`] minus the structural-error variant (which is
+/// short-circuited above) and with `Pending`'s payload kept by-value so the routing
+/// `match` stays readable.
+enum ParamListResult<'a> {
+    Done(Vec<SignatureElement>),
+    Pending {
+        park_producers: Vec<crate::runtime::machine::NodeId>,
+        sub_dispatches: Vec<(usize, crate::ast::KExpression<'a>)>,
+    },
 }
 
 /// Carrier for the return type across the Combine boundary. `Resolved` means we already
@@ -203,20 +227,64 @@ fn finalize_fn<'a>(
     BodyResult::Value(obj)
 }
 
-/// Schedule a `Combine` over `producers` and re-run the signature elaboration in the
+/// Schedule a `Combine` over `park_producers` plus any newly scheduled sub-Dispatches
+/// for parens-wrapped parameter types, then re-run the signature elaboration in the
 /// finish closure. Mirrors MODULE / SIG's `BodyResult::DeferTo` shape: the FN's terminal
 /// lifts off the Combine's terminal, so the parent scope's binding lands at Combine-finish
-/// time. The original `signature_expr` and `body_expr` are moved into the closure.
+/// time.
+///
+/// Splice protocol: every entry in `sub_dispatches` is scheduled here as
+/// `sched.add_dispatch(sub_expr, scope)`; the resulting `NodeId` is appended to the
+/// Combine's `deps` vector after the park producers. The closure tracks each
+/// sub-Dispatch's `(slot_idx_in_signature_parts, position_in_results)` pairing so that
+/// when the Combine wakes, the finish closure splices each result into
+/// `signature_expr.parts[slot_idx]` as `Future(obj)` before re-running
+/// `parse_fn_param_list` against the now-final scope.
 fn defer_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     signature_expr: crate::ast::KExpression<'a>,
     return_type_capture: ReturnTypeCapture,
-    producers: Vec<crate::runtime::machine::NodeId>,
+    park_producers: Vec<crate::runtime::machine::NodeId>,
+    sub_dispatches: Vec<(usize, crate::ast::KExpression<'a>)>,
     body_expr: crate::ast::KExpression<'a>,
 ) -> BodyResult<'a> {
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
-        // Producers have finalized — re-elaborate against the now-stable scope. The
+    // Schedule sub-Dispatches up front. `splice_layout[k] = (slot_idx, results_pos)` says
+    // "splice results[results_pos] into signature.parts[slot_idx] as `Future(_)`".
+    // `results_pos` is captured as `deps.len()` immediately before the new dep is pushed,
+    // so the offset over `park_producers` falls out naturally — Combine's `results` slice
+    // mirrors `deps` order, park producers first.
+    let mut deps: Vec<crate::runtime::machine::NodeId> = park_producers;
+    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
+    for (slot_idx, sub_expr) in sub_dispatches {
+        let id = sched.add_dispatch(sub_expr, scope);
+        splice_layout.push((slot_idx, deps.len()));
+        deps.push(id);
+    }
+
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+        // Splice each sub-Dispatch's result into the corresponding signature slot as a
+        // `Future(_)`. Cloning the `signature_expr` keeps the closure callable on a
+        // hypothetical future re-wake (the Combine fires once today, but the
+        // `KExpression` clone is cheap and matches the pattern used for `body_expr`).
+        let mut spliced_parts = signature_expr.parts.clone();
+        for &(slot_idx, results_pos) in &splice_layout {
+            let obj = results[results_pos];
+            // Reject non-type results early with a focused diagnostic. The downstream
+            // `parse_fn_param_list` would also reject (its `Future(other)` arm), but
+            // catching here lets us name the offending slot's part-index in the message.
+            if !matches!(obj, KObject::KTypeValue(_)) {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "FN signature slot at part-index {slot_idx} expected a type expression, \
+                     got a {} value",
+                    obj.ktype().name(),
+                ))));
+            }
+            spliced_parts[slot_idx] = ExpressionPart::Future(obj);
+        }
+        let spliced_signature = crate::ast::KExpression { parts: spliced_parts };
+
+        // Park producers have finalized — re-elaborate against the now-stable scope. The
         // elaborator's `Park` arm cannot fire again because every parked producer is
         // terminal by the Combine-finish invariant; if it does, that's a regression
         // worth surfacing as a structured error rather than re-parking forever.
@@ -243,20 +311,20 @@ fn defer_via_combine<'a>(
                 },
             },
         };
-        let elements = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
+        let elements = match signature::parse_fn_param_list(&spliced_signature, &mut elaborator) {
             ParamListOutcome::Done(es) => es,
             ParamListOutcome::Err(msg) => {
                 return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg)));
             }
-            ParamListOutcome::Park(_) => {
+            ParamListOutcome::Pending { .. } => {
                 return BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                    "FN signature elaboration parked again after Combine wake".to_string(),
+                    "FN signature elaboration still pending after Combine wake".to_string(),
                 )));
             }
         };
         finalize_fn(scope, elements, return_type, body_expr.clone())
     });
-    let combine_id = sched.add_combine(producers, scope, finish);
+    let combine_id = sched.add_combine(deps, scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 

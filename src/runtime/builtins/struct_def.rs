@@ -18,8 +18,9 @@ use super::{err, register_builtin_with_pre_run};
 ///
 /// The schema slot is `KType::KExpression`: the user writes a parens-wrapped expression of
 /// repeated `<field:Identifier> : <type:Type>` triples (`STRUCT Point = (x: Number, y: Number)`).
-/// Same triple shape as `UNION` — both delegate to [`parse_typed_field_list`] so the parsing
-/// logic and error messages stay consistent.
+/// Same triple shape as `UNION` — both delegate to
+/// [`crate::runtime::model::types::parse_typed_field_list_via_elaborator`] so the
+/// parsing logic and error messages stay consistent.
 ///
 /// Unlike `UNION`, struct schemas preserve declaration order so [`struct_value::apply`]
 /// (super::struct_value::apply) can reorder the user's named-arg pairs (`Point (x: 3, y: 4)`

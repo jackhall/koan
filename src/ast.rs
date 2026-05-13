@@ -129,24 +129,20 @@ impl<'a> ExpressionPart<'a> {
     /// elaborated `KType` and packaged as `KObject::KTypeValue` so consumers downstream
     /// operate on the unified runtime type representation rather than parser surface syntax.
     ///
-    /// Phase-2 transitional behavior: lowering goes through
-    /// `KType::from_type_expr(t, &NoopResolver)` — scope-aware elaboration (forward
-    /// references to LET-bound type names) is added in phase 3 via the scheduler-driven
-    /// elaborator that runs at FN-def time, not here. By phase 5 the only `Type(t)` parts
-    /// reaching `resolve_for` are bare leaves whose names resolve through `from_name`'s
-    /// builtin table (because user-bound names land via `Future(KObject::KTypeValue(_))`
-    /// after their LET / STRUCT / UNION binder's body finalizes), at which point this
-    /// helper becomes a thin lowering.
+    /// Lowering routes through [`crate::runtime::model::types::KType::from_type_expr`],
+    /// which handles the structural container shapes (`List<…>`, `Dict<…>`,
+    /// `Function<…>`) and the builtin-leaf table. Bare leaves whose name isn't a builtin
+    /// (`Point`, `IntOrd`, `MyList`) lower to a transitional [`crate::runtime::model::types::KType::Unresolved`]
+    /// carrier; the FN / LET / STRUCT body that consumes the slot re-runs
+    /// [`crate::runtime::model::types::elaborate_type_expr`] against its captured scope
+    /// to recover the bound `KType`. The carrier persists because resolve_for runs at
+    /// `KFunction::bind` time — before any body sees the slot — and the bind-time pass
+    /// has no scope-aware elaborator wired in (the dispatcher's TypeExprRef-of-pre_run
+    /// slots skip the auto-wrap path that would otherwise surface a `Future(KTypeValue)`).
     pub fn resolve_for(&self, slot: &crate::runtime::model::KType) -> KObject<'a> {
-        use crate::runtime::model::types::{KType, NoopResolver};
+        use crate::runtime::model::types::KType;
         if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
-            // Lower parameterized forms (`List<Number>`, `Function<...>`) via
-            // `from_type_expr` so the structural shape survives. Bare leaves whose name
-            // isn't a builtin (`Point`, `IntOrd`, `MyList`) lower to
-            // `KType::Unresolved(name)` — a phase-2 transitional carrier for the surface
-            // name; phase 3 replaces it via the scheduler-driven elaborator and phase 5
-            // removes the variant entirely.
-            let kt = KType::from_type_expr(t, &NoopResolver).unwrap_or_else(|_| {
+            let kt = KType::from_type_expr(t).unwrap_or_else(|_| {
                 KType::from_name(&t.name)
                     .unwrap_or_else(|| KType::Unresolved(t.name.clone()))
             });

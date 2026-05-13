@@ -189,11 +189,12 @@ impl KType {
             // Phase 1: cycle gate — accept anything until phase 3 introduces a threaded
             // unfold set.
             KType::RecursiveRef(_) => true,
-            // Phase 2 transitional: `Unresolved` is a name-carrying placeholder for bare
-            // leaves that didn't resolve via `from_name` at parser-side `resolve_for`
-            // time. It's never a declared *slot* type — slot types are minted by
-            // `from_name` (which doesn't produce `Unresolved`) or by elaboration — so
-            // nothing should ever be filling an `Unresolved`-typed slot. Reject defensively.
+            // `Unresolved` is a bind-time carrier for bare leaves that didn't resolve via
+            // `from_name` at parser-side `resolve_for` time (see [`KType::Unresolved`] for
+            // why it's still around). It's never a declared *slot* type — slot types are
+            // minted by `from_name` (which doesn't produce `Unresolved`) or by elaboration
+            // — so nothing should ever be filling an `Unresolved`-typed slot. Reject
+            // defensively.
             KType::Unresolved(_) => false,
         }
     }

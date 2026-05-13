@@ -9,13 +9,13 @@ still have no targeted Miri test under tree borrows: the
 opaque-ascription path that re-binds source module entries into a fresh
 child scope, and the type-op dispatch through the per-call arena. The
 substrate the rest of stage 2 rides on — scheduled type-constructor
-builtins producing typed values, `ScopeResolver` lowering both type-value
-and `KSignature` bindings, MODULE / SIG body statements planning onto the
-outer scheduler with `BodyResult::DeferTo`, and end-to-end functor
-dispatch with per-call generative semantics — has landed; see
-[design/module-system.md](../design/module-system.md) for the shipped
-shape. Scheduler-driven type elaboration with placeholder-based recursion
-is tracked in [eager-type-elaboration](eager-type-elaboration.md).
+builtins producing typed values, the scope-aware `elaborate_type_expr`
+walking both type-value and `KSignature` bindings, MODULE / SIG body
+statements planning onto the outer scheduler with `BodyResult::DeferTo`,
+and end-to-end functor dispatch with per-call generative semantics — has
+landed; see [design/module-system.md](../design/module-system.md) for the
+shipped shape. Scheduler-driven type elaboration with placeholder-based
+recursion is tracked in [eager-type-elaboration](eager-type-elaboration.md).
 
 **Impact.**
 

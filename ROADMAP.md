@@ -19,97 +19,36 @@ as `module-system-*` roadmap items below) — and [design/effects.md](design/eff
 — in-language monadic side effects (implementation tracked in
 [roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md)). What's
 shipped so far on the module-system and scheduler tracks: the dispatch-as-node
-scheduler refactor, transient-node reclamation (Bind/Combine sub-trees recycled
-via a per-slot deps sidecar + free-list, keeping repeated-call scheduler memory
-near-constant), the module-system stage 0 cleanup (vestigial `KType::TypeRef`
-removed in favor of the unified `TypeExprRef` slot kind, struct values now
-`IndexMap`-backed so PRINT emits fields in declaration order, constructor
-dispatch funneled through a single `dispatch_constructor` helper, and a
-`TypeResolver` trait threaded through `KType::from_type_expr` ready for stage
-1's module-aware resolver), the module-system stage 1 module language (`MODULE`
-and `SIG` declarators bind structures and signatures under Type-token names;
-`:|` opaque ascription mints fresh `KType::ModuleType { scope_id, name }` per
-declared abstract type so two ascriptions of the same source module are
-observably distinct types; `:!` transparent ascription shape-checks against the
-signature without re-tagging identity; `Module`/`Signature` first-class values
-arena-allocated alongside `KFunction` and reachable via `Foo.member` ATTR
-access), the lift-walk and aggregate-scheduler dedup (a single `any_descendant`
-predicate-walker serves both `needs_lift` and `kobject_borrows_arena`; list-
-and dict-literal planning collapsed into a single `Combine` scheduler variant
-whose host-side `finish` closure captures the construction logic and folds
-already-resolved literal scalars in alongside dep results; module/signature
-resolution lives next to the `Module` / `Signature` types and serves both
-ascription operators and `MODULE_TYPE_OF`), the dispatcher fold (overload
-resolution now lives as one `Scope::resolve_dispatch` chain walk returning a
-four-variant `ResolveOutcome` — `Resolved` carries the per-slot
-auto-wrap / replay-park / eager-sub index buckets via
-`KFunction::classify_for_pick`, specificity ranking is
-`ExpressionSignature::most_specific`, the scheduler driver is a five-phase
-linear pipeline, and the standalone `core/dispatcher.rs` plus its
-`install_dispatch_placeholder` helper are gone), dispatch-time name placeholders (binders install a
-`name → producer NodeId` entry in a new `Scope::placeholders` sidecar at
-dispatch time; bare-identifier slot lookups whose target binder has dispatched
-but not yet executed park on the producer via the existing `notify_list` /
-`pending_deps` machinery instead of failing with `UnboundName` — see
-[design/execution-model.md § Dispatch-time name placeholders](design/execution-model.md#dispatch-time-name-placeholders);
-same-scope rebind of a value name now surfaces as a structured `Rebind` error
-and an exact-signature `FN` overload conflict as `DuplicateOverload`), the
-scheduler park-vs-own edge split (the `Scheduler::dep_edges` sidecar's entries
-now carry a `DepEdge::Owned` / `DepEdge::Notify` tag so `free`'s recursive
-reclaim walks the ownership tree only and ignores park edges installed by the
-single-Identifier short-circuit and replay-park; reclaiming a consumer can no
-longer transit a notify edge into a sibling producer's subtree), the Type-token
-auto-wrap / replay-park unification (`classify_for_pick` now treats bare leaf
-Type-tokens symmetrically with Identifiers in both the §7 auto-wrap and §8
-replay-park rails, so `LET T = Number` and `IntOrd :| OrderedSig` ride the
-same scheduler paths as `LET y = z` and let the parallel `Type, Type`
-ascription overload plus the Type-token branches of `resolve_module` /
-`resolve_signature` collapse out of the dispatcher), scheduler refactor
-phase 1 (the two raw `queue` + `ready_set` fields on `Scheduler<'a>` collapsed
-into a single `queues: WorkQueues` sub-struct whose five named entry points —
-`pop_next`, `push_top_level`, `push_internal`, `push_internal_front`,
-`push_woken` — type-enforce the routing and priority rules that the call sites
-in `submit.rs` and `execute.rs` previously restated by hand), scheduler
-refactor phase 2 (the three tri-vector dependency fields `notify_list` +
-`pending_deps` + `dep_edges` collapsed into a single `deps: DepGraph`
-sub-struct whose `add_owned_edge` / `add_park_edge` / `install_for_slot`
-/ `drain_notify` / `owned_children` surface keeps the
-three vectors in lockstep atomically — every forward edge in
-`notify_list[p]` has a matching backward entry in `dep_edges[c]` and
-contributes 1 to `pending_deps[c]`, so the deferred-fixup gap where
-`run_dispatch` / `defer_to_lift` pushed raw and relied on a later
-`register_slot_deps` call closes), and scheduler refactor phase 3 (the
-slot-table fields `nodes` + `results` + `free_list` collapsed into a single
-`store: NodeStore<'a>` sub-struct whose `alloc_slot` / `take_for_run` /
-`reinstall` / `finalize` / `free_one` surface walks each slot through one
-lifecycle, so the index-space, run-window, terminal-write, and reclaim
-invariants are each a single atomic body and `Scheduler<'a>` is now four
-fields with three internal sub-structs each carrying a single tight
-invariant), and the `runtime::machine` unsafe-surface reduction (the
-`Resolved` carrier holds `ClassifiedSlots` by value as its sole producer,
-`KFunction::captured` is now `NonNull<Scope<'a>>` + invariance-pinning
-`PhantomData<&'a Scope<'a>>` instead of `*const Scope<'static>`,
-`NodeStore::reinstall_with_frame` and `CallArena::scope_for_bind`
-concentrate the `Frame::scope → 'a`-storage re-anchor where the `'a`
-storage actually lives, and the runtime singletons ride a `Sync`-deriving
-`StaticKValue` enum so `arena.rs` no longer carries a dedicated
-`unsafe impl Sync`), and the Bindings façade (`Scope::{data, functions,
-placeholders}` lifted into an embedded `Bindings<'a>` sub-struct whose
-shared `try_apply` helper enforces the dual-map mirror in one place and
-unifies the dedupe path between `LET f = (FN ...)` and `FN`-decl, closing
-the LET-binds-FN dedupe gap; ascription's bulk-install now routes through
-`try_bulk_install_from` instead of reaching into the underlying maps by
-hand), and the PendingQueue façade (`Scope::pending` and the
-`PendingWrite` enum lifted into an embedded `PendingQueue<'a>` whose
-`defer_value` / `defer_function` mirror the `Bindings` write surface and
-collapse the try-then-defer pattern to one match arm per write kind;
-`drain(&Bindings<'a>)` routes deferred retries through the same validated
-write path as direct writes, and a debug-only `debug_assert!` on drain-time
-errors surfaces queue/dispatch interaction bugs that the production
-silent-`Err`-drop hid). The next
-signature revision after error handling lands monadic side-effect capture; the
-type-system arc runs through the module-system stages — foundation now landed
-in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
+scheduler (every expression evaluates as a `Dispatch` node, so deferred work,
+forward references, and cross-file references all reduce to the same
+park-on-producer mechanism); the module-system stage 1 module language
+(`MODULE` / `SIG` declarators, `:|` opaque and `:!` transparent ascription,
+per-module type identity via `KType::ModuleType { scope_id, name }`, and
+`Module` / `Signature` first-class values reachable via `Foo.member` ATTR
+access); the dispatcher fold (overload resolution as one
+`Scope::resolve_dispatch` chain walk returning a four-variant `ResolveOutcome`
+whose `Resolved` carries the per-slot auto-wrap / replay-park / eager-sub
+index buckets via `KFunction::classify_for_pick`); dispatch-time name
+placeholders (binders install a `name → producer NodeId` entry in
+`Scope::placeholders` at dispatch time so bare-identifier slot lookups whose
+target binder has dispatched but not yet executed park on the producer instead
+of failing with `UnboundName` — see [design/execution-model.md § Dispatch-time
+name placeholders](design/execution-model.md#dispatch-time-name-placeholders));
+the scheduler park-vs-own edge split (`DepEdge::Owned` / `DepEdge::Notify`
+tagging so `free`'s recursive reclaim walks the ownership tree only and
+ignores park edges installed by the single-Identifier short-circuit and
+replay-park); and the eager-type-elaboration phase 1–3 slice plus the
+parens-wrapped / phase-5 cleanup (one canonical runtime type representation,
+scheduler-aware FN / STRUCT / UNION elaboration with self-recursive STRUCT
+support and `LET T = T` cycle detection, FN parameter slots written
+`(LIST_OF Number)` / `(DICT_OF Str Number)` scheduling a sub-Dispatch from
+`parse_fn_param_list`, and the `NoopResolver` / `TypeResolver` /
+`ScopeResolver` seam plus the legacy `parse_typed_field_list` deleted so
+scope-aware elaboration goes exclusively through the scheduler-driven
+`elaborate_type_expr`). The next signature revision after error handling lands
+monadic side-effect capture; the type-system arc runs through the
+module-system stages — foundation now landed in stage 1, ergonomic generic
+dispatch in stage 5, coherence in stage 6.
 
 ## Next items
 
@@ -173,11 +112,17 @@ the rest incrementally, each producing a usable end state.
   ship SCC pre-registration on the same declaration surface so mutually
   recursive STRUCT/UNION groups elaborate without deadlocking.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
-  — finish the scheduler-driven elaborator: parens-wrapped FN-parameter
-  sub-dispatch (`xs: (LIST_OF MyType)`), `OnceCell<KType>` late binding for
-  signature-typed parameters whose type only resolves at functor application
-  time, and the phase-5 cleanup that retires `NoopResolver` and
-  `KType::Unresolved`.
+  — narrow remaining gaps: `OnceCell<KType>` late binding for signature-typed
+  parameters whose type resolves only at functor application time (deferred
+  pending a concrete case the parens-wrapped sub-Dispatch path doesn't cover),
+  and the `KType::Unresolved` deletion (gated on a per-slot
+  reference-vs-declaration opt-in in `classify_for_pick`, or a new `KObject`
+  carrier preserving the surface `TypeExpr` through bind).
+- [Chained type-binding LETs panic the scheduler](roadmap/chained-type-binding-let-panic.md)
+  — `LET A = ... ; LET B = (... A ...) ; FN (... : B) -> ...` panics in
+  `node_store.rs` with "result must be ready by the time it's read"; the bug
+  is pre-existing and independent of the eager-type-elaboration parens-wrapped
+  / phase-5 slice that surfaced it.
 
 ### Surface and ergonomics
 

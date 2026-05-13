@@ -167,7 +167,7 @@ src/
     │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeExpr elaboration (from_name, from_type_expr, join)
-    │   │   ├── resolver.rs        TypeResolver trait + ScopeResolver
+    │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
     │   │   └── typed_field_list.rs  shared parser for `(name: Type ...)` schemas

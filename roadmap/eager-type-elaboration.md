@@ -1,84 +1,74 @@
 # Eager type elaboration with placeholder-based recursion
 
-Phases 1–2 (one canonical runtime type representation) and a meaningful slice
-of phase 3 (scheduler-aware FN / STRUCT / UNION elaboration with self-recursive
-STRUCT support and `LET T = T` cycle detection) have landed. The remaining
-work — parens-wrapped FN parameter types and the phase-5 cleanup that deletes
-`NoopResolver` and `KType::Unresolved` — is captured below. Mutual STRUCT /
-UNION recursion (SCC pre-registration) was originally part of this item; it
-now ships with [per-declaration type identity for structs and tagged
+Phases 1–2 (one canonical runtime type representation), a meaningful slice of
+phase 3 (scheduler-aware FN / STRUCT / UNION elaboration with self-recursive
+STRUCT support and `LET T = T` cycle detection), parens-wrapped FN parameter
+type sub-Dispatch, and the bulk of the phase-5 cleanup (deletion of
+`NoopResolver`, the `TypeResolver` trait, `ScopeResolver`, the legacy
+`parse_typed_field_list`, and the `&dyn TypeResolver` parameter on
+`KType::from_type_expr`) have landed. What remains is the `OnceCell<KType>`
+late-binding fallback for genuine functor application-time cases and the
+`KType::Unresolved` deletion. Mutual STRUCT / UNION recursion (SCC
+pre-registration) was originally part of this item; it now ships with
+[per-declaration type identity for structs and tagged
 unions](per-declaration-type-identity.md), since both touch the same
 STRUCT/UNION declaration surface.
 
-**Problem.** Two concrete gaps remain after the phase-1–3 landing:
+**Problem.** Two narrowed gaps remain after the parens-wrapped /
+phase-5-cleanup landing:
 
-- *Parens-wrapped FN parameter types.* `parse_fn_param_list` in
-  [`fn_def/signature.rs`](../src/runtime/builtins/fn_def/signature.rs) still
-  only accepts `ExpressionPart::Type(t)` triples; a parameter written
-  `xs: (LIST_OF Number)` raises `ShapeError` because the parens-wrapped
-  form isn't sub-dispatched. The `OnceCell<KType>`-backed late binding
-  for signature-typed parameters whose type only resolves at functor
-  application time is also unstarted.
-- *`NoopResolver` / `KType::Unresolved` cleanup.* Phase-3 wiring lifted
-  bind-time elaboration off `ScopeResolver` (bindings now store
-  `KObject::KTypeValue(KType)` directly, and the elaborator returns the
-  stored value rather than re-elaborating), but
-  [`NoopResolver`](../src/runtime/model/types/resolver.rs) and
-  [`KType::from_type_expr`](../src/runtime/model/types/ktype_resolution.rs)
-  still exist as a transitional seam:
-  [`ExpressionPart::resolve_for`](../src/ast.rs) calls them to lower bare
-  `Type(_)` parts in `TypeExprRef` slots, and an unresolved leaf falls
-  through as a phase-2 transitional
-  [`KType::Unresolved(name)`](../src/runtime/model/types/ktype.rs) that the
-  scheduler-driven elaborator later replaces. Removing that fallback path
-  (so bare-leaf user-bound type names route entirely through the
-  scheduler-aware elaborator at FN-def / LET / STRUCT body time) lets
-  `NoopResolver`, the `TypeResolver` trait's recursion arm, and
-  `KType::Unresolved` all go.
+- *`OnceCell<KType>` late binding for FN parameter types.* No concrete failing
+  case has surfaced yet that the parens-wrapped sub-Dispatch + Combine path in
+  [`fn_def/signature.rs`](../src/runtime/builtins/fn_def/signature.rs) and
+  [`fn_def.rs`](../src/runtime/builtins/fn_def.rs) doesn't already cover.
+  Functor bodies substitute outer-FN parameters to `Future(KModule)` before
+  the inner FN-def runs, so parens-wrapped types like `(MODULE_TYPE_OF E Type)`
+  resolve through the existing Combine path. Closing this requires either a
+  concrete failing test or a richer functor-body shape that bypasses the
+  substitution.
+- *`KType::Unresolved` deletion.* The variant survives as a bind-time carrier
+  for bare-leaf user-bound type names (`-> MyT` where `LET MyT = Number`)
+  reached via [`ExpressionPart::resolve_for`](../src/ast.rs). The
+  `fn_with_user_bound_return_type_works` test in
+  [`fn_def/tests/return_type.rs`](../src/runtime/builtins/fn_def/tests/return_type.rs)
+  pins this path. Removing the variant requires either a per-slot
+  reference-vs-declaration opt-in on `KFunction::classify_for_pick` (currently
+  coarse: any pre_run-bearing binder skips wrap and replay-park on all
+  literal-name slots), or a new `KObject` carrier preserving the surface
+  `TypeExpr` through bind. The variant's docstring in
+  [`ktype.rs`](../src/runtime/model/types/ktype.rs) names what would have to
+  land first.
 
 **Impact.**
 
-- *Type expressions assemble end-to-end inside FN signatures.* A FN
-  parameter typed `xs: (LIST_OF MyType)` schedules the parens-wrapped
-  part as a sub-Dispatch and splices the resulting `KType` in via the
-  Combine path FN-def already uses for bare-name parking. A
-  signature-typed parameter whose type comes from a SIG in scope only at
-  functor application time carries the original `TypeExpr` on the
-  resulting `KFunction`; the first call re-runs resolution against the
-  FN's captured scope and memoizes the result.
-- *One elaboration entry point, no transitional carriers.* The phase-5
-  cleanup deletes `NoopResolver`, `KType::Unresolved`, and the
-  `TypeResolver`-shaped recursion arm of `KType::from_type_expr`. The
-  scheduler-driven elaborator is the only path bare-leaf type names take;
-  `resolve_for` becomes a thin builtin-table lookup for `Type(_)` parts
-  that are genuinely builtin scalar names. `KType::from_type_expr`
-  remains for the parens-wrapped sub-dispatch lowering only.
+- *Genuine functor late-binding cases get a memoized fallback.* If a
+  signature-typed parameter whose type comes from a SIG only in scope at
+  functor application time ever surfaces (the parens-wrapped sub-Dispatch
+  doesn't already cover it), the resulting `KFunction` carries the original
+  `TypeExpr`; the first call re-runs resolution against the FN's captured
+  scope and memoizes via one `OnceCell<KType>` per slot.
+- *One canonical type carrier on the bind-time path.* Removing
+  `KType::Unresolved` collapses the surface-name-string carrier so every
+  `KType` flowing through dispatch is fully elaborated. The downstream
+  consumers that today recover the surface name from `Unresolved(name)` —
+  `extract_bare_type_name`, `dispatch_constructor`, ATTR's TypeExprRef-lhs
+  lookup, FN return-type elaboration — read the elaborated `KType` directly.
 
 **Directions.**
 
-- *Parens-wrapped type expressions sub-dispatch — decided.* A parameter
-  position written `xs: (LIST_OF MyType)` schedules the parens-wrapped
-  part as a sub-Dispatch; its `KObject::KTypeValue` result splices in via
-  the standard `Bind` path. The
-  [`elaborate_type_expr`](../src/runtime/model/types/resolver.rs) helper
-  added in phase 3 is the shared entry point.
-- *Signature-typed parameter late binding via `OnceCell<KType>` — decided.*
-  Names not yet even dispatched at FN-definition time (signature-typed
-  parameters whose type comes from a SIG only in scope at functor
-  application time) carry the original `TypeExpr` on the resulting
-  `KFunction`; the first call re-runs resolution against the FN's captured
-  scope and memoizes the result (one `OnceCell<KType>` per slot, sound
-  because the captured scope is lexically fixed). The OnceCell fallback
-  narrows to genuine functor late-binding cases; top-level and
-  lexical-scope cases are handled at bind time and the OnceCell never
-  fires there.
-- *`NoopResolver` and `KType::Unresolved` removal — decided.* With bindings
-  storing elaborated `KType` directly and the scheduler-aware elaborator
-  handling bare-leaf user-bound names at FN-def / LET / STRUCT body time,
-  `ScopeResolver::resolve` no longer re-elaborates anything and
-  `ExpressionPart::resolve_for`'s `from_type_expr(&NoopResolver)` fallback
-  has no live user-bound case to cover. `NoopResolver`, the `TypeResolver`
-  trait's recursion arm, and `KType::Unresolved` go in one pass.
+- *`OnceCell<KType>` late binding — deferred.* Open until a concrete failing
+  case appears that the parens-wrapped sub-Dispatch + Combine path doesn't
+  cover. The implementation shape (one `OnceCell<KType>` per signature slot,
+  re-resolution against the captured scope on first call) is decided; only
+  the trigger is missing.
+- *`KType::Unresolved` deletion — deferred.* Open on one of two prerequisites
+  landing first: a per-slot reference-vs-declaration opt-in on
+  `classify_for_pick` so FN return-type slots can route through the
+  auto-wrap rail, or a new `KObject::TypeNameRef(TypeExpr)` carrier
+  preserving the surface form through bind. Either is a targeted change but
+  out of scope for this item; see the variant docstring on
+  [`KType::Unresolved`](../src/runtime/model/types/ktype.rs) for the gating
+  detail.
 - *Module-qualified type names — open.* `TypeExpr` carries a name string
   that can naturally hold a path like `MyMod.Number`; `KType` has no
   path-aware variant today. If module-qualified type references ever need

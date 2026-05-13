@@ -105,6 +105,43 @@ fn dispatch_picks_more_specific_list_overload() {
     assert_eq!(bytes, b"number\n");
 }
 
+/// Parens-wrapped FN parameter type: `xs: (LIST_OF Number)` schedules `(LIST_OF Number)`
+/// as a sub-Dispatch from `parse_fn_param_list`, splices the resulting `KTypeValue` back
+/// into the signature, and finalizes the FN with the elaborated `KType::List(Number)`.
+/// Pins the per-roadmap "parens-wrapped type expressions sub-dispatch" Direction.
+#[test]
+fn fn_with_parens_wrapped_list_of_param_accepts_matching_list() {
+    let bytes = capture_program_output(
+        "FN (HEAD xs: (LIST_OF Number)) -> Number = (1)\n\
+         PRINT (HEAD [1 2 3])",
+    );
+    assert_eq!(bytes, b"1\n");
+}
+
+/// Nested parens-wrapped type expression in a FN parameter slot: `xs: (LIST_OF (LIST_OF
+/// Number))` exercises the same scheduler path the standalone `(LIST_OF (LIST_OF
+/// Number))` test in `type_ops` exercises, but via the FN-def Combine.
+#[test]
+fn fn_with_nested_parens_wrapped_type_param_dispatches() {
+    let bytes = capture_program_output(
+        "FN (HEAD xs: (LIST_OF (LIST_OF Number))) -> Number = (1)\n\
+         PRINT (HEAD [[1 2] [3]])",
+    );
+    assert_eq!(bytes, b"1\n");
+}
+
+/// `xs: (DICT_OF Str Number)` walks the same parens-wrapped sub-Dispatch path as the
+/// LIST_OF case but with two type args, exercising the multi-arg shape of
+/// `parse_fn_param_list`'s `Future(_)` re-walk arm.
+#[test]
+fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
+    let bytes = capture_program_output(
+        "FN (SIZE d: (DICT_OF Str Number)) -> Number = (1)\n\
+         PRINT (SIZE {\"a\": 1, \"b\": 2})",
+    );
+    assert_eq!(bytes, b"1\n");
+}
+
 /// Mixed list dispatches to the `List<Any>` overload (the only one that matches by
 /// post-evaluation `matches_value`); the `List<Number>` overload is filtered out.
 /// Note: dispatch-time matching is shape-only for containers (`Argument::matches`),

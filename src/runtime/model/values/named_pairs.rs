@@ -3,12 +3,12 @@
 //! function calls ([`KFunction::apply`](super::kfunction::KFunction::apply)) — the two paths
 //! that switched from positional to named arguments.
 //!
-//! Mirrors the shape of [`typed_field_list::parse_typed_field_list`](super::typed_field_list::parse_typed_field_list);
+//! Mirrors the shape of [`crate::runtime::model::types::parse_typed_field_list_via_elaborator`];
 //! both parsers walk the same `<Identifier> : <slot>` triple shape and share the
-//! identifier/colon/duplicate scaffolding through
-//! [`crate::parse::parse_triple_list`]. The third-slot interpretation is the only thing that
-//! differs — value-side here is "take the part verbatim", type-side over there is
-//! "resolve as a KType". The wrapper closes over the right interpretation.
+//! identifier/colon/duplicate scaffolding through [`crate::parse::parse_triple_list`].
+//! The third-slot interpretation is the only thing that differs — value-side here is
+//! "take the part verbatim", type-side over there is "resolve as a KType against scope".
+//! The wrapper closes over the right interpretation.
 
 use crate::ast::{ExpressionPart, KExpression};
 use crate::parse::parse_triple_list;

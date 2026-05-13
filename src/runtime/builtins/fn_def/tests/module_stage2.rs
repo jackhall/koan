@@ -1,4 +1,5 @@
-//! Module-system stage 2: `ScopeResolver`, signature-bound parameters, functor lifting.
+//! Module-system stage 2: scope-aware type elaboration, signature-bound parameters,
+//! functor lifting.
 
 use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::runtime::model::KObject;
@@ -23,31 +24,29 @@ fn list_of_let_binding_is_ktype_value() {
     }
 }
 
-/// `ScopeResolver` reads a `KTypeValue` binding back as its stored `KType`.
-///
-/// **Caveat — top-level statement ordering.** Today `LET MyList = (LIST_OF Number)`
-/// followed by `FN (USE xs: MyList) ...` doesn't work end-to-end because the LET's
-/// `value` slot is an `Expression` (the `(LIST_OF Number)` sub-expression), so the LET
-/// becomes a Bind waiting on a sub-Dispatch — and the next top-level statement (the
-/// FN) runs before the Bind resolves. Phase 3 of eager-type-elaboration closes this by
-/// parking the FN signature elaboration on the LET's placeholder. The resolver itself
-/// already does the right thing once the binding is present.
+/// The scheduler-aware elaborator reads a `KTypeValue` binding back as its stored
+/// `KType`: `LET MyList = (LIST_OF Number)` followed by an elaborator walk of the
+/// `MyList` leaf returns `KType::List(Number)`. Replaces the previous `ScopeResolver`
+/// path that was deleted in phase 5.
 #[test]
-fn scope_resolver_lowers_ktype_value_binding() {
+fn elaborator_lowers_ktype_value_binding() {
+    use crate::ast::TypeExpr;
     use crate::runtime::model::KType;
-    use crate::runtime::model::types::{ScopeResolver, TypeResolver};
+    use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
-    let resolver = ScopeResolver::new(scope);
-    let resolved = resolver.resolve("MyList").expect("MyList should resolve");
-    assert_eq!(resolved, KType::List(Box::new(KType::Number)));
+    let mut el = Elaborator::new(scope);
+    match elaborate_type_expr(&mut el, &TypeExpr::leaf("MyList".into())) {
+        ElabResult::Done(kt) => assert_eq!(kt, KType::List(Box::new(KType::Number))),
+        other => panic!("expected Done(List<Number>), got {:?}", other),
+    }
 }
 
-/// FN-def integration: a parameter typed `E: OrderedSig` lowers via `ScopeResolver`
-/// into `KType::SignatureBound { sig_id, sig_path: "OrderedSig" }`, with `sig_id`
-/// equal to the declaring `Signature::sig_id()`. Pins the resolver-to-FN-signature
-/// path that drives functor dispatch.
+/// FN-def integration: a parameter typed `E: OrderedSig` lowers via the scope-aware
+/// `elaborate_type_expr` into `KType::SignatureBound { sig_id, sig_path: "OrderedSig" }`,
+/// with `sig_id` equal to the declaring `Signature::sig_id()`. Pins the elaborator-to-
+/// FN-signature path that drives functor dispatch.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::runtime::model::{Argument, KType, SignatureElement};

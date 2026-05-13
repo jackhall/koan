@@ -354,9 +354,9 @@ mod tests {
     //       the dying frame.
     //
     // Module/sig declarations are dispatched in their own batch ahead of the functor
-    // call so the synchronous `ScopeResolver` consultation in FN-def's parameter-list
-    // elaboration sees the SIG binding (the same caveat documented on
-    // `scope_resolver_lowers_type_expr_value_binding` above).
+    // call so the synchronous scope-aware elaboration in FN-def's parameter-list walk
+    // sees the SIG binding (the same caveat documented on the elaborator-binding test
+    // above).
 
     /// Test 1 — Functor returns a module. A FN with a sig-typed parameter whose body
     /// declares `MODULE Result = (LET inner = 1)` produces a `KObject::KModule` whose

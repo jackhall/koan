@@ -280,12 +280,12 @@ above; the remaining stages live under
 [`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
 - [Eager type elaboration with placeholder-based recursion](../roadmap/eager-type-elaboration.md)
-  — closes the remaining gaps in the elaboration mechanism described
-  above: parens-wrapped FN-parameter sub-dispatch
-  (`xs: (LIST_OF MyType)`), `OnceCell<KType>` late binding for
-  signature-typed parameters whose type only resolves at functor
-  application time, and the phase-5 cleanup that retires `NoopResolver`
-  and the transitional `KType::Unresolved` carrier.
+  — narrows remaining gaps in the elaboration mechanism described above:
+  `OnceCell<KType>` late binding for genuine functor application-time
+  cases the parens-wrapped sub-Dispatch path doesn't already cover, and
+  the deletion of the transitional `KType::Unresolved` carrier (gated on a
+  per-slot reference-vs-declaration opt-in in `classify_for_pick` or a new
+  `KObject` carrier preserving the surface `TypeExpr` through bind).
 - [Per-declaration type identity for structs and tagged unions](../roadmap/per-declaration-type-identity.md)
   — extends the `KType::ModuleType` per-declaration identity carrier
   to flat `STRUCT` and `UNION` declarations, and ships SCC

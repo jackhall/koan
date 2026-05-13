@@ -288,8 +288,13 @@ bare type-name leaf whose binder is in
 `Scope::placeholders` but not yet finalized, it returns
 `ElabResult::Park(producers)` and FN-def's body schedules a `Combine`
 over those producers that re-runs the signature elaboration against the
-now-final scope at finish time. STRUCT and UNION share the same
-elaborator-and-Combine shape for their field-type lists. The replay-park
+now-final scope at finish time. A parens-wrapped parameter type
+(`xs: (LIST_OF Number)`) rides the same Combine: `parse_fn_param_list`
+records the `(slot_idx, sub_expr)` pair, FN-def schedules each sub-expression
+as its own `Dispatch`, and the Combine's finish closure splices each result
+into `signature_expr.parts[slot_idx]` as `Future(KTypeValue(_))` before
+re-running the parameter-list walk against the spliced signature. STRUCT and
+UNION share the same elaborator-and-Combine shape for their field-type lists. The replay-park
 rail itself cycle-checks before installing the park edge:
 [`DepGraph::would_create_cycle`](../src/runtime/machine/execute/scheduler/dep_graph.rs)
 walks the forward `notify_list` graph from the consumer and, if the

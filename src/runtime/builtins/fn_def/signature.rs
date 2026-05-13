@@ -2,26 +2,39 @@
 //!
 //! Two entry points:
 //! - [`parse_fn_param_list`] — the full structural parse used by [`super::body`] at FN
-//!   construction time. Returns a `ParamListOutcome` so the caller can route through a
-//!   `Combine` when one or more parameter-type names resolve to a pending placeholder.
+//!   construction time. Returns a [`ParamListOutcome`] so the caller can route through a
+//!   `Combine` when one or more parameter-type names resolve to a pending placeholder *or*
+//!   when one or more parameter slots use a parens-wrapped type expression that needs
+//!   sub-Dispatch.
 //! - [`pre_run`] — the dispatch-time placeholder extractor used by `register` to
 //!   announce the function's name before its body runs.
 
-use crate::runtime::model::{Argument, SignatureElement};
-use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::runtime::model::{Argument, KObject, SignatureElement};
+use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
 use crate::runtime::machine::NodeId;
 use crate::ast::{ExpressionPart, KExpression};
 
 /// Result of one walk over an FN signature's part list.
-pub(super) enum ParamListOutcome {
+pub(super) enum ParamListOutcome<'a> {
     /// Every parameter type elaborated against the captured scope; the resulting
     /// `SignatureElement`s are ready to bind.
     Done(Vec<SignatureElement>),
-    /// One or more parameter-type leaf names resolved to scheduler placeholders that
-    /// hadn't finalized at FN-def time. The caller schedules a `Combine` over
-    /// `producers`; when every producer terminalizes, the closure re-runs
-    /// `parse_fn_param_list` against the (now-final) scope and finalizes the FN.
-    Park(Vec<NodeId>),
+    /// One or more parameter slots couldn't elaborate synchronously. The caller schedules
+    /// a `Combine` over [`Self::park_producers`] and any sub-Dispatches it spawns from
+    /// [`Self::sub_dispatches`]; when every dep terminalizes, the closure splices each
+    /// sub-Dispatch's `KObject::KTypeValue` result into the corresponding slot of
+    /// `signature_expr.parts` (replacing the `Expression(_)` part with `Future(obj)`)
+    /// and re-runs `parse_fn_param_list`.
+    Pending {
+        /// Producers (placeholders) the walk parked on; unchanged from the previous
+        /// `Park(_)`-only contract.
+        park_producers: Vec<NodeId>,
+        /// Parens-wrapped type slots needing sub-Dispatch. Each entry is
+        /// `(slot_idx_in_signature_parts, sub_expr_to_dispatch)`. The caller pairs each
+        /// scheduled `NodeId` with its `slot_idx` so the Combine finish can splice
+        /// results back into the right places.
+        sub_dispatches: Vec<(usize, KExpression<'a>)>,
+    },
     /// A structural / unbound / cycle error surfaced during elaboration. The caller wraps
     /// in `ShapeError`.
     Err(String),
@@ -29,22 +42,34 @@ pub(super) enum ParamListOutcome {
 
 /// Convert the captured FN-parameter-list `KExpression` into a list of `SignatureElement`s.
 /// Walks the parts left-to-right, consuming bare `Keyword` parts as fixed tokens and
-/// `Identifier(name) Keyword(":") Type(t)` triples as typed `Argument` slots. Stray `:`,
-/// stray `Type`, missing `: Type` annotations, and other malformed shapes surface as
-/// `ParamListOutcome::Err(msg)`.
+/// `Identifier(name) Keyword(":") <type-slot>` triples as typed `Argument` slots, where
+/// `<type-slot>` is one of:
+///
+/// - `Type(t)` — bare type token (the original surface form).
+/// - `Expression(e)` — parens-wrapped type expression like `(LIST_OF Number)`. The walk
+///   records its `(slot_idx, e)` for the caller to schedule as a sub-Dispatch; the slot
+///   is left unfilled until the Combine wakes and a re-walk sees the spliced
+///   `Future(KTypeValue(_))`.
+/// - `Future(KObject::KTypeValue(kt))` — already-resolved type value spliced in by the
+///   Combine finish. Lifted directly into the slot's `KType`.
+///
+/// Stray `:`, stray `Type`, missing `: Type` annotations, and other malformed shapes
+/// surface as [`ParamListOutcome::Err`].
 ///
 /// Type-name resolution rides on the scheduler-aware [`elaborate_type_expr`]: it consults
 /// the captured scope's `placeholders` map alongside its `data` map, returning
 /// `ElabResult::Park(producers)` for type-binding names that have dispatched but not
-/// finalized. Multiple parking producers accumulate across the whole signature walk so the
-/// caller can register every blocker in one Combine.
+/// finalized. Multiple parking producers and parens-wrapped sub-Dispatches accumulate
+/// across the whole signature walk so the caller can register every blocker in one
+/// Combine.
 pub(super) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
     elaborator: &mut Elaborator<'_, '_>,
-) -> ParamListOutcome {
+) -> ParamListOutcome<'a> {
     let parts = &signature.parts;
     let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
     let mut parks: Vec<NodeId> = Vec::new();
+    let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;
     let mut i = 0;
     while i < parts.len() {
@@ -61,8 +86,15 @@ pub(super) fn parse_fn_param_list<'a>(
             ExpressionPart::Identifier(name) => {
                 let colon = parts.get(i + 1);
                 let ty = parts.get(i + 2);
-                match (colon, ty) {
-                    (Some(ExpressionPart::Keyword(c)), Some(ExpressionPart::Type(t))) if c == ":" => {
+                let is_colon = matches!(colon, Some(ExpressionPart::Keyword(c)) if c == ":");
+                if !is_colon {
+                    return ParamListOutcome::Err(format!(
+                        "FN signature parameter `{name}` requires a `: Type` annotation \
+                         (e.g. `{name}: Number`)",
+                    ));
+                }
+                match ty {
+                    Some(ExpressionPart::Type(t)) => {
                         match elaborate_type_expr(elaborator, t) {
                             ElabResult::Done(kt) => {
                                 elements.push(SignatureElement::Argument(Argument {
@@ -81,6 +113,31 @@ pub(super) fn parse_fn_param_list<'a>(
                             ElabResult::Unbound(_) => {}
                         }
                         i += 3;
+                    }
+                    Some(ExpressionPart::Expression(boxed)) => {
+                        // Parens-wrapped type expression (`xs: (LIST_OF Number)`). Schedule
+                        // its sub-Dispatch via the caller; the result splices back as a
+                        // `Future(KTypeValue(_))` on re-walk. Record `(slot_idx, sub_expr)`
+                        // — `slot_idx` is the position of this `Expression` part within
+                        // `signature.parts` so the splice goes to the right place.
+                        sub_dispatches.push((i + 2, (**boxed).clone()));
+                        i += 3;
+                    }
+                    Some(ExpressionPart::Future(KObject::KTypeValue(kt))) => {
+                        // Spliced result from a prior sub-Dispatch (Combine wake re-walk).
+                        // Lift the carried `KType` directly into the slot.
+                        elements.push(SignatureElement::Argument(Argument {
+                            name: name.clone(),
+                            ktype: (*kt).clone(),
+                        }));
+                        i += 3;
+                    }
+                    Some(ExpressionPart::Future(other)) => {
+                        return ParamListOutcome::Err(format!(
+                            "FN signature parameter `{name}` type slot resolved to a non-type \
+                             value `{}` (expected a type expression like `Number` or `List<Str>`)",
+                            other.summarize(),
+                        ));
                     }
                     _ => {
                         return ParamListOutcome::Err(format!(
@@ -107,8 +164,11 @@ pub(super) fn parse_fn_param_list<'a>(
     if let Some(msg) = first_err {
         return ParamListOutcome::Err(msg);
     }
-    if !parks.is_empty() {
-        return ParamListOutcome::Park(parks);
+    if !parks.is_empty() || !sub_dispatches.is_empty() {
+        return ParamListOutcome::Pending {
+            park_producers: parks,
+            sub_dispatches,
+        };
     }
     ParamListOutcome::Done(elements)
 }

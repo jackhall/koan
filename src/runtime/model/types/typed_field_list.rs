@@ -3,7 +3,7 @@
 //! positional construction).
 
 use super::ktype::KType;
-use super::resolver::{elaborate_type_expr, ElabResult, Elaborator, TypeResolver};
+use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::ast::{ExpressionPart, KExpression};
 use crate::parse::parse_triple_list;
 use crate::runtime::machine::NodeId;
@@ -59,22 +59,3 @@ pub fn parse_typed_field_list_via_elaborator(
     }
 }
 
-/// Legacy entry point retained for any caller that still passes a `TypeResolver`. Today
-/// only the resolver-shaped seam (FN-def's tests and a couple of legacy callers) reaches
-/// this; phase 5 deletes it along with `NoopResolver`.
-#[allow(dead_code)]
-pub fn parse_typed_field_list(
-    expr: &KExpression<'_>,
-    context: &str,
-    resolver: &dyn TypeResolver,
-) -> Result<Vec<(String, KType)>, String> {
-    parse_triple_list(expr, context, |part, name| match part {
-        ExpressionPart::Type(t) => KType::from_type_expr(t, resolver)
-            .map_err(|e| format!("{e} in {context} for `{}`", name)),
-        other => Err(format!(
-            "{context} type for `{}` must be a type name token, got {}",
-            name,
-            other.summarize()
-        )),
-    })
-}

@@ -85,15 +85,14 @@ pub fn body_dict_of<'a>(
 /// `Function<(args) -> ret>`. The `args` slot is captured raw as a `KExpression` whose
 /// parts are bare `Type(_)` tokens; we re-extract and elaborate each into a `KType`.
 /// Parameterized inner args (`List<Number>`) come through as `Future(KTypeValue(kt))` from
-/// a prior sub-dispatch; leaf `Type(t)` tokens go through `KType::from_name` plus
-/// `KType::from_type_expr` against `NoopResolver` to handle nested-parameter shapes.
+/// a prior sub-dispatch; leaf `Type(t)` tokens go through the resolver-free
+/// [`KType::from_type_expr`] (builtin-table only) to handle nested-parameter shapes.
 pub fn body_function_of<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     use crate::ast::ExpressionPart;
-    use crate::runtime::model::types::NoopResolver;
     let args_expr = match bundle.get("args") {
         Some(obj) => match obj.as_kexpression() {
             Some(e) => e.clone(),
@@ -114,7 +113,7 @@ pub fn body_function_of<'a>(
     let mut args: Vec<KType> = Vec::with_capacity(args_expr.parts.len());
     for part in &args_expr.parts {
         match part {
-            ExpressionPart::Type(t) => match KType::from_type_expr(t, &NoopResolver) {
+            ExpressionPart::Type(t) => match KType::from_type_expr(t) {
                 Ok(kt) => args.push(kt),
                 Err(msg) => {
                     return err(KError::new(KErrorKind::ShapeError(format!(

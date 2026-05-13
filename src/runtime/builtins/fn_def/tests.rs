@@ -5,7 +5,8 @@
 //! - [`return_type`] — parsing the `-> Type` slot and runtime return-type checks.
 //! - [`param_type`] — typed-parameter dispatch, overload routing, shape errors.
 //! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
-//! - [`module_stage2`] — `ScopeResolver`, signature-bound params, functor lifting.
+//! - [`module_stage2`] — scope-aware type elaboration, signature-bound params,
+//!   functor lifting.
 
 mod arena;
 mod basic;

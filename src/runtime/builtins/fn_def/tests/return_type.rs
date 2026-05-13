@@ -86,6 +86,37 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     );
 }
 
+/// User-bound type alias used as a FN return type elaborates against the captured
+/// scope: `LET MyT = Number` followed by `FN (DOIT xs: MyT) -> MyT = (xs)` registers
+/// and runs. Pins the bare-leaf-user-bound case the phase-3 elaborator now handles in
+/// the FN-def body.
+#[test]
+fn fn_with_user_bound_return_type_works() {
+    use super::capture_program_output;
+    let bytes = capture_program_output(
+        "LET MyT = Number\n\
+         FN (DOIT xs: MyT) -> MyT = (xs)\n\
+         PRINT (DOIT 7)",
+    );
+    assert_eq!(bytes, b"7\n");
+}
+
+/// Forward reference: `FN (DOIT xs: MyT) -> MyT = (xs)` followed by
+/// `LET MyT = Number` in the same batch. The scheduler installs `MyT`'s placeholder at
+/// submit time (LET's pre_run); the FN's body parks on it via Combine and re-elaborates
+/// against the now-final scope when the LET wakes. Pins that source-order doesn't
+/// matter for placeholder-bearing forward references.
+#[test]
+fn fn_with_forward_user_bound_return_type_works() {
+    use super::capture_program_output;
+    let bytes = capture_program_output(
+        "FN (DOIT xs: MyT) -> MyT = (xs)\n\
+         LET MyT = Number\n\
+         PRINT (DOIT 7)",
+    );
+    assert_eq!(bytes, b"7\n");
+}
+
 /// `Any` return type is the no-op fast path: any body value satisfies it.
 #[test]
 fn user_fn_with_any_return_type_accepts_anything() {

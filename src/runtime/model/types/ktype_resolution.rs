@@ -4,7 +4,6 @@
 //! `KObject::ktype` to infer container element types.
 
 use super::ktype::KType;
-use super::resolver::TypeResolver;
 use crate::ast::{TypeExpr, TypeParams};
 
 impl KType {
@@ -31,38 +30,30 @@ impl KType {
         }
     }
 
-    /// Convert a parser `TypeExpr` into a `KType`. This is the surface-level type-parsing
-    /// boundary used by FN signatures, FN return-type slots, and UNION/STRUCT field types.
-    /// Recurses on nested type parameters; arity for the known containers is enforced here so
-    /// errors surface at FN-definition time rather than at first call.
+    /// Lower a parser `TypeExpr` into a `KType` against the builtin table only — no
+    /// scope-aware resolver. Recurses through container shapes (`List<T>`, `Dict<K, V>`,
+    /// `Function<(...)->R>`); each leaf goes through [`KType::from_name`].
     ///
-    /// Resolution precedence: `resolver.resolve(name)` first (so user-defined / module-local
-    /// types can shadow builtins), then `from_name`'s builtin table. The resolver is
-    /// consulted only for paramless names — parameterized container types (`List`, `Dict`,
-    /// `Function`) are still routed through their structural arms because user code can't
-    /// re-define those.
-    pub fn from_type_expr(
-        t: &TypeExpr,
-        resolver: &dyn TypeResolver,
-    ) -> Result<KType, String> {
+    /// User-defined / module-local type names (anything not in `from_name`) surface as
+    /// `Err(_)` for the caller to either fall back on a transitional `KType::Unresolved`
+    /// carrier (the [`crate::ast::ExpressionPart::resolve_for`] seam at parser-side
+    /// lowering) or route through the scheduler-aware
+    /// [`crate::runtime::model::types::elaborate_type_expr`] (the FN / LET / STRUCT body
+    /// path that consults `Scope` for placeholder + value lookups).
+    pub fn from_type_expr(t: &TypeExpr) -> Result<KType, String> {
         match (t.name.as_str(), &t.params) {
-            (_, TypeParams::None) => {
-                if let Some(t) = resolver.resolve(&t.name) {
-                    return Ok(t);
-                }
-                KType::from_name(&t.name)
-                    .ok_or_else(|| format!("unknown type name `{}`", t.name))
-            }
+            (_, TypeParams::None) => KType::from_name(&t.name)
+                .ok_or_else(|| format!("unknown type name `{}`", t.name)),
             ("List", TypeParams::List(items)) if items.len() == 1 => {
-                Ok(KType::List(Box::new(KType::from_type_expr(&items[0], resolver)?)))
+                Ok(KType::List(Box::new(KType::from_type_expr(&items[0])?)))
             }
             ("List", TypeParams::List(items)) => Err(format!(
                 "List<...> expects exactly 1 type parameter, got {}",
                 items.len()
             )),
             ("Dict", TypeParams::List(items)) if items.len() == 2 => Ok(KType::Dict(
-                Box::new(KType::from_type_expr(&items[0], resolver)?),
-                Box::new(KType::from_type_expr(&items[1], resolver)?),
+                Box::new(KType::from_type_expr(&items[0])?),
+                Box::new(KType::from_type_expr(&items[1])?),
             )),
             ("Dict", TypeParams::List(items)) => Err(format!(
                 "Dict<...> expects exactly 2 type parameters, got {}",
@@ -71,9 +62,9 @@ impl KType {
             ("Function", TypeParams::Function { args, ret }) => {
                 let args = args
                     .iter()
-                    .map(|t| KType::from_type_expr(t, resolver))
+                    .map(KType::from_type_expr)
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = Box::new(KType::from_type_expr(ret, resolver)?);
+                let ret = Box::new(KType::from_type_expr(ret)?);
                 Ok(KType::KFunction { args, ret })
             }
             (_, TypeParams::List(_)) => {
@@ -119,7 +110,6 @@ impl KType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::model::types::NoopResolver;
 
     fn leaf(n: &str) -> TypeExpr {
         TypeExpr {
@@ -130,7 +120,7 @@ mod tests {
 
     #[test]
     fn from_type_expr_leaf_number() {
-        assert_eq!(KType::from_type_expr(&leaf("Number"), &NoopResolver).unwrap(), KType::Number);
+        assert_eq!(KType::from_type_expr(&leaf("Number")).unwrap(), KType::Number);
     }
 
     #[test]
@@ -140,7 +130,7 @@ mod tests {
             params: TypeParams::List(vec![leaf("Number")]),
         };
         assert_eq!(
-            KType::from_type_expr(&te, &NoopResolver).unwrap(),
+            KType::from_type_expr(&te).unwrap(),
             KType::List(Box::new(KType::Number))
         );
     }
@@ -152,7 +142,7 @@ mod tests {
             params: TypeParams::List(vec![leaf("Str"), leaf("Number")]),
         };
         assert_eq!(
-            KType::from_type_expr(&te, &NoopResolver).unwrap(),
+            KType::from_type_expr(&te).unwrap(),
             KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
         );
     }
@@ -167,7 +157,7 @@ mod tests {
             },
         };
         assert_eq!(
-            KType::from_type_expr(&te, &NoopResolver).unwrap(),
+            KType::from_type_expr(&te).unwrap(),
             KType::KFunction {
                 args: vec![KType::Number],
                 ret: Box::new(KType::Str),
@@ -185,7 +175,7 @@ mod tests {
             },
         };
         assert_eq!(
-            KType::from_type_expr(&te, &NoopResolver).unwrap(),
+            KType::from_type_expr(&te).unwrap(),
             KType::KFunction {
                 args: vec![],
                 ret: Box::new(KType::Number),
@@ -204,7 +194,7 @@ mod tests {
             params: TypeParams::List(vec![inner]),
         };
         assert_eq!(
-            KType::from_type_expr(&te, &NoopResolver).unwrap(),
+            KType::from_type_expr(&te).unwrap(),
             KType::List(Box::new(KType::List(Box::new(KType::Number))))
         );
     }
@@ -215,7 +205,7 @@ mod tests {
             name: "List".into(),
             params: TypeParams::List(vec![leaf("A"), leaf("B")]),
         };
-        assert!(KType::from_type_expr(&te, &NoopResolver).is_err());
+        assert!(KType::from_type_expr(&te).is_err());
     }
 
     #[test]
@@ -224,13 +214,13 @@ mod tests {
             name: "Dict".into(),
             params: TypeParams::List(vec![leaf("Str")]),
         };
-        assert!(KType::from_type_expr(&te, &NoopResolver).is_err());
+        assert!(KType::from_type_expr(&te).is_err());
     }
 
     #[test]
     fn from_type_expr_unknown_paramless_name_errors() {
         // bare unknown leaf → from_name returns None → error
-        assert!(KType::from_type_expr(&leaf("Banana"), &NoopResolver).is_err());
+        assert!(KType::from_type_expr(&leaf("Banana")).is_err());
     }
 
     #[test]
@@ -239,7 +229,7 @@ mod tests {
             name: "Banana".into(),
             params: TypeParams::List(vec![leaf("Number")]),
         };
-        assert!(KType::from_type_expr(&te, &NoopResolver).is_err());
+        assert!(KType::from_type_expr(&te).is_err());
     }
 
     #[test]
@@ -251,32 +241,18 @@ mod tests {
                 ret: Box::new(leaf("Number")),
             },
         };
-        assert!(KType::from_type_expr(&te, &NoopResolver).is_err());
+        assert!(KType::from_type_expr(&te).is_err());
     }
 
-    /// Resolver-first precedence: a name registered with the resolver wins over a builtin
-    /// of the same name. Stage 1 will rely on this so module-local types can shadow
-    /// builtins without needing to thread the choice through every call site.
+    /// Builtin lookup directly: `from_type_expr` for a paramless leaf routes through
+    /// `from_name` exclusively. Scope-aware shadowing of builtins (a binding rebinding
+    /// `Number` to a struct type, for instance) lives one layer up in
+    /// [`crate::runtime::model::types::elaborate_type_expr`], which consults `Scope`
+    /// before falling through to `from_name`.
     #[test]
-    fn from_type_expr_resolver_shadows_builtin() {
-        struct AlwaysStr;
-        impl TypeResolver for AlwaysStr {
-            fn resolve(&self, _name: &str) -> Option<KType> {
-                Some(KType::Str)
-            }
-        }
-        // `Number` is a builtin; the resolver returning `Str` must win.
+    fn from_type_expr_leaf_falls_through_to_builtin() {
         assert_eq!(
-            KType::from_type_expr(&leaf("Number"), &AlwaysStr).unwrap(),
-            KType::Str,
-        );
-    }
-
-    /// Resolver returning `None` falls through to the builtin table.
-    #[test]
-    fn from_type_expr_resolver_none_falls_through_to_builtin() {
-        assert_eq!(
-            KType::from_type_expr(&leaf("Number"), &NoopResolver).unwrap(),
+            KType::from_type_expr(&leaf("Number")).unwrap(),
             KType::Number,
         );
     }
