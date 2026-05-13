@@ -9,6 +9,9 @@ mod kerror;
 mod pending;
 mod scope;
 
+#[cfg(test)]
+mod tests;
+
 pub use arena::{CallArena, RuntimeArena};
 pub use bindings::Bindings;
 pub use kerror::{Frame, KError, KErrorKind};
