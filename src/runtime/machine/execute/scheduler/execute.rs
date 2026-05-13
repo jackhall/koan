@@ -1,4 +1,4 @@
-use crate::runtime::machine::{Frame, KError, KErrorKind, NodeId, Scope};
+use crate::runtime::machine::{Frame, KError, KErrorKind, NodeId};
 
 use super::super::lift::lift_kobject;
 use super::super::nodes::{Node, NodeOutput, NodeStep, NodeWork};
@@ -87,30 +87,26 @@ impl<'a> Scheduler<'a> {
                     }
                 }
                 NodeStep::Replace { work: new_work, frame: new_frame, function: new_function } => {
-                    let (next_scope, next_frame) = match new_frame {
+                    let next_function = new_function.or(prev_function);
+                    match new_frame {
                         Some(f) => {
                             // Fresh per-call frame: drop the previous one. Lexical scoping
                             // means the new frame's child scope's `outer` is the captured
-                            // scope, not the previous frame's.
+                            // scope, not the previous frame's. The `'a`-anchoring of
+                            // `f.scope()` lives inside `reinstall_with_frame` — see its
+                            // SAFETY docstring.
                             drop(prev_frame);
-                            // SAFETY: `f.scope()` borrows from `f`, but `f` is owned by the
-                            // slot once installed. The `&'a` we hand to the next iteration
-                            // is anchored to the slot's storage inside `NodeStore`, which
-                            // lives until the slot drops or its frame is replaced again.
-                            let s: &'a Scope<'a> = unsafe {
-                                std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(f.scope())
-                            };
-                            (s, Some(f))
+                            self.store.reinstall_with_frame(idx, f, new_work, next_function);
                         }
-                        None => (scope, prev_frame),
-                    };
-                    let next_function = new_function.or(prev_function);
-                    self.store.reinstall(idx, Node {
-                        work: new_work,
-                        scope: next_scope,
-                        frame: next_frame,
-                        function: next_function,
-                    });
+                        None => {
+                            self.store.reinstall(idx, Node {
+                                work: new_work,
+                                scope,
+                                frame: prev_frame,
+                                function: next_function,
+                            });
+                        }
+                    }
                     // Replace return sites either install their own edges via
                     // `add_owned_edge` / `add_park_edge` before returning (run_dispatch
                     // bare-name and replay-park branches, defer_to_lift) or have nothing

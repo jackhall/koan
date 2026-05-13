@@ -212,7 +212,7 @@ mod tests {
         default_scope(arena, Box::new(SharedBuf(captured)))
     }
 
-    fn parse_one(src: &str) -> KExpression<'static> {
+    fn parse_one<'a>(src: &str) -> KExpression<'a> {
         let mut exprs = parse(src).expect("parse should succeed");
         assert_eq!(exprs.len(), 1, "test helper expects a single expression");
         exprs.remove(0)

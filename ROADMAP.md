@@ -85,7 +85,15 @@ slot-table fields `nodes` + `results` + `free_list` collapsed into a single
 lifecycle, so the index-space, run-window, terminal-write, and reclaim
 invariants are each a single atomic body and `Scheduler<'a>` is now four
 fields with three internal sub-structs each carrying a single tight
-invariant). The next
+invariant), and the `runtime::machine` unsafe-surface reduction (the
+`Resolved` carrier holds `ClassifiedSlots` by value as its sole producer,
+`KFunction::captured` is now `NonNull<Scope<'a>>` + invariance-pinning
+`PhantomData<&'a Scope<'a>>` instead of `*const Scope<'static>`,
+`NodeStore::reinstall_with_frame` and `CallArena::scope_for_bind`
+concentrate the `Frame::scope → 'a`-storage re-anchor where the `'a`
+storage actually lives, and the runtime singletons ride a `Sync`-deriving
+`StaticKValue` enum so `arena.rs` no longer carries a dedicated
+`unsafe impl Sync`). The next
 signature revision after error handling lands monadic side-effect capture; the
 type-system arc runs through the module-system stages — foundation now landed
 in stage 1, ergonomic generic dispatch in stage 5, coherence in stage 6.
@@ -115,6 +123,14 @@ without first landing something else:
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
   ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
   stage 2's functor support so the `Wrap` slot can be higher-kinded.
+- [Encapsulate Scope write paths in a Bindings façade](roadmap/bindings-facade.md)
+  — lift `Scope::{data, functions, placeholders}` into a `Bindings<'a>`
+  sub-struct whose shared `try_apply` helper enforces the dual-map mirror
+  and unifies the LET-binds-FN dedupe path.
+- [Lift Scope::pending into a PendingQueue façade](roadmap/pending-queue-facade.md)
+  — wrap `Scope::pending` and `PendingWrite` so the try-then-defer pattern
+  collapses to one match arm per write kind and drain-time errors surface
+  via `debug_assert!`. Requires the Bindings façade.
 
 ### Module system
 

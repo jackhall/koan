@@ -7,13 +7,13 @@ use crate::runtime::machine::{KErrorKind, RuntimeArena};
 use super::Scheduler;
 use crate::parse::parse;
 
-fn parse_one(src: &str) -> crate::ast::KExpression<'static> {
+fn parse_one<'a>(src: &str) -> crate::ast::KExpression<'a> {
     let mut exprs = parse(src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
 
-fn parse_all(src: &str) -> Vec<crate::ast::KExpression<'static>> {
+fn parse_all<'a>(src: &str) -> Vec<crate::ast::KExpression<'a>> {
     parse(src).expect("parse should succeed")
 }
 

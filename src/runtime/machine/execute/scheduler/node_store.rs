@@ -30,11 +30,15 @@
 //! `DepGraph::owned_children` for recursion — the two sub-structs stay
 //! independent, with `Scheduler::free` orchestrating across them.
 
+use std::rc::Rc;
+
+use crate::runtime::machine::core::{CallArena, Scope};
+use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::machine::NodeId;
 use crate::runtime::model::KObject;
 use crate::runtime::machine::KError;
 
-use super::super::nodes::{Node, NodeOutput};
+use super::super::nodes::{Node, NodeOutput, NodeWork};
 
 /// Slot-table state for the scheduler. Three private vectors sharing an
 /// index space; all mutation goes through the named methods below so the
@@ -97,6 +101,33 @@ impl<'a> NodeStore<'a> {
     /// rewrites the slot's work + frame + function without bumping the index.
     pub(super) fn reinstall(&mut self, idx: usize, node: Node<'a>) {
         self.nodes[idx] = Some(node);
+    }
+
+    /// Replace the node payload **with a fresh per-call frame**, re-anchoring the frame's
+    /// per-call [`Scope`] to `'a` (the slot-storage lifetime). The owner of the
+    /// `'a`-anchored claim is therefore this module, not the caller: invokers (today,
+    /// `Scheduler::execute`'s `Replace` arm) no longer need to carry the SAFETY paragraph
+    /// for the `&Scope<'_> → &'a Scope<'a>` re-anchor.
+    ///
+    /// SAFETY: `frame` is about to be stored in `self.nodes[idx]`, whose live span equals
+    /// `'a` — the same lifetime the slot's scope reference is anchored to. So
+    /// re-anchoring `frame.scope()` from its receiver-bound borrow to `'a` is witnessed
+    /// by the store itself: the `Rc<CallArena>` stays in the same node payload as the
+    /// `&'a Scope<'a>` it produces, so the arena heap-pinning that backs `scope_ptr`
+    /// outlives every read through this `'a` reference. The previous frame held in
+    /// `self.nodes[idx]` (if any) must have been removed by a prior `take_for_run`;
+    /// callers are responsible for dropping it before invoking this entry point.
+    pub(super) fn reinstall_with_frame(
+        &mut self,
+        idx: usize,
+        frame: Rc<CallArena>,
+        work: NodeWork<'a>,
+        function: Option<&'a KFunction<'a>>,
+    ) {
+        let scope: &'a Scope<'a> = unsafe {
+            std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope())
+        };
+        self.nodes[idx] = Some(Node { work, scope, frame: Some(frame), function });
     }
 
     /// Terminal write. The only path that lands a `NodeOutput` in

@@ -492,42 +492,29 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 }
 
 /// Pack a picked function + classification + `pre_run`-extracted placeholder name into a
-/// [`Resolved`]. The sole producer of `Resolved`'s three index vectors — disjointness lives
-/// here via [`KFunction::classify_for_pick`].
+/// [`Resolved`]. The sole producer of the embedded `slots` — disjointness lives in
+/// [`KFunction::classify_for_pick`].
 fn build_resolved<'a>(
     picked: &'a KFunction<'a>,
     expr: &KExpression<'_>,
 ) -> Resolved<'a> {
-    let classified = picked.classify_for_pick(expr);
-    let placeholder_name = picked.pre_run.and_then(|extractor| extractor(expr));
     Resolved {
         function: picked,
-        placeholder_name,
-        eager_indices: classified.eager_indices,
-        wrap_indices: classified.wrap_indices,
-        ref_name_indices: classified.ref_name_indices,
-        picked_has_pre_run: classified.picked_has_pre_run,
+        placeholder_name: picked.pre_run.and_then(|extractor| extractor(expr)),
+        slots: picked.classify_for_pick(expr),
     }
 }
 
 /// A successful resolution: which function was picked, what placeholder name (if any) to
-/// install at dispatch time, and the per-slot index buckets a downstream scheduler driver
-/// needs to do auto-wrap, replay-park, and eager-sub scheduling. The three index vectors
-/// are disjoint by construction over disjoint `(SignatureElement, ExpressionPart)` shapes
-/// — see [`crate::runtime::machine::kfunction::ClassifiedSlots`].
+/// install at dispatch time, and the per-slot classification a downstream scheduler driver
+/// needs for auto-wrap, replay-park, and eager-sub scheduling. `slots` is held by value —
+/// `build_resolved` is the sole producer, so this is the single carrier for the disjoint
+/// `(eager_indices | wrap_indices | ref_name_indices)` invariant documented on
+/// [`crate::runtime::machine::kfunction::ClassifiedSlots`].
 pub struct Resolved<'a> {
     pub function: &'a KFunction<'a>,
     pub placeholder_name: Option<String>,
-    /// `Some(indices)` iff the picked function is a lazy candidate (its signature has at
-    /// least one `KType::KExpression` slot bound by an `ExpressionPart::Expression`). The
-    /// carried indices are the *eager* `Expression` parts — those in non-`KExpression`
-    /// slots — to schedule as sub-Dispatches; the lazy ones stay in place for the
-    /// receiving builtin to dispatch itself. `None` when the function isn't a lazy
-    /// candidate; the scheduler then schedules every eager-shaped part as a sub.
-    pub eager_indices: Option<Vec<usize>>,
-    pub wrap_indices: Vec<usize>,
-    pub ref_name_indices: Vec<usize>,
-    pub picked_has_pre_run: bool,
+    pub slots: crate::runtime::machine::kfunction::ClassifiedSlots,
 }
 
 /// Outcome of [`Scope::resolve_dispatch`]. See that method's docstring for the meaning of
@@ -794,9 +781,9 @@ mod tests {
         let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
         match scope.resolve_dispatch(&expr) {
             ResolveOutcome::Resolved(r) => {
-                assert_eq!(r.wrap_indices, vec![0]);
-                assert!(r.ref_name_indices.is_empty());
-                assert!(!r.picked_has_pre_run);
+                assert_eq!(r.slots.wrap_indices, vec![0]);
+                assert!(r.slots.ref_name_indices.is_empty());
+                assert!(!r.slots.picked_has_pre_run);
             }
             _ => panic!("expected Resolved for known overload"),
         }
@@ -893,7 +880,7 @@ mod tests {
         match scope.resolve_dispatch(&expr) {
             ResolveOutcome::Resolved(r) => {
                 assert_eq!(r.placeholder_name.as_deref(), Some("foo"));
-                assert!(r.picked_has_pre_run);
+                assert!(r.slots.picked_has_pre_run);
             }
             _ => panic!("expected Resolved with placeholder_name"),
         }

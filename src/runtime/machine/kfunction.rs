@@ -14,6 +14,8 @@
 //!   parameter-Identifier rewriter user-fn bodies use on entry).
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::ast::{ExpressionPart, KExpression};
@@ -35,10 +37,10 @@ pub use scheduler_handle::{CombineFinish, NodeId, SchedulerHandle};
 /// A callable Koan function: signature, body, and the lexical environment captured at
 /// definition time (the scope that ran the `FN ...` form, or run-root for builtins).
 ///
-/// `captured` is lifetime-erased to `*const Scope<'static>` to keep `KFunction<'a>`
-/// covariant in `'a`; storing a real `&'a Scope<'a>` would make `KFunction` invariant
-/// (because `Scope<'a>` is invariant via its `RefCell`s) and would break builtin
-/// registration's coercion from `'static` to shorter lifetimes.
+/// The captured-scope handle is carried at the type level via `NonNull<Scope<'a>>` +
+/// `PhantomData<&'a Scope<'a>>` (see the `captured` field). One `unsafe { NonNull::as_ref }`
+/// remains inside [`KFunction::captured_scope`]; everything else flows through the type
+/// system.
 ///
 /// SAFETY: the captured scope is allocated in a `RuntimeArena` that outlives this
 /// `KFunction` — they share the arena (FN registers the function in the same scope it
@@ -47,7 +49,16 @@ pub use scheduler_handle::{CombineFinish, NodeId, SchedulerHandle};
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature,
     pub body: Body<'a>,
-    captured: *const Scope<'static>,
+    /// Captured definition-scope pointer. **Variance-load-bearing.** `Scope<'a>` is
+    /// invariant in `'a` (it contains `RefCell`s), so the paired
+    /// `PhantomData<&'a Scope<'a>>` below is required to keep `KFunction<'a>` invariant in
+    /// `'a`. Do **not** simplify `_p` to `PhantomData<&'a ()>` — that would make
+    /// `KFunction` covariant in `'a` and silently reintroduce the soundness bug the old
+    /// `*const Scope<'static>` erasure was working around the wrong way. The constructor
+    /// (`with_pre_run`) takes `&'a Scope<'a>` directly and stores it via `NonNull::from`,
+    /// so the only `unsafe` site is the `NonNull::as_ref` deref in `captured_scope`.
+    captured: NonNull<Scope<'a>>,
+    _p: PhantomData<&'a Scope<'a>>,
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE); `None` for
     /// everything else. See [`PreRunFn`].
     pub pre_run: Option<PreRunFn>,
@@ -93,17 +104,21 @@ impl<'a> KFunction<'a> {
         pre_run: Option<PreRunFn>,
     ) -> Self {
         signature.normalize();
-        // Double cast: `Scope` is invariant in `'a`, so a single cast to
-        // `*const Scope<'static>` is rejected.
-        #[allow(clippy::unnecessary_cast)]
-        let captured = captured as *const Scope<'_> as *const Scope<'static>;
-        Self { signature, body, captured, pre_run }
+        Self {
+            signature,
+            body,
+            captured: NonNull::from(captured),
+            _p: PhantomData,
+            pre_run,
+        }
     }
 
-    /// Re-attaches the captured scope pointer to a fresh `'a`. Soundness rests on the
-    /// SAFETY argument on `KFunction`: the scope's allocation outlives this `KFunction`.
+    /// Re-borrow the captured scope at `'a`. SAFETY: `captured` was built from
+    /// `NonNull::from(&'a Scope<'a>)` in [`Self::with_pre_run`], so the pointer is non-null
+    /// and points at a `Scope<'a>` that outlives this `KFunction<'a>` by the broader
+    /// runtime-arena SAFETY argument (see `core/arena.rs::RuntimeArena`).
     pub fn captured_scope(&self) -> &'a Scope<'a> {
-        unsafe { &*self.captured.cast::<Scope<'a>>() }
+        unsafe { self.captured.as_ref() }
     }
 
     pub fn summarize(&self) -> String {

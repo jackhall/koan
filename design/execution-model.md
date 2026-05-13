@@ -213,7 +213,7 @@ and the dep schedule. Phase 2 calls
 [`Scope::resolve_dispatch`](../src/runtime/machine/core/scope.rs) once and
 matches on its [`ResolveOutcome`](../src/runtime/machine/core/scope.rs):
 `Resolved(r)` continues into phase 3 with the picked function plus the
-per-slot index buckets `r` carries (`wrap_indices`, `ref_name_indices`,
+per-slot index buckets `r.slots` carries (`wrap_indices`, `ref_name_indices`,
 `eager_indices`); `Ambiguous(n)` and `Unmatched` surface as
 `AmbiguousDispatch` / `DispatchFailed` errors; `Deferred` (no match against
 the bare shape but the expression carries nested `Expression` /
@@ -235,7 +235,7 @@ The four rails the resolution feeds:
   driver installs `name → NodeId(idx)` on the dispatching scope. A
   `Rebind` collision here surfaces as a `Done(Err(_))` step so other slots
   keep draining.
-- **Auto-wrap pass** (phase 4, carrier: `Resolved.wrap_indices`). Promotes
+- **Auto-wrap pass** (phase 4, carrier: `Resolved.slots.wrap_indices`). Promotes
   bare-name parts in *value-typed* slots of the picked function to
   single-part sub-expressions so they re-enter `run_dispatch` and route
   through the bare-name short-circuit. Both `ExpressionPart::Identifier`
@@ -245,7 +245,7 @@ The four rails the resolution feeds:
   path, the first through the `Identifier` overload and the second
   through the `TypeExprRef` overload of `value_lookup`. Multi-name forward
   references compose as N independent sub-Dispatches.
-- **Replay-park** (phase 4, carrier: `Resolved.ref_name_indices`). Covers
+- **Replay-park** (phase 4, carrier: `Resolved.slots.ref_name_indices`). Covers
   literal-name slots that *don't* sub-dispatch (`call_by_name`'s verb,
   `ATTR`'s identifier-lhs, `type_call`'s verb, ascription's `m` / `s`
   slots): if any of those names — Identifier or bare leaf Type-token —
@@ -256,12 +256,13 @@ The four rails the resolution feeds:
   the consumer's replay-park surfaces it with a `<replay-park>` frame
   rather than parking on a dead slot.
 
-`Resolved`'s three index vectors (`wrap_indices` /  `ref_name_indices` /
+`Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's
 `(SignatureElement, ExpressionPart)` shape lands in at most one bucket.
 [`KFunction::classify_for_pick`](../src/runtime/machine/kfunction.rs) is
-the sole producer, so the disjointness invariant lives in one place rather
-than as comment-enforced rules across the scheduler driver.
+the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
+by value), so the disjointness invariant lives in one place rather than as
+comment-enforced rules across the scheduler driver.
 
 The bare-name short-circuit and replay-park call `DepGraph::add_park_edge`,
 which records a `DepEdge::Notify(producer)` in the consumer's `dep_edges` entry

@@ -174,31 +174,54 @@ impl RuntimeArena {
     }
 }
 
-/// Wrapper that lets a `KObject` live in a `static`. `KObject` isn't `Sync` (some variants
-/// hold `Rc` / `Box<dyn Trait>`), but the only variants instantiated as statics here are
-/// `Null` and `Bool(_)` — fully owned, no interior shared state, soundly shareable.
-struct StaticKObject(KObject<'static>);
-unsafe impl Sync for StaticKObject {}
-
-static NULL_HOLDER: StaticKObject = StaticKObject(KObject::Null);
-static TRUE_HOLDER: StaticKObject = StaticKObject(KObject::Bool(true));
-static FALSE_HOLDER: StaticKObject = StaticKObject(KObject::Bool(false));
-
-/// Singleton `&KObject::Null`. SAFETY: `KObject::Null` is a unit variant with no references,
-/// so the `'a` lifetime parameter is purely phantom and `'static` → `'a` is sound.
-pub fn null_singleton<'a>() -> &'a KObject<'a> {
-    unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(&NULL_HOLDER.0) }
+/// Static-singleton inhabitants. `KObject` itself isn't `Sync` (some variants carry `Rc` /
+/// `Box<dyn Trait>`), but `Null` and `Bool(bool)` are unit-shaped — no references, no
+/// interior shared state. Typing the static storage at this unit-only enum lets the
+/// `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` statics derive `Sync` naturally, so no
+/// dedicated `unsafe impl Sync` is needed for static storage.
+///
+/// The `Holder` statics are storage-only; the accessors below project the corresponding
+/// `&KObject<'static>` from a `const KObject<'static>` item (a `const` is inlined per use
+/// site and doesn't go through static storage, so `KObject: !Sync` is no obstacle). The
+/// remaining `unsafe` in each accessor is the `'static → 'a` re-annotation, which is sound
+/// because the carried variant holds no lifetime-parameterized data.
+enum StaticKValue {
+    Null,
+    Bool(bool),
 }
 
-/// Singleton `&KObject::Bool(true)`. SAFETY: `KObject::Bool` carries only a `bool`.
-pub fn true_singleton<'a>() -> &'a KObject<'a> {
-    unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(&TRUE_HOLDER.0) }
+static NULL_HOLDER: StaticKValue = StaticKValue::Null;
+static TRUE_HOLDER: StaticKValue = StaticKValue::Bool(true);
+static FALSE_HOLDER: StaticKValue = StaticKValue::Bool(false);
+
+/// Project the `KObject` view of a static `StaticKValue`. Lives at the boundary so the
+/// `Holder` statics' typed inventory drives the accessor surface: any future addition to
+/// `StaticKValue` is forced through here. `const` items inline at the use site, so the
+/// returned reference is rvalue-promoted to `&'static KObject<'static>` without requiring
+/// `KObject: Sync`.
+fn project<'a>(v: &'static StaticKValue) -> &'a KObject<'a> {
+    const NULL: KObject<'static> = KObject::Null;
+    const TRUE: KObject<'static> = KObject::Bool(true);
+    const FALSE: KObject<'static> = KObject::Bool(false);
+    let r: &'static KObject<'static> = match v {
+        StaticKValue::Null => &NULL,
+        StaticKValue::Bool(true) => &TRUE,
+        StaticKValue::Bool(false) => &FALSE,
+    };
+    // SAFETY: the projected `KObject` is `Null` or `Bool(_)` — both unit-shaped, carrying
+    // no references — so the `'static` lifetime parameter is purely phantom and `'static`
+    // → `'a` is sound.
+    unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(r) }
 }
+
+/// Singleton `&KObject::Null`.
+pub fn null_singleton<'a>() -> &'a KObject<'a> { project(&NULL_HOLDER) }
+
+/// Singleton `&KObject::Bool(true)`.
+pub fn true_singleton<'a>() -> &'a KObject<'a> { project(&TRUE_HOLDER) }
 
 /// Singleton `&KObject::Bool(false)`.
-pub fn false_singleton<'a>() -> &'a KObject<'a> {
-    unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(&FALSE_HOLDER.0) }
-}
+pub fn false_singleton<'a>() -> &'a KObject<'a> { project(&FALSE_HOLDER) }
 
 /// One user-fn call's allocation frame. Owns its own `RuntimeArena` for the per-call child
 /// `Scope`, parameter clones, and substituted body rewrites. Reference-counted so an
@@ -255,6 +278,26 @@ impl CallArena {
     pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
         unsafe {
             std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.scope_ptr)
+        }
+    }
+
+    /// Scope handle whose borrow lifetime is statically tied to `&self`. Use this when
+    /// feeding the per-call scope into local-bind plumbing (e.g. [`Scope::bind_value`])
+    /// that does not need to escape the `Rc`'s borrow.
+    ///
+    /// Unlike [`CallArena::scope`], the returned reference is bounded by `'p` (the
+    /// `&'p Rc<Self>` receiver's borrow), so the caller does not need an `unsafe`
+    /// `'a`-anchoring transmute to feed it into `'p`-lifetime APIs. The single internal
+    /// transmute converts the `'static`-erased `scope_ptr` storage back to the receiver's
+    /// borrow lifetime — strictly shorter than the broader `&'a Scope<'a>` claim that
+    /// [`CallArena::scope`] makes.
+    ///
+    /// SAFETY: `scope_ptr` is stable for the `Rc`'s lifetime (heap-pinned by `Rc`); the
+    /// returned `'p` is bounded by `&'p Rc<Self>` so the borrow cannot outlive the
+    /// receiver.
+    pub fn scope_for_bind<'p>(self: &'p Rc<Self>) -> &'p Scope<'p> {
+        unsafe {
+            std::mem::transmute::<&Scope<'static>, &'p Scope<'p>>(&*self.scope_ptr)
         }
     }
 

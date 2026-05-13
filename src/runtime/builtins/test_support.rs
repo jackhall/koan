@@ -52,7 +52,7 @@ pub(crate) fn run_root_bare<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
 
 /// Parse a source string expected to contain exactly one top-level expression. Panics on
 /// parse failure or wrong arity.
-pub(crate) fn parse_one(src: &str) -> KExpression<'static> {
+pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
     let mut exprs = parse(src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)

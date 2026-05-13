@@ -20,6 +20,12 @@ impl<'a> KFunction<'a> {
     /// references in typed-slot positions (`(PRINT x)` needs `x` as a `Future(KString)`),
     /// the child scope covers Identifier-slot lookups (`(x)` parens-wrapped) and is the
     /// substrate for closure capture.
+    ///
+    /// Lifetime shape: the per-call `child` scope and `inner_arena` are re-anchored to `'a`
+    /// — the outer slot-storage lifetime — by one consolidated `unsafe` block. The witness
+    /// is the `Rc<CallArena>` (`frame`) that this function moves into the
+    /// [`BodyResult::Tail`] payload: the slot stores both `frame` and the tailed expression
+    /// at `'a`, so the heap-pinned arena outlives every `'a`-re-anchored read into it.
     pub fn invoke(
         &'a self,
         scope: &'a Scope<'a>,
@@ -36,12 +42,19 @@ impl<'a> KFunction<'a> {
                 // `KFunction(&fn, Some(Rc))` on the user-bound value.
                 let outer = self.captured_scope();
                 let frame: Rc<CallArena> = CallArena::new(outer, None);
-                // SAFETY: heap-pinning makes `arena_ptr` and `scope_ptr` valid for the
-                // box's life; allocations into the arena live until `frame` drops.
-                let arena_ptr: *const RuntimeArena = frame.arena();
-                let scope_ptr: *const Scope<'_> = frame.scope();
-                let inner_arena: &'a RuntimeArena = unsafe { &*(arena_ptr as *const _) };
-                let child: &'a Scope<'a> = unsafe { &*(scope_ptr as *const _) };
+                // SAFETY (consolidated): both re-anchors below share one witness — `frame`
+                // is moved into `BodyResult::Tail` below, whose slot-storage lifetime is
+                // `'a`. The `Rc<CallArena>` heap-pins the per-call arena (and therefore
+                // its scope) for as long as the slot lives, so claiming `'a` here is
+                // exactly the receiver-bound-borrow → slot-storage-lifetime re-anchor that
+                // `NodeStore::reinstall_with_frame` performs on the scheduler side after
+                // a Replace.
+                let (inner_arena, child): (&'a RuntimeArena, &'a Scope<'a>) = unsafe {
+                    (
+                        std::mem::transmute::<&RuntimeArena, &'a RuntimeArena>(frame.arena()),
+                        std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope()),
+                    )
+                };
                 for (name, rc) in bundle.args.iter() {
                     let cloned = rc.deep_clone();
                     let allocated = inner_arena.alloc_object(cloned);

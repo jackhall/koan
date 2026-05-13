@@ -73,7 +73,7 @@ impl<'a> Scheduler<'a> {
         }
 
         // Phase 3: pure-transform auto-wrap.
-        let rewritten = apply_auto_wrap(expr, &resolved.wrap_indices);
+        let rewritten = apply_auto_wrap(expr, &resolved.slots.wrap_indices);
 
         // Phase 4: replay-park check.
         match self.try_replay_park(&rewritten, &resolved, scope, idx) {
@@ -122,7 +122,7 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Phase 4. Walk `resolved.ref_name_indices` against `expr`: a slot whose name resolves
+    /// Phase 4. Walk `resolved.slots.ref_name_indices` against `expr`: a slot whose name resolves
     /// to a still-pending placeholder needs a park edge; a slot whose producer already
     /// terminalized with an error propagates that error. Returns `Continue` when the slot
     /// can proceed to phase 5, or `Done` when a park or propagation took over.
@@ -134,7 +134,7 @@ impl<'a> Scheduler<'a> {
         idx: usize,
     ) -> ReplayParkResult<'a> {
         let mut producers_to_wait: Vec<NodeId> = Vec::new();
-        for &i in &resolved.ref_name_indices {
+        for &i in &resolved.slots.ref_name_indices {
             let name = match expr.parts.get(i) {
                 Some(ExpressionPart::Identifier(n)) => n.as_str(),
                 // Bare leaf Type-tokens in literal-name slots park on the same placeholder
@@ -194,7 +194,7 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Phase 5 — `Resolved` arm. Single loop over `expr.parts` branching on whether the
-    /// picked function is a lazy candidate (`resolved.eager_indices.is_some()`):
+    /// picked function is a lazy candidate (`resolved.slots.eager_indices.is_some()`):
     /// - **Lazy candidate** (the picked sig has a `KType::KExpression` slot bound by an
     ///   `ExpressionPart::Expression`): only the carried `eager_indices` — `Expression`
     ///   parts in *non-*`KExpression` slots — schedule as sub-Dispatches; every other
@@ -214,7 +214,7 @@ impl<'a> Scheduler<'a> {
     ) -> NodeStep<'a> {
         let mut new_parts = Vec::with_capacity(expr.parts.len());
         let mut subs: Vec<(usize, NodeId)> = Vec::new();
-        match resolved.eager_indices.as_deref() {
+        match resolved.slots.eager_indices.as_deref() {
             Some(eager_indices) => {
                 for (i, part) in expr.parts.into_iter().enumerate() {
                     if eager_indices.contains(&i) {
