@@ -103,6 +103,7 @@ impl KType {
                 (UserTypeKind::Struct, KObject::Struct { .. })
                     | (UserTypeKind::Tagged, KObject::Tagged { .. })
                     | (UserTypeKind::Module, KObject::KModule(_, _))
+                    | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
             ),
             // Phase 1: one-unfold check. Cycle-gating (a threaded "currently unfolding" set)
             // is a phase-3 concern; today no runtime value carries a `RecursiveRef` so the
@@ -191,6 +192,7 @@ impl KType {
                     (UserTypeKind::Struct, KObject::Struct { .. })
                         | (UserTypeKind::Tagged, KObject::Tagged { .. })
                         | (UserTypeKind::Module, KObject::KModule(_, _))
+                        | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
                 ),
                 _ => false,
             },
@@ -344,6 +346,55 @@ mod tests {
         assert!(t.accepts_part(&ExpressionPart::Future(s)));
         assert!(!t.accepts_part(&ExpressionPart::Future(tagged)));
         assert!(!t.accepts_part(&ExpressionPart::Future(n)));
+    }
+
+    /// Stage 4: a `Wrapped` value with a NEWTYPE identity fills both the wildcard
+    /// `AnyUserType { kind: Newtype { repr: <sentinel> } }` (the manual `PartialEq`
+    /// ignores `repr`) and the per-declaration `UserType { kind: Newtype, .. }` slot
+    /// of matching `(scope_id, name)`.
+    #[test]
+    fn any_user_type_newtype_accepts_wrapped_only() {
+        use crate::runtime::machine::core::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let t = KType::AnyUserType {
+            kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+        };
+        let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
+        let type_id: &KType = arena.alloc_ktype(KType::UserType {
+            kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+            scope_id: 0xAA,
+            name: "Distance".into(),
+        });
+        let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped { inner, type_id });
+        let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
+            name: "Point".into(),
+            scope_id: 0,
+            fields: std::rc::Rc::new(indexmap::IndexMap::new()),
+        });
+        assert!(t.accepts_part(&ExpressionPart::Future(w)));
+        assert!(!t.accepts_part(&ExpressionPart::Future(s)));
+        assert!(t.matches_value(w));
+        assert!(!t.matches_value(s));
+    }
+
+    /// Pins the wildcard refinement: `UserType { kind: Newtype { repr: <real> }, .. }`
+    /// is strictly more specific than `AnyUserType { kind: Newtype { repr: <sentinel> } }`,
+    /// and incomparable with `AnyUserType { kind: Struct }`.
+    #[test]
+    fn user_type_newtype_specificity_lattice() {
+        let any_newtype = KType::AnyUserType {
+            kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+        };
+        let any_struct = KType::AnyUserType { kind: UserTypeKind::Struct };
+        let dist = KType::UserType {
+            kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+            scope_id: 0xAA,
+            name: "Distance".into(),
+        };
+        assert!(dist.is_more_specific_than(&any_newtype));
+        assert!(!any_newtype.is_more_specific_than(&dist));
+        assert!(!dist.is_more_specific_than(&any_struct));
+        assert!(!any_struct.is_more_specific_than(&dist));
     }
 
     /// Specificity ordering for the new `UserType` / `AnyUserType` variants:

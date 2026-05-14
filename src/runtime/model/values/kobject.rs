@@ -99,6 +99,22 @@ pub enum KObject<'a> {
     /// escape](../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
     KModule(&'a Module<'a>, Option<Rc<CallArena>>),
     KSignature(&'a Signature<'a>),
+    /// Stage-4 NEWTYPE carrier. Tags a representation value with a NEWTYPE type identity.
+    /// `inner` is the underlying representation value (arena-allocated, invariantly *not*
+    /// a `Wrapped` — newtype-over-newtype is collapsed to a single layer at construction
+    /// time in `newtype_def::newtype_construct_primitive`). `type_id` is the
+    /// `&'a KType::UserType { kind: Newtype, .. }` minted at NEWTYPE declaration time
+    /// (the same arena reference `bindings.types[name]` holds).
+    ///
+    /// `ktype()` reports `(*type_id).clone()` — the per-declaration nominal identity.
+    /// Dispatch on a slot typed by `Distance` admits a `Wrapped` whose `type_id`
+    /// resolves to the same `(scope_id, name)`. ATTR over a `Wrapped` falls through to
+    /// `inner` (`access_field`'s `Wrapped` arm), so wrapping a struct in a NEWTYPE
+    /// doesn't force every field accessor to redo.
+    Wrapped {
+        inner: &'a KObject<'a>,
+        type_id: &'a KType,
+    },
     Null,
 }
 
@@ -152,6 +168,10 @@ impl<'a> KObject<'a> {
                 name: m.path.clone(),
             },
             KObject::KSignature(_) => KType::Signature,
+            // Stage 4: a `Wrapped` reports its cached NEWTYPE identity directly. The cell
+            // is the arena ref the declaration site minted; cloning preserves the
+            // `(kind, scope_id, name)` triple the dispatcher reads.
+            KObject::Wrapped { type_id, .. } => (*type_id).clone(),
         }
     }
 
@@ -195,6 +215,13 @@ impl<'a> KObject<'a> {
             KObject::TypeNameRef(t, _) => KObject::TypeNameRef(t.clone(), OnceCell::new()),
             KObject::KModule(m, frame) => KObject::KModule(m, frame.clone()),
             KObject::KSignature(s) => KObject::KSignature(s),
+            // Stage 4: both fields are arena references; copying them preserves the
+            // immutable-carrier contract. `inner` already lives in the arena, so no
+            // deep allocation is needed here.
+            KObject::Wrapped { inner, type_id } => KObject::Wrapped {
+                inner: *inner,
+                type_id: *type_id,
+            },
         }
     }
 
@@ -366,6 +393,15 @@ impl<'a> Parseable for KObject<'a> {
             KObject::TypeNameRef(t, _) => t.render(),
             KObject::KModule(m, _) => format!("module {}", m.path),
             KObject::KSignature(s) => format!("sig {}", s.path),
+            // Stage 4: render as `Distance(<inner summary>)`. `type_id.name()` returns
+            // the bare declared name (per `user_type_name_renders_bare_name`); the
+            // inner summary recurses via the `Parseable` impl, mirroring the
+            // surface-form invariant Struct / Tagged carriers honor.
+            KObject::Wrapped { inner, type_id } => format!(
+                "{}({})",
+                type_id.name(),
+                Parseable::summarize(*inner),
+            ),
         }
     }
 }
@@ -557,5 +593,68 @@ mod tests {
         let v = KObject::KTypeValue(KType::List(Box::new(KType::Number)));
         use crate::runtime::model::types::Parseable;
         assert_eq!(v.summarize(), "List<Number>");
+    }
+
+    /// Stage 4: `Wrapped::ktype()` reports a clone of `*type_id`, preserving the full
+    /// `(kind, scope_id, name)` triple the dispatcher reads for per-declaration identity
+    /// comparisons.
+    #[test]
+    fn wrapped_ktype_reports_clone_of_type_id() {
+        use crate::runtime::machine::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let inner = arena.alloc_object(KObject::Number(3.0));
+        let type_id: &KType = arena.alloc_ktype(KType::UserType {
+            kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+            scope_id: 0xAA,
+            name: "Distance".into(),
+        });
+        let w = KObject::Wrapped { inner, type_id };
+        match w.ktype() {
+            KType::UserType { kind: UserTypeKind::Newtype { .. }, name, scope_id } => {
+                assert_eq!(name, "Distance");
+                assert_eq!(scope_id, 0xAA);
+            }
+            other => panic!("expected Newtype identity, got {other:?}"),
+        }
+    }
+
+    /// Stage 4: `Wrapped::summarize()` renders `Distance(<inner>)`, mirroring the
+    /// surface-form invariant Struct / Tagged carriers honor.
+    #[test]
+    fn wrapped_summarize_renders_surface_form() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::model::types::Parseable;
+        let arena = RuntimeArena::new();
+        let inner = arena.alloc_object(KObject::Number(3.0));
+        let type_id = arena.alloc_ktype(KType::UserType {
+            kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+            scope_id: 0xAA,
+            name: "Distance".into(),
+        });
+        let w = KObject::Wrapped { inner, type_id };
+        assert_eq!(w.summarize(), "Distance(3)");
+    }
+
+    /// Stage 4: `Wrapped::deep_clone()` copies both arena references without
+    /// re-allocating. The cloned `inner` and `type_id` point at the same arena slots.
+    #[test]
+    fn wrapped_deep_clone_preserves_arena_references() {
+        use crate::runtime::machine::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let inner = arena.alloc_object(KObject::Number(3.0));
+        let type_id = arena.alloc_ktype(KType::UserType {
+            kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+            scope_id: 0xAA,
+            name: "Distance".into(),
+        });
+        let original = KObject::Wrapped { inner, type_id };
+        let cloned = original.deep_clone();
+        match cloned {
+            KObject::Wrapped { inner: ci, type_id: ct } => {
+                assert!(std::ptr::eq(ci, inner));
+                assert!(std::ptr::eq(ct, type_id));
+            }
+            _ => panic!("expected Wrapped after deep_clone"),
+        }
     }
 }

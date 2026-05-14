@@ -307,6 +307,10 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
 fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
     // Snapshot kind + scope_id under a single `pending_types` read borrow; release
     // before calling into Scope methods that take their own borrows.
+    // Stage 4: `UserTypeKind` is no longer `Copy` (the `Newtype { repr }` variant carries
+    // a `Box<KType>`). `Clone` the kind out of the borrow. STRUCT / named-UNION are the
+    // only carriers that participate in SCC cycle-close — neither produces a `Newtype`
+    // variant here, so this clone is always a cheap variant-tag copy.
     let identities: Vec<(String, UserTypeKind, usize)> = {
         let pending = scope.bindings().pending_types();
         members
@@ -315,7 +319,7 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
                 let entry = pending
                     .get(n)
                     .expect("cycle member must be in pending_types when cycle-close fires");
-                (n.clone(), entry.kind, entry.scope_id)
+                (n.clone(), entry.kind.clone(), entry.scope_id)
             })
             .collect()
     };

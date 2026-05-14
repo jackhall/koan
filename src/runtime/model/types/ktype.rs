@@ -10,27 +10,60 @@
 
 /// Surface-keyword classifier shared by `KType::UserType` and `KType::AnyUserType`. Each
 /// variant maps to the keyword that declares the carrier (`STRUCT`, anonymous-or-named
-/// `UNION` → `Tagged`, `MODULE`). The kind is sourced from the declaration site at finalize
-/// time and lives on both the per-declaration identity tag (`UserType`) and the wildcard
-/// "any user-declared X" tag (`AnyUserType`). This is the dispatcher's primary kind
-/// discriminator for user-declared types. See
+/// `UNION` → `Tagged`, `MODULE`, `NEWTYPE`). The kind is sourced from the declaration site
+/// at finalize time and lives on both the per-declaration identity tag (`UserType`) and
+/// the wildcard "any user-declared X" tag (`AnyUserType`). This is the dispatcher's
+/// primary kind discriminator for user-declared types. See
 /// [per-declaration type identity](../../../../design/type-system.md).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// Stage 4 added the `Newtype { repr }` variant which carries a `Box<KType>`, so the enum
+/// is no longer `Copy`. The manual `PartialEq` / `Eq` impl below *ignores* the inner
+/// `repr` — identity equality is by variant only, since the per-declaration `(scope_id,
+/// name)` pair on `KType::UserType` already separates two newtypes that share a
+/// representation. Ignoring `repr` is load-bearing for the wildcard
+/// `AnyUserType { kind: Newtype { repr: <sentinel> } }` to admit any concrete
+/// `UserType { kind: Newtype { repr: <real> }, .. }` value.
+#[derive(Clone, Debug)]
 pub enum UserTypeKind {
     Struct,
     Tagged,
     Module,
+    /// Stage 4: fresh nominal identity over a transparent representation.
+    /// `repr` is the declared representation type (`NEWTYPE Distance = Number`
+    /// carries `repr: Box<KType::Number>`). The variant-internal `repr` is NOT
+    /// part of identity equality (the manual `PartialEq` excludes it); two
+    /// `KType::UserType` values with the same `(scope_id, name)` but technically
+    /// different `repr` boxes (e.g. arena-allocated identity vs. a freshly cloned
+    /// one, or wildcard-sentinel vs. concrete) still compare equal.
+    Newtype { repr: Box<KType> },
 }
+
+impl PartialEq for UserTypeKind {
+    fn eq(&self, other: &Self) -> bool {
+        use UserTypeKind::*;
+        matches!(
+            (self, other),
+            (Struct, Struct)
+                | (Tagged, Tagged)
+                | (Module, Module)
+                | (Newtype { .. }, Newtype { .. }),
+        )
+    }
+}
+impl Eq for UserTypeKind {}
 
 impl UserTypeKind {
     /// Surface keyword rendered in diagnostics and `AnyUserType::name()`. Matches the
     /// surface name a user would write for the wildcard slot (`Struct`, `Tagged`,
-    /// `Module`).
+    /// `Module`, `Newtype`). `Newtype` is not yet registered as a writable surface name
+    /// in `from_name` / `default_scope` — deferred per the stage-4 roadmap — but the
+    /// keyword is still pinned here for diagnostic rendering.
     pub fn surface_keyword(&self) -> &'static str {
         match self {
             UserTypeKind::Struct => "Struct",
             UserTypeKind::Tagged => "Tagged",
             UserTypeKind::Module => "Module",
+            UserTypeKind::Newtype { .. } => "Newtype",
         }
     }
 }
@@ -194,6 +227,22 @@ mod tests {
         assert_eq!(UserTypeKind::Struct.surface_keyword(), "Struct");
         assert_eq!(UserTypeKind::Tagged.surface_keyword(), "Tagged");
         assert_eq!(UserTypeKind::Module.surface_keyword(), "Module");
+        assert_eq!(
+            UserTypeKind::Newtype { repr: Box::new(KType::Number) }.surface_keyword(),
+            "Newtype",
+        );
+    }
+
+    /// Manual `PartialEq` on `UserTypeKind` ignores the `Newtype` variant's `repr`.
+    /// Load-bearing for the wildcard `AnyUserType { kind: Newtype { repr: <sentinel> } }`
+    /// to compare equal to a concrete `UserType { kind: Newtype { repr: <real> }, .. }`.
+    #[test]
+    fn newtype_kind_partial_eq_ignores_repr() {
+        let a = UserTypeKind::Newtype { repr: Box::new(KType::Number) };
+        let b = UserTypeKind::Newtype { repr: Box::new(KType::Str) };
+        assert_eq!(a, b);
+        assert_ne!(a, UserTypeKind::Struct);
+        assert_ne!(UserTypeKind::Struct, a);
     }
 
     #[test]
