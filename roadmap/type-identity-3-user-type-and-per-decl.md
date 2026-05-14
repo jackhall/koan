@@ -168,13 +168,31 @@ Three ancillary gaps the same surface admits:
   PR — the single-home invariant ("type names resolve via `resolve_type`
   only") is the explicit payoff.
 
+## Stage-2 carve-outs
+
+Stage 2 deliberately deferred one piece of `TypeExpr` plumbing that stage
+3 inherits:
+
+- *`ReturnTypeCapture::Unresolved` carries a bare name, not a `TypeExpr`.*
+  The local `ReturnTypeCapture` enum in
+  [`fn_def.rs`](../src/runtime/builtins/fn_def.rs) stores the deferred
+  return-type identifier as a `String`, not the full `TypeExpr` the
+  stage-2
+  [`KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)`](../src/runtime/model/values/kobject.rs)
+  carrier preserves. Stage 3's `KType::UserType { kind, scope_id, name }`
+  is itself a bare-leaf identity (the name is still a single identifier
+  string), so the bare-`String` capture stays sufficient through this
+  stage. The named follow-up — promoting `Unresolved` to carry the full
+  `TypeExpr` — fires the moment a stage-3-adjacent change wants
+  parameterized user-typed return types (a `FN ... -> MyList<Number>`
+  whose `MyList` is user-declared and parses to a structured `TypeExpr`
+  rather than a leaf), since at that point the bare name discards the
+  parser-side parameter shape the `TypeNameRef` carrier was specifically
+  designed to preserve.
+
 ## Dependencies
 
-**Requires:**
-
-- [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](type-identity-2-typename-ref-carrier.md)
-  — collapsing `KType::Struct` / `Tagged` / `ModuleType` into
-  `KType::UserType` is cleaner once `KType::Unresolved` is already gone.
+**Requires:** none.
 
 **Unblocks:**
 

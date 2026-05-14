@@ -1,14 +1,16 @@
 //! `ArgumentBundle` — the resolved name-to-value map produced by `KFunction::bind` and
 //! consumed by a builtin or user-defined body.
 //!
-//! Also home to the slot-extraction helpers (`extract_kexpression`, `extract_type_expr`,
-//! `extract_bare_type_name`) that collapse the `Rc::try_unwrap` + variant-match dance
-//! used to pull `KExpression`, `TypeExpr`, and bare type names out of a bundle slot.
+//! Also home to the slot-extraction helpers (`extract_kexpression`, `extract_ktype`,
+//! `extract_type_name_ref`, `extract_bare_type_name`) that collapse the
+//! `Rc::try_unwrap` + variant-match dance used to pull `KExpression`, an elaborated
+//! `KType`, a `TypeNameRef` carrier's `TypeExpr`, or a surface type name out of a
+//! bundle slot.
 
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::KExpression;
+use crate::ast::{KExpression, TypeExpr, TypeParams};
 
 use crate::runtime::machine::core::{KError, KErrorKind};
 use crate::runtime::model::types::KType;
@@ -55,9 +57,13 @@ pub(crate) fn extract_kexpression<'a>(
     }
 }
 
-/// Take ownership of the elaborated `KType` carried by a `KType::TypeExprRef` slot.
-/// Bindings now store `KObject::KTypeValue(kt)` directly; this helper pulls the inner
-/// `KType` out, cloning if the bundle is not the sole `Rc` holder.
+/// Take ownership of the elaborated `KType` carried by a `KObject::KTypeValue`-variant
+/// `KType::TypeExprRef` slot. Returns `None` for the sibling `KObject::TypeNameRef`
+/// carrier (callers route to [`extract_type_name_ref`] for that path) and for missing
+/// slots. Clones the inner `KType` if the bundle is not the sole `Rc` holder.
+///
+/// Both extractors consume the slot via `remove`; a caller that wants to try both must
+/// peek with `bundle.get(...)` first to pick the right one.
 pub(crate) fn extract_ktype<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,
@@ -73,18 +79,39 @@ pub(crate) fn extract_ktype<'a>(
     }
 }
 
-/// Resolve a `KType::TypeExprRef` slot to its bare type name. After the
-/// `KObject::TypeExprValue → KObject::KTypeValue` migration, the slot's payload is an
-/// elaborated `KType`; only leaf-named variants are valid binder / constructor / type-call
-/// names. Parameterized forms (`List<X>`), function types, `Mu` / `RecursiveRef`, and the
-/// other structural variants are rejected as `ShapeError`. `surface` is the surface-form
-/// keyword (`"STRUCT"`, `"UNION"`, …) embedded in the message.
+/// Resolve a `KType::TypeExprRef` slot to its bare type name. Two carrier variants share
+/// the slot post-stage-2:
+///
+/// - `KObject::KTypeValue(t)` — the parser-side `TypeExpr` resolved to a builtin `KType`
+///   at `resolve_for` time. Leaf-named variants surface their `KType::name()`;
+///   structural / recursive shapes (`List<X>`, function types, `Mu` / `RecursiveRef`)
+///   are not valid binder / constructor / type-call names and surface a `ShapeError`.
+/// - `KObject::TypeNameRef(t, _)` — a `resolve_for`-time fallback for bare-leaf names
+///   not in `KType::from_name`'s builtin table. The surface name is `t.name` directly;
+///   parameterized shapes on the carrier's `TypeExpr` are rejected with the same
+///   `ShapeError` text shape as the parameterized-`KType` rejection.
+///
+/// `surface` is the surface-form keyword (`"STRUCT"`, `"UNION"`, …) embedded in the
+/// message.
 pub(crate) fn extract_bare_type_name<'a>(
     bundle: &ArgumentBundle<'a>,
     name: &str,
     surface: &str,
 ) -> Result<String, KError> {
     match bundle.get(name) {
+        Some(KObject::TypeNameRef(t, _)) => match &t.params {
+            TypeParams::None => Ok(t.name.clone()),
+            // Parameterized surface form on a `TypeNameRef` carrier — the parser saw
+            // something like `Foo<Bar>` where `Foo` isn't a builtin and the user wrote
+            // it in a binder / constructor slot. Reject with the same message shape as
+            // the `KTypeValue` parameterized rejection.
+            TypeParams::List(_) | TypeParams::Function { .. } => {
+                Err(KError::new(KErrorKind::ShapeError(format!(
+                    "{surface} {name} must be a bare type name, got `{}`",
+                    t.render(),
+                ))))
+            }
+        },
         Some(KObject::KTypeValue(t)) => match t {
             // Leaf-named variants: surface name is the user-facing identifier.
             KType::Number
@@ -101,8 +128,7 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::Signature
             | KType::Any
             | KType::ModuleType { .. }
-            | KType::SignatureBound { .. }
-            | KType::Unresolved(_) => Ok(t.name()),
+            | KType::SignatureBound { .. } => Ok(t.name()),
             // Structural / recursive shapes are not valid binder names — the caller wants
             // a leaf identifier, not a parameterized container.
             KType::List(_)
@@ -120,5 +146,29 @@ pub(crate) fn extract_bare_type_name<'a>(
             got: other.ktype().name(),
         })),
         None => Err(KError::new(KErrorKind::MissingArg(name.to_string()))),
+    }
+}
+
+/// Take ownership of a `TypeNameRef` carrier's `TypeExpr` out of `bundle.args`, cloning
+/// if the bundle is not the sole `Rc` holder. Returns `None` when the slot is missing or
+/// holds a non-`TypeNameRef` variant (the caller typically tried `extract_ktype` first
+/// and falls through here for the unresolved-leaf carrier path).
+///
+/// FN's return-type elaboration consumes the helper to recover the bare-leaf name into
+/// its existing `ReturnTypeState::Pending(name, …)` / `ReturnTypeCapture::Unresolved`
+/// machinery; the parser-preserved `TypeExpr` is the source of truth for the surface
+/// form that survives bind for diagnostics.
+pub(crate) fn extract_type_name_ref<'a>(
+    bundle: &mut ArgumentBundle<'a>,
+    name: &str,
+) -> Option<TypeExpr> {
+    let rc = bundle.args.remove(name)?;
+    match Rc::try_unwrap(rc) {
+        Ok(KObject::TypeNameRef(t, _)) => Some(t),
+        Ok(_) => None,
+        Err(rc) => match &*rc {
+            KObject::TypeNameRef(t, _) => Some(t.clone()),
+            _ => None,
+        },
     }
 }

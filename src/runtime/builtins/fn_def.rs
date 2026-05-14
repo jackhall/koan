@@ -4,7 +4,9 @@ use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Signa
 use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
 use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 
-use crate::runtime::machine::kfunction::argument_bundle::{extract_kexpression, extract_ktype};
+use crate::runtime::machine::kfunction::argument_bundle::{
+    extract_kexpression, extract_ktype, extract_type_name_ref,
+};
 use crate::ast::ExpressionPart;
 use super::{err, register_builtin_with_pre_run};
 
@@ -45,9 +47,25 @@ pub fn body<'a>(
             )));
         }
     };
-    let return_type_raw = match extract_ktype(&mut bundle, "return_type") {
-        Some(t) => t,
-        None => {
+    // The return-type slot holds either a fully-resolved `KTypeValue` (builtin leaf
+    // names, structural shapes like `List<Number>`) or a `TypeNameRef` carrier (a bare
+    // leaf name not in `KType::from_name`'s table — `Point`, `IntOrd`, `MyList`). Peek
+    // first to pick the right extractor: both consume the slot via `remove`, so calling
+    // one after the other on the same bundle would lose the value.
+    enum ReturnTypeRaw {
+        Resolved(KType),
+        Carrier(crate::ast::TypeExpr),
+    }
+    let return_type_raw = match bundle.get("return_type") {
+        Some(KObject::KTypeValue(_)) => match extract_ktype(&mut bundle, "return_type") {
+            Some(t) => ReturnTypeRaw::Resolved(t),
+            None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
+        },
+        Some(KObject::TypeNameRef(_, _)) => match extract_type_name_ref(&mut bundle, "return_type") {
+            Some(te) => ReturnTypeRaw::Carrier(te),
+            None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
+        },
+        _ => {
             return err(KError::new(KErrorKind::ShapeError(
                 "FN return-type slot must be a type expression (e.g. `Number`, `List<Str>`)"
                     .to_string(),
@@ -81,22 +99,29 @@ pub fn body<'a>(
         Pending(String, Vec<crate::runtime::machine::NodeId>),
     }
     let return_type_state = match return_type_raw {
-        KType::Unresolved(name) => match elaborate_type_expr(
-            &mut elaborator,
-            &crate::ast::TypeExpr::leaf(name.clone()),
-        ) {
-            ElabResult::Done(kt) => ReturnTypeState::Done(kt),
-            ElabResult::Park(producers) => ReturnTypeState::Pending(name, producers),
-            ElabResult::Unbound(_) => match KType::from_name(&name) {
-                Some(kt) => ReturnTypeState::Done(kt),
-                None => {
-                    return err(KError::new(KErrorKind::ShapeError(format!(
-                        "FN return-type slot: unknown type name `{name}`"
-                    ))));
-                }
-            },
-        },
-        kt => ReturnTypeState::Done(kt),
+        ReturnTypeRaw::Resolved(kt) => ReturnTypeState::Done(kt),
+        // Bare-leaf carrier path: walk the scope-aware elaborator against the parser-
+        // preserved `TypeExpr`. The carrier's `name` survives bind regardless of
+        // resolution outcome — the surface form is what diagnostics render and what
+        // park-on-placeholder uses to wake later. Stage 2 keeps `ReturnTypeCapture`'s
+        // `Unresolved(String)` carrier; the parser-preserved `TypeExpr` could carry
+        // through if a future workload needs a parameterized user-typed return type,
+        // but FN's shipped patterns are all bare leaves.
+        ReturnTypeRaw::Carrier(te) => {
+            let name = te.name.clone();
+            match elaborate_type_expr(&mut elaborator, &te) {
+                ElabResult::Done(kt) => ReturnTypeState::Done(kt),
+                ElabResult::Park(producers) => ReturnTypeState::Pending(name, producers),
+                ElabResult::Unbound(_) => match KType::from_name(&name) {
+                    Some(kt) => ReturnTypeState::Done(kt),
+                    None => {
+                        return err(KError::new(KErrorKind::ShapeError(format!(
+                            "FN return-type slot: unknown type name `{name}`"
+                        ))));
+                    }
+                },
+            }
+        }
     };
 
     // Step 2: elaborate the parameter list. Three sub-cases:

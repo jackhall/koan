@@ -1,9 +1,10 @@
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::ast::KExpression;
+use crate::ast::{KExpression, TypeExpr};
 use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::machine::core::{CallArena, KFuture};
 use crate::runtime::model::types::{KType, Parseable, Serializable, SignatureElement};
@@ -48,6 +49,23 @@ pub enum KObject<'a> {
     /// downstream never see surface syntax again. Slot kind is still `KType::TypeExprRef`;
     /// the slot is the dispatch-position marker, the variant is the runtime value.
     KTypeValue(KType),
+    /// Bind-time carrier for a `TypeExprRef`-slot value whose surface `TypeExpr` couldn't
+    /// be lowered to a concrete `KType` at `ExpressionPart::resolve_for` time — i.e. a
+    /// bare-leaf name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`,
+    /// `MyList`). Preserves the parser-side `TypeExpr` for consumers that want the surface
+    /// name (`extract_bare_type_name`, ATTR's TypeExprRef-lhs lookup, FN's deferred return-
+    /// type elaboration, `LET <Type-class> = …`) and memoizes the eventual scope-resolved
+    /// `&'a KType` in the cell via [`Self::resolve_type_name_ref`].
+    ///
+    /// The `OnceCell` is reset by `deep_clone` rather than preserved across clones: the
+    /// cell pointer is into the originating scope's arena, but the *semantic* validity of
+    /// "this is what `Scope::resolve_type` would return *in the cloning scope*" is not
+    /// guaranteed when the clone crosses scope chains. `TypeNameRef` is a bind-time slot
+    /// value, not a hot runtime value; re-resolution after a clone is one scope walk —
+    /// cheap enough that the conservative reset wins over the bookkeeping needed to
+    /// preserve a cell whose validity depends on the clone destination. Revisitable in a
+    /// follow-up if a profiling workload surfaces this as hot.
+    TypeNameRef(TypeExpr, OnceCell<&'a KType>),
     /// `Option<Rc<CallArena>>` mirrors `KFunction`'s lifecycle anchor: a `Module` whose
     /// child scope was alloc'd inside a per-call frame (a functor body's freshly-built
     /// `MODULE Result = (...)`) carries the frame's `Rc` so the captured scope outlives
@@ -85,6 +103,11 @@ impl<'a> KObject<'a> {
             KObject::Tagged { .. } => KType::Tagged,
             KObject::Struct { .. } => KType::Struct,
             KObject::KTypeValue(_) => KType::TypeExprRef,
+            // `TypeNameRef` is dispatch-equivalent to `KTypeValue` — both fill a
+            // `TypeExprRef`-typed slot. The slot's role is the dispatch-position marker;
+            // whether the carrier resolved at `resolve_for` time or memoizes lazily is
+            // an internal detail.
+            KObject::TypeNameRef(_, _) => KType::TypeExprRef,
             KObject::KModule(_, _) => KType::Module,
             KObject::KSignature(_) => KType::Signature,
         }
@@ -117,6 +140,9 @@ impl<'a> KObject<'a> {
                 fields: Rc::clone(fields),
             },
             KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
+            // The memo cell is intentionally reset on clone — see the `TypeNameRef`
+            // variant doc for the rationale.
+            KObject::TypeNameRef(t, _) => KObject::TypeNameRef(t.clone(), OnceCell::new()),
             KObject::KModule(m, frame) => KObject::KModule(m, frame.clone()),
             KObject::KSignature(s) => KObject::KSignature(s),
         }
@@ -164,6 +190,59 @@ impl<'a> KObject<'a> {
             KObject::KTypeValue(t) => Some(t),
             _ => None,
         }
+    }
+
+    /// Resolve a `TypeNameRef` carrier against `scope` and memoize the result.
+    ///
+    /// Bare-leaf carriers (`TypeParams::None`) consult [`crate::runtime::machine::core::Scope::resolve_type`]
+    /// directly; on first success, the arena-allocated `&'a KType` is cached in the cell
+    /// and returned on every subsequent call without re-walking the scope chain.
+    /// Parameterized carriers (`Foo<Bar>` where `Foo` is user-bound) fall through to the
+    /// scope-aware elaborator and allocate the resulting `KType` into the scope's arena
+    /// to obtain an arena-lifetime reference for the cell. The parameterized path is rare
+    /// today — most `TypeNameRef` carriers are bare leaves — but lives in this single
+    /// method so a future workload that needs it doesn't have to touch every consumer.
+    ///
+    /// Returns `None` for non-`TypeNameRef` variants (a defensive arm — callers should
+    /// only invoke this on a `TypeNameRef`) and for carriers whose `TypeExpr` doesn't
+    /// resolve in `scope`. The unbound case is the consumer's responsibility to surface
+    /// as a structured `UnboundName` / `ShapeError`.
+    pub fn resolve_type_name_ref(
+        &self,
+        scope: &crate::runtime::machine::core::Scope<'a>,
+    ) -> Option<&'a KType> {
+        let (t, cell) = match self {
+            KObject::TypeNameRef(t, cell) => (t, cell),
+            _ => return None,
+        };
+        if let Some(kt) = cell.get() {
+            return Some(*kt);
+        }
+        // Bare-leaf fast path: skip the elaborator entirely so a cycle of leaf carriers
+        // can't recurse forever. The elaborator's threaded set is empty here.
+        use crate::ast::TypeParams;
+        let resolved: Option<&'a KType> = match &t.params {
+            TypeParams::None => scope.resolve_type(&t.name),
+            // Parameterized fallback: run the scope-aware elaborator and allocate the
+            // resulting `KType` into the arena so the cell can hold an `&'a KType`.
+            // Parking and unbound surface as `None` — the bind-time caller is not on a
+            // scheduler-driven path and treats both as "didn't resolve here."
+            _ => {
+                use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+                let mut elaborator = Elaborator::new(scope);
+                match elaborate_type_expr(&mut elaborator, t) {
+                    ElabResult::Done(kt) => Some(scope.arena.alloc_ktype(kt) as &'a KType),
+                    ElabResult::Park(_) | ElabResult::Unbound(_) => None,
+                }
+            }
+        };
+        if let Some(kt) = resolved {
+            // OnceCell's `set` errors only if already populated — the `get` at the top
+            // covered that case, so a benign error here is impossible in single-threaded
+            // execution. Ignore the result for symmetry with `Cell::set`.
+            let _ = cell.set(kt);
+        }
+        resolved
     }
 }
 
@@ -231,6 +310,10 @@ impl<'a> Parseable for KObject<'a> {
             }
             KObject::Null => "null".to_string(),
             KObject::KTypeValue(t) => t.render(),
+            // Preserve the surface form the user wrote (`Point`, `Foo<Bar>`) for
+            // diagnostics — the cell's resolved `&KType` would render via `name()` and
+            // might normalize, which the "surface form survives bind" invariant forbids.
+            KObject::TypeNameRef(t, _) => t.render(),
             KObject::KModule(m, _) => format!("module {}", m.path),
             KObject::KSignature(s) => format!("sig {}", s.path),
         }
@@ -325,6 +408,96 @@ mod tests {
             KObject::KString("x".into()),
         ]));
         assert!(t.matches_value(&mixed));
+    }
+
+    /// `TypeNameRef` summarizes through `TypeExpr::render`, preserving the surface form
+    /// (`MyT`, `Point<Foo>`) for diagnostics. The cell's eventual resolved `&KType` is
+    /// not consulted by `summarize` — the surface form must survive bind regardless of
+    /// whether the carrier has been resolved yet.
+    #[test]
+    fn type_name_ref_summarize_renders_surface_form() {
+        use crate::ast::TypeExpr;
+        let v = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()), OnceCell::new());
+        use crate::runtime::model::types::Parseable;
+        assert_eq!(v.summarize(), "MyT");
+    }
+
+    /// `TypeNameRef::ktype()` reports `TypeExprRef` so it fills the same dispatch slot as
+    /// the fully-elaborated `KTypeValue` carrier. Pins the slot-routing invariant.
+    #[test]
+    fn type_name_ref_ktype_is_type_expr_ref() {
+        use crate::ast::TypeExpr;
+        let v = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()), OnceCell::new());
+        assert_eq!(v.ktype(), KType::TypeExprRef);
+    }
+
+    /// Register a type under a name and resolve through a `TypeNameRef`. The cell
+    /// captures the arena reference on first call so the second call returns the same
+    /// pointer without re-walking the scope chain.
+    #[test]
+    fn type_name_ref_resolve_in_scope_memoizes() {
+        use crate::ast::TypeExpr;
+        use crate::runtime::builtins::test_support::run_root_bare;
+        use crate::runtime::machine::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        scope.register_type("MyT".into(), KType::Number);
+        let tnr = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()), OnceCell::new());
+        let first = tnr
+            .resolve_type_name_ref(scope)
+            .expect("first resolve hits the bound type");
+        let second = tnr
+            .resolve_type_name_ref(scope)
+            .expect("second resolve hits the memo cell");
+        assert!(
+            std::ptr::eq(first, second),
+            "memo cell should return the same arena pointer on the second call",
+        );
+    }
+
+    /// A non-`TypeNameRef` variant returns `None` from `resolve_type_name_ref`. The
+    /// defensive arm pins the API contract — callers can blindly try the helper without
+    /// classifying the variant first.
+    #[test]
+    fn type_name_ref_resolve_returns_none_for_non_carrier_variant() {
+        use crate::runtime::builtins::test_support::run_root_bare;
+        use crate::runtime::machine::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let obj: KObject<'_> = KObject::Number(1.0);
+        assert!(obj.resolve_type_name_ref(scope).is_none());
+    }
+
+    /// An unbound name resolves to `None`. Consumers translate this into an
+    /// `UnboundName` / `ShapeError` per their own diagnostic shape.
+    #[test]
+    fn type_name_ref_resolve_returns_none_for_unbound_name() {
+        use crate::ast::TypeExpr;
+        use crate::runtime::builtins::test_support::run_root_bare;
+        use crate::runtime::machine::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let tnr = KObject::TypeNameRef(TypeExpr::leaf("Bogus".into()), OnceCell::new());
+        assert!(tnr.resolve_type_name_ref(scope).is_none());
+    }
+
+    /// `deep_clone` resets the memo cell — the cloned carrier's cell is fresh and must
+    /// re-resolve through the scope chain on the next call. Pins the conservative-reset
+    /// semantics chosen for the cross-scope-cache-validity concern.
+    #[test]
+    fn type_name_ref_deep_clone_resets_cell() {
+        use crate::ast::TypeExpr;
+        let cell: OnceCell<&'static KType> = OnceCell::new();
+        let leaked: &'static KType = Box::leak(Box::new(KType::Number));
+        let _ = cell.set(leaked);
+        let original: KObject<'static> = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()), cell);
+        let cloned = original.deep_clone();
+        match cloned {
+            KObject::TypeNameRef(_, c) => {
+                assert!(c.get().is_none(), "deep_clone should reset the memo cell");
+            }
+            _ => panic!("expected TypeNameRef after clone"),
+        }
     }
 
     #[test]

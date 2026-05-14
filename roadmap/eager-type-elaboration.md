@@ -3,19 +3,19 @@
 Phases 1–2 (one canonical runtime type representation), a meaningful slice
 of phase 3 (scheduler-aware FN / STRUCT / UNION elaboration with
 self-recursive STRUCT support and `LET Ty = Ty` cycle detection),
-parens-wrapped FN parameter type sub-Dispatch, and the bulk of the phase-5
+parens-wrapped FN parameter type sub-Dispatch, the bulk of the phase-5
 cleanup (deletion of `NoopResolver`, the `TypeResolver` trait,
 `ScopeResolver`, the legacy `parse_typed_field_list`, and the `&dyn
-TypeResolver` parameter on `KType::from_type_expr`) have landed. The
-`KType::Unresolved` deletion and `OnceCell<KType>` late-binding mechanism
-close via [type identity stage 2 — `KObject::TypeNameRef` carrier and
-`KType::Unresolved` deletion](type-identity-2-typename-ref-carrier.md),
-whose `KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)` carrier is the
-same mechanism — the cell *is* the late-binding slot. Mutual STRUCT /
-UNION recursion (SCC pre-registration) ships under [type identity stage
-3](type-identity-3-user-type-and-per-decl.md). This item now narrows to
-the two genuinely deferred questions stage 2 does not address:
-module-qualified type-name paths and non-SCC forward references.
+TypeResolver` parameter on `KType::from_type_expr`), and the
+`KType::Unresolved` deletion plus `OnceCell<KType>` late-binding mechanism
+(via the `KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)` carrier
+whose cell *is* the late-binding slot — see
+[design/type-system.md § Open work](../design/type-system.md#open-work))
+have landed. Mutual STRUCT / UNION recursion (SCC pre-registration) ships
+under [type identity stage 3](type-identity-3-user-type-and-per-decl.md).
+This item now narrows to the two genuinely deferred questions the shipped
+work does not address: module-qualified type-name paths and non-SCC
+forward references.
 
 **Problem.** Two narrow questions remain after the type-identity stages
 land:
@@ -58,10 +58,7 @@ land:
 
 ## Dependencies
 
-**Requires:**
-- [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](type-identity-2-typename-ref-carrier.md)
-  — supplies the carrier this item's deferred module-qualified-path
-  extension would carry.
+**Requires:** none.
 
 **Unblocks:**
 - [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md) —

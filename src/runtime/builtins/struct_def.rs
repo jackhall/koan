@@ -37,8 +37,10 @@ pub fn body<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    // `TypeExprRef`-typed slot resolves to `KObject::KTypeValue(kt)`. The name slot wants
-    // a bare leaf — reject parameterized forms like `Point<X>` at definition time.
+    // `TypeExprRef`-typed slot resolves to `KObject::KTypeValue(kt)` for builtin leaves
+    // / structural shapes or `KObject::TypeNameRef(t, _)` for bare user-bound names.
+    // The shared helper accepts either carrier; reject parameterized forms like
+    // `Point<X>` at definition time.
     let name = match extract_bare_type_name(&bundle, "name", "STRUCT") {
         Ok(n) => n,
         Err(e) => return err(e),

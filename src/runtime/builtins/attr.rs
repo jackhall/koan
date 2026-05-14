@@ -71,6 +71,11 @@ pub fn body_type_lhs<'a>(
         // `KTypeValue(KType::ModuleType { name: "Foo", .. })` or a similarly leaf-named
         // variant; `name()` returns the user-facing identifier in either case.
         Some(KObject::KTypeValue(t)) => t.name(),
+        // Stage-2 carrier: a bare-leaf name not in `KType::from_name`'s builtin table
+        // landed here as a `TypeNameRef`. The surface name is the `TypeExpr.name`
+        // directly — `Foo.x` where `Foo` is user-bound resolves to its value-side
+        // binding via `scope.lookup` below, the same path the `KTypeValue` arm takes.
+        Some(KObject::TypeNameRef(t, _)) => t.name.clone(),
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
@@ -137,6 +142,10 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
         // a `KTypeValue`. `name()` returns the bare leaf identifier — same shape as the
         // Identifier path.
         Some(KObject::KTypeValue(t)) => Ok(t.name()),
+        // Stage-2 carrier: a Type-classed field whose name isn't in the builtin table
+        // lands as a `TypeNameRef`. `t.name` is the surface identifier — same shape as
+        // the `KTypeValue::name()` path.
+        Some(KObject::TypeNameRef(t, _)) => Ok(t.name.clone()),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "field".to_string(),
             expected: "Identifier".to_string(),

@@ -125,28 +125,36 @@ impl<'a> ExpressionPart<'a> {
     }
 
     /// Slot-aware resolve. Identical to `resolve` for every variant except `Type`: when the
-    /// receiving slot is `KType::TypeExprRef`, the surface `TypeExpr` is lowered into an
-    /// elaborated `KType` and packaged as `KObject::KTypeValue` so consumers downstream
-    /// operate on the unified runtime type representation rather than parser surface syntax.
+    /// receiving slot is `KType::TypeExprRef`, the surface `TypeExpr` is lowered into a
+    /// runtime carrier so consumers downstream operate on a unified value representation
+    /// rather than parser surface syntax.
     ///
-    /// Lowering routes through [`crate::runtime::model::types::KType::from_type_expr`],
-    /// which handles the structural container shapes (`List<…>`, `Dict<…>`,
-    /// `Function<…>`) and the builtin-leaf table. Bare leaves whose name isn't a builtin
-    /// (`Point`, `IntOrd`, `MyList`) lower to a transitional [`crate::runtime::model::types::KType::Unresolved`]
-    /// carrier; the FN / LET / STRUCT body that consumes the slot re-runs
-    /// [`crate::runtime::model::types::elaborate_type_expr`] against its captured scope
-    /// to recover the bound `KType`. The carrier persists because resolve_for runs at
-    /// `KFunction::bind` time — before any body sees the slot — and the bind-time pass
-    /// has no scope-aware elaborator wired in (the dispatcher's TypeExprRef-of-pre_run
-    /// slots skip the auto-wrap path that would otherwise surface a `Future(KTypeValue)`).
+    /// Two routes:
+    /// - When [`crate::runtime::model::types::KType::from_type_expr`] succeeds (builtin
+    ///   leaf names like `Number`, or structural shapes like `List<Number>` /
+    ///   `Function<(...)-> R>`), the result is packaged as `KObject::KTypeValue(kt)`.
+    /// - When `from_type_expr` returns `Err` — i.e. a bare-leaf name that isn't a
+    ///   builtin (`Point`, `IntOrd`, `MyList`) — the carrier becomes a
+    ///   `KObject::TypeNameRef(t, OnceCell::new())` preserving the parser-side
+    ///   `TypeExpr`. The consuming body (`extract_bare_type_name`, ATTR's TypeExprRef
+    ///   lhs, FN's deferred return-type elaboration, `LET <Type-class> = …`) reads the
+    ///   surface name directly off the carrier or — when scope-aware elaboration is
+    ///   needed — calls [`crate::runtime::model::KObject::resolve_type_name_ref`] to
+    ///   resolve and memoize against the consuming scope.
+    ///
+    /// The carrier shape is required because `resolve_for` runs at `KFunction::bind`
+    /// time — before any body sees the slot — and the bind-time pass has no `Scope`
+    /// reference in hand. The earlier transitional `KType::Unresolved` carrier
+    /// (deleted in stage 2) routed the surface name through the elaborated-type
+    /// language; `TypeNameRef` keeps it on the value side where the rest of the
+    /// bind-time surface-name plumbing lives.
     pub fn resolve_for(&self, slot: &crate::runtime::model::KType) -> KObject<'a> {
         use crate::runtime::model::types::KType;
         if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
-            let kt = KType::from_type_expr(t).unwrap_or_else(|_| {
-                KType::from_name(&t.name)
-                    .unwrap_or_else(|| KType::Unresolved(t.name.clone()))
-            });
-            return KObject::KTypeValue(kt);
+            return match KType::from_type_expr(t) {
+                Ok(kt) => KObject::KTypeValue(kt),
+                Err(_) => KObject::TypeNameRef(t.clone(), std::cell::OnceCell::new()),
+            };
         }
         self.resolve()
     }

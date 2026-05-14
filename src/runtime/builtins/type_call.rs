@@ -17,12 +17,11 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    // The verb slot is `TypeExprRef`, so its resolved value is `KObject::TypeExprValue(t)`.
-    // The name slot wants the bare type name; reject parameterized forms (`List<Number>` as
-    // a constructor verb makes no sense here). The shared helper reports
-    // `other.ktype().name()` for the non-`TypeExprValue` branch — slightly different from
-    // the previous `other.summarize()` here, but the value is debug-only (no test asserts
-    // on this `got:` field) and consolidating beats a one-off divergence.
+    // The verb slot is `TypeExprRef`, so its resolved value is `KObject::KTypeValue(t)`
+    // for builtin leaves / structural shapes or `KObject::TypeNameRef(t, _)` for bare
+    // user-bound names (`Point`, `Maybe`). The shared helper reads the surface name out
+    // of either carrier and rejects parameterized forms (`List<Number>` as a
+    // constructor verb makes no sense here).
     let verb = match extract_bare_type_name(&bundle, "verb", "type-call") {
         Ok(n) => n,
         Err(e) => return err(e),

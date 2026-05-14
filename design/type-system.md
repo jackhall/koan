@@ -279,14 +279,15 @@ type identity via `KType::ModuleType`) shipped and is described in the body
 above; the remaining stages live under
 [`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
-The four-stage type-identity arc replaces the surface-name `KType::Unresolved`
-fallback with a `KObject`-side carrier, unifies `KType::Struct` / `Tagged`
-/ `ModuleType` into a single `KType::UserType { kind, scope_id, name }`
-carrier with per-declaration scope-tagged identity, and adds the `NEWTYPE`
-keyword for fresh nominal identity over a transparent representation. The
-binding home splits into two maps (`data` for values, `types` for type
-names), with token-kind-driven lookup at the resolver — Type-class tokens
-consult `types`, identifier tokens consult `data`.
+The four-stage type-identity arc routes bare-leaf type names through a
+`KObject`-side carrier rather than a placeholder variant inside the
+elaborated type language, unifies `KType::Struct` / `Tagged` / `ModuleType`
+into a single `KType::UserType { kind, scope_id, name }` carrier with
+per-declaration scope-tagged identity, and adds the `NEWTYPE` keyword for
+fresh nominal identity over a transparent representation. The binding home
+splits into two maps (`data` for values, `types` for type names), with
+token-kind-driven lookup at the resolver — Type-class tokens consult
+`types`, identifier tokens consult `data`.
 
 - Type identity stage 1 — foundation: dual-map binding home,
   `Scope::resolve_type`, dispatch routing by token kind, bind-time
@@ -328,9 +329,47 @@ consult `types`, identifier tokens consult `data`.
   helper, so SIG `Type` declarations resolve uniformly whether the
   signature body's LET wrote to `types` (Type-class LHS, `KTypeValue`
   RHS) or to `data` (other type-language carriers).
-- [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](../roadmap/type-identity-2-typename-ref-carrier.md)
-  — parse→bind carrier replacement; subsumes eager type elaboration's
-  `KType::Unresolved` deletion and `OnceCell<KType>` late-binding gates.
+- Type identity stage 2 — `KObject::TypeNameRef` carrier. Bare-leaf type
+  names that aren't in
+  [`KType::from_name`](../src/runtime/model/types/ktype.rs)'s builtin table
+  (`Point`, `IntOrd`, `MyList`) are lowered by
+  [`ExpressionPart::resolve_for`](../src/ast.rs) into
+  `KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)` rather than a
+  placeholder `KType` variant. The carrier preserves the parser-side
+  `TypeExpr` for diagnostics and consumers that want the user's surface
+  identifier verbatim, and the cell memoizes the eventual scope-resolved
+  `&'a KType` via
+  [`KObject::resolve_type_name_ref`](../src/runtime/model/values/kobject.rs).
+  Both `TypeNameRef` and the fully-resolved `KTypeValue` report `ktype() =
+  KType::TypeExprRef`, so the slot's dispatch position is identical;
+  whether the carrier resolved at bind time or memoizes lazily is an
+  internal detail. The four downstream consumers each carry a
+  `TypeNameRef` arm beside the existing `KTypeValue` arm: the shared
+  [`extract_bare_type_name`](../src/runtime/machine/kfunction/argument_bundle.rs)
+  helper (used by STRUCT/UNION declaration sites and `type_call`'s verb
+  slot), [ATTR's `body_type_lhs` and `read_field_name`](../src/runtime/builtins/attr.rs),
+  [`let_binding`'s name slot](../src/runtime/builtins/let_binding.rs) (which
+  runs the same primitive/container blocklist as the `KTypeValue` arm and
+  routes to `register_type` for type-valued RHSes), and
+  [`value_lookup::body_type_expr`](../src/runtime/builtins/value_lookup.rs)
+  (which falls through to `Scope::resolve` to pick up value-side nominal
+  carriers when the surface name isn't in `bindings.types`). FN's deferred
+  return-type elaboration peeks the slot to pick between
+  [`extract_ktype`](../src/runtime/machine/kfunction/argument_bundle.rs)
+  (resolved carrier) and the sibling
+  [`extract_type_name_ref`](../src/runtime/machine/kfunction/argument_bundle.rs)
+  (deferred carrier consuming the parser-preserved `TypeExpr`), then drives
+  the existing park-on-placeholder machinery from there. The `OnceCell` is
+  reset by `deep_clone` rather than preserved across clones: the cached
+  `&'a KType` is into the originating scope's arena and the semantic
+  validity of "this is what `Scope::resolve_type` would return *in the
+  cloning scope*" is not guaranteed when the clone crosses scope chains.
+  If profiling ever surfaces the post-clone re-resolution as hot, the cell
+  can move to `Rc<OnceCell<&'a KType>>` for shared memoization with no API
+  break — the carrier's public surface (`KObject::resolve_type_name_ref`
+  plus the `KType::TypeExprRef` dispatch shape) stays unchanged.
+  Every `KType` flowing through dispatch is fully elaborated — there is no
+  surface-name carrier variant inside `KType` itself.
 - [Type identity stage 3 — `KType::UserType` and per-declaration identity](../roadmap/type-identity-3-user-type-and-per-decl.md)
   — variant collapse, dual-write, SCC discovery via lazy
   `Bindings::pending_types` dependency tracking.

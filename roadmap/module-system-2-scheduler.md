@@ -71,9 +71,6 @@ recursion is tracked in [eager-type-elaboration](eager-type-elaboration.md).
   that work lands. Doing stage 2's surface ergonomics first would force
   re-doing them once eager elaboration replaces the synchronous
   resolver.
-- [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](type-identity-2-typename-ref-carrier.md)
-  — the canonical-`KType`-only invariant lets HKT slots assume their
-  type-typed args are fully elaborated by the time dispatch reads them.
 - [Type identity stage 3 — `KType::UserType` and per-declaration identity](type-identity-3-user-type-and-per-decl.md)
   — `KType::TypeConstructor` extends `UserTypeKind` with a
   `Constructor` variant carrying type-parameter shape; the same

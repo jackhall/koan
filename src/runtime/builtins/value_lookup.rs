@@ -78,6 +78,20 @@ pub fn body_type_expr<'a>(
             }
             _ => t.name(),
         },
+        // Stage-2 carrier: a bare-leaf type token whose name isn't in the builtin table
+        // (`Foo` after `STRUCT Foo = …`, etc.) lands here from auto-wrap's
+        // `Type(t) → (Type(t))` sub-Dispatch. Reject parameterized shapes the same way
+        // the `KTypeValue` arm does; otherwise the surface name (`t.name`) is the
+        // lookup target.
+        Some(KObject::TypeNameRef(t, _)) => match &t.params {
+            crate::ast::TypeParams::List(_) | crate::ast::TypeParams::Function { .. } => {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "value_lookup: parameterized type expression `{}` is not a value-lookup target",
+                    t.render()
+                ))));
+            }
+            crate::ast::TypeParams::None => t.name.clone(),
+        },
         other => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "v".to_string(),

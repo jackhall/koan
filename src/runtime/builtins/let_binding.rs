@@ -27,6 +27,36 @@ pub fn body<'a>(
     let mut type_for_types_map: Option<KType> = None;
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => s.clone(),
+        // Stage-2 carrier: a Type-classed binder name not in `KType::from_name`'s
+        // builtin table lands as a `TypeNameRef`. Parameterized shapes (`List<X>`,
+        // function arrow forms) are rejected — the binder name must be a bare leaf.
+        // The `TypeClassBindingExpectsType` blocklist runs the same shape as the
+        // `KTypeValue` arm: non-type RHS rejected before storage routing.
+        Some(KObject::TypeNameRef(t, _)) => match &t.params {
+            crate::ast::TypeParams::List(_) | crate::ast::TypeParams::Function { .. } => {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "LET name must be a bare type name, got `{}`",
+                    t.render(),
+                ))));
+            }
+            crate::ast::TypeParams::None => {
+                let resolved_name = t.name.clone();
+                if matches!(
+                    value.ktype(),
+                    KType::Number | KType::Str | KType::Bool | KType::Null
+                        | KType::List(_) | KType::Dict(_, _)
+                ) {
+                    return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
+                        name: resolved_name,
+                        got: value.ktype(),
+                    }));
+                }
+                if let KObject::KTypeValue(kt) = value {
+                    type_for_types_map = Some(kt.clone());
+                }
+                resolved_name
+            }
+        },
         // The `TypeExprRef` overload routes through `KTypeValue(kt)` post-refactor; only
         // leaf-named variants are valid binder names. Structural shapes (`List<X>`,
         // function types, `Mu` / `RecursiveRef`) are rejected as `ShapeError`.

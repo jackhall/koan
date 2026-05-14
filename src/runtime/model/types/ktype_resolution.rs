@@ -35,9 +35,10 @@ impl KType {
     /// `Function<(...)->R>`); each leaf goes through [`KType::from_name`].
     ///
     /// User-defined / module-local type names (anything not in `from_name`) surface as
-    /// `Err(_)` for the caller to either fall back on a transitional `KType::Unresolved`
-    /// carrier (the [`crate::ast::ExpressionPart::resolve_for`] seam at parser-side
-    /// lowering) or route through the scheduler-aware
+    /// `Err(_)` for the caller to either fall back on the
+    /// [`crate::runtime::model::values::KObject::TypeNameRef`] carrier (the
+    /// [`crate::ast::ExpressionPart::resolve_for`] seam at parser-side lowering) or
+    /// route through the scheduler-aware
     /// [`crate::runtime::model::types::elaborate_type_expr`] (the FN / LET / STRUCT body
     /// path that consults `Scope` for placeholder + value lookups).
     pub fn from_type_expr(t: &TypeExpr) -> Result<KType, String> {

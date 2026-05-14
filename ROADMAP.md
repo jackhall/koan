@@ -66,7 +66,15 @@ routes `LET Ty = Number`-style aliases through `Scope::register_type` so
 they live in `bindings.types` alongside the builtin type names — with
 ascription's abstract-type member sweep walking both maps so SIG
 abstract-type declarations stay visible across the storage split
-([`ascribe.rs`](src/runtime/builtins/ascribe.rs)). The next signature revision after error handling lands
+([`ascribe.rs`](src/runtime/builtins/ascribe.rs)); and the type-identity
+stage 2 carrier replacement
+([`KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)`](src/runtime/model/values/kobject.rs))
+that lowers bare-leaf type names not in `KType::from_name`'s builtin table
+on the value side at `resolve_for` time, memoizes the scope-resolved
+`&'a KType` in the cell via
+[`KObject::resolve_type_name_ref`](src/runtime/model/values/kobject.rs), and
+deletes the placeholder `KType::Unresolved` variant so every `KType` flowing
+through dispatch is fully elaborated. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -121,10 +129,6 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](roadmap/type-identity-2-typename-ref-carrier.md)
-  — replaces the surface-name fallback in the elaborated type language with
-  a `KObject`-side carrier; subsumes eager type elaboration's
-  `KType::Unresolved` deletion and `OnceCell<KType>` late-binding gates.
 - [Type identity stage 3 — `KType::UserType` and per-declaration identity](roadmap/type-identity-3-user-type-and-per-decl.md)
   — collapses `KType::Struct`/`Tagged`/`ModuleType` into a unified
   `KType::UserType { kind, scope_id, name }` carrier; SCC discovery via
