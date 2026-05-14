@@ -68,11 +68,13 @@ independent of signatures.
 ## Dependencies
 
 **Requires:**
+
 - [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
   — generators thread randomness via the `Random` effect module rather than
   ambient entropy.
 
 **Unblocks:**
+
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
 
 The engine is independent of implicit dispatch and could be developed in

@@ -53,6 +53,7 @@ breaks no existing programs.
 ## Dependencies
 
 **Requires:**
+
 - [Stage 5 — Modular implicits](module-system-5-modular-implicits.md)
 
 **Unblocks:** none — stage 7 is a leaf.

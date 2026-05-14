@@ -76,6 +76,7 @@ another. This item closes that gap.
 **Requires:**
 
 **Unblocks:**
+
 - [Standard library](standard-library.md) — the stdlib lives across
   multiple `.koan` files; user code needs an import surface to load them.
 

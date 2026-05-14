@@ -56,6 +56,7 @@ is the same phase emitting code.
 ## Dependencies
 
 **Requires:**
+
 - [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
   the type system has to be structurally complete before the checker is designed
   against it. Stage 5 is the latest stage that introduces new shapes the checker has

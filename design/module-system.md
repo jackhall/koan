@@ -512,7 +512,7 @@ See [Open work](#open-work).
 ## Resolution and coherence: the design dials
 
 | Dial | Setting |
-|---|---|
+| --- | --- |
 | Implicit search scope | Lexical + explicitly imported only. No transitive leak. |
 | Specificity | Most-specific-wins. Unrelated ties are errors. |
 | Ambiguity policy | Strict — error unless candidates pass cross-equivalence. |

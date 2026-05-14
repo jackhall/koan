@@ -31,11 +31,11 @@ and hands it to dispatch.
 Every non-literal atom falls into one of three classes, decided by the casing
 rule in [tokens.rs](src/parse/tokens.rs):
 
-| Class        | Rule                                                                      | Examples                       |
-|--------------|---------------------------------------------------------------------------|--------------------------------|
-| `Keyword`    | pure-symbol, **or** alphabetic with ≥2 uppercase letters and no lowercase | `=`, `->`, `:|`, `LET`, `THEN` |
+| Class        | Rule                                                                      | Examples                        |
+|--------------|---------------------------------------------------------------------------|---------------------------------|
+| `Keyword`    | pure-symbol, **or** alphabetic with ≥2 uppercase letters and no lowercase | `=`, `->`, `:\|`, `LET`, `THEN` |
 | `Type`       | first char uppercase **and** at least one lowercase elsewhere             | `Number`, `KFunction`, `IntOrd` |
-| `Identifier` | lowercase- or `_`-leading                                                 | `x`, `greeting`, `my_var`      |
+| `Identifier` | lowercase- or `_`-leading                                                 | `x`, `greeting`, `my_var`       |
 
 A token that starts uppercase but classifies as neither (e.g. a single
 uppercase letter `A`, or `K9`) is a parse error rather than falling through to
@@ -167,17 +167,17 @@ current block.
 
 Every value in Koan has a type. The names you can write in source are:
 
-| Type                       | What it is                          | How to write a value                  |
-|----------------------------|-------------------------------------|---------------------------------------|
-| `Number`                   | 64-bit float                        | `42`, `3.14`                          |
-| `Str`                      | string                              | `"hi"`, `'hi'`                        |
-| `Bool`                     | boolean                             | `true`, `false`                       |
-| `Null`                     | the null value                      | `null`                                |
-| `List<T>`                  | ordered sequence                    | `[1, 2, 3]`                           |
-| `Dict<K, V>`               | scalar-keyed map                    | `{a: 1, b: 2}`                        |
+| Type                       | What it is                          | How to write a value                      |
+|----------------------------|-------------------------------------|-------------------------------------------|
+| `Number`                   | 64-bit float                        | `42`, `3.14`                              |
+| `Str`                      | string                              | `"hi"`, `'hi'`                            |
+| `Bool`                     | boolean                             | `true`, `false`                           |
+| `Null`                     | the null value                      | `null`                                    |
+| `List<T>`                  | ordered sequence                    | `[1, 2, 3]`                               |
+| `Dict<K, V>`               | scalar-keyed map                    | `{a: 1, b: 2}`                            |
 | `Function<(args) -> R>`    | callable function value             | `(FN (DOUBLE x: Number) -> Number = (x))` |
-| `Tagged`                   | a value of a tagged union           | `Maybe (some 42)` (see `UNION` below) |
-| `Any`                      | wildcard — accepts any value        | (used in annotations only)            |
+| `Tagged`                   | a value of a tagged union           | `Maybe (some 42)` (see `UNION` below)     |
+| `Any`                      | wildcard — accepts any value        | (used in annotations only)                |
 
 A type name appears wherever you annotate something: the type of a parameter
 slot (`x: List<Number>`), the return type on a function (`-> Number`), the
@@ -521,22 +521,22 @@ What runs:
 One line per surface form. Sources under
 [src/builtins/](src/runtime/builtins).
 
-| Form                                                  | Effect                                                                                          | File                                                          |
+| Form                                     | Effect                                                                                          | File                                                          |
 |-------------------------------------------------------|-------------------------------------------------------------------------------------------------|---------------------------------------------------------------|
-| `LET <name> = <value>`                                | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/runtime/builtins/let_binding.rs)        |
-| `PRINT <msg:Str>`                                     | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/runtime/builtins/print.rs)                    |
-| `FN <sig> -> <Type> = <body>`                         | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/runtime/builtins/fn_def.rs)          |
-| `UNION <Name> = (<schema>)`                           | Declare a tagged-union type. Binds `<Name>` in scope.                                            | [union.rs](src/runtime/builtins/union.rs)                    |
-| `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/runtime/builtins/struct_def.rs)          |
-| `NEWTYPE <Name> = <Repr>`                             | Declare a fresh nominal identity over a transparent representation. `Name(value)` constructs.    | [newtype_def.rs](src/runtime/builtins/newtype_def.rs)        |
-| `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/runtime/builtins/match_case.rs)          |
-| `<verb:TypeExprRef> (<args>)`                         | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/runtime/builtins/type_call.rs)            |
-| `<verb:Identifier> (<args>)`                          | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/runtime/builtins/call_by_name.rs)      |
-| `<s>.<field>` (`ATTR <s> <field>`)                    | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/runtime/builtins/attr.rs)                      |
-| `<v:Identifier>` (single-part)                        | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/runtime/builtins/value_lookup.rs)      |
-| `<v>` (single-part literal/expr)                      | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/runtime/builtins/value_pass.rs)          |
-| `#(<expr>)`                                           | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/runtime/builtins/quote.rs)                    |
-| `$(<expr>)`                                           | Eval: resolve `<expr>`; if the result is a `KExpression`, dispatch the captured AST.             | [eval.rs](src/runtime/builtins/eval.rs)                      |
+| `LET <name> = <value>`                   | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/runtime/builtins/let_binding.rs)        |
+| `PRINT <msg:Str>`                        | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/runtime/builtins/print.rs)                    |
+| `FN <sig> -> <Type> = <body>`            | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/runtime/builtins/fn_def.rs)          |
+| `UNION <Name> = (<schema>)`              | Declare a tagged-union type. Binds `<Name>` in scope.                                            | [union.rs](src/runtime/builtins/union.rs)                    |
+| `STRUCT <Name> = (<schema>)`             | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/runtime/builtins/struct_def.rs)          |
+| `NEWTYPE <Name> = <Repr>`                | Declare a fresh nominal identity over a transparent representation. `Name(value)` constructs.    | [newtype_def.rs](src/runtime/builtins/newtype_def.rs)        |
+| `MATCH <value:Tagged> WITH (<branches>)` | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/runtime/builtins/match_case.rs)          |
+| `<verb:TypeExprRef> (<args>)`            | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/runtime/builtins/type_call.rs)            |
+| `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/runtime/builtins/call_by_name.rs)      |
+| `<s>.<field>` (`ATTR <s> <field>`)       | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/runtime/builtins/attr.rs)                      |
+| `<v:Identifier>` (single-part)           | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/runtime/builtins/value_lookup.rs)      |
+| `<v>` (single-part literal/expr)         | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/runtime/builtins/value_pass.rs)          |
+| `#(<expr>)`                              | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/runtime/builtins/quote.rs)                    |
+| `$(<expr>)`                              | Eval: resolve `<expr>`; if the result is a `KExpression`, dispatch the captured AST.             | [eval.rs](src/runtime/builtins/eval.rs)                      |
 
 ## What's not in the language yet
 

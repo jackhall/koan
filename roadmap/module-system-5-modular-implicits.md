@@ -72,6 +72,7 @@ is the ergonomic payoff of the design.
 **Requires:**
 
 **Unblocks:**
+
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](module-system-7-syntax-tuning.md)
 - [Group-based operators](group-based-operators.md)

@@ -116,7 +116,7 @@ rule keeps dispatch unambiguous.
 Three sites consume parameterized types, and each has its own behavior:
 
 | Site | What it does | Variance |
-|---|---|---|
+| --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at the return-type check. | **Covariant** for `List` / `Dict`: `List<Any>` accepts any list because `Any.matches_value(_)` is always true; `Dict<Str, Any>` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
 | `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. | **Covariant in every parameter position** (element, key, value, arg, ret): `List<Number>` ≺ `List<Any>`, `Dict<Str, Number>` ≺ `Dict<Str, Any>`, `Function<(Number) -> Str>` ≺ `Function<(Any) -> Any>`. |
 | `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x: Number) -> Str` fills only `Function<(Number) -> Str>`, not `Function<(Any) -> Str>`. |

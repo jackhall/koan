@@ -37,6 +37,7 @@ dispatch correctness in the user's head.
 ## Dependencies
 
 **Requires:**
+
 - [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
   for the generic-over-groups payoff. The syntax-level shorthand could ship earlier
   against stage 1's signature surface, but the most expressive variant needs implicit

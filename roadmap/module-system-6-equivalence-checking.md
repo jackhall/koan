@@ -57,6 +57,7 @@ Property-tested coherence is a third option.
 ## Dependencies
 
 **Requires:**
+
 - [Stage 4 — Property testing and axioms](module-system-4-axioms-and-generators.md)
 - [Stage 5 — Modular implicits](module-system-5-modular-implicits.md)
 

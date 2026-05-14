@@ -65,6 +65,7 @@ doesn't exist yet.
 ## Dependencies
 
 **Requires:**
+
 - [Functor parameters — Type-class names and templated return types](module-system-functor-params.md)
   — collection functors like `Make` over `ORDERED` need Type-class FN
   parameters and return-type expressions that reference them.
@@ -72,6 +73,7 @@ doesn't exist yet.
   multiple `.koan` files, so user code needs a way to load them.
 
 **Unblocks:**
+
 - [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
   — the standard effect modules (`Random`, `IO`, `Time`) ship as stdlib
   entries.

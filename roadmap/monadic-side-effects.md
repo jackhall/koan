@@ -54,10 +54,12 @@ is scaffolding without a building.
 ## Dependencies
 
 **Requires:**
+
 - [Standard library](standard-library.md) — the standard effect modules
   (`Random`, `IO`, `Time`) ship as stdlib entries.
 
 **Unblocks:**
+
 - [Module system stage 4 — Property testing and axioms](module-system-4-axioms-and-generators.md)
   — generators thread randomness via the `Random` effect module.
 
