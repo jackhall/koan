@@ -174,12 +174,6 @@ the rest incrementally, each producing a usable end state.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
   — module-qualified type-name paths and non-SCC forward references remain
   deferred pending concrete use cases.
-- [Chained type-binding LETs panic the scheduler](roadmap/chained-type-binding-let-panic.md)
-  — `LET Aa = ... ; LET Bb = (... Aa ...) ; FN (... : Bb) -> ...` panics in
-  `node_store.rs` with "result must be ready by the time it's read"; the bug
-  is pre-existing and independent of the eager-type-elaboration parens-wrapped
-  / phase-5 slice that surfaced it.
-
 ### Surface and ergonomics
 
 - [Files and imports](roadmap/files-and-imports.md) — a Koan codebase is one file;

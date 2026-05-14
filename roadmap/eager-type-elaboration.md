@@ -21,14 +21,19 @@ forward references.
 **Problem.** Two narrow questions remain after the type-identity stages
 land:
 
-- *Module-qualified type names have no path-aware `KType` shape.*
-  `TypeExpr` carries a name string that can hold a path like
-  `MyMod.Number`, but `KType` has no variant that preserves a
-  multi-segment path. The `KType::UserType { kind: Module, scope_id,
-  name }` shape that shipped with the type-identity stage 3 carrier (see
-  [design/type-system.md § Open work](../design/type-system.md#open-work))
-  gives per-module abstract-type identity, but does not let a
-  `MyMod.Number` surface-name flow as a typed value end-to-end.
+- *Module-qualified type names don't resolve through the type-side
+  lookup.*
+  [`Scope::resolve_type(&str)`](../src/runtime/machine/core/scope.rs)
+  keys `bindings.types` by flat name, so a TypeExpr like `MyMod.Number`
+  (or chained `Outer.Inner.T`) misses. Value-side ATTR already chains
+  module-member access via `KObject::KModule` walking —
+  [`attr.rs::body_type_lhs`](../src/runtime/builtins/attr.rs) routes
+  Type-Type ATTR through `access_module_member` so `Outer.Inner.x`
+  resolves left-to-right — but type-position TypeExprs have no
+  equivalent walker. No `KType` shape change follows: the resolved type
+  is the leaf's existing per-declaration `KType::UserType { kind,
+  scope_id, name }` (see
+  [design/type-system.md § Open work](../design/type-system.md#open-work)).
 - *Non-SCC forward references in type aliases fail at bind time.* Eager
   elaboration means a type alias's RHS must resolve at bind time. Mutual
   STRUCT / named-UNION recursion is covered by the `pending_types` SCC
@@ -37,18 +42,22 @@ land:
 
 **Impact.**
 
-- *Module-qualified type names flow through dispatch.* If module-qualified
-  type references ever need to be passed as type values (e.g. a `LET MyT
-  = MyMod.Number` binding), the carrier shape lands.
+- *Module-qualified type names resolve in type position.* `LET MyT =
+  MyMod.Number` (and chained `Outer.Inner.T`) binds without rejection,
+  matching the value-side ATTR chain that already ships.
 - *Source order stops being load-bearing for type aliases.* A top-level
   `LET Ty = Un; LET Un = Number` binds without rejection.
 
 **Directions.**
 
-- *Module-qualified type names — deferred.* Either `KType::UserType {
-  kind: Module, ... }` is extended to carry a multi-segment path, or a
-  new `KType::Qualified(Path)` variant lands. Decision deferred until a
-  use case forces it; current module-system stages do not.
+- *Module-qualified type names — deferred.* Teach the type-side
+  resolver to walk dotted TypeExpr paths: resolve the head segment to a
+  `KObject::KModule` value, then descend through each inner module's
+  `bindings.types` for subsequent segments (the same chain
+  `access_module_member` already walks on the value side). The resolved
+  `KType` is the leaf's existing per-declaration `UserType` — no new
+  variant, no path field. Deferred until a use case forces it; current
+  module-system stages do not.
 - *Forward references and partial definitions — deferred.* Whether to
   extend the
   [`Bindings::types` map](../src/runtime/machine/core/bindings.rs)
