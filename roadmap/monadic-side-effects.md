@@ -54,10 +54,6 @@ is scaffolding without a building.
 ## Dependencies
 
 **Requires:**
-- [Module system stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
-  — module-language substrate including the higher-kinded `Wrap` slot
-  surface. The HKT pieces have shipped; only stage 2's audit slate
-  carry-forward remains.
 - [Standard library](standard-library.md) — the standard effect modules
   (`Random`, `IO`, `Time`) ship as stdlib entries.
 

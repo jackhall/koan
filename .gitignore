@@ -3,3 +3,4 @@ venv/
 target/
 scratch/
 main
+.markdownlint.yaml

@@ -14,7 +14,7 @@ Design rationale for what's already in the language lives in [design/](design/) 
 topical docs covering the execution model, memory model, functional programming, type
 system, expressions and parsing, and error handling. Two further design docs capture
 cross-cutting work in flight: [design/module-system.md](design/module-system.md) — the
-module-based abstraction system end-to-end (stage 1 shipped, remaining stages tracked
+module-based abstraction system end-to-end (stages 1 and 2 shipped, remaining stages tracked
 as `module-system-*` roadmap items below) — and [design/effects.md](design/effects.md)
 — in-language monadic side effects (implementation tracked in
 [roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md)). What's
@@ -156,7 +156,11 @@ Type)) (LET pure = (FN (PURE a: Number) -> Wrap<Number> = (1))))`-shaped
 signature. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
-dispatch in stage 5, coherence in stage 6.
+dispatch in stage 5, coherence in stage 6. And the module-system stage-2
+audit-slate sign-off: the post-stage-1 Miri tree-borrows slate re-ran
+clean across every unsafe site introduced by stage-2 substrate (opaque
+ascription re-binds, type-op dispatch through the per-call arena),
+closing the carry-forward.
 
 ## Next items
 
@@ -185,16 +189,20 @@ without first landing something else:
 ### Module system
 
 The agreed design is captured in [design/module-system.md](design/module-system.md);
-stage 1 shipped (the module language: `MODULE`/`SIG` declarators, `:|`/`:!`
-ascription, per-module type identity), and the remaining stages below land
-the rest incrementally, each producing a usable end state.
+stages 1 and 2 shipped (the module language: `MODULE`/`SIG` declarators,
+`:|`/`:!` ascription, per-module type identity, plus the scheduler-driven
+elaborator, `SIG_WITH` sharing constraints, higher-kinded
+type-constructor slots, and the post-stage-1 Miri audit-slate
+carry-forward), and the remaining stages below land the rest
+incrementally, each producing a usable end state.
 
-- [Stage 2 — Module values and functors through the scheduler](roadmap/module-system-2-scheduler.md) —
-  the post-stage-1 Miri audit slate carry-forward. Two unsafe sites
-  (opaque-ascription re-bind, type-op dispatch through the per-call arena)
-  still need targeted tests under tree borrows. The module-language
-  substrate — `SIG_WITH` sharing constraints, dispatch-boundary return-type
-  pin substitution, higher-kinded type-constructor slots — has shipped.
+- [Functor parameters — Type-class names and templated return types](roadmap/module-system-functor-params.md) —
+  Type-class FN parameters (`Er: OrderedSig`) for module values and
+  return-type expressions that reference per-call parameters
+  (`(MODULE_TYPE_OF Er Type)`) — the canonical OCaml-`Make`-shape functor
+  signature. Both are described in
+  [design/module-system.md § Functors](design/module-system.md#functors)
+  but not wired through the runtime.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.

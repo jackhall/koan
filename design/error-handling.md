@@ -85,8 +85,8 @@ two tiers with a hard privilege boundary:
   only by the runtime. User code cannot raise them. They propagate
   ambiently along the dependency edges through the existing notify-walk.
 - **User errors** are typed values. A function that may raise them returns
-  `Result<Ty, Er>` for a user-defined error type `Er` — the carrier from
-  [module system stage 2](../roadmap/module-system-2-scheduler.md). `RAISE`
+  `Result<Ty, Er>` for a user-defined error type `Er` — a functor-produced
+  module per [module-system.md § Functors](module-system.md#functors). `RAISE`
   produces a value of `Er`; the runtime carries it as
   `KErrorKind::User(KObject)` through the same propagation channel.
 - **Catch is a non-exhaustive match-form.** Arms cover the builtin kinds

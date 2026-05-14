@@ -93,7 +93,7 @@ module parameter, and the compiler infers and inserts a satisfying module at
 each call site. `sort {Mo : ORDERED} (xs: List<Mo.t>)` is an ordinary `FN`
 in the value language whose `Mo` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
-([stage 2](../roadmap/module-system-2-scheduler.md)) give the *module*
+([module-system.md § Functors](module-system.md#functors)) give the *module*
 language the analog of the higher-order story this doc covers — a module
 parameterized by another module, applied generatively to produce fresh
 abstract types. See [module-system.md](module-system.md) for the full

@@ -43,12 +43,12 @@ function raise."
   continues to propagate. A catch arm may construct a user-error value and
   reraise — the only mechanism by which a builtin error is lifted into the
   type system.
-- *"Type-language binder expected" diagnostic vocabulary — open.* Module
-  system stage 2 rejects identifier-class names in type-position slots
-  (see
-  [module-system-2-scheduler § Identifier-class names in type-position slots](module-system-2-scheduler.md)).
-  The diagnostic needs vocabulary that names the surface "modules-as-types"
-  layering (per
+- *"Type-language binder expected" diagnostic vocabulary — open.* The
+  bare-leaf arm of `elaborate_type_expr` rejects identifier-class names
+  in type-position slots (shipped substrate; see
+  [design/type-system.md](../design/type-system.md)). The diagnostic
+  needs vocabulary that names the surface "modules-as-types" layering
+  (per
   [design/module-system.md § Functors](../design/module-system.md#functors))
   without leaking scheduler internals. Pick wording — candidates: "type-
   language binder expected", "name is value-language only", or similar —
@@ -61,9 +61,10 @@ design choices:
   `LET` and pass as args. Substrate for the typed surface; needs the
   dispatcher to either short-circuit through error-typed slots or splice
   errors into them.
-- *`Result<Ty, Er>` as a functor.* Lives with
-  [stage 2](module-system-2-scheduler.md); the typed user-error work is
-  gated on it shipping.
+- *`Result<Ty, Er>` as a functor.* A functor-produced module over the
+  shipped module-system substrate
+  ([design/module-system.md § Functors](../design/module-system.md#functors));
+  the typed user-error surface consumes it.
 - *Catch-builtins.* The match-form surface. Pattern arms over selected
   `KErrorKind` variants and over the user-error type's variants, with
   unmatched arms propagating. Requires errors-as-values and `Result<Ty, Er>`.
@@ -71,18 +72,14 @@ design choices:
   a user-error value. Requires errors-as-values and `Result<Ty, Er>` so the
   value has a typed home.
 - *Source spans on `KExpression`* so frames carry `file:line`. Independent
-  of the type-system work and can ship before stage 2.
+  of the type-system work.
 - *Continue-on-error after the first top-level failure*, useful for a
-  future REPL. Independent of the type-system work and can ship before
-  stage 2.
+  future REPL. Independent of the type-system work.
 
 ## Dependencies
 
-**Requires:**
-- [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
-  — `Result<Ty, Er>` is a functor-produced module; the catch-builtin and
-  `RAISE` items consume it. Errors-as-values, source spans, and
-  continue-on-error can ship before stage 2.
+**Requires:** none — `Result<Ty, Er>` runs against the shipped
+module-system substrate; errors-as-values, source spans, and
+continue-on-error are independent of the type-system work.
 
-**Unblocks:**
-- (none)
+**Unblocks:** none.

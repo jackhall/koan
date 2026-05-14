@@ -746,4 +746,66 @@ mod tests {
         let data = scope.bindings().data();
         assert!(matches!(data.get("IntOrdA"), Some(KObject::KModule(_, _))));
     }
+
+    /// Miri audit-slate: pins the opaque-ascription re-bind path under tree borrows.
+    /// `body_opaque` allocates a fresh child scope, mirrors the source module's bindings
+    /// into it via `try_bulk_install_from` (which replays each entry through `try_apply`
+    /// so a `KFunction` entry exercises the `functions`-map dual-write mirror as well as
+    /// the plain `data` write), and builds the resulting `Module` over the captured
+    /// scope. The captured-reference shape is the per-call analogue of the
+    /// `module_child_scope_transmute_does_not_dangle` site, so the slate needs an
+    /// end-to-end pin that the re-bind walk plus the held `&Module` survive subsequent
+    /// arena churn under tree borrows.
+    #[test]
+    fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        // The source module carries a plain `LET` plus a `LET = FN` so the
+        // `try_bulk_install_from` walk hits the `KFunction → functions` dual-map mirror
+        // (`LET <name> = (FN ...)` is the canonical shape for module-member functions per
+        // `module_member_function_via_let_fn` in `module_def.rs`) as well as the plain
+        // `data` write path. The SIG only requires `compare`; `helper` is a non-required
+        // FN member that still rides through the re-bind walk.
+        run(
+            scope,
+            "SIG OrderedSig = (LET compare = 0)\n\
+             MODULE IntOrd = ((LET compare = 7) (LET helper = (FN (HELP x: Number) -> Number = (x))))\n\
+             LET Held = (IntOrd :| OrderedSig)",
+        );
+        // Extract the module pointer *before* further dispatches — `bindings().data()`
+        // returns a `Ref<_>` and holding it across a `run` would block the RefCell
+        // writes the new dispatches need.
+        let held = {
+            let data = scope.bindings().data();
+            match data.get("Held") {
+                Some(KObject::KModule(m, _)) => *m,
+                other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
+            }
+        };
+
+        // Subsequent allocations and FN calls churn the run-root arena. The re-bound
+        // child scope (and the `&Module` pointing at it) must keep both maps live
+        // across that churn.
+        run(scope, "FN (CHURNCALL) -> Number = (1)");
+        for _ in 0..20 {
+            run_one(scope, parse_one("CHURNCALL"));
+        }
+        // Re-ascribe a second time to allocate another re-bind scope; the original
+        // `held` reference must still walk through to its own data/functions pair.
+        run(scope, "LET Held2 = (IntOrd :| OrderedSig)");
+
+        // Read both binding kinds back through the held module's child scope. The
+        // `compare` slot tests the plain `data` mirror; the `helper` slot tests the
+        // `KFunction → functions` mirror written by `try_apply`.
+        let child = held.child_scope();
+        let inner = child.bindings().data();
+        assert!(
+            matches!(inner.get("compare"), Some(KObject::Number(n)) if *n == 7.0),
+            "held.child_scope().compare must still read 7.0 after subsequent churn",
+        );
+        assert!(
+            matches!(inner.get("helper"), Some(KObject::KFunction(_, _))),
+            "held.child_scope().helper must still resolve to a KFunction after churn",
+        );
+    }
 }

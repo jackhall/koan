@@ -74,7 +74,4 @@ sub-struct extractions made type-impossible.
 (DepGraph / NodeStore sub-structs from `8f637d1` / `1ebcccd`, scheduler
 simplification from `273721f`, and the existing modgraph tooling).
 
-**Unblocks:** none strictly — but
-[module-system-2-scheduler](module-system-2-scheduler.md) is the natural
-follow-on, and doing the partition exercise first means stage-2 work lands in
-the new layout instead of moving with it.
+**Unblocks:** none.

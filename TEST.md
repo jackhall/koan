@@ -46,9 +46,7 @@ self-referential `Rc<CallArena>` storage — under Miri's tree-borrows mode, wit
 zero process-exit leaks and zero UB required for sign-off.
 
 The model the slate signs off on is documented in
-[design/memory-model.md](design/memory-model.md#verification). Future re-runs
-against post-stage-1 unsafe sites are tracked in
-[roadmap/module-system-2-scheduler.md](roadmap/module-system-2-scheduler.md).
+[design/memory-model.md](design/memory-model.md#verification).
 
 ### Command of record
 
@@ -68,6 +66,7 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-05-14: 371.79s — 24 tests, 0 leaks, 0 UB
 - 2026-05-12: 283.68s — 22 tests, 0 leaks, 0 UB
 - 2026-05-10: 281.61s — 24 tests, 0 leaks, 0 UB
 - 2026-05-09: 266.18s — 23 tests, 0 leaks, 0 UB
@@ -76,7 +75,7 @@ Use the most-recent entry as the baseline expectation when scheduling a run.
 
 ### The slate
 
-22 tests, grouped by the unsafe site each pins down. Names below are the exact
+24 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the command above.
 
 **Singleton transmutes** ([src/runtime/machine/core/arena.rs](src/runtime/machine/core/arena.rs)) — the `'static`→`'a`
@@ -138,6 +137,15 @@ per-call scaffolding freed at call return.
 
 - `repeated_user_fn_calls_do_not_grow_run_root_per_call`
 
+**Type-op dispatch through per-call arena** ([src/runtime/builtins/type_ops.rs](src/runtime/builtins/type_ops.rs)) — `MODULE_TYPE_OF`
+(and the rest of the type-op builtin family) allocates its `KTypeValue` result
+into `scope.arena`. When invoked from inside a functor body, `scope` is the
+per-call scope, so the dispatched value lands in the per-call arena and must
+survive lift-out to the caller's run-root arena under the per-call-arena
+reclamation discipline.
+
+- `type_op_dispatch_does_not_dangle`
+
 **Module / Signature lifetime erasure** ([src/runtime/model/values/module.rs](src/runtime/model/values/module.rs)) — `Module`
 and `Signature` carry their captured scope as `*const Scope<'static>` and
 re-attach `'a` via transmute on access; `Module::type_members` mutates a
@@ -147,6 +155,7 @@ shape).
 - `module_child_scope_transmute_does_not_dangle`
 - `signature_decl_scope_transmute_does_not_dangle`
 - `module_type_members_refcell_mutation_with_held_module_ref`
+- `opaque_ascription_re_binds_do_not_alias_unsoundly`
 
 **MODULE body Combine continuation** ([src/runtime/builtins/module_def.rs](src/runtime/builtins/module_def.rs)) — the
 MODULE body schedules a `Combine` whose `finish` closure captures the child

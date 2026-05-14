@@ -324,11 +324,11 @@ generically rather than as a special case in the elaborator.
   `Dispatch` and `Bind` machinery — type-returning builtins on the value
   path, `Bind` as the refinement-and-wake-up mechanism, and stage 5
   implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
-  node kind. Module-system
-  [stage 2](../roadmap/module-system-2-scheduler.md) layers higher-kinded
-  slots and sharing constraints on top of the shipped scheduler-driven
-  elaborator; [stage 5](../roadmap/module-system-5-modular-implicits.md)
-  layers implicit search.
+  node kind. Higher-kinded slots and sharing constraints layer on top of
+  the scheduler-driven elaborator (see
+  [module-system.md](module-system.md));
+  [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
+  implicit search.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

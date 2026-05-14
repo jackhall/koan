@@ -65,9 +65,9 @@ doesn't exist yet.
 ## Dependencies
 
 **Requires:**
-- [Module system stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
-  — collections are functor FNs over their element/key types, which need
-  end-to-end functor definition, dispatch, and execution.
+- [Functor parameters — Type-class names and templated return types](module-system-functor-params.md)
+  — collection functors like `Make` over `ORDERED` need Type-class FN
+  parameters and return-type expressions that reference them.
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
 

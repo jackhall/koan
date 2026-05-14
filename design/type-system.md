@@ -318,21 +318,21 @@ The static-typing-and-jit work in open work closes the first two uniformly.
 The abstraction-over-types story is the [module
 system](module-system.md) — structures and signatures, opaque ascription as
 the type-abstraction primitive, functors for parametric types, and modular
-implicits for inferred dispatch. Stage 1 (the module language and per-module
-type identity via `KType::UserType { kind: Module, .. }`) shipped and is
-described in the body above; the remaining stages live under
-[`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
+implicits for inferred dispatch. Stages 1 and 2 (the module language,
+per-module type identity via `KType::UserType { kind: Module, .. }`, and
+the scheduler-driven elaborator plus `SIG_WITH` sharing constraints and
+higher-kinded type-constructor slots) shipped and are described in the
+body above; the remaining stages live under
+[`roadmap/module-system-*.md`](../roadmap/module-system-4-axioms-and-generators.md).
 
-The bare-leaf arm of `elaborate_type_expr` today falls through to
-`Scope::resolve` on a `resolve_type` miss (see Type identity stage 1
-below — "for compatibility with the small set of callers that still
-consult the value side"). Hardening this fall-through into a hard error
-— identifier-class names in type-position slots reject rather than fall
-through to the value side — is part of
-[module system stage 2](../roadmap/module-system-2-scheduler.md), which
-also adds per-call FN-parameter substitution into return-type pins.
-Together these implement the surface "modules-as-types" presentation
-described in [module-system.md § Functors](module-system.md#functors).
+Per-call FN-parameter substitution into return-type pins — the templated
+return-type surface described in
+[module-system.md § Functors](module-system.md#functors) — is the
+follow-up
+[Functor parameters — Type-class names and templated return types](../roadmap/module-system-functor-params.md);
+together with the shipped identifier-class hardening at the bare-leaf arm
+of `elaborate_type_expr`, it completes the surface "modules-as-types"
+presentation.
 
 The four-stage type-identity arc routes bare-leaf type names through a
 `KObject`-side carrier rather than a placeholder variant inside the

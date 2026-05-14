@@ -70,10 +70,6 @@ is the ergonomic payoff of the design.
 ## Dependencies
 
 **Requires:**
-- [Stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md) —
-  modular implicits ride on the dispatch and execution of module values
-  that stage 2 lands, and on the type-builtin substrate stage 2 wires
-  end-to-end through FN signatures.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)

@@ -6,8 +6,8 @@
 //! sub-expression evaluation: `(LIST_OF (MODULE_TYPE_OF M Type))` wakes the outer slot
 //! only after the inner sub-dispatch resolves to a concrete `KType` value.
 //!
-//! **Why builtins rather than a parallel registration table.** The plan in
-//! [roadmap/module-system-2-scheduler.md](../../../roadmap/module-system-2-scheduler.md)
+//! **Why builtins rather than a parallel registration table.** The design in
+//! [design/module-system.md](../../../design/module-system.md)
 //! reduces type-expression evaluation to ordinary dispatch: the same scope-lookup chain,
 //! the same `Bind`-waits-for-subs refinement, the same `lift_kobject` rules. No new node
 //! kind, no `KType::TypeVar`, no second registration table — a `TypeExprRef`-typed binding
@@ -1057,6 +1057,83 @@ mod tests {
     /// flow: `attr.rs` routes `Foo.Wrap` through `type_members` lookup, and the new
     /// `UserTypeKind::TypeConstructor` variant flows through the existing
     /// `KType::UserType` arm unchanged.
+    /// Miri audit-slate: pins type-op dispatch through the per-call arena under tree
+    /// borrows. A functor body invokes `(MODULE_TYPE_OF elem Type)` on its per-call
+    /// parameter; `body_module_type_of` allocates the resulting `KTypeValue` into the
+    /// per-call scope's arena. The returned `KModule` plus the bound type member must
+    /// survive subsequent arena churn — the per-call-arena reclamation + lift machinery
+    /// have to keep storage live for both the module pointer and the dispatched
+    /// type-op value. Mirrors the structure of
+    /// [`crate::runtime::builtins::fn_def::tests::module_stage2::functor_body_module_dispatch_does_not_dangle`]
+    /// but pins the type-op-in-per-call-arena path rather than the plain functor lift.
+    #[test]
+    fn type_op_dispatch_does_not_dangle() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+             MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+             LET elem_mod = (IntOrd :| OrderedSig)",
+        );
+        // Functor body invokes MODULE_TYPE_OF on the per-call parameter `elem`. The
+        // dispatched `KTypeValue` is allocated in the per-call arena and bound into the
+        // result module via `LET Tslot` (uppercase — drives the LET TypeExprRef
+        // overload that writes into `bindings.types`). A second plain `LET probe = 11`
+        // gives a value-side binding to read back.
+        //
+        // Note: the design surface for signature-typed FN parameters is a Type-class
+        // name (`Elem: OrderedSig`) per [design/module-system.md § Functors](../../../design/module-system.md#functors),
+        // but the runtime currently routes Type-class names in FN parameter slots
+        // through the type-resolution path (parks on the missing top-level binding)
+        // rather than the per-call value path. Existing functor tests work around this
+        // by using lowercase identifier parameters; this test follows the same
+        // convention so the audit-slate pin doesn't have to wait on a parser/dispatch
+        // change. The unsafe-site being pinned (type-op dispatch in the per-call arena)
+        // is independent of the parameter's surface name.
+        run(
+            scope,
+            "FN (LIFT_TYPE elem: OrderedSig) -> Module = \
+             (MODULE Result = ((LET Tslot = (MODULE_TYPE_OF elem Type)) (LET probe = 11)))",
+        );
+        run(scope, "LET held = (LIFT_TYPE (elem_mod))");
+
+        // Subsequent allocations and FN calls churn the run-root arena. The lifted
+        // `KModule` and its child scope (carrying the dispatched type-op value) must
+        // survive that churn.
+        run(scope, "FN (NOOP) -> Number = (1)");
+        for _ in 0..20 {
+            run_one(scope, parse_one("NOOP"));
+        }
+        // Another functor call to allocate more per-call frames (and drop them).
+        run(scope, "LET other = (LIFT_TYPE (elem_mod))");
+
+        // Hold the original `held` module across all that churn and read both surfaces
+        // the audit pins: `child_scope()` (the captured-scope transmute) and
+        // `type_members` (the RefCell on the Module).
+        let data = scope.bindings().data();
+        let m = match data.get("held") {
+            Some(KObject::KModule(m, _)) => *m,
+            other => panic!("held should be a module, got {:?}", other.map(|o| o.ktype())),
+        };
+        let probe = m.child_scope().bindings().data().get("probe").copied();
+        assert!(
+            matches!(probe, Some(KObject::Number(n)) if *n == 11.0),
+            "held.probe must still read 11.0 after subsequent churn",
+        );
+        // `Tslot` landed in `bindings.types` via the LET TypeExprRef overload — the
+        // dispatched `KTypeValue` from the per-call MODULE_TYPE_OF call.
+        let tslot = m.child_scope().resolve_type("Tslot");
+        assert!(
+            tslot.is_some(),
+            "held.Tslot must still resolve through bindings.types after churn",
+        );
+        // The RefCell on `type_members` is the other half of the Module's lifetime
+        // surface; the borrow must complete cleanly (we don't assert contents here —
+        // the body's module isn't opaquely ascribed, so type_members is empty).
+        let _ = m.type_members.borrow();
+    }
+
     #[test]
     fn module_attr_access_returns_type_constructor() {
         use crate::runtime::model::types::UserTypeKind;

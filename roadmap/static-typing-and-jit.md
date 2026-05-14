@@ -56,12 +56,6 @@ is the same phase emitting code.
 ## Dependencies
 
 **Requires:**
-- [Module system stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
-  — module-system stage 1 plus stage 2's module-and-functor work reshapes the
-  memory model, and the stage-2 audit slate re-run is what re-establishes the
-  sign-off the checker's lifetime story and the JIT's codegen contract both
-  want to target. Stage 2 also lands the type-expression-as-`Dispatch` reduction
-  the checker's IR shape depends on.
 - [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
   the type system has to be structurally complete before the checker is designed
   against it. Stage 5 is the latest stage that introduces new shapes the checker has

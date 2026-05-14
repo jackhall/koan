@@ -547,25 +547,21 @@ absorbing the conceptual cost incrementally.
 
 ## Open work
 
-Implementation stages remain, each producing a usable end state. (Stage 1
-— the module language itself: `MODULE`, `SIG`, `:|`, `:!`, and per-module type
-identity via `KType::UserType { kind: Module, .. }` — shipped and is
-described in the body above. First-class module values shipped alongside
-it: `KObject::KModule`
-flows through `LET` and ATTR like any other value, so a separate pack/unpack
-construct isn't needed; the remaining first-class-modules work folds into
-later stages — signature-bound dispatch (modules-as-values typed against a
-specific signature) is part of stage 5, and the static-signature-at-use-site
-obligation for the type checker is part of stage 2.)
+Implementation stages remain, each producing a usable end state. Stages 1
+and 2 — the module language itself (`MODULE`, `SIG`, `:|`, `:!`,
+per-module type identity, first-class module values flowing through `LET`
+and ATTR) and the module-language substrate through the scheduler
+(scheduler-driven type elaborator, `SIG_WITH` sharing constraints,
+higher-kinded type-constructor slots) — shipped and are described in the
+body above; the Miri audit slate signs them off under tree borrows (see
+[memory-model.md § Verification](memory-model.md#verification)).
+Signature-bound dispatch (modules-as-values typed against a specific
+signature) folds into stage 5.
 
-- [Stage 2 — Module values and functors through the scheduler](../roadmap/module-system-2-scheduler.md)
-  — the post-stage-1 [memory-model audit slate](memory-model.md#verification)
-  carry-forward. Two unsafe sites still need targeted Miri tests under tree
-  borrows: the opaque-ascription re-bind path and the type-op dispatch path
-  through the per-call arena. Module-language substrate (scheduler-driven
-  type elaborator, `SIG_WITH` sharing constraints, dispatch-boundary
-  return-type pin substitution, higher-kinded type-constructor slots) has
-  shipped and is described in the body above.
+- [Functor parameters — Type-class names and templated return types](../roadmap/module-system-functor-params.md)
+  — two surfaces described in the body (Type-class FN parameters for
+  module values, return-type expressions referencing per-call parameters)
+  are not yet wired through the runtime.
 - [Stage 4 — Property testing and axioms](../roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom
   syntax in signatures (`AXIOM #(...)` over quoted bool predicates);

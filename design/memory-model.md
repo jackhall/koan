@@ -204,18 +204,14 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   locks in the cycle gate: a value carrying an `Rc<CallArena>` whose `arena()`
   is the receiving arena allocates into the escape arena instead, with the
   per-call arena's storage left untouched.
-- The audit slate runs cycle-free: 16 closure-escape, KFuture-anchor, and
-  arena-unsafe-site tests plus the cycle-gate regression all pass under
-  `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit leaks,
-  signing off the memory model as it stands today.
-  [Module-system stage 2](../roadmap/module-system-2-scheduler.md) re-runs
-  the slate once the module language and functors flow through the scheduler
-  end-to-end, since the new unsafe sites that work introduces reshape the
-  runtime that the slate signed off against.
+- The audit slate runs cycle-free across every unsafe site in the runtime
+  — closure-escape, KFuture-anchor, arena-unsafe-site, module/signature
+  lifetime-erasure transmutes, opaque-ascription re-binds, and type-op
+  dispatch through the per-call arena — under
+  `MIRIFLAGS=-Zmiri-tree-borrows` with zero UB and zero process-exit
+  leaks, signing off the memory model as it stands today. The canonical
+  slate list lives in [TEST.md § Miri audit slate](../TEST.md#miri-audit-slate).
 
 ## Open work
 
-- [Module system stage 2 — Module values and functors through the scheduler](../roadmap/module-system-2-scheduler.md)
-  — re-run the audit slate against the post-stage-1 runtime plus any new
-  unsafe sites that landing modules-and-functors through the scheduler
-  introduces.
+- (none)
