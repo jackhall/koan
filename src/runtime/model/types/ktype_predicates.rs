@@ -40,11 +40,11 @@ impl KType {
                 let ret_eq = ar == br;
                 (args_more && (ret_more || ret_eq)) || (args_eq && ret_more)
             }
-            // SignatureBound strictly refines Module: a sig-typed slot is a refinement of
-            // "any module." Two SignatureBounds with different sig_ids are incomparable —
-            // they're disjoint slot types — so this predicate stays `false` for that case
-            // by falling through to the wildcard.
-            (SignatureBound { .. }, Module) => true,
+            // SignatureBound strictly refines the "any module" wildcard: a sig-typed slot
+            // is a refinement of "any module." Two SignatureBounds with different sig_ids
+            // are incomparable — they're disjoint slot types — so this predicate stays
+            // `false` for that case by falling through to the wildcard.
+            (SignatureBound { .. }, AnyUserType { kind: UserTypeKind::Module }) => true,
             // A per-declaration `UserType { kind, .. }` strictly refines the wildcard
             // `AnyUserType { kind }` of the same kind. Different-kind pairs fall through
             // to the wildcard `false`, leaving them correctly incomparable. Two
@@ -173,27 +173,18 @@ impl KType {
                 ExpressionPart::Future(KObject::TaggedUnionType { .. })
                     | ExpressionPart::Future(KObject::StructType { .. })
             ),
-            KType::Tagged => matches!(
-                part,
-                ExpressionPart::Future(KObject::Tagged { .. })
-            ),
-            KType::Struct => matches!(
-                part,
-                ExpressionPart::Future(KObject::Struct { .. })
-            ),
             // Per-declaration identity: a slot typed with a concrete `UserType { kind,
             // scope_id, name }` accepts only a `Future(KObject)` value whose `ktype()`
-            // reports the same `UserType`. Inert in stage 3.0 — no carrier reports a
-            // `UserType` from `ktype()` yet — but the arm lands correctly so the 3.1
-            // variant collapse is a pure rewire of the value carriers' `ktype()` arms.
+            // reports the same `UserType`. Same equality is the abstraction-barrier check
+            // for opaquely-ascribed module abstract types (`Foo.Type`).
             KType::UserType { .. } => {
                 matches!(part, ExpressionPart::Future(obj) if &obj.ktype() == self)
             }
             // Wildcard "any user-declared X" slot: the `kind` discriminator selects which
-            // family of carriers we admit (`Struct`/`Tagged`/`Module`). Lands the 3.0b
-            // surface-name rewire — `Struct`/`Tagged`/`Module` in `from_name` now map
-            // here — so existing dispatch tests using `(PICK x: Struct)` continue to
-            // accept any struct carrier regardless of declaring schema.
+            // family of carriers we admit (`Struct`/`Tagged`/`Module`). Surface names
+            // `Struct`/`Tagged`/`Module` from `from_name` resolve here, so existing
+            // dispatch tests using `(PICK x: Struct)` accept any struct carrier
+            // regardless of declaring schema.
             KType::AnyUserType { kind } => match part {
                 ExpressionPart::Future(obj) => matches!(
                     (kind, obj),
@@ -203,16 +194,6 @@ impl KType {
                 ),
                 _ => false,
             },
-            KType::ModuleType { .. } => match part {
-                // A part filling a `ModuleType` slot must be a value whose runtime KType is
-                // an exactly-equal `ModuleType` (same scope_id and name) — that's the
-                // abstraction-barrier identity check. Today no value variant reports
-                // `ModuleType`; this arm is reserved for stage-3 first-class module values
-                // and falls through to false until then.
-                ExpressionPart::Future(obj) => &obj.ktype() == self,
-                _ => false,
-            },
-            KType::Module => matches!(part, ExpressionPart::Future(KObject::KModule(_, _))),
             // O(1) per-sig admissibility: a `Future(KModule)` fills a sig-typed slot iff
             // its ascription-populated `compatible_sigs` set carries the slot's `sig_id`.
             // Unascribed source modules never match (their compat set is empty); pass them

@@ -84,11 +84,10 @@ pub fn default_scope<'a>(
     );
     scope.register_type("KExpression".into(), KType::KExpression);
     scope.register_type("Type".into(), KType::Type);
-    // Stage 3.0b: agree with `KType::from_name` so the type-resolver path produces the
-    // same wildcard carriers a parser-side `from_name` would. Stage 3.1 will delete the
-    // old singletons entirely; until then the singletons remain valid `KType` values
-    // for the carriers' `ktype()` arms — they're just not what the user types resolve
-    // to anymore.
+    // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
+    // carrier — matches `KType::from_name`'s mapping so type-name resolution through
+    // the resolver and through the parser-side fast path agree. Per-declaration types
+    // live as `KType::UserType` in `bindings.types`, dual-written by the finalize sites.
     scope.register_type("Tagged".into(), KType::AnyUserType { kind: UserTypeKind::Tagged });
     scope.register_type("Struct".into(), KType::AnyUserType { kind: UserTypeKind::Struct });
     scope.register_type("Module".into(), KType::AnyUserType { kind: UserTypeKind::Module });

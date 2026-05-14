@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use crate::ast::{KExpression, TypeExpr};
 use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::machine::core::{CallArena, KFuture};
-use crate::runtime::model::types::{KType, Parseable, Serializable, SignatureElement};
+use crate::runtime::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
 use super::module::{Module, Signature};
 
 /// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
@@ -30,37 +30,39 @@ pub enum KObject<'a> {
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
-    /// Tagged-union schema. Stage 3.0c grew `(name, scope_id)` identity alongside the
-    /// shared `schema` map — `name` is the declared type name (`Maybe`), `scope_id` is
-    /// the declaring scope's address (cast `*const Scope as usize`) and is the same
-    /// identity scheme `Module::scope_id()` uses. `ktype()` still reports `KType::Type`
-    /// in 3.0; stage 3.1 flips it to synthesize `KType::UserType { kind: Tagged, .. }`
-    /// from the identity fields.
+    /// Tagged-union schema. `(name, scope_id)` is the declared type's identity —
+    /// `name` is the declared type name (`Maybe`), `scope_id` is the declaring scope's
+    /// address (cast `*const Scope as usize`) and uses the same scheme `Module::scope_id()`
+    /// does. `ktype()` reports `KType::Type` (the schema is a value *of* the meta-type);
+    /// `Tagged` *values* synthesize `KType::UserType { kind: Tagged, .. }` from these
+    /// identity fields, which `tagged_union::construct` copies onto each produced value.
     TaggedUnionType {
         schema: Rc<HashMap<String, KType>>,
         name: String,
         scope_id: usize,
     },
-    /// Struct schema. Stage 3.0c added `scope_id` next to the existing `name`; same
-    /// identity scheme as `TaggedUnionType`. `ktype()` still reports `KType::Type`;
-    /// stage 3.1 flips it to `KType::UserType { kind: Struct, .. }`.
+    /// Struct schema. `(scope_id, name)` is the declared type's identity — same scheme
+    /// as `TaggedUnionType`. `ktype()` reports `KType::Type`; produced `Struct` values
+    /// synthesize `KType::UserType { kind: Struct, .. }` from these identity fields,
+    /// copied onto each value by `struct_value::construct`.
     StructType {
         name: String,
         scope_id: usize,
         fields: Rc<Vec<(String, KType)>>,
     },
-    /// Tagged-union value. Stage 3.0c grew `(name, scope_id)` to carry the declaring
-    /// schema's identity through the value — populated by `tagged_union::construct`
-    /// from the schema in the bundle. `ktype()` still reports `KType::Tagged` in 3.0.
+    /// Tagged-union value. `(name, scope_id)` carries the declaring schema's identity
+    /// through to the value, populated by `tagged_union::construct` from the schema
+    /// in the bundle. `ktype()` synthesizes `KType::UserType { kind: Tagged, .. }`
+    /// from these fields so dispatch on type identity sees the declared union.
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
         scope_id: usize,
         name: String,
     },
-    /// Struct value. Stage 3.0c renamed `type_name` → `name` and added `scope_id` next
-    /// to it — populated by `struct_value::construct` from the schema in the bundle.
-    /// `ktype()` still reports `KType::Struct` in 3.0.
+    /// Struct value. `(name, scope_id)` carries the declaring schema's identity through
+    /// to the value, populated by `struct_value::construct`. `ktype()` synthesizes
+    /// `KType::UserType { kind: Struct, .. }` from these fields.
     Struct {
         name: String,
         scope_id: usize,
@@ -121,20 +123,34 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f, _) => function_value_ktype(f),
             KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
-            // Stage 3.0c: identity fields are populated on the carriers but `ktype()`
-            // still reports the old singletons. Stage 3.1 flips these arms to synthesize
-            // `KType::UserType { kind, scope_id, name }` from the carrier's identity.
+            // Schema carriers report the meta-type (`KType::Type`): they are values *of*
+            // the meta-type, not user-typed values. Per-declaration value carriers
+            // (`Struct`, `Tagged`, `KModule`) synthesize `KType::UserType` from their
+            // `(scope_id, name)` identity fields so dispatch on type identity sees
+            // distinct types per declaration.
             KObject::TaggedUnionType { .. } => KType::Type,
             KObject::StructType { .. } => KType::Type,
-            KObject::Tagged { .. } => KType::Tagged,
-            KObject::Struct { .. } => KType::Struct,
+            KObject::Tagged { name, scope_id, .. } => KType::UserType {
+                kind: UserTypeKind::Tagged,
+                scope_id: *scope_id,
+                name: name.clone(),
+            },
+            KObject::Struct { name, scope_id, .. } => KType::UserType {
+                kind: UserTypeKind::Struct,
+                scope_id: *scope_id,
+                name: name.clone(),
+            },
             KObject::KTypeValue(_) => KType::TypeExprRef,
             // `TypeNameRef` is dispatch-equivalent to `KTypeValue` — both fill a
             // `TypeExprRef`-typed slot. The slot's role is the dispatch-position marker;
             // whether the carrier resolved at `resolve_for` time or memoizes lazily is
             // an internal detail.
             KObject::TypeNameRef(_, _) => KType::TypeExprRef,
-            KObject::KModule(_, _) => KType::Module,
+            KObject::KModule(m, _) => KType::UserType {
+                kind: UserTypeKind::Module,
+                scope_id: m.scope_id(),
+                name: m.path.clone(),
+            },
             KObject::KSignature(_) => KType::Signature,
         }
     }

@@ -12,9 +12,9 @@
 /// variant maps to the keyword that declares the carrier (`STRUCT`, anonymous-or-named
 /// `UNION` → `Tagged`, `MODULE`). The kind is sourced from the declaration site at finalize
 /// time and lives on both the per-declaration identity tag (`UserType`) and the wildcard
-/// "any user-declared X" tag (`AnyUserType`). See
-/// [per-declaration type identity](../../../../design/type-system.md) — stage 3.1 makes
-/// this the dispatcher's primary kind discriminator for user-declared types.
+/// "any user-declared X" tag (`AnyUserType`). This is the dispatcher's primary kind
+/// discriminator for user-declared types. See
+/// [per-declaration type identity](../../../../design/type-system.md).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum UserTypeKind {
     Struct,
@@ -23,9 +23,9 @@ pub enum UserTypeKind {
 }
 
 impl UserTypeKind {
-    /// Surface keyword rendered in diagnostics and `AnyUserType::name()`. Mirrors the
-    /// existing singleton names (`KType::Struct.name()` → `"Struct"`, etc.) so the
-    /// 3.1 flip is purely structural.
+    /// Surface keyword rendered in diagnostics and `AnyUserType::name()`. Matches the
+    /// surface name a user would write for the wildcard slot (`Struct`, `Tagged`,
+    /// `Module`).
     pub fn surface_keyword(&self) -> &'static str {
         match self {
             UserTypeKind::Struct => "Struct",
@@ -59,54 +59,35 @@ pub enum KType {
     TypeExprRef,
     /// Meta-type for first-class type-values; both tagged-union and struct schemas report this.
     Type,
-    /// Singleton tag for every tagged-union value, regardless of declaring schema. Per-declaration
-    /// identity is tracked as
-    /// [per-declaration type identity](../../../../roadmap/type-identity-3.1-variant-collapse.md).
-    Tagged,
-    /// Singleton tag for every user struct, regardless of declaration. Per-declaration identity
-    /// is tracked as
-    /// [per-declaration type identity](../../../../roadmap/type-identity-3.1-variant-collapse.md).
-    Struct,
     /// Per-declaration identity tag for a user-declared type (STRUCT, UNION, MODULE). The
     /// `(scope_id, name)` pair is the dispatch identity: distinct declarations in the same
     /// scope have distinct `name`s; same-named declarations in different scopes have
     /// distinct `scope_id`s. `kind` carries the surface keyword so the wildcard
     /// `AnyUserType { kind }` can admit only the matching family.
     ///
-    /// Stage 3.0 introduces the variant but no `ktype()` arm reports it yet — value
-    /// carriers grow the identity fields and still report the old singletons (`Struct`
-    /// / `Tagged` / `Type`). Stage 3.1 flips `ktype()` to synthesize `UserType` from the
-    /// carrier's identity fields and deletes the singletons.
+    /// Synthesized by `KObject::ktype()` for `Struct`, `Tagged`, and `KModule` carriers
+    /// from their `(scope_id, name)` identity fields. Also covers per-module abstract
+    /// types (`Foo.Type` from opaque ascription) with `kind: Module` and `name` set to
+    /// the abstract type's name (typically `"Type"`) — distinguished from a first-class
+    /// module value by `name`.
     UserType { kind: UserTypeKind, scope_id: usize, name: String },
     /// Wildcard tag matching any user-declared carrier of the given `kind`. The surface
-    /// names `"Struct"` / `"Tagged"` / `"Module"` resolve to this (post-3.0b); a slot
-    /// typed `Struct` accepts any `KObject::Struct{..}` regardless of declaring schema.
-    /// Strictly more specific than `Any`; incomparable with other `AnyUserType`s of a
-    /// different kind and with concrete `UserType`s of the same kind (matching specificity
-    /// only one direction: `UserType { kind: K, .. }` is more specific than
-    /// `AnyUserType { kind: K }`).
+    /// names `"Struct"` / `"Tagged"` / `"Module"` resolve to this; a slot typed `Struct`
+    /// accepts any `KObject::Struct{..}` regardless of declaring schema. Strictly more
+    /// specific than `Any`; incomparable with other `AnyUserType`s of a different kind
+    /// and with concrete `UserType`s of the same kind (matching specificity only one
+    /// direction: `UserType { kind: K, .. }` is more specific than `AnyUserType { kind: K }`).
     AnyUserType { kind: UserTypeKind },
-    /// Per-module abstract type (`Foo.Type` after opaque ascription). `scope_id` is the
-    /// declaring module's child-scope address cast to `usize` — stable for the run because
-    /// `Scope`s are arena-allocated and never moved, distinct across modules because the
-    /// arena hands out fresh addresses, and equal between two `KType::ModuleType` values iff
-    /// they were minted by the same opaque-ascription event. `name` is the abstract type name
-    /// (typically `"Type"`); it disambiguates when a module declares multiple abstract types.
-    /// Equality on `KType::ModuleType` is the dispatch identity check that makes opaquely-
-    /// ascribed `IntOrd.Type` distinct from `Number` even when the underlying definition is
-    /// `Number`.
-    ModuleType { scope_id: usize, name: String },
-    /// Meta-type for first-class module values (`KObject::KModule`).
-    Module,
     /// First-class module value tagged with the signature it satisfies. `sig_id` is the
-    /// declaring `Signature`'s `decl_scope_ptr as usize` — the same identity scheme
-    /// `ModuleType` uses for module abstract types: the arena pins the `Signature` for the
-    /// run, addresses are stable and unique, and two `SIG Foo = (...)` declarations in the
-    /// same scope already error (`Rebind`). Equality (and dispatch admissibility) is by
-    /// `sig_id` exclusively; `sig_path` is for diagnostics only. Distinguishing this from
-    /// `KType::Module` is what lets the dispatcher reject unascribed modules from a
-    /// signature-typed slot — the per-sig admissibility check rides on `Module`'s
-    /// `compatible_sigs` set populated by `:|` / `:!`.
+    /// declaring `Signature`'s `decl_scope_ptr as usize` — same `*const _ as usize`
+    /// identity scheme `UserType { kind: Module, scope_id, .. }` uses for first-class
+    /// module values: the arena pins the `Signature` for the run, addresses are stable
+    /// and unique, and two `SIG Foo = (...)` declarations in the same scope already
+    /// error (`Rebind`). Equality (and dispatch admissibility) is by `sig_id`
+    /// exclusively; `sig_path` is for diagnostics only. Distinguishing this from
+    /// `AnyUserType { kind: Module }` is what lets the dispatcher reject unascribed
+    /// modules from a signature-typed slot — the per-sig admissibility check rides on
+    /// `Module`'s `compatible_sigs` set populated by `:|` / `:!`.
     SignatureBound { sig_id: usize, sig_path: String },
     /// Meta-type for first-class module signatures (`KObject::KSignature`).
     Signature,
@@ -142,12 +123,8 @@ impl KType {
             KType::KExpression => "KExpression".into(),
             KType::TypeExprRef => "TypeExprRef".into(),
             KType::Type => "Type".into(),
-            KType::Tagged => "Tagged".into(),
-            KType::Struct => "Struct".into(),
             KType::UserType { name, .. } => name.clone(),
             KType::AnyUserType { kind } => kind.surface_keyword().into(),
-            KType::ModuleType { name, .. } => name.clone(),
-            KType::Module => "Module".into(),
             KType::SignatureBound { sig_path, .. } => sig_path.clone(),
             KType::Signature => "Signature".into(),
             KType::Mu { binder, .. } => binder.clone(),
@@ -214,8 +191,6 @@ mod tests {
 
     #[test]
     fn user_type_kind_surface_keywords() {
-        // Mirror the existing `KType::Struct.name() == "Struct"` singleton names so the
-        // 3.1 variant collapse is purely structural — the surface form is preserved.
         assert_eq!(UserTypeKind::Struct.surface_keyword(), "Struct");
         assert_eq!(UserTypeKind::Tagged.surface_keyword(), "Tagged");
         assert_eq!(UserTypeKind::Module.surface_keyword(), "Module");
@@ -223,8 +198,7 @@ mod tests {
 
     #[test]
     fn any_user_type_name_renders_kind_keyword() {
-        // Wildcard tag renders the surface keyword for the kind, matching how the old
-        // singletons (`KType::Struct`/`Tagged`/`Module`) render today.
+        // Wildcard tag renders the surface keyword for the kind.
         assert_eq!(
             KType::AnyUserType { kind: UserTypeKind::Struct }.name(),
             "Struct"

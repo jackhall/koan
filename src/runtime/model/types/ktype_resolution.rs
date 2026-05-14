@@ -21,11 +21,11 @@ impl KType {
             "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::Type),
-            // Stage 3.0b: the user-declared-type surface names lower to the wildcard
-            // `AnyUserType { kind }` carrier — a slot typed `Struct` admits any struct
-            // carrier, `Tagged` any tagged-union carrier, `Module` any module value.
-            // The old singletons (`KType::Struct`/`Tagged`/`Module`) still exist for
-            // every other site that constructs them directly; stage 3.1 deletes them.
+            // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
+            // carrier — a slot typed `Struct` admits any struct carrier regardless of
+            // declaring schema, `Tagged` any tagged-union carrier, `Module` any module
+            // value. Per-declaration identity comes from `KType::UserType` minted by
+            // STRUCT / UNION / MODULE finalize and stored in `bindings.types`.
             "Tagged" => Some(KType::AnyUserType { kind: UserTypeKind::Tagged }),
             "Struct" => Some(KType::AnyUserType { kind: UserTypeKind::Struct }),
             "Module" => Some(KType::AnyUserType { kind: UserTypeKind::Module }),

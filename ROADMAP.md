@@ -23,8 +23,8 @@ scheduler (every expression evaluates as a `Dispatch` node, so deferred work,
 forward references, and cross-file references all reduce to the same
 park-on-producer mechanism); the module-system stage 1 module language
 (`MODULE` / `SIG` declarators, `:|` opaque and `:!` transparent ascription,
-per-module type identity via `KType::ModuleType { scope_id, name }`, and
-`Module` / `Signature` first-class values reachable via `Foo.member` ATTR
+per-module type identity via `KType::UserType { kind: Module, scope_id, name }`,
+and `Module` / `Signature` first-class values reachable via `Foo.member` ATTR
 access); the dispatcher fold (overload resolution as one
 `Scope::resolve_dispatch` chain walk returning a four-variant `ResolveOutcome`
 whose `Resolved` carries the per-slot auto-wrap / replay-park / eager-sub
@@ -74,20 +74,29 @@ on the value side at `resolve_for` time, memoizes the scope-resolved
 `&'a KType` in the cell via
 [`KObject::resolve_type_name_ref`](src/runtime/model/values/kobject.rs), and
 deletes the placeholder `KType::Unresolved` variant so every `KType` flowing
-through dispatch is fully elaborated; and the type-identity stage 3.0
-scaffolding — the
+through dispatch is fully elaborated; and the type-identity stage 3
+per-declaration carrier and dual-write — the
 [`KType::UserType { kind, scope_id, name }` per-declaration tag and `KType::AnyUserType { kind }` wildcard kind tag](src/runtime/model/types/ktype.rs)
-with the surface names `"Struct"` / `"Tagged"` / `"Module"` lowering to the
-wildcard via
+(with the old `KType::Struct` / `Tagged` / `Module` / `ModuleType` singletons
+deleted), the surface names `"Struct"` / `"Tagged"` / `"Module"` lowering to
+the wildcard via
 [`KType::from_name`](src/runtime/model/types/ktype_resolution.rs),
 `(scope_id, name)` identity fields populated at finalize time on
 [`KObject::Struct` / `Tagged` / `StructType` / `TaggedUnionType`](src/runtime/model/values/kobject.rs)
-under the `scope as *const _ as usize` scheme `Module::scope_id()` uses
-(with `ktype()` still reporting the old singletons until stage 3.1 flips the
-arms), predicate arms placing `UserType { kind: K, .. }` strictly under
+under the `scope as *const _ as usize` scheme `Module::scope_id()` uses,
+predicate arms placing `UserType { kind: K, .. }` strictly under
 `AnyUserType { kind: K }` strictly under `Any` in
-[`ktype_predicates.rs`](src/runtime/model/types/ktype_predicates.rs), and
-the empty
+[`ktype_predicates.rs`](src/runtime/model/types/ktype_predicates.rs),
+`KObject::Struct` / `Tagged` / `KModule` synthesizing `KType::UserType`
+from their identity fields in `ktype()`, STRUCT / UNION-named / MODULE /
+SIG finalize routing through the
+[`Scope::register_nominal`](src/runtime/machine/core/scope.rs) shim that
+transactionally writes `bindings.types[name]` and `bindings.data[name]`
+together (with `body_type_expr`'s value-side fall-through and the resolver's
+`KSignature` / `StructType` / `TaggedUnionType` value-side fallback both
+deleted under the single-home invariant), `LET <Type-class> = <module/sig/struct-value>`
+aliases dual-writing through the same shim while preserving the original
+carrier's identity, and the empty
 [`Bindings.pending_types`](src/runtime/machine/core/bindings.rs)
 field plus read handle that stage 3.2 will populate. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
@@ -144,11 +153,6 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 3.1 — atomic variant collapse and dual-write](roadmap/type-identity-3.1-variant-collapse.md)
-  — deletes `KType::Struct`/`Tagged`/`Module`/`ModuleType`; routes
-  STRUCT / UNION / MODULE / SIG finalize through
-  `Bindings::try_register_nominal`; deletes the `body_type_expr`
-  `scope.lookup` fall-through under the single-home invariant.
 - [Type identity stage 3.2 — SCC discovery and anonymous-UNION removal](roadmap/type-identity-3.2-scc-and-anon-union.md)
   — wires `Bindings::pending_types` so mutually recursive STRUCT / UNION
   pairs elaborate without deadlocking; deletes the anonymous `UNION (...)`

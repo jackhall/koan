@@ -59,9 +59,10 @@ definition. Type checking forbids passing an `IntOrdAbstract.Type` value to
 anything expecting a `Number` — the abstraction barrier is enforced.
 
 Opaque ascription is **generative**: each application mints a fresh
-`KType::ModuleType { scope_id, name }` per declared abstract type. Two
-distinct opaque ascriptions of the same source module yield distinct types
-that cannot be confused. The carrier lives in
+`KType::UserType { kind: Module, scope_id, name }` per declared abstract
+type. Two distinct opaque ascriptions of the same source module yield
+distinct `scope_id`s and therefore distinct types that cannot be confused.
+The carrier lives in
 [`KType`](../src/runtime/model/types/ktype.rs); the operators are registered as
 ordinary builtins in [`ascribe.rs`](../src/runtime/builtins/ascribe.rs).
 
@@ -93,8 +94,9 @@ body needs no separate "anonymous structure" form. The bound name (`Result`
 above) lives only inside the call frame.
 
 Functor application is **generative**: each call evaluates the body afresh,
-and any inner `:|` mints fresh `KType::ModuleType` slots. `(MAKESET IntOrd)`
-applied twice yields two distinct `Set` types that cannot be confused.
+and any inner `:|` mints fresh `KType::UserType { kind: Module, .. }`
+slots. `(MAKESET IntOrd)` applied twice yields two distinct `Set` types
+that cannot be confused.
 Generativity is a consequence of `:|`-per-call, not a separate mechanism.
 
 Sharing constraints — pinning a functor's output abstract type to its input
@@ -437,8 +439,9 @@ absorbing the conceptual cost incrementally.
 
 Implementation stages remain, each producing a usable end state. (Stage 1
 — the module language itself: `MODULE`, `SIG`, `:|`, `:!`, and per-module type
-identity via `KType::ModuleType` — shipped and is described in the body
-above. First-class module values shipped alongside it: `KObject::KModule`
+identity via `KType::UserType { kind: Module, .. }` — shipped and is
+described in the body above. First-class module values shipped alongside
+it: `KObject::KModule`
 flows through `LET` and ATTR like any other value, so a separate pack/unpack
 construct isn't needed; the remaining first-class-modules work folds into
 later stages — signature-bound dispatch (modules-as-values typed against a

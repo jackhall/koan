@@ -19,6 +19,7 @@
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::model::values::Module;
 
 use crate::ast::KExpression;
@@ -75,13 +76,22 @@ pub fn body<'a>(
             arena.alloc_module(Module::new(name_for_finish.clone(), child_scope));
         let module_obj: &'a KObject<'a> =
             arena.alloc_object(KObject::KModule(module, active_frame.clone()));
-        if let Err(e) = parent_scope.bind_value(name_for_finish.clone(), module_obj) {
-            return BodyResult::Err(e.with_frame(Frame {
+        // Dual-write the module's per-declaration identity into `bindings.types`
+        // alongside the value-side carrier so a type-class slot typed by `name_for_finish`
+        // resolves to the same `KType::UserType { kind: Module, scope_id, name }` the
+        // carrier's `ktype()` synthesizes.
+        let identity = KType::UserType {
+            kind: UserTypeKind::Module,
+            scope_id: module.scope_id(),
+            name: name_for_finish.clone(),
+        };
+        match parent_scope.register_nominal(name_for_finish.clone(), identity, module_obj) {
+            Ok(obj) => BodyResult::Value(obj),
+            Err(e) => BodyResult::Err(e.with_frame(Frame {
                 function: "<module>".to_string(),
                 expression: format!("MODULE {} body", name_for_finish),
-            }));
+            })),
         }
-        BodyResult::Value(module_obj)
     });
     let combine_id = sched.add_combine(deps, scope, finish);
     BodyResult::DeferTo(combine_id)
@@ -98,7 +108,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MODULE",
         ExpressionSignature {
-            return_type: KType::Module,
+            return_type: KType::AnyUserType { kind: UserTypeKind::Module },
             elements: vec![
                 SignatureElement::Keyword("MODULE".into()),
                 SignatureElement::Argument(Argument {

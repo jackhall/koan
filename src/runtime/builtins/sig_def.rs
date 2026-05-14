@@ -54,13 +54,20 @@ pub fn body<'a>(
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
         let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KSignature(sig));
-        if let Err(e) = parent_scope.bind_value(name_for_finish.clone(), sig_obj) {
-            return BodyResult::Err(e.with_frame(Frame {
+        // SIG is not a `UserTypeKind`; the identity carrier stays `SignatureBound`.
+        // Dual-write so type-name resolution finds the signature by name without
+        // consulting `bindings.data` for the value-side carrier.
+        let identity = KType::SignatureBound {
+            sig_id: sig.sig_id(),
+            sig_path: name_for_finish.clone(),
+        };
+        match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj) {
+            Ok(obj) => BodyResult::Value(obj),
+            Err(e) => BodyResult::Err(e.with_frame(Frame {
                 function: "<signature>".to_string(),
                 expression: format!("SIG {} body", name_for_finish),
-            }));
+            })),
         }
-        BodyResult::Value(sig_obj)
     });
     let combine_id = sched.add_combine(deps, scope, finish);
     BodyResult::DeferTo(combine_id)
@@ -163,5 +170,31 @@ mod tests {
             scope.bindings().data().get("Foo").is_none(),
             "Foo must not bind when its body errors",
         );
+    }
+
+    /// Stage 3.1: SIG finalize dual-writes a `KType::SignatureBound` into
+    /// `bindings.types` next to the `KObject::KSignature` carrier in `bindings.data`.
+    /// Without this, deleting `body_type_expr`'s `scope.lookup` fall-through would
+    /// break every SIG-typed name lookup.
+    #[test]
+    fn sig_dual_writes_to_types_and_data() {
+        use crate::runtime::model::types::KType;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "SIG OrderedSig = (LET x = 1)");
+        let types = scope.bindings().types();
+        let kt = types
+            .get("OrderedSig")
+            .expect("OrderedSig should be in bindings.types");
+        assert!(matches!(
+            **kt,
+            KType::SignatureBound { ref sig_path, .. } if sig_path == "OrderedSig"
+        ));
+        drop(types);
+        let data = scope.bindings().data();
+        let obj = data
+            .get("OrderedSig")
+            .expect("OrderedSig should be in bindings.data");
+        assert!(matches!(obj, KObject::KSignature(_)));
     }
 }

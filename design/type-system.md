@@ -50,15 +50,23 @@ convention is `LET Type = ...` for the principal abstract type, with `Elt`,
 - Other function-like: `KExpression` (a captured-but-unevaluated expression).
 - Meta-type for type-position slots: `TypeExprRef` — see
   [Type-position slot kinds](#type-position-slot-kinds).
-- First-class type values: `Type` (a tagged-union or struct schema), `Tagged`
-  (a tagged-union variant value), `Struct` (a struct value).
-- Module-system carriers: `Module` (the type of a `MODULE` value),
-  `Signature` (the type of a `SIG` value), and
-  `ModuleType { scope_id: usize, name: String }` — the per-ascription
-  abstract-type carrier minted by `:|` opaque ascription. Two distinct
-  opaque ascriptions of the same source module mint distinct `ModuleType`s
-  (different `scope_id`s), giving the abstraction-barrier identity property
-  the [module system](module-system.md) rests on.
+- First-class type values: `Type` (a tagged-union or struct schema, the meta-type
+  reported by `KObject::StructType` and `KObject::TaggedUnionType`).
+- User-declared nominal types: `UserType { kind: UserTypeKind, scope_id: usize,
+  name: String }` — the per-declaration identity tag synthesized by
+  `KObject::ktype()` for `Struct`, `Tagged`, and `KModule` carriers and minted
+  by `:|` opaque ascription with `kind: Module`. Two distinct STRUCTs (or two
+  distinct opaque ascriptions of the same source module) produce different
+  `scope_id`s, giving the abstraction-barrier and per-declaration-distinctness
+  identity property the [module system](module-system.md) rests on. The
+  companion `AnyUserType { kind }` wildcard accepts any `UserType` of the
+  matching kind, used for slot types that admit "any user-declared X" — ATTR's
+  `body_struct` / `body_module` slots, `MODULE`'s declaration slot, `:|` / `:!`
+  ascription, construction primitives' return types.
+- Signature carriers: `Signature` (the type of a first-class `SIG` value) and
+  `SignatureBound { sig_id, sig_path }` — the per-declaration `SIG` identity
+  written into `bindings.types` at finalize time so signature names resolve
+  uniformly through `Scope::resolve_type`.
 - `Any` — the no-op fast-path.
 
 [`KType::matches_value`](../src/runtime/model/types/ktype_predicates.rs) plus
@@ -275,19 +283,22 @@ The abstraction-over-types story is the [module
 system](module-system.md) — structures and signatures, opaque ascription as
 the type-abstraction primitive, functors for parametric types, and modular
 implicits for inferred dispatch. Stage 1 (the module language and per-module
-type identity via `KType::ModuleType`) shipped and is described in the body
-above; the remaining stages live under
+type identity via `KType::UserType { kind: Module, .. }`) shipped and is
+described in the body above; the remaining stages live under
 [`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
 The four-stage type-identity arc routes bare-leaf type names through a
 `KObject`-side carrier rather than a placeholder variant inside the
-elaborated type language, unifies `KType::Struct` / `Tagged` / `ModuleType`
-into a single `KType::UserType { kind, scope_id, name }` carrier with
-per-declaration scope-tagged identity, and adds the `NEWTYPE` keyword for
-fresh nominal identity over a transparent representation. The binding home
-splits into two maps (`data` for values, `types` for type names), with
+elaborated type language, unifies STRUCT / UNION / MODULE / opaque-ascription
+identity onto a single `KType::UserType { kind, scope_id, name }` carrier
+with per-declaration scope-tagged identity, and adds the `NEWTYPE` keyword
+for fresh nominal identity over a transparent representation. The binding
+home splits into two maps (`data` for values, `types` for type names), with
 token-kind-driven lookup at the resolver — Type-class tokens consult
-`types`, identifier tokens consult `data`.
+`types`, identifier tokens consult `data`. Stages 1, 2, and 3 (3.0
+scaffolding plus 3.1 variant collapse and dual-write) have shipped; stage
+3.2's SCC discovery / anonymous-UNION removal and stage 4's `NEWTYPE`
+keyword are still to come.
 
 - Type identity stage 1 — foundation: dual-map binding home,
   `Scope::resolve_type`, dispatch routing by token kind, bind-time
@@ -313,12 +324,16 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   `KObject::KTypeValue` synthesis site for dispatch transport lives in
   [`value_lookup::body_type_expr`](../src/runtime/builtins/value_lookup.rs),
   which mints `KObject::KTypeValue(kt.clone())` on a `resolve_type` hit.
-  On a `resolve_type` miss, both readers fall through to `Scope::resolve`
-  to pick up value-side nominal carriers — `KObject::KModule` from
+  On a `resolve_type` miss, the bare-leaf arm of `elaborate_type_expr`
+  falls through to `Scope::resolve` for compatibility with the small set of
+  callers that still consult the value side; the `body_type_expr` reader,
+  by contrast, is now types-only (stage 3.1 deleted its value-side
+  fallback). Value-side nominal carriers — `KObject::KModule` from
   `MODULE`, `KObject::StructType` from `STRUCT`, `KObject::TaggedUnionType`
-  from `UNION`, `KObject::KSignature` from `SIG` — none of which live in
-  `bindings.types` until stage 3 dual-writes a `KType::UserType` next to
-  them. The bind-time check uses a primitive/container blocklist
+  from `UNION`, `KObject::KSignature` from `SIG` — are dual-written into
+  `bindings.types` next to a `KType::UserType` or `KType::SignatureBound`
+  by the stage 3.1 finalize routes. The bind-time check uses a
+  primitive/container blocklist
   (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so type-language
   carriers (`KModule`, `KSignature`, `StructType`, `TaggedUnionType`),
   whose runtime `KType` is `Module` / `Signature` / `Type` rather than
@@ -352,8 +367,9 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   runs the same primitive/container blocklist as the `KTypeValue` arm and
   routes to `register_type` for type-valued RHSes), and
   [`value_lookup::body_type_expr`](../src/runtime/builtins/value_lookup.rs)
-  (which falls through to `Scope::resolve` to pick up value-side nominal
-  carriers when the surface name isn't in `bindings.types`). FN's deferred
+  (which resolves through `bindings.types` and, on a nominal `UserType` /
+  `SignatureBound` hit, recovers the paired value-side carrier from
+  `bindings.data`). FN's deferred
   return-type elaboration peeks the slot to pick between
   [`extract_ktype`](../src/runtime/machine/kfunction/argument_bundle.rs)
   (resolved carrier) and the sibling
@@ -370,36 +386,55 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   plus the `KType::TypeExprRef` dispatch shape) stays unchanged.
   Every `KType` flowing through dispatch is fully elaborated — there is no
   surface-name carrier variant inside `KType` itself.
-- Type identity stage 3.0 — scaffolding for the per-declaration carrier.
-  [`enum UserTypeKind { Struct, Tagged, Module }`](../src/runtime/model/types/ktype.rs)
-  with a `surface_keyword()` accessor, [`KType::UserType { kind, scope_id, name }`](../src/runtime/model/types/ktype.rs)
-  (per-declaration identity tag) and [`KType::AnyUserType { kind }`](../src/runtime/model/types/ktype.rs)
-  (wildcard kind tag) all exist as `KType` variants. The surface names
-  `"Struct"` / `"Tagged"` / `"Module"` lower to `AnyUserType { kind }` in
+- Type identity stage 3 — per-declaration `KType::UserType` carrier and
+  dual-write. [`enum UserTypeKind { Struct, Tagged, Module }`](../src/runtime/model/types/ktype.rs)
+  with a `surface_keyword()` accessor,
+  [`KType::UserType { kind, scope_id, name }`](../src/runtime/model/types/ktype.rs)
+  (per-declaration identity tag), and
+  [`KType::AnyUserType { kind }`](../src/runtime/model/types/ktype.rs)
+  (wildcard kind tag) are the carriers; the old `KType::Struct` /
+  `KType::Tagged` / `KType::Module` / `KType::ModuleType` singletons are
+  gone. The surface names `"Struct"` / `"Tagged"` / `"Module"` lower to
+  `AnyUserType { kind }` in
   [`KType::from_name`](../src/runtime/model/types/ktype_resolution.rs), and
-  [`scope.register_type`](../src/runtime/builtins.rs) agrees so the type-resolver
-  and the builtin registry produce the same wildcard carrier. Predicate arms
-  ([`ktype_predicates.rs`](../src/runtime/model/types/ktype_predicates.rs)) for
-  `AnyUserType` (matches any `KObject::Struct` / `Tagged` / `KModule` of the
-  matching kind) and `UserType` (inert exact-`ktype()` match, dormant until
-  stage 3.1) land with `is_more_specific_than` placing `UserType { kind: K, .. }`
-  strictly below `AnyUserType { kind: K }`, which sits strictly below `Any`.
-  Value carriers — [`KObject::Struct`](../src/runtime/model/values/kobject.rs),
+  [`scope.register_type`](../src/runtime/builtins.rs) agrees so the
+  type-resolver and the builtin registry produce the same wildcard
+  carrier. Predicate arms
+  ([`ktype_predicates.rs`](../src/runtime/model/types/ktype_predicates.rs))
+  place `UserType { kind: K, .. }` strictly below `AnyUserType { kind: K }`
+  strictly below `Any` in `is_more_specific_than`, and `AnyUserType {
+  kind }` matches any `KObject::Struct` / `Tagged` / `KModule` of the
+  matching kind. Value carriers —
+  [`KObject::Struct`](../src/runtime/model/values/kobject.rs),
   [`KObject::Tagged`](../src/runtime/model/values/kobject.rs),
-  [`KObject::StructType`](../src/runtime/model/values/kobject.rs), and
-  [`KObject::TaggedUnionType`](../src/runtime/model/values/kobject.rs) —
-  grew `(scope_id, name)` identity fields populated at finalize time via the
-  `scope as *const _ as usize` scheme that `Module::scope_id()` uses; the
-  anonymous `UNION (...)` form stamps `name = ""` as the interim sentinel
-  stage 3.2 deletes. `ktype()` continues to report the old singletons
-  (`KType::Struct` / `Tagged` / `Type`) — identity is dormant until 3.1
-  flips the arms. [`Bindings.pending_types`](../src/runtime/machine/core/bindings.rs)
+  [`KObject::StructType`](../src/runtime/model/values/kobject.rs),
+  [`KObject::TaggedUnionType`](../src/runtime/model/values/kobject.rs),
+  and `KObject::KModule` — carry `(scope_id, name)` identity fields
+  populated at finalize time via the `scope as *const _ as usize` scheme
+  `Module::scope_id()` uses; `ktype()` on a `KObject::Struct` / `Tagged` /
+  `KModule` reconstructs `KType::UserType { kind, scope_id, name }`,
+  while schema carriers (`StructType` / `TaggedUnionType`) keep reporting
+  `KType::Type` (they are values *of the meta-type*, not user-typed
+  values). STRUCT / UNION-named / MODULE / SIG finalize each route
+  through the
+  [`Scope::register_nominal`](../src/runtime/machine/core/scope.rs)
+  shim, which transactionally writes `bindings.types[name] = &KType` and
+  `bindings.data[name] = &KObject` together so the single-home invariant
+  (Type-classed name lookups go through `Scope::resolve_type` only)
+  holds — `body_type_expr`'s value-side fall-through is deleted, and the
+  resolver's `KSignature` / `StructType` / `TaggedUnionType` value-side
+  fallback is gone. `LET <Type-class> = <module/sig/struct-value>` (e.g.
+  `LET IntOrdA = (IntOrd :| OrderedSig)`) also dual-writes, preserving
+  the *original* carrier's identity rather than minting a fresh
+  `scope_id` for the alias name — aliasing is type-equivalent, so a slot
+  typed by the alias dispatches to the same overload as a slot typed by
+  the original. SIG declarations write `KType::SignatureBound { sig_id,
+  sig_path }` (unchanged variant) on the type side. The anonymous
+  `UNION (...)` overload still mints a sentinel `("", parent_scope_id)`
+  identity; stage 3.2 deletes the overload entirely.
+  [`Bindings.pending_types`](../src/runtime/machine/core/bindings.rs)
   exists as an empty `RefCell<HashMap<String, PendingTypeEntry>>` with a
   read handle; stage 3.2 wires the SCC pre-registration writer.
-- [Type identity stage 3.1 — atomic variant collapse and dual-write](../roadmap/type-identity-3.1-variant-collapse.md)
-  — deletes `KType::Struct` / `Tagged` / `Module` / `ModuleType`, flips
-  value-carrier `ktype()` arms onto `KType::UserType`, and routes nominal
-  binders through `Bindings::try_register_nominal`.
 - [Type identity stage 3.2 — SCC discovery and anonymous-UNION removal](../roadmap/type-identity-3.2-scc-and-anon-union.md)
   — populates `Bindings.pending_types` from the elaborator's park path so
   mutually recursive STRUCT / UNION pairs cycle-close, and deletes the

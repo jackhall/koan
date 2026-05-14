@@ -338,8 +338,11 @@ LET partial = (Point (x: 3))
 # error: missing argument 'y'
 ```
 
-A struct's runtime type is `KType::Struct`; the schema itself is
-`KType::Type` (shared with `TaggedUnionType`).
+A struct value's runtime type is `KType::UserType { kind: Struct, scope_id,
+name }` — the per-declaration identity tag, so values of distinct STRUCT
+declarations dispatch to different overloads. The schema itself (the
+`StructType` carrier `Point` is bound to) is `KType::Type`, shared with
+`TaggedUnionType`.
 
 Read a field off a struct value with the `.` operator (an alias for the
 `ATTR` builtin):

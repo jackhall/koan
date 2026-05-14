@@ -18,6 +18,7 @@
 //! `extract_ktype()` and operate on the structural shape rather than the surface form.
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::resolve_module;
 
@@ -165,9 +166,10 @@ pub fn body_module_type_of<'a>(
         Err(e) => return err(e),
     };
     let name = name_kt.name();
-    // Pull the abstract type's concrete `KType::ModuleType` (or whatever the module stored)
-    // out of the `type_members` table directly so the consumer downstream sees the
-    // identity-bearing variant rather than a re-elaborated leaf.
+    // Pull the abstract type's concrete `KType` (post-3.1: `KType::UserType { kind:
+    // Module, .. }` minted by opaque ascription) out of the `type_members` table directly
+    // so the consumer downstream sees the identity-bearing variant rather than a
+    // re-elaborated leaf.
     let kt = match m.type_members.borrow().get(&name).cloned() {
         Some(kt) => kt,
         None => {
@@ -232,7 +234,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::TypeExprRef,
             elements: vec![
                 SignatureElement::Keyword("MODULE_TYPE_OF".into()),
-                SignatureElement::Argument(Argument { name: "m".into(),    ktype: KType::Module }),
+                SignatureElement::Argument(Argument {
+                    name: "m".into(),
+                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
+                }),
                 SignatureElement::Argument(Argument { name: "name".into(), ktype: KType::TypeExprRef }),
             ],
         },
@@ -300,8 +305,8 @@ mod tests {
 
     /// `(MODULE_TYPE_OF M Type)` reads the `Type` slot from a module's `type_members`
     /// table. Sets up an opaquely-ascribed module so `Type` is bound, then verifies the
-    /// builtin returns a `KTypeValue` whose `KType::ModuleType` carries the abstract
-    /// type's identity.
+    /// builtin returns a `KTypeValue` whose `KType::UserType { kind: Module, .. }`
+    /// carries the abstract type's identity.
     #[test]
     fn module_type_of_resolves_via_module_member() {
         let arena = RuntimeArena::new();
@@ -315,10 +320,14 @@ mod tests {
         let result = run_one(scope, parse_one("MODULE_TYPE_OF Mod Type"));
         match result {
             KObject::KTypeValue(kt) => {
-                // The abstract type member is recorded as `KType::ModuleType` by the
-                // ascription path; surface name is `Type`.
+                // The abstract type member is recorded as `KType::UserType { kind:
+                // Module, .. }` by the ascription path; surface name is `Type`.
                 assert_eq!(kt.name(), "Type");
-                assert!(matches!(kt, KType::ModuleType { .. }));
+                use crate::runtime::model::types::UserTypeKind;
+                assert!(matches!(
+                    kt,
+                    KType::UserType { kind: UserTypeKind::Module, .. }
+                ));
             }
             other => panic!("expected KTypeValue, got {:?}", other.ktype()),
         }

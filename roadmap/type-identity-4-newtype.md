@@ -106,16 +106,18 @@ koan's runtime dispatch.
 
 - *Surface name for "any newtype" — open.* Whether `Newtype` is a writable
   wildcard surface name (parallel to `Struct` / `Tagged` / `Module` from
-  [stage 3](type-identity-3.1-variant-collapse.md)) is deferred until
-  a builtin signature surfaces the need.
+  the shipped stage 3 carrier, see
+  [design/type-system.md § Open work](../design/type-system.md#open-work))
+  is deferred until a builtin signature surfaces the need.
 
 ## Dependencies
 
-**Requires:**
-
-- [Type identity stage 3 — `KType::UserType` and per-declaration identity](type-identity-3.1-variant-collapse.md)
-  — extends `UserTypeKind` with the `Newtype` variant. `KType::UserType`,
-  the dual-write primitive, and the `types` map all land in earlier stages.
+**Requires:** none — `KType::UserType`, the `UserTypeKind` enum, the
+`try_register_nominal` dual-write path, and the `bindings.types` map have
+all shipped (see
+[design/type-system.md § Open work](../design/type-system.md#open-work)).
+Stage 4 extends `UserTypeKind` with a `Newtype` variant on the existing
+substrate.
 
 **Unblocks:**
 

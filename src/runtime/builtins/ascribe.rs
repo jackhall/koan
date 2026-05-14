@@ -6,6 +6,7 @@
 //! the inference scheduler.
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::{resolve_module, resolve_signature, Module};
 
@@ -39,14 +40,21 @@ pub fn body_opaque<'a>(
     }
 
     let new_module: &'a Module<'a> = arena.alloc_module(Module::new(m.path.clone(), new_scope));
-    // Each minted `ModuleType` carries the new module's `scope_id`, so two opaque ascriptions
-    // of the same source yield distinct types — the abstraction-barrier identity property.
+    // Each minted abstract type carries the new module's `scope_id`, so two opaque
+    // ascriptions of the same source yield distinct types — the abstraction-barrier
+    // identity property. `kind: Module` reuses the user-declared-module family; the
+    // distinction from a first-class module value is by `name` (the abstract type
+    // name, typically `"Type"`, vs. the module's full path).
     let scope_id = new_module.scope_id();
     let mut minted: Vec<(String, KType)> = Vec::new();
     for name in abstract_type_names_of(s.decl_scope()) {
         minted.push((
             name.clone(),
-            KType::ModuleType { scope_id, name: name.clone() },
+            KType::UserType {
+                kind: UserTypeKind::Module,
+                scope_id,
+                name: name.clone(),
+            },
         ));
     }
     if !minted.is_empty() {
@@ -185,9 +193,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         ":|",
         ExpressionSignature {
-            return_type: KType::Module,
+            return_type: KType::AnyUserType { kind: UserTypeKind::Module },
             elements: vec![
-                SignatureElement::Argument(Argument { name: "m".into(), ktype: KType::Module }),
+                SignatureElement::Argument(Argument {
+                    name: "m".into(),
+                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
+                }),
                 SignatureElement::Keyword(":|".into()),
                 SignatureElement::Argument(Argument { name: "s".into(), ktype: KType::Signature }),
             ],
@@ -198,9 +209,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         ":!",
         ExpressionSignature {
-            return_type: KType::Module,
+            return_type: KType::AnyUserType { kind: UserTypeKind::Module },
             elements: vec![
-                SignatureElement::Argument(Argument { name: "m".into(), ktype: KType::Module }),
+                SignatureElement::Argument(Argument {
+                    name: "m".into(),
+                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
+                }),
                 SignatureElement::Keyword(":!".into()),
                 SignatureElement::Argument(Argument { name: "s".into(), ktype: KType::Signature }),
             ],
@@ -293,9 +307,16 @@ mod tests {
         };
         let a_t = a.type_members.borrow().get("Type").cloned();
         let b_t = b.type_members.borrow().get("Type").cloned();
-        assert!(matches!(&a_t, Some(KType::ModuleType { .. })));
-        assert!(matches!(&b_t, Some(KType::ModuleType { .. })));
-        assert_ne!(a_t, b_t, "two opaque ascriptions must mint distinct ModuleTypes");
+        use crate::runtime::model::types::UserTypeKind;
+        assert!(matches!(
+            &a_t,
+            Some(KType::UserType { kind: UserTypeKind::Module, .. })
+        ));
+        assert!(matches!(
+            &b_t,
+            Some(KType::UserType { kind: UserTypeKind::Module, .. })
+        ));
+        assert_ne!(a_t, b_t, "two opaque ascriptions must mint distinct module abstract types");
     }
 
     #[test]
@@ -353,9 +374,10 @@ mod tests {
             .get("Type")
             .cloned()
             .expect("opaque ascription should mint a Type member");
+        use crate::runtime::model::types::UserTypeKind;
         match &minted {
-            KType::ModuleType { name, .. } => assert_eq!(name, "Type"),
-            other => panic!("minted abstract type must be ModuleType, got {:?}", other),
+            KType::UserType { kind: UserTypeKind::Module, name, .. } => assert_eq!(name, "Type"),
+            other => panic!("minted abstract type must be UserType(Module), got {:?}", other),
         }
         assert_ne!(minted, KType::Number, "opaque IntOrdAbstract.Type must not equal Number");
         let compare = abstract_mod
@@ -443,7 +465,7 @@ mod tests {
     /// Test 3 — Per-call generative semantics. Two functor invocations produce modules
     /// whose `scope_id` differs, since each call's body runs in a fresh per-call frame
     /// whose arena hands out a fresh scope address. The `Module::scope_id` is the
-    /// identity carrier `KType::ModuleType` would mint after `:|` opaque ascription;
+    /// identity carrier `KType::UserType { kind: Module, .. }` would mint after `:|` opaque ascription;
     /// asserting on the bare `scope_id`s themselves directly pins the per-call
     /// generativity property without depending on multi-statement-FN-body forward refs
     /// (which fold through `CONS` and don't share lexical bindings between statements).
@@ -475,7 +497,7 @@ mod tests {
         };
         // Per-call generativity: each invocation allocates a fresh `child_scope` in its
         // own per-call frame's arena, so `scope_id`s differ. After `:|` ascription this
-        // would seed two distinct `KType::ModuleType { scope_id, .. }` values; the
+        // would seed two distinct `KType::UserType { kind: Module, scope_id, .. }` values; the
         // identity carrier is what makes the abstract types incompatible across calls.
         assert_ne!(
             m1.scope_id(),

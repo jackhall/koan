@@ -3,13 +3,14 @@
 **Problem.** Stages 1-2 give an explicit module language: every functor
 application, every module-typed argument, every signature constraint is
 written by hand. For everyday generic code this is verbose. The
-[`KType::Module`](../src/runtime/model/types/ktype.rs) slot kind that stage 1
-shipped accepts any module value regardless of which signature it satisfies,
-so even the explicit-module path lacks the signature-bound dispatch a
-generic-function call site needs. Stage 5 introduces **implicit module
-parameters**: a function declares that it requires some module satisfying a
-given signature, and at the call site the compiler resolves which module to
-thread in by searching scope. This is the ergonomic payoff of the design.
+[`KType::AnyUserType { kind: Module }`](../src/runtime/model/types/ktype.rs)
+slot kind that stage 1 shipped accepts any module value regardless of which
+signature it satisfies, so even the explicit-module path lacks the
+signature-bound dispatch a generic-function call site needs. Stage 5
+introduces **implicit module parameters**: a function declares that it
+requires some module satisfying a given signature, and at the call site
+the compiler resolves which module to thread in by searching scope. This
+is the ergonomic payoff of the design.
 
 **Impact.**
 
@@ -28,12 +29,13 @@ thread in by searching scope. This is the ergonomic payoff of the design.
 **Directions.**
 
 - *Signature-bound module-typed dispatch — decided.* The substrate the
-  implicit-parameter machinery rides on: `KType::Module` slots learn to
-  carry a required signature, and the dispatcher checks that the bound
-  module value satisfies it. Implicit parameters are then a special case
-  of a typed module slot whose argument is resolved by search rather than
-  supplied at the call site. Stage 1 shipped the unconstrained
-  `KType::Module` slot; this stage tightens it.
+  implicit-parameter machinery rides on: `KType::AnyUserType { kind: Module }`
+  slots learn to carry a required signature, and the dispatcher checks
+  that the bound module value satisfies it. Implicit parameters are then
+  a special case of a typed module slot whose argument is resolved by
+  search rather than supplied at the call site. Stage 1 shipped the
+  unconstrained `AnyUserType { kind: Module }` slot; this stage tightens
+  it.
 - *Implicit-parameter declaration syntax — open.* The function signature
   needs a slot for implicit module parameters; surface form follows stage
   1's conventions but the exact spelling is unsettled.

@@ -126,14 +126,10 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::KExpression
             | KType::TypeExprRef
             | KType::Type
-            | KType::Tagged
-            | KType::Struct
-            | KType::Module
             | KType::Signature
             | KType::Any
             | KType::UserType { .. }
             | KType::AnyUserType { .. }
-            | KType::ModuleType { .. }
             | KType::SignatureBound { .. } => Ok(t.name()),
             // Structural / recursive shapes are not valid binder names — the caller wants
             // a leaf identifier, not a parameterized container.

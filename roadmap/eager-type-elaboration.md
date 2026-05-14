@@ -24,10 +24,10 @@ land:
   `TypeExpr` carries a name string that can hold a path like
   `MyMod.Number`, but `KType` has no variant that preserves a
   multi-segment path. The `KType::UserType { kind: Module, scope_id,
-  name }` shape that lands with
-  [stage 3.1](type-identity-3.1-variant-collapse.md) gives per-module
-  abstract-type identity, but does not let a `MyMod.Number` surface-name
-  flow as a typed value end-to-end.
+  name }` shape that shipped with the type-identity stage 3 carrier (see
+  [design/type-system.md § Open work](../design/type-system.md#open-work))
+  gives per-module abstract-type identity, but does not let a
+  `MyMod.Number` surface-name flow as a typed value end-to-end.
 - *Non-SCC forward references in type aliases fail at bind time.* Eager
   elaboration means a type alias's RHS must resolve at bind time. Mutual
   STRUCT / UNION recursion is covered by [stage 3.2](type-identity-3.2-scc-and-anon-union.md)'s

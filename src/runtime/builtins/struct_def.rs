@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
@@ -90,19 +91,25 @@ fn finalize_struct<'a>(
     let arena = scope.arena;
     // Per-declaration identity: `scope_id` is the declaring (parent) scope's address —
     // the same `*const _ as usize` scheme `Module::scope_id()` uses, stable for the
-    // run because scopes are arena-allocated and never moved. Stage 3.0 reads no
-    // consumer of the field yet; stage 3.1 flips `ktype()` to synthesize
-    // `KType::UserType { kind: Struct, scope_id, name }` from these fields.
+    // run because scopes are arena-allocated and never moved. The schema carrier and
+    // the dual-written `KType::UserType` identity tag share these `(scope_id, name)`
+    // fields so dispatch on the carrier (via its `ktype()`) and dispatch through a
+    // slot typed by the identity reach the same `UserType` value.
     let scope_id = scope as *const _ as usize;
     let struct_obj: &'a KObject<'a> = arena.alloc_object(KObject::StructType {
         name: name.clone(),
         scope_id,
         fields: Rc::new(fields),
     });
-    if let Err(e) = scope.bind_value(name, struct_obj) {
-        return err(e);
+    let identity = KType::UserType {
+        kind: UserTypeKind::Struct,
+        scope_id,
+        name: name.clone(),
+    };
+    match scope.register_nominal(name, identity, struct_obj) {
+        Ok(obj) => BodyResult::Value(obj),
+        Err(e) => err(e),
     }
-    BodyResult::Value(struct_obj)
 }
 
 /// Schedule a `Combine` over `producers` and re-run the schema elaboration in the finish
@@ -293,10 +300,10 @@ mod tests {
     /// [stage 3.2 — SCC discovery and anonymous-UNION removal](../../../roadmap/type-identity-3.2-scc-and-anon-union.md).
     /// Sanity check that two unrelated STRUCTs in the same batch don't
     /// spuriously cross-pollinate `RecursiveRef`. `STRUCT A = (x: Number)`,
-    /// `STRUCT B = (y: A)` — B's field references A, which is non-recursive; B's schema
-    /// must record `KType::Struct` (or the StructType-shaped reference) for `y`, never a
-    /// `RecursiveRef`. Per-binder threaded-set seeding handles this — only the binder's
-    /// own name is in its threaded set.
+    /// `STRUCT B = (y: A)` — B's field references A, which is non-recursive; B's schema    /// must record the resolved `KType` for `y` (post-3.1: `KType::UserType { kind:
+    /// Struct, .. }` from Aa's identity), never a `RecursiveRef`. Per-binder
+    /// threaded-set seeding handles this — only the binder's own name is in its
+    /// threaded set.
     #[test]
     fn mutual_non_recursive_pair_does_not_wrap_either() {
         let arena = RuntimeArena::new();
@@ -314,7 +321,8 @@ mod tests {
             other => panic!("expected Bb to be a StructType, got {:?}", other.map(|o| o.ktype())),
         };
         // `y`'s recorded KType is whatever the elaborator pulls out of `Aa`'s binding —
-        // which is `KObject::StructType` (matches `KType::Struct`) — not `RecursiveRef`.
+        // post-3.1 `KType::UserType { kind: Struct, name: "Aa", .. }` from the dual-
+        // write — not `RecursiveRef`.
         assert_eq!(b_fields[0].0, "y");
         assert!(
             !matches!(b_fields[0].1, KType::RecursiveRef(_)),
@@ -378,5 +386,80 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("triple")),
             "expected ShapeError on missing colon, got {err}",
         );
+    }
+
+    /// Stage 3.1 impact: two STRUCTs declared at the same scope with identical field shapes
+    /// have distinct per-declaration identity. Two `FN (PICK x: Foo)` and
+    /// `FN (PICK x: Bar)` overloads coexist (pre-3.1 collapsed to `DuplicateOverload`
+    /// because both slot types lowered to `KType::Struct`), and dispatching on a
+    /// `Foo`-typed value selects the `Foo` body — same for `Bar`.
+    #[test]
+    fn per_declaration_dispatch_separates_overloads() {
+        use crate::runtime::builtins::test_support::run;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "STRUCT Foo = (a: Number)\n\
+             STRUCT Bar = (a: Number)\n\
+             FN (PICK x: Foo) -> Str = (\"foo\")\n\
+             FN (PICK x: Bar) -> Str = (\"bar\")",
+        );
+        let foo_result = run_one(scope, parse_one("PICK (Foo (a: 1))"));
+        match foo_result {
+            KObject::KString(s) => assert_eq!(s, "foo"),
+            other => panic!("expected \"foo\", got {:?}", other.ktype()),
+        }
+        let bar_result = run_one(scope, parse_one("PICK (Bar (a: 1))"));
+        match bar_result {
+            KObject::KString(s) => assert_eq!(s, "bar"),
+            other => panic!("expected \"bar\", got {:?}", other.ktype()),
+        }
+    }
+
+    /// Wildcard slot `Struct` admits any struct carrier regardless of declaring schema —
+    /// the `AnyUserType { kind: Struct }` arm. Both `Foo` and `Bar` values lower to
+    /// distinct `UserType`s, but both refine `AnyUserType { kind: Struct }`.
+    #[test]
+    fn wildcard_struct_slot_admits_any_struct_carrier() {
+        use crate::runtime::builtins::test_support::run;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "STRUCT Foo = (a: Number)\n\
+             STRUCT Bar = (a: Number)\n\
+             FN (PICK x: Struct) -> Str = (\"any\")",
+        );
+        let foo_result = run_one(scope, parse_one("PICK (Foo (a: 1))"));
+        let bar_result = run_one(scope, parse_one("PICK (Bar (a: 1))"));
+        match (foo_result, bar_result) {
+            (KObject::KString(a), KObject::KString(b)) => {
+                assert_eq!(a, "any");
+                assert_eq!(b, "any");
+            }
+            _ => panic!("expected both PICK calls to return \"any\""),
+        }
+    }
+
+    /// STRUCT finalize dual-writes the identity into `bindings.types` AND the carrier
+    /// into `bindings.data` via `register_nominal`. Both maps must hold matching entries
+    /// for the same name after declaration.
+    #[test]
+    fn struct_dual_writes_to_types_and_data() {
+        use crate::runtime::model::types::UserTypeKind;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run_one(scope, parse_one("STRUCT Point = (x: Number, y: Number)"));
+        let types = scope.bindings().types();
+        let kt = types.get("Point").expect("Point should be in bindings.types");
+        assert!(matches!(
+            **kt,
+            KType::UserType { kind: UserTypeKind::Struct, ref name, .. } if name == "Point"
+        ));
+        drop(types);
+        let data = scope.bindings().data();
+        let obj = data.get("Point").expect("Point should be in bindings.data");
+        assert!(matches!(obj, KObject::StructType { name, .. } if name == "Point"));
     }
 }

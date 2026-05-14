@@ -1,11 +1,13 @@
 # Type identity stage 3.2 — SCC discovery and anonymous-UNION removal
 
-Third and final sub-stage of the type-identity-3 arc. Stage 3.0 landed the
-scaffolding (`KType::UserType` / `AnyUserType` variants, `(scope_id, name)`
-fields on value carriers, `pending_types` field empty — see
-[design/type-system.md § Open work](../design/type-system.md#open-work));
-[stage 3.1](type-identity-3.1-variant-collapse.md) collapses the singletons
-and flips the value-carrier `ktype()` arms to report per-declaration identity.
+Third and final sub-stage of the type-identity-3 arc. Stages 3.0 (scaffolding)
+and 3.1 (variant collapse and dual-write) have shipped: `KType::UserType` /
+`AnyUserType` carry per-declaration nominal identity, the old
+`KType::Struct` / `Tagged` / `Module` / `ModuleType` singletons are deleted,
+and STRUCT / UNION-named / MODULE / SIG finalize each route through
+`Scope::register_nominal` dual-writing `bindings.types` and `bindings.data`
+together (see
+[design/type-system.md § Open work](../design/type-system.md#open-work)).
 3.2 closes the two remaining gaps the same surface admits: mutually recursive
 STRUCT / UNION pairs deadlock during elaboration, and the anonymous
 `UNION (...)` form mints values whose sentinel identity doesn't fit the
@@ -22,9 +24,9 @@ the gap.
 
 The anonymous `UNION (...)` overload at
 [`union.rs:167-179`](../src/runtime/builtins/union.rs) produces a
-`KObject::TaggedUnionType` carrying sentinel identity `("", 0)`. Stage 3.1
-tolerates this — `ktype()` on a tagged value from an anonymous union
-reports `KType::UserType { kind: Tagged, scope_id: 0, name: "" }`, which
+`KObject::TaggedUnionType` carrying sentinel identity `("", parent_scope_id)`.
+`ktype()` on a tagged value from an anonymous union reports
+`KType::UserType { kind: Tagged, scope_id: <parent>, name: "" }`, which
 cannot collide with any named UNION but breaks the per-declaration
 contract two anonymous unions are supposed to satisfy.
 
@@ -108,10 +110,9 @@ contract two anonymous unions are supposed to satisfy.
 
 ## Dependencies
 
-**Requires:**
-
-- [Type identity stage 3.1 — atomic variant collapse and dual-write](type-identity-3.1-variant-collapse.md)
-  — needs `KType::UserType` to mint per-cycle-member identities and
-  `try_register_nominal` as the finalize write path.
+**Requires:** none — the `KType::UserType` carrier, the
+`try_register_nominal` dual-write path, and the empty `pending_types` field
+have all shipped (see
+[design/type-system.md § Open work](../design/type-system.md#open-work)).
 
 **Unblocks:** none. Tail of the type-identity-3 arc.

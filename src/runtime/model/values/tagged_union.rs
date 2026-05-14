@@ -23,7 +23,7 @@ use std::rc::Rc;
 use crate::runtime::builtins::register_builtin;
 use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::core::{KError, KErrorKind, Scope};
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, UserTypeKind};
 use crate::runtime::model::values::KObject;
 use crate::ast::{ExpressionPart, KExpression};
 
@@ -163,7 +163,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "tagged_union_construct",
         ExpressionSignature {
-            return_type: KType::Tagged,
+            return_type: KType::AnyUserType { kind: UserTypeKind::Tagged },
             elements: vec![
                 SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::Type }),
                 SignatureElement::Argument(Argument { name: "tag".into(),    ktype: KType::Identifier }),

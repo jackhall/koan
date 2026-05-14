@@ -14,10 +14,12 @@
 //!   stage 1.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! `KType::Struct` and `KType::Module` only match the corresponding `Future` variants), so
-//! dispatch picks unambiguously without a specificity tiebreaker.
+//! `KType::AnyUserType { kind: Struct }` and `KType::AnyUserType { kind: Module }` only
+//! match the corresponding `Future` variants), so dispatch picks unambiguously without a
+//! specificity tiebreaker.
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{err, register_builtin};
@@ -68,7 +70,7 @@ pub fn body_type_lhs<'a>(
     let s_name = match bundle.get("s") {
         // Post-`KTypeValue` migration: the lhs's surface name is `KType::name()`. For a
         // user-typed `Foo.x`, the parser-side `resolve_for` lifted `Foo` to
-        // `KTypeValue(KType::ModuleType { name: "Foo", .. })` or a similarly leaf-named
+        // `KTypeValue(KType::UserType { name: "Foo", .. })` or a similarly leaf-named
         // variant; `name()` returns the user-facing identifier in either case.
         Some(KObject::KTypeValue(t)) => t.name(),
         // Stage-2 carrier: a bare-leaf name not in `KType::from_name`'s builtin table
@@ -192,9 +194,10 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
         }));
     };
     // Type-position fallback: opaque ascription's `type_members` map (e.g., `IntOrd.Type`
-    // resolves to a `KType::ModuleType`). The stored `KType` is the abstract type's actual
-    // identity — return it directly as a `KTypeValue` so identity comparisons downstream
-    // see the per-module `{ scope_id, name }` rather than a freshly elaborated leaf.
+    // resolves to a `KType::UserType { kind: Module, .. }` minted with the new module's
+    // `scope_id`). The stored `KType` is the abstract type's actual identity — return it
+    // directly as a `KTypeValue` so identity comparisons downstream see the per-module
+    // `{ scope_id, name }` rather than a freshly elaborated leaf.
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
         return BodyResult::Value(
             m.child_scope().arena.alloc_object(KObject::KTypeValue(kt)),
@@ -238,7 +241,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Any,
             elements: vec![
                 SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::Struct }),
+                SignatureElement::Argument(Argument {
+                    name: "s".into(),
+                    ktype: KType::AnyUserType { kind: UserTypeKind::Struct },
+                }),
                 SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
             ],
         },
@@ -251,7 +257,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Any,
             elements: vec![
                 SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::Module }),
+                SignatureElement::Argument(Argument {
+                    name: "s".into(),
+                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
+                }),
                 SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
             ],
         },
@@ -292,7 +301,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             return_type: KType::Any,
             elements: vec![
                 SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::Module }),
+                SignatureElement::Argument(Argument {
+                    name: "s".into(),
+                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
+                }),
                 SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::TypeExprRef }),
             ],
         },

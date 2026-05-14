@@ -22,7 +22,10 @@ use super::KObject;
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
-/// they currently expose (e.g. `Foo.Type` resolving to a `KType::ModuleType`).
+/// they currently expose (e.g. `Foo.Type` resolving to a `KType::UserType { kind:
+/// Module, .. }` minted by opaque ascription). The `kind: Module` reuse covers both
+/// first-class module values and per-module abstract types — the two are distinguished
+/// by `name` (the abstract type's name, typically `"Type"`, vs. the module's full path).
 pub struct Module<'a> {
     pub path: String,
     child_scope_ptr: *const Scope<'static>,
@@ -74,9 +77,9 @@ impl<'a> Module<'a> {
         }
     }
 
-    /// Stable identity used to seed `KType::ModuleType { scope_id, .. }`. Two distinct
-    /// opaque ascriptions of the same source module mint distinct `ModuleType`s because
-    /// each ascription allocates a fresh child scope.
+    /// Stable identity used to seed `KType::UserType { kind: Module, scope_id, .. }`.
+    /// Two distinct opaque ascriptions of the same source module mint distinct
+    /// `UserType`s because each ascription allocates a fresh child scope.
     pub fn scope_id(&self) -> usize {
         self.child_scope_ptr as usize
     }
@@ -119,9 +122,10 @@ impl<'a> Signature<'a> {
 }
 
 /// Resolve a `KObject` slot to a borrowed `&Module`. Ascribe and MODULE_TYPE_OF both
-/// declare their `m` slot as `KType::Module`, so the `Argument::matches` filter already
-/// guarantees `obj.as_module()` is `Some` on the happy path; the `TypeMismatch` arm is a
-/// defensive guard against a future caller routing a non-module value through here.
+/// declare their `m` slot as `KType::AnyUserType { kind: Module }`, so the
+/// `Argument::matches` filter already guarantees `obj.as_module()` is `Some` on the
+/// happy path; the `TypeMismatch` arm is a defensive guard against a future caller
+/// routing a non-module value through here.
 ///
 /// `arg_name` is the surface argument label threaded into any produced `TypeMismatch`.
 pub(crate) fn resolve_module<'a>(
@@ -200,6 +204,7 @@ mod tests {
     /// borrows is strict about interior mutation under a live shared borrow.
     #[test]
     fn module_type_members_refcell_mutation_with_held_module_ref() {
+        use crate::runtime::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(sink()));
         let module = arena.alloc_module(Module::new("M".into(), scope));
@@ -208,13 +213,18 @@ mod tests {
             let mut tm = module.type_members.borrow_mut();
             tm.insert(
                 "Type".into(),
-                KType::ModuleType { scope_id, name: "Type".into() },
+                KType::UserType {
+                    kind: UserTypeKind::Module,
+                    scope_id,
+                    name: "Type".into(),
+                },
             );
         }
         let bound = module.type_members.borrow().get("Type").cloned();
         assert!(matches!(
             &bound,
-            Some(KType::ModuleType { scope_id: id, name }) if *id == scope_id && name == "Type"
+            Some(KType::UserType { kind: UserTypeKind::Module, scope_id: id, name })
+                if *id == scope_id && name == "Type"
         ));
     }
 

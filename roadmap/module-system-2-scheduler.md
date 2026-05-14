@@ -71,10 +71,6 @@ recursion is tracked in [eager-type-elaboration](eager-type-elaboration.md).
   that work lands. Doing stage 2's surface ergonomics first would force
   re-doing them once eager elaboration replaces the synchronous
   resolver.
-- [Type identity stage 3 — `KType::UserType` and per-declaration identity](type-identity-3.1-variant-collapse.md)
-  — `KType::TypeConstructor` extends `UserTypeKind` with a
-  `Constructor` variant carrying type-parameter shape; the same
-  `(kind, scope_id, name)` identity contract applies.
 
 **Unblocks:**
 - [Standard library](standard-library.md) — collections and other

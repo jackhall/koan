@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
@@ -94,9 +95,8 @@ fn finalize_union<'a>(
     // Per-declaration identity: same `*const _ as usize` scheme `finalize_struct` and
     // `Module::scope_id()` use. The anonymous form (`UNION (...)` with no binder) still
     // populates `(scope_id, name)`; `name` is the empty string for the anonymous form
-    // since there's no declared identity to pin diagnostics to. Stage 3.1 flips
-    // `ktype()` to synthesize `KType::UserType { kind: Tagged, .. }` from these fields;
-    // stage 3.2 removes the anonymous form entirely.
+    // since there's no declared identity to pin diagnostics to. Stage 3.2 deletes the
+    // anonymous overload entirely.
     let scope_id = scope as *const _ as usize;
     let union_obj: &'a KObject<'a> =
         arena.alloc_object(KObject::TaggedUnionType {
@@ -104,10 +104,21 @@ fn finalize_union<'a>(
             name: bound_name.clone().unwrap_or_default(),
             scope_id,
         });
+    // Named form: dual-write the per-declaration identity into `bindings.types` next
+    // to the schema carrier in `bindings.data` so type-name resolution finds the union
+    // by name and dispatch on `(PICK x: Maybe)` lowers to the same `KType::UserType`
+    // the carrier's `ktype()` reports. Anonymous form keeps its carrier-only path
+    // until stage 3.2 deletes it.
     if let Some(name) = bound_name {
-        if let Err(e) = scope.bind_value(name, union_obj) {
-            return err(e);
-        }
+        let identity = KType::UserType {
+            kind: UserTypeKind::Tagged,
+            scope_id,
+            name: name.clone(),
+        };
+        return match scope.register_nominal(name, identity, union_obj) {
+            Ok(obj) => BodyResult::Value(obj),
+            Err(e) => err(e),
+        };
     }
     BodyResult::Value(union_obj)
 }

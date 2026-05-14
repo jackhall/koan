@@ -15,7 +15,6 @@ use std::collections::HashSet;
 use crate::ast::{TypeExpr, TypeParams};
 use crate::runtime::machine::NodeId;
 use crate::runtime::machine::core::{Resolution, Scope};
-use crate::runtime::model::values::KObject;
 
 use super::ktype::KType;
 
@@ -73,12 +72,12 @@ impl<'s, 'a> Elaborator<'s, 'a> {
 /// accumulating any `Park` producers across inner slots into a single combined park list
 /// so the caller can register every dep at once. Bare-leaf names route through the
 /// elaborator's threaded set first (recursive back-edge), then `Scope::resolve_type` for
-/// every type-side binding (builtin type names, stage-1.7 `LET`-bound type names, plus
-/// future stage-3 user types), then falling through to `Scope::resolve` for the
-/// value-side carriers still on `data` (`KSignature`, `StructType`, `TaggedUnionType`,
-/// `Placeholder`), then `KType::from_name` as a final fallback covering test fixtures
-/// that skip `default_scope`'s builtin registration. A genuinely unbound leaf surfaces
-/// as `ElabResult::Unbound`.
+/// every type-side binding (builtin type names, `LET`-bound type names, plus user-
+/// declared STRUCT / UNION / MODULE / SIG names dual-written into `bindings.types` by
+/// the finalize sites). `Resolution::Placeholder` is the dispatch-time forward
+/// reference path; `Resolution::Value` and `Resolution::Unbound` fall through to
+/// `KType::from_name` covering test fixtures that skip `default_scope`'s builtin
+/// registration. A genuinely unbound leaf surfaces as `ElabResult::Unbound`.
 pub fn elaborate_type_expr(
     el: &mut Elaborator<'_, '_>,
     t: &TypeExpr,
@@ -98,24 +97,6 @@ pub fn elaborate_type_expr(
                 return ElabResult::Done(kt.clone());
             }
             match el.scope.resolve(name) {
-                Resolution::Value(obj) => match obj {
-                    KObject::KSignature(s) => ElabResult::Done(KType::SignatureBound {
-                        sig_id: s.sig_id(),
-                        sig_path: s.path.clone(),
-                    }),
-                    // A user-bound STRUCT-name resolves to a `KObject::StructType`; a
-                    // user-bound UNION-name resolves to a `KObject::TaggedUnionType`. Their
-                    // dispatch identity is the singleton `KType::Struct` / `KType::Type`
-                    // tag until per-declaration type identity ships; report that here so
-                    // a field type like `b: TreeB` lands as a usable `KType` rather than
-                    // an `Unbound` error.
-                    KObject::StructType { .. } => ElabResult::Done(KType::Struct),
-                    KObject::TaggedUnionType { .. } => ElabResult::Done(KType::Type),
-                    _ => match KType::from_name(name) {
-                        Some(kt) => ElabResult::Done(kt),
-                        None => ElabResult::Unbound(name.clone()),
-                    },
-                },
                 Resolution::Placeholder(id) => {
                     // Trivial cycle: `LET T = T` — the only producer we'd park on is
                     // ourselves. Surface as Unbound (caller maps to a structured cycle
@@ -125,7 +106,14 @@ pub fn elaborate_type_expr(
                     }
                     ElabResult::Park(vec![id])
                 }
-                Resolution::Unbound => match KType::from_name(name) {
+                // Stage 3.1: STRUCT / UNION / MODULE / SIG finalize dual-writes the
+                // nominal identity into `bindings.types`, so the `resolve_type` hit
+                // above covers every user-declared type name. The value-side
+                // `Resolution::Value` carriers (StructType, TaggedUnionType, KSignature)
+                // are no longer consulted here; fall through to `from_name` so
+                // fixture-shaped tests that skip `default_scope`'s builtin registration
+                // still resolve builtin leaf names.
+                Resolution::Value(_) | Resolution::Unbound => match KType::from_name(name) {
                     Some(kt) => ElabResult::Done(kt),
                     None => ElabResult::Unbound(name.clone()),
                 },

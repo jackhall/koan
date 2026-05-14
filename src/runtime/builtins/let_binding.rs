@@ -1,4 +1,5 @@
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression};
 
@@ -21,10 +22,14 @@ pub fn body<'a>(
         None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
     };
     // `type_for_types_map` is `Some(kt)` iff this call should route storage through
-    // `register_type` (stage-1.7): a Type-class LHS with an actual `KTypeValue(kt)` RHS.
-    // Other type-language carriers on the RHS (`KModule` / `KSignature` / struct/union
-    // types) stay on the `bind_value` path because there's no `KType` to register.
+    // `register_type` (a Type-class LHS with an actual `KTypeValue(kt)` RHS).
+    // `nominal_identity` is `Some(kt)` iff the RHS is a type-language carrier with a
+    // recoverable nominal identity (`KModule` / `KSignature` / `StructType` /
+    // `TaggedUnionType`); those route through `register_nominal` so the alias name
+    // resolves both type-side (via `resolve_type`) and value-side (via `lookup`).
+    // Only one of the two is `Some` at any time — they're mutually exclusive RHS shapes.
     let mut type_for_types_map: Option<KType> = None;
+    let mut nominal_identity: Option<KType> = None;
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => s.clone(),
         // Stage-2 carrier: a Type-classed binder name not in `KType::from_name`'s
@@ -53,6 +58,8 @@ pub fn body<'a>(
                 }
                 if let KObject::KTypeValue(kt) = value {
                     type_for_types_map = Some(kt.clone());
+                } else {
+                    nominal_identity = derive_nominal_identity(value);
                 }
                 resolved_name
             }
@@ -96,6 +103,8 @@ pub fn body<'a>(
                 // stays a `KObject::KTypeValue(kt)` — only the storage location moves.
                 if let KObject::KTypeValue(kt) = value {
                     type_for_types_map = Some(kt.clone());
+                } else {
+                    nominal_identity = derive_nominal_identity(value);
                 }
                 resolved_name
             }
@@ -120,10 +129,53 @@ pub fn body<'a>(
         // synthesis site, downstream `KType::TypeExprRef`-typed slots — sees the
         // same shape as before the storage flip.
         scope.register_type(name, kt);
+    } else if let Some(identity) = nominal_identity {
+        // Aliasing dual-write: `LET P2 = Point` writes `bindings.types[P2]` carrying
+        // the ORIGINAL carrier's identity (Point's `name`/`scope_id`), not a fresh
+        // identity minted from the alias name. This is what makes
+        // `(PICK x: P2)` and `(PICK x: Point)` dispatch to the same overload — aliasing
+        // preserves type identity rather than introducing a new nominal type.
+        if let Err(e) = scope.register_nominal(name, identity, allocated) {
+            return err(e);
+        }
     } else if let Err(e) = scope.bind_value(name, allocated) {
         return err(e);
     }
     BodyResult::Value(allocated)
+}
+
+/// Recover the nominal identity (a `KType::UserType` or `KType::SignatureBound`) carried
+/// by a type-language value `obj`. Returns `Some(identity)` for the four shapes that came
+/// from a STRUCT / UNION / MODULE / SIG declaration (or an alias of one); `None` for
+/// every other carrier shape — those keep flowing through `Scope::bind_value` and never
+/// dual-write to `bindings.types`.
+///
+/// The identity preserves the ORIGINAL declaration's `name` / `scope_id` rather than the
+/// alias's binder name, so `LET P2 = Point` makes `P2` resolve to the same `UserType`
+/// that `Point` carries.
+fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
+    match obj {
+        KObject::KModule(m, _) => Some(KType::UserType {
+            kind: UserTypeKind::Module,
+            scope_id: m.scope_id(),
+            name: m.path.clone(),
+        }),
+        KObject::KSignature(s) => Some(KType::SignatureBound {
+            sig_id: s.sig_id(),
+            sig_path: s.path.clone(),
+        }),
+        KObject::StructType { name, scope_id, .. } => Some(KType::UserType {
+            kind: UserTypeKind::Struct,
+            scope_id: *scope_id,
+            name: name.clone(),
+        }),
+        KObject::TaggedUnionType { name, scope_id, .. } => Some(KType::UserType {
+            kind: UserTypeKind::Tagged,
+            scope_id: *scope_id,
+            name: name.clone(),
+        }),
+        _ => None,
+    }
 }
 
 /// Dispatch-time placeholder extractor for LET. Both overloads (`LET <name:Identifier> = ...`
@@ -403,6 +455,70 @@ mod tests {
             ),
             Ok(v) => panic!("expected shape error, got value {:?}", v.ktype()),
         }
+    }
+
+    /// Stage 3.1 dual-write: `LET IntOrdA = (IntOrd :| OrderedSig)` writes the alias
+    /// into `bindings.types` (via `register_nominal`) AND `bindings.data` at the same
+    /// scope. The identity preserves the ORIGINAL module's `(scope_id, path)` rather
+    /// than minting a fresh nominal — aliasing is type-equivalent.
+    #[test]
+    fn let_type_class_with_module_carrier_dual_writes() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::model::KType;
+        use crate::runtime::builtins::test_support::run;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        run(
+            scope,
+            "MODULE IntOrd = (LET compare = 0)\n\
+             SIG OrderedSig = (LET compare = 0)\n\
+             LET IntOrdA = (IntOrd :| OrderedSig)",
+        );
+        let types = scope.bindings().types();
+        let kt = types
+            .get("IntOrdA")
+            .expect("IntOrdA should be in bindings.types");
+        assert!(matches!(
+            **kt,
+            KType::UserType { kind: UserTypeKind::Module, .. }
+        ));
+        drop(types);
+        let data = scope.bindings().data();
+        let obj = data
+            .get("IntOrdA")
+            .expect("IntOrdA should be in bindings.data");
+        assert!(matches!(obj, KObject::KModule(_, _)));
+    }
+
+    /// Stage 3.1 aliasing-preserves-identity: `LET Pt = Point` writes a `types[Pt]`
+    /// entry that equals `types[Point]` field-wise — `Pt` and `Point` lower to the
+    /// same `UserType` (same kind, scope_id, name="Point"). The alias binder name
+    /// `Pt` is for value-side lookup only; the type identity stays Point's. Token
+    /// classification requires the binder to carry at least one lowercase letter
+    /// to read as a type-class name.
+    #[test]
+    fn let_aliases_struct_preserves_type_identity() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::model::KType;
+        use crate::runtime::builtins::test_support::run;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        run(
+            scope,
+            "STRUCT Point = (x: Number, y: Number)\n\
+             LET Pt = Point",
+        );
+        let types = scope.bindings().types();
+        let pt: &KType = types
+            .get("Pt")
+            .copied()
+            .expect("Pt should be in bindings.types after alias");
+        let point: &KType = types
+            .get("Point")
+            .copied()
+            .expect("Point should be in bindings.types");
+        assert_eq!(*pt, *point, "alias must preserve type identity field-wise");
     }
 
     /// Stage 1.6: `LET Foo = "hello"` — confirms the blocklist covers `Str`, not just

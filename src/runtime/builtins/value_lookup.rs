@@ -33,32 +33,24 @@ pub fn body_identifier<'a>(
 }
 
 /// `<v:TypeExprRef>` — single-part expression containing one type-classed name token.
-/// Resolves the name in two stages, mirroring the same `resolve_type` → `lookup`
-/// fall-through `elaborate_type_expr` uses for bare-leaf names:
+/// Resolves the name through `Scope::resolve_type` exclusively (the type-side binding
+/// home). Two outcomes:
 ///
-/// 1. Try `Scope::resolve_type` first. On hit (the builtin type names registered via
-///    `Scope::register_type`, which post-stage-1.4 live in `bindings.types`), synthesize
-///    a per-lookup `KObject::KTypeValue(kt.clone())` carrier so the value sits in the
-///    same dispatch transport every other body consumes. This is the *sole*
-///    `KObject::KTypeValue` synthesis site post-stage-1.5 — the transient
-///    `Scope::resolve` fallback that previously fabricated the wrap on demand is gone.
-/// 2. On a `resolve_type` miss, fall through to `scope.lookup`. Type-classed *names*
-///    whose nominal value-side bindings still live in `data` (`KObject::KModule` from
-///    `MODULE Foo`, `KObject::StructType` from `STRUCT Foo`, `KObject::TaggedUnionType`
-///    from `UNION Foo`, `KObject::KSignature` from `SIG Foo`) get found here. Those
-///    carriers don't dual-write to `bindings.types` until stage 3 mints
-///    `KType::UserType` and adds the dual-write surface.
-/// 3. On a miss everywhere, `UnboundName`.
+/// - Hit reports a nominal identity (`KType::UserType` / `KType::SignatureBound`) —
+///   the binding was dual-written by STRUCT / UNION / MODULE / SIG finalize (or a
+///   `LET <Type-class> = <carrier>` alias). Recover the paired value-side carrier via
+///   `scope.lookup` so downstream operators (`:|`, `:!`, ATTR-Struct/Module,
+///   `struct_construct`, `MODULE_TYPE_OF`) receive the expected `KSignature` /
+///   `KModule` / `StructType` / `TaggedUnionType` part rather than a synthesized
+///   `KTypeValue`. The `lookup` call here is paired-carrier recovery gated on a
+///   nominal `types` hit — structurally not a fall-through.
+/// - Any other `types` hit (builtin leaves, `LET <Type-class> = <KTypeValue>` aliases)
+///   synthesizes a per-lookup `KObject::KTypeValue(kt.clone())` carrier so the value
+///   sits in the same dispatch transport every other body consumes.
 ///
-/// The per-lookup `alloc_object` cost in stage 1 is bounded by program-source type
-/// references (not hot-loop iterations) and pays for the binding-home invariant (type
-/// names live in `bindings.types`, identifier names live in `bindings.data`, no overlap
-/// in this body).
-///
-/// Structural type-syntax (`List<X>`, function types, `Mu` / `RecursiveRef`) is rejected
-/// up front with `ShapeError` — only leaf-named variants are lookup targets. The
-/// rejection runs on the incoming `KTypeValue` bundle slot *before* either lookup, so
-/// the structural-shape error fires identically to the pre-migration behavior.
+/// On a `resolve_type` miss the result is `UnboundName` directly — there is no
+/// independent `lookup` fall-through anymore. Structural type-syntax (`List<X>`,
+/// function types, `Mu` / `RecursiveRef`) is rejected up front with `ShapeError`.
 pub fn body_type_expr<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -103,12 +95,24 @@ pub fn body_type_expr<'a>(
             }));
         }
     };
-    if let Some(kt) = scope.resolve_type(&name) {
-        let obj = scope.arena.alloc_object(KObject::KTypeValue(kt.clone()));
-        return BodyResult::Value(obj);
-    }
-    match scope.lookup(&name) {
-        Some(obj) => BodyResult::Value(obj),
+    match scope.resolve_type(&name) {
+        Some(kt) => {
+            // Dual-write invariant: nominal identity types (`UserType`,
+            // `SignatureBound`) are paired with a value-side carrier at the same
+            // scope. Recover the carrier so downstream operators (`:|`, `:!`,
+            // ATTR-Module/Struct, `struct_construct`, `MODULE_TYPE_OF`) receive the
+            // expected `KSignature` / `KModule` / `StructType` / `TaggedUnionType`
+            // part rather than a synthesized `KTypeValue`.
+            if matches!(kt, KType::UserType { .. } | KType::SignatureBound { .. }) {
+                if let Some(obj) = scope.lookup(&name) {
+                    return BodyResult::Value(obj);
+                }
+                // Unreachable under dual-write atomicity; fall through to the
+                // KTypeValue synthesis below as a defensive recovery.
+            }
+            let obj = scope.arena.alloc_object(KObject::KTypeValue(kt.clone()));
+            BodyResult::Value(obj)
+        }
         None => err(KError::new(KErrorKind::UnboundName(name))),
     }
 }

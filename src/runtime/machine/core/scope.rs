@@ -175,6 +175,35 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Transactional dual-write for nominal declarations (STRUCT, named UNION, MODULE,
+    /// SIG). Identity `kt` (a `KType::UserType` or `KType::SignatureBound`) is inserted
+    /// into [`Bindings::types`] and the runtime carrier `obj` (`StructType`,
+    /// `TaggedUnionType`, `KModule`, `KSignature`) into [`Bindings::data`] atomically
+    /// via [`Bindings::try_register_nominal`]. Returns the carrier on success so the
+    /// caller can yield it back to the dispatcher via `BodyResult::Value`.
+    ///
+    /// Finalize sites are post-Combine, past the re-entrant queue point: a borrow
+    /// `Conflict` here is a programming error. Mirrors [`Self::bind_value`]'s shape:
+    /// panic on `Conflict`, return `Err` on `Rebind`.
+    pub fn register_nominal(
+        &self,
+        name: String,
+        kt: crate::runtime::model::types::KType,
+        obj: &'a KObject<'a>,
+    ) -> Result<&'a KObject<'a>, KError> {
+        let kt_ref: &'a crate::runtime::model::types::KType = self.arena.alloc_ktype(kt);
+        match self.bindings.try_register_nominal(&name, kt_ref, obj)? {
+            ApplyOutcome::Applied => Ok(obj),
+            ApplyOutcome::Conflict => {
+                panic!(
+                    "register_nominal borrow conflict on `{name}` — finalize sites run \
+                     post-Combine outside the re-entrant bind hot path, so a conflict \
+                     here indicates a programming error",
+                );
+            }
+        }
+    }
+
     /// Apply queued writes between dispatch nodes. Thin delegation to
     /// [`PendingQueue::drain`] — items that still hit a borrow conflict stay queued
     /// (eventually-consistent, not guaranteed-empty after one call), and drain-time
