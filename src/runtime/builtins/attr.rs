@@ -1,22 +1,26 @@
-//! `ATTR <s> <field:Identifier>` — struct or module field access. Surface syntax is the `.`
-//! infix operator from `operators::build_attr` (private to `crate::parse`), which compiles
-//! `p.x` into `[Keyword("ATTR"), Identifier("p"), Identifier("x")]`. Three overloads share
-//! the bucket `[Keyword, Slot, Slot]` and pick by lhs shape:
+//! `ATTR <s> <field:Identifier>` — struct, module, or NEWTYPE field access. Surface syntax
+//! is the `.` infix operator from `operators::build_attr` (private to `crate::parse`), which
+//! compiles `p.x` into `[Keyword("ATTR"), Identifier("p"), Identifier("x")]`. Several
+//! overloads share the bucket `[Keyword, Slot, Slot]` and pick by lhs shape:
 //!
 //! - [`body_identifier`] — `p.x` form. The lhs is still an `Identifier`, so this body
 //!   does the scope lookup itself, mirroring [`value_lookup`](super::value_lookup), and
 //!   then dispatches to either struct-field or module-member access based on what the
 //!   identifier resolved to.
-//! - [`body_struct`] — chained access like `p.x.y` for structs. The inner `[ATTR p x]`
-//!   evaluates first and arrives here as `Future(KObject::Struct{..})`.
+//! - [`body_struct`] — chained access like `p.x.y` for structs *and* the stage-4.C
+//!   NEWTYPE fall-through path. The inner `[ATTR p x]` evaluates first and arrives here
+//!   as `Future(KObject::Struct{..})` (`Struct` slot) or `Future(KObject::Wrapped{..})`
+//!   (`Newtype` slot, stage 4.C). The body is share-safe because `access_field` does the
+//!   lhs-shape dispatch — its `Wrapped` arm recurses one level into `inner`, which the
+//!   stage-4.B collapse rule pins as non-`Wrapped`.
 //! - [`body_module`] — chained access like `M.SubModule.foo`. The inner `[ATTR M SubModule]`
 //!   evaluates first and arrives here as `Future(KObject::KModule(_))`. Module-system
 //!   stage 1.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! `KType::AnyUserType { kind: Struct }` and `KType::AnyUserType { kind: Module }` only
-//! match the corresponding `Future` variants), so dispatch picks unambiguously without a
-//! specificity tiebreaker.
+//! `KType::AnyUserType { kind: Struct | Module | Newtype { .. } }` each admit a distinct
+//! `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks unambiguously
+//! without a specificity tiebreaker.
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::model::types::UserTypeKind;
@@ -173,6 +177,15 @@ fn access_field<'a>(
         // The identifier resolved to a module — `IntOrd.compare`, `OrderedSig.Type`, etc.
         // Module-system stage 1.
         KObject::KModule(_, _) => access_module_member(target, field),
+        // Stage 4.C NEWTYPE fall-through. `Wrapped.inner` is invariantly *not* a `Wrapped`
+        // (the construction-time collapse rule in [`super::newtype_def::newtype_construct`]'s
+        // finish closure peels any `Wrapped` value before re-wrapping), so the recursion
+        // descends exactly one level into a non-`Wrapped` target. Whatever the inner is —
+        // `Struct` (the shipping path: `b.x` on `LET b: Boxed = Point(...)`), `KModule`
+        // (allowed by the type system though no shipping NEWTYPE-over-module exists today),
+        // or a scalar like `Number` (rejected by the `other` arm below) — the existing arms
+        // handle it without a redo at every accessor.
+        KObject::Wrapped { inner, .. } => access_field(scope, inner, field),
         other => err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "Struct".to_string(),
@@ -265,6 +278,31 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         },
         body_module,
+    );
+    // Stage 4.C: NEWTYPE fall-through. The slot's wildcard `AnyUserType { kind: Newtype
+    // { repr: Any } }` admits any `KObject::Wrapped` (the manual `UserTypeKind::PartialEq`
+    // ignores `repr` on the `Newtype` variant). The body reuses `body_struct` because
+    // `access_field` already does the lhs-shape dispatch — the new `Wrapped` arm there
+    // recurses one level into `inner`. Disjoint from the Struct / Module slots above
+    // (`Newtype` is a distinct `UserTypeKind` discriminant), so dispatch picks without
+    // a specificity tiebreaker.
+    register_builtin(
+        scope,
+        "ATTR",
+        ExpressionSignature {
+            return_type: KType::Any,
+            elements: vec![
+                SignatureElement::Keyword("ATTR".into()),
+                SignatureElement::Argument(Argument {
+                    name: "s".into(),
+                    ktype: KType::AnyUserType {
+                        kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+                    },
+                }),
+                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
+            ],
+        },
+        body_struct,
     );
     register_builtin(
         scope,
@@ -418,6 +456,72 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Point") && msg.contains("`bogus`")),
             "expected ShapeError naming Point and bogus on chained access, got {err}",
+        );
+    }
+
+    /// Stage 4.C golden path: `b.x` where `b: Boxed = Point(...)` reads the underlying
+    /// struct's field without forcing every accessor to redo. The new ATTR `Newtype`
+    /// overload routes through `access_field`'s `Wrapped` arm, which recurses one level
+    /// into `inner: KObject::Struct`.
+    #[test]
+    fn access_field_falls_through_wrapped_struct() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "STRUCT Point = (x: Number, y: Number)\n\
+             NEWTYPE Boxed = Point\n\
+             LET p = (Point (x: 1, y: 2))\n\
+             LET b = (Boxed (p))",
+        );
+        assert!(matches!(run_one(scope, parse_one("b.x")), KObject::Number(n) if *n == 1.0));
+        assert!(matches!(run_one(scope, parse_one("b.y")), KObject::Number(n) if *n == 2.0));
+    }
+
+    /// `d.x` on a NEWTYPE-over-Number surfaces as `TypeMismatch` — `access_field`'s
+    /// `Wrapped` arm recurses into `inner: KObject::Number`, which hits the existing
+    /// non-Struct / non-Module `other` arm. Pins that wrapping a scalar doesn't grow
+    /// fields out of thin air.
+    #[test]
+    fn access_field_rejects_wrapped_non_struct() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "NEWTYPE Distance = Number\n\
+             LET d = (Distance (3.0))",
+        );
+        let err = run_one_err(scope, parse_one("d.x"));
+        match &err.kind {
+            KErrorKind::TypeMismatch { arg, expected, got } => {
+                assert_eq!(arg, "s");
+                assert_eq!(expected, "Struct");
+                assert_eq!(got, "Number");
+            }
+            _ => panic!("expected TypeMismatch on NEWTYPE-over-Number field access, got {err}"),
+        }
+    }
+
+    /// `b.z` where `b: Boxed = Point(x, y)` surfaces as `ShapeError` naming the inner
+    /// struct's type (`Point`) and the missing field (`z`). Confirms the fall-through
+    /// preserves the inner struct's error attribution — the diagnostic isn't lost in
+    /// the wrapper.
+    #[test]
+    fn access_field_falls_through_wrapped_with_missing_field() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(
+            scope,
+            "STRUCT Point = (x: Number, y: Number)\n\
+             NEWTYPE Boxed = Point\n\
+             LET p = (Point (x: 1, y: 2))\n\
+             LET b = (Boxed (p))",
+        );
+        let err = run_one_err(scope, parse_one("b.z"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg)
+                if msg.contains("Point") && msg.contains("`z`")),
+            "expected ShapeError naming Point and z on Wrapped fall-through, got {err}",
         );
     }
 }
