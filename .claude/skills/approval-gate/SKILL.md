@@ -9,7 +9,7 @@ Reusable approval-gate template for orchestration skills (e.g. `work-item`) that
 
 ## When to apply
 
-After a sub-agent returns and before advancing to the next step. The caller supplies four inputs per use:
+After a sub-agent returns and before advancing to the next step. The caller supplies three inputs per use. When combined with the sub-agent output, the parameters for an approval gate are:
 
 - `agent_output` — the verbatim returned text from the sub-agent.
 - `accept_label` — what "Accept" advances to (one phrase, e.g. "proceed to doc-shepherd").
@@ -18,7 +18,7 @@ After a sub-agent returns and before advancing to the next step. The caller supp
 
 ## Procedure
 
-1. **Emit `agent_output` to the user as your user-facing text, complete and verbatim.** Do not summarize, paraphrase, condense, or bullet-ify. The user cannot see sub-agent output directly — your text is their only window into it.
+1. **Write `agent_output` to a file in `scratch/`, complete and verbatim, and point the user at that file.** Do not summarize, paraphrase, condense, or bullet-ify. The user cannot see sub-agent output directly — your text is their only window into it.
 
 2. **In the same turn, call AskUserQuestion with exactly two explicit options.** Iterate is the built-in "Other" channel, not its own option — AskUserQuestion always exposes "Other" with a free-text input, and adding an explicit "Iterate" alongside it splits the iterate path.
    - **Accept** — `accept_label`.

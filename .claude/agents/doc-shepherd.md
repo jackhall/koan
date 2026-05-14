@@ -23,7 +23,7 @@ You handle the doc-update phase of a koan PR. Your inputs are:
    - **Update `design/*.md`:** if a design doc's "Open work" section pointed to the deleted roadmap item, replace with either a body section describing what shipped (when there's explanatory value) or remove the bullet (when the body already covers it). If the design doc's invariants changed, update them in place.
    - **Update `README.md` / `TUTORIAL.md`** if the work changes user-facing surface or directory layout.
    - **Bulk path rewrites?** If files moved (renames, sub-module extractions), `python3 tools/doclinks.py fix-refs OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments. Pass `--from-file mapping.txt` for a long list. The tool refuses to run if any NEW doesn't exist on disk.
-   - **Source-file top-of-file comments** that link to deleted/renamed docs need updating. The `fix-refs` subcommand handles bulk renames; otherwise `check` will flag them.
+   - **Source-file comments** that link to deleted/renamed docs need updating. The `fix-refs` subcommand handles bulk renames; otherwise `check` will flag them.
 
 3. **Apply the workflow gates from the skill:**
 
@@ -42,7 +42,7 @@ You handle the doc-update phase of a koan PR. Your inputs are:
 The documentation skill covers the general doc anti-patterns (grep vs `doclinks refs`, keeping shipped roadmap entries, migration notes, grammar-for-brevity). Two are specific to this agent:
 
 - **Don't trust the implementer's summary over the diff.** Summaries describe intent; diffs describe reality. If they disagree, the diff wins and you flag the divergence.
-- **Don't touch source code.** Your tool list includes `Edit`/`Write` because top-of-file comments in `src/` may need link updates, but actual code logic is out of scope. If the diff suggests code needs changing too, flag it and stop.
+- **Don't touch source code.** Your tool list includes `Edit`/`Write` because comments in `src/` may need link updates, but actual code logic is out of scope. If the diff suggests code needs changing too, flag it and stop.
 
 ## What you return
 
