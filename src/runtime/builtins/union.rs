@@ -91,8 +91,19 @@ fn finalize_union<'a>(
     // `STRUCT`) into a HashMap. Duplicate detection has already happened in the helper.
     let schema: HashMap<String, KType> = fields.into_iter().collect();
     let arena = scope.arena;
+    // Per-declaration identity: same `*const _ as usize` scheme `finalize_struct` and
+    // `Module::scope_id()` use. The anonymous form (`UNION (...)` with no binder) still
+    // populates `(scope_id, name)`; `name` is the empty string for the anonymous form
+    // since there's no declared identity to pin diagnostics to. Stage 3.1 flips
+    // `ktype()` to synthesize `KType::UserType { kind: Tagged, .. }` from these fields;
+    // stage 3.2 removes the anonymous form entirely.
+    let scope_id = scope as *const _ as usize;
     let union_obj: &'a KObject<'a> =
-        arena.alloc_object(KObject::TaggedUnionType(Rc::new(schema)));
+        arena.alloc_object(KObject::TaggedUnionType {
+            schema: Rc::new(schema),
+            name: bound_name.clone().unwrap_or_default(),
+            scope_id,
+        });
     if let Some(name) = bound_name {
         if let Err(e) = scope.bind_value(name, union_obj) {
             return err(e);
@@ -203,11 +214,11 @@ mod tests {
             scope,
             parse_one("UNION Maybe = (some: Number none: Null)"),
         );
-        assert!(matches!(result, KObject::TaggedUnionType(_)));
+        assert!(matches!(result, KObject::TaggedUnionType { .. }));
         let data = scope.bindings().data();
         let entry = data.get("Maybe").expect("Maybe should be bound in scope");
         match entry {
-            KObject::TaggedUnionType(schema) => {
+            KObject::TaggedUnionType { schema, .. } => {
                 assert_eq!(schema.get("some"), Some(&KType::Number));
                 assert_eq!(schema.get("none"), Some(&KType::Null));
             }
@@ -221,7 +232,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("UNION (ok: Number err: Str)"));
         match result {
-            KObject::TaggedUnionType(schema) => {
+            KObject::TaggedUnionType { schema, .. } => {
                 assert_eq!(schema.get("ok"), Some(&KType::Number));
                 assert_eq!(schema.get("err"), Some(&KType::Str));
             }

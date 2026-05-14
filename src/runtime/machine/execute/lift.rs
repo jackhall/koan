@@ -94,16 +94,22 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                 KObject::Dict(Rc::clone(entries))
             }
         }
-        KObject::Tagged { tag, value } => {
+        KObject::Tagged { tag, value, scope_id, name } => {
+            // Stage 3.0c: propagate `(scope_id, name)` identity through the lifted
+            // carrier. Pure passthrough — lifting doesn't change the declaring schema.
             if needs_lift(value, dying_frame) {
                 KObject::Tagged {
                     tag: tag.clone(),
                     value: Rc::new(lift_kobject(value, dying_frame)),
+                    scope_id: *scope_id,
+                    name: name.clone(),
                 }
             } else {
                 KObject::Tagged {
                     tag: tag.clone(),
                     value: Rc::clone(value),
+                    scope_id: *scope_id,
+                    name: name.clone(),
                 }
             }
         }

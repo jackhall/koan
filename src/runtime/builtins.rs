@@ -1,6 +1,6 @@
 use crate::runtime::machine::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use crate::runtime::machine::core::{KError, Scope};
-use crate::runtime::model::types::{ExpressionSignature, KType};
+use crate::runtime::model::types::{ExpressionSignature, KType, UserTypeKind};
 use crate::runtime::model::values::KObject;
 
 mod ascribe;
@@ -84,9 +84,14 @@ pub fn default_scope<'a>(
     );
     scope.register_type("KExpression".into(), KType::KExpression);
     scope.register_type("Type".into(), KType::Type);
-    scope.register_type("Tagged".into(), KType::Tagged);
-    scope.register_type("Struct".into(), KType::Struct);
-    scope.register_type("Module".into(), KType::Module);
+    // Stage 3.0b: agree with `KType::from_name` so the type-resolver path produces the
+    // same wildcard carriers a parser-side `from_name` would. Stage 3.1 will delete the
+    // old singletons entirely; until then the singletons remain valid `KType` values
+    // for the carriers' `ktype()` arms — they're just not what the user types resolve
+    // to anymore.
+    scope.register_type("Tagged".into(), KType::AnyUserType { kind: UserTypeKind::Tagged });
+    scope.register_type("Struct".into(), KType::AnyUserType { kind: UserTypeKind::Struct });
+    scope.register_type("Module".into(), KType::AnyUserType { kind: UserTypeKind::Module });
     scope.register_type("Signature".into(), KType::Signature);
     scope.register_type("Any".into(), KType::Any);
 

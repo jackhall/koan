@@ -88,8 +88,15 @@ fn finalize_struct<'a>(
         )));
     }
     let arena = scope.arena;
+    // Per-declaration identity: `scope_id` is the declaring (parent) scope's address —
+    // the same `*const _ as usize` scheme `Module::scope_id()` uses, stable for the
+    // run because scopes are arena-allocated and never moved. Stage 3.0 reads no
+    // consumer of the field yet; stage 3.1 flips `ktype()` to synthesize
+    // `KType::UserType { kind: Struct, scope_id, name }` from these fields.
+    let scope_id = scope as *const _ as usize;
     let struct_obj: &'a KObject<'a> = arena.alloc_object(KObject::StructType {
         name: name.clone(),
+        scope_id,
         fields: Rc::new(fields),
     });
     if let Err(e) = scope.bind_value(name, struct_obj) {
@@ -183,7 +190,7 @@ mod tests {
             parse_one("STRUCT Point = (x: Number, y: Number)"),
         );
         match result {
-            KObject::StructType { name, fields } => {
+            KObject::StructType { name, fields, .. } => {
                 assert_eq!(name, "Point");
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0], ("x".to_string(), KType::Number));
@@ -263,7 +270,7 @@ mod tests {
         run_one(scope, parse_one("STRUCT Tree = (children: List<Tree>)"));
         let data = scope.bindings().data();
         match data.get("Tree").expect("Tree should be bound") {
-            KObject::StructType { name, fields } => {
+            KObject::StructType { name, fields, .. } => {
                 assert_eq!(name, "Tree");
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].0, "children");
@@ -331,6 +338,35 @@ mod tests {
         let data = scope.bindings().data();
         assert!(matches!(data.get("TreeA"), Some(KObject::StructType { .. })));
         assert!(matches!(data.get("TreeB"), Some(KObject::StructType { .. })));
+    }
+
+    /// Stage 3.0c identity-field invariant: two STRUCTs declared in the same scope
+    /// share `scope_id` (they're both bound on the same parent scope) but carry
+    /// distinct `name`s. This is the per-declaration identity the 3.1 `ktype()` flip
+    /// reads — `Foo` and `Bar` lower to distinct `KType::UserType { name: .., scope_id: .. }`
+    /// even though they sit in the same scope, because `name` separates them.
+    #[test]
+    fn struct_pair_same_scope_distinct_names_share_scope_id() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run_one(scope, parse_one("STRUCT Foo = (x: Number)"));
+        run_one(scope, parse_one("STRUCT Bar = (x: Number)"));
+        let data = scope.bindings().data();
+        let foo_id = match data.get("Foo") {
+            Some(KObject::StructType { scope_id, name, .. }) => {
+                assert_eq!(name, "Foo");
+                *scope_id
+            }
+            other => panic!("expected StructType Foo, got {:?}", other.map(|o| o.ktype())),
+        };
+        let bar_id = match data.get("Bar") {
+            Some(KObject::StructType { scope_id, name, .. }) => {
+                assert_eq!(name, "Bar");
+                *scope_id
+            }
+            other => panic!("expected StructType Bar, got {:?}", other.map(|o| o.ktype())),
+        };
+        assert_eq!(foo_id, bar_id, "same-scope STRUCTs must share scope_id");
     }
 
     #[test]

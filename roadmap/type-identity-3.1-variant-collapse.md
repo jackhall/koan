@@ -46,11 +46,13 @@ only") cannot land while SIG sits on the value-side map.
 
 **Directions.**
 
-- *Carrier shape — decided per [3.0 scaffolding](type-identity-3.0-scaffolding.md).*
-  `KType::UserType { kind: UserTypeKind, scope_id: usize, name: String }`
-  with `enum UserTypeKind { Struct, Tagged, Module }`. The variants
-  exist as of 3.0; 3.1 deletes `KType::Struct`, `KType::Tagged`,
-  `KType::Module`, and `KType::ModuleType` in the same commit.
+- *Carrier shape — decided.* `KType::UserType { kind: UserTypeKind, scope_id:
+  usize, name: String }` with `enum UserTypeKind { Struct, Tagged, Module }`,
+  both already on
+  [`KType`](../src/runtime/model/types/ktype.rs) from the stage-3.0 scaffolding
+  (see [design/type-system.md § Open work](../design/type-system.md#open-work)).
+  3.1 deletes `KType::Struct`, `KType::Tagged`, `KType::Module`, and
+  `KType::ModuleType` in the same commit.
 
 - *Identity comparison — decided.* Field-wise across
   `(kind, scope_id, name)`. `is_more_specific_than` ranks `UserType
@@ -118,10 +120,8 @@ only") cannot land while SIG sits on the value-side map.
 
 ## Dependencies
 
-**Requires:**
-
-- [Type identity stage 3.0 — scaffolding for `KType::UserType`](type-identity-3.0-scaffolding.md)
-  — every new variant, identity field, and predicate arm.
+**Requires:** none. (Stage 3.0 scaffolding has shipped — see
+[design/type-system.md § Open work](../design/type-system.md#open-work).)
 
 **Unblocks:**
 

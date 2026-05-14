@@ -57,7 +57,21 @@ pub struct Bindings<'a> {
     data: RefCell<HashMap<String, &'a KObject<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     placeholders: RefCell<HashMap<String, NodeId>>,
+    /// Stage 3.0d scaffolding: per-batch "pending types" registered by STRUCT / UNION /
+    /// MODULE before their bodies elaborate. Stage 3.2 wires the writer (the SCC pre-
+    /// registration pass that lets mutually recursive STRUCTs see each other's binders
+    /// during elaboration). 3.0 lands the field empty so 3.1's variant collapse and
+    /// 3.2's SCC discovery can each be a focused diff.
+    pending_types: RefCell<HashMap<String, PendingTypeEntry>>,
 }
+
+/// Pending-type entry the stage-3.2 SCC pre-registration pass installs into
+/// `Bindings.pending_types`. Minimal in stage 3.0 — only the presence is observed by the
+/// type resolver to discover "a STRUCT named X is being declared right now, even though
+/// its `StructType` isn't bound yet." Stage 3.2 expands the payload with the SCC's
+/// participating names and the binder-to-placeholder mapping the elaborator needs to
+/// emit a `RecursiveRef` instead of parking.
+pub struct PendingTypeEntry;
 
 impl<'a> Bindings<'a> {
     pub fn new() -> Self {
@@ -66,6 +80,7 @@ impl<'a> Bindings<'a> {
             data: RefCell::new(HashMap::new()),
             functions: RefCell::new(HashMap::new()),
             placeholders: RefCell::new(HashMap::new()),
+            pending_types: RefCell::new(HashMap::new()),
         }
     }
 
@@ -94,6 +109,13 @@ impl<'a> Bindings<'a> {
     /// Same `Ref<'_, _>` semantics as [`Bindings::data`].
     pub fn types(&self) -> Ref<'_, HashMap<String, &'a KType>> {
         self.types.borrow()
+    }
+
+    /// Read-only handle for the stage-3.2 SCC pre-registration map. No writer in stage
+    /// 3.0 — the field is always empty, and reads observe an empty map. Same
+    /// `Ref<'_, _>` semantics as [`Bindings::data`].
+    pub fn pending_types(&self) -> Ref<'_, HashMap<String, PendingTypeEntry>> {
+        self.pending_types.borrow()
     }
 
     /// LET-style value bind. Errors `Rebind` if `data[name]` already exists. When `obj`
@@ -560,6 +582,15 @@ mod tests {
         // Borrow contention on `types` blocked the write: both maps untouched.
         assert!(_r.get("Foo").is_none());
         assert!(bindings.data().get("Foo").is_none());
+    }
+
+    /// Stage 3.0d scaffolding: `Bindings::new()` initializes `pending_types` empty.
+    /// No writer in 3.0 — the field is observable only as an empty map until stage 3.2
+    /// wires the SCC pre-registration pass.
+    #[test]
+    fn new_bindings_has_empty_pending_types() {
+        let bindings: Bindings<'_> = Bindings::new();
+        assert!(bindings.pending_types().is_empty());
     }
 
     #[test]

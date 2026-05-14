@@ -3,7 +3,7 @@
 //! predicates the dispatcher consults to decide whether a part fills a slot and
 //! which of two viable candidates is more specific.
 
-use super::ktype::KType;
+use super::ktype::{KType, UserTypeKind};
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::runtime::model::values::KObject;
 use crate::ast::{ExpressionPart, KLiteral};
@@ -14,6 +14,10 @@ impl KType {
     /// element / key / value / arg / return positions). Strict — returns `false` for equal types.
     pub fn is_more_specific_than(&self, other: &KType) -> bool {
         use KType::*;
+        // `AnyUserType` vs `Any` is already covered by this prefix — `AnyUserType` is
+        // non-`Any`, so it lands here and returns `true` without needing a dedicated arm.
+        // The dedicated `(UserType, AnyUserType)` arm below covers the strict refinement
+        // direction inside the user-declared family.
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
         }
@@ -41,6 +45,12 @@ impl KType {
             // they're disjoint slot types — so this predicate stays `false` for that case
             // by falling through to the wildcard.
             (SignatureBound { .. }, Module) => true,
+            // A per-declaration `UserType { kind, .. }` strictly refines the wildcard
+            // `AnyUserType { kind }` of the same kind. Different-kind pairs fall through
+            // to the wildcard `false`, leaving them correctly incomparable. Two
+            // `UserType`s of the same kind but different `(scope_id, name)` are
+            // incomparable — same-kind siblings are sibling refinements of `AnyUserType`.
+            (UserType { kind: a, .. }, AnyUserType { kind: b }) if a == b => true,
             // Phase 1: `Mu`-vs-`Mu` with the same binder name recurses on bodies. Different
             // binders are incomparable. Real cycle-aware structural ordering is a phase-3+
             // concern; phase 1 only needs the trivial reflexive shape so the variants don't
@@ -83,6 +93,17 @@ impl KType {
                 KObject::KModule(m, _) => m.compatible_sigs.borrow().contains(sig_id),
                 _ => false,
             },
+            // Wildcard kind check for user-declared types. Mirrors the `accepts_part`
+            // arm — admit any carrier of the matching family regardless of declaring
+            // schema. Inert in 3.0 (no slot is typed `AnyUserType` until `from_name` is
+            // rewired in 3.0b) but pinned now so 3.0b's `from_name` flip is a one-line
+            // change with the predicate already correct.
+            KType::AnyUserType { kind } => matches!(
+                (kind, obj),
+                (UserTypeKind::Struct, KObject::Struct { .. })
+                    | (UserTypeKind::Tagged, KObject::Tagged { .. })
+                    | (UserTypeKind::Module, KObject::KModule(_, _))
+            ),
             // Phase 1: one-unfold check. Cycle-gating (a threaded "currently unfolding" set)
             // is a phase-3 concern; today no runtime value carries a `RecursiveRef` so the
             // unfold can't actually recurse onto one.
@@ -149,7 +170,7 @@ impl KType {
             ),
             KType::Type => matches!(
                 part,
-                ExpressionPart::Future(KObject::TaggedUnionType(_))
+                ExpressionPart::Future(KObject::TaggedUnionType { .. })
                     | ExpressionPart::Future(KObject::StructType { .. })
             ),
             KType::Tagged => matches!(
@@ -160,6 +181,28 @@ impl KType {
                 part,
                 ExpressionPart::Future(KObject::Struct { .. })
             ),
+            // Per-declaration identity: a slot typed with a concrete `UserType { kind,
+            // scope_id, name }` accepts only a `Future(KObject)` value whose `ktype()`
+            // reports the same `UserType`. Inert in stage 3.0 — no carrier reports a
+            // `UserType` from `ktype()` yet — but the arm lands correctly so the 3.1
+            // variant collapse is a pure rewire of the value carriers' `ktype()` arms.
+            KType::UserType { .. } => {
+                matches!(part, ExpressionPart::Future(obj) if &obj.ktype() == self)
+            }
+            // Wildcard "any user-declared X" slot: the `kind` discriminator selects which
+            // family of carriers we admit (`Struct`/`Tagged`/`Module`). Lands the 3.0b
+            // surface-name rewire — `Struct`/`Tagged`/`Module` in `from_name` now map
+            // here — so existing dispatch tests using `(PICK x: Struct)` continue to
+            // accept any struct carrier regardless of declaring schema.
+            KType::AnyUserType { kind } => match part {
+                ExpressionPart::Future(obj) => matches!(
+                    (kind, obj),
+                    (UserTypeKind::Struct, KObject::Struct { .. })
+                        | (UserTypeKind::Tagged, KObject::Tagged { .. })
+                        | (UserTypeKind::Module, KObject::KModule(_, _))
+                ),
+                _ => false,
+            },
             KType::ModuleType { .. } => match part {
                 // A part filling a `ModuleType` slot must be a value whose runtime KType is
                 // an exactly-equal `ModuleType` (same scope_id and name) — that's the
@@ -288,5 +331,62 @@ mod tests {
         let t = KType::RecursiveRef("Tree".into());
         assert!(t.matches_value(&KObject::Number(1.0)));
         assert!(t.matches_value(&KObject::List(vec![].into())));
+    }
+
+    /// `AnyUserType { kind: Struct }` accepts `Future(KObject::Struct{..})` and rejects
+    /// carriers of other kinds (`Tagged`) or wholly different families (`Number`).
+    /// Anchors the wildcard predicate's family-filtering behavior — stage 3.0b will
+    /// flip `from_name("Struct")` to produce this variant, and dispatch tests using
+    /// `(PICK x: Struct)` must continue to accept any struct carrier.
+    #[test]
+    fn any_user_type_struct_accepts_struct_future_only() {
+        use crate::runtime::machine::core::RuntimeArena;
+        use indexmap::IndexMap;
+        use std::rc::Rc;
+        // Arena-allocate the carriers: `KObject` is invariant in its `'a` lifetime, so
+        // stack locals trip dropck. Arena allocation hands out `&'a KObject<'a>` whose
+        // lifetime is tied to the arena's, dodging the false-positive.
+        let arena = RuntimeArena::new();
+        let t = KType::AnyUserType { kind: UserTypeKind::Struct };
+        let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
+            name: "Point".into(),
+            scope_id: 0,
+            fields: Rc::new(IndexMap::new()),
+        });
+        let tagged: &KObject<'_> = arena.alloc_object(KObject::Tagged {
+            tag: "some".into(),
+            value: Rc::new(KObject::Number(1.0)),
+            scope_id: 0,
+            name: "Maybe".into(),
+        });
+        let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+        assert!(t.accepts_part(&ExpressionPart::Future(s)));
+        assert!(!t.accepts_part(&ExpressionPart::Future(tagged)));
+        assert!(!t.accepts_part(&ExpressionPart::Future(n)));
+    }
+
+    /// Specificity ordering for the new `UserType` / `AnyUserType` variants:
+    /// - `AnyUserType` is strictly under `Any` (handled by the top-level `Any` short-circuit).
+    /// - `UserType { kind: K, .. }` is strictly under `AnyUserType { kind: K }` (same kind).
+    /// - `UserType` of one kind and `AnyUserType` of a different kind are incomparable
+    ///   (sibling families).
+    #[test]
+    fn user_type_specificity_lattice() {
+        let any_struct = KType::AnyUserType { kind: UserTypeKind::Struct };
+        let any_tagged = KType::AnyUserType { kind: UserTypeKind::Tagged };
+        let point = KType::UserType {
+            kind: UserTypeKind::Struct,
+            scope_id: 0xAA,
+            name: "Point".into(),
+        };
+        // `AnyUserType` strictly under `Any`.
+        assert!(any_struct.is_more_specific_than(&KType::Any));
+        assert!(!KType::Any.is_more_specific_than(&any_struct));
+        // `UserType { kind: Struct, .. }` strictly under `AnyUserType { kind: Struct }`.
+        assert!(point.is_more_specific_than(&any_struct));
+        assert!(!any_struct.is_more_specific_than(&point));
+        // Different-kind pairs incomparable.
+        assert!(!point.is_more_specific_than(&any_tagged));
+        assert!(!any_tagged.is_more_specific_than(&point));
     }
 }

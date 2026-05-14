@@ -74,7 +74,22 @@ on the value side at `resolve_for` time, memoizes the scope-resolved
 `&'a KType` in the cell via
 [`KObject::resolve_type_name_ref`](src/runtime/model/values/kobject.rs), and
 deletes the placeholder `KType::Unresolved` variant so every `KType` flowing
-through dispatch is fully elaborated. The next signature revision after error handling lands
+through dispatch is fully elaborated; and the type-identity stage 3.0
+scaffolding — the
+[`KType::UserType { kind, scope_id, name }` per-declaration tag and `KType::AnyUserType { kind }` wildcard kind tag](src/runtime/model/types/ktype.rs)
+with the surface names `"Struct"` / `"Tagged"` / `"Module"` lowering to the
+wildcard via
+[`KType::from_name`](src/runtime/model/types/ktype_resolution.rs),
+`(scope_id, name)` identity fields populated at finalize time on
+[`KObject::Struct` / `Tagged` / `StructType` / `TaggedUnionType`](src/runtime/model/values/kobject.rs)
+under the `scope as *const _ as usize` scheme `Module::scope_id()` uses
+(with `ktype()` still reporting the old singletons until stage 3.1 flips the
+arms), predicate arms placing `UserType { kind: K, .. }` strictly under
+`AnyUserType { kind: K }` strictly under `Any` in
+[`ktype_predicates.rs`](src/runtime/model/types/ktype_predicates.rs), and
+the empty
+[`Bindings.pending_types`](src/runtime/machine/core/bindings.rs)
+field plus read handle that stage 3.2 will populate. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -129,10 +144,6 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 3.0 — scaffolding for `KType::UserType`](roadmap/type-identity-3.0-scaffolding.md)
-  — adds the `UserType` / `AnyUserType` variants, identity fields on
-  value carriers, and predicate arms for the wildcard, all coexisting
-  with the old singletons so stage 3.1's collapse can flip atomically.
 - [Type identity stage 3.1 — atomic variant collapse and dual-write](roadmap/type-identity-3.1-variant-collapse.md)
   — deletes `KType::Struct`/`Tagged`/`Module`/`ModuleType`; routes
   STRUCT / UNION / MODULE / SIG finalize through

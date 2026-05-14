@@ -37,7 +37,7 @@ pub fn body<'a>(
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let (tag, value) = match bundle.get("value") {
-        Some(KObject::Tagged { tag, value }) => (tag.clone(), Rc::clone(value)),
+        Some(KObject::Tagged { tag, value, .. }) => (tag.clone(), Rc::clone(value)),
         Some(KObject::Bool(b)) => (
             if *b { "true".to_string() } else { "false".to_string() },
             Rc::new(KObject::Null),

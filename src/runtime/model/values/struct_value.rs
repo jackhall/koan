@@ -99,6 +99,7 @@ pub fn apply<'a>(
 /// builtin's body is a thin shim around this.
 pub fn construct<'a>(
     type_name: &str,
+    scope_id: usize,
     fields: &[(String, KType)],
     values: &[KObject<'a>],
 ) -> Result<KObject<'a>, KError> {
@@ -121,8 +122,11 @@ pub fn construct<'a>(
         }
         map.insert(field_name.clone(), value.deep_clone());
     }
+    // Stage 3.0c: copy `(scope_id, name)` off the schema's `StructType` so the value
+    // carries the declaring schema's identity. Stage 3.1 reads these in `ktype()`.
     Ok(KObject::Struct {
-        type_name: type_name.to_string(),
+        name: type_name.to_string(),
+        scope_id,
         fields: Rc::new(map),
     })
 }
@@ -134,8 +138,13 @@ fn primitive_body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let (type_name, fields) = match bundle.get("schema") {
-        Some(KObject::StructType { name, fields }) => (name.clone(), Rc::clone(fields)),
+    // Pull `(scope_id, name)` off the schema so the produced `Struct` value carries
+    // the declaring schema's identity — stage 3.0c made this load-bearing for 3.1's
+    // `ktype()` flip.
+    let (type_name, scope_id, fields) = match bundle.get("schema") {
+        Some(KObject::StructType { name, scope_id, fields }) => {
+            (name.clone(), *scope_id, Rc::clone(fields))
+        }
         Some(other) => {
             return BodyResult::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "schema".to_string(),
@@ -160,7 +169,7 @@ fn primitive_body<'a>(
             return BodyResult::Err(KError::new(KErrorKind::MissingArg("values".to_string())));
         }
     };
-    match construct(&type_name, &fields, &values) {
+    match construct(&type_name, scope_id, &fields, &values) {
         Ok(struct_value) => BodyResult::Value(scope.arena.alloc_object(struct_value)),
         Err(e) => BodyResult::Err(e),
     }
@@ -255,7 +264,7 @@ mod tests {
         run(scope, "STRUCT Point = (x: Number, y: Number)");
         let result = run_one(scope, parse_one("Point (x: 3, y: 4)"));
         match result {
-            KObject::Struct { type_name, fields } => {
+            KObject::Struct { name: type_name, fields, .. } => {
                 assert_eq!(type_name, "Point");
                 assert_eq!(fields.len(), 2);
                 assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));

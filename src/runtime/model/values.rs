@@ -30,7 +30,7 @@ pub fn dispatch_constructor<'a>(
     args_parts: Vec<ExpressionPart<'a>>,
 ) -> Option<BodyResult<'a>> {
     match verb_obj {
-        KObject::TaggedUnionType(_) => Some(tagged_union::apply(verb_obj, args_parts)),
+        KObject::TaggedUnionType { .. } => Some(tagged_union::apply(verb_obj, args_parts)),
         KObject::StructType { .. } => Some(struct_value::apply(verb_obj, args_parts)),
         _ => None,
     }

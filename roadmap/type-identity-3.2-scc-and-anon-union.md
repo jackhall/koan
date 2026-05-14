@@ -1,12 +1,15 @@
 # Type identity stage 3.2 — SCC discovery and anonymous-UNION removal
 
-Third and final sub-stage of the type-identity-3 arc. Stages
-[3.0](type-identity-3.0-scaffolding.md) and
-[3.1](type-identity-3.1-variant-collapse.md) shipped per-declaration
-identity; 3.2 closes the two remaining gaps the same surface admits:
-mutually recursive STRUCT / UNION pairs deadlock during elaboration, and
-the anonymous `UNION (...)` form mints values whose sentinel identity
-doesn't fit the per-declaration contract.
+Third and final sub-stage of the type-identity-3 arc. Stage 3.0 landed the
+scaffolding (`KType::UserType` / `AnyUserType` variants, `(scope_id, name)`
+fields on value carriers, `pending_types` field empty — see
+[design/type-system.md § Open work](../design/type-system.md#open-work));
+[stage 3.1](type-identity-3.1-variant-collapse.md) collapses the singletons
+and flips the value-carrier `ktype()` arms to report per-declaration identity.
+3.2 closes the two remaining gaps the same surface admits: mutually recursive
+STRUCT / UNION pairs deadlock during elaboration, and the anonymous
+`UNION (...)` form mints values whose sentinel identity doesn't fit the
+per-declaration contract.
 
 **Problem.** A mutually recursive STRUCT pair (`STRUCT TreeA = (b: TreeB)`
 / `STRUCT TreeB = (a: TreeA)`) deadlocks: each member's field elaboration

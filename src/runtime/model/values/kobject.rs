@@ -30,17 +30,40 @@ pub enum KObject<'a> {
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
-    TaggedUnionType(Rc<HashMap<String, KType>>),
+    /// Tagged-union schema. Stage 3.0c grew `(name, scope_id)` identity alongside the
+    /// shared `schema` map — `name` is the declared type name (`Maybe`), `scope_id` is
+    /// the declaring scope's address (cast `*const Scope as usize`) and is the same
+    /// identity scheme `Module::scope_id()` uses. `ktype()` still reports `KType::Type`
+    /// in 3.0; stage 3.1 flips it to synthesize `KType::UserType { kind: Tagged, .. }`
+    /// from the identity fields.
+    TaggedUnionType {
+        schema: Rc<HashMap<String, KType>>,
+        name: String,
+        scope_id: usize,
+    },
+    /// Struct schema. Stage 3.0c added `scope_id` next to the existing `name`; same
+    /// identity scheme as `TaggedUnionType`. `ktype()` still reports `KType::Type`;
+    /// stage 3.1 flips it to `KType::UserType { kind: Struct, .. }`.
     StructType {
         name: String,
+        scope_id: usize,
         fields: Rc<Vec<(String, KType)>>,
     },
+    /// Tagged-union value. Stage 3.0c grew `(name, scope_id)` to carry the declaring
+    /// schema's identity through the value — populated by `tagged_union::construct`
+    /// from the schema in the bundle. `ktype()` still reports `KType::Tagged` in 3.0.
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
+        scope_id: usize,
+        name: String,
     },
+    /// Struct value. Stage 3.0c renamed `type_name` → `name` and added `scope_id` next
+    /// to it — populated by `struct_value::construct` from the schema in the bundle.
+    /// `ktype()` still reports `KType::Struct` in 3.0.
     Struct {
-        type_name: String,
+        name: String,
+        scope_id: usize,
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
     /// First-class type value carrying the elaborated `KType` directly. The parser's
@@ -98,7 +121,10 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f, _) => function_value_ktype(f),
             KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
-            KObject::TaggedUnionType(_) => KType::Type,
+            // Stage 3.0c: identity fields are populated on the carriers but `ktype()`
+            // still reports the old singletons. Stage 3.1 flips these arms to synthesize
+            // `KType::UserType { kind, scope_id, name }` from the carrier's identity.
+            KObject::TaggedUnionType { .. } => KType::Type,
             KObject::StructType { .. } => KType::Type,
             KObject::Tagged { .. } => KType::Tagged,
             KObject::Struct { .. } => KType::Struct,
@@ -126,17 +152,25 @@ impl<'a> KObject<'a> {
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
             KObject::KFunction(f, frame) => KObject::KFunction(f, frame.clone()),
-            KObject::TaggedUnionType(schema) => KObject::TaggedUnionType(Rc::clone(schema)),
-            KObject::StructType { name, fields } => KObject::StructType {
+            KObject::TaggedUnionType { schema, name, scope_id } => KObject::TaggedUnionType {
+                schema: Rc::clone(schema),
                 name: name.clone(),
+                scope_id: *scope_id,
+            },
+            KObject::StructType { name, scope_id, fields } => KObject::StructType {
+                name: name.clone(),
+                scope_id: *scope_id,
                 fields: Rc::clone(fields),
             },
-            KObject::Tagged { tag, value } => KObject::Tagged {
+            KObject::Tagged { tag, value, scope_id, name } => KObject::Tagged {
                 tag: tag.clone(),
                 value: Rc::clone(value),
+                scope_id: *scope_id,
+                name: name.clone(),
             },
-            KObject::Struct { type_name, fields } => KObject::Struct {
-                type_name: type_name.clone(),
+            KObject::Struct { name, scope_id, fields } => KObject::Struct {
+                name: name.clone(),
+                scope_id: *scope_id,
                 fields: Rc::clone(fields),
             },
             KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
@@ -159,14 +193,14 @@ impl<'a> KObject<'a> {
     #[allow(clippy::type_complexity)]
     pub fn as_struct_type(&self) -> Option<(&str, &Rc<Vec<(String, KType)>>)> {
         match self {
-            KObject::StructType { name, fields } => Some((name.as_str(), fields)),
+            KObject::StructType { name, fields, .. } => Some((name.as_str(), fields)),
             _ => None,
         }
     }
 
     pub fn as_tagged_union_type(&self) -> Option<&Rc<HashMap<String, KType>>> {
         match self {
-            KObject::TaggedUnionType(schema) => Some(schema),
+            KObject::TaggedUnionType { schema, .. } => Some(schema),
             _ => None,
         }
     }
@@ -286,27 +320,27 @@ impl<'a> Parseable for KObject<'a> {
             KObject::KExpression(e) => e.summarize(),
             KObject::KFuture(t, _) => t.parsed.summarize(),
             KObject::KFunction(f, _) => f.summarize(),
-            KObject::TaggedUnionType(schema) => {
+            KObject::TaggedUnionType { schema, .. } => {
                 let parts: Vec<String> = schema
                     .iter()
                     .map(|(tag, ktype)| format!("{}: {}", tag, ktype.name()))
                     .collect();
                 format!("Union{{{}}}", parts.join(", "))
             }
-            KObject::StructType { name, fields } => {
+            KObject::StructType { name, fields, .. } => {
                 let parts: Vec<String> = fields
                     .iter()
                     .map(|(field, ktype)| format!("{}: {}", field, ktype.name()))
                     .collect();
                 format!("{}{{{}}}", name, parts.join(", "))
             }
-            KObject::Tagged { tag, value } => format!("{}({})", tag, value.summarize()),
-            KObject::Struct { type_name, fields } => {
+            KObject::Tagged { tag, value, .. } => format!("{}({})", tag, value.summarize()),
+            KObject::Struct { name, fields, .. } => {
                 let parts: Vec<String> = fields
                     .iter()
                     .map(|(field, value)| format!("{}: {}", field, value.summarize()))
                     .collect();
-                format!("{}({})", type_name, parts.join(", "))
+                format!("{}({})", name, parts.join(", "))
             }
             KObject::Null => "null".to_string(),
             KObject::KTypeValue(t) => t.render(),

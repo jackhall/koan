@@ -3,7 +3,7 @@
 //! turning parsed type syntax into a `KType` live here, alongside the join used by
 //! `KObject::ktype` to infer container element types.
 
-use super::ktype::KType;
+use super::ktype::{KType, UserTypeKind};
 use crate::ast::{TypeExpr, TypeParams};
 
 impl KType {
@@ -21,9 +21,14 @@ impl KType {
             "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::Type),
-            "Tagged" => Some(KType::Tagged),
-            "Struct" => Some(KType::Struct),
-            "Module" => Some(KType::Module),
+            // Stage 3.0b: the user-declared-type surface names lower to the wildcard
+            // `AnyUserType { kind }` carrier — a slot typed `Struct` admits any struct
+            // carrier, `Tagged` any tagged-union carrier, `Module` any module value.
+            // The old singletons (`KType::Struct`/`Tagged`/`Module`) still exist for
+            // every other site that constructs them directly; stage 3.1 deletes them.
+            "Tagged" => Some(KType::AnyUserType { kind: UserTypeKind::Tagged }),
+            "Struct" => Some(KType::AnyUserType { kind: UserTypeKind::Struct }),
+            "Module" => Some(KType::AnyUserType { kind: UserTypeKind::Module }),
             "Signature" => Some(KType::Signature),
             "Any" => Some(KType::Any),
             _ => None,

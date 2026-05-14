@@ -8,6 +8,33 @@
 //! live in `ktype_predicates.rs`; elaboration (`from_name`, `from_type_expr`, `join`,
 //! `join_iter`) lives in `ktype_resolution.rs`.
 
+/// Surface-keyword classifier shared by `KType::UserType` and `KType::AnyUserType`. Each
+/// variant maps to the keyword that declares the carrier (`STRUCT`, anonymous-or-named
+/// `UNION` → `Tagged`, `MODULE`). The kind is sourced from the declaration site at finalize
+/// time and lives on both the per-declaration identity tag (`UserType`) and the wildcard
+/// "any user-declared X" tag (`AnyUserType`). See
+/// [per-declaration type identity](../../../../design/type-system.md) — stage 3.1 makes
+/// this the dispatcher's primary kind discriminator for user-declared types.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum UserTypeKind {
+    Struct,
+    Tagged,
+    Module,
+}
+
+impl UserTypeKind {
+    /// Surface keyword rendered in diagnostics and `AnyUserType::name()`. Mirrors the
+    /// existing singleton names (`KType::Struct.name()` → `"Struct"`, etc.) so the
+    /// 3.1 flip is purely structural.
+    pub fn surface_keyword(&self) -> &'static str {
+        match self {
+            UserTypeKind::Struct => "Struct",
+            UserTypeKind::Tagged => "Tagged",
+            UserTypeKind::Module => "Module",
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum KType {
     Number,
@@ -40,6 +67,25 @@ pub enum KType {
     /// is tracked as
     /// [per-declaration type identity](../../../../roadmap/type-identity-3.1-variant-collapse.md).
     Struct,
+    /// Per-declaration identity tag for a user-declared type (STRUCT, UNION, MODULE). The
+    /// `(scope_id, name)` pair is the dispatch identity: distinct declarations in the same
+    /// scope have distinct `name`s; same-named declarations in different scopes have
+    /// distinct `scope_id`s. `kind` carries the surface keyword so the wildcard
+    /// `AnyUserType { kind }` can admit only the matching family.
+    ///
+    /// Stage 3.0 introduces the variant but no `ktype()` arm reports it yet — value
+    /// carriers grow the identity fields and still report the old singletons (`Struct`
+    /// / `Tagged` / `Type`). Stage 3.1 flips `ktype()` to synthesize `UserType` from the
+    /// carrier's identity fields and deletes the singletons.
+    UserType { kind: UserTypeKind, scope_id: usize, name: String },
+    /// Wildcard tag matching any user-declared carrier of the given `kind`. The surface
+    /// names `"Struct"` / `"Tagged"` / `"Module"` resolve to this (post-3.0b); a slot
+    /// typed `Struct` accepts any `KObject::Struct{..}` regardless of declaring schema.
+    /// Strictly more specific than `Any`; incomparable with other `AnyUserType`s of a
+    /// different kind and with concrete `UserType`s of the same kind (matching specificity
+    /// only one direction: `UserType { kind: K, .. }` is more specific than
+    /// `AnyUserType { kind: K }`).
+    AnyUserType { kind: UserTypeKind },
     /// Per-module abstract type (`Foo.Type` after opaque ascription). `scope_id` is the
     /// declaring module's child-scope address cast to `usize` — stable for the run because
     /// `Scope`s are arena-allocated and never moved, distinct across modules because the
@@ -98,6 +144,8 @@ impl KType {
             KType::Type => "Type".into(),
             KType::Tagged => "Tagged".into(),
             KType::Struct => "Struct".into(),
+            KType::UserType { name, .. } => name.clone(),
+            KType::AnyUserType { kind } => kind.surface_keyword().into(),
             KType::ModuleType { name, .. } => name.clone(),
             KType::Module => "Module".into(),
             KType::SignatureBound { sig_path, .. } => sig_path.clone(),
@@ -162,5 +210,44 @@ mod tests {
     fn name_renders_recursive_ref_as_name() {
         let t = KType::RecursiveRef("Tree".into());
         assert_eq!(t.name(), "Tree");
+    }
+
+    #[test]
+    fn user_type_kind_surface_keywords() {
+        // Mirror the existing `KType::Struct.name() == "Struct"` singleton names so the
+        // 3.1 variant collapse is purely structural — the surface form is preserved.
+        assert_eq!(UserTypeKind::Struct.surface_keyword(), "Struct");
+        assert_eq!(UserTypeKind::Tagged.surface_keyword(), "Tagged");
+        assert_eq!(UserTypeKind::Module.surface_keyword(), "Module");
+    }
+
+    #[test]
+    fn any_user_type_name_renders_kind_keyword() {
+        // Wildcard tag renders the surface keyword for the kind, matching how the old
+        // singletons (`KType::Struct`/`Tagged`/`Module`) render today.
+        assert_eq!(
+            KType::AnyUserType { kind: UserTypeKind::Struct }.name(),
+            "Struct"
+        );
+        assert_eq!(
+            KType::AnyUserType { kind: UserTypeKind::Tagged }.name(),
+            "Tagged"
+        );
+        assert_eq!(
+            KType::AnyUserType { kind: UserTypeKind::Module }.name(),
+            "Module"
+        );
+    }
+
+    #[test]
+    fn user_type_name_renders_bare_name() {
+        // Per-declaration tag renders the declared `name`, not the kind keyword. Pins the
+        // diagnostic surface: a `Point` struct slot shows `Point`, not `Struct`.
+        let t = KType::UserType {
+            kind: UserTypeKind::Struct,
+            scope_id: 0x1234,
+            name: "Point".into(),
+        };
+        assert_eq!(t.name(), "Point");
     }
 }

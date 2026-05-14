@@ -161,7 +161,7 @@ fn access_field<'a>(
     field: &str,
 ) -> BodyResult<'a> {
     match target {
-        KObject::Struct { type_name, fields } => match fields.get(field) {
+        KObject::Struct { name: type_name, fields, .. } => match fields.get(field) {
             Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
             None => err(KError::new(KErrorKind::ShapeError(format!(
                 "struct `{}` has no field `{}`",

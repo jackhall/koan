@@ -71,6 +71,8 @@ pub fn apply<'a>(
 /// construction-primitive builtin's body is a thin shim around this.
 pub fn construct<'a>(
     schema: &HashMap<String, KType>,
+    schema_name: &str,
+    schema_scope_id: usize,
     tag: String,
     value: &KObject<'a>,
 ) -> Result<KObject<'a>, KError> {
@@ -91,9 +93,13 @@ pub fn construct<'a>(
             got: value.ktype().name().to_string(),
         }));
     }
+    // Stage 3.0c: copy `(scope_id, name)` off the `TaggedUnionType` so the value
+    // carries the declaring schema's identity. Stage 3.1 reads these in `ktype()`.
     Ok(KObject::Tagged {
         tag,
         value: Rc::new(value.deep_clone()),
+        scope_id: schema_scope_id,
+        name: schema_name.to_string(),
     })
 }
 
@@ -105,8 +111,12 @@ fn primitive_body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let schema = match bundle.get("schema") {
-        Some(KObject::TaggedUnionType(s)) => Rc::clone(s),
+    // Pull `(schema, name, scope_id)` off the `TaggedUnionType` so the produced
+    // `Tagged` value carries the declaring schema's identity — stage 3.0c.
+    let (schema, schema_name, schema_scope_id) = match bundle.get("schema") {
+        Some(KObject::TaggedUnionType { schema, name, scope_id }) => {
+            (Rc::clone(schema), name.clone(), *scope_id)
+        }
         Some(other) => {
             return BodyResult::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "schema".to_string(),
@@ -139,7 +149,7 @@ fn primitive_body<'a>(
             return BodyResult::Err(KError::new(KErrorKind::MissingArg("value".to_string())));
         }
     };
-    match construct(&schema, tag, value) {
+    match construct(&schema, &schema_name, schema_scope_id, tag, value) {
         Ok(tagged) => BodyResult::Value(scope.arena.alloc_object(tagged)),
         Err(e) => BodyResult::Err(e),
     }
@@ -237,7 +247,7 @@ mod tests {
         run(scope, "LET maybe = (UNION (some: Number none: Null))");
         let result = run_one(scope, parse_one("(maybe) some 42"));
         match result {
-            KObject::Tagged { tag, value } => {
+            KObject::Tagged { tag, value, .. } => {
                 assert_eq!(tag, "some");
                 assert!(matches!(&**value, KObject::Number(n) if *n == 42.0));
             }

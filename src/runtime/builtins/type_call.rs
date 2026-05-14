@@ -81,7 +81,7 @@ mod tests {
         run(scope, "UNION Maybe = (some: Number none: Null)");
         let result = run_one(scope, parse_one("Maybe (some 42)"));
         match result {
-            KObject::Tagged { tag, value } => {
+            KObject::Tagged { tag, value, .. } => {
                 assert_eq!(tag, "some");
                 assert!(matches!(&**value, KObject::Number(n) if *n == 42.0));
             }
@@ -122,7 +122,7 @@ mod tests {
         run(scope, "UNION Maybe = (some: Number none: Null)\nLET x = 7");
         let result = run_one(scope, parse_one("Maybe (some (x))"));
         match result {
-            KObject::Tagged { tag, value } => {
+            KObject::Tagged { tag, value, .. } => {
                 assert_eq!(tag, "some");
                 assert!(matches!(&**value, KObject::Number(n) if *n == 7.0));
             }

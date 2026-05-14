@@ -182,7 +182,7 @@ mod tests {
         run(scope, "LET maybe = (UNION (some: Number none: Null))");
         let result = run_one(scope, parse_one("maybe (some 42)"));
         match result {
-            KObject::Tagged { tag, value } => {
+            KObject::Tagged { tag, value, .. } => {
                 assert_eq!(tag, "some");
                 assert!(matches!(&**value, KObject::Number(n) if *n == 42.0));
             }
@@ -199,7 +199,7 @@ mod tests {
         run(scope, "LET pt = (STRUCT Pt = (x: Number, y: Number))");
         let result = run_one(scope, parse_one("pt (x: 3, y: 4)"));
         match result {
-            KObject::Struct { type_name, fields } => {
+            KObject::Struct { name: type_name, fields, .. } => {
                 assert_eq!(type_name, "Pt");
                 assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
                 assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));

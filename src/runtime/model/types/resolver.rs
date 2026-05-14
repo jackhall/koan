@@ -110,7 +110,7 @@ pub fn elaborate_type_expr(
                     // a field type like `b: TreeB` lands as a usable `KType` rather than
                     // an `Unbound` error.
                     KObject::StructType { .. } => ElabResult::Done(KType::Struct),
-                    KObject::TaggedUnionType(_) => ElabResult::Done(KType::Type),
+                    KObject::TaggedUnionType { .. } => ElabResult::Done(KType::Type),
                     _ => match KType::from_name(name) {
                         Some(kt) => ElabResult::Done(kt),
                         None => ElabResult::Unbound(name.clone()),

@@ -113,7 +113,11 @@ pub(crate) fn extract_bare_type_name<'a>(
             }
         },
         Some(KObject::KTypeValue(t)) => match t {
-            // Leaf-named variants: surface name is the user-facing identifier.
+            // Leaf-named variants: surface name is the user-facing identifier. Both
+            // `UserType` (per-declaration tag) and `AnyUserType` (wildcard kind tag)
+            // join the leaf set — their `name()` renders either the declared name or
+            // the surface keyword (`Struct`/`Tagged`/`Module`), both valid binder /
+            // constructor / type-call names.
             KType::Number
             | KType::Str
             | KType::Bool
@@ -127,6 +131,8 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::Module
             | KType::Signature
             | KType::Any
+            | KType::UserType { .. }
+            | KType::AnyUserType { .. }
             | KType::ModuleType { .. }
             | KType::SignatureBound { .. } => Ok(t.name()),
             // Structural / recursive shapes are not valid binder names — the caller wants
