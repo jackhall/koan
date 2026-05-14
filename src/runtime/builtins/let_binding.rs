@@ -16,6 +16,15 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
+    let value = match bundle.get("value") {
+        Some(v) => v,
+        None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
+    };
+    // `type_for_types_map` is `Some(kt)` iff this call should route storage through
+    // `register_type` (stage-1.7): a Type-class LHS with an actual `KTypeValue(kt)` RHS.
+    // Other type-language carriers on the RHS (`KModule` / `KSignature` / struct/union
+    // types) stay on the `bind_value` path because there's no `KType` to register.
+    let mut type_for_types_map: Option<KType> = None;
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => s.clone(),
         // The `TypeExprRef` overload routes through `KTypeValue(kt)` post-refactor; only
@@ -38,13 +47,9 @@ pub fn body<'a>(
                 // carriers `KModule` / `KSignature` / `StructType` / `TaggedUnionType`
                 // report `Module` / `Signature` / `Type`, not `TypeExprRef`, and shipped
                 // `LET IntOrdAbstract = (IntOrd :| OrderedSig)` patterns in `ascribe.rs`
-                // depend on those being accepted. Stage 1.7's storage-routing flip will
-                // subsume this once type-language carriers move to `bindings.types`.
+                // depend on those being accepted. The non-`KTypeValue` carriers continue
+                // to write `data` via `bind_value` until their own storage migration.
                 let resolved_name = t.name();
-                let value = match bundle.get("value") {
-                    Some(v) => v,
-                    None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
-                };
                 if matches!(
                     value.ktype(),
                     KType::Number | KType::Str | KType::Bool | KType::Null
@@ -54,6 +59,13 @@ pub fn body<'a>(
                         name: resolved_name,
                         got: value.ktype(),
                     }));
+                }
+                // Stage-1.7 storage flip: Type-class LHS + `KTypeValue(kt)` RHS routes
+                // through `register_type` so the bound name lives in `bindings.types`
+                // alongside builtin type names. The dispatch carrier returned below
+                // stays a `KObject::KTypeValue(kt)` — only the storage location moves.
+                if let KObject::KTypeValue(kt) = value {
+                    type_for_types_map = Some(kt.clone());
                 }
                 resolved_name
             }
@@ -67,13 +79,18 @@ pub fn body<'a>(
         }
         None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
-    let cloned = match bundle.get("value") {
-        Some(obj) => obj.deep_clone(),
-        None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
-    };
+    let cloned = value.deep_clone();
     let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
-    if let Err(e) = scope.bind_value(name, allocated) {
+    if let Some(kt) = type_for_types_map {
+        // Infallible `register_type` matches the prior `bind_value` shape for shipped
+        // call sites (placeholder-resolution catches name conflicts upstream before
+        // the body runs). The returned `KObject::KTypeValue(kt)` carrier is preserved
+        // so dispatch transport — `lift_kobject`, the `value_lookup`-TypeExprRef
+        // synthesis site, downstream `KType::TypeExprRef`-typed slots — sees the
+        // same shape as before the storage flip.
+        scope.register_type(name, kt);
+    } else if let Err(e) = scope.bind_value(name, allocated) {
         return err(e);
     }
     BodyResult::Value(allocated)
@@ -279,9 +296,10 @@ mod tests {
         }
     }
 
-    /// Stage 1.6: `LET Foo = Number` — Type-class LHS with a type RHS. Storage stays
-    /// in `data` for now (stage 1.7 will flip routing to `bindings.types`). Regression
-    /// guard that the blocklist doesn't reject the good case.
+    /// Stage 1.7: `LET Foo = Number` — Type-class LHS with a type RHS. Storage now
+    /// lives in `bindings.types` (via `register_type`), reachable through
+    /// `Scope::resolve_type`. Regression guard that the blocklist doesn't reject the
+    /// good case and that the storage flip lands on the right map.
     #[test]
     fn let_type_class_with_type_value_still_binds() {
         use crate::runtime::machine::RuntimeArena;
@@ -298,13 +316,10 @@ mod tests {
         sched.execute().expect("execute does not surface per-slot errors");
         let res = sched.read_result(ids[0]);
         assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
-        let data = scope.bindings().data();
-        let entry = data.get("Foo").expect("expected binding 'Foo'");
-        assert!(
-            matches!(entry, KObject::KTypeValue(t) if matches!(t, KType::Number)),
-            "expected KTypeValue(Number), got {:?}",
-            entry.ktype(),
-        );
+        let kt = scope
+            .resolve_type("Foo")
+            .expect("expected type binding 'Foo' in bindings.types");
+        assert_eq!(*kt, KType::Number, "expected Number, got {:?}", kt);
     }
 
     /// Stage 1.6: `LET foo = 1` (lowercase, Identifier overload) is untouched by

@@ -5,23 +5,21 @@ use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_s
 use crate::runtime::model::KObject;
 use crate::runtime::machine::RuntimeArena;
 
-/// Verify that `LET MyList = (LIST_OF Number)` binds a `KTypeValue` carrying the
-/// elaborated `KType::List(Number)` directly. Post-`KTypeValue` migration the surface
-/// form is gone from the runtime; consumers operate on the structural `KType`.
+/// Verify that `LET MyList = (LIST_OF Number)` registers a type binding carrying the
+/// elaborated `KType::List(Number)`. Post-stage-1.7 storage flip the LET TypeExprRef
+/// overload writes `bindings.types` (reachable via `Scope::resolve_type`); the prior
+/// `KObject::KTypeValue` carrier survives only as a dispatch transport, not as the
+/// storage shape.
 #[test]
 fn list_of_let_binding_is_ktype_value() {
     use crate::runtime::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
-    let data = scope.bindings().data();
-    let entry = data.get("MyList").expect("MyList should be bound");
-    match entry {
-        KObject::KTypeValue(kt) => {
-            assert_eq!(*kt, KType::List(Box::new(KType::Number)));
-        }
-        other => panic!("expected KTypeValue, got ktype={}", other.ktype().name()),
-    }
+    let kt = scope
+        .resolve_type("MyList")
+        .expect("MyList should be bound in bindings.types");
+    assert_eq!(*kt, KType::List(Box::new(KType::Number)));
 }
 
 /// The scheduler-aware elaborator reads a `KTypeValue` binding back as its stored
@@ -108,11 +106,14 @@ fn let_then_fn_in_same_batch_works() {
         sched.add_dispatch(e, scope);
     }
     sched.execute().unwrap();
-    let data = scope.bindings().data();
+    // Post-stage-1.7 the LET TypeExprRef overload writes `MyList` into `bindings.types`,
+    // not `data` — check the type-side map. The FN-def's `USE` binding still lives on
+    // `data` like any other function binding.
     assert!(
-        data.get("MyList").is_some(),
-        "MyList should be bound after the batch executes",
+        scope.resolve_type("MyList").is_some(),
+        "MyList should be bound in bindings.types after the batch executes",
     );
+    let data = scope.bindings().data();
     let use_fn = data.get("USE").expect("USE should be bound by the FN definition");
     assert!(matches!(use_fn, KObject::KFunction(_, _)));
 }

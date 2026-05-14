@@ -73,9 +73,9 @@ impl<'s, 'a> Elaborator<'s, 'a> {
 /// accumulating any `Park` producers across inner slots into a single combined park list
 /// so the caller can register every dep at once. Bare-leaf names route through the
 /// elaborator's threaded set first (recursive back-edge), then `Scope::resolve_type` for
-/// every type-side binding (builtin type names plus future stage-3 user types), then
-/// falling through to `Scope::resolve` for the value-side carriers still on `data`
-/// (`KTypeValue` from `LET T = ...`, `KSignature`, `StructType`, `TaggedUnionType`,
+/// every type-side binding (builtin type names, stage-1.7 `LET`-bound type names, plus
+/// future stage-3 user types), then falling through to `Scope::resolve` for the
+/// value-side carriers still on `data` (`KSignature`, `StructType`, `TaggedUnionType`,
 /// `Placeholder`), then `KType::from_name` as a final fallback covering test fixtures
 /// that skip `default_scope`'s builtin registration. A genuinely unbound leaf surfaces
 /// as `ElabResult::Unbound`.
@@ -99,13 +99,6 @@ pub fn elaborate_type_expr(
             }
             match el.scope.resolve(name) {
                 Resolution::Value(obj) => match obj {
-                    // `LET MyList = (LIST_OF Number)` writes a `KObject::KTypeValue`
-                    // into `bindings.data` (LET's Identifier / TypeExprRef LHS path
-                    // both land here pre-stage-1.7). Read the carried `KType` back
-                    // directly. Stage 1.7 flips LET to call `register_type` instead;
-                    // when it lands, the `resolve_type` step above will catch these
-                    // hits and this arm can delete.
-                    KObject::KTypeValue(kt) => ElabResult::Done(kt.clone()),
                     KObject::KSignature(s) => ElabResult::Done(KType::SignatureBound {
                         sig_id: s.sig_id(),
                         sig_path: s.path.clone(),

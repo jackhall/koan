@@ -43,13 +43,11 @@ pub fn body_opaque<'a>(
     // of the same source yield distinct types — the abstraction-barrier identity property.
     let scope_id = new_module.scope_id();
     let mut minted: Vec<(String, KType)> = Vec::new();
-    for name in s.decl_scope().bindings().data().keys() {
-        if is_abstract_type_name(name) {
-            minted.push((
-                name.clone(),
-                KType::ModuleType { scope_id, name: name.clone() },
-            ));
-        }
+    for name in abstract_type_names_of(s.decl_scope()) {
+        minted.push((
+            name.clone(),
+            KType::ModuleType { scope_id, name: name.clone() },
+        ));
     }
     if !minted.is_empty() {
         let mut tm = new_module.type_members.borrow_mut();
@@ -105,10 +103,14 @@ fn shape_check<'a>(
     sig: &crate::runtime::model::values::Signature<'a>,
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
+    // Snapshot abstract-type names first so the helper's `data` borrow releases before
+    // we acquire our own — honors the `types → functions → data` borrow order.
+    let abstract_names: std::collections::HashSet<String> =
+        abstract_type_names_of(sig.decl_scope()).into_iter().collect();
     let sig_data = sig.decl_scope().bindings().data();
     let src_data = src_scope.bindings().data();
     for name in sig_data.keys() {
-        if is_abstract_type_name(name) {
+        if abstract_names.contains(name.as_str()) {
             continue;
         }
         if !src_data.contains_key(name) {
@@ -119,6 +121,30 @@ fn shape_check<'a>(
         }
     }
     Ok(())
+}
+
+/// Collect every name in `scope`'s `Bindings` that classifies as an abstract Type member.
+/// Type-class LET aliases write `bindings.types` via `register_type`; other carriers that
+/// classify as Type-tokens at use still land on `bindings.data`. Sweeping both maps keeps
+/// the helper's answer robust to either binding home; names already in `types` are not
+/// duplicated.
+///
+/// Goes through the [`Bindings`](crate::runtime::machine::core::Bindings) façade — no
+/// raw `RefCell` reach-around. Drops `types_guard` before acquiring `data_guard` to
+/// honor the `types → functions → data` borrow ordering.
+fn abstract_type_names_of<'a>(scope: &crate::runtime::machine::Scope<'a>) -> Vec<String> {
+    let bindings = scope.bindings();
+    let types_guard = bindings.types();
+    let mut names: Vec<String> = types_guard.keys().cloned().collect();
+    drop(types_guard);
+    let types_set: std::collections::HashSet<String> = names.iter().cloned().collect();
+    let data_guard = bindings.data();
+    for k in data_guard.keys() {
+        if is_abstract_type_name(k) && !types_set.contains(k) {
+            names.push(k.clone());
+        }
+    }
+    names
 }
 
 /// True iff `name` classifies as a Type token (first char uppercase + at least one

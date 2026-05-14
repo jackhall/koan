@@ -290,7 +290,8 @@ consult `types`, identifier tokens consult `data`.
 
 - Type identity stage 1 — foundation: dual-map binding home,
   `Scope::resolve_type`, dispatch routing by token kind, bind-time
-  diagnostic for type-class LHS with non-type RHS. The arena slot
+  diagnostic for type-class LHS with non-type RHS, and LET routing of
+  Type-class aliases through `register_type`. The arena slot
   ([`RuntimeArena::alloc_ktype`](../src/runtime/machine/core/arena.rs)),
   the
   [`Bindings::types` map plus `try_register_type` and `try_register_nominal` write primitives](../src/runtime/machine/core/bindings.rs),
@@ -298,30 +299,35 @@ consult `types`, identifier tokens consult `data`.
   [`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](../src/runtime/machine/core/scope.rs),
   the
   [consumer migration onto `Scope::resolve_type` with `Scope::resolve`'s transient fallback deleted](../src/runtime/builtins/value_lookup.rs),
-  and the
+  the
   [`KErrorKind::TypeClassBindingExpectsType` bind-time diagnostic in `let_binding`](../src/runtime/builtins/let_binding.rs)
-  that rejects `LET <Type-class> = <non-type>` at the binder
-  have landed. Builtin type names live in `bindings.types` as
-  arena-allocated `&KType`. Type-token reads (the `TypeExprRef` overload
-  of `value_lookup` and the bare-leaf arm of `elaborate_type_expr`)
-  consult `Scope::resolve_type` first; the sole `KObject::KTypeValue`
-  synthesis site for dispatch transport lives in
+  that rejects `LET <Type-class> = <non-type>` at the binder, and the
+  [LET `TypeExprRef`-LHS routing through `register_type`](../src/runtime/builtins/let_binding.rs)
+  for type-valued RHSes have landed. Builtin type names *and*
+  `LET Ty = Number`-style aliases live in `bindings.types` as
+  arena-allocated `&KType`, reachable through `Scope::resolve_type` on
+  the same pointer as the builtin. Type-token reads (the `TypeExprRef`
+  overload of `value_lookup` and the bare-leaf arm of
+  `elaborate_type_expr`) consult `Scope::resolve_type` first; the sole
+  `KObject::KTypeValue` synthesis site for dispatch transport lives in
   [`value_lookup::body_type_expr`](../src/runtime/builtins/value_lookup.rs),
   which mints `KObject::KTypeValue(kt.clone())` on a `resolve_type` hit.
   On a `resolve_type` miss, both readers fall through to `Scope::resolve`
   to pick up value-side nominal carriers — `KObject::KModule` from
   `MODULE`, `KObject::StructType` from `STRUCT`, `KObject::TaggedUnionType`
-  from `UNION`, `KObject::KSignature` from `SIG`, and the
-  `KObject::KTypeValue` that `LET Ty = ...` still writes into `data`
-  pre-stage-1.7 — none of which live in `bindings.types` until stage 3
-  dual-writes a `KType::UserType` next to them. The bind-time check
-  uses a primitive/container blocklist (`Number | Str | Bool | Null |
-  List(_) | Dict(_, _)`) so type-language carriers (`KModule`,
-  `KSignature`, `StructType`, `TaggedUnionType`), whose runtime `KType`
-  is `Module` / `Signature` / `Type` rather than `TypeExprRef`, continue
-  to bind through the existing path. The remaining sub-item is
-  [1.7](../roadmap/type-identity-1.7-let-type-value-writes-types.md)
-  (LET-of-type-value routing + ascribe migration).
+  from `UNION`, `KObject::KSignature` from `SIG` — none of which live in
+  `bindings.types` until stage 3 dual-writes a `KType::UserType` next to
+  them. The bind-time check uses a primitive/container blocklist
+  (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so type-language
+  carriers (`KModule`, `KSignature`, `StructType`, `TaggedUnionType`),
+  whose runtime `KType` is `Module` / `Signature` / `Type` rather than
+  `TypeExprRef`, continue to bind through the existing `bind_value` path.
+  Ascription's abstract-type member sweep
+  ([`ascribe.rs`](../src/runtime/builtins/ascribe.rs)) walks both
+  `bindings.types` and `bindings.data` via the `abstract_type_names_of`
+  helper, so SIG `Type` declarations resolve uniformly whether the
+  signature body's LET wrote to `types` (Type-class LHS, `KTypeValue`
+  RHS) or to `data` (other type-language carriers).
 - [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](../roadmap/type-identity-2-typename-ref-carrier.md)
   — parse→bind carrier replacement; subsumes eager type elaboration's
   `KType::Unresolved` deletion and `OnceCell<KType>` late-binding gates.

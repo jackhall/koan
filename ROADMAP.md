@@ -59,9 +59,14 @@ downstream elaboration) — builtin type names live in
 `bindings.types` as arena-allocated `&KType`, Type-token reads consult
 `Scope::resolve_type` first (with the sole `KObject::KTypeValue` synthesis
 site for dispatch transport now living in `value_lookup::body_type_expr`),
-and value-side nominal carriers (`KModule`, `StructType`, `TaggedUnionType`,
+value-side nominal carriers (`KModule`, `StructType`, `TaggedUnionType`,
 `KSignature`) fall through to `Scope::resolve` until stage 3 dual-writes a
-`KType::UserType` next to them. The next signature revision after error handling lands
+`KType::UserType` next to them, and the LET `TypeExprRef`-LHS overload
+routes `LET Ty = Number`-style aliases through `Scope::register_type` so
+they live in `bindings.types` alongside the builtin type names — with
+ascription's abstract-type member sweep walking both maps so SIG
+abstract-type declarations stay visible across the storage split
+([`ascribe.rs`](src/runtime/builtins/ascribe.rs)). The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -116,9 +121,6 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 1.7 — `LET Ty = Number` routes through `register_type`](roadmap/type-identity-1.7-let-type-value-writes-types.md)
-  — Type-class LET aliases write `types`; ascribe scans both maps so
-  SIG abstract-type members stay visible.
 - [Type identity stage 2 — `KObject::TypeNameRef` carrier and `KType::Unresolved` deletion](roadmap/type-identity-2-typename-ref-carrier.md)
   — replaces the surface-name fallback in the elaborated type language with
   a `KObject`-side carrier; subsumes eager type elaboration's

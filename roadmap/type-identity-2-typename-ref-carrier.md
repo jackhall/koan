@@ -89,11 +89,9 @@ cleanup.
 
 ## Dependencies
 
-**Requires:**
-
-- [Type identity stage 1.7 — `LET Ty = Number` routes through `register_type`](type-identity-1.7-let-type-value-writes-types.md)
-  — Type-class LET aliases live in `types`, so the carrier's resolution
-  picks them up uniformly with builtin types.
+**Requires:** none — type-identity stage 1 has shipped (Type-class LET
+aliases live in `bindings.types`, so the carrier's resolution picks them
+up uniformly with builtin types).
 
 **Unblocks:**
 
