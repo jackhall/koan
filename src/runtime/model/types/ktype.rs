@@ -116,12 +116,25 @@ pub enum KType {
     /// identity scheme `UserType { kind: Module, scope_id, .. }` uses for first-class
     /// module values: the arena pins the `Signature` for the run, addresses are stable
     /// and unique, and two `SIG Foo = (...)` declarations in the same scope already
-    /// error (`Rebind`). Equality (and dispatch admissibility) is by `sig_id`
-    /// exclusively; `sig_path` is for diagnostics only. Distinguishing this from
-    /// `AnyUserType { kind: Module }` is what lets the dispatcher reject unascribed
-    /// modules from a signature-typed slot — the per-sig admissibility check rides on
-    /// `Module`'s `compatible_sigs` set populated by `:|` / `:!`.
-    SignatureBound { sig_id: usize, sig_path: String },
+    /// error (`Rebind`). Equality (and dispatch admissibility) is by `sig_id` plus the
+    /// `pinned_slots` constraint vector; `sig_path` is for diagnostics only.
+    /// Distinguishing this from `AnyUserType { kind: Module }` is what lets the
+    /// dispatcher reject unascribed modules from a signature-typed slot — the per-sig
+    /// admissibility check rides on `Module`'s `compatible_sigs` set populated by
+    /// `:|` / `:!`.
+    ///
+    /// `pinned_slots` carries sharing constraints — abstract-type slots of the signature
+    /// pinned to specific concrete `KType`s. Empty for the unconstrained `OrderedSig`
+    /// form. Two `SignatureBound`s with the same `sig_id` but different `pinned_slots`
+    /// vectors are distinct slot types; admissibility (`matches_value`, `accepts_part`)
+    /// also checks each pin against the candidate module's `type_members`. The vec is
+    /// order-preserving — rather than a `HashMap` — so structural equality is
+    /// deterministic and the diagnostic surface stays stable.
+    SignatureBound {
+        sig_id: usize,
+        sig_path: String,
+        pinned_slots: Vec<(String, KType)>,
+    },
     /// Meta-type for first-class module signatures (`KObject::KSignature`).
     Signature,
     /// Recursive type binder. `body` describes the unfolded shape with `binder` in scope as a
@@ -158,7 +171,20 @@ impl KType {
             KType::Type => "Type".into(),
             KType::UserType { name, .. } => name.clone(),
             KType::AnyUserType { kind } => kind.surface_keyword().into(),
-            KType::SignatureBound { sig_path, .. } => sig_path.clone(),
+            KType::SignatureBound { sig_path, pinned_slots, .. } => {
+                if pinned_slots.is_empty() {
+                    sig_path.clone()
+                } else {
+                    // Pinned-form rendering mirrors the parens-form surface that
+                    // `SIG_WITH` accepts at slot positions. Pure display surface — does
+                    // not round-trip through the parser.
+                    let inner: Vec<String> = pinned_slots
+                        .iter()
+                        .map(|(name, kt)| format!("({}: {})", name, kt.name()))
+                        .collect();
+                    format!("(SIG_WITH {} ({}))", sig_path, inner.join(" "))
+                }
+            }
             KType::Signature => "Signature".into(),
             KType::Mu { binder, .. } => binder.clone(),
             KType::RecursiveRef(name) => name.clone(),

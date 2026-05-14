@@ -77,10 +77,10 @@ ordinary FNs whose parameters are signature-typed and whose body returns a
 `MODULE` expression:
 
 ```
-LET MakeSet = (FN (MAKESET E: OrderedSig) -> SetSig = (
+LET MakeSet = (FN (MAKESET Er: OrderedSig) -> SetSig = (
   MODULE Result = (
     (LET Type = ...)
-    (LET insert = (FN (INSERT s: Type x: E.Type) -> Type = ...))
+    (LET insert = (FN (INSERT s: Type x: Er.Type) -> Type = ...))
     ...
   )
 ))
@@ -99,11 +99,21 @@ slots. `(MAKESET IntOrd)` applied twice yields two distinct `Set` types
 that cannot be confused.
 Generativity is a consequence of `:|`-per-call, not a separate mechanism.
 
-Sharing constraints — pinning a functor's output abstract type to its input
-— ride on the named-slot syntax for parameterized type expressions described
-in [Parameterized type expressions](#parameterized-type-expressions). A
-functor whose return type is `SetSig<Elt: E.Type>` declares the constraint
-at the FN's return slot. There is no separate `with type` keyword.
+Sharing constraints — pinning a functor's output abstract type to a
+specific concrete type — ride on the `SIG_WITH` builtin described in
+[Type expressions and constraints](#type-expressions-and-constraints). A
+functor whose return type is `(SIG_WITH SetSig ((Elt: Number)))` declares
+the constraint at the FN's return slot; the body's `MODULE Result`
+must mirror `Elt = Number` for the return-type check to admit it. There
+is no separate `with type` keyword.
+
+Pin values are elaborated at FN-construction time and resolve against
+the FN's outer scope. Concrete builtins (`Number`, `Str`) and
+outer-scope-bound type values (`(MODULE_TYPE_OF Mo Type)` where `Mo` is
+bound outside the FN) both work as pin values. Threading a per-call FN
+parameter's abstract type through to a return-type pin is a separate
+extension — see
+[stage 2's open work](../roadmap/module-system-2-scheduler.md).
 
 Multi-argument functors are ordinary multi-parameter FNs. Currying is just
 nested FNs.
@@ -129,36 +139,44 @@ case and would be strictly less expressive than the operators that already
 exist.
 
 FN parameters and return types accept signature names directly. The
-constrained-signature case (`OrderedSig<Type: Number>`) uses the named-slot
-machinery in [Parameterized type expressions](#parameterized-type-expressions).
+constrained-signature case (`(SIG_WITH OrderedSig ((Type: Number)))`)
+uses the `SIG_WITH` builtin in
+[Type expressions and constraints](#type-expressions-and-constraints).
 
-## Parameterized type expressions
+## Type expressions and constraints
 
-The `<>` machinery shipped for `List<T>`, `Dict<K, V>`, and
-`Function<(args) -> R>` extends to carry sharing constraints, signature
-constraints on implicit-parameter types, and witness-typed instantiations.
-Three extensions to the shipped surface
-([type-system.md](type-system.md#container-type-parameterization)):
+The `<>` parameterization shipped for `List<T>`, `Dict<K, V>`, and
+`Function<(args) -> R>`
+([type-system.md](type-system.md#container-type-parameterization))
+covers positional structural types. Sharing constraints,
+modular-implicit signature constraints, and witness-typed
+instantiations ride on a separate **parens-form builtin family** that
+reuses the `name: value` triple shape FN parameters and STRUCT fields
+use. The two surfaces stay disjoint: `<>` for structural shapes whose
+slot semantics are positional, parens-form builtins for slot-named
+constraints.
 
-- **Named slots.** `OrderedSig<Type: Number>` pins the abstract `Type` slot
-  of a signature to `Number`. `Set<Elt: Number, Ord: IntOrd>` does the same
-  for a parameterized type constructor with multiple slots. Named binding
-  uses the same `name: value` shape FN parameters use, just inside `<>`.
-  Positional fill is accepted when slot order is unambiguous.
-- **Type-valued expressions.** `<>` slots accept any expression that
-  evaluates to a `KType` or `KModule`, not only bare type-name tokens.
-  `List<Mo.Type>` is an ATTR access yielding the abstract type of module
+- **`SIG_WITH`.** Pins abstract type slots of a signature to specific
+  concrete types. `(SIG_WITH OrderedSig ((Type: Number)))` is
+  `OrderedSig` with its `Type` slot pinned to `Number`;
+  `(SIG_WITH Set ((Elt: Number) (Ord: IntOrd)))` pins multiple slots in
+  one call. The inner parens groups are each one `name: value` triple,
+  matching the shape FN parameters parse.
+- **Type-valued slot values.** `SIG_WITH` slot values accept any
+  expression that evaluates to a `KType` or `KModule`, not only bare
+  type-name tokens. `(SIG_WITH MySig ((Elt: (MODULE_TYPE_OF Mo Type))))`
+  works because `MODULE_TYPE_OF` returns the abstract type of module
   `Mo`. The slot's declared kind decides what the engine expects.
 - **Module-kind slots.** Type constructors can declare slots that take
-  modules. `Set<Elt: Number, Ord: IntOrd>` works because `Set`'s second
-  slot is declared `OrderedSig`-kind. Distinct module values bound to the
-  same slot give distinct concrete types — the mechanism behind witness
-  types in stage 7.
+  modules. `(SIG_WITH Set ((Elt: Number) (Ord: IntOrd)))` works because
+  `Set`'s `Ord` slot is declared `OrderedSig`-kind. Distinct module
+  values bound to the same slot give distinct concrete types — the
+  mechanism behind witness types in stage 7.
 
-Sharing constraints, modular-implicit signature constraints, and witness
-types share this one notation. The implicit *marker* itself (which
-parameter is implicit) is orthogonal — see
-[Modular implicits](#modular-implicits).
+Sharing constraints, modular-implicit signature constraints, and
+witness-typed instantiations share this one builtin family. The
+implicit *marker* itself (which parameter is implicit) is orthogonal —
+see [Modular implicits](#modular-implicits).
 
 ## Modular implicits
 
@@ -169,8 +187,8 @@ LET sort = (FN (SORT xs: List<Mo.Type> {Mo: OrderedSig}) -> List<Mo.Type> = (...
 ```
 
 At a call site `(SORT [3, 1, 2])`, the compiler infers `Mo.Type = Number`,
-searches in scope for a module satisfying `OrderedSig<Type: Number>`, and
-inserts it. Searching is **lexical**: the candidate set is the implicit
+searches in scope for a module satisfying
+`(SIG_WITH OrderedSig ((Type: Number)))`, and inserts it. Searching is **lexical**: the candidate set is the implicit
 modules defined in the current module plus those explicitly imported.
 Nothing leaks through transitive dependencies.
 
@@ -188,9 +206,10 @@ strawman has been picked; examples below and in the
 read OCaml-shaped (`with type t = ...`, `module type ... = sig ... end`,
 `observation ... via ...`) are pre-Koan placeholders awaiting design.
 The constraint half — the signature expression to the right of `:` —
-uses the named-slot machinery described in
-[Parameterized type expressions](#parameterized-type-expressions). Sugar
-(block-scoped binding, module priority, selective imports) lands later,
+uses the `SIG_WITH` builtin described in
+[Type expressions and constraints](#type-expressions-and-constraints).
+Sugar (block-scoped binding, module priority, selective imports) lands
+later,
 after enough real code has been written to know which patterns are
 common. See
 [the syntax-tuning stage](../roadmap/module-system-7-syntax-tuning.md).

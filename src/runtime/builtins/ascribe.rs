@@ -140,7 +140,7 @@ fn shape_check<'a>(
 /// Goes through the [`Bindings`](crate::runtime::machine::core::Bindings) façade — no
 /// raw `RefCell` reach-around. Drops `types_guard` before acquiring `data_guard` to
 /// honor the `types → functions → data` borrow ordering.
-fn abstract_type_names_of<'a>(scope: &crate::runtime::machine::Scope<'a>) -> Vec<String> {
+pub(super) fn abstract_type_names_of<'a>(scope: &crate::runtime::machine::Scope<'a>) -> Vec<String> {
     let bindings = scope.bindings();
     let types_guard = bindings.types();
     let mut names: Vec<String> = types_guard.keys().cloned().collect();
@@ -157,7 +157,7 @@ fn abstract_type_names_of<'a>(scope: &crate::runtime::machine::Scope<'a>) -> Vec
 
 /// True iff `name` classifies as a Type token (first char uppercase + at least one
 /// lowercase elsewhere). See [design/type-system.md](../../../design/type-system.md#token-classes--the-parser-level-foundation).
-fn is_abstract_type_name(name: &str) -> bool {
+pub(super) fn is_abstract_type_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else { return false; };
     if !first.is_ascii_uppercase() {

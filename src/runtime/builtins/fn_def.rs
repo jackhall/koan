@@ -92,26 +92,33 @@ pub fn body<'a>(
     let mut elaborator = Elaborator::new(scope);
 
     // Step 1: elaborate the return type. Three outcomes — concrete `KType`, parking on
-    // producers (carries the original unresolved name so the Combine finish re-runs the
-    // leaf elaboration), or a structured error.
+    // producers (carries the surface form so the Combine finish re-runs elaboration), or
+    // a structured error. The `Pending` variant captures the full parser-preserved
+    // `TypeExpr` (not just the leaf name) so parameterized shapes like `List<MyT>`
+    // re-elaborate verbatim against the now-final scope; `name` is kept alongside for
+    // diagnostics on the leaf-only fallback (when the elaborator's `Unbound` arm fires
+    // and the legacy `KType::from_name` fast path needs the bare name).
     enum ReturnTypeState {
         Done(KType),
-        Pending(String, Vec<crate::runtime::machine::NodeId>),
+        Pending {
+            te: crate::ast::TypeExpr,
+            producers: Vec<crate::runtime::machine::NodeId>,
+        },
     }
     let return_type_state = match return_type_raw {
         ReturnTypeRaw::Resolved(kt) => ReturnTypeState::Done(kt),
-        // Bare-leaf carrier path: walk the scope-aware elaborator against the parser-
-        // preserved `TypeExpr`. The carrier's `name` survives bind regardless of
-        // resolution outcome — the surface form is what diagnostics render and what
-        // park-on-placeholder uses to wake later. Stage 2 keeps `ReturnTypeCapture`'s
-        // `Unresolved(String)` carrier; the parser-preserved `TypeExpr` could carry
-        // through if a future workload needs a parameterized user-typed return type,
-        // but FN's shipped patterns are all bare leaves.
+        // Bare-leaf or parameterized-shape carrier path: walk the scope-aware elaborator
+        // against the parser-preserved `TypeExpr`. The carrier's surface form survives
+        // bind regardless of resolution outcome — what diagnostics render and what
+        // park-on-placeholder uses to wake later. Both the leaf-name shape (`Point`,
+        // `IntOrd`) and the parameterized shape (`List<MyT>`, `Foo<Bar, Baz>`) ride this
+        // arm; the `Park`-arm preserves the full `TypeExpr` so the Combine finish
+        // re-elaborates with structure intact.
         ReturnTypeRaw::Carrier(te) => {
             let name = te.name.clone();
             match elaborate_type_expr(&mut elaborator, &te) {
                 ElabResult::Done(kt) => ReturnTypeState::Done(kt),
-                ElabResult::Park(producers) => ReturnTypeState::Pending(name, producers),
+                ElabResult::Park(producers) => ReturnTypeState::Pending { te, producers },
                 ElabResult::Unbound(_) => match KType::from_name(&name) {
                     Some(kt) => ReturnTypeState::Done(kt),
                     None => {
@@ -154,31 +161,49 @@ pub fn body<'a>(
                 body_expr,
             )
         }
-        (ReturnTypeState::Pending(name, producers), ParamListResult::Done(_)) => {
+        (ReturnTypeState::Pending { te, producers }, ParamListResult::Done(_)) => {
             // Param-types fully elaborated synchronously, but the return type parked. The
             // Combine finish re-runs both walks against the now-final scope for symmetry.
+            // Pick `Unresolved(name)` for the bare-leaf shape (`Point`, `IntOrd`) so the
+            // legacy `KType::from_name` fast path still applies; switch to `TypeExpr(te)`
+            // when the shape carries parameters so structure survives the boundary.
+            let capture = make_capture(te);
             defer_via_combine(
                 scope,
                 sched,
                 signature_expr,
-                ReturnTypeCapture::Unresolved(name),
+                capture,
                 producers,
                 Vec::new(),
                 body_expr,
             )
         }
-        (ReturnTypeState::Pending(name, rt_producers), ParamListResult::Pending { mut park_producers, sub_dispatches }) => {
+        (ReturnTypeState::Pending { te, producers: rt_producers }, ParamListResult::Pending { mut park_producers, sub_dispatches }) => {
             park_producers.extend(rt_producers);
+            let capture = make_capture(te);
             defer_via_combine(
                 scope,
                 sched,
                 signature_expr,
-                ReturnTypeCapture::Unresolved(name),
+                capture,
                 park_producers,
                 sub_dispatches,
                 body_expr,
             )
         }
+    }
+}
+
+/// Pick the right `ReturnTypeCapture` variant for a parked-during-construction
+/// `TypeExpr`. Bare leaves (`Point`, `IntOrd`) route through `Unresolved(name)` so the
+/// legacy `KType::from_name` fast path applies on the Combine wake. Parameterized
+/// shapes (`List<MyT>`, `Foo<Bar, Baz>`) route through `TypeExpr(te)` so the structured
+/// elaboration survives the boundary verbatim.
+fn make_capture(te: crate::ast::TypeExpr) -> ReturnTypeCapture {
+    use crate::ast::TypeParams;
+    match te.params {
+        TypeParams::None => ReturnTypeCapture::Unresolved(te.name),
+        TypeParams::List(_) | TypeParams::Function { .. } => ReturnTypeCapture::TypeExpr(te),
     }
 }
 
@@ -195,11 +220,26 @@ enum ParamListResult<'a> {
 
 /// Carrier for the return type across the Combine boundary. `Resolved` means we already
 /// have a concrete `KType` and the Combine finish skips re-elaboration; `Unresolved` means
-/// we parked on the leaf name and the finish runs `elaborate_type_expr` against the
-/// now-final scope.
+/// we parked on a bare leaf name and the finish runs `elaborate_type_expr` against the
+/// now-final scope. `TypeExpr` is the structured variant — used when the parser-preserved
+/// `TypeExpr` carries non-trivial parameter structure (`List<MyT>`, `Function<(A) -> B>`,
+/// `Foo<Bar, Baz>`) whose `TypeParams::List` / `TypeParams::Function` slots need to be
+/// preserved verbatim for re-elaboration against the now-final scope. Plumbing the full
+/// `TypeExpr` rather than just the leaf name keeps the `params` intact; rendering and
+/// re-parsing would round-trip through a string and strip the structure.
+///
+/// Parens-wrapped return-type expressions like `(SIG_WITH SetSig ((Elt: Number)))` do NOT
+/// route through this carrier. The dispatcher's eager-sub-dispatch path
+/// (`accepts_for_wrap` + `lazy_eager_indices`) resolves them at FN-construction time and
+/// splices the resulting `KTypeValue` into the FN bundle as a `Future(_)`; the FN body
+/// then extracts a concrete `KType` via the `Resolved` arm. The structured-`TypeExpr`
+/// carrier exists for parked-during-construction leaf-with-parameters shapes where the
+/// parser already produced a `TypeExpr` with non-`None` params and we need to wait on a
+/// type-binding placeholder before final elaboration.
 enum ReturnTypeCapture {
     Resolved(KType),
     Unresolved(String),
+    TypeExpr(crate::ast::TypeExpr),
 }
 
 /// Build the `KFunction` and register it in `scope`. Shared between the synchronous
@@ -334,6 +374,27 @@ fn defer_via_combine<'a>(
                         ))));
                     }
                 },
+            },
+            // Structured-TypeExpr capture: re-elaborate the full parser-preserved shape
+            // against the now-final scope. The Park arm is a protocol error (every parked
+            // producer is terminal by Combine-finish invariant); the Unbound arm fails the
+            // FN-def because the surface form references a name that didn't resolve
+            // anywhere reachable.
+            ReturnTypeCapture::TypeExpr(t) => match elaborate_type_expr(
+                &mut elaborator,
+                t,
+            ) {
+                ElabResult::Done(kt) => kt,
+                ElabResult::Park(_) => {
+                    return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                        "FN return type parked after Combine wake".to_string(),
+                    )));
+                }
+                ElabResult::Unbound(msg) => {
+                    return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                        "FN return-type slot: {msg}"
+                    ))));
+                }
             },
         };
         let elements = match signature::parse_fn_param_list(&spliced_signature, &mut elaborator) {

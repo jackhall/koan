@@ -45,6 +45,29 @@ impl KType {
             // are incomparable — they're disjoint slot types — so this predicate stays
             // `false` for that case by falling through to the wildcard.
             (SignatureBound { .. }, AnyUserType { kind: UserTypeKind::Module }) => true,
+            // Same-sig SignatureBound specificity by `pinned_slots`. A pin-extended form
+            // strictly refines a pin-reduced form when every slot in the reduced side's
+            // pin vec also appears (with equal `KType`) on the extended side. Disjoint
+            // constraint sets are incomparable; same-key-different-`KType` is a hard
+            // mismatch and likewise incomparable. Different `sig_id`s fall through to
+            // the wildcard `false`.
+            (
+                SignatureBound { sig_id: ia, pinned_slots: pa, .. },
+                SignatureBound { sig_id: ib, pinned_slots: pb, .. },
+            ) if ia == ib => {
+                // Strict refinement: `pa` must cover every `(name, kt)` in `pb`
+                // (equal `KType`) AND carry at least one constraint `pb` lacks.
+                if pa.len() <= pb.len() {
+                    return false;
+                }
+                for (name, expected) in pb.iter() {
+                    match pa.iter().find(|(n, _)| n == name) {
+                        Some((_, actual)) if actual == expected => {}
+                        _ => return false,
+                    }
+                }
+                true
+            }
             // A per-declaration `UserType { kind, .. }` strictly refines the wildcard
             // `AnyUserType { kind }` of the same kind. Different-kind pairs fall through
             // to the wildcard `false`, leaving them correctly incomparable. Two
@@ -88,9 +111,23 @@ impl KType {
             },
             // FN-return-type check: a FN declared `-> OrderedSig` whose body produces a
             // module that hasn't been ascribed to OrderedSig errors at the slot's Done arm.
-            // Mirror of `accepts_part`'s SignatureBound arm.
-            KType::SignatureBound { sig_id, .. } => match obj {
-                KObject::KModule(m, _) => m.compatible_sigs.borrow().contains(sig_id),
+            // Mirror of `accepts_part`'s SignatureBound arm. With non-empty `pinned_slots`,
+            // also require that each pinned slot exists in the module's `type_members` with
+            // the structurally-equal `KType` — sharing constraints reject mismatched
+            // ascriptions.
+            KType::SignatureBound { sig_id, pinned_slots, .. } => match obj {
+                KObject::KModule(m, _) => {
+                    if !m.compatible_sigs.borrow().contains(sig_id) {
+                        return false;
+                    }
+                    if pinned_slots.is_empty() {
+                        return true;
+                    }
+                    let tm = m.type_members.borrow();
+                    pinned_slots.iter().all(|(name, expected)| {
+                        tm.get(name).map(|actual| actual == expected).unwrap_or(false)
+                    })
+                }
                 _ => false,
             },
             // Wildcard kind check for user-declared types. Mirrors the `accepts_part`
@@ -202,10 +239,21 @@ impl KType {
             // through `:|` / `:!` first. Bare-name arguments are routed through value
             // lookup (LET-bound to a lowercase identifier) so they enter as Identifier
             // tokens which the auto-wrap pass converts to sub-Dispatches that resolve
-            // to the module value before re-entering this slot.
-            KType::SignatureBound { sig_id, .. } => match part {
+            // to the module value before re-entering this slot. When `pinned_slots` is
+            // non-empty, each pin must additionally match the module's `type_members`
+            // entry — mirror of the `matches_value` arm above.
+            KType::SignatureBound { sig_id, pinned_slots, .. } => match part {
                 ExpressionPart::Future(KObject::KModule(m, _)) => {
-                    m.compatible_sigs.borrow().contains(sig_id)
+                    if !m.compatible_sigs.borrow().contains(sig_id) {
+                        return false;
+                    }
+                    if pinned_slots.is_empty() {
+                        return true;
+                    }
+                    let tm = m.type_members.borrow();
+                    pinned_slots.iter().all(|(name, expected)| {
+                        tm.get(name).map(|actual| actual == expected).unwrap_or(false)
+                    })
                 }
                 _ => false,
             },
@@ -420,5 +468,68 @@ mod tests {
         // Different-kind pairs incomparable.
         assert!(!point.is_more_specific_than(&any_tagged));
         assert!(!any_tagged.is_more_specific_than(&point));
+    }
+
+    /// `SignatureBound { pinned_slots }` specificity rules:
+    /// - A non-empty `pinned_slots` strictly refines an empty same-`sig_id` form when
+    ///   every pin in the empty side appears (with equal `KType`) in the non-empty side.
+    /// - Different `sig_id`s are incomparable.
+    /// - Same `sig_id` with disjoint constraint keys is incomparable.
+    /// - Same-key-different-`KType` is incomparable.
+    /// - A `SignatureBound` (pinned or not) strictly refines `AnyUserType { kind: Module }`.
+    #[test]
+    fn is_more_specific_for_pinned_signature_bound() {
+        let bare = KType::SignatureBound {
+            sig_id: 1,
+            sig_path: "OrderedSig".into(),
+            pinned_slots: Vec::new(),
+        };
+        let pinned_number = KType::SignatureBound {
+            sig_id: 1,
+            sig_path: "OrderedSig".into(),
+            pinned_slots: vec![("Type".into(), KType::Number)],
+        };
+        let pinned_str = KType::SignatureBound {
+            sig_id: 1,
+            sig_path: "OrderedSig".into(),
+            pinned_slots: vec![("Type".into(), KType::Str)],
+        };
+        let pinned_two = KType::SignatureBound {
+            sig_id: 1,
+            sig_path: "OrderedSig".into(),
+            pinned_slots: vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
+        };
+        let other_sig = KType::SignatureBound {
+            sig_id: 2,
+            sig_path: "HashedSig".into(),
+            pinned_slots: vec![("Type".into(), KType::Number)],
+        };
+        let pinned_elt = KType::SignatureBound {
+            sig_id: 1,
+            sig_path: "OrderedSig".into(),
+            pinned_slots: vec![("Elt".into(), KType::Number)],
+        };
+        let any_module = KType::AnyUserType { kind: UserTypeKind::Module };
+
+        // Pinned strictly more specific than bare same-sig.
+        assert!(pinned_number.is_more_specific_than(&bare));
+        assert!(!bare.is_more_specific_than(&pinned_number));
+        // Two-pin extension of one-pin (covering pin) is strictly more specific.
+        assert!(pinned_two.is_more_specific_than(&pinned_number));
+        assert!(!pinned_number.is_more_specific_than(&pinned_two));
+        // Same key, different KType → incomparable.
+        assert!(!pinned_number.is_more_specific_than(&pinned_str));
+        assert!(!pinned_str.is_more_specific_than(&pinned_number));
+        // Disjoint constraint keys at same length → incomparable.
+        assert!(!pinned_number.is_more_specific_than(&pinned_elt));
+        assert!(!pinned_elt.is_more_specific_than(&pinned_number));
+        // Different sig_ids → incomparable on the pinned path; both still refine
+        // the AnyUserType { kind: Module } wildcard.
+        assert!(!pinned_number.is_more_specific_than(&other_sig));
+        assert!(!other_sig.is_more_specific_than(&pinned_number));
+        // Any SignatureBound (pinned or not) refines `AnyUserType { kind: Module }`.
+        assert!(bare.is_more_specific_than(&any_module));
+        assert!(pinned_number.is_more_specific_than(&any_module));
+        assert!(pinned_two.is_more_specific_than(&any_module));
     }
 }

@@ -163,6 +163,8 @@ fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
         KObject::KSignature(s) => Some(KType::SignatureBound {
             sig_id: s.sig_id(),
             sig_path: s.path.clone(),
+            // A bare SIG alias (`LET S2 = OrderedSig`) carries no sharing constraints.
+            pinned_slots: Vec::new(),
         }),
         KObject::StructType { name, scope_id, .. } => Some(KType::UserType {
             kind: UserTypeKind::Struct,

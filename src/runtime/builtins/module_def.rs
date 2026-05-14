@@ -85,6 +85,35 @@ pub fn body<'a>(
         let arena = parent_scope.arena;
         let module: &'a Module<'a> =
             arena.alloc_module(Module::new(name_for_finish.clone(), child_scope));
+        // Mirror the child scope's type-class bindings into the module's `type_members`
+        // table so abstract-type slots declared in the body surface to dispatch-time
+        // sharing-constraint checks. `LET Elt = Number` inside a MODULE body writes
+        // `bindings.types["Elt"] = KType::Number` *only* (the `register_type` path skips
+        // `data`); nominal sub-declarations like `MODULE Inner = ...` dual-write both
+        // `types` and `data` via `register_nominal`. The filter below picks only entries
+        // that LIVE on the type side without a value-side counterpart — those are the
+        // pure type-class bindings the module's surface treats as abstract-type members.
+        // Nominal sub-declarations stay value-only-from-ATTR's-perspective (ATTR's
+        // `type_members` lookup runs ahead of the `data` lookup, so a type_members
+        // entry would shadow the value-side `KModule` carrier on chained `Outer.Inner.x`
+        // access — that ordering breaks unless we exclude the dual-bound names here).
+        // Without this mirror the module's `type_members` stays empty and a FN-return-
+        // type `(SIG_WITH SetSig ((Elt: Number)))` pin can't admit the returned module.
+        // Opaque ascription overwrites the affected entries with freshly-minted
+        // `UserType { kind: Module, .. }` identities (see `ascribe.rs::body_opaque`);
+        // the body-side concrete values flow through unascribed and `:!` (transparent)
+        // paths.
+        {
+            let types_guard = child_scope.bindings().types();
+            let data_guard = child_scope.bindings().data();
+            let mut tm = module.type_members.borrow_mut();
+            for (k, v) in types_guard.iter() {
+                if data_guard.contains_key(k) {
+                    continue;
+                }
+                tm.insert(k.clone(), (**v).clone());
+            }
+        }
         let module_obj: &'a KObject<'a> =
             arena.alloc_object(KObject::KModule(module, active_frame.clone()));
         // Dual-write the module's per-declaration identity into `bindings.types`

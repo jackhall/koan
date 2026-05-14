@@ -125,7 +125,19 @@ applies the construction-time newtype-over-newtype collapse so
 via a new `AnyUserType { kind: Newtype { repr: Any } }` overload that
 reuses `body_struct`'s `access_field` dispatch — so `b.x` on `LET b:
 Boxed = Point(...)` reads the underlying struct's field without forcing
-every accessor to redo. The next signature revision after error handling lands
+every accessor to redo; and the module-system stage-2 sharing-constraint
+surface — the `SIG_WITH` builtin
+([`type_ops.rs::body_sig_with`](src/runtime/builtins/type_ops.rs)),
+[`KType::SignatureBound { pinned_slots }`](src/runtime/model/types/ktype.rs)
+carrying the pins through admissibility and specificity, FN return-type
+slots elaborating parens-wrapped `(SIG_WITH ...)` expressions via the
+existing eager-sub-dispatch rails (with a `ReturnTypeCapture::TypeExpr`
+carrier in [`fn_def.rs`](src/runtime/builtins/fn_def.rs) for the
+Combine-boundary case), and MODULE-body finalize mirroring
+`child_scope.bindings.types` into `Module::type_members`
+([`module_def.rs`](src/runtime/builtins/module_def.rs)) so a body-side
+`LET Elt = Number` admits the FN's declared
+`(SIG_WITH SetSig ((Elt: Number)))` pin. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -161,9 +173,9 @@ ascription, per-module type identity), and the remaining stages below land
 the rest incrementally, each producing a usable end state.
 
 - [Stage 2 — Module values and functors through the scheduler](roadmap/module-system-2-scheduler.md) —
-  higher-kinded type slots (`KType::TypeConstructor`), sharing constraints
-  (`<Type: E.Type>`), and the post-stage-1 Miri audit slate carry-forward.
-  Requires eager type elaboration.
+  higher-kinded type slots (a `Wrap` slot taking a type parameter) and the
+  post-stage-1 Miri audit slate carry-forward. The `SIG_WITH` sharing-
+  constraint surface has shipped. Requires eager type elaboration.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.

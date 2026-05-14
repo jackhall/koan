@@ -60,6 +60,8 @@ pub fn body<'a>(
         let identity = KType::SignatureBound {
             sig_id: sig.sig_id(),
             sig_path: name_for_finish.clone(),
+            // Unconstrained at the SIG-declaration site; `SIG_WITH` pins slots later.
+            pinned_slots: Vec::new(),
         };
         match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj) {
             Ok(obj) => BodyResult::Value(obj),

@@ -163,6 +163,32 @@ impl<'a> KFunction<'a> {
                         eager_indices.push(i);
                     }
                     (_, other) => {
+                        // Mirror `accepts_for_wrap`'s bare-name relaxation: a bare
+                        // Identifier or bare leaf-Type part in any slot whose declared
+                        // type isn't `Identifier` / `TypeExprRef` is auto-wrap-eligible.
+                        // The auto-wrap pass (`apply_auto_wrap`) rewrites the part into
+                        // a single-name sub-Dispatch that re-enters via the bare-name
+                        // short-circuit before late dispatch matches the lifted value.
+                        // Admitting the part here keeps the function's lazy candidacy
+                        // intact when a sibling `KExpression+Expression` slot is the
+                        // one driving laziness — without this, `SIG_WITH OrderedSig (...)`
+                        // would lose its lazy candidacy on the `sig: Signature` /
+                        // `Type(OrderedSig)` pairing and the `schedule_deps` None-arm
+                        // would sub-Dispatch the bindings group, defeating the lazy
+                        // contract for the `KExpression` slot.
+                        let is_bare_name = matches!(
+                            other,
+                            ExpressionPart::Identifier(_)
+                                | ExpressionPart::Type(crate::ast::TypeExpr {
+                                    params: crate::ast::TypeParams::None,
+                                    ..
+                                })
+                        );
+                        if is_bare_name
+                            && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
+                        {
+                            continue;
+                        }
                         if !arg.matches(other) {
                             return None;
                         }

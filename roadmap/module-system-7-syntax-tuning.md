@@ -19,7 +19,7 @@ breaks no existing programs.
   coherence checking can't silently pick.
 - *Deductive coherence as an opt-in.* Witness types reflect the implicit's
   identity as a module-kind slot on the type constructor (see
-  [design/module-system.md](../design/module-system.md#parameterized-type-expressions))
+  [design/module-system.md](../design/module-system.md#type-expressions-and-constraints))
   — distinct module values bound to that slot produce distinct types, and
   the type system enforces non-mixing. Users who want
   stronger-than-probabilistic certainty get it, at the cost of a slightly
@@ -37,13 +37,13 @@ breaks no existing programs.
   stage 7 fixes the form against the patterns of use. May coincide with
   the block-scoped binding form (block applies to many calls; explicit
   applies to one). Same deferral discipline as the sugar candidates above.
-- *Witness type encoding — decided per [design/module-system.md § Parameterized type expressions](../design/module-system.md#parameterized-type-expressions).*
+- *Witness type encoding — decided per [design/module-system.md § Type expressions and constraints](../design/module-system.md#type-expressions-and-constraints).*
   The type constructor declares a module-kind slot whose value carries
-  through type identity — `Set<Elt: Number>` becomes
-  `Set<Elt: Number, Ord: IntOrd>` when `IntOrd` is the implicit used.
-  Distinct module values means distinct types means cannot mix. Type
-  inference must elide the module-kind slot in source so users only write
-  it when they want.
+  through type identity — a `Set` with `Elt` pinned to `Number` becomes
+  `(SIG_WITH Set ((Elt: Number) (Ord: IntOrd)))` when `IntOrd` is the
+  implicit used. Distinct module values means distinct types means
+  cannot mix. Type inference must elide the module-kind slot in source
+  so users only write it when they want.
 - *Opt-in mechanism for witness types — decided in concept, syntax open.*
   Witness types are not the default. A signature marks itself as
   participating and consumers of that signature carry the phantom. The

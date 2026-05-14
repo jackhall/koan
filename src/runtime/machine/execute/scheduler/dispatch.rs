@@ -246,13 +246,27 @@ impl<'a> Scheduler<'a> {
         let mut subs: Vec<(usize, NodeId)> = Vec::new();
         match resolved.slots.eager_indices.as_deref() {
             Some(eager_indices) => {
+                // Lazy arm: sub-Dispatch the eager indices AND the wrap indices. The
+                // wrap indices have already been rewritten by `apply_auto_wrap` into
+                // `Expression([Type(name)])` / `Expression([Identifier(name)])` shapes,
+                // so they're equivalent in shape to eager Expression parts. Without
+                // sub-Dispatching them, an auto-wrapped slot would arrive at `bind` as
+                // a `KExpression` value and fail the slot's type check. Pre-`SIG_WITH`
+                // this gap was invisible because `lazy_eager_indices` rejected any
+                // function with auto-wrap-able bare-name slots; the relaxation in
+                // `lazy_eager_indices` is paired with this sub-Dispatch coverage.
+                let wrap_indices = &resolved.slots.wrap_indices;
                 for (i, part) in expr.parts.into_iter().enumerate() {
-                    if eager_indices.contains(&i) {
+                    if eager_indices.contains(&i) || wrap_indices.contains(&i) {
                         let inner = match part {
                             ExpressionPart::Expression(boxed) => *boxed,
-                            // `eager_indices` came from `KFunction::lazy_eager_indices`,
-                            // which only flags `Expression` parts.
-                            _ => unreachable!("eager_indices only flags Expression parts"),
+                            // Post-`apply_auto_wrap`, every `wrap_indices` slot is an
+                            // `Expression(_)`; pre-wrap-aware `eager_indices` also only
+                            // flags `Expression` parts. Anything else here is a
+                            // classification bug.
+                            _ => unreachable!(
+                                "eager_indices / wrap_indices only flag Expression parts post-auto-wrap",
+                            ),
                         };
                         let sub_id = self.add(NodeWork::Dispatch(inner), scope);
                         subs.push((i, sub_id));
