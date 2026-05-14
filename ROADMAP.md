@@ -129,11 +129,19 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 3 — `KType::UserType` and per-declaration identity](roadmap/type-identity-3-user-type-and-per-decl.md)
-  — collapses `KType::Struct`/`Tagged`/`ModuleType` into a unified
-  `KType::UserType { kind, scope_id, name }` carrier; SCC discovery via
-  lazy `Bindings::pending_types` dependency tracking so mutually recursive
-  STRUCT/UNION pairs elaborate without deadlocking.
+- [Type identity stage 3.0 — scaffolding for `KType::UserType`](roadmap/type-identity-3.0-scaffolding.md)
+  — adds the `UserType` / `AnyUserType` variants, identity fields on
+  value carriers, and predicate arms for the wildcard, all coexisting
+  with the old singletons so stage 3.1's collapse can flip atomically.
+- [Type identity stage 3.1 — atomic variant collapse and dual-write](roadmap/type-identity-3.1-variant-collapse.md)
+  — deletes `KType::Struct`/`Tagged`/`Module`/`ModuleType`; routes
+  STRUCT / UNION / MODULE / SIG finalize through
+  `Bindings::try_register_nominal`; deletes the `body_type_expr`
+  `scope.lookup` fall-through under the single-home invariant.
+- [Type identity stage 3.2 — SCC discovery and anonymous-UNION removal](roadmap/type-identity-3.2-scc-and-anon-union.md)
+  — wires `Bindings::pending_types` so mutually recursive STRUCT / UNION
+  pairs elaborate without deadlocking; deletes the anonymous `UNION (...)`
+  overload.
 - [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](roadmap/type-identity-4-newtype.md)
   — fresh nominal identity over a transparent representation; substrate
   for stage-4 axioms and stage-5 modular implicits.

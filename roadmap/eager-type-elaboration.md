@@ -12,7 +12,7 @@ TypeResolver` parameter on `KType::from_type_expr`), and the
 whose cell *is* the late-binding slot — see
 [design/type-system.md § Open work](../design/type-system.md#open-work))
 have landed. Mutual STRUCT / UNION recursion (SCC pre-registration) ships
-under [type identity stage 3](type-identity-3-user-type-and-per-decl.md).
+under [type identity stage 3.2](type-identity-3.2-scc-and-anon-union.md).
 This item now narrows to the two genuinely deferred questions the shipped
 work does not address: module-qualified type-name paths and non-SCC
 forward references.
@@ -24,13 +24,13 @@ land:
   `TypeExpr` carries a name string that can hold a path like
   `MyMod.Number`, but `KType` has no variant that preserves a
   multi-segment path. The `KType::UserType { kind: Module, scope_id,
-  name }` shape that lands with [stage
-  3](type-identity-3-user-type-and-per-decl.md) gives per-module
+  name }` shape that lands with
+  [stage 3.1](type-identity-3.1-variant-collapse.md) gives per-module
   abstract-type identity, but does not let a `MyMod.Number` surface-name
   flow as a typed value end-to-end.
 - *Non-SCC forward references in type aliases fail at bind time.* Eager
   elaboration means a type alias's RHS must resolve at bind time. Mutual
-  STRUCT / UNION recursion is covered by [stage 3](type-identity-3-user-type-and-per-decl.md)'s
+  STRUCT / UNION recursion is covered by [stage 3.2](type-identity-3.2-scc-and-anon-union.md)'s
   SCC discovery, but a top-level `LET Ty = Un` where `Un` is declared
   later in source (and not in a mutual SCC with `Ty`) still fails.
 

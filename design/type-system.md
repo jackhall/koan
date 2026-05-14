@@ -370,7 +370,7 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   plus the `KType::TypeExprRef` dispatch shape) stays unchanged.
   Every `KType` flowing through dispatch is fully elaborated — there is no
   surface-name carrier variant inside `KType` itself.
-- [Type identity stage 3 — `KType::UserType` and per-declaration identity](../roadmap/type-identity-3-user-type-and-per-decl.md)
+- [Type identity stage 3 — `KType::UserType` and per-declaration identity](../roadmap/type-identity-3.1-variant-collapse.md)
   — variant collapse, dual-write, SCC discovery via lazy
   `Bindings::pending_types` dependency tracking.
 - [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](../roadmap/type-identity-4-newtype.md)
