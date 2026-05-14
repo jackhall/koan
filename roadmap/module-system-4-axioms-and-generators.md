@@ -71,10 +71,6 @@ independent of signatures.
 - [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
   — generators thread randomness via the `Random` effect module rather than
   ambient entropy.
-- [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](type-identity-4-newtype.md)
-  — per-newtype axiom attachment keys on fresh nominal identity; without
-  NEWTYPE, axioms over distinct-but-same-repr types would have to attach
-  to single-field STRUCT wrappers.
 
 **Unblocks:**
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)

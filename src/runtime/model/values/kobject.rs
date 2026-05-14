@@ -102,7 +102,7 @@ pub enum KObject<'a> {
     /// Stage-4 NEWTYPE carrier. Tags a representation value with a NEWTYPE type identity.
     /// `inner` is the underlying representation value (arena-allocated, invariantly *not*
     /// a `Wrapped` — newtype-over-newtype is collapsed to a single layer at construction
-    /// time in `newtype_def::newtype_construct_primitive`). `type_id` is the
+    /// time in `newtype_def::newtype_construct`'s Combine finish). `type_id` is the
     /// `&'a KType::UserType { kind: Newtype, .. }` minted at NEWTYPE declaration time
     /// (the same arena reference `bindings.types[name]` holds).
     ///

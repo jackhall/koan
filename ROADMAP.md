@@ -102,7 +102,21 @@ SCC registry that closes mutually recursive STRUCT / named-UNION cycles by
 pre-installing every member's identity into `bindings.types` so each
 finalize hits `try_register_nominal`'s idempotent arm — with the
 anonymous `UNION (...)` overload deleted so every tagged value carries a
-real per-declaration identity. The next signature revision after error handling lands
+real per-declaration identity; and the type-identity stage 4 `NEWTYPE`
+keyword and [`KObject::Wrapped`](src/runtime/model/values/kobject.rs)
+carrier — `NEWTYPE Distance = Number` mints a fresh nominal identity
+([`KType::UserType { kind: Newtype { repr }, scope_id, name }`](src/runtime/model/types/ktype.rs))
+over a transparent representation, `Distance(3.0)` constructs through
+[`type_call`'s `Newtype` arm](src/runtime/builtins/type_call.rs) into
+[`newtype_def::newtype_construct`](src/runtime/builtins/newtype_def.rs)
+(an `add_dispatch` + `Combine` pair that type-checks against `repr` and
+applies the construction-time newtype-over-newtype collapse so
+`Wrapped.inner` is invariantly non-`Wrapped`), and ATTR over a
+`Wrapped` carrier [falls through to `inner`](src/runtime/builtins/attr.rs)
+via a new `AnyUserType { kind: Newtype { repr: Any } }` overload that
+reuses `body_struct`'s `access_field` dispatch — so `b.x` on `LET b:
+Boxed = Point(...)` reads the underlying struct's field without forcing
+every accessor to redo. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -157,9 +171,6 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](roadmap/type-identity-4-newtype.md)
-  — fresh nominal identity over a transparent representation; substrate
-  for stage-4 axioms and stage-5 modular implicits.
 - [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
   — module-qualified type-name paths and non-SCC forward references remain
   deferred pending concrete use cases.

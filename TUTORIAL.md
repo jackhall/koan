@@ -366,6 +366,75 @@ LET wat = (5).x
 # error: type mismatch for argument 's': expected Struct, got Number
 ```
 
+## Newtypes
+
+`NEWTYPE` declares a fresh nominal type identity over a transparent
+representation. Unlike `STRUCT`, which mints a new identity *and* a new
+field-based shape, `NEWTYPE Distance = Number` says "a `Distance` is
+represented as a `Number`, but the two are distinct types at dispatch":
+
+```
+NEWTYPE Distance = Number
+NEWTYPE Duration = Number
+```
+
+Construct a value by calling the type with its representation:
+
+```
+LET d = (Distance 3.0)
+LET t = (Duration 3.0)
+```
+
+Even though both carry the same `Number` underneath, they're observably
+distinct at dispatch — a slot typed `Number` rejects a `Distance`, and a
+slot typed `Distance` rejects a raw `Number`:
+
+```
+FN (KM_FROM x: Number)   -> Str = ("got Number")
+FN (KM_FROM x: Distance) -> Str = ("got Distance")
+
+KM_FROM 3.0        # → "got Number"   (raw Number; Distance slot rejects)
+KM_FROM d          # → "got Distance" (Distance value; Number slot rejects)
+```
+
+This is what `STRUCT` can't give you ergonomically: pairs like
+(`UserId`, `PostId`) or (`Distance`, `Duration`) that share a representation
+but mean different things, without wrapping each in a single-field record.
+
+The representation can be any type, including another struct:
+
+```
+STRUCT Point = (x: Number, y: Number)
+NEWTYPE Boxed = Point
+
+LET p = (Point (x: 1, y: 2))
+LET b = (Boxed p)
+```
+
+Field access *falls through* the wrapper for struct representations, so
+you can read fields off a `Boxed` value as if it were a `Point`:
+
+```
+LET bx = b.x        # 1
+LET by = b.y        # 2
+```
+
+Missing-field errors name the inner struct, not the newtype — the
+fall-through is transparent at the diagnostic level too:
+
+```
+LET bogus = b.z
+# error: shape error: struct `Point` has no field `z`
+```
+
+Newtype-over-newtype is collapsed to a single layer at construction time —
+no matter how many levels of NEWTYPE wrap a value, the inner representation
+sits exactly one wrapper deep. `Distance("hi")` (a non-`Number` value for a
+`Number`-repr NEWTYPE) fails at construction with `KErrorKind::TypeMismatch`.
+
+The wildcard slot type for "any newtype" is not yet a writable surface name
+— it's reserved for when a builtin signature surfaces the need.
+
 ## Quoting and evaluating expressions
 
 Two prefix sigils give you surface control over when an expression evaluates.
@@ -459,6 +528,7 @@ One line per surface form. Sources under
 | `FN <sig> -> <Type> = <body>`                         | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/runtime/builtins/fn_def.rs)          |
 | `UNION <Name> = (<schema>)`                           | Declare a tagged-union type. Binds `<Name>` in scope.                                            | [union.rs](src/runtime/builtins/union.rs)                    |
 | `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/runtime/builtins/struct_def.rs)          |
+| `NEWTYPE <Name> = <Repr>`                             | Declare a fresh nominal identity over a transparent representation. `Name(value)` constructs.    | [newtype_def.rs](src/runtime/builtins/newtype_def.rs)        |
 | `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/runtime/builtins/match_case.rs)          |
 | `<verb:TypeExprRef> (<args>)`                         | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/runtime/builtins/type_call.rs)            |
 | `<verb:Identifier> (<args>)`                          | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/runtime/builtins/call_by_name.rs)      |

@@ -154,6 +154,7 @@ src/
     │   ├── type_ops.rs            LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF
     │   ├── union.rs
     │   ├── struct_def.rs
+    │   ├── newtype_def.rs         NEWTYPE
     │   ├── module_def.rs          MODULE
     │   ├── sig_def.rs             SIG
     │   ├── ascribe.rs             :| / :! module ascription

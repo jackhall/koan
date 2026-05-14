@@ -295,10 +295,7 @@ with per-declaration scope-tagged identity, and adds the `NEWTYPE` keyword
 for fresh nominal identity over a transparent representation. The binding
 home splits into two maps (`data` for values, `types` for type names), with
 token-kind-driven lookup at the resolver — Type-class tokens consult
-`types`, identifier tokens consult `data`. Stages 1, 2, and 3 (3.0
-scaffolding plus 3.1 variant collapse and dual-write) have shipped; stage
-3.2's SCC discovery / anonymous-UNION removal and stage 4's `NEWTYPE`
-keyword are still to come.
+`types`, identifier tokens consult `data`. All four stages have shipped.
 
 - Type identity stage 1 — foundation: dual-map binding home,
   `Scope::resolve_type`, dispatch routing by token kind, bind-time
@@ -386,8 +383,11 @@ keyword are still to come.
   Every `KType` flowing through dispatch is fully elaborated — there is no
   surface-name carrier variant inside `KType` itself.
 - Type identity stage 3 — per-declaration `KType::UserType` carrier and
-  dual-write. [`enum UserTypeKind { Struct, Tagged, Module }`](../src/runtime/model/types/ktype.rs)
-  with a `surface_keyword()` accessor,
+  dual-write. [`enum UserTypeKind { Struct, Tagged, Module, Newtype { repr } }`](../src/runtime/model/types/ktype.rs)
+  with a `surface_keyword()` accessor (the `Newtype` variant lands with
+  stage 4 below; its `repr` is variant-internal and a manual
+  `UserTypeKind::PartialEq` ignores it so wildcard / identity comparisons
+  key on kind and `(scope_id, name)` only),
   [`KType::UserType { kind, scope_id, name }`](../src/runtime/model/types/ktype.rs)
   (per-declaration identity tag), and
   [`KType::AnyUserType { kind }`](../src/runtime/model/types/ktype.rs)
@@ -450,9 +450,46 @@ keyword are still to come.
   `pending_types` (its body parks on the outer scheduler's sibling
   dispatch deps, not on type-name resolution); the idempotent guard
   still lives in MODULE finalize for symmetry.
-- [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](../roadmap/type-identity-4-newtype.md)
-  — fresh nominal identity substrate for stage-4 axioms and stage-5
-  modular implicits.
+- Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier.
+  `NEWTYPE Distance = Number` declares a fresh nominal identity over a
+  transparent representation: declaration mints a per-declaration
+  [`KType::UserType { kind: UserTypeKind::Newtype { repr: Box<KType> }, scope_id, name }`](../src/runtime/model/types/ktype.rs)
+  and writes only `bindings.types` — unlike STRUCT / UNION / MODULE, NEWTYPE
+  has no value-side schema carrier (no payload to bind at the declaration
+  site). Construction (`Distance(3.0)`, `Bar(Foo(3.0))`) flows through
+  `type_call`'s `Newtype` arm into
+  [`newtype_def::newtype_construct`](../src/runtime/builtins/newtype_def.rs),
+  which schedules the value sub-expression via `add_dispatch` and waits on
+  it via a `Combine` whose finish closure type-checks against `repr` and
+  produces a
+  [`KObject::Wrapped { inner: &'a KObject, type_id: &'a KType }`](../src/runtime/model/values/kobject.rs)
+  carrier. Newtype-over-newtype collapse is pinned in the finish closure:
+  `Wrapped.inner` is invariantly non-`Wrapped`, so `Bar(some_foo)` peels
+  `some_foo.inner` and rewraps with `Bar`'s `type_id` — at most one layer
+  of wrapping at any point. The construction path is driven from
+  `type_call::body` (which now resolves the verb through `scope.resolve_type`
+  first and branches on the resolved `kind`) rather than a second registered
+  builtin: a sibling primitive would share `type_call`'s `[TypeExprRef, …]`
+  signature bucket and re-dispatch infinitely. ATTR over a `KObject::Wrapped`
+  falls through to `inner` via [`access_field`'s `Wrapped`
+  arm](../src/runtime/builtins/attr.rs): a new ATTR overload typed
+  `AnyUserType { kind: Newtype { repr: Box::new(Any) } }` reuses
+  `body_struct` because the lhs-shape dispatch lives inside `access_field`;
+  the recursion descends exactly one level by the collapse invariant. The
+  ATTR overload's slot is disjoint from the Struct / Module slots (the
+  manual `UserTypeKind::PartialEq` discriminates by kind), so dispatch picks
+  without a specificity tiebreaker. Missing-field diagnostics name the inner
+  struct (`b: Boxed = Point; b.z` reports `struct Point has no field z`) —
+  the fall-through is transparent at the diagnostic level too. Stage-4
+  routing inside `ktype_predicates` reuses the same `UserType` /
+  `AnyUserType { kind: K }` / `Any` specificity stratification stage 3
+  established, so `Newtype` ranks alongside `Struct` / `Tagged` / `Module`
+  with no per-kind branching at the dispatcher. The wildcard surface name
+  `Newtype` is intentionally *not* registered in
+  [`KType::from_name`](../src/runtime/model/types/ktype_resolution.rs) —
+  it's reserved as the writable form once a builtin signature surfaces the
+  need; today it appears only synthesized inside ATTR's `AnyUserType { kind:
+  Newtype { repr: Any } }` slot.
 - [Eager type elaboration with placeholder-based recursion](../roadmap/eager-type-elaboration.md)
   — module-qualified type-name paths and non-SCC forward references remain
   deferred pending concrete use cases.
