@@ -47,15 +47,33 @@ shape.
   triple shape, not a `<>` named-slot extension. Resolution of the
   slot's right-hand side rides on the shipped scheduler-driven type
   elaborator.
-- *Per-call FN-parameter references in pin values — open.* The shipped
-  pin path elaborates values at FN-construction time against the FN's
-  outer scope, so `(SIG_WITH SetSig ((Elt: (MODULE_TYPE_OF Er Type))))`
-  for a per-call parameter `Er` parks on a name not yet bound. Closing
-  this requires either templated return types (storing the unresolved
-  `TypeExpr` on the function and substituting parameter values at call
-  time before lifting) or extending the `substitute_params` walk to
-  cover the return-type slot. Recommended: the templated-return path,
-  symmetric with how parameter-typed slots already flow.
+- *Per-call FN-parameter references in pin values — decided.* The pin
+  path stores the unresolved `TypeExpr` on the function at construction
+  time. At each call's **dispatch boundary** (after parameters bind,
+  before the body runs), `substitute_params` rewrites parameter-name
+  identifiers in the captured expression and the substituted expression
+  is scheduled as a sub-Dispatch. The outer Combine joins body and
+  return-type elaboration for the slot check. Dispatch-boundary
+  elaboration — rather than waiting until the body returns — keeps
+  sharing-constraint pins meaningful as call-site contracts,
+  parallelizes return-type work with body work, and parallels how
+  parameter-typed slots already flow.
+  `(SIG_WITH SetSig ((Elt: (MODULE_TYPE_OF Er Type))))` therefore
+  resolves at dispatch, riding the same scheduler machinery as any other
+  type expression. This implements the surface "modules-as-types"
+  presentation in
+  [design/module-system.md § Functors](../design/module-system.md#functors)
+  for the per-call case.
+- *Identifier-class names in type-position slots — decided.* Hard error.
+  The value-side `Scope::resolve` fall-through in the bare-leaf arm of
+  `elaborate_type_expr` (today gated for "the small set of callers that
+  still consult the value side", per
+  [design/type-system.md § Open work](../design/type-system.md#open-work))
+  is removed. Identifier-class names (`er`, `mo` — lowercase-first per
+  [design/type-system.md § Token classes](../design/type-system.md#token-classes--the-parser-level-foundation))
+  are value-language only; appearing in a type-position slot rejects at
+  elaboration. Diagnostic vocabulary is owned by
+  [error-handling](error-handling.md).
 - *Higher-kinded abstract type slots — decided.* Signatures declare
   type constructors (a `Wrap` slot taking a type parameter) so monads
   and other parametric abstractions are expressible. Required by

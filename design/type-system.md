@@ -307,6 +307,17 @@ type identity via `KType::UserType { kind: Module, .. }`) shipped and is
 described in the body above; the remaining stages live under
 [`roadmap/module-system-*.md`](../roadmap/module-system-2-scheduler.md).
 
+The bare-leaf arm of `elaborate_type_expr` today falls through to
+`Scope::resolve` on a `resolve_type` miss (see Type identity stage 1
+below — "for compatibility with the small set of callers that still
+consult the value side"). Hardening this fall-through into a hard error
+— identifier-class names in type-position slots reject rather than fall
+through to the value side — is part of
+[module system stage 2](../roadmap/module-system-2-scheduler.md), which
+also adds per-call FN-parameter substitution into return-type pins.
+Together these implement the surface "modules-as-types" presentation
+described in [module-system.md § Functors](module-system.md#functors).
+
 The four-stage type-identity arc routes bare-leaf type names through a
 `KObject`-side carrier rather than a placeholder variant inside the
 elaborated type language, unifies STRUCT / UNION / MODULE / opaque-ascription

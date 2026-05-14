@@ -43,6 +43,16 @@ function raise."
   continues to propagate. A catch arm may construct a user-error value and
   reraise — the only mechanism by which a builtin error is lifted into the
   type system.
+- *"Type-language binder expected" diagnostic vocabulary — open.* Module
+  system stage 2 rejects identifier-class names in type-position slots
+  (see
+  [module-system-2-scheduler § Identifier-class names in type-position slots](module-system-2-scheduler.md)).
+  The diagnostic needs vocabulary that names the surface "modules-as-types"
+  layering (per
+  [design/module-system.md § Functors](../design/module-system.md#functors))
+  without leaking scheduler internals. Pick wording — candidates: "type-
+  language binder expected", "name is value-language only", or similar —
+  with a hint pointing at the Type-class spelling convention.
 
 The remaining items are scoped sub-tasks for implementation rather than
 design choices:

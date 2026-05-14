@@ -72,9 +72,27 @@ newtype-with-private-fields pattern that a trait system would need.
 ## Functors
 
 A **functor** is a module parameterized by another module — a function from
-modules to modules. Since modules are first-class values, functors are
-ordinary FNs whose parameters are signature-typed and whose body returns a
-`MODULE` expression:
+modules to modules. Koan presents this with two layered semantics:
+
+- *Surface semantics* — modules are part of the **type language**. A
+  signature-typed FN parameter (`Er: OrderedSig`) is a type-language
+  binder, like an OCaml functor's parameter. `Er.Type` in a type-position
+  slot is type-language projection — extracting the module's abstract
+  type. Identifier-class names (`er`, `mo` — lowercase-first per
+  [type-system.md](type-system.md#token-classes--the-parser-level-foundation))
+  are value-language only and a hard error in any type-position slot.
+- *Machine semantics* — modules are **first-class values**.
+  `KObject::KModule` flows through the scheduler like any other value;
+  functors are ordinary FNs whose parameters are signature-typed and whose
+  body returns a `MODULE` expression.
+
+The two readings rest on the same scheduler — there is no separate
+type-checking pass, no parallel module language. The elaborator's
+token-class-driven lookup is the seam: Type-class names in type-position
+slots consult the type-language binders; identifier-class names do not.
+The example below illustrates both readings — the surface reads `Er` as a
+type-language binder, the machine sees a value parameter whose value is a
+module:
 
 ```
 LET MakeSet = (FN (MAKESET Er: OrderedSig) -> SetSig = (
@@ -98,6 +116,9 @@ and any inner `:|` mints fresh `KType::UserType { kind: Module, .. }`
 slots. `(MAKESET IntOrd)` applied twice yields two distinct `Set` types
 that cannot be confused.
 Generativity is a consequence of `:|`-per-call, not a separate mechanism.
+The applicative variant — same-functor-applied-to-same-module producing the
+same output types, so independent call sites resolving to the same implicit
+module interoperate — is open work; see [Open work](#open-work).
 
 Sharing constraints — pinning a functor's output abstract type to a
 specific concrete type — ride on the `SIG_WITH` builtin described in
@@ -107,13 +128,25 @@ the constraint at the FN's return slot; the body's `MODULE Result`
 must mirror `Elt = Number` for the return-type check to admit it. There
 is no separate `with type` keyword.
 
-Pin values are elaborated at FN-construction time and resolve against
-the FN's outer scope. Concrete builtins (`Number`, `Str`) and
+Pin values that reference only the FN's outer scope are elaborated at
+FN-construction time. Concrete builtins (`Number`, `Str`) and
 outer-scope-bound type values (`(MODULE_TYPE_OF Mo Type)` where `Mo` is
-bound outside the FN) both work as pin values. Threading a per-call FN
-parameter's abstract type through to a return-type pin is a separate
-extension — see
-[stage 2's open work](../roadmap/module-system-2-scheduler.md).
+bound outside the FN) both work as pin values resolved eagerly.
+
+Pin values that reference a per-call FN parameter
+(`(MODULE_TYPE_OF Er Type)` for an `Er` declared on the FN itself) are
+*templated*: the unresolved `TypeExpr` is captured on the FN at
+construction time. At each call's **dispatch boundary** — after
+parameters bind, before the body runs — `substitute_params` rewrites the
+parameter name in the captured expression and the substituted expression
+is scheduled as a sub-Dispatch. The result is the call's concrete
+return-type `KType`, known before the body produces its first value;
+body and return-type elaboration proceed concurrently and join at the
+outer Combine for the slot check. Elaborating the return at the dispatch
+boundary — rather than waiting until the body returns — keeps
+sharing-constraint pins meaningful as call-site contracts, parallelizes
+return-type work with body work, and parallels how parameter-typed slots
+already flow.
 
 Multi-argument functors are ordinary multi-parameter FNs. Currying is just
 nested FNs.
@@ -492,3 +525,11 @@ obligation for the type checker is part of stage 2.)
 - [Stage 7 — Syntax tuning and witness types](../roadmap/module-system-7-syntax-tuning.md)
   — disambiguation sugar designed against patterns from real stage-5 code,
   plus opt-in witness types for stronger-than-probabilistic coherence.
+- [Standard library](../roadmap/standard-library.md) — collections built
+  as functor FNs over their element/key types. Parks the **applicative
+  functor semantics** open question: today's `FN`-based functor surface
+  is generative-only, so independent call sites resolving (via stage 5
+  implicit search) to the same module still mint distinct output types
+  and can't interoperate. Landing form: a separate `FUNCTOR` binder
+  reusing FN mechanics, distinguished at the surface so the
+  generative/applicative choice is visible at the declaration.

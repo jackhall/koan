@@ -49,6 +49,18 @@ doesn't exist yet.
   builtin (e.g., the existing dictionary builtin if Set/Map cover its
   uses), the builtin gets removed in the same change rather than left as
   a parallel surface.
+- *Applicative functor semantics via `FUNCTOR` binder — open.* Stage 5's
+  implicit resolution makes independent `(MakeSet)` call sites resolve
+  to the same `IntOrd` without users seeing it; under the shipped
+  generative-only semantics (per
+  [design/module-system.md § Functors](../design/module-system.md#functors)),
+  two such applications mint distinct Set types and the resulting sets
+  cannot interoperate. Applicative semantics — same-functor-applied-to-
+  same-module produces equal types — closes this. Landing form: a new
+  `FUNCTOR` binder reusing FN mechanics, distinguished from `FN` at the
+  surface so the generative/applicative choice is visible at the
+  declaration. The memoization scheme (argument-identity hashing vs.
+  structural equality on argument values) is part of this item.
 
 ## Dependencies
 
