@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::model::types::Parseable;
+use crate::runtime::model::KType;
 use crate::ast::KExpression;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
@@ -30,6 +31,9 @@ pub enum KErrorKind {
     Rebind { name: String },
     /// Distinct from `Rebind` — collision is per-signature within the same name's bucket.
     DuplicateOverload { name: String, signature: String },
+    /// LET on a Type-class binder with a non-type RHS — caught at bind time
+    /// rather than at downstream elaboration. Pairs with stage 1.7's routing flip.
+    TypeClassBindingExpectsType { name: String, got: KType },
 }
 
 /// One entry in an error's call-stack trace. Both fields are `summarize()` text because
@@ -106,6 +110,11 @@ impl fmt::Display for KErrorKind {
             KErrorKind::DuplicateOverload { name, signature } => write!(
                 f,
                 "function '{name}' already has an overload with signature {signature}",
+            ),
+            KErrorKind::TypeClassBindingExpectsType { name, got } => write!(
+                f,
+                "type-class binding `{name}` expects a type value, got `{}`",
+                got.name(),
             ),
         }
     }

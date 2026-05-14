@@ -31,6 +31,8 @@ with these `KErrorKind` variants:
 - `DispatchFailed` — no function matched.
 - `ShapeError` — list/dict shape didn't fit (e.g., index out of bounds).
 - `ParseError` — produced by the parser, propagated through the same channel.
+- `TypeClassBindingExpectsType` — `LET <Type-class> = <non-type>` rejected at
+  bind time rather than at downstream elaboration.
 - `User` — landing pad for user-side error construction; see open work.
 
 ## Propagation

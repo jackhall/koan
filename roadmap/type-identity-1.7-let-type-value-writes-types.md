@@ -32,12 +32,12 @@ migration must ship in the same PR.
 
 - *LET routing — decided.* In the LET `TypeExprRef`-LHS overload at
   [`let_binding.rs`](../src/runtime/builtins/let_binding.rs): when the
-  RHS is type-valued (passes the [stage 1.6](type-identity-1.6-let-typeclass-bind-error.md)
-  check), unwrap the inner `KType` and call `scope.register_type(name,
-  kt)` instead of `scope.bind_value(name, allocated_object)`. The
-  `BodyResult::Value` return still hands back a `KObject::KTypeValue`
-  for dispatch transport — the storage move changes where the binding
-  lives, not the dispatch carrier shape.
+  RHS is type-valued (passes the shipped `TypeClassBindingExpectsType`
+  primitive/container blocklist), unwrap the inner `KType` and call
+  `scope.register_type(name, kt)` instead of `scope.bind_value(name,
+  allocated_object)`. The `BodyResult::Value` return still hands back
+  a `KObject::KTypeValue` for dispatch transport — the storage move
+  changes where the binding lives, not the dispatch carrier shape.
 
 - *Ascribe both-map scan — decided.* Shared helper
   `abstract_type_names_of(scope: &Scope) -> Vec<String>` that walks both
@@ -69,10 +69,7 @@ migration must ship in the same PR.
 
 ## Dependencies
 
-**Requires:**
-
-- [Stage 1.6 — `TypeClassBindingExpectsType` bind-time error](type-identity-1.6-let-typeclass-bind-error.md)
-  — the routing change runs only when 1.6's check passes.
+**Requires:** none — stage 1.6's bind-time check has shipped.
 
 **Unblocks:**
 

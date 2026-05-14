@@ -32,7 +32,31 @@ pub fn body<'a>(
                     t.render(),
                 ))));
             }
-            _ => t.name(),
+            _ => {
+                // Bind-time rejection for `LET <Type-class> = <non-type>`. Blocklist —
+                // not `value.ktype() != KType::TypeExprRef` — because the type-language
+                // carriers `KModule` / `KSignature` / `StructType` / `TaggedUnionType`
+                // report `Module` / `Signature` / `Type`, not `TypeExprRef`, and shipped
+                // `LET IntOrdAbstract = (IntOrd :| OrderedSig)` patterns in `ascribe.rs`
+                // depend on those being accepted. Stage 1.7's storage-routing flip will
+                // subsume this once type-language carriers move to `bindings.types`.
+                let resolved_name = t.name();
+                let value = match bundle.get("value") {
+                    Some(v) => v,
+                    None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
+                };
+                if matches!(
+                    value.ktype(),
+                    KType::Number | KType::Str | KType::Bool | KType::Null
+                        | KType::List(_) | KType::Dict(_, _)
+                ) {
+                    return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
+                        name: resolved_name,
+                        got: value.ktype(),
+                    }));
+                }
+                resolved_name
+            }
         },
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
@@ -220,5 +244,150 @@ mod tests {
         let data = scope.bindings().data();
         let entry = data.get("x").expect("expected binding 'x'");
         assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
+    }
+
+    /// Stage 1.6: `LET Foo = 1` — Type-class LHS with a non-type RHS. The bind-time
+    /// check fires before the value reaches storage, producing a structured
+    /// `TypeClassBindingExpectsType` rather than the downstream `UnboundName` /
+    /// `ShapeError` the old "bind silently" path eventually surfaced.
+    #[test]
+    fn let_type_class_with_non_type_value_errors() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::machine::KErrorKind;
+        use crate::runtime::model::KType;
+        use crate::parse::parse;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let exprs = parse("LET Foo = 1").unwrap();
+        let mut ids = Vec::new();
+        for e in exprs {
+            ids.push(sched.add_dispatch(e, scope));
+        }
+        sched.execute().expect("execute does not surface per-slot errors");
+        let res = sched.read_result(ids[0]);
+        match res {
+            Err(e) => assert!(
+                matches!(
+                    &e.kind,
+                    KErrorKind::TypeClassBindingExpectsType { name, got }
+                        if name == "Foo" && matches!(got, KType::Number),
+                ),
+                "expected TypeClassBindingExpectsType {{ name: \"Foo\", got: Number }}, got {e}",
+            ),
+            Ok(v) => panic!("expected bind-time error, got value {:?}", v.ktype()),
+        }
+    }
+
+    /// Stage 1.6: `LET Foo = Number` — Type-class LHS with a type RHS. Storage stays
+    /// in `data` for now (stage 1.7 will flip routing to `bindings.types`). Regression
+    /// guard that the blocklist doesn't reject the good case.
+    #[test]
+    fn let_type_class_with_type_value_still_binds() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::model::KType;
+        use crate::parse::parse;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let exprs = parse("LET Foo = Number").unwrap();
+        let mut ids = Vec::new();
+        for e in exprs {
+            ids.push(sched.add_dispatch(e, scope));
+        }
+        sched.execute().expect("execute does not surface per-slot errors");
+        let res = sched.read_result(ids[0]);
+        assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
+        let data = scope.bindings().data();
+        let entry = data.get("Foo").expect("expected binding 'Foo'");
+        assert!(
+            matches!(entry, KObject::KTypeValue(t) if matches!(t, KType::Number)),
+            "expected KTypeValue(Number), got {:?}",
+            entry.ktype(),
+        );
+    }
+
+    /// Stage 1.6: `LET foo = 1` (lowercase, Identifier overload) is untouched by
+    /// the new check — it doesn't go through the `KTypeValue(_)` arm at all.
+    #[test]
+    fn let_identifier_lhs_with_non_type_still_binds() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::parse::parse;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let exprs = parse("LET foo = 1").unwrap();
+        let mut ids = Vec::new();
+        for e in exprs {
+            ids.push(sched.add_dispatch(e, scope));
+        }
+        sched.execute().expect("execute does not surface per-slot errors");
+        let res = sched.read_result(ids[0]);
+        assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
+        let data = scope.bindings().data();
+        let entry = data.get("foo").expect("expected binding 'foo'");
+        assert!(
+            matches!(entry, KObject::Number(n) if *n == 1.0),
+            "expected Number(1.0), got {:?}",
+            entry.ktype(),
+        );
+    }
+
+    /// Stage 1.6: `LET List<Number> = 1` — parameterized binder name is rejected by
+    /// the structural-shape check, which fires before the primitive blocklist.
+    /// Regression guard for ordering.
+    #[test]
+    fn let_parameterized_type_lhs_still_shape_errors() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::machine::KErrorKind;
+        use crate::parse::parse;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let exprs = parse("LET List<Number> = 1").unwrap();
+        let mut ids = Vec::new();
+        for e in exprs {
+            ids.push(sched.add_dispatch(e, scope));
+        }
+        sched.execute().expect("execute does not surface per-slot errors");
+        let res = sched.read_result(ids[0]);
+        match res {
+            Err(e) => assert!(
+                matches!(&e.kind, KErrorKind::ShapeError(_)),
+                "expected ShapeError, got {e}",
+            ),
+            Ok(v) => panic!("expected shape error, got value {:?}", v.ktype()),
+        }
+    }
+
+    /// Stage 1.6: `LET Foo = "hello"` — confirms the blocklist covers `Str`, not just
+    /// `Number`. Same diagnostic shape as the Number case.
+    #[test]
+    fn let_type_class_with_string_value_errors() {
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::machine::KErrorKind;
+        use crate::runtime::model::KType;
+        use crate::parse::parse;
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let exprs = parse("LET Foo = \"hello\"").unwrap();
+        let mut ids = Vec::new();
+        for e in exprs {
+            ids.push(sched.add_dispatch(e, scope));
+        }
+        sched.execute().expect("execute does not surface per-slot errors");
+        let res = sched.read_result(ids[0]);
+        match res {
+            Err(e) => assert!(
+                matches!(
+                    &e.kind,
+                    KErrorKind::TypeClassBindingExpectsType { name, got }
+                        if name == "Foo" && matches!(got, KType::Str),
+                ),
+                "expected TypeClassBindingExpectsType {{ name: \"Foo\", got: Str }}, got {e}",
+            ),
+            Ok(v) => panic!("expected bind-time error, got value {:?}", v.ktype()),
+        }
     }
 }

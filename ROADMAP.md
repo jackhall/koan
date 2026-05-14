@@ -52,7 +52,10 @@ the
 [`Scope::register_type` rewire onto `bindings.types` plus the type-side `Scope::resolve_type` lookup API](src/runtime/machine/core/scope.rs),
 and the [stage-1.5 consumer migration](src/runtime/builtins/value_lookup.rs)
 that flips type-name reads onto `Scope::resolve_type` and deletes the
-transient `Scope::resolve` fallback) — builtin type names live in
+transient `Scope::resolve` fallback, plus the stage-1.6 bind-time diagnostic
+[`KErrorKind::TypeClassBindingExpectsType`](src/runtime/machine/core/kerror.rs)
+that rejects `LET <Type-class> = <non-type>` at the binder rather than at
+downstream elaboration) — builtin type names live in
 `bindings.types` as arena-allocated `&KType`, Type-token reads consult
 `Scope::resolve_type` first (with the sole `KObject::KTypeValue` synthesis
 site for dispatch transport now living in `value_lookup::body_type_expr`),
@@ -68,10 +71,6 @@ dispatch in stage 5, coherence in stage 6.
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Type identity stage 1.6 — `TypeClassBindingExpectsType` bind-time error](roadmap/type-identity-1.6-let-typeclass-bind-error.md)
-  — bind-time diagnostic for `LET Foo = 1` (Type-class LHS, non-type
-  RHS). Storage-neutral; can ship in parallel with the other stage 1
-  sub-items.
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
 - [Simplify `runtime::machine` and shrink AI context cost](roadmap/simplify-and-shrink-context.md)
