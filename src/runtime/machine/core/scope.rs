@@ -175,6 +175,38 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Synchronous identity install for the stage-3.2 SCC cycle-close sweep. Writes
+    /// `name` → `ktype` to [`Bindings::types`] via the same primitive
+    /// [`Self::register_type`] uses, but panics on borrow conflict instead of
+    /// deferring through the pending queue. Panics on `Rebind` too — a cycle
+    /// member's identity must not already be in `types` when cycle-close fires.
+    ///
+    /// Called by [`crate::runtime::model::types::resolver::close_type_cycle`] from
+    /// inside the elaborator's `Resolution::Placeholder` arm. At that call site no
+    /// outer `bindings` borrow is held (the placeholder lookup released its `Ref`
+    /// before returning), so a conflict here is a programming error. The
+    /// downstream finalize's
+    /// [`crate::runtime::machine::core::Bindings::try_register_nominal`] idempotent
+    /// arm picks up the carrier write against this pre-installed identity.
+    pub fn cycle_close_install_identity(
+        &self,
+        name: String,
+        ktype: crate::runtime::model::types::KType,
+    ) {
+        let kt_ref: &'a crate::runtime::model::types::KType = self.arena.alloc_ktype(ktype);
+        match self.bindings.try_register_type(&name, kt_ref) {
+            Ok(ApplyOutcome::Applied) => {}
+            Ok(ApplyOutcome::Conflict) => panic!(
+                "cycle_close_install_identity borrow conflict on `{name}` — cycle-close \
+                 runs from the elaborator with no outer types borrow held",
+            ),
+            Err(e) => panic!(
+                "cycle_close_install_identity Rebind for `{name}`: {e} — cycle member \
+                 identity should not already be in bindings.types",
+            ),
+        }
+    }
+
     /// Transactional dual-write for nominal declarations (STRUCT, named UNION, MODULE,
     /// SIG). Identity `kt` (a `KType::UserType` or `KType::SignatureBound`) is inserted
     /// into [`Bindings::types`] and the runtime carrier `obj` (`StructType`,

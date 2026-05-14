@@ -20,11 +20,12 @@
 //! it isn't re-exported beyond `core::` — the `Conflict` variant is an internal queueing
 //! signal, not part of any user-visible API.
 
-use std::cell::{Ref, RefCell};
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 
+use crate::ast::KExpression;
 use crate::runtime::machine::kfunction::{KFunction, NodeId};
-use crate::runtime::model::types::{KType, UntypedKey};
+use crate::runtime::model::types::{KType, UntypedKey, UserTypeKind};
 use crate::runtime::model::values::KObject;
 
 use super::kerror::{KError, KErrorKind};
@@ -57,21 +58,29 @@ pub struct Bindings<'a> {
     data: RefCell<HashMap<String, &'a KObject<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     placeholders: RefCell<HashMap<String, NodeId>>,
-    /// Stage 3.0d scaffolding: per-batch "pending types" registered by STRUCT / UNION /
-    /// MODULE before their bodies elaborate. Stage 3.2 wires the writer (the SCC pre-
-    /// registration pass that lets mutually recursive STRUCTs see each other's binders
-    /// during elaboration). 3.0 lands the field empty so 3.1's variant collapse and
-    /// 3.2's SCC discovery can each be a focused diff.
-    pending_types: RefCell<HashMap<String, PendingTypeEntry>>,
+    /// In-flight named-type binders (STRUCT / named-UNION) that have entered their
+    /// elaborator and may park on cross-references. Populated by struct_def / union
+    /// before elaboration; consulted by the elaborator's `Resolution::Placeholder`
+    /// arm to record dependency edges and run DFS cycle detection. Drained either by
+    /// the happy-path finalize or by `close_type_cycle` on cycle close. MODULE does
+    /// NOT participate — module bodies park on the outer scheduler, not on type-name
+    /// resolution inside elaboration (see roadmap stage 3.2).
+    pending_types: RefCell<HashMap<String, PendingTypeEntry<'a>>>,
 }
 
-/// Pending-type entry the stage-3.2 SCC pre-registration pass installs into
-/// `Bindings.pending_types`. Minimal in stage 3.0 — only the presence is observed by the
-/// type resolver to discover "a STRUCT named X is being declared right now, even though
-/// its `StructType` isn't bound yet." Stage 3.2 expands the payload with the SCC's
-/// participating names and the binder-to-placeholder mapping the elaborator needs to
-/// emit a `RecursiveRef` instead of parking.
-pub struct PendingTypeEntry;
+/// Per-binder state captured at the moment a STRUCT / named-UNION enters its
+/// elaborator. `schema_expr` is the unelaborated body the cycle-close sweep
+/// re-runs against the post-pre-registration scope; `kind` and `scope_id` are
+/// the identity fields the cycle-close writes into `bindings.types` as
+/// `KType::UserType { kind, scope_id, name }`; `edges` is the adjacency list
+/// the elaborator appends to each time this binder parks on a fellow in-flight
+/// binder's placeholder.
+pub struct PendingTypeEntry<'a> {
+    pub kind: UserTypeKind,
+    pub scope_id: usize,
+    pub schema_expr: KExpression<'a>,
+    pub edges: Vec<String>,
+}
 
 impl<'a> Bindings<'a> {
     pub fn new() -> Self {
@@ -111,11 +120,66 @@ impl<'a> Bindings<'a> {
         self.types.borrow()
     }
 
-    /// Read-only handle for the stage-3.2 SCC pre-registration map. No writer in stage
-    /// 3.0 — the field is always empty, and reads observe an empty map. Same
-    /// `Ref<'_, _>` semantics as [`Bindings::data`].
-    pub fn pending_types(&self) -> Ref<'_, HashMap<String, PendingTypeEntry>> {
+    /// Read-only handle for the SCC pre-registration map. Same `Ref<'_, _>` semantics
+    /// as [`Bindings::data`]. Stage-3.2 writers are [`Bindings::insert_pending_type`]
+    /// / [`Bindings::record_pending_edge`] / [`Bindings::remove_pending_type`] plus
+    /// the `RefMut` accessor [`Bindings::pending_types_mut`] for the cycle-close sweep.
+    pub fn pending_types(&self) -> Ref<'_, HashMap<String, PendingTypeEntry<'a>>> {
         self.pending_types.borrow()
+    }
+
+    /// Mutable handle for the cycle-close sweep — it removes every cycle member's
+    /// entry under one borrow before re-elaborating any schema. Callers at the
+    /// elaborator's `Resolution::Placeholder` arm should use the targeted
+    /// [`Bindings::record_pending_edge`] / [`Bindings::remove_pending_type`]
+    /// methods instead so that nested elaboration calls don't deadlock against a
+    /// held `RefMut`.
+    pub fn pending_types_mut(&self) -> RefMut<'_, HashMap<String, PendingTypeEntry<'a>>> {
+        self.pending_types.borrow_mut()
+    }
+
+    /// Install a new in-flight binder entry. Called by struct_def / union before
+    /// running the elaborator so the elaborator's placeholder arm can observe the
+    /// binder's `pending_types` presence and record cross-binder edges.
+    ///
+    /// Panics on borrow conflict — pending-type writes happen at body-entry, outside
+    /// the re-entrant `try_apply` hot path; a conflict here is a programming error.
+    /// Panics on duplicate name — same scope cannot have two in-flight binders for
+    /// one name (placeholders block the second dispatch from progressing this far).
+    pub fn insert_pending_type(&self, name: String, entry: PendingTypeEntry<'a>) {
+        let mut map = self.pending_types.borrow_mut();
+        if map.contains_key(&name) {
+            panic!(
+                "insert_pending_type: `{name}` already in flight — duplicate dispatch \
+                 reached body-entry, which the placeholder install should have blocked",
+            );
+        }
+        map.insert(name, entry);
+    }
+
+    /// Append `to` to `from`'s adjacency list (no-op if `from` isn't a pending binder —
+    /// the elaborator can be running under a non-binder context). Used by the
+    /// elaborator's `Resolution::Placeholder` arm when the parked-on name is itself
+    /// an in-flight binder.
+    ///
+    /// Panics on borrow conflict for the same reason as
+    /// [`Bindings::insert_pending_type`]; deduplicates against existing edges so a
+    /// re-elaboration that re-parks on the same name doesn't grow the list.
+    pub fn record_pending_edge(&self, from: &str, to: String) {
+        let mut map = self.pending_types.borrow_mut();
+        if let Some(entry) = map.get_mut(from) {
+            if !entry.edges.iter().any(|e| e == &to) {
+                entry.edges.push(to);
+            }
+        }
+    }
+
+    /// Remove and return `name`'s entry. The cycle-close sweep removes every cycle
+    /// member before re-elaborating, and the happy-path finalize removes the
+    /// just-finalized binder. Panics on borrow conflict (same rationale as
+    /// [`Bindings::insert_pending_type`]).
+    pub fn remove_pending_type(&self, name: &str) -> Option<PendingTypeEntry<'a>> {
+        self.pending_types.borrow_mut().remove(name)
     }
 
     /// LET-style value bind. Errors `Rebind` if `data[name]` already exists. When `obj`
@@ -175,16 +239,19 @@ impl<'a> Bindings<'a> {
     /// - Returns `Ok(Conflict)` if either `types` or `data` is borrowed elsewhere,
     ///   with no write attempted (mirrors [`Bindings::try_bind_value`] /
     ///   [`Bindings::try_register_function`] queueing).
-    /// - Returns `Err(Rebind)` if *either* `types[name]` or `data[name]` already
-    ///   exists. The pre-check runs before any insert, so a collision on either
-    ///   side leaves both maps untouched — no partial write to roll back.
-    /// - On success inserts into both maps, then best-effort clears any matching
-    ///   `placeholders[name]` (same tail as [`Bindings::try_apply`] /
-    ///   [`Bindings::try_apply_type`]).
-    ///
-    /// Unused at land time — stage 3 (`KType::UserType` and per-declaration
-    /// identity) migrates STRUCT / UNION / MODULE finalize paths onto this
-    /// primitive.
+    /// - Stage 3.2 *cycle-close-idempotent* path: if `types[name]` is already
+    ///   populated with a `KType` value-equal to the new `kt` AND `data[name]` is
+    ///   empty, write only the carrier. This is the post-SCC-pre-registration
+    ///   finalize path — the SCC sweep installs each cycle member's identity into
+    ///   `types` synchronously before any member's body / Combine-finish builds
+    ///   its carrier, so the eventual `register_nominal` call hits this arm with
+    ///   matching identity.
+    /// - Returns `Err(Rebind)` if `data[name]` already exists OR `types[name]`
+    ///   exists with a *different* `KType`. The pre-check runs before any insert,
+    ///   so a collision leaves both maps untouched — no partial write to roll back.
+    /// - On success inserts into both maps (or just `data` on the idempotent arm),
+    ///   then best-effort clears any matching `placeholders[name]` (same tail as
+    ///   [`Bindings::try_apply`] / [`Bindings::try_apply_type`]).
     pub fn try_register_nominal(
         &self,
         name: &str,
@@ -204,10 +271,22 @@ impl<'a> Bindings<'a> {
                 return Ok(ApplyOutcome::Conflict);
             }
         };
-        if types.contains_key(name) || data.contains_key(name) {
+        if data.contains_key(name) {
             return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
         }
-        types.insert(name.to_string(), kt);
+        match types.get(name).copied() {
+            None => {
+                types.insert(name.to_string(), kt);
+            }
+            Some(existing) if existing == kt => {
+                // Cycle-close-idempotent: SCC pre-registration already wrote the
+                // identity. Skip the types write; carrier-write below completes the
+                // pair.
+            }
+            Some(_) => {
+                return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+            }
+        }
         data.insert(name.to_string(), obj);
         drop(data);
         drop(types);
@@ -591,6 +670,44 @@ mod tests {
     fn new_bindings_has_empty_pending_types() {
         let bindings: Bindings<'_> = Bindings::new();
         assert!(bindings.pending_types().is_empty());
+    }
+
+    /// Stage 3.2: the SCC cycle-close sweep pre-installs each member's identity via
+    /// `try_register_type`. The eventual `try_register_nominal` call observes the
+    /// matching pre-installed identity and writes only the carrier into `data`. Pins
+    /// the idempotent arm against regression.
+    #[test]
+    fn try_register_nominal_is_idempotent_against_matching_pre_installed_types() {
+        let arena = RuntimeArena::new();
+        let bindings: Bindings<'_> = Bindings::new();
+        // Build two pointer-distinct but value-equal KTypes — cycle-close and finalize
+        // each alloc their own.
+        let kt_pre: &KType = arena.alloc_ktype(KType::UserType {
+            kind: UserTypeKind::Struct,
+            scope_id: 0xDEAD_BEEF,
+            name: "Foo".into(),
+        });
+        let kt_finalize: &KType = arena.alloc_ktype(KType::UserType {
+            kind: UserTypeKind::Struct,
+            scope_id: 0xDEAD_BEEF,
+            name: "Foo".into(),
+        });
+        assert!(!std::ptr::eq(kt_pre, kt_finalize), "alloc should produce distinct pointers");
+        assert_eq!(*kt_pre, *kt_finalize, "values must be equal");
+        let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+        bindings.try_register_type("Foo", kt_pre).unwrap();
+        // try_register_nominal: types[Foo] already populated with matching identity,
+        // data[Foo] empty → idempotent path, write only data.
+        let outcome = bindings
+            .try_register_nominal("Foo", kt_finalize, obj)
+            .expect("idempotent arm should succeed");
+        assert!(matches!(outcome, ApplyOutcome::Applied));
+        // The types entry keeps the PRE-installed pointer (not the finalize's).
+        let stored_kt = *bindings.types().get("Foo").expect("Foo in types");
+        assert!(std::ptr::eq(stored_kt, kt_pre));
+        // The data entry is the finalize's carrier.
+        let stored_obj = *bindings.data().get("Foo").expect("Foo in data");
+        assert!(std::ptr::eq(stored_obj, obj));
     }
 
     #[test]

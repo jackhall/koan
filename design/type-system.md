@@ -327,12 +327,11 @@ keyword are still to come.
   On a `resolve_type` miss, the bare-leaf arm of `elaborate_type_expr`
   falls through to `Scope::resolve` for compatibility with the small set of
   callers that still consult the value side; the `body_type_expr` reader,
-  by contrast, is now types-only (stage 3.1 deleted its value-side
-  fallback). Value-side nominal carriers — `KObject::KModule` from
-  `MODULE`, `KObject::StructType` from `STRUCT`, `KObject::TaggedUnionType`
-  from `UNION`, `KObject::KSignature` from `SIG` — are dual-written into
-  `bindings.types` next to a `KType::UserType` or `KType::SignatureBound`
-  by the stage 3.1 finalize routes. The bind-time check uses a
+  by contrast, is types-only. Value-side nominal carriers —
+  `KObject::KModule` from `MODULE`, `KObject::StructType` from `STRUCT`,
+  `KObject::TaggedUnionType` from `UNION`, `KObject::KSignature` from
+  `SIG` — are dual-written into `bindings.types` next to a
+  `KType::UserType` or `KType::SignatureBound` by the finalize routes. The bind-time check uses a
   primitive/container blocklist
   (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so type-language
   carriers (`KModule`, `KSignature`, `StructType`, `TaggedUnionType`),
@@ -429,16 +428,28 @@ keyword are still to come.
   `scope_id` for the alias name — aliasing is type-equivalent, so a slot
   typed by the alias dispatches to the same overload as a slot typed by
   the original. SIG declarations write `KType::SignatureBound { sig_id,
-  sig_path }` (unchanged variant) on the type side. The anonymous
-  `UNION (...)` overload still mints a sentinel `("", parent_scope_id)`
-  identity; stage 3.2 deletes the overload entirely.
+  sig_path }` on the type side. Anonymous `UNION (...)` is not a valid
+  surface — every tagged value carries a real per-declaration identity.
+  Mutually recursive STRUCT / named-UNION pairs resolve through the
   [`Bindings.pending_types`](../src/runtime/machine/core/bindings.rs)
-  exists as an empty `RefCell<HashMap<String, PendingTypeEntry>>` with a
-  read handle; stage 3.2 wires the SCC pre-registration writer.
-- [Type identity stage 3.2 — SCC discovery and anonymous-UNION removal](../roadmap/type-identity-3.2-scc-and-anon-union.md)
-  — populates `Bindings.pending_types` from the elaborator's park path so
-  mutually recursive STRUCT / UNION pairs cycle-close, and deletes the
-  anonymous `UNION (...)` overload.
+  registry: STRUCT / named-UNION `body()` installs a `PendingTypeEntry
+  { kind, scope_id, schema_expr, edges }` before launching its
+  elaborator; the elaborator's `Resolution::Placeholder` arm records
+  edges and runs DFS from `current_decl_name`; a closed cycle invokes
+  [`close_type_cycle`](../src/runtime/model/types/resolver.rs), which
+  synchronously installs every member's identity into `bindings.types`
+  via the panic-on-conflict
+  [`Scope::cycle_close_install_identity`](../src/runtime/machine/core/scope.rs)
+  shim. Each member's eventual `finalize_struct` / `finalize_union` (or
+  Combine-finish for parked members) then routes through
+  `try_register_nominal`'s cycle-close-idempotent arm — types is
+  pre-populated with a matching identity, so only the carrier writes to
+  `data`. Defense-in-depth: every nominal finalize site also short-
+  circuits to the existing carrier when both `types[name]` and
+  `data[name]` are populated at entry. MODULE does not participate in
+  `pending_types` (its body parks on the outer scheduler's sibling
+  dispatch deps, not on type-name resolution); the idempotent guard
+  still lives in MODULE finalize for symmetry.
 - [Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier](../roadmap/type-identity-4-newtype.md)
   — fresh nominal identity substrate for stage-4 axioms and stage-5
   modular implicits.

@@ -594,7 +594,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         run(
-            "LET result = (UNION (ok: Str err: Str))\n\
+            "UNION Result = (ok: Str err: Str)\n\
+             LET result = Result\n\
              LET r = (result (err \"oops\"))\n\
              MATCH (r) WITH (ok -> (PRINT \"good\") err -> (PRINT it))",
             &arena,

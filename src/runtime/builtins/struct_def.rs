@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::runtime::machine::core::PendingTypeEntry;
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{
@@ -54,10 +55,27 @@ pub fn body<'a>(
             )));
         }
     };
+    // Stage-3.2 SCC: register this binder in `pending_types` so a fellow in-flight
+    // STRUCT / named-UNION's elaboration can detect a closing cycle when it parks on
+    // our placeholder. The entry carries the schema + kind + scope_id so cycle-close
+    // can install our identity without re-entering dispatch.
+    let scope_id = scope as *const _ as usize;
+    scope.bindings().insert_pending_type(
+        name.clone(),
+        PendingTypeEntry {
+            kind: UserTypeKind::Struct,
+            scope_id,
+            schema_expr: schema_expr.clone(),
+            edges: Vec::new(),
+        },
+    );
     // Phase-3 elaborator: seeds the threaded set with this STRUCT's binder name so a
     // self-reference (`STRUCT Tree { children: List<Tree> }`) resolves to
     // `KType::RecursiveRef("Tree")` rather than parking on the binder's own placeholder.
-    let mut elaborator = Elaborator::new(scope).with_threaded([name.clone()]);
+    // `with_current_decl` arms the SCC edge-recording / cycle-detection arm.
+    let mut elaborator = Elaborator::new(scope)
+        .with_threaded([name.clone()])
+        .with_current_decl(name.clone(), UserTypeKind::Struct, scope_id);
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "STRUCT schema",
@@ -65,7 +83,10 @@ pub fn body<'a>(
     );
     match outcome {
         FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields),
-        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
+        FieldListOutcome::Err(msg) => {
+            scope.bindings().remove_pending_type(&name);
+            err(KError::new(KErrorKind::ShapeError(msg)))
+        }
         FieldListOutcome::Park(producers) => defer_struct_via_combine(
             scope,
             sched,
@@ -83,6 +104,22 @@ fn finalize_struct<'a>(
     name: String,
     fields: Vec<(String, KType)>,
 ) -> BodyResult<'a> {
+    // Stage-3.2 cleanup: drop our `pending_types` entry. Idempotent — cycle-close
+    // never removes entries (carrier-write is the finalize's job), and the entry
+    // may still be there from this binder's earlier park.
+    scope.bindings().remove_pending_type(&name);
+    // Idempotent-finalize guard: if both maps are already populated for this name,
+    // a parallel finalize (cycle-close + Combine-finish, or two Combine-finishes)
+    // already produced a carrier. Return it without re-allocating. Defense-in-depth
+    // — the carrier-write today routes through `try_register_nominal`'s idempotent
+    // arm which tolerates a pre-installed identity, but cannot tolerate a
+    // pre-installed carrier.
+    let bindings = scope.bindings();
+    if bindings.types().get(&name).is_some() {
+        if let Some(existing) = bindings.data().get(&name).copied() {
+            return BodyResult::Value(existing);
+        }
+    }
     if fields.is_empty() {
         return err(KError::new(KErrorKind::ShapeError(
             "STRUCT schema must have at least one field".to_string(),
@@ -123,7 +160,12 @@ fn defer_struct_via_combine<'a>(
 ) -> BodyResult<'a> {
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
-        // Producers terminalized — re-elaborate against the now-final scope.
+        // Producers terminalized — re-elaborate against the now-final scope. The
+        // Combine-finish path runs AFTER the dispatch-time park; if cycle-close
+        // populated `bindings.types` while we were parked, `resolve_type` resolves
+        // the cross-members synchronously here. No `current_decl` seeding — cycle
+        // detection only matters for in-flight binders that might park, and by the
+        // time we're here all producers have terminalized.
         let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
         match parse_typed_field_list_via_elaborator(
             &schema_expr,
@@ -133,15 +175,21 @@ fn defer_struct_via_combine<'a>(
             FieldListOutcome::Done(fields) => {
                 finalize_struct(scope, name_for_finish.clone(), fields)
             }
-            FieldListOutcome::Err(msg) => BodyResult::Err(
-                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
-                    function: "<struct>".to_string(),
-                    expression: format!("STRUCT {} schema", name_for_finish),
-                }),
-            ),
-            FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                "STRUCT schema elaboration parked again after Combine wake".to_string(),
-            ))),
+            FieldListOutcome::Err(msg) => {
+                scope.bindings().remove_pending_type(&name_for_finish);
+                BodyResult::Err(
+                    KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
+                        function: "<struct>".to_string(),
+                        expression: format!("STRUCT {} schema", name_for_finish),
+                    }),
+                )
+            }
+            FieldListOutcome::Park(_) => {
+                scope.bindings().remove_pending_type(&name_for_finish);
+                BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                    "STRUCT schema elaboration parked again after Combine wake".to_string(),
+                )))
+            }
         }
     });
     let combine_id = sched.add_combine(producers, scope, finish);
@@ -291,13 +339,11 @@ mod tests {
     }
 
     /// Mutually recursive STRUCTs. `STRUCT TreeA = (b: TreeB)` and
-    /// `STRUCT TreeB = (a: TreeA)` submitted in the same batch must both finalize with
-    /// their schemas carrying `RecursiveRef` to each other. The current implementation
-    /// only handles single-binder self-recursion via the elaborator's threaded set; mutual
-    /// recursion deadlocks because each binder's body parks on the other's placeholder
-    /// and neither can ever finalize. Marked `#[ignore]` until batch SCC pre-registration
-    /// lands; that work is tracked under
-    /// [stage 3.2 — SCC discovery and anonymous-UNION removal](../../../roadmap/type-identity-3.2-scc-and-anon-union.md).
+    /// `STRUCT TreeB = (a: TreeA)` submitted in the same batch must both finalize.
+    /// Stage 3.2 SCC pre-registration installs each binder's identity into
+    /// `bindings.types` synchronously at cycle-close, so cross-member references
+    /// resolve to `KType::UserType` directly — no `RecursiveRef` wrap inside SCC
+    /// members.
     /// Sanity check that two unrelated STRUCTs in the same batch don't
     /// spuriously cross-pollinate `RecursiveRef`. `STRUCT A = (x: Number)`,
     /// `STRUCT B = (y: A)` — B's field references A, which is non-recursive; B's schema    /// must record the resolved `KType` for `y` (post-3.1: `KType::UserType { kind:
@@ -332,8 +378,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn mutually_recursive_struct_pair() {
+        use crate::runtime::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         use crate::runtime::machine::execute::Scheduler;
@@ -344,8 +390,113 @@ mod tests {
         }
         sched.execute().unwrap();
         let data = scope.bindings().data();
-        assert!(matches!(data.get("TreeA"), Some(KObject::StructType { .. })));
-        assert!(matches!(data.get("TreeB"), Some(KObject::StructType { .. })));
+        let a_fields = match data.get("TreeA") {
+            Some(KObject::StructType { fields, .. }) => fields.clone(),
+            other => panic!("expected TreeA StructType, got {:?}", other.map(|o| o.ktype())),
+        };
+        let b_fields = match data.get("TreeB") {
+            Some(KObject::StructType { fields, .. }) => fields.clone(),
+            other => panic!("expected TreeB StructType, got {:?}", other.map(|o| o.ktype())),
+        };
+        // Each member's field references the OTHER as `UserType` (not `RecursiveRef`):
+        // SCC cycle-close pre-installed both identities so cross-member resolution
+        // returns the named identity directly.
+        assert_eq!(a_fields[0].0, "b");
+        assert!(
+            matches!(&a_fields[0].1, KType::UserType { kind: UserTypeKind::Struct, name, .. } if name == "TreeB"),
+            "TreeA.b expected UserType{{TreeB}}, got {:?}",
+            a_fields[0].1,
+        );
+        assert_eq!(b_fields[0].0, "a");
+        assert!(
+            matches!(&b_fields[0].1, KType::UserType { kind: UserTypeKind::Struct, name, .. } if name == "TreeA"),
+            "TreeB.a expected UserType{{TreeA}}, got {:?}",
+            b_fields[0].1,
+        );
+        // Pending-types entries are drained after cycle-close + each member's finalize.
+        drop(data);
+        assert!(scope.bindings().pending_types().is_empty());
+    }
+
+    /// Three-way mutual recursion: A → B → C → A. SCC closes when the third edge
+    /// is recorded; all three members' identities pre-install, then each binder's
+    /// finalize writes its carrier. Exercises the DFS depth past two members.
+    #[test]
+    fn three_way_mutual_recursion_struct_chain() {
+        use crate::runtime::model::types::UserTypeKind;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        use crate::runtime::machine::execute::Scheduler;
+        use crate::parse::parse;
+        let mut sched = Scheduler::new();
+        for e in parse(
+            "STRUCT Aaa = (b: Bbb)\nSTRUCT Bbb = (c: Ccc)\nSTRUCT Ccc = (a: Aaa)",
+        )
+        .unwrap()
+        {
+            sched.add_dispatch(e, scope);
+        }
+        sched.execute().unwrap();
+        let data = scope.bindings().data();
+        for n in ["Aaa", "Bbb", "Ccc"] {
+            assert!(
+                matches!(data.get(n), Some(KObject::StructType { .. })),
+                "{n} should be a StructType",
+            );
+        }
+        // Each member's only field is a UserType pointing at the next.
+        for (from, expected_field, expected_target) in
+            [("Aaa", "b", "Bbb"), ("Bbb", "c", "Ccc"), ("Ccc", "a", "Aaa")]
+        {
+            let fields = match data.get(from) {
+                Some(KObject::StructType { fields, .. }) => fields.clone(),
+                _ => panic!(),
+            };
+            assert_eq!(fields[0].0, expected_field);
+            assert!(
+                matches!(&fields[0].1, KType::UserType { kind: UserTypeKind::Struct, name, .. } if name == expected_target),
+                "{from}.{expected_field} expected UserType{{{expected_target}}}, got {:?}",
+                fields[0].1,
+            );
+        }
+    }
+
+    /// `finalize_struct` is idempotent when both `bindings.types[name]` and
+    /// `bindings.data[name]` are already populated. Pins the defensive guard at the
+    /// top of `finalize_struct` against a future refactor that might silently
+    /// regress the cycle-close-then-Combine-finish double-fire safety net.
+    #[test]
+    fn finalize_struct_is_idempotent_when_both_maps_populated() {
+        use crate::runtime::model::types::UserTypeKind;
+        use std::rc::Rc;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        // Pre-seed both maps to mimic the cycle-close-then-finalize state.
+        let scope_id = scope as *const _ as usize;
+        let pre_carrier: &KObject<'_> = arena.alloc_object(KObject::StructType {
+            name: "Foo".into(),
+            scope_id,
+            fields: Rc::new(vec![("x".into(), KType::Number)]),
+        });
+        let pre_identity = KType::UserType {
+            kind: UserTypeKind::Struct,
+            scope_id,
+            name: "Foo".into(),
+        };
+        scope.register_nominal("Foo".into(), pre_identity, pre_carrier).unwrap();
+        // Call finalize_struct directly — it must short-circuit to the existing carrier.
+        let outcome = super::finalize_struct(
+            scope,
+            "Foo".into(),
+            vec![("x".into(), KType::Number)],
+        );
+        match outcome {
+            crate::runtime::machine::BodyResult::Value(obj) => {
+                assert!(std::ptr::eq(obj, pre_carrier),
+                    "finalize_struct must return the pre-installed carrier pointer");
+            }
+            _ => panic!("expected Value variant from finalize_struct"),
+        }
     }
 
     /// Stage 3.0c identity-field invariant: two STRUCTs declared in the same scope

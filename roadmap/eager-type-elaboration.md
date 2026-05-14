@@ -11,8 +11,9 @@ TypeResolver` parameter on `KType::from_type_expr`), and the
 (via the `KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)` carrier
 whose cell *is* the late-binding slot — see
 [design/type-system.md § Open work](../design/type-system.md#open-work))
-have landed. Mutual STRUCT / UNION recursion (SCC pre-registration) ships
-under [type identity stage 3.2](type-identity-3.2-scc-and-anon-union.md).
+have landed. Mutual STRUCT / named-UNION recursion ships through the
+`Bindings.pending_types` SCC pre-registration sweep (see
+[design/type-system.md § Open work](../design/type-system.md#open-work)).
 This item now narrows to the two genuinely deferred questions the shipped
 work does not address: module-qualified type-name paths and non-SCC
 forward references.
@@ -30,9 +31,9 @@ land:
   `MyMod.Number` surface-name flow as a typed value end-to-end.
 - *Non-SCC forward references in type aliases fail at bind time.* Eager
   elaboration means a type alias's RHS must resolve at bind time. Mutual
-  STRUCT / UNION recursion is covered by [stage 3.2](type-identity-3.2-scc-and-anon-union.md)'s
-  SCC discovery, but a top-level `LET Ty = Un` where `Un` is declared
-  later in source (and not in a mutual SCC with `Ty`) still fails.
+  STRUCT / named-UNION recursion is covered by the `pending_types` SCC
+  sweep, but a top-level `LET Ty = Un` where `Un` is declared later in
+  source (and not in a mutual SCC with `Ty`) still fails.
 
 **Impact.**
 

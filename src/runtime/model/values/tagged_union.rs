@@ -244,7 +244,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET maybe = (UNION (some: Number none: Null))");
+        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
         let result = run_one(scope, parse_one("(maybe) some 42"));
         match result {
             KObject::Tagged { tag, value, .. } => {
@@ -260,7 +260,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET maybe = (UNION (some: Number none: Null))");
+        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
         let err = run_one_err(scope, parse_one("(maybe) other 42"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`other`")),
@@ -273,7 +273,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "LET maybe = (UNION (some: Number none: Null))");
+        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
         let err = run_one_err(scope, parse_one("(maybe) some \"oops\""));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {

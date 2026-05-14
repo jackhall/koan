@@ -255,26 +255,25 @@ body. Recursion is the iteration model; tail calls reuse the calling slot.
 
 ## Tagged unions
 
-`UNION` declares a type whose values carry a *tag* and a payload. Two forms:
+`UNION` declares a type whose values carry a *tag* and a payload:
 
 ```
-UNION Maybe = (some: Number none: Null)              # named — registers `Maybe`
-LET maybe = (UNION (ok: Str err: Str))               # anonymous — bind the type to a name
+UNION Maybe = (some: Number none: Null)
 ```
 
 A tag is a bare identifier; a type is a type-name token. The schema body is a
-parens-wrapped sequence of `<tag>: <Type>` triples.
+parens-wrapped sequence of `<tag>: <Type>` triples. Every UNION carries a
+per-declaration identity — the bare `UNION (...)` form is not accepted.
 
 Construct a value by calling the type with a `(tag value)` pair:
 
 ```
 LET m = (Maybe (some 42))
-LET r = (maybe (err "boom"))
 ```
 
-The lowercase form (`maybe`) works because `call_by_name` recognizes
-`TaggedUnionType` as a callable and routes to the same constructor as the
-type-token form (`Maybe`).
+Aliasing the type token to a lowercase identifier (`LET maybe = Maybe`) and
+calling `maybe (...)` works too: `call_by_name` recognizes `TaggedUnionType` as
+a callable and routes to the same constructor.
 
 Pattern-match on the tag with `MATCH ... WITH`. The branches are
 `<tag> -> <body>` triples. A trailing comma joins the next line into the
@@ -458,7 +457,7 @@ One line per surface form. Sources under
 | `LET <name> = <value>`                                | Bind `<name>` to `<value>` in the current scope. Returns the bound value.                       | [let_binding.rs](src/runtime/builtins/let_binding.rs)        |
 | `PRINT <msg:Str>`                                     | Write `<msg>` and a newline to the scope's output sink. Returns null.                           | [print.rs](src/runtime/builtins/print.rs)                    |
 | `FN <sig> -> <Type> = <body>`                         | Register a user function. Parameter slots in `<sig>` are typed (`name: Type`); the return type is runtime-enforced. Returns the function. | [fn_def.rs](src/runtime/builtins/fn_def.rs)          |
-| `UNION <Name> = (<schema>)` / `UNION (<schema>)`      | Declare a tagged-union type. Named form binds `<Name>` in scope.                                | [union.rs](src/runtime/builtins/union.rs)                    |
+| `UNION <Name> = (<schema>)`                           | Declare a tagged-union type. Binds `<Name>` in scope.                                            | [union.rs](src/runtime/builtins/union.rs)                    |
 | `STRUCT <Name> = (<schema>)`                          | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/runtime/builtins/struct_def.rs)          |
 | `MATCH <value:Tagged> WITH (<branches>)`              | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/runtime/builtins/match_case.rs)          |
 | `<verb:TypeExprRef> (<args>)`                         | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/runtime/builtins/type_call.rs)            |

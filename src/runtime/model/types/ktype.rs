@@ -15,7 +15,7 @@
 /// "any user-declared X" tag (`AnyUserType`). This is the dispatcher's primary kind
 /// discriminator for user-declared types. See
 /// [per-declaration type identity](../../../../design/type-system.md).
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UserTypeKind {
     Struct,
     Tagged,

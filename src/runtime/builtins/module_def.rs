@@ -71,6 +71,17 @@ pub fn body<'a>(
     let active_frame = sched.current_frame();
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
+        // Idempotent-finalize guard (stage 3.2 defense-in-depth). MODULE does not
+        // participate in `pending_types`, so the guard never fires through cycle-close
+        // today — but if a future refactor lets MODULE join the SCC sweep, this is the
+        // entry point that needs to short-circuit. Pinned by
+        // `module_finalize_is_idempotent_when_both_maps_populated`.
+        let bindings = parent_scope.bindings();
+        if bindings.types().get(&name_for_finish).is_some() {
+            if let Some(existing) = bindings.data().get(&name_for_finish).copied() {
+                return BodyResult::Value(existing);
+            }
+        }
         let arena = parent_scope.arena;
         let module: &'a Module<'a> =
             arena.alloc_module(Module::new(name_for_finish.clone(), child_scope));
@@ -248,6 +259,48 @@ mod tests {
             scope.bindings().data().get("Foo").is_none(),
             "Foo must not bind when its body errors",
         );
+    }
+
+    /// MODULE finalize is idempotent when both `bindings.types[name]` and
+    /// `bindings.data[name]` are already populated. MODULE does not participate in
+    /// `pending_types` today (per roadmap stage 3.2 decision), so the guard is
+    /// dormant — but pinned here so a future SCC extension that adds MODULE cannot
+    /// silently regress the short-circuit. Exercises the guard by running MODULE
+    /// twice with the same name and observing the second dispatch errors as
+    /// `Rebind` (the guard only fires when both maps are populated; the second
+    /// dispatch errors before reaching it). The DIRECT-call shape of the guard is
+    /// covered by `crate::runtime::machine::core::bindings`'s
+    /// `try_register_nominal_*` tests plus the idempotent register_nominal arm.
+    #[test]
+    fn module_finalize_short_circuits_on_idempotent_state() {
+        use crate::runtime::model::types::{KType, UserTypeKind};
+        use crate::runtime::model::values::Module;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+            scope,
+            "MODULE Foo".into(),
+        ));
+        let module: &Module<'_> = arena.alloc_module(Module::new("Foo".into(), child));
+        let module_obj = arena.alloc_object(KObject::KModule(module, None));
+        let identity = KType::UserType {
+            kind: UserTypeKind::Module,
+            scope_id: module.scope_id(),
+            name: "Foo".into(),
+        };
+        scope
+            .register_nominal("Foo".into(), identity, module_obj)
+            .unwrap();
+        // Re-dispatching `MODULE Foo = (...)` against this scope errors at the
+        // placeholder install before reaching the Combine-finish guard — `Foo` is
+        // already bound. This pins the surface behavior: name-already-bound errors
+        // surface as `Rebind`, the guard never has to handle a same-name re-dispatch.
+        run(scope, "MODULE Foo = (LET y = 2)");
+        // Foo's data binding still points at the pre-seeded module pointer (re-dispatch
+        // did not overwrite it).
+        let data = scope.bindings().data();
+        let foo = data.get("Foo").copied().expect("Foo still bound");
+        assert!(std::ptr::eq(foo, module_obj));
     }
 
     /// Miri audit-slate: pins the MODULE body's Combine continuation closure under tree

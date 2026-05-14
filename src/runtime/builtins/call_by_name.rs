@@ -179,7 +179,7 @@ mod tests {
     fn call_by_name_on_tagged_union_constructs() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET maybe = (UNION (some: Number none: Null))");
+        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
         let result = run_one(scope, parse_one("maybe (some 42)"));
         match result {
             KObject::Tagged { tag, value, .. } => {
