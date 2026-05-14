@@ -1,31 +1,21 @@
 # Module system stage 2 — Module values and functors through the scheduler
 
-**Problem.** Higher-kinded type slots aren't expressible: there is no
-higher-kinded slot carrier in `KType`, so a signature can't declare a
-`Wrap` slot taking a type parameter. Functor return-type pins resolve
-only against the FN's outer scope, so a per-call FN parameter's
-attribute (e.g. the parameter's abstract type) can't be threaded through
-to a return-type pin. Two stage-2 unsafe sites still have no targeted
-Miri test under tree borrows: the opaque-ascription path that re-binds
-source module entries into a fresh child scope, and the type-op dispatch
-through the per-call arena. The substrate the rest of stage 2 rides on —
+**Problem.** Two stage-2 unsafe sites still have no targeted Miri test
+under tree borrows: the opaque-ascription path that re-binds source
+module entries into a fresh child scope, and the type-op dispatch
+through the per-call arena. The rest of the stage-2 module surface —
 scheduled type-constructor builtins producing typed values, the
 scope-aware `elaborate_type_expr` walking both type-value and
 `KSignature` bindings, MODULE / SIG body statements planning onto the
 outer scheduler with `BodyResult::DeferTo`, end-to-end functor dispatch
-with per-call generative semantics, and the `SIG_WITH` builtin with
-concrete-typed sharing-constraint pins — has landed; see
-[design/module-system.md](../design/module-system.md) for the shipped
-shape.
+with per-call generative semantics, the `SIG_WITH` builtin with
+concrete-typed sharing-constraint pins, and higher-kinded
+type-constructor slots via `(TYPE_CONSTRUCTOR <param>)` and
+`KType::ConstructorApply` — has shipped; see
+[design/module-system.md](../design/module-system.md) for the shape.
 
 **Impact.**
 
-- *Higher-kinded type slots become expressible.* Signatures declare
-  type constructors (a `Wrap` slot taking a type parameter); functor
-  applications then thread that constructor through to their output via
-  the shipped `SIG_WITH` pin path. Unblocks the in-language `Monad`
-  signature's `Wrap` slot for
-  [monadic-side-effects](monadic-side-effects.md).
 - *Memory-model sign-off carries the full stage-2 module surface.* The
   [audit slate](../design/memory-model.md#verification) covers every
   unsafe site this stage touches — including the opaque-ascription
@@ -34,52 +24,6 @@ shape.
 
 **Directions.**
 
-- *Inference and search as scheduler work — decided per [design/module-system.md § Inference and search](../design/module-system.md#inference-and-search-as-scheduler-work).*
-  Inference and implicit search reduce to the existing `Dispatch` and
-  `Bind` machinery — no `Infer` node kind, no `ImplicitSearch` node kind,
-  no `KType::TypeVar`, no `Scope::types`. Type-returning builtins are
-  ordinary builtins, type expressions in source position re-elaborate to
-  a synthesized call, and refinement rides on `Bind` waiting for its
-  sub-Dispatches.
-- *Sharing constraints — decided per [design/module-system.md § Type expressions and constraints](../design/module-system.md#type-expressions-and-constraints).*
-  Pinning a functor's output abstract type to a concrete type rides on
-  the `SIG_WITH` parens-form builtin reusing the shipped `name: value`
-  triple shape, not a `<>` named-slot extension. Resolution of the
-  slot's right-hand side rides on the shipped scheduler-driven type
-  elaborator.
-- *Per-call FN-parameter references in pin values — decided.* The pin
-  path stores the unresolved `TypeExpr` on the function at construction
-  time. At each call's **dispatch boundary** (after parameters bind,
-  before the body runs), `substitute_params` rewrites parameter-name
-  identifiers in the captured expression and the substituted expression
-  is scheduled as a sub-Dispatch. The outer Combine joins body and
-  return-type elaboration for the slot check. Dispatch-boundary
-  elaboration — rather than waiting until the body returns — keeps
-  sharing-constraint pins meaningful as call-site contracts,
-  parallelizes return-type work with body work, and parallels how
-  parameter-typed slots already flow.
-  `(SIG_WITH SetSig ((Elt: (MODULE_TYPE_OF Er Type))))` therefore
-  resolves at dispatch, riding the same scheduler machinery as any other
-  type expression. This implements the surface "modules-as-types"
-  presentation in
-  [design/module-system.md § Functors](../design/module-system.md#functors)
-  for the per-call case.
-- *Identifier-class names in type-position slots — decided.* Hard error.
-  The value-side `Scope::resolve` fall-through in the bare-leaf arm of
-  `elaborate_type_expr` (today gated for "the small set of callers that
-  still consult the value side", per
-  [design/type-system.md § Open work](../design/type-system.md#open-work))
-  is removed. Identifier-class names (`er`, `mo` — lowercase-first per
-  [design/type-system.md § Token classes](../design/type-system.md#token-classes--the-parser-level-foundation))
-  are value-language only; appearing in a type-position slot rejects at
-  elaboration. Diagnostic vocabulary is owned by
-  [error-handling](error-handling.md).
-- *Higher-kinded abstract type slots — decided.* Signatures declare
-  type constructors (a `Wrap` slot taking a type parameter) so monads
-  and other parametric abstractions are expressible. Required by
-  [monadic-side-effects](monadic-side-effects.md). Implementation needs
-  a higher-kinded slot carrier in `KType` plus the surface syntax to
-  declare and apply it.
 - *Audit slate carry-forward — decided.* Two unsafe sites remain to
   pin: the opaque-ascription re-bind path
   (`opaque_ascription_re_binds_do_not_alias_unsoundly`) and the
@@ -103,8 +47,9 @@ shape.
 - [Error handling](error-handling.md) — `Result<Ty, Er>` is the
   functor-produced carrier for user-typed errors.
 - [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
-  — the in-language `Monad` signature's `Wrap` slot is higher-kinded,
-  expressible only with functor support.
+  — module-language substrate including the higher-kinded `Wrap` slot
+  surface. The HKT pieces have shipped; only the audit slate
+  carry-forward remains here.
 - [Static type checking and JIT compilation](static-typing-and-jit.md) —
   both the checker's lifetime story and the JIT's codegen contract want a
   stable, signed-off memory model plus a settled answer to the

@@ -16,16 +16,18 @@ system rather than implicit in builtin internals.
 
 ```
 SIG Monad = (
-  (LET Wrap = ...)        -- type constructor: T → Wrap<T>
-  (LET pure = (FN (PURE x: Any) -> Wrap<Any> = ...))
-  (LET bind = (FN (BIND m: Wrap<Any> f: Function<(Any) -> Wrap<Any>>) -> Wrap<Any> = ...))
+  (LET Wrap = (TYPE_CONSTRUCTOR Type))   -- type constructor: T → Wrap<T>
+  (LET pure = (FN (PURE x: Number) -> Wrap<Number> = ...))
+  (LET bind = (FN (BIND m: Wrap<Number> f: Function<(Number) -> Wrap<Number>>) -> Wrap<Number> = ...))
 )
 ```
 
-The `Wrap` slot is a type constructor — a signature with a higher-kinded
-abstract type. Module-system stage 2's functor support is what makes this
-expressible; without it, `Wrap` cannot be a parameterized type slot. This
-is the dependency line between effects and module-system stage 2.
+The `Wrap` slot is a type-constructor slot declared with
+`(TYPE_CONSTRUCTOR <param>)` — the higher-kinded surface form lives in
+[module-system.md § Higher-kinded type slots](module-system.md#higher-kinded-type-slots).
+Opaque ascription mints a per-call `KType::UserType { kind:
+TypeConstructor, .. }` under the ascribed module's `type_members[Wrap]`,
+so different `Monad`-ascribed modules carry distinct `Wrap` identities.
 
 ## Standard effect modules
 

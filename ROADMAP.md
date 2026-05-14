@@ -137,7 +137,23 @@ Combine-boundary case), and MODULE-body finalize mirroring
 `child_scope.bindings.types` into `Module::type_members`
 ([`module_def.rs`](src/runtime/builtins/module_def.rs)) so a body-side
 `LET Elt = Number` admits the FN's declared
-`(SIG_WITH SetSig ((Elt: Number)))` pin. The next signature revision after error handling lands
+`(SIG_WITH SetSig ((Elt: Number)))` pin; and the module-system stage-2
+higher-kinded type-constructor slot surface — the
+[`TYPE_CONSTRUCTOR`](src/runtime/builtins/type_ops.rs) builtin returning
+a template
+[`KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`](src/runtime/model/types/ktype.rs),
+[`elaborate_type_expr`'s constructor-application arm](src/runtime/model/types/resolver.rs)
+emitting structural
+[`KType::ConstructorApply { ctor, args }`](src/runtime/model/types/ktype.rs)
+on `Wrap<Number>` against a `TypeConstructor`-resolved outer name (with
+arity check and a placeholder-park rail mirroring the bare-leaf arm),
+and [`ascribe.rs:body_opaque`](src/runtime/builtins/ascribe.rs)'s
+per-call minting loop inspecting the SIG's `bindings.types` so an opaque
+ascription against a SIG declaring `LET Wrap = (TYPE_CONSTRUCTOR Type)`
+mints a fresh `TypeConstructor` slot per call — arity-1 only,
+expressible end-to-end in a `SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR
+Type)) (LET pure = (FN (PURE a: Number) -> Wrap<Number> = (1))))`-shaped
+signature. The next signature revision after error handling lands
 monadic side-effect capture; the type-system arc runs through the
 module-system stages — foundation now landed in stage 1, ergonomic generic
 dispatch in stage 5, coherence in stage 6.
@@ -162,8 +178,9 @@ without first landing something else:
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
   — replace the ad-hoc `Box<dyn Write>` with an in-language `Monad` signature
   (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
-  ships standard effect modules (`Random`, `IO`, `Time`). Requires module-system
-  stage 2's functor support so the `Wrap` slot can be higher-kinded.
+  ships standard effect modules (`Random`, `IO`, `Time`). The `Wrap` slot's
+  higher-kinded surface (`(TYPE_CONSTRUCTOR Type)`) has landed via module-system
+  stage 2.
 
 ### Module system
 
@@ -173,9 +190,11 @@ ascription, per-module type identity), and the remaining stages below land
 the rest incrementally, each producing a usable end state.
 
 - [Stage 2 — Module values and functors through the scheduler](roadmap/module-system-2-scheduler.md) —
-  higher-kinded type slots (a `Wrap` slot taking a type parameter) and the
-  post-stage-1 Miri audit slate carry-forward. The `SIG_WITH` sharing-
-  constraint surface has shipped. Requires eager type elaboration.
+  the post-stage-1 Miri audit slate carry-forward. Two unsafe sites
+  (opaque-ascription re-bind, type-op dispatch through the per-call arena)
+  still need targeted tests under tree borrows. The module-language
+  substrate — `SIG_WITH` sharing constraints, dispatch-boundary return-type
+  pin substitution, higher-kinded type-constructor slots — has shipped.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.

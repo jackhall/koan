@@ -132,12 +132,14 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::AnyUserType { .. }
             | KType::SignatureBound { .. } => Ok(t.name()),
             // Structural / recursive shapes are not valid binder names — the caller wants
-            // a leaf identifier, not a parameterized container.
+            // a leaf identifier, not a parameterized container. `ConstructorApply` joins
+            // this group: an applied higher-kinded type is structural, not a leaf.
             KType::List(_)
             | KType::Dict(_, _)
             | KType::KFunction { .. }
             | KType::Mu { .. }
-            | KType::RecursiveRef(_) => Err(KError::new(KErrorKind::ShapeError(format!(
+            | KType::RecursiveRef(_)
+            | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(
                 "{surface} {name} must be a bare type name, got `{}`",
                 t.render(),
             )))),

@@ -45,17 +45,34 @@ pub fn body_opaque<'a>(
     // identity property. `kind: Module` reuses the user-declared-module family; the
     // distinction from a first-class module value is by `name` (the abstract type
     // name, typically `"Type"`, vs. the module's full path).
+    //
+    // Module-system stage 2: per-slot kind selection. A SIG slot declared with
+    // `LET Wrap = (TYPE_CONSTRUCTOR T)` lives in the SIG's decl_scope as a
+    // `KType::UserType { kind: TypeConstructor { param_names }, .. }` template; we
+    // mint a fresh per-call `TypeConstructor` rather than the default `Module` arm.
+    // The lookup inspects `bindings.types` (where Type-class LET aliases land via
+    // `register_type`) and falls back to the default `Module` mint for plain
+    // abstract-type slots (`LET Type = Number`).
     let scope_id = new_module.scope_id();
     let mut minted: Vec<(String, KType)> = Vec::new();
-    for name in abstract_type_names_of(s.decl_scope()) {
-        minted.push((
-            name.clone(),
-            KType::UserType {
-                kind: UserTypeKind::Module,
-                scope_id,
-                name: name.clone(),
-            },
-        ));
+    {
+        let sig_types = s.decl_scope().bindings().types();
+        for name in abstract_type_names_of(s.decl_scope()) {
+            let kind = match sig_types.get(&name) {
+                Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }) => {
+                    UserTypeKind::TypeConstructor { param_names: param_names.clone() }
+                }
+                _ => UserTypeKind::Module,
+            };
+            minted.push((
+                name.clone(),
+                KType::UserType {
+                    kind,
+                    scope_id,
+                    name: name.clone(),
+                },
+            ));
+        }
     }
     if !minted.is_empty() {
         let mut tm = new_module.type_members.borrow_mut();
@@ -640,6 +657,76 @@ mod tests {
         };
         let sample = m.child_scope().bindings().data().get("sample").copied();
         assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
+    }
+
+    /// Module-system stage 2 Workstream B: two opaque ascriptions of a module that
+    /// satisfies a SIG declaring `LET Wrap = (TYPE_CONSTRUCTOR T)` mint distinct
+    /// per-call `KType::UserType { kind: TypeConstructor, .. }` values under each
+    /// resulting module's `type_members[Wrap]`. Mirror of
+    /// `functor_application_is_generative` — pins the abstraction-barrier property
+    /// for higher-kinded slots.
+    #[test]
+    fn opaque_ascription_mints_fresh_type_constructor_per_call() {
+        use crate::runtime::model::types::UserTypeKind;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        let src = "SIG MonadSig = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))\n\
+                   MODULE IntList = ((LET Wrap = Number))\n\
+                   LET First = (IntList :| MonadSig)\n\
+                   LET Second = (IntList :| MonadSig)";
+        let exprs = parse(src).expect("parse should succeed");
+        let mut sched = Scheduler::new();
+        let mut ids = Vec::new();
+        for expr in exprs {
+            ids.push(sched.add_dispatch(expr, scope));
+        }
+        sched.execute().expect("scheduler should succeed");
+        for (i, id) in ids.iter().enumerate() {
+            if let Err(e) = sched.read_result(*id) {
+                panic!("expr {} errored: {}", i, e);
+            }
+        }
+        let data = scope.bindings().data();
+        let a = match data.get("First") {
+            Some(KObject::KModule(m, _)) => *m,
+            _ => panic!("First should be a module"),
+        };
+        let b = match data.get("Second") {
+            Some(KObject::KModule(m, _)) => *m,
+            _ => panic!("Second should be a module"),
+        };
+        let a_wrap = a.type_members.borrow().get("Wrap").cloned();
+        let b_wrap = b.type_members.borrow().get("Wrap").cloned();
+        // Both wraps must be UserType(TypeConstructor) — the SIG slot kind, not
+        // the default Module kind.
+        assert!(matches!(
+            &a_wrap,
+            Some(KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. })
+        ));
+        assert!(matches!(
+            &b_wrap,
+            Some(KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. })
+        ));
+        // Per-call generativity: two opaque ascriptions get distinct scope_ids on the
+        // minted slot, even though the SIG and source module are the same. The manual
+        // `UserTypeKind::PartialEq` ignores `param_names`, so the equality test below
+        // is gated on `(scope_id, name)` — exactly the abstraction-barrier property.
+        match (&a_wrap, &b_wrap) {
+            (
+                Some(KType::UserType { scope_id: aid, .. }),
+                Some(KType::UserType { scope_id: bid, .. }),
+            ) => {
+                assert_ne!(
+                    aid, bid,
+                    "two opaque ascriptions must mint TypeConstructor slots with distinct scope_id",
+                );
+            }
+            _ => unreachable!("matched above"),
+        }
+        assert_ne!(
+            a_wrap, b_wrap,
+            "two opaque ascriptions must mint distinct TypeConstructor types",
+        );
     }
 
     /// Companion: bare Type-token in an ascription operand. `IntOrd :! OrderedSig` already

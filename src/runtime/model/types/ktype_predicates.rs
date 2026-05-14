@@ -81,6 +81,21 @@ impl KType {
             (Mu { binder: ba, body: a }, Mu { binder: bb, body: b }) if ba == bb => {
                 a.is_more_specific_than(b)
             }
+            // Two `ConstructorApply`s with the same `ctor` rank by arg specificity —
+            // mirror of the `List(a)` vs `List(b)` arm. Different `ctor`s are
+            // incomparable (sibling per-call applications). Arity mismatch is
+            // incomparable too — we hold the elaborator's arity check load-bearing.
+            (
+                ConstructorApply { ctor: ca, args: aa },
+                ConstructorApply { ctor: cb, args: ab },
+            ) if ca == cb && aa.len() == ab.len() => {
+                let any_more = aa.iter().zip(ab.iter()).any(|(x, y)| x.is_more_specific_than(y));
+                let all_eq_or_more = aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(x, y)| x == y || x.is_more_specific_than(y));
+                any_more && all_eq_or_more
+            }
             _ => false,
         }
     }
@@ -150,6 +165,11 @@ impl KType {
             // anything; phase 3 will tighten this by carrying the enclosing `Mu`'s body
             // through the predicate's call frame.
             KType::RecursiveRef(_) => true,
+            // Higher-kinded application has no runtime carrier in stage 2 — no
+            // `KObject` synthesizes a `ConstructorApply` `ktype()`. Reject all values;
+            // the meta-type admissibility path goes through `accepts_part` against a
+            // `Future(KTypeValue(_))`.
+            KType::ConstructorApply { .. } => false,
             _ => *self == obj.ktype(),
         }
     }
@@ -263,6 +283,16 @@ impl KType {
             // Phase 1: cycle gate — accept anything until phase 3 introduces a threaded
             // unfold set.
             KType::RecursiveRef(_) => true,
+            // Higher-kinded application: structural identity by `(ctor, args)`. Stage 2
+            // has no runtime carrier whose `ktype()` would synthesize a `ConstructorApply`
+            // (`KObject::KTypeValue` reports `TypeExprRef`, not the inner application), so
+            // a slot typed `ConstructorApply` admits only a `Future(KTypeValue(_))` whose
+            // inner `KType` is structurally equal. This is the meta-type path — actual
+            // value-level admissibility for opaque applied types is a stage-3 concern.
+            KType::ConstructorApply { .. } => match part {
+                ExpressionPart::Future(KObject::KTypeValue(kt)) => kt == self,
+                _ => false,
+            },
         }
     }
 }

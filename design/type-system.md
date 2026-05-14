@@ -58,11 +58,27 @@ convention is `LET Type = ...` for the principal abstract type, with `Elt`,
   by `:|` opaque ascription with `kind: Module`. Two distinct STRUCTs (or two
   distinct opaque ascriptions of the same source module) produce different
   `scope_id`s, giving the abstraction-barrier and per-declaration-distinctness
-  identity property the [module system](module-system.md) rests on. The
-  companion `AnyUserType { kind }` wildcard accepts any `UserType` of the
+  identity property the [module system](module-system.md) rests on.
+  `UserTypeKind` is `Struct | Tagged | Module | Newtype { repr } |
+  TypeConstructor { param_names }`. The two payload-carrying variants
+  (`Newtype`, `TypeConstructor`) have a manual `PartialEq` that ignores their
+  payloads — identity equality is by variant tag plus the carrier's
+  `(scope_id, name)`, so wildcard / concrete pairs compare equal.
+  The companion `AnyUserType { kind }` wildcard accepts any `UserType` of the
   matching kind, used for slot types that admit "any user-declared X" — ATTR's
   `body_struct` / `body_module` slots, `MODULE`'s declaration slot, `:|` / `:!`
-  ascription, construction primitives' return types.
+  ascription, construction primitives' return types. The surface keywords
+  `Newtype` and `TypeConstructor` are pinned for diagnostic rendering but not
+  registered as writable surface names (no entry in
+  [`KType::from_name`](../src/runtime/model/types/ktype_resolution.rs)).
+- Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
+  Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
+  / `Dict(_, _)`. Emitted by `elaborate_type_expr` when the outer name of a
+  parameterized `TypeExpr` resolves to a
+  `UserType { kind: TypeConstructor { .. }, .. }`; renders as `ctor<arg1,
+  arg2>` in diagnostics. See
+  [module-system.md § Higher-kinded type slots](module-system.md#higher-kinded-type-slots)
+  for the surface form and per-call generativity.
 - Signature carriers: `Signature` (the type of a first-class `SIG` value) and
   `SignatureBound { sig_id, sig_path }` — the per-declaration `SIG` identity
   written into `bindings.types` at finalize time so signature names resolve

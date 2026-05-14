@@ -151,6 +151,64 @@ already flow.
 Multi-argument functors are ordinary multi-parameter FNs. Currying is just
 nested FNs.
 
+## Higher-kinded type slots
+
+Signatures can declare **type-constructor slots** — abstract types that take
+a type parameter — so parametric abstractions like the `Monad` signature in
+[design/effects.md](effects.md) are expressible:
+
+```
+SIG Monad = (
+  (LET Wrap = (TYPE_CONSTRUCTOR Type))
+  (LET pure = (FN (PURE x: Number) -> Wrap<Number> = ...))
+  (LET bind = (FN (BIND m: Wrap<Number> f: Function<(Number) -> Wrap<Number>>) -> Wrap<Number> = ...))
+)
+```
+
+`(TYPE_CONSTRUCTOR <param>)` is the declaration form: inside a SIG body it
+binds the slot name (`Wrap` above) to a template
+`KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`
+carrying the parameter symbol list. The builtin lives in
+[`type_ops.rs`](../src/runtime/builtins/type_ops.rs).
+
+Application uses the existing `<>` parameterization surface:
+`Wrap<Number>` in a type-position slot elaborates through
+[`elaborate_type_expr`](../src/runtime/model/types/resolver.rs)'s
+constructor-application arm into
+`KType::ConstructorApply { ctor: <the Wrap UserType>, args: [Number] }` —
+structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.
+The arm arity-checks against the constructor's `param_names.len()` and
+parks on a placeholder when the outer name is an in-flight `LET`, the same
+forward-reference path bare-leaf type names use.
+
+Higher-kinded slots are **per-call generative on the same path as ordinary
+abstract type slots**. Two opaque ascriptions of the same source module
+against the same SIG mint distinct `TypeConstructor` carriers under each
+resulting module's `type_members[Wrap]` — their `(scope_id, name)` pairs
+differ, so `First.Wrap<Number>` and `Second.Wrap<Number>` are incomparable
+types. The minting site is the same loop in `ascribe.rs:body_opaque` that
+mints `kind: Module` slots; it inspects the SIG's
+`bindings.types[<slot>]` and matches `UserTypeKind::TypeConstructor` so the
+slot inherits its declared kind.
+
+Stage 2 ships **arity-1 only.** The `param_names` list always carries one
+entry; multi-parameter constructors (`Functor F G`) are deferred. The
+parameter symbol must be a Type-classified token (≥1 lowercase character):
+the parser rejects single-letter capitals (`T`, `E`) at lex time, so
+surface forms in this doc using `T` are conceptual — real code writes
+`(TYPE_CONSTRUCTOR Type)` or `(TYPE_CONSTRUCTOR Elt)`. The
+[token-class rule](type-system.md#token-classes--the-parser-level-foundation)
+is the parser-level cause.
+
+`ConstructorApply` has no value-level runtime carrier in stage 2: no
+`KObject` reports a `ConstructorApply` `ktype()`. The variant flows through
+the type-position machinery (FN return-type elaboration, signature-body
+ascription) but the corresponding value-level admissibility — wrapping a
+concrete value in `Wrap<Number>` and unwrapping it — is a stage-3 concern.
+Cross-module application (`M.Wrap<Number>` reached via ATTR-then-apply)
+isn't exercised end-to-end yet; bare `Wrap<T>` in a signature body or
+against a root-scope-bound constructor is the path the stage-2 tests pin.
+
 ## First-class modules
 
 Modules are values: `KObject::KModule` flows through `LET`, ATTR, and
@@ -501,12 +559,13 @@ specific signature) is part of stage 5, and the static-signature-at-use-site
 obligation for the type checker is part of stage 2.)
 
 - [Stage 2 — Module values and functors through the scheduler](../roadmap/module-system-2-scheduler.md)
-  — make module expressions, type expressions (with incremental refinement),
-  and functors full participants in the scheduler's free-execution model
-  via the `Dispatch`/`Bind` reduction described above. Ships parametric
-  modules with explicit application and sharing constraints. Re-runs the
-  [memory-model audit slate](memory-model.md#verification) against the
-  post-stage-1 runtime plus any new unsafe sites this work introduces.
+  — the post-stage-1 [memory-model audit slate](memory-model.md#verification)
+  carry-forward. Two unsafe sites still need targeted Miri tests under tree
+  borrows: the opaque-ascription re-bind path and the type-op dispatch path
+  through the per-call arena. Module-language substrate (scheduler-driven
+  type elaborator, `SIG_WITH` sharing constraints, dispatch-boundary
+  return-type pin substitution, higher-kinded type-constructor slots) has
+  shipped and is described in the body above.
 - [Stage 4 — Property testing and axioms](../roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom
   syntax in signatures (`AXIOM #(...)` over quoted bool predicates);

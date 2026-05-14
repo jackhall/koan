@@ -17,12 +17,14 @@
 /// [per-declaration type identity](../../../../design/type-system.md).
 ///
 /// Stage 4 added the `Newtype { repr }` variant which carries a `Box<KType>`, so the enum
-/// is no longer `Copy`. The manual `PartialEq` / `Eq` impl below *ignores* the inner
-/// `repr` — identity equality is by variant only, since the per-declaration `(scope_id,
-/// name)` pair on `KType::UserType` already separates two newtypes that share a
-/// representation. Ignoring `repr` is load-bearing for the wildcard
-/// `AnyUserType { kind: Newtype { repr: <sentinel> } }` to admit any concrete
-/// `UserType { kind: Newtype { repr: <real> }, .. }` value.
+/// is no longer `Copy`. Module-system stage 2 added the `TypeConstructor { param_names }`
+/// variant on the same pattern. The manual `PartialEq` / `Eq` impl below *ignores* the
+/// inner payload — identity equality is by variant tag only, since the per-declaration
+/// `(scope_id, name)` pair on `KType::UserType` already separates two carriers of the
+/// same kind. Ignoring the payload is load-bearing for wildcard admissibility:
+/// `AnyUserType { kind: Newtype { repr: <sentinel> } }` admits any concrete
+/// `UserType { kind: Newtype { repr: <real> }, .. }`, and the same applies to the
+/// `TypeConstructor` variant.
 #[derive(Clone, Debug)]
 pub enum UserTypeKind {
     Struct,
@@ -36,6 +38,18 @@ pub enum UserTypeKind {
     /// different `repr` boxes (e.g. arena-allocated identity vs. a freshly cloned
     /// one, or wildcard-sentinel vs. concrete) still compare equal.
     Newtype { repr: Box<KType> },
+    /// Module-system stage 2: higher-kinded type-constructor slot in a SIG. Declared
+    /// via `LET Wrap = (TYPE_CONSTRUCTOR T)` inside a SIG body; minted at opaque
+    /// ascription with a fresh `scope_id` per call (mirror of the `kind: Module`
+    /// abstract-type slot path in `ascribe.rs:body_opaque`). The variant-internal
+    /// `param_names` is NOT part of identity equality (the manual `PartialEq`
+    /// excludes it): two `UserType { kind: TypeConstructor { param_names: a }, .. }`
+    /// values with the same `(scope_id, name)` but different `param_names` lists
+    /// (e.g. wildcard-sentinel vs. concrete) still compare equal.
+    ///
+    /// Stage 2 ships arity-1 only — the param-name list is always a single entry.
+    /// Higher arity (`Functor F G`) is deferred per the roadmap.
+    TypeConstructor { param_names: Vec<String> },
 }
 
 impl PartialEq for UserTypeKind {
@@ -46,7 +60,8 @@ impl PartialEq for UserTypeKind {
             (Struct, Struct)
                 | (Tagged, Tagged)
                 | (Module, Module)
-                | (Newtype { .. }, Newtype { .. }),
+                | (Newtype { .. }, Newtype { .. })
+                | (TypeConstructor { .. }, TypeConstructor { .. }),
         )
     }
 }
@@ -55,15 +70,17 @@ impl Eq for UserTypeKind {}
 impl UserTypeKind {
     /// Surface keyword rendered in diagnostics and `AnyUserType::name()`. Matches the
     /// surface name a user would write for the wildcard slot (`Struct`, `Tagged`,
-    /// `Module`, `Newtype`). `Newtype` is not yet registered as a writable surface name
-    /// in `from_name` / `default_scope` — deferred per the stage-4 roadmap — but the
-    /// keyword is still pinned here for diagnostic rendering.
+    /// `Module`, `Newtype`, `TypeConstructor`). `Newtype` and `TypeConstructor` are
+    /// not registered as writable surface names in `from_name` / `default_scope` —
+    /// deferred per the roadmap — but the keyword is still pinned here for
+    /// diagnostic rendering.
     pub fn surface_keyword(&self) -> &'static str {
         match self {
             UserTypeKind::Struct => "Struct",
             UserTypeKind::Tagged => "Tagged",
             UserTypeKind::Module => "Module",
             UserTypeKind::Newtype { .. } => "Newtype",
+            UserTypeKind::TypeConstructor { .. } => "TypeConstructor",
         }
     }
 }
@@ -143,6 +160,17 @@ pub enum KType {
     /// scheduler-driven elaborator on top-level type-binding sites where a self-reference
     /// fired during body elaboration.
     Mu { binder: String, body: Box<KType> },
+    /// Application of a higher-kinded type constructor to arg types. `ctor` is a
+    /// `KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }` carrying the
+    /// per-call nominal identity of the constructor slot (minted by opaque ascription).
+    /// `args` are the structurally-elaborated arg types (one per `param_names` entry on
+    /// the constructor).
+    ///
+    /// Structural equality by `(ctor, args)` — two applications of the same constructor
+    /// with the same args are interchangeable. Mirrors `KType::List(_)` / `Dict(_, _)`:
+    /// an applied form keyed on inner structure, not a per-declaration nominal identity.
+    /// Stage 2 emits this for `Wrap<T>` and `M.Wrap<T>` via `elaborate_type_expr`.
+    ConstructorApply { ctor: Box<KType>, args: Vec<KType> },
     /// Back-reference to an enclosing `Mu`'s binder. Equality is by binder name only — the
     /// concrete identity is recovered from the surrounding `Mu` context. Never constructed
     /// from user source directly; only the elaborator emits it.
@@ -188,6 +216,10 @@ impl KType {
             KType::Signature => "Signature".into(),
             KType::Mu { binder, .. } => binder.clone(),
             KType::RecursiveRef(name) => name.clone(),
+            KType::ConstructorApply { ctor, args } => {
+                let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
+                format!("{}<{}>", ctor.name(), arg_names.join(", "))
+            }
             KType::Any => "Any".into(),
         }
     }
@@ -257,6 +289,10 @@ mod tests {
             UserTypeKind::Newtype { repr: Box::new(KType::Number) }.surface_keyword(),
             "Newtype",
         );
+        assert_eq!(
+            UserTypeKind::TypeConstructor { param_names: vec!["T".into()] }.surface_keyword(),
+            "TypeConstructor",
+        );
     }
 
     /// Manual `PartialEq` on `UserTypeKind` ignores the `Newtype` variant's `repr`.
@@ -269,6 +305,25 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, UserTypeKind::Struct);
         assert_ne!(UserTypeKind::Struct, a);
+    }
+
+    /// Module-system stage 2: manual `PartialEq` on the `TypeConstructor` variant ignores
+    /// `param_names`. Load-bearing for the wildcard
+    /// `AnyUserType { kind: TypeConstructor { param_names: <sentinel> } }` to compare
+    /// equal to a concrete `UserType { kind: TypeConstructor { param_names: <real> }, .. }`.
+    /// Mirror of `newtype_kind_partial_eq_ignores_repr`.
+    #[test]
+    fn user_type_kind_type_constructor_partial_eq_ignores_param_names() {
+        let a = UserTypeKind::TypeConstructor { param_names: vec!["T".into()] };
+        let b = UserTypeKind::TypeConstructor { param_names: vec!["U".into()] };
+        let empty = UserTypeKind::TypeConstructor { param_names: Vec::new() };
+        assert_eq!(a, b);
+        assert_eq!(a, empty);
+        assert_ne!(a, UserTypeKind::Struct);
+        assert_ne!(UserTypeKind::Module, a);
+        // Cross-kind: TypeConstructor must not compare equal to Newtype (both carry
+        // payloads but distinct variant tags).
+        assert_ne!(a, UserTypeKind::Newtype { repr: Box::new(KType::Number) });
     }
 
     #[test]

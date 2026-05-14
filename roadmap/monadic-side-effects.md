@@ -31,9 +31,11 @@ is scaffolding without a building.
 **Directions.**
 
 - *In-language `Monad` signature — decided per [design/effects.md](../design/effects.md).*
-  Implementation lands the signature, the `Wrap` higher-kinded slot, and `pure` /
-  `bind`. Requires module-system stage 2's functor support so `Wrap` can be a
-  higher-kinded abstract type slot.
+  Implementation lands the signature plus `pure` / `bind`. The `Wrap`
+  higher-kinded slot surface (`(TYPE_CONSTRUCTOR Type)` declaration form,
+  `KType::ConstructorApply` application) has landed via module-system
+  stage 2; see
+  [design/module-system.md § Higher-kinded type slots](../design/module-system.md#higher-kinded-type-slots).
 - *Standard effect modules — decided.* `Random`, `IO`, `Time`, plus existing
   `PRINT`-emitting builtins folded into `IO`. Each ascribes the `Monad` signature plus
   per-effect operations.
@@ -53,8 +55,9 @@ is scaffolding without a building.
 
 **Requires:**
 - [Module system stage 2 — Module values and functors through the scheduler](module-system-2-scheduler.md)
-  — the in-language `Monad` signature's `Wrap` slot is a higher-kinded
-  abstract type, expressible only with functor support.
+  — module-language substrate including the higher-kinded `Wrap` slot
+  surface. The HKT pieces have shipped; only stage 2's audit slate
+  carry-forward remains.
 - [Standard library](standard-library.md) — the standard effect modules
   (`Random`, `IO`, `Time`) ship as stdlib entries.
 
