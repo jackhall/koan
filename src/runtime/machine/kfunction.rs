@@ -21,7 +21,7 @@ use std::rc::Rc;
 use crate::ast::{ExpressionPart, KExpression};
 
 use crate::runtime::machine::core::{KError, KErrorKind, KFuture, Scope};
-use crate::runtime::model::types::{ExpressionSignature, KType, Parseable, SignatureElement};
+use crate::runtime::model::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
 use crate::runtime::model::values::{parse_named_value_pairs, KObject};
 
 pub mod argument_bundle;
@@ -173,17 +173,46 @@ impl<'a> KFunction<'a> {
         if has_lazy_slot { Some(eager_indices) } else { None }
     }
 
-    /// Auto-wrap-permissive shape check: bare-Identifier and bare-Type parts in a slot whose
-    /// declared type is neither `Identifier` nor `TypeExprRef` are tentatively accepted (the
-    /// auto-wrap pass will rewrite them into sub-Dispatches whose results type-check at
-    /// late dispatch). All other slot/part pairings reuse the normal `Argument::matches`
-    /// check. Mirrors the strict matcher except for the bare-name-in-value-slot allowance —
-    /// covers both `MAKESET some_var` (Identifier) and `MAKESET IntOrd` (Type-token).
+    /// Auto-wrap-permissive shape check. Speculatively admits two relaxations beyond the
+    /// strict matcher:
+    ///
+    /// - Bare-Identifier and bare leaf-Type parts in any slot whose declared type isn't
+    ///   `Identifier` or `TypeExprRef`. The auto-wrap pass rewrites these into single-name
+    ///   sub-Dispatches that re-enter via the bare-name short-circuit and route through
+    ///   the Identifier / TypeExprRef overload of `value_lookup`. Covers both
+    ///   `MAKESET some_var` (Identifier) and `MAKESET IntOrd` (Type-token).
+    /// - Parens-wrapped `Expression` parts in non-`KExpression` slots — *but only when*
+    ///   the signature also has at least one `KExpression` slot bound by an `Expression`
+    ///   part (i.e. the function is a [`Self::lazy_eager_indices`] candidate). The
+    ///   post-pick scheduler then routes the non-`KExpression` slot's `Expression`
+    ///   through `eager_indices` for sub-Dispatch while leaving the lazy
+    ///   `KExpression+Expression` pair untouched, and splices the resulting `Future(_)`
+    ///   back for strict re-matching. Covers shapes like `FN (...) -> Mo.Ty = (...)`
+    ///   where the return-type slot is `Expression([ATTR Mo Ty])` and FN's `signature`/
+    ///   `body` slots are also `Expression` parts. Functions without a `KExpression`
+    ///   slot (e.g. `LIST_OF Mo.Ty`, `PLUS (deep_call) OP 1`) ride the
+    ///   `resolve_dispatch::Deferred` path instead, where `schedule_eager_fallthrough`
+    ///   sub-Dispatches every `Expression` part uniformly — equivalent end state without
+    ///   the false-tentative-match noise that would otherwise show up here.
+    ///
+    /// All other slot/part pairings reuse the normal `Argument::matches` check.
     pub fn accepts_for_wrap(&self, expr: &KExpression<'_>) -> bool {
         let sig = &self.signature;
         if sig.elements.len() != expr.parts.len() {
             return false;
         }
+        // Pre-compute whether this function has a `KExpression+Expression` lazy slot — gates
+        // the Expression-in-non-KExpression-slot relaxation below so non-lazy candidates
+        // keep their existing `Deferred` path.
+        let has_lazy_kexpr_slot = sig.elements.iter().zip(expr.parts.iter()).any(|(el, part)| {
+            matches!(
+                (el, part),
+                (
+                    SignatureElement::Argument(Argument { ktype: KType::KExpression, .. }),
+                    ExpressionPart::Expression(_),
+                )
+            )
+        });
         for (el, part) in sig.elements.iter().zip(expr.parts.iter()) {
             match (el, part) {
                 (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
@@ -199,6 +228,12 @@ impl<'a> KFunction<'a> {
                     );
                     if is_bare_name
                         && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
+                    {
+                        continue;
+                    }
+                    if has_lazy_kexpr_slot
+                        && matches!(part, ExpressionPart::Expression(_))
+                        && !matches!(arg.ktype, KType::KExpression)
                     {
                         continue;
                     }

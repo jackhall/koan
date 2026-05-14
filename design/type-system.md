@@ -255,6 +255,26 @@ dispatch. Cycle-aware traversals (equality, printing, hashing) carry an
 unfold. Trivially cyclic aliases (`LET Ty = Ty`) surface as a structured
 error rather than a stack overflow.
 
+**Module-qualified type names.** A TypeExpr like `Mo.Ty` or chained
+`Outer.Inner.T` resolves through the value-side ATTR walker:
+[`access_module_member`](../src/runtime/builtins/attr.rs) tries the
+module's `type_members` table (opaque-ascription type bindings), then
+the child scope's `data` (so chained `Outer.Inner.X` reads the inner
+*module value* and the chain stays drillable), then the child scope's
+type-side `bindings.types` via `Scope::resolve_type` — synthesizing a
+`KTypeValue` carrier so type-position consumers (e.g. a LET-RHS routing
+through Combine) see a first-class `KType` value. The resolved type is
+the leaf's existing per-declaration `KType::UserType { kind, scope_id,
+name }`; no new variant, no path field.
+
+**Non-SCC forward type aliases.** A top-level `LET Ty = Un; LET Un = Number`
+binds without rejection: the Type-classed `Un` token on the first LET's
+RHS parks on the producer's dispatch-time placeholder via the same
+mechanism value-name forward references use, resumes when `LET Un =
+Number` finalizes, and writes through `Scope::register_type` to land in
+`bindings.types`. The mutual-recursion SCC sweep covers the cycle case;
+the placeholder-park rail covers the source-order case.
+
 ## Dispatch and slot-specificity
 
 When multiple registered functions match an incoming expression, dispatch picks
@@ -490,9 +510,6 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   it's reserved as the writable form once a builtin signature surfaces the
   need; today it appears only synthesized inside ATTR's `AnyUserType { kind:
   Newtype { repr: Any } }` slot.
-- [Eager type elaboration with placeholder-based recursion](../roadmap/eager-type-elaboration.md)
-  — module-qualified type-name paths and non-SCC forward references remain
-  deferred pending concrete use cases.
 - [Module system stage 5 — Modular implicits](../roadmap/module-system-5-modular-implicits.md)
   — inferred dispatch on signatures. Lands the multi-parameter dispatch the
   current slot-specificity ranking can't express on its own.

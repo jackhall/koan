@@ -194,10 +194,25 @@ fn access_field<'a>(
     }
 }
 
-/// Look `field` up inside a [`KObject::KModule`]'s child scope. Tries the module's
-/// `type_members` table first (so `Foo.Type` resolves to a `KType` value when present), then
-/// the child scope's `data` (LET/FN bindings under the module body). Returns a clean
-/// `ShapeError` naming the module's path and the missing member when neither finds anything.
+/// Look `field` up inside a [`KObject::KModule`]'s child scope. Tries, in order:
+///
+/// 1. The module's `type_members` table (opaque-ascription type binding: `IntOrd.Type`
+///    resolves to a `KType::UserType { kind: Module, .. }` minted with the new module's
+///    `scope_id`). Stored as a `KType` directly — return it as a `KTypeValue`.
+/// 2. The child scope's `data` (`LET`/`FN`/`MODULE`/`STRUCT`/... value bindings under
+///    the module body). Nominal binders like `MODULE Sub = (...)` and `STRUCT P = (...)`
+///    dual-write into both `data` and `bindings.types`; preferring `data` here means
+///    chained access `Outer.Inner.X` reads the inner *module value* from `data` rather
+///    than its type identity (which `bindings.types` carries), so the next ATTR step
+///    can recurse into the inner module's child scope.
+/// 3. The child scope's type-side `bindings.types` via [`Scope::resolve_type`]
+///    (pure-type bindings: `LET Ty = Number` inside the module body lands here via
+///    stage 1.7's `register_type` routing and has no `data` entry). Synthesize a
+///    `KTypeValue` carrier so type-position consumers (e.g. a LET-RHS routing through
+///    Combine) see a first-class `KType` value.
+///
+/// Returns a clean `ShapeError` naming the module's path and the missing member when
+/// none find anything.
 fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     let Some(m) = target.as_module() else {
         return err(KError::new(KErrorKind::TypeMismatch {
@@ -206,26 +221,19 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
             got: target.ktype().name().to_string(),
         }));
     };
-    // Type-position fallback: opaque ascription's `type_members` map (e.g., `IntOrd.Type`
-    // resolves to a `KType::UserType { kind: Module, .. }` minted with the new module's
-    // `scope_id`). The stored `KType` is the abstract type's actual identity — return it
-    // directly as a `KTypeValue` so identity comparisons downstream see the per-module
-    // `{ scope_id, name }` rather than a freshly elaborated leaf.
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
         return BodyResult::Value(
             m.child_scope().arena.alloc_object(KObject::KTypeValue(kt)),
         );
     }
-    // Module-member access reads the module's child-scope `data` map directly:
-    // `LET`-bound and `FN`-bound members live there, and that's the value side of
-    // the binding (the identifier-classed read path). Type-side names that
-    // appeared as `LET T = ...` inside the module body land here too via
-    // `KObject::KTypeValue` carriers until stage 1.7 reroutes them through
-    // `register_type`. Going through `Scope::resolve_type` here would miss
-    // every one of those bindings.
     let scope = m.child_scope();
     if let Some(obj) = scope.bindings().data().get(field).copied() {
         return BodyResult::Value(obj);
+    }
+    if let Some(kt) = scope.resolve_type(field) {
+        return BodyResult::Value(
+            scope.arena.alloc_object(KObject::KTypeValue(kt.clone())),
+        );
     }
     err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",

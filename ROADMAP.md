@@ -37,15 +37,24 @@ name placeholders](design/execution-model.md#dispatch-time-name-placeholders));
 the scheduler park-vs-own edge split (`DepEdge::Owned` / `DepEdge::Notify`
 tagging so `free`'s recursive reclaim walks the ownership tree only and
 ignores park edges installed by the single-Identifier short-circuit and
-replay-park); and the eager-type-elaboration phase 1–3 slice plus the
-parens-wrapped / phase-5 cleanup (one canonical runtime type representation,
-scheduler-aware FN / STRUCT / UNION elaboration with self-recursive STRUCT
-support and `LET Ty = Ty` cycle detection, FN parameter slots written
-`(LIST_OF Number)` / `(DICT_OF Str Number)` scheduling a sub-Dispatch from
-`parse_fn_param_list`, and the `NoopResolver` / `TypeResolver` /
-`ScopeResolver` seam plus the legacy `parse_typed_field_list` deleted so
-scope-aware elaboration goes exclusively through the scheduler-driven
-`elaborate_type_expr`); and the type-identity stage 1 substrate
+replay-park); and eager type elaboration end-to-end (one canonical runtime type
+representation, scheduler-aware FN / STRUCT / UNION elaboration with
+self-recursive STRUCT support and `LET Ty = Ty` cycle detection, FN
+parameter slots written `(LIST_OF Number)` / `(DICT_OF Str Number)`
+scheduling a sub-Dispatch from `parse_fn_param_list`, the `NoopResolver` /
+`TypeResolver` / `ScopeResolver` seam plus the legacy
+`parse_typed_field_list` deleted so scope-aware elaboration goes
+exclusively through the scheduler-driven `elaborate_type_expr`,
+module-qualified type names resolved through
+[`access_module_member`](src/runtime/builtins/attr.rs)'s
+`type_members` / `data` / `Scope::resolve_type` tier walk — so
+`LET MyT = Mo.Ty` and chained `Outer.Inner.T` bind in type position —
+and non-SCC forward type aliases like `LET Ty = Un; LET Un = Number`
+parking on the producer's dispatch-time placeholder via the same rail
+value-name forward references use, plus a head-Keyword fallback in
+[`run_dispatch`'s `Unmatched` arm](src/runtime/machine/execute/scheduler/dispatch.rs)
+that parks a consumer call on a sibling binder whose body deferred
+through a Combine so its registration hasn't landed yet); and the type-identity stage 1 substrate
 ([`RuntimeArena::alloc_ktype`](src/runtime/machine/core/arena.rs), the
 [`Bindings::types` map with the `try_register_type` and `try_register_nominal` write primitives](src/runtime/machine/core/bindings.rs),
 the
@@ -171,9 +180,7 @@ the rest incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
-- [Eager type elaboration with placeholder-based recursion](roadmap/eager-type-elaboration.md)
-  — module-qualified type-name paths and non-SCC forward references remain
-  deferred pending concrete use cases.
+
 ### Surface and ergonomics
 
 - [Files and imports](roadmap/files-and-imports.md) — a Koan codebase is one file;

@@ -215,15 +215,16 @@ and the dep schedule. Phase 2 calls
 matches on its [`ResolveOutcome`](../src/runtime/machine/core/scope.rs):
 `Resolved(r)` continues into phase 3 with the picked function plus the
 per-slot index buckets `r.slots` carries (`wrap_indices`, `ref_name_indices`,
-`eager_indices`); `Ambiguous(n)` and `Unmatched` surface as
-`AmbiguousDispatch` / `DispatchFailed` errors; `Deferred` (no match against
+`eager_indices`); `Ambiguous(n)` surfaces as an `AmbiguousDispatch` error;
+`Unmatched` first tries the head-Keyword placeholder fallback (below) and,
+on miss, surfaces as `DispatchFailed`; `Deferred` (no match against
 the bare shape but the expression carries nested `Expression` /
 `ListLiteral` / `DictLiteral` parts whose evaluation may produce typed
 `Future(_)` parts that match) jumps to phase 5's eager-fallthrough loop and
 re-dispatches via [`run_bind`](../src/runtime/machine/execute/scheduler/finish.rs)
 after subs resolve.
 
-The four rails the resolution feeds:
+The five rails the resolution feeds:
 
 - **Bare-name short-circuit** (phase 1, runs before resolution). A
   single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
@@ -231,6 +232,17 @@ The four rails the resolution feeds:
   to `Lift { from: producer_id }` (the same shim `BodyResult::Tail` uses for
   sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
   produces the structured error.
+- **Head-Keyword placeholder fallback** (phase 2, runs inside the
+  `Unmatched` arm). The bucket lookup failed, but a sibling binder may be
+  in flight: `first_keyword_placeholder` walks the expression's `Keyword`
+  parts and, on the first `Resolution::Placeholder` hit, parks this slot
+  on the producer and re-dispatches the same expression. Without this,
+  `(ID 7)` submitted alongside an `FN ID (...) -> Mo.Ty = (...)` whose
+  body defers (its return-type slot routes through a Combine for sub-Dispatch)
+  would race the producer's registration and surface as `no matching
+  function`. Mirrors the bare-name short-circuit's `Placeholder` arm: the
+  consumer parks on the producer's terminal write, then the next pop
+  re-enters and hits the now-registered function.
 - **Placeholder install** (phase 3). If the picked function carries a
   `pre_run` extractor, `Resolved.placeholder_name` is its result and the
   driver installs `name → NodeId(idx)` on the dispatching scope. A
@@ -312,14 +324,11 @@ generically rather than as a special case in the elaborator.
   `Dispatch` and `Bind` machinery — type-returning builtins on the value
   path, `Bind` as the refinement-and-wake-up mechanism, and stage 5
   implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
-  node kind.
-  [Eager type elaboration](../roadmap/eager-type-elaboration.md) lands the
-  scheduler-driven type-elaboration substrate end-to-end through FN
-  signatures, including placeholder-based recursive type definitions;
-  module-system [stage 2](../roadmap/module-system-2-scheduler.md) layers
-  higher-kinded slots and sharing constraints on top;
-  [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
-  implicit search.
+  node kind. Module-system
+  [stage 2](../roadmap/module-system-2-scheduler.md) layers higher-kinded
+  slots and sharing constraints on top of the shipped scheduler-driven
+  elaborator; [stage 5](../roadmap/module-system-5-modular-implicits.md)
+  layers implicit search.
 - **Monadic side-effect capture**
   ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,

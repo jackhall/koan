@@ -14,8 +14,7 @@ walking both type-value and `KSignature` bindings, MODULE / SIG body
 statements planning onto the outer scheduler with `BodyResult::DeferTo`,
 and end-to-end functor dispatch with per-call generative semantics — has
 landed; see [design/module-system.md](../design/module-system.md) for the
-shipped shape. Scheduler-driven type elaboration with placeholder-based
-recursion is tracked in [eager-type-elaboration](eager-type-elaboration.md).
+shipped shape.
 
 **Impact.**
 
@@ -46,8 +45,7 @@ recursion is tracked in [eager-type-elaboration](eager-type-elaboration.md).
   not a separate `with type` keyword. Implementation needs
   `TypeParams::Named` in the parser and a `KType::TypeConstructor`
   slot kind. Resolution of the named slot's right-hand side rides on the
-  scheduler-driven elaborator landed by
-  [eager-type-elaboration](eager-type-elaboration.md).
+  shipped scheduler-driven type elaborator.
 - *Higher-kinded abstract type slots — decided.* Signatures declare
   type constructors (a `Wrap` slot taking a type parameter) so monads
   and other parametric abstractions are expressible. Required by
@@ -64,13 +62,7 @@ recursion is tracked in [eager-type-elaboration](eager-type-elaboration.md).
 
 ## Dependencies
 
-**Requires:**
-- [Eager type elaboration with placeholder-based recursion](eager-type-elaboration.md) —
-  HKT slot elaboration (`KType::TypeConstructor`) and `<Type: Er.Type>`
-  sharing-constraint resolution ride on the scheduler-driven elaborator
-  that work lands. Doing stage 2's surface ergonomics first would force
-  re-doing them once eager elaboration replaces the synchronous
-  resolver.
+**Requires:** none.
 
 **Unblocks:**
 - [Standard library](standard-library.md) — collections and other

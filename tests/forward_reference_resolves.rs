@@ -115,6 +115,115 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
     assert!(matches!(scope.lookup("v"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
+/// Forward LET type alias: `LET Ty = Un; LET Un = Number`. The Type-classed `Un` token
+/// on the RHS of the first LET parks on `Un`'s dispatch-time placeholder, resumes when
+/// `LET Un = Number` finalizes, and ends with `Ty` resolving to `Number` via the
+/// `bindings.types` chain.
+#[test]
+fn forward_let_type_alias_resolves_to_number() {
+    use koan::runtime::model::KType;
+    let arena = RuntimeArena::new();
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let scope = run(&arena, captured, "LET Ty = Un\nLET Un = Number");
+    assert!(
+        matches!(scope.resolve_type("Ty"), Some(KType::Number)),
+        "expected Ty to resolve to Number, got {:?}",
+        scope.resolve_type("Ty"),
+    );
+}
+
+/// Module-qualified type name in LET-RHS position. `LET MyT = Mo.Ty` where `Mo` is a
+/// module exporting `Ty = Number`. The RHS auto-wraps and sub-Dispatches the ATTR; the
+/// chain produces a `KTypeValue(kt)` via `access_module_member`'s `Scope::resolve_type`
+/// fallback (stage 1.7 routed module-body `LET Ty = ...` through `register_type` into
+/// `bindings.types`, which `access_module_member` consults), and the LET-TypeExprRef-LHS
+/// overload routes that carrier through `register_type` on the parent scope.
+#[test]
+fn let_alias_via_module_qualified_type_resolves() {
+    use koan::runtime::model::KType;
+    let arena = RuntimeArena::new();
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let scope = run(
+        &arena,
+        captured,
+        "MODULE Mo = ((LET Ty = Number))\nLET MyT = Mo.Ty",
+    );
+    assert!(
+        matches!(scope.resolve_type("MyT"), Some(KType::Number)),
+        "expected MyT to resolve to Number via Mo.Ty, got {:?}",
+        scope.resolve_type("MyT").map(|t| t.name()),
+    );
+}
+
+/// Module-qualified type name in FN parameter (and return) position. `Mo.Ty` arrives
+/// as `ExpressionPart::Expression` in the FN signature; `parse_fn_param_list` records
+/// it for sub-Dispatch and splices back the resolved type as `Future(KTypeValue)` on
+/// the Combine wake. The return-type slot's `Expression([ATTR Mo Ty])` rides the
+/// tentative-pass `Expression`-in-non-`KExpression`-slot allowance on
+/// `KFunction::accepts_for_wrap`, then `lazy_eager_indices` puts the slot into
+/// `eager_indices` so the dispatcher schedules its sub-Dispatch. The subsequent
+/// `LET y = (ID 7)` parks on `ID`'s dispatch-time placeholder via the head-Keyword
+/// fallback in `run_dispatch`'s `Unmatched` arm — without that, the call would race
+/// FN's Combine-deferred registration and surface as `no matching function`.
+#[test]
+fn fn_param_with_module_qualified_type_resolves() {
+    let arena = RuntimeArena::new();
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let scope = run(
+        &arena,
+        captured,
+        "MODULE Mo = ((LET Ty = Number))\n\
+         FN (ID x: Mo.Ty) -> Mo.Ty = (x)\n\
+         LET y = (ID 7)",
+    );
+    assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));
+}
+
+/// Module-qualified type name in a `LIST_OF`-style type frame. `LIST_OF Mo.Ty` rides
+/// the existing `Deferred` path in `resolve_dispatch`: the bare `LIST_OF` overload
+/// (`elem: TypeExprRef`) rejects the `Expression` part on strict match, but
+/// `expr_has_eager_part` returns true so `schedule_eager_fallthrough` sub-Dispatches
+/// `Mo.Ty` and re-binds with `Future(KTypeValue(_))` in the slot.
+#[test]
+fn type_frame_with_module_qualified_element_resolves() {
+    let arena = RuntimeArena::new();
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let scope = run(
+        &arena,
+        captured,
+        "MODULE Mo = ((LET Ty = Number))\n\
+         LET MyList = (LIST_OF Mo.Ty)",
+    );
+    assert!(
+        scope.resolve_type("MyList").is_some(),
+        "expected MyList to bind via LIST_OF Mo.Ty",
+    );
+}
+
+/// Chained module-qualified type name `Outer.Inner.T`. The inner `Outer.Inner` resolves
+/// via `access_module_member` to the inner module's `KObject::KModule` value (preferring
+/// the `bindings.data` arm so the chain stays drillable); the outer `.T` then hits the
+/// inner module's `bindings.types` via the same helper's `resolve_type` fallback and
+/// surfaces as `KTypeValue(Number)`. Pins that the value-side ATTR walker produces a
+/// usable `KTypeValue` for type-position consumers across the chain.
+#[test]
+fn chained_module_qualified_type_resolves() {
+    use koan::runtime::model::KType;
+    let arena = RuntimeArena::new();
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let scope = run(
+        &arena,
+        captured,
+        "MODULE Outer = ((MODULE Inner = ((LET Ty = Number))))\n\
+         LET MyT = Outer.Inner.Ty",
+    );
+    assert!(
+        matches!(scope.resolve_type("MyT"), Some(KType::Number)),
+        "expected MyT to resolve to Number via Outer.Inner.Ty, got {:?}",
+        scope.resolve_type("MyT"),
+    );
+}
+
 /// Producer-error propagation: when a forward reference's producer errors at dispatch
 /// time (e.g. `LET x = (UNDEFINED_FN)` — the inner expression has no matching function),
 /// `Scheduler::execute` returns the dispatch failure directly. The consumer's slot may
@@ -152,3 +261,4 @@ fn producer_error_propagates_to_parked_consumer() {
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
     );
 }
+

@@ -14,8 +14,12 @@ impl<'a> Scheduler<'a> {
     ///    terminates immediately; a `Placeholder` hit installs a park edge and rewrites the
     ///    slot to a `Lift`. `Unbound` and non-bare-name shapes fall through.
     /// 2. **`Scope::resolve_dispatch`** — one chain walk yielding a [`Resolved`],
-    ///    `Ambiguous(n)`, `Deferred`, or `Unmatched`. `Ambiguous` / `Unmatched` short-circuit
-    ///    to a structured error; `Deferred` jumps to phase 5; `Resolved` continues.
+    ///    `Ambiguous(n)`, `Deferred`, or `Unmatched`. `Ambiguous` surfaces as a structured
+    ///    error. `Unmatched` first tries a head-Keyword placeholder fallback via
+    ///    [`first_keyword_placeholder`] — a sibling FN whose `pre_run` already announced
+    ///    the dispatch name (`Resolution::Placeholder`) parks this slot rather than
+    ///    failing; otherwise surfaces as a structured error. `Deferred` jumps to phase 5;
+    ///    `Resolved` continues.
     /// 3. **Placeholder install** — if the picked function carried a `pre_run` extractor,
     ///    install its dispatch-time name placeholder against this slot's `NodeId`.
     /// 4. **`apply_auto_wrap` + `try_replay_park`** — rewrite the expression's
@@ -52,6 +56,23 @@ impl<'a> Scheduler<'a> {
                 }));
             }
             ResolveOutcome::Unmatched => {
+                // Forward-reference fallback: the bucket lookup failed, but a sibling
+                // binder may be in flight (its `pre_run` installed a placeholder for the
+                // dispatch name). Park on the producer so the consumer re-dispatches after
+                // the binder finalizes and registers its function. Without this, a sequence
+                // like `LET y = (ID 7)` submitted alongside an FN whose body must defer
+                // (e.g. through a Combine on a forward type-name) would race the producer
+                // and fail with `no matching function`. Mirrors the bare-name short-circuit's
+                // `Resolution::Placeholder` arm: park-and-re-dispatch on the producer's
+                // terminal write, then the next pop re-enters this method.
+                if let Some(producer_id) = first_keyword_placeholder(&expr, scope) {
+                    self.deps.add_park_edge(producer_id, NodeId(idx));
+                    return Ok(NodeStep::Replace {
+                        work: NodeWork::Dispatch(expr),
+                        frame: None,
+                        function: None,
+                    });
+                }
                 return Err(KError::new(KErrorKind::DispatchFailed {
                     expr: expr.summarize(),
                     reason: "no matching function".to_string(),
@@ -323,6 +344,32 @@ impl<'a> Scheduler<'a> {
         let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
         self.defer_to_lift(idx, bind_id)
     }
+}
+
+/// Forward-reference fallback for the `Unmatched` arm of `run_dispatch`. Walks the
+/// expression's `Keyword` parts and consults [`Scope::resolve`] for each — a `Placeholder`
+/// hit means a sibling binder's `pre_run` already announced this dispatch name, so the
+/// consumer should park on the producer rather than fail with `no matching function`.
+/// First hit wins (FN's `pre_run` extracts the first signature `Keyword`, which is the
+/// registered dispatch name — same one a consumer's first Keyword would match).
+///
+/// `Resolution::Value` and `Resolution::Unbound` are non-hits: a value-side binding under
+/// the same name is fine (the bucket lookup already failed against the function shape,
+/// so this is a real shape mismatch, not a pending one), and an unbound name is the
+/// terminal "no matching function" case.
+fn first_keyword_placeholder<'a>(
+    expr: &KExpression<'a>,
+    scope: &'a crate::runtime::machine::Scope<'a>,
+) -> Option<NodeId> {
+    use crate::runtime::machine::Resolution;
+    for part in &expr.parts {
+        if let ExpressionPart::Keyword(name) = part {
+            if let Resolution::Placeholder(producer_id) = scope.resolve(name) {
+                return Some(producer_id);
+            }
+        }
+    }
+    None
 }
 
 /// Phase 3. Pure transform: rewrite each `wrap_indices` slot's bare-Identifier or bare
