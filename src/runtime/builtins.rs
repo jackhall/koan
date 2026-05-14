@@ -12,6 +12,7 @@ mod fn_def;
 mod let_binding;
 mod match_case;
 mod module_def;
+mod newtype_def;
 mod print;
 mod quote;
 mod sig_def;
@@ -104,6 +105,7 @@ pub fn default_scope<'a>(
     crate::runtime::model::values::tagged_union::register(scope);
     struct_def::register(scope);
     crate::runtime::model::values::struct_value::register(scope);
+    newtype_def::register(scope);
     type_call::register(scope);
     match_case::register(scope);
     attr::register(scope);

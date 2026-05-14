@@ -219,8 +219,8 @@ impl<'a> KObject<'a> {
             // immutable-carrier contract. `inner` already lives in the arena, so no
             // deep allocation is needed here.
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
-                inner: *inner,
-                type_id: *type_id,
+                inner,
+                type_id,
             },
         }
     }

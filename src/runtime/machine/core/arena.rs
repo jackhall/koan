@@ -148,7 +148,7 @@ impl RuntimeArena {
     /// Allocate a `KType` into the run-lifetime store. No lifetime erasure: `KType` carries
     /// no lifetime parameter, so storage is direct and the returned `&'a KType` is a plain
     /// coerce of `typed_arena::Arena::alloc`'s `&'a mut KType`. No `unsafe` is required.
-    pub fn alloc_ktype<'a>(&'a self, t: KType) -> &'a KType {
+    pub fn alloc_ktype(&self, t: KType) -> &KType {
         self.ktypes.alloc(t)
     }
 
