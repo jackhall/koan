@@ -8,7 +8,7 @@
 //! are distinct concepts; do not conflate.
 //!
 //! Lifetime erasure on the scope pointer follows the same pattern as
-//! [`KFunction`](crate::runtime::machine::kfunction::KFunction) and
+//! [`KFunction`](crate::runtime::machine::core::kfunction::KFunction) and
 //! [`RuntimeArena`](crate::runtime::machine::core::arena::RuntimeArena); per-site SAFETY blocks
 //! sit at the `unsafe` `as_ref()` calls below.
 
@@ -235,7 +235,7 @@ mod tests {
     /// execution end-to-end.
     #[test]
     fn functor_per_call_module_lifts_correctly() {
-        use crate::runtime::machine::kfunction::{Body, KFunction};
+        use crate::runtime::machine::core::kfunction::{Body, KFunction};
         use crate::runtime::machine::core::{CallArena, RuntimeArena as RA};
         use crate::runtime::machine::model::types::{ExpressionSignature, KType, SignatureElement, ReturnType};
         use crate::runtime::machine::model::values::KObject;
@@ -259,7 +259,7 @@ mod tests {
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
             Body::Builtin(|s, _, _| {
-                crate::runtime::machine::kfunction::BodyResult::Value(s.arena.alloc_object(KObject::Null))
+                crate::runtime::machine::core::kfunction::BodyResult::Value(s.arena.alloc_object(KObject::Null))
             }),
             frame.scope(),
         );

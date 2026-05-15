@@ -1,6 +1,6 @@
 use crate::runtime::machine::model::{KObject, KType, Parseable};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
+use crate::runtime::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, dispatch_constructor, err, register_builtin, sig};
 
 /// `<verb:Identifier> <args:KExpression>` — surface syntax `f (a: 1, b: 2)`. When `verb`

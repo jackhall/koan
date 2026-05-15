@@ -22,7 +22,7 @@
 
 use crate::ast::{ExpressionPart, KExpression, TypeParams};
 use crate::runtime::machine::core::ApplyOutcome;
-use crate::runtime::machine::kfunction::argument_bundle::{
+use crate::runtime::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_ktype, extract_type_name_ref,
 };
 use crate::runtime::machine::{

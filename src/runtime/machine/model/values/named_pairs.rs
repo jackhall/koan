@@ -1,6 +1,6 @@
 //! Shared parser for `<name>: <value> <name>: <value> ...` named-argument lists. Used by
 //! struct construction ([`crate::runtime::builtins::struct_value::apply`]) and first-class
-//! function calls ([`KFunction::apply`](crate::runtime::machine::kfunction::KFunction)) —
+//! function calls ([`KFunction::apply`](crate::runtime::machine::core::kfunction::KFunction)) —
 //! the two paths that switched from positional to named arguments.
 //!
 //! Mirrors the shape of [`crate::runtime::machine::model::types::parse_typed_field_list_via_elaborator`];

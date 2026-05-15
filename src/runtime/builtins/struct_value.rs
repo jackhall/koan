@@ -22,7 +22,7 @@ use indexmap::IndexMap;
 
 use crate::ast::{ExpressionPart, KExpression};
 use crate::runtime::machine::core::{KError, KErrorKind, Scope};
-use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
 };

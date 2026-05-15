@@ -1,5 +1,5 @@
 use crate::ast::ExpressionPart;
-use crate::runtime::machine::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
+use crate::runtime::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use crate::runtime::machine::core::{KError, Scope};
 use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,

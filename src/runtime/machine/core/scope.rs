@@ -3,7 +3,7 @@ use std::io::Write;
 
 use crate::ast::KExpression;
 
-use crate::runtime::machine::kfunction::{ArgumentBundle, KFunction, NodeId};
+use crate::runtime::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::runtime::machine::model::values::KObject;
 use super::arena::RuntimeArena;
 use super::bindings::{ApplyOutcome, Bindings};
@@ -495,11 +495,11 @@ fn build_resolved<'a>(
 /// needs for auto-wrap, replay-park, and eager-sub scheduling. `slots` is held by value —
 /// `build_resolved` is the sole producer, so this is the single carrier for the disjoint
 /// `(eager_indices | wrap_indices | ref_name_indices)` invariant documented on
-/// [`crate::runtime::machine::kfunction::ClassifiedSlots`].
+/// [`crate::runtime::machine::core::kfunction::ClassifiedSlots`].
 pub struct Resolved<'a> {
     pub function: &'a KFunction<'a>,
     pub placeholder_name: Option<String>,
-    pub slots: crate::runtime::machine::kfunction::ClassifiedSlots,
+    pub slots: crate::runtime::machine::core::kfunction::ClassifiedSlots,
 }
 
 /// Outcome of [`Scope::resolve_dispatch`]. See that method's docstring for the meaning of

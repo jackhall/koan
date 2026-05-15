@@ -4,7 +4,7 @@ use crate::runtime::builtins::test_support::{marker, one_slot_sig, run_root_bare
 use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{NodeId, RuntimeArena, Scope};
-use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression, KLiteral};
 
 use super::super::nodes::{NodeOutput, NodeWork};

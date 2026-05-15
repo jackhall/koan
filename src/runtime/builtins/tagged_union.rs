@@ -1,5 +1,5 @@
 //! Tagged-union construction primitives, mirroring
-//! [`KFunction::apply`](crate::runtime::machine::kfunction::KFunction) in shape: the
+//! [`KFunction::apply`](crate::runtime::machine::core::kfunction::KFunction) in shape: the
 //! synthesis that turns a "call site" into a tail expression lives next to the type,
 //! not inside the dispatch builtins that consume it.
 //!
@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use crate::ast::{ExpressionPart, KExpression};
 use crate::runtime::machine::core::{KError, KErrorKind, Scope};
-use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
 };
@@ -31,7 +31,7 @@ use crate::runtime::machine::model::values::KObject;
 
 use super::register_builtin;
 
-/// Mirror of [`KFunction::apply`](crate::runtime::machine::kfunction::KFunction): take
+/// Mirror of [`KFunction::apply`](crate::runtime::machine::core::kfunction::KFunction): take
 /// the args parts captured at the call site and produce a `BodyResult::Tail` re-dispatching
 /// through the construction primitive. `schema_obj` is the looked-up `&'a KObject<'a>`
 /// reference (must be `KObject::TaggedUnionType(_)` — caller's responsibility).

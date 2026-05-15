@@ -5,7 +5,7 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::ast::{KExpression, TypeExpr};
-use crate::runtime::machine::kfunction::KFunction;
+use crate::runtime::machine::core::kfunction::KFunction;
 use crate::runtime::machine::core::{CallArena, KFuture};
 use crate::runtime::machine::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
 use super::module::{Module, Signature};

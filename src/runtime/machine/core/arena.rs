@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use typed_arena::Arena;
 
-use crate::runtime::machine::kfunction::KFunction;
+use crate::runtime::machine::core::kfunction::KFunction;
 use crate::runtime::machine::model::types::KType;
 use crate::runtime::machine::model::values::{KObject, Module, Signature};
 use super::scope::Scope;
@@ -483,13 +483,13 @@ mod tests {
         // `Rc<CallArena>` pointing at `frame.arena()`. The cycle gate only inspects the
         // carried `Rc`, so the placeholder `KFunction` body is irrelevant.
         let dummy_fn_obj = outer.alloc_object(KObject::KFunction(
-            outer.alloc_function(crate::runtime::machine::kfunction::KFunction::new(
+            outer.alloc_function(crate::runtime::machine::core::kfunction::KFunction::new(
                 crate::runtime::machine::model::types::ExpressionSignature {
                     return_type: crate::runtime::machine::model::types::ReturnType::Resolved(crate::runtime::machine::model::types::KType::Null),
                     elements: vec![crate::runtime::machine::model::types::SignatureElement::Keyword("DUMMY".into())],
                 },
-                crate::runtime::machine::kfunction::Body::Builtin(|_, _, _|
-                    crate::runtime::machine::kfunction::BodyResult::Value(null_singleton())),
+                crate::runtime::machine::core::kfunction::Body::Builtin(|_, _, _|
+                    crate::runtime::machine::core::kfunction::BodyResult::Value(null_singleton())),
                 scope,
             )),
             None,

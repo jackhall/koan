@@ -12,7 +12,7 @@ impl KType {
     /// True iff this declared parameter `KType` denotes the type language — i.e. a
     /// FN parameter declared with this `KType` carries (at call time) a value whose
     /// nominal type identity is meaningful as a *type* binding, not just as a value
-    /// binding. Used by [`crate::runtime::machine::kfunction::KFunction::invoke`]
+    /// binding. Used by [`crate::runtime::machine::core::kfunction::KFunction::invoke`]
     /// to decide whether to dual-write the per-call binding into
     /// [`crate::runtime::machine::core::Bindings::types`] alongside the usual
     /// value-side `bind_value`.
@@ -570,7 +570,7 @@ mod tests {
     /// `is_type_denoting` returns `true` exactly for the variants enumerated in the
     /// predicate's docstring — the parameters whose declared `KType` makes the bound
     /// value's nominal identity meaningful at the type level. Anchors the dual-write
-    /// gate in [`crate::runtime::machine::kfunction::KFunction::invoke`].
+    /// gate in [`crate::runtime::machine::core::kfunction::KFunction::invoke`].
     #[test]
     fn is_type_denoting_table() {
         // SignatureBound — module ascribed to a signature.

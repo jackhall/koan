@@ -240,7 +240,7 @@ impl<'a> KExpression<'a> {
     /// dispatch-time placeholder extractor for typed-binder builtins (STRUCT, UNION,
     /// MODULE, SIG) whose surface form is `<KEYWORD> <Name> = (<body>)`. Returns `None`
     /// on shape mismatch; the builtin body is responsible for surfacing the structured
-    /// error (see [`crate::runtime::machine::kfunction::PreRunFn`]).
+    /// error (see [`crate::runtime::machine::core::kfunction::PreRunFn`]).
     pub fn binder_name_from_type_part(&self) -> Option<String> {
         match self.parts.get(1)? {
             ExpressionPart::Type(t) => Some(t.name.clone()),

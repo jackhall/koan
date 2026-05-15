@@ -14,7 +14,7 @@ use crate::runtime::machine::model::types::{
 
 use crate::ast::KExpression;
 
-use crate::runtime::machine::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
+use crate::runtime::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.

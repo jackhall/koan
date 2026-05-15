@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::runtime::machine::kfunction::KFunction;
+use crate::runtime::machine::core::kfunction::KFunction;
 use crate::runtime::machine::model::types::Parseable;
 use crate::runtime::machine::model::KType;
 use crate::ast::KExpression;

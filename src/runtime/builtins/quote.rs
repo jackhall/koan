@@ -1,7 +1,7 @@
 use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
-use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
+use crate::runtime::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, err, kw, register_builtin, sig};
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`. The body is the captured raw AST,

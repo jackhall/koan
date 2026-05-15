@@ -1,6 +1,6 @@
 use super::{Resolution, RuntimeArena, Scope};
 use crate::runtime::builtins::test_support::run_root_bare;
-use crate::runtime::machine::kfunction::{Body, KFunction, NodeId};
+use crate::runtime::machine::core::kfunction::{Body, KFunction, NodeId};
 use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::model::values::KObject;
 
@@ -13,10 +13,10 @@ fn unit_signature<'a>() -> ExpressionSignature<'a> {
 
 fn body_no_op<'a>(
     _scope: &'a Scope<'a>,
-    _sched: &mut dyn crate::runtime::machine::kfunction::SchedulerHandle<'a>,
-    _bundle: crate::runtime::machine::kfunction::ArgumentBundle<'a>,
-) -> crate::runtime::machine::kfunction::BodyResult<'a> {
-    crate::runtime::machine::kfunction::BodyResult::Value(_scope.arena.alloc_object(KObject::Null))
+    _sched: &mut dyn crate::runtime::machine::core::kfunction::SchedulerHandle<'a>,
+    _bundle: crate::runtime::machine::core::kfunction::ArgumentBundle<'a>,
+) -> crate::runtime::machine::core::kfunction::BodyResult<'a> {
+    crate::runtime::machine::core::kfunction::BodyResult::Value(_scope.arena.alloc_object(KObject::Null))
 }
 
 /// Snapshot-iteration semantics: a re-entrant `bind_value` queues silently and only
@@ -254,7 +254,7 @@ use super::ResolveOutcome;
 use crate::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::runtime::builtins::register_builtin;
 use crate::runtime::builtins::test_support::{marker, one_slot_sig};
-use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 
 fn body_a<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "a")) }
 fn body_b<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "b")) }

@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 
-use crate::runtime::machine::kfunction::KFunction;
+use crate::runtime::machine::core::kfunction::KFunction;
 use crate::runtime::machine::model::values::KObject;
 
 use super::bindings::{ApplyOutcome, Bindings};

@@ -4,7 +4,7 @@ use crate::runtime::machine::model::{ExpressionSignature, KObject, KType, Signat
 use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
 use crate::runtime::machine::model::types::{elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, ReturnType};
 
-use crate::runtime::machine::kfunction::argument_bundle::{
+use crate::runtime::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
 use crate::ast::ExpressionPart;

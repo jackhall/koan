@@ -6,7 +6,7 @@ use crate::runtime::machine::model::KType;
 
 use super::dispatch_constructor;
 use super::newtype_def::newtype_construct;
-use crate::runtime::machine::kfunction::argument_bundle::{
+use crate::runtime::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
 use super::{arg, err, register_builtin, sig};

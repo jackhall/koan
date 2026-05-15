@@ -24,7 +24,7 @@ use crate::runtime::machine::model::KType;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression};
 
-use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
+use crate::runtime::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, err, kw, register_builtin, sig};
 
 pub fn body<'a>(
