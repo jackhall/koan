@@ -1,4 +1,4 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{err, register_builtin};
@@ -25,7 +25,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "value_pass",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
             ],

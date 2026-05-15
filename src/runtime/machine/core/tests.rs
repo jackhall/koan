@@ -1,12 +1,12 @@
 use super::{Resolution, RuntimeArena, Scope};
 use crate::runtime::builtins::test_support::run_root_bare;
 use crate::runtime::machine::kfunction::{Body, KFunction, NodeId};
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::model::values::KObject;
 
-fn unit_signature() -> ExpressionSignature {
+fn unit_signature<'a>() -> ExpressionSignature<'a> {
     ExpressionSignature {
-        return_type: KType::Any,
+        return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Keyword("FOO".into())],
     }
 }
@@ -169,14 +169,14 @@ fn register_function_allows_overload_with_different_arg_types() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let sig_num = ExpressionSignature {
-        return_type: KType::Any,
+        return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
             SignatureElement::Keyword("BAR".into()),
             SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Number }),
         ],
     };
     let sig_str = ExpressionSignature {
-        return_type: KType::Any,
+        return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
             SignatureElement::Keyword("BAR".into()),
             SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Str }),
@@ -259,9 +259,9 @@ use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHa
 fn body_a<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "a")) }
 fn body_b<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "b")) }
 
-fn two_slot_sig(a: KType, b: KType) -> ExpressionSignature {
+fn two_slot_sig<'a>(a: KType, b: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
-        return_type: KType::Any,
+        return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
             SignatureElement::Argument(Argument { name: "a".into(), ktype: a }),
             SignatureElement::Keyword("OP".into()),
@@ -360,7 +360,7 @@ fn resolve_carries_placeholder_name_for_pre_run_function() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let sig = ExpressionSignature {
-        return_type: KType::Any,
+        return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
             SignatureElement::Keyword("LETLIKE".into()),
             SignatureElement::Argument(Argument { name: "n".into(), ktype: KType::Identifier }),

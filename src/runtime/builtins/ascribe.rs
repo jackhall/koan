@@ -5,7 +5,7 @@
 //! Stage 1 shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::{resolve_module, resolve_signature, Module};
@@ -210,7 +210,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         ":|",
         ExpressionSignature {
-            return_type: KType::AnyUserType { kind: UserTypeKind::Module },
+            return_type: ReturnType::Resolved(KType::AnyUserType { kind: UserTypeKind::Module }),
             elements: vec![
                 SignatureElement::Argument(Argument {
                     name: "m".into(),
@@ -226,7 +226,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         ":!",
         ExpressionSignature {
-            return_type: KType::AnyUserType { kind: UserTypeKind::Module },
+            return_type: ReturnType::Resolved(KType::AnyUserType { kind: UserTypeKind::Module }),
             elements: vec![
                 SignatureElement::Argument(Argument {
                     name: "m".into(),

@@ -14,6 +14,45 @@ use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator, 
 use crate::runtime::machine::NodeId;
 use crate::ast::{ExpressionPart, KExpression, TypeParams};
 
+/// Extract parameter names from an FN signature's `KExpression` shape without running
+/// type elaboration. Used by Stage B's return-type scan (see
+/// [`super::body`]) to decide between `ReturnType::Resolved` and
+/// `ReturnType::Deferred` before any outer-scope elaboration runs — the scan must
+/// happen at FN-def time, before the eager-elaborate path would surface an `Unbound`
+/// against a parameter name.
+///
+/// Walks the same `(Identifier|Type) ":" <type-slot>` triple shape the full parser
+/// recognizes, but skips the type-slot validation (anything that looks like a typed
+/// param contributes the bare name). Returns names in declaration order.
+pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) -> Vec<String> {
+    let parts = &signature.parts;
+    let mut names: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < parts.len() {
+        // Recognize a parameter-name slot: either a lowercase `Identifier` (`xs`)
+        // or a Type-classified bare-leaf token (`Er`, `Elem` — Stage A's surface
+        // form). The `<name>: <type>` shape requires the next part to be a `:`.
+        let param_name: Option<String> = match &parts[i] {
+            ExpressionPart::Identifier(name) => Some(name.clone()),
+            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+                Some(t.name.clone())
+            }
+            _ => None,
+        };
+        if let Some(name) = param_name {
+            let colon = parts.get(i + 1);
+            let is_colon = matches!(colon, Some(ExpressionPart::Keyword(c)) if c == ":");
+            if is_colon {
+                names.push(name);
+                i += 3;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
 /// Result of one walk over an FN signature's part list.
 pub(super) enum ParamListOutcome<'a> {
     /// Every parameter type elaborated against the captured scope; the resulting

@@ -13,7 +13,7 @@
 //! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
 //! attaches axioms.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::Signature;
 
@@ -86,7 +86,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "SIG",
         ExpressionSignature {
-            return_type: KType::Signature,
+            return_type: ReturnType::Resolved(KType::Signature),
             elements: vec![
                 SignatureElement::Keyword("SIG".into()),
                 SignatureElement::Argument(Argument {

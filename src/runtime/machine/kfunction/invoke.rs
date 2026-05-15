@@ -2,8 +2,11 @@ use std::rc::Rc;
 
 use crate::ast::{ExpressionPart, KExpression};
 
-use crate::runtime::machine::core::{CallArena, RuntimeArena, Scope};
-use crate::runtime::model::types::{KType, SignatureElement, UserTypeKind};
+use crate::runtime::machine::core::{CallArena, KError, KErrorKind, RuntimeArena, Scope};
+use crate::runtime::model::types::{
+    elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
+    SignatureElement, UserTypeKind,
+};
 use crate::runtime::model::values::KObject;
 
 use super::argument_bundle::ArgumentBundle;
@@ -81,7 +84,154 @@ impl<'a> KFunction<'a> {
                     }
                 }
                 let substituted = substitute_params(expr.clone(), &bundle, inner_arena);
-                BodyResult::tail_with_frame(substituted, frame, self)
+
+                // Module-system functor-params Stage B: deferred return-type path.
+                // For `Resolved(_)`, the existing tail-call path applies — slot inherits
+                // `self` as `function`, lift-time check at `execute.rs:54` fires against
+                // the static `KType` (and the `ReturnType::is_resolved` gate there is
+                // satisfied by construction).
+                //
+                // For `Deferred(_)`, the per-call return type isn't known statically:
+                //
+                //  * `Deferred(TypeExpr)` — elaborate inline against `child` (where
+                //    Stage A's dual-write has installed parameter-name → KType
+                //    identities). The elaborator can park on a placeholder only if a
+                //    *new* outstanding type-binding existed at call time, which is
+                //    pathological; default to `KType::Any` on park/unbound so the
+                //    check doesn't reject (the body's own value-side dispatch will
+                //    have already surfaced the real error).
+                //  * `Deferred(Expression)` — sub-Dispatch the captured parens-form
+                //    expression against `child`, then read its `KTypeValue` result.
+                //
+                // The body itself is dispatched as a sub-Dispatch under the per-call
+                // frame (via `with_active_frame`) so the frame's `Rc` propagates to
+                // both the body and the type-elab sub-slots. A `Combine` joins them;
+                // the finish closure runs the slot check against the per-call type.
+                // The FN's slot DeferTo's the Combine, so its terminal becomes the
+                // Combine's terminal — same shape as MODULE/SIG body wrap-up.
+                match &self.signature.return_type {
+                    ReturnType::Resolved(_) => {
+                        BodyResult::tail_with_frame(substituted, frame, self)
+                    }
+                    ReturnType::Deferred(d) => {
+                        // Resolve the per-call return-type carrier into either a
+                        // ready `KType` (TypeExpr arm) or a pending sub-Dispatch
+                        // (Expression arm). The closure captures only what it
+                        // needs — no live borrow of `self.signature` survives the
+                        // sub-Dispatch spawning below.
+                        let body_id;
+                        let typ_id_opt: Option<crate::runtime::machine::NodeId>;
+                        let inline_typ: Option<KType>;
+                        match d {
+                            DeferredReturn::TypeExpr(te) => {
+                                let mut el = Elaborator::new(child);
+                                inline_typ = match elaborate_type_expr(&mut el, te) {
+                                    ElabResult::Done(kt) => Some(kt),
+                                    // Park / Unbound at the dispatch boundary is a
+                                    // protocol break: Stage A's dual-write installs
+                                    // every parameter the carrier could reference on
+                                    // `bindings.types`, and the parameter-name scan in
+                                    // `fn_def.rs` only picks `Deferred(TypeExpr)` when
+                                    // the carrier has a parameter-leaf reference. Either
+                                    // arm here means a regression in one of those
+                                    // invariants — debug-assert to catch it in tests,
+                                    // fall back to `Any` in release so the body's own
+                                    // value-side problems still surface normally.
+                                    ElabResult::Park(_) => {
+                                        debug_assert!(
+                                            false,
+                                            "deferred return-type TypeExpr parked at dispatch \
+                                             boundary — Stage A dual-write should have made \
+                                             every parameter-leaf reference resolvable",
+                                        );
+                                        Some(KType::Any)
+                                    }
+                                    ElabResult::Unbound(ref msg) => {
+                                        debug_assert!(
+                                            false,
+                                            "deferred return-type TypeExpr unbound at dispatch \
+                                             boundary: {msg} — fn_def parameter-name scan \
+                                             should have prevented this carrier",
+                                        );
+                                        Some(KType::Any)
+                                    }
+                                };
+                                typ_id_opt = None;
+                            }
+                            DeferredReturn::Expression(e) => {
+                                inline_typ = None;
+                                let cloned = e.clone();
+                                let mut tid = None;
+                                sched.with_active_frame(frame.clone(), &mut |s| {
+                                    tid = Some(s.add_dispatch(cloned.clone(), child));
+                                });
+                                typ_id_opt = tid;
+                            }
+                        }
+                        // Spawn the body Dispatch under the per-call frame.
+                        let mut bid = None;
+                        sched.with_active_frame(frame.clone(), &mut |s| {
+                            bid = Some(s.add_dispatch(substituted.clone(), child));
+                        });
+                        body_id = bid.expect("body dispatch must spawn");
+
+                        // Build the Combine's dep list: body first, then optional
+                        // return-type sub-Dispatch. Closure reads `results[0]` for
+                        // the body and `results[1]` for the type when present.
+                        let mut deps = vec![body_id];
+                        if let Some(t) = typ_id_opt {
+                            deps.push(t);
+                        }
+                        let function_summary = self.summarize();
+                        let combine_id = sched.add_combine(deps, child, Box::new(move |_scope, _sched, results| {
+                            let body_value: &KObject<'_> = results[0];
+                            let per_call_ret: KType = match inline_typ {
+                                Some(kt) => kt,
+                                None => match results.get(1).copied() {
+                                    Some(KObject::KTypeValue(kt)) => kt.clone(),
+                                    Some(other) => {
+                                        return BodyResult::Err(KError::new(
+                                            KErrorKind::ShapeError(format!(
+                                                "FN deferred return-type expression \
+                                                 produced a non-type {} value",
+                                                other.ktype().name(),
+                                            )),
+                                        ));
+                                    }
+                                    None => KType::Any,
+                                },
+                            };
+                            if !per_call_ret.matches_value(body_value) {
+                                // Surface per-call return-type rejection with the
+                                // documented "per-call return type" wording the
+                                // Stage B tests pin.
+                                return BodyResult::Err(KError::new(
+                                    KErrorKind::TypeMismatch {
+                                        arg: "<return>".to_string(),
+                                        expected: format!(
+                                            "{} (per-call return type)",
+                                            per_call_ret.name(),
+                                        ),
+                                        got: body_value.ktype().name(),
+                                    },
+                                ).with_frame(crate::runtime::machine::Frame {
+                                    function: function_summary.clone(),
+                                    expression: function_summary.clone(),
+                                }));
+                            }
+                            BodyResult::Value(body_value)
+                        }));
+                        // Suppress unused-variable warning when `frame` would otherwise
+                        // be dropped here; the Rc clones into each `with_active_frame`
+                        // call above keep the per-call arena alive across the body and
+                        // type-elab sub-slot lifetimes. The FN's slot itself retains
+                        // its own `frame` via `defer_to_lift`'s frame-stay-attached
+                        // contract, so the final Rc reference for the duration of
+                        // this slot's run is the slot's `prev_frame`.
+                        drop(frame);
+                        BodyResult::DeferTo(combine_id)
+                    }
+                }
             }
         }
     }

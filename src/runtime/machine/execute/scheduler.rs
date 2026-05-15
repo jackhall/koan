@@ -118,4 +118,19 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn current_frame(&self) -> Option<Rc<CallArena>> {
         self.active_frame.clone()
     }
+
+    /// Temporarily install `frame` as the active frame while running `body`. Sub-slots
+    /// spawned inside `body` inherit `frame` via the `Scheduler::add` site that reads
+    /// `self.active_frame`. The previous `active_frame` is saved and restored on return,
+    /// so the caller's slot-tracking invariant survives unchanged.
+    fn with_active_frame(
+        &mut self,
+        frame: std::rc::Rc<crate::runtime::machine::core::CallArena>,
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+    ) {
+        let prev = self.active_frame.take();
+        self.active_frame = Some(frame);
+        body(self);
+        self.active_frame = prev;
+    }
 }

@@ -16,10 +16,11 @@ the constraint in the body or routing through a paired tuple-module.
 **Impact.**
 
 - *Multi-parameter OCaml-style functors with sharing constraints become
-  writable.* Generalizes the single-parameter functor surface from
-  [Functor parameters](module-system-functor-params.md) so the second
-  parameter's signature can pin a slot to the first parameter's
-  abstract type.
+  writable.* Generalizes the single-parameter functor surface
+  described in
+  [design/module-system.md § Functors](../design/module-system.md#functors)
+  so the second parameter's signature can pin a slot to the first
+  parameter's abstract type.
 - *Dependent value-typed parameters become writable.* Constructions
   like `(BUILD T: Type x: T)` — accept a type, then accept a value of
   that type — are first-class.
@@ -27,11 +28,12 @@ the constraint in the body or routing through a paired tuple-module.
 **Directions.**
 
 - *Carrier — decided.* Reuse the
-  `ReturnType { Resolved(KType), Deferred(TypeExpr) }` carrier from
-  [Functor parameters](module-system-functor-params.md). Parameter type
-  slots widen to the same two-variant shape; selection is decidable at
-  FN-definition by scanning each parameter type's `TypeExpr` for any
-  leaf matching an *earlier* parameter name.
+  `ReturnType { Resolved(KType), Deferred(DeferredReturn) }` carrier
+  shipped at
+  [`ExpressionSignature::return_type`](../src/runtime/model/types/signature.rs).
+  Parameter type slots widen to the same two-variant shape; selection
+  is decidable at FN-definition by scanning each parameter type's
+  `TypeExpr` for any leaf matching an *earlier* parameter name.
 
 - *Dispatch staging — open.* The hard problem. Today the dispatcher
   resolves admissibility against a holistic dispatch index — every
@@ -60,8 +62,9 @@ the constraint in the body or routing through a paired tuple-module.
 
 **Requires:**
 
-- [Functor parameters](module-system-functor-params.md) — establishes
-  the `Deferred(TypeExpr)` carrier and the per-call re-elaboration
-  path that this item's parameter-type widening reuses.
+- [SIG slot explicit-type ascription](sig-explicit-type-ascription.md)
+  — the value-side surface for declaring slots whose type is an
+  earlier parameter (the `elt: T` shape in `(BUILD T: Type elt: T)`)
+  shares its surface form with the SIG-body gap that item designs.
 
 **Unblocks:**

@@ -19,7 +19,7 @@
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::types::UserTypeKind;
+use crate::runtime::model::types::{ReturnType, UserTypeKind};
 use crate::runtime::model::values::Module;
 
 use crate::ast::KExpression;
@@ -148,7 +148,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MODULE",
         ExpressionSignature {
-            return_type: KType::AnyUserType { kind: UserTypeKind::Module },
+            return_type: ReturnType::Resolved(KType::AnyUserType { kind: UserTypeKind::Module }),
             elements: vec![
                 SignatureElement::Keyword("MODULE".into()),
                 SignatureElement::Argument(Argument {

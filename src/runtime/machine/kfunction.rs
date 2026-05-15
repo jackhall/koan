@@ -47,7 +47,7 @@ pub use scheduler_handle::{CombineFinish, NodeId, SchedulerHandle};
 /// captures; builtins are registered in run-root). See `runtime/arena.rs` for the broader
 /// lifetime-erasure pattern.
 pub struct KFunction<'a> {
-    pub signature: ExpressionSignature,
+    pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
     /// Captured definition-scope pointer. **Variance-load-bearing.** `Scope<'a>` is
     /// invariant in `'a` (it contains `RefCell`s), so the paired
@@ -90,7 +90,7 @@ pub struct ClassifiedSlots {
 
 impl<'a> KFunction<'a> {
     pub fn new(
-        signature: ExpressionSignature,
+        signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
     ) -> Self {
@@ -98,7 +98,7 @@ impl<'a> KFunction<'a> {
     }
 
     pub fn with_pre_run(
-        mut signature: ExpressionSignature,
+        mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
         pre_run: Option<PreRunFn>,
@@ -434,7 +434,7 @@ mod tests {
     use crate::runtime::builtins::test_support::{marker, run_root_bare};
     use crate::runtime::builtins::{default_scope, register_builtin};
     use crate::runtime::machine::core::{RuntimeArena, Scope};
-    use crate::runtime::model::types::{Argument, ExpressionSignature, KType};
+    use crate::runtime::model::types::{Argument, ExpressionSignature, KType, ReturnType};
 
     fn body_any<'a>(
         s: &'a Scope<'a>,
@@ -483,7 +483,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         let sig = ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("OP".into()),
                 SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Number }),
@@ -568,7 +568,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         let sig = ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("OP".into()),
                 SignatureElement::Argument(Argument {
@@ -600,7 +600,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         let sig = ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("OP".into()),
                 SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),

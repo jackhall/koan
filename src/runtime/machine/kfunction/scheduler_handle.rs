@@ -45,6 +45,22 @@ pub trait SchedulerHandle<'a> {
     ) -> NodeId;
     fn current_frame(&self) -> Option<Rc<CallArena>>;
 
+    /// Run a closure with `active_frame` temporarily set to `frame`. Sub-slots
+    /// added via `add_dispatch` / `add_combine` inside the closure inherit `frame`
+    /// (see the `frame = self.active_frame.clone()` line in `Scheduler::add`),
+    /// keeping the per-call arena alive for the lifetimes of those sub-slots.
+    ///
+    /// Module-system functor-params Stage B: `KFunction::invoke`'s deferred-return
+    /// path uses this to spawn the body Dispatch and the return-type elaboration
+    /// Dispatch under the new per-call frame, so the frame's `Rc` stays alive
+    /// until both sub-slots finalize. The previous `active_frame` (the caller's)
+    /// is restored on return.
+    fn with_active_frame(
+        &mut self,
+        frame: Rc<CallArena>,
+        body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
+    );
+
     /// Schedule each top-level statement in `body_expr` against `scope` and return their
     /// `NodeId`s. Caller (MODULE / SIG body) wraps these in a `Combine` whose finish
     /// closure builds the binder value once all statements terminalize.

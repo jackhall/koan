@@ -23,7 +23,7 @@ use indexmap::IndexMap;
 use crate::runtime::builtins::register_builtin;
 use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::core::{KError, KErrorKind, Scope};
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, UserTypeKind};
+use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, UserTypeKind, ReturnType};
 use crate::runtime::model::values::{KObject, parse_named_value_pairs};
 use crate::ast::{ExpressionPart, KExpression};
 
@@ -185,7 +185,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "struct_construct",
         ExpressionSignature {
-            return_type: KType::AnyUserType { kind: UserTypeKind::Struct },
+            return_type: ReturnType::Resolved(KType::AnyUserType { kind: UserTypeKind::Struct }),
             elements: vec![
                 SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::Type }),
                 SignatureElement::Argument(Argument { name: "values".into(), ktype: KType::List(Box::new(KType::Any)) }),

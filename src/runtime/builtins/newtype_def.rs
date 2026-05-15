@@ -30,7 +30,7 @@ use crate::runtime::machine::{
 };
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::model::values::KObject;
-use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 
 use super::{err, register_builtin_with_pre_run};
 
@@ -221,7 +221,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "NEWTYPE",
         ExpressionSignature {
-            return_type: KType::Type,
+            return_type: ReturnType::Resolved(KType::Type),
             elements: vec![
                 SignatureElement::Keyword("NEWTYPE".into()),
                 SignatureElement::Argument(Argument {

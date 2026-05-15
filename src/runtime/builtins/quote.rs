@@ -1,4 +1,4 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
@@ -33,7 +33,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "QUOTE",
         ExpressionSignature {
-            return_type: KType::KExpression,
+            return_type: ReturnType::Resolved(KType::KExpression),
             elements: vec![
                 SignatureElement::Keyword("QUOTE".into()),
                 SignatureElement::Argument(Argument { name: "expr".into(), ktype: KType::KExpression }),

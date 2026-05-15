@@ -7,7 +7,6 @@ use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::model::types::KType;
 use crate::runtime::model::values::{KObject, Module, Signature};
 use super::scope::Scope;
-
 /// Run-lifetime allocator. Lives for one program run.
 ///
 /// **Lifetime erasure.** Sub-arenas store `T<'static>`; each `alloc_*` takes input at the
@@ -486,7 +485,7 @@ mod tests {
         let dummy_fn_obj = outer.alloc_object(KObject::KFunction(
             outer.alloc_function(crate::runtime::machine::kfunction::KFunction::new(
                 crate::runtime::model::types::ExpressionSignature {
-                    return_type: crate::runtime::model::types::KType::Null,
+                    return_type: crate::runtime::model::types::ReturnType::Resolved(crate::runtime::model::types::KType::Null),
                     elements: vec![crate::runtime::model::types::SignatureElement::Keyword("DUMMY".into())],
                 },
                 crate::runtime::machine::kfunction::Body::Builtin(|_, _, _|

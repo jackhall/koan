@@ -237,7 +237,7 @@ mod tests {
     fn functor_per_call_module_lifts_correctly() {
         use crate::runtime::machine::kfunction::{Body, KFunction};
         use crate::runtime::machine::core::{CallArena, RuntimeArena as RA};
-        use crate::runtime::model::types::{ExpressionSignature, KType, SignatureElement};
+        use crate::runtime::model::types::{ExpressionSignature, KType, SignatureElement, ReturnType};
         use crate::runtime::model::values::KObject;
         use crate::runtime::machine::execute::lift_kobject_for_test;
         use std::rc::Rc;
@@ -255,7 +255,7 @@ mod tests {
         // Defeat `functions_is_empty()`'s fast path so the slow lift path runs.
         let kf = KFunction::new(
             ExpressionSignature {
-                return_type: KType::Null,
+                return_type: ReturnType::Resolved(KType::Null),
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
             Body::Builtin(|s, _, _| {

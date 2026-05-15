@@ -270,7 +270,7 @@ mod tests {
     /// below defeats `functions_is_empty()`'s fast path so the slow path runs.
     #[test]
     fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
-        use crate::runtime::model::{ExpressionSignature, KType, SignatureElement};
+        use crate::runtime::model::{ExpressionSignature, KType, SignatureElement, ReturnType};
         use crate::runtime::machine::{Body, KFunction};
 
         let arena = RuntimeArena::new();
@@ -278,7 +278,7 @@ mod tests {
         let dying = CallArena::new(scope, None);
         let kf = KFunction::new(
             ExpressionSignature {
-                return_type: KType::Null,
+                return_type: ReturnType::Resolved(KType::Null),
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
             Body::Builtin(|s, _, _| crate::runtime::machine::BodyResult::Value(
@@ -315,7 +315,7 @@ mod tests {
     /// allocated in the dying arena must lift with `frame: Some(rc)`.
     #[test]
     fn unanchored_kfuture_with_arena_borrow_does_anchor() {
-        use crate::runtime::model::{ExpressionSignature, KType, SignatureElement};
+        use crate::runtime::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
         use crate::runtime::machine::{Body, KFunction};
 
         let arena = RuntimeArena::new();
@@ -326,7 +326,7 @@ mod tests {
         // scope lives in `dying.arena()` to satisfy `alloc_function`'s invariant.
         let kf = KFunction::new(
             ExpressionSignature {
-                return_type: KType::Null,
+                return_type: ReturnType::Resolved(KType::Null),
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
             Body::Builtin(|s, _, _| crate::runtime::machine::BodyResult::Value(

@@ -160,20 +160,31 @@ dispatch in stage 5, coherence in stage 6. And the module-system stage-2
 audit-slate sign-off: the post-stage-1 Miri tree-borrows slate re-ran
 clean across every unsafe site introduced by stage-2 substrate (opaque
 ascription re-binds, type-op dispatch through the per-call arena),
-closing the carry-forward; and the functor-params parameter-position
-dual-write — the
+closing the carry-forward; and the functor-params surface end-to-end —
+parameter-position dual-write (the
 [`KType::is_type_denoting`](src/runtime/model/types/ktype_predicates.rs)
 predicate plus
 [`KFunction::invoke`](src/runtime/machine/kfunction/invoke.rs)'s per-call
 bind loop registering the per-call binding into `bindings.types`
 alongside the existing `bind_value`, so a Type-class FN parameter
 (`Er: OrderedSig`) is a type-language binder for body-position
-references (`(MODULE_TYPE_OF Er Type)` resolves through the per-call
-scope), with the FN-param parser
+references like `(MODULE_TYPE_OF Er Type)`) plus the templated
+return-type surface (the
+[`ReturnType<'a>` / `DeferredReturn<'a>` carriers at
+`ExpressionSignature::return_type`](src/runtime/model/types/signature.rs)
+routing parameter-name-bearing return types through deferred per-call
+elaboration in `KFunction::invoke`'s Combine-finish closure, with the
+parens-form return-type overload in
+[`fn_def.rs`](src/runtime/builtins/fn_def.rs) registering its
+return-type slot as `KType::KExpression` so `(MODULE_TYPE_OF Er Type)`
+and `(SIG_WITH Set ((Elt: Er)))` survive FN-def without sub-dispatching
+against the outer scope), with the FN-param parser
 ([`fn_def/signature.rs`](src/runtime/builtins/fn_def/signature.rs))
 relaxed to admit Type-classified bare-leaf tokens in the parameter-name
-slot of the `<name>: <Type>` triple. Return-type position references
-remain future work.
+slot of the `<name>: <Type>` triple. Unblocks standard-library
+collection functors (`Make` over `ORDERED`) once
+[SIG slot explicit-type ascription](roadmap/sig-explicit-type-ascription.md)
+lands the value-side SIG surface.
 
 ## Next items
 
@@ -209,23 +220,24 @@ type-constructor slots, and the post-stage-1 Miri audit-slate
 carry-forward), and the remaining stages below land the rest
 incrementally, each producing a usable end state.
 
-- [Functor parameters — Type-class names and templated return types](roadmap/module-system-functor-params.md) —
-  return-type expressions that reference per-call parameters
-  (`-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`) — the
-  canonical OCaml-`Make`-shape functor return type. Parameter-position
-  references (a Type-class FN parameter `Er: OrderedSig` carrying a
-  type-language binding inside the body) now resolve through per-call
-  dual-write into `bindings.types`; return-type position still
-  elaborates against the FN's outer scope at construction time, so a
-  parameter-name leaf in that position errors unbound. Both surfaces
-  are described in
-  [design/module-system.md § Functors](design/module-system.md#functors).
+- [SIG slot explicit-type ascription](roadmap/sig-explicit-type-ascription.md) —
+  SIG slots are *ascription-by-example* today (`(LET compare = 0)`
+  declares `compare: Number` because `0.ktype() = Number`). There is
+  no surface form for a slot whose value-type is the SIG's own
+  abstract `Type` member, so `val zero : t` / `val compare : t -> t
+  -> int` inside an `ORDERED` signature is unwritable. The Stage-B
+  templated-return-type surface lands the FN-side dispatch routing
+  but cannot exercise an end-to-end body-vs-annotation pairing
+  because the canonical body shape needs an SIG `Type`-typed value
+  slot the surface can't express.
 - [Dependent parameter annotations](roadmap/module-system-dependent-param-annotations.md) —
   parameter type slots that reference earlier parameters in the same FN
   signature (`(MAKE T: Type elt: T)`, OCaml's
-  `module Make (E : ORDERED) (S : SET with type elt = E.t)`). Reuses the
-  `Deferred(TypeExpr)` carrier from
-  [Functor parameters](roadmap/module-system-functor-params.md); the new
+  `module Make (E : ORDERED) (S : SET with type elt = E.t)`). Reuses
+  the `ReturnType` / `DeferredReturn` carrier shipped at
+  [`ExpressionSignature::return_type`](src/runtime/model/types/signature.rs)
+  and the per-call re-elaboration plumbing in
+  [`KFunction::invoke`](src/runtime/machine/kfunction/invoke.rs); the new
   work is staged left-to-right dispatch.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
@@ -243,6 +255,16 @@ incrementally, each producing a usable end state.
 - [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
+- [Structural KFunction admission across deferred return types](roadmap/kfunction-deferred-ret-precision.md) —
+  [`function_value_ktype`](src/runtime/model/values/kobject.rs) synthesizes
+  `KType::KFunction { ret: KType::Any }` for deferred-return FNs because the
+  structural function-type language has no surface for "per-call
+  elaboration of this expression"; the symmetric coarsening in
+  [`function_compat`](src/runtime/model/types/ktype_predicates.rs) admits-or-
+  rejects-by-`==` so today's strict refusal stays safe but silent. A
+  `debug_assert!` at the coarsening branch is the tripwire; the decision
+  is forced when stage 5 implicit search or a precise FN-typed slot
+  ascription first exercises the scenario.
 
 ### Surface and ergonomics
 

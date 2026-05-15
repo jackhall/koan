@@ -14,7 +14,8 @@ pub use ktraits::{Parseable, Serializable};
 pub use ktype::{KType, UserTypeKind};
 pub use resolver::{elaborate_type_expr, ElabResult, Elaborator};
 pub use signature::{
-    Argument, ExpressionSignature, SignatureElement, UntypedElement, UntypedKey, is_keyword_token,
+    Argument, DeferredReturn, ExpressionSignature, ReturnType, SignatureElement, UntypedElement,
+    UntypedKey, is_keyword_token,
 };
 #[allow(unused_imports)]
 pub use signature::Specificity;

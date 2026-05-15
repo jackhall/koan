@@ -9,7 +9,7 @@ use crate::runtime::machine::{
     SchedulerHandle,
 };
 use crate::runtime::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, ReturnType,
 };
 
 use crate::ast::KExpression;
@@ -179,7 +179,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "UNION",
         ExpressionSignature {
-            return_type: KType::Type,
+            return_type: ReturnType::Resolved(KType::Type),
             elements: vec![
                 SignatureElement::Keyword("UNION".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeExprRef }),

@@ -327,12 +327,14 @@ body above; the remaining stages live under
 
 Per-call FN-parameter substitution into return-type pins — the templated
 return-type surface described in
-[module-system.md § Functors](module-system.md#functors) — is the
-follow-up
-[Functor parameters — Type-class names and templated return types](../roadmap/module-system-functor-params.md);
-together with the shipped identifier-class hardening at the bare-leaf arm
-of `elaborate_type_expr`, it completes the surface "modules-as-types"
-presentation.
+[module-system.md § Functors](module-system.md#functors) — rides the
+`ReturnType` / `DeferredReturn` carriers at
+[`ExpressionSignature::return_type`](../src/runtime/model/types/signature.rs)
+and the dispatch-boundary re-elaboration in
+[`KFunction::invoke`](../src/runtime/machine/kfunction/invoke.rs);
+together with the shipped identifier-class hardening at the bare-leaf
+arm of `elaborate_type_expr`, it completes the surface
+"modules-as-types" presentation.
 
 The four-stage type-identity arc routes bare-leaf type names through a
 `KObject`-side carrier rather than a placeholder variant inside the

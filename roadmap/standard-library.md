@@ -66,9 +66,11 @@ doesn't exist yet.
 
 **Requires:**
 
-- [Functor parameters — Type-class names and templated return types](module-system-functor-params.md)
-  — collection functors like `Make` over `ORDERED` need Type-class FN
-  parameters and return-type expressions that reference them.
+- [SIG slot explicit-type ascription](sig-explicit-type-ascription.md)
+  — canonical `ORDERED` / `SET` signatures declare operations against
+  the abstract `Type` member (`val compare : t -> t -> int`,
+  `val empty : t`), which today's ascription-by-example SIG surface
+  can't express.
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
 

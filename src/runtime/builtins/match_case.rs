@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
 use crate::runtime::machine::substitute_params;
 use crate::ast::{ExpressionPart, KExpression, KLiteral};
@@ -165,7 +165,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MATCH",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("MATCH".into()),
                 SignatureElement::Argument(Argument { name: "value".into(),    ktype: KType::Any }),

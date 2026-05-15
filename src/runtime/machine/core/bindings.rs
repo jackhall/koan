@@ -483,9 +483,16 @@ pub enum ApplyOutcome {
 /// Structural equality on shape + per-Argument `KType` + return type. Independent of
 /// `Argument::name` — two overloads with matching shape and types collide for dispatch
 /// regardless of parameter naming.
-fn signatures_exact_equal(
-    a: &crate::runtime::model::types::ExpressionSignature,
-    b: &crate::runtime::model::types::ExpressionSignature,
+///
+/// Return-type equality flows through [`crate::runtime::model::types::ReturnType`]'s
+/// `PartialEq` impl. `Resolved` compares by inner `KType`; `Deferred` compares by
+/// carrier variant + payload (see `ReturnType::eq`'s docstring for the equality
+/// rule on the parens-form `Expression` variant). Two FN-defs whose deferred
+/// carriers are structurally identical surface as `DuplicateOverload`, which
+/// matches the existing semantic — they are interchangeable for dispatch.
+fn signatures_exact_equal<'a>(
+    a: &crate::runtime::model::types::ExpressionSignature<'a>,
+    b: &crate::runtime::model::types::ExpressionSignature<'a>,
 ) -> bool {
     use crate::runtime::model::types::SignatureElement;
     if a.return_type != b.return_type {

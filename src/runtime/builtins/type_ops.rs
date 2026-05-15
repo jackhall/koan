@@ -19,7 +19,7 @@
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::{resolve_module, resolve_signature};
 
@@ -492,7 +492,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "LIST_OF",
         ExpressionSignature {
-            return_type: KType::TypeExprRef,
+            return_type: ReturnType::Resolved(KType::TypeExprRef),
             elements: vec![
                 SignatureElement::Keyword("LIST_OF".into()),
                 SignatureElement::Argument(Argument { name: "elem".into(), ktype: KType::TypeExprRef }),
@@ -504,7 +504,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "DICT_OF",
         ExpressionSignature {
-            return_type: KType::TypeExprRef,
+            return_type: ReturnType::Resolved(KType::TypeExprRef),
             elements: vec![
                 SignatureElement::Keyword("DICT_OF".into()),
                 SignatureElement::Argument(Argument { name: "key".into(),   ktype: KType::TypeExprRef }),
@@ -517,7 +517,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "FUNCTION_OF",
         ExpressionSignature {
-            return_type: KType::TypeExprRef,
+            return_type: ReturnType::Resolved(KType::TypeExprRef),
             elements: vec![
                 SignatureElement::Keyword("FUNCTION_OF".into()),
                 SignatureElement::Argument(Argument { name: "args".into(), ktype: KType::KExpression }),
@@ -536,7 +536,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "MODULE_TYPE_OF",
         ExpressionSignature {
-            return_type: KType::TypeExprRef,
+            return_type: ReturnType::Resolved(KType::TypeExprRef),
             elements: vec![
                 SignatureElement::Keyword("MODULE_TYPE_OF".into()),
                 SignatureElement::Argument(Argument {
@@ -557,7 +557,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "TYPE_CONSTRUCTOR",
         ExpressionSignature {
-            return_type: KType::TypeExprRef,
+            return_type: ReturnType::Resolved(KType::TypeExprRef),
             elements: vec![
                 SignatureElement::Keyword("TYPE_CONSTRUCTOR".into()),
                 SignatureElement::Argument(Argument { name: "param".into(), ktype: KType::TypeExprRef }),
@@ -573,7 +573,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "SIG_WITH",
         ExpressionSignature {
-            return_type: KType::TypeExprRef,
+            return_type: ReturnType::Resolved(KType::TypeExprRef),
             elements: vec![
                 SignatureElement::Keyword("SIG_WITH".into()),
                 SignatureElement::Argument(Argument {
@@ -960,11 +960,12 @@ mod tests {
             KObject::KFunction(f, _) => *f,
             other => panic!("pure not KFunction: {:?}", other.ktype()),
         };
+        use crate::runtime::model::ReturnType;
         match &f.signature.return_type {
-            KType::ConstructorApply { args, .. } => {
+            ReturnType::Resolved(KType::ConstructorApply { args, .. }) => {
                 assert_eq!(*args, vec![KType::Number]);
             }
-            other => panic!("expected ConstructorApply, got {:?}", other),
+            other => panic!("expected Resolved(ConstructorApply), got {:?}", other),
         }
     }
 
@@ -1031,8 +1032,9 @@ mod tests {
             KObject::KFunction(f, _) => *f,
             other => panic!("pure must be a KFunction, got {:?}", other.ktype()),
         };
+        use crate::runtime::model::ReturnType;
         match &f.signature.return_type {
-            KType::ConstructorApply { ctor, args } => {
+            ReturnType::Resolved(KType::ConstructorApply { ctor, args }) => {
                 // The constructor is the SIG-body's template `Wrap` (scope_id 0, name
                 // `_typeconstructor` per body_type_constructor's template form — note
                 // the SIG body's `LET Wrap = ...` does NOT rebrand the template; the
@@ -1046,7 +1048,7 @@ mod tests {
                 assert_eq!(*args, vec![KType::Number]);
             }
             other => panic!(
-                "pure's return type must be ConstructorApply, got {:?}",
+                "pure's return type must be Resolved(ConstructorApply), got {:?}",
                 other,
             ),
         }
@@ -1058,7 +1060,7 @@ mod tests {
     /// `UserTypeKind::TypeConstructor` variant flows through the existing
     /// `KType::UserType` arm unchanged.
     /// Miri audit-slate: pins type-op dispatch through the per-call arena under tree
-    /// borrows. A functor body invokes `(MODULE_TYPE_OF elem Type)` on its per-call
+    /// borrows. A functor body invokes `(MODULE_TYPE_OF Er Type)` on its per-call
     /// parameter; `body_module_type_of` allocates the resulting `KTypeValue` into the
     /// per-call scope's arena. The returned `KModule` plus the bound type member must
     /// survive subsequent arena churn — the per-call-arena reclamation + lift machinery
@@ -1066,6 +1068,12 @@ mod tests {
     /// type-op value. Mirrors the structure of
     /// [`crate::runtime::builtins::fn_def::tests::module_stage2::functor_body_module_dispatch_does_not_dangle`]
     /// but pins the type-op-in-per-call-arena path rather than the plain functor lift.
+    ///
+    /// Module-system functor-params Stage B: parameter migrated from the lowercase
+    /// workaround (`elem`) to the documented Type-class form (`Er`). Stage A's
+    /// per-call dual-write makes the surface form work end-to-end through the
+    /// signature-typed parameter path that previously parked on a missing top-level
+    /// binding.
     #[test]
     fn type_op_dispatch_does_not_dangle() {
         let arena = RuntimeArena::new();
@@ -1076,25 +1084,15 @@ mod tests {
              MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
              LET elem_mod = (IntOrd :| OrderedSig)",
         );
-        // Functor body invokes MODULE_TYPE_OF on the per-call parameter `elem`. The
+        // Functor body invokes MODULE_TYPE_OF on the per-call parameter `Er`. The
         // dispatched `KTypeValue` is allocated in the per-call arena and bound into the
         // result module via `LET Tslot` (uppercase — drives the LET TypeExprRef
         // overload that writes into `bindings.types`). A second plain `LET probe = 11`
         // gives a value-side binding to read back.
-        //
-        // Note: the design surface for signature-typed FN parameters is a Type-class
-        // name (`Elem: OrderedSig`) per [design/module-system.md § Functors](../../../design/module-system.md#functors),
-        // but the runtime currently routes Type-class names in FN parameter slots
-        // through the type-resolution path (parks on the missing top-level binding)
-        // rather than the per-call value path. Existing functor tests work around this
-        // by using lowercase identifier parameters; this test follows the same
-        // convention so the audit-slate pin doesn't have to wait on a parser/dispatch
-        // change. The unsafe-site being pinned (type-op dispatch in the per-call arena)
-        // is independent of the parameter's surface name.
         run(
             scope,
-            "FN (LIFT_TYPE elem: OrderedSig) -> Module = \
-             (MODULE Result = ((LET Tslot = (MODULE_TYPE_OF elem Type)) (LET probe = 11)))",
+            "FN (LIFT_TYPE Er: OrderedSig) -> Module = \
+             (MODULE Result = ((LET Tslot = (MODULE_TYPE_OF Er Type)) (LET probe = 11)))",
         );
         run(scope, "LET held = (LIFT_TYPE (elem_mod))");
 

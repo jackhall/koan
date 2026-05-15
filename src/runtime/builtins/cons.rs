@@ -20,7 +20,7 @@
 //! first depending on the queue. Use placeholder-bearing statements (`LET`) to enforce
 //! ordering when needed.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression};
 
@@ -99,7 +99,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "CONS",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("CONS".into()),
                 SignatureElement::Argument(Argument { name: "head".into(), ktype: KType::KExpression }),

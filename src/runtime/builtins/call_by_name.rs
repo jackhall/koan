@@ -1,4 +1,4 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Parseable, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Parseable, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::dispatch_constructor;
 
@@ -63,7 +63,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "call_by_name",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Argument(Argument { name: "verb".into(), ktype: KType::Identifier }),
                 SignatureElement::Argument(Argument { name: "args".into(), ktype: KType::KExpression }),

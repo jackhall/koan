@@ -1,4 +1,4 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression};
@@ -197,7 +197,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "LET",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("LET".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier }),
@@ -212,7 +212,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "LET",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("LET".into()),
                 SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::TypeExprRef }),

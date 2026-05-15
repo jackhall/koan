@@ -3,7 +3,7 @@ use crate::runtime::machine::{
 };
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::model::values::dispatch_constructor;
-use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 
 use super::newtype_def::newtype_construct;
 use crate::runtime::machine::kfunction::argument_bundle::{
@@ -117,7 +117,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "type_call",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Argument(Argument { name: "verb".into(), ktype: KType::TypeExprRef }),
                 SignatureElement::Argument(Argument { name: "args".into(), ktype: KType::KExpression }),

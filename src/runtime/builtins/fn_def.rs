@@ -2,7 +2,7 @@ mod signature;
 
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
-use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::runtime::model::types::{elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, ReturnType};
 
 use crate::runtime::machine::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
@@ -14,11 +14,83 @@ use signature::ParamListOutcome;
 
 pub(crate) use signature::pre_run;
 
+/// Scan a parser-preserved `TypeExpr` for any leaf whose name matches one of
+/// `param_names`. Drives the Stage B `Resolved` vs `Deferred(TypeExpr)` decision
+/// at FN-def time: a match short-circuits the eager-elaborate path (which would
+/// fail or produce the wrong answer against the FN's outer scope, where the
+/// parameter is unbound by definition).
+fn type_expr_references_any(te: &crate::ast::TypeExpr, param_names: &[String]) -> bool {
+    use crate::ast::TypeParams;
+    if param_names.iter().any(|n| n == &te.name) {
+        return true;
+    }
+    match &te.params {
+        TypeParams::None => false,
+        TypeParams::List(items) => items.iter().any(|t| type_expr_references_any(t, param_names)),
+        TypeParams::Function { args, ret } => {
+            args.iter().any(|t| type_expr_references_any(t, param_names))
+                || type_expr_references_any(ret, param_names)
+        }
+    }
+}
+
+/// Companion scan for the parens-form return-type carrier (overload 2). Walks a
+/// `KExpression`'s parts recursively into nested `Expression`, `ListLiteral`, and
+/// `DictLiteral` parts and returns `true` iff any leaf `Identifier(name)` or
+/// `Type(TypeExpr { name, .. })` matches one of `param_names`. Mirrors the
+/// recursive walk in `kfunction::invoke::substitute_part`.
+fn kexpression_references_any<'a>(
+    expr: &crate::ast::KExpression<'a>,
+    param_names: &[String],
+) -> bool {
+    expr.parts.iter().any(|p| part_references_any(p, param_names))
+}
+
+fn part_references_any<'a>(
+    part: &crate::ast::ExpressionPart<'a>,
+    param_names: &[String],
+) -> bool {
+    match part {
+        ExpressionPart::Identifier(name) => param_names.iter().any(|n| n == name),
+        ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
+        ExpressionPart::Expression(boxed) => kexpression_references_any(boxed, param_names),
+        ExpressionPart::ListLiteral(items) => {
+            items.iter().any(|p| part_references_any(p, param_names))
+        }
+        ExpressionPart::DictLiteral(pairs) => pairs.iter().any(|(k, v)| {
+            part_references_any(k, param_names) || part_references_any(v, param_names)
+        }),
+        _ => false,
+    }
+}
+
+/// Collect parameter names from a signature's `SignatureElement` list. Used by
+/// the parameter-name scan during Stage B's `Resolved` vs `Deferred` decision.
+fn collect_param_names(elements: &[SignatureElement]) -> Vec<String> {
+    elements
+        .iter()
+        .filter_map(|el| match el {
+            SignatureElement::Argument(a) => Some(a.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
 /// function constructor. The signature and body slots are `KType::KExpression`, so the parser's
-/// parenthesized sub-expressions match and ride through as data. The return-type slot is a
-/// `KType::TypeExprRef`, matching a parsed `Type(_)` token whose structured `TypeExpr` (with
-/// any nested type parameters) is preserved through the bundle.
+/// parenthesized sub-expressions match and ride through as data. Two return-type slot
+/// overloads share this body:
+///
+///   1. `KType::TypeExprRef` — `Type(_)` carrier (`-> Number`, `-> List<Str>`, `-> Er`,
+///      `-> SomeUserBound`). The carrier's structured `TypeExpr` is preserved through the
+///      bundle for either eager elaboration (no parameter refs) or `ReturnType::Deferred(TypeExpr)`
+///      (parameter refs detected — Stage B).
+///   2. `KType::KExpression` — `Expression(_)` carrier (`-> (MODULE_TYPE_OF Er Type)`,
+///      `-> (SIG_WITH Set ((Elt: Er)))`). Captured raw so the parens-form survives FN-def
+///      without sub-dispatching against the outer scope where the parameter is unbound.
+///      Routes either to `ReturnType::Deferred(Expression)` (parameter refs detected) or
+///      to a `defer_via_combine` sub-Dispatch (no parameter refs, lifted to `Resolved`).
+///
 /// The captured signature `KExpression` is structurally inspected here — never dispatched —
 /// to derive the registered function's `ExpressionSignature`. The body `KExpression` is
 /// captured raw; `KFunction::invoke` substitutes parameter values into it and re-dispatches
@@ -47,14 +119,22 @@ pub fn body<'a>(
             )));
         }
     };
-    // The return-type slot holds either a fully-resolved `KTypeValue` (builtin leaf
-    // names, structural shapes like `List<Number>`) or a `TypeNameRef` carrier (a bare
-    // leaf name not in `KType::from_name`'s table — `Point`, `IntOrd`, `MyList`). Peek
-    // first to pick the right extractor: both consume the slot via `remove`, so calling
-    // one after the other on the same bundle would lose the value.
-    enum ReturnTypeRaw {
+    // The return-type slot accepts three carrier shapes (matching the two FN overloads):
+    //
+    //  * `KObject::KTypeValue(kt)` — overload 1, eager-resolved leaf or structural type
+    //    (`Number`, `List<Str>`, `(SIG_WITH Set ((Elt: Number)))` after construction-time
+    //    sub-Dispatch). Lifted directly into `Resolved(kt)`.
+    //  * `KObject::TypeNameRef(t, _)` — overload 1, bare-leaf carrier the parser created
+    //    because the name isn't in `KType::from_name`'s table (`Point`, `IntOrd`,
+    //    `MyList`). Walked by the elaborator below.
+    //  * `KObject::KExpression(e)` — overload 2 (Stage B), parens-form return type
+    //    (`(MODULE_TYPE_OF Er Type)`, `(SIG_WITH Set ((Elt: Er)))`) captured raw so the
+    //    expression survives FN-def without sub-dispatching against the outer scope where
+    //    the parameter name is unbound.
+    enum ReturnTypeRaw<'a> {
         Resolved(KType),
-        Carrier(crate::ast::TypeExpr),
+        TypeExprCarrier(crate::ast::TypeExpr),
+        ExprCarrier(crate::ast::KExpression<'a>),
     }
     let return_type_raw = match bundle.get("return_type") {
         Some(KObject::KTypeValue(_)) => match extract_ktype(&mut bundle, "return_type") {
@@ -62,8 +142,12 @@ pub fn body<'a>(
             None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
         },
         Some(KObject::TypeNameRef(_, _)) => match extract_type_name_ref(&mut bundle, "return_type") {
-            Some(te) => ReturnTypeRaw::Carrier(te),
+            Some(te) => ReturnTypeRaw::TypeExprCarrier(te),
             None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
+        },
+        Some(KObject::KExpression(_)) => match extract_kexpression(&mut bundle, "return_type") {
+            Some(e) => ReturnTypeRaw::ExprCarrier(e),
+            None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
         },
         _ => {
             return err(KError::new(KErrorKind::ShapeError(
@@ -86,47 +170,92 @@ pub fn body<'a>(
     // on the last statement, backward refs across statements work, forward refs do not.
     let body_expr = super::cons::fold_multi_statement(body_expr);
 
+    // Module-system functor-params Stage B: parameter-name scan. Extract parameter
+    // names from the signature shape before any elaboration runs, then scan the
+    // return-type carrier for any leaf matching a parameter name. A match short-
+    // circuits the eager-elaborate path — the return type becomes
+    // `ReturnType::Deferred(_)`, carried verbatim through to `KFunction::invoke`,
+    // which re-elaborates against the per-call scope where Stage A's dual-write has
+    // installed the parameter's type-language identity.
+    //
+    // The scan reads `signature_expr` raw rather than the elaborated `SignatureElement`
+    // list so we can decide before triggering the elaborator's parking machinery — a
+    // parked-on-placeholder param type still contributes its name to the scan.
+    let param_names = signature::collect_param_names_from_signature(&signature_expr);
+
     // Phase-3 elaborator: parameter-type leaf names park on outstanding type-binding
     // placeholders, so a `LET MyList = (LIST_OF Number)` dispatched in the same batch
     // wakes the FN's signature elaboration when its body finalizes.
     let mut elaborator = Elaborator::new(scope);
 
-    // Step 1: elaborate the return type. Three outcomes — concrete `KType`, parking on
-    // producers (carries the surface form so the Combine finish re-runs elaboration), or
-    // a structured error. The `Pending` variant captures the full parser-preserved
-    // `TypeExpr` (not just the leaf name) so parameterized shapes like `List<MyT>`
-    // re-elaborate verbatim against the now-final scope; `name` is kept alongside for
-    // diagnostics on the leaf-only fallback (when the elaborator's `Unbound` arm fires
-    // and the legacy `KType::from_name` fast path needs the bare name).
-    enum ReturnTypeState {
+    // Step 1: decide the return-type carrier shape.
+    //
+    //  * `Deferred(_)` — parameter-name leaf detected in the carrier; the per-call
+    //    elaboration runs at the dispatch boundary (see `KFunction::invoke`). Skip
+    //    the outer-scope elaborator entirely — running it would surface an `Unbound`
+    //    because the parameter is by construction not in the FN's lexical scope.
+    //  * `Done(kt)` — fully resolved at FN-def (covers most cases).
+    //  * `Pending { te, producers }` — bare-leaf elaboration parked on a placeholder
+    //    (forward-LET case); resumed via Combine wake against the now-final scope.
+    //  * `ExprSubDispatched { id }` — overload-2 no-parameter-reference path: the
+    //    return-type expression sub-dispatched at FN-def time. The Combine finish
+    //    reads the result from `results[<id-position>]` and lifts into `Resolved`.
+    enum ReturnTypeState<'a> {
         Done(KType),
         Pending {
             te: crate::ast::TypeExpr,
             producers: Vec<crate::runtime::machine::NodeId>,
         },
+        Deferred(DeferredReturn<'a>),
+        ExprSubDispatched(crate::runtime::machine::NodeId),
     }
     let return_type_state = match return_type_raw {
         ReturnTypeRaw::Resolved(kt) => ReturnTypeState::Done(kt),
-        // Bare-leaf or parameterized-shape carrier path: walk the scope-aware elaborator
-        // against the parser-preserved `TypeExpr`. The carrier's surface form survives
-        // bind regardless of resolution outcome — what diagnostics render and what
-        // park-on-placeholder uses to wake later. Both the leaf-name shape (`Point`,
-        // `IntOrd`) and the parameterized shape (`List<MyT>`, `Foo<Bar, Baz>`) ride this
-        // arm; the `Park`-arm preserves the full `TypeExpr` so the Combine finish
-        // re-elaborates with structure intact.
-        ReturnTypeRaw::Carrier(te) => {
-            let name = te.name.clone();
-            match elaborate_type_expr(&mut elaborator, &te) {
-                ElabResult::Done(kt) => ReturnTypeState::Done(kt),
-                ElabResult::Park(producers) => ReturnTypeState::Pending { te, producers },
-                ElabResult::Unbound(_) => match KType::from_name(&name) {
-                    Some(kt) => ReturnTypeState::Done(kt),
-                    None => {
-                        return err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN return-type slot: unknown type name `{name}`"
-                        ))));
-                    }
-                },
+        ReturnTypeRaw::TypeExprCarrier(te) => {
+            // Stage B param-name scan first. If the surface form references any
+            // parameter name, defer regardless of whether the leaf would otherwise
+            // resolve against the outer scope — the per-call mapping is what
+            // matters.
+            if type_expr_references_any(&te, &param_names) {
+                ReturnTypeState::Deferred(DeferredReturn::TypeExpr(te))
+            } else {
+                let name = te.name.clone();
+                match elaborate_type_expr(&mut elaborator, &te) {
+                    ElabResult::Done(kt) => ReturnTypeState::Done(kt),
+                    ElabResult::Park(producers) => ReturnTypeState::Pending { te, producers },
+                    ElabResult::Unbound(_) => match KType::from_name(&name) {
+                        Some(kt) => ReturnTypeState::Done(kt),
+                        None => {
+                            return err(KError::new(KErrorKind::ShapeError(format!(
+                                "FN return-type slot: unknown type name `{name}`"
+                            ))));
+                        }
+                    },
+                }
+            }
+        }
+        ReturnTypeRaw::ExprCarrier(e) => {
+            // Stage B overload-2 carrier. Two cases by the parameter-name scan:
+            //
+            //  * Parameter reference detected → `Deferred(Expression(e))`. Per-call
+            //    re-dispatch runs at `KFunction::invoke` time against the per-call
+            //    scope where Stage A's dual-write has installed the parameter's
+            //    type-language identity.
+            //  * No parameter reference → sub-dispatch the expression at FN-def
+            //    against the outer scope. The result becomes a `Resolved` return
+            //    type at Combine finish. Routes through `ExprSubDispatched` and
+            //    composes with any parameter-list pending/sub-dispatch deps so a
+            //    single Combine waits on everything.
+            //
+            // Today's wrap-path (pre-Stage-B) admitted the `Expression(_)` part into
+            // overload 1's `TypeExprRef` slot via `accepts_for_wrap`'s relaxation;
+            // overload 2's strict win now bypasses that. The synchronous sub-dispatch
+            // below preserves the prior behavior end-to-end for the no-param case.
+            if kexpression_references_any(&e, &param_names) {
+                ReturnTypeState::Deferred(DeferredReturn::Expression(e))
+            } else {
+                let id = sched.add_dispatch(e, scope);
+                ReturnTypeState::ExprSubDispatched(id)
             }
         }
     };
@@ -148,7 +277,23 @@ pub fn body<'a>(
     // Step 3: route to synchronous-finalize or Combine-deferred based on parking state.
     match (return_type_state, params) {
         (ReturnTypeState::Done(rt), ParamListResult::Done(elements)) => {
-            finalize_fn(scope, elements, rt, body_expr)
+            finalize_fn(scope, elements, ReturnType::Resolved(rt), body_expr)
+        }
+        (ReturnTypeState::Deferred(d), ParamListResult::Done(elements)) => {
+            finalize_fn(scope, elements, ReturnType::Deferred(d), body_expr)
+        }
+        (ReturnTypeState::ExprSubDispatched(id), ParamListResult::Done(_)) => {
+            // Return-type sub-dispatched, params synchronous. The Combine's only
+            // dep is the return-type sub-Dispatch; the closure reads `results[0]`.
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                ReturnTypeCapture::ReturnTypeExpr { results_pos: 0 },
+                vec![id],
+                Vec::new(),
+                body_expr,
+            )
         }
         (ReturnTypeState::Done(rt), ParamListResult::Pending { park_producers, sub_dispatches }) => {
             defer_via_combine(
@@ -156,6 +301,38 @@ pub fn body<'a>(
                 sched,
                 signature_expr,
                 ReturnTypeCapture::Resolved(rt),
+                park_producers,
+                sub_dispatches,
+                body_expr,
+            )
+        }
+        (ReturnTypeState::Deferred(d), ParamListResult::Pending { park_producers, sub_dispatches }) => {
+            // Params still parking on outer placeholders, but the return type is
+            // per-call-deferred and doesn't need re-elaboration at the Combine wake.
+            // Carry the carrier verbatim through to `finalize_fn` once params land.
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                ReturnTypeCapture::Deferred(d),
+                park_producers,
+                sub_dispatches,
+                body_expr,
+            )
+        }
+        (ReturnTypeState::ExprSubDispatched(id), ParamListResult::Pending { mut park_producers, sub_dispatches }) => {
+            // Mixed shape: return-type sub-dispatch must join the Combine alongside
+            // any parking parameter-types and parameter-type sub-Dispatches. Append
+            // the return-type id to `park_producers` first; its `results_pos` is the
+            // current `park_producers.len()` before push (i.e. the next slot). The
+            // closure reads `results[results_pos]` exactly there.
+            let results_pos = park_producers.len();
+            park_producers.push(id);
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                ReturnTypeCapture::ReturnTypeExpr { results_pos },
                 park_producers,
                 sub_dispatches,
                 body_expr,
@@ -199,7 +376,7 @@ pub fn body<'a>(
 /// legacy `KType::from_name` fast path applies on the Combine wake. Parameterized
 /// shapes (`List<MyT>`, `Foo<Bar, Baz>`) route through `TypeExpr(te)` so the structured
 /// elaboration survives the boundary verbatim.
-fn make_capture(te: crate::ast::TypeExpr) -> ReturnTypeCapture {
+fn make_capture<'a>(te: crate::ast::TypeExpr) -> ReturnTypeCapture<'a> {
     use crate::ast::TypeParams;
     match te.params {
         TypeParams::None => ReturnTypeCapture::Unresolved(te.name),
@@ -236,10 +413,26 @@ enum ParamListResult<'a> {
 /// carrier exists for parked-during-construction leaf-with-parameters shapes where the
 /// parser already produced a `TypeExpr` with non-`None` params and we need to wait on a
 /// type-binding placeholder before final elaboration.
-enum ReturnTypeCapture {
+enum ReturnTypeCapture<'a> {
     Resolved(KType),
     Unresolved(String),
     TypeExpr(crate::ast::TypeExpr),
+    /// Module-system functor-params Stage B: parameter-name reference detected in the
+    /// return-type carrier at FN-def time. The carrier is held verbatim and propagated
+    /// through to the final `ReturnType::Deferred(_)` on the registered `KFunction`'s
+    /// signature without elaboration at the Combine wake — per-call elaboration runs at
+    /// the dispatch boundary instead.
+    Deferred(DeferredReturn<'a>),
+    /// Module-system functor-params Stage B: overload-2 return-type carrier whose
+    /// parens-form expression doesn't reference any parameter — sub-dispatch the
+    /// expression at FN-def and lift the resulting `KTypeValue` into `Resolved` at
+    /// Combine finish. The `results_pos` index says where the result lands in the
+    /// closure's `&[&'a KObject<'a>]` slice; the FN-def body computes this when it
+    /// merges the return-type sub-dispatch into the Combine's overall `deps` order.
+    /// Replaces today's wrap-path admission into overload 1's `TypeExprRef` slot
+    /// for the parens-form no-parameter case (which overload 2 now wins on the
+    /// strict pass).
+    ReturnTypeExpr { results_pos: usize },
 }
 
 /// Build the `KFunction` and register it in `scope`. Shared between the synchronous
@@ -247,7 +440,7 @@ enum ReturnTypeCapture {
 fn finalize_fn<'a>(
     scope: &'a Scope<'a>,
     elements: Vec<SignatureElement>,
-    return_type: KType,
+    return_type: ReturnType<'a>,
     body_expr: crate::ast::KExpression<'a>,
 ) -> BodyResult<'a> {
     // Pick the first Keyword as the data-table key. `Bindings::functions` does the load-
@@ -309,7 +502,7 @@ fn defer_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     signature_expr: crate::ast::KExpression<'a>,
-    return_type_capture: ReturnTypeCapture,
+    return_type_capture: ReturnTypeCapture<'a>,
     park_producers: Vec<crate::runtime::machine::NodeId>,
     sub_dispatches: Vec<(usize, crate::ast::KExpression<'a>)>,
     body_expr: crate::ast::KExpression<'a>,
@@ -353,21 +546,26 @@ fn defer_via_combine<'a>(
         // elaborator's `Park` arm cannot fire again because every parked producer is
         // terminal by the Combine-finish invariant; if it does, that's a regression
         // worth surfacing as a structured error rather than re-parking forever.
+        //
+        // Stage B `Deferred(_)` case: the carrier doesn't re-elaborate here — it propagates
+        // verbatim through to `ReturnType::Deferred(_)` on the finalized FN. Per-call
+        // re-elaboration runs at `KFunction::invoke` time against the dispatch boundary's
+        // per-call scope.
         let mut elaborator = Elaborator::new(scope);
-        let return_type = match &return_type_capture {
-            ReturnTypeCapture::Resolved(kt) => kt.clone(),
+        let return_type: ReturnType<'a> = match return_type_capture {
+            ReturnTypeCapture::Resolved(kt) => ReturnType::Resolved(kt),
             ReturnTypeCapture::Unresolved(name) => match elaborate_type_expr(
                 &mut elaborator,
                 &crate::ast::TypeExpr::leaf(name.clone()),
             ) {
-                ElabResult::Done(kt) => kt,
+                ElabResult::Done(kt) => ReturnType::Resolved(kt),
                 ElabResult::Park(_) => {
                     return BodyResult::Err(KError::new(KErrorKind::ShapeError(
                         "FN return type parked after Combine wake".to_string(),
                     )));
                 }
-                ElabResult::Unbound(_) => match KType::from_name(name) {
-                    Some(kt) => kt,
+                ElabResult::Unbound(_) => match KType::from_name(&name) {
+                    Some(kt) => ReturnType::Resolved(kt),
                     None => {
                         return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
                             "FN return-type slot: unknown type name `{name}`"
@@ -382,9 +580,9 @@ fn defer_via_combine<'a>(
             // anywhere reachable.
             ReturnTypeCapture::TypeExpr(t) => match elaborate_type_expr(
                 &mut elaborator,
-                t,
+                &t,
             ) {
-                ElabResult::Done(kt) => kt,
+                ElabResult::Done(kt) => ReturnType::Resolved(kt),
                 ElabResult::Park(_) => {
                     return BodyResult::Err(KError::new(KErrorKind::ShapeError(
                         "FN return type parked after Combine wake".to_string(),
@@ -396,6 +594,23 @@ fn defer_via_combine<'a>(
                     ))));
                 }
             },
+            ReturnTypeCapture::Deferred(d) => ReturnType::Deferred(d),
+            ReturnTypeCapture::ReturnTypeExpr { results_pos } => {
+                // Sub-Dispatch result lives at `results[results_pos]` by capture
+                // protocol (the FN-def body computed this when it merged the
+                // return-type sub-dispatch into the Combine's `deps` order).
+                let obj = results[results_pos];
+                match obj {
+                    KObject::KTypeValue(kt) => ReturnType::Resolved(kt.clone()),
+                    other => {
+                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                            "FN return-type slot sub-Dispatch expected a type expression, \
+                             got a {} value",
+                            other.ktype().name(),
+                        ))));
+                    }
+                }
+            }
         };
         let elements = match signature::parse_fn_param_list(&spliced_signature, &mut elaborator) {
             ParamListOutcome::Done(es) => es,
@@ -415,6 +630,11 @@ fn defer_via_combine<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    // Overload 1: `Type(_)` or `TypeNameRef` return-type carrier (the historical surface).
+    // FN-construction-time eager-elaborate path lifts the resolved `KType` into the
+    // signature. Module-system functor-params Stage B: if the captured `TypeExpr` carries
+    // a parameter-name leaf, the body switches to `ReturnType::Deferred(TypeExpr)` and
+    // re-elaborates per call against the dispatch-boundary scope.
     register_builtin_with_pre_run(
         scope,
         "FN",
@@ -423,12 +643,45 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             // a function's structural type only exists once its signature is known. `Any`
             // here lets the constructed `KObject::KFunction`'s projected `ktype()` (which
             // does carry the full signature) flow through any caller's slot.
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("FN".into()),
                 SignatureElement::Argument(Argument { name: "signature".into(),   ktype: KType::KExpression }),
                 SignatureElement::Keyword("->".into()),
                 SignatureElement::Argument(Argument { name: "return_type".into(), ktype: KType::TypeExprRef }),
+                SignatureElement::Keyword("=".into()),
+                SignatureElement::Argument(Argument { name: "body".into(),        ktype: KType::KExpression }),
+            ],
+        },
+        body,
+        Some(pre_run),
+    );
+    // Overload 2: `Expression(_)` return-type carrier — parens-form return types
+    // (`(MODULE_TYPE_OF Er Type)`, `(SIG_WITH Set ((Elt: Er)))`). The `KExpression` slot
+    // accepts the parens-form raw, so FN-def never sub-dispatches the expression against
+    // the outer scope (where the parameter name is unbound by construction). The same
+    // `body` runs and branches on `bundle.get("return_type")`'s shape.
+    //
+    // Dispatch shape: a `Type(_)` part strictly matches overload 1's `TypeExprRef` slot;
+    // an `Expression(_)` part strictly matches overload 2's `KExpression` slot. The
+    // strict pass picks one or the other unambiguously; the wrap-path admission of an
+    // `Expression(_)` into `TypeExprRef` (the pre-Stage-B fallback for parens-form return
+    // types) becomes a tentative-fallback that loses to overload 2's strict win.
+    //
+    // `Future(KTypeValue(_))` post-Combine wakes (the picker re-walks against a spliced
+    // signature) still admit only against overload 1's `TypeExprRef`, since
+    // `KExpression` doesn't accept `Future(_)` of any kind. Pinned by
+    // `fn_def/tests/module_stage2.rs` regression coverage.
+    register_builtin_with_pre_run(
+        scope,
+        "FN",
+        ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::Any),
+            elements: vec![
+                SignatureElement::Keyword("FN".into()),
+                SignatureElement::Argument(Argument { name: "signature".into(),   ktype: KType::KExpression }),
+                SignatureElement::Keyword("->".into()),
+                SignatureElement::Argument(Argument { name: "return_type".into(), ktype: KType::KExpression }),
                 SignatureElement::Keyword("=".into()),
                 SignatureElement::Argument(Argument { name: "body".into(),        ktype: KType::KExpression }),
             ],

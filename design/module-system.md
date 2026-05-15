@@ -144,9 +144,45 @@ predicate gates the dual-write — `SignatureBound`, `Signature`, `Type`,
 type-language identity at the binder. Body-position references to the
 parameter (`(MODULE_TYPE_OF Er Type)` inside the body) resolve through
 `Scope::resolve_type`'s outer-chain walk against the per-call scope.
+
 Return-type expressions that reference a per-call FN parameter
-(`-> (MODULE_TYPE_OF Er Type)` and similar templated return types) are
-tracked as future work — see [Open work](#open-work).
+(`-> Er`, `-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`)
+ride the same per-call scope through a *deferred* return-type carrier.
+[`ExpressionSignature::return_type`](../src/runtime/model/types/signature.rs)
+is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
+every static case (builtins and FNs whose return type doesn't reference a
+parameter), while `Deferred(DeferredReturn<'a>)` holds the surface form
+verbatim — either `TypeExpr(TypeExpr)` for parser-preserved structured
+forms or `Expression(KExpression<'a>)` for captured parens-form
+expressions. Routing happens at FN-definition in
+[`fn_def.rs`](../src/runtime/builtins/fn_def.rs): a parameter-name scan
+over the captured return-type carrier picks `Deferred(_)` when any leaf
+matches a parameter name and `Resolved(_)` otherwise. The parens-form
+overload registers its return-type slot as `KType::KExpression` so the
+expression survives FN-def without sub-dispatching against the outer
+scope.
+
+Per-call elaboration runs at the dispatch boundary in
+[`KFunction::invoke`](../src/runtime/machine/kfunction/invoke.rs). The
+`Deferred(_)` arm spawns the body Dispatch and (for the `Expression`
+carrier) an optional return-type sub-Dispatch under the per-call frame
+via `SchedulerHandle::with_active_frame`, then joins them in a `Combine`
+whose finish closure runs `per_call_ret.matches_value(body_value)` and
+surfaces mismatches with `(per-call return type)` wording. The
+`TypeExpr` carrier elaborates inline against the per-call scope where
+Stage A's dual-write has installed the parameter-name identities; both
+carriers feed the same Combine. The lift-time return-type check in
+[`scheduler/execute.rs`](../src/runtime/machine/execute/scheduler/execute.rs)
+gates on `ReturnType::is_resolved()` so the static-typing pathway stays
+untouched and the deferred slot check runs only inside the Combine
+finish where the per-call elaboration is in hand. The structural
+`KType::KFunction { ret }` synthesis at
+[`function_value_ktype`](../src/runtime/model/values/kobject.rs) and the
+admission helper at
+[`function_compat`](../src/runtime/model/types/ktype_predicates.rs)
+coarsen `Deferred(_)` to `KType::Any` because the structural function-type
+language has no surface for "per-call elaboration of this expression" —
+see [Open work](#open-work) for the precision refinement.
 
 Multi-argument functors are ordinary multi-parameter FNs. Currying is just
 nested FNs.
@@ -552,18 +588,14 @@ and 2 — the module language itself (`MODULE`, `SIG`, `:|`, `:!`,
 per-module type identity, first-class module values flowing through `LET`
 and ATTR) and the module-language substrate through the scheduler
 (scheduler-driven type elaborator, `SIG_WITH` sharing constraints,
-higher-kinded type-constructor slots) — shipped and are described in the
-body above; the Miri audit slate signs them off under tree borrows (see
+higher-kinded type-constructor slots, Type-class FN-parameter per-call
+dual-write, and templated return types via the `ReturnType` /
+`DeferredReturn` carriers) — shipped and are described in the body above;
+the Miri audit slate signs them off under tree borrows (see
 [memory-model.md § Verification](memory-model.md#verification)).
 Signature-bound dispatch (modules-as-values typed against a specific
 signature) folds into stage 5.
 
-- [Functor parameters — Type-class names and templated return types](../roadmap/module-system-functor-params.md)
-  — return-type expressions that reference a per-call FN parameter
-  (`-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`) need
-  deferred per-call elaboration; today the return-type slot elaborates
-  against the FN's outer scope at construction time, so a parameter-name
-  leaf in that position errors unbound.
 - [Dependent parameter annotations](../roadmap/module-system-dependent-param-annotations.md)
   — parameter types that reference earlier parameters in the same FN
   signature; required for OCaml-style multi-parameter functor signatures

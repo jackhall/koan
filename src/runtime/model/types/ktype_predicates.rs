@@ -337,12 +337,44 @@ impl KType {
 /// Strict equality, not subtyping — a function declared `(x: Number) -> Str` only fills a slot
 /// typed `Function<(Number) -> Str>`, not `Function<(Any) -> Str>`. Subtype-aware function
 /// matching (contravariant in args, covariant in ret) is a future refinement.
+///
+/// `Deferred(_)` return-type carrier: the structural-type comparison can't see the per-call
+/// resolution, so a `Deferred` return collapses to `KType::Any` for this check (admit
+/// anything). Documented coarsening — two FNs differing only in their deferred carriers
+/// look structurally identical at this comparison site. There is no current consumer of
+/// the difference (module-system functor-params Stage B never lifts a deferred-return FN
+/// into a structural `KFunction` slot in a way that would exercise refinement), but flag
+/// in case modular-implicit search or similar future work needs precision here.
 pub(super) fn function_compat(
-    sig: &ExpressionSignature,
+    sig: &ExpressionSignature<'_>,
     args: &[KType],
     ret: &KType,
 ) -> bool {
-    if sig.return_type != *ret {
+    use crate::runtime::model::types::ReturnType;
+    let sig_ret_kt: &KType = match &sig.return_type {
+        ReturnType::Resolved(kt) => kt,
+        ReturnType::Deferred(_) => {
+            // Tripwire for the documented coarsening: a `Deferred(_)`-return candidate
+            // being checked against a slot whose `ret` is more specific than `Any` is a
+            // scenario we haven't decided. Today the `==` below safely refuses
+            // (`Any != SpecificT`), but the refusal is silent — a future consumer adding
+            // precise FN-typed slots (`LET cb: Function<(Er) -> Er>` against a deferred-
+            // return candidate) would see "no matching function" with no signal that the
+            // refusal is due to coarsening rather than a real shape mismatch. When this
+            // assertion fires, refine either the synthesis at
+            // `kobject.rs::function_value_ktype` (mint a precision-aware variant) or this
+            // admission site (route through a value-aware admission helper that can see
+            // the underlying `KFunction::signature.return_type`).
+            debug_assert!(
+                matches!(ret, KType::Any),
+                "Deferred-return FN candidate against non-Any slot ret ({:?}) — \
+                 see ktype_predicates.rs::function_compat for the unresolved case",
+                ret,
+            );
+            &KType::Any
+        }
+    };
+    if sig_ret_kt != ret {
         return false;
     }
     let mut i = 0;

@@ -324,6 +324,7 @@ impl<'a> KObject<'a> {
 }
 
 fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {
+    use crate::runtime::model::types::ReturnType;
     let args: Vec<KType> = f
         .signature
         .elements
@@ -333,7 +334,15 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {
             _ => None,
         })
         .collect();
-    let ret = Box::new(f.signature.return_type.clone());
+    // Module-system functor-params Stage B coarsening: structural `KType::KFunction`
+    // can't carry a `Deferred(_)` return-type carrier (the structural type language has
+    // no surface for "per-call elaboration of this expression"). Collapse to `KType::Any`
+    // so the structural type stays well-formed; the precise per-call return type is
+    // observed at the dispatch boundary, not from a structural-type comparison.
+    let ret = match &f.signature.return_type {
+        ReturnType::Resolved(kt) => Box::new(kt.clone()),
+        ReturnType::Deferred(_) => Box::new(KType::Any),
+    };
     KType::KFunction { args, ret }
 }
 

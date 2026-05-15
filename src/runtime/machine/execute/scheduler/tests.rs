@@ -2,7 +2,7 @@ use crate::runtime::builtins::default_scope;
 use crate::runtime::builtins::register_builtin;
 use crate::runtime::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::runtime::model::KObject;
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{NodeId, RuntimeArena, Scope};
 use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression, KLiteral};
@@ -363,7 +363,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
         scope,
         "DEFERTEST",
         ExpressionSignature {
-            return_type: KType::Str,
+            return_type: ReturnType::Resolved(KType::Str),
             elements: vec![SignatureElement::Keyword("DEFERTEST".into())],
         },
         body,
@@ -459,7 +459,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let sig = ExpressionSignature {
-        return_type: KType::Any,
+        return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
             SignatureElement::Keyword("foo".into()), // lowercase — should be coerced
             SignatureElement::Argument(Argument {

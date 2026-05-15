@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{err, register_builtin};
@@ -52,7 +52,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "EVAL",
         ExpressionSignature {
-            return_type: KType::Any,
+            return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("EVAL".into()),
                 SignatureElement::Argument(Argument { name: "expr".into(), ktype: KType::Any }),

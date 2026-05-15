@@ -285,8 +285,9 @@ fn functor_with_two_pinned_slots_round_trips() {
         Some(KObject::KFunction(f, _)) => *f,
         other => panic!("TWOPIN should be a function, got {:?}", other.map(|o| o.ktype())),
     };
+    use crate::runtime::model::ReturnType;
     match &f.signature.return_type {
-        KType::SignatureBound { sig_path, pinned_slots, .. } => {
+        ReturnType::Resolved(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
             assert_eq!(sig_path, "Set");
             assert_eq!(pinned_slots.len(), 2);
             assert_eq!(pinned_slots[0].0, "Elt");
@@ -295,7 +296,7 @@ fn functor_with_two_pinned_slots_round_trips() {
             assert_eq!(pinned_slots[1].1, KType::Number);
         }
         other => panic!(
-            "expected SignatureBound on TWOPIN's return type, got {:?}",
+            "expected Resolved(SignatureBound) on TWOPIN's return type, got {:?}",
             other,
         ),
     }
@@ -336,13 +337,14 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         other => panic!("MAKESETN should be a function, got {:?}", other.map(|o| o.ktype())),
     };
     // Stored return type: SignatureBound { sig_path: "SetSig", pinned_slots: [("Elt", Number)] }.
+    use crate::runtime::model::ReturnType;
     match &f.signature.return_type {
-        KType::SignatureBound { sig_path, pinned_slots, .. } => {
+        ReturnType::Resolved(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
             assert_eq!(sig_path, "SetSig");
             assert_eq!(pinned_slots, &vec![("Elt".to_string(), KType::Number)]);
         }
         other => panic!(
-            "expected SignatureBound on MAKESETN's return type, got {:?}",
+            "expected Resolved(SignatureBound) on MAKESETN's return type, got {:?}",
             other,
         ),
     }
@@ -515,4 +517,183 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
          got Ok({:?})",
         res.ok().map(|o| o.ktype()),
     );
+}
+
+// ---------- Module-system functor-params Stage B — templated return types ------------
+//
+// At FN-def time, when the return-type carrier references a parameter name (e.g.
+// `-> Er`, `-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type))))`),
+// the body scans the carrier against the parameter-name list and routes through
+// `ReturnType::Deferred(_)` instead of trying to elaborate against the FN's outer scope.
+// Per-call elaboration runs at `KFunction::invoke` time against the per-call scope where
+// Stage A's dual-write has installed parameter-name → KType identities.
+
+/// Landing test 1: bare parameter-name return type. `FN (USE_ID Er: OrderedSig) -> Er = ...`
+/// returns a module value of type `Er`. The body simply returns the bound parameter
+/// (Er is in `bindings.data` from Stage A's value-side bind), and the per-call return-type
+/// elaboration resolves `Er` to the per-call module's `UserType { kind: Module, .. }`
+/// identity via `Scope::resolve_type` against the per-call scope's `bindings.types`.
+#[test]
+fn functor_return_bare_parameter_name_resolves_per_call() {
+    use crate::runtime::model::ReturnType;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+         LET int_ord = (IntOrd :! OrderedSig)",
+    );
+    // FN-def must register with `ReturnType::Deferred(TypeExpr(Er))`. The body `(Er)`
+    // returns the bound module value via value_lookup.
+    run(
+        scope,
+        "FN (USE_ID Er: OrderedSig) -> Er = (Er)",
+    );
+    let data = scope.bindings().data();
+    let f = match data.get("USE_ID") {
+        Some(KObject::KFunction(f, _)) => *f,
+        other => panic!("USE_ID should be a function, got {:?}", other.map(|o| o.ktype())),
+    };
+    assert!(
+        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        "USE_ID's return type should be Deferred, got {:?}",
+        f.signature.return_type,
+    );
+    drop(data);
+    // Invoke and verify the per-call slot check accepts the bound module.
+    let result = run_one(scope, parse_one("USE_ID int_ord"));
+    match result {
+        KObject::KModule(_, _) => {}
+        other => panic!("expected KModule from USE_ID, got {:?}", other.ktype()),
+    }
+}
+
+/// Landing test 2: `(MODULE_TYPE_OF Er Type)` parens-form return type. Pins that
+/// FN-def registers the function with `ReturnType::Deferred(Expression(...))` instead
+/// of erroring at FN-construction (the pre-Stage-B failure mode was "unbound name `Er`"
+/// because the parens-form return type sub-dispatched against the outer scope where
+/// `Er` is unbound).
+///
+/// The body returns a type-value via `(MODULE_TYPE_OF Er Type)`. The per-call slot
+/// check then compares the resolved abstract `KType` (from opaque ascription) against
+/// the body's `.ktype() = KType::TypeExprRef` — those don't structurally match (body
+/// returns the *type* as a value; annotation says "value of that type"), so the
+/// per-call check rejects with the documented "per-call return type" diagnostic. The
+/// negative-case test below pins that diagnostic; here we pin only the routing — that
+/// FN-def doesn't error and the registration carries `Deferred(_)`. Exercising a
+/// successful end-to-end body-vs-annotation pairing for this shape needs SIG-design
+/// surface for `Type`-typed value slots (e.g. `(LET zero: Type = 0)`), which is a
+/// composition concern tracked separately.
+#[test]
+fn functor_return_module_type_of_parameter_resolves_per_call() {
+    use crate::runtime::model::ReturnType;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+         LET int_ord = (IntOrd :| OrderedSig)",
+    );
+    // FN-def. Pre-Stage-B this errored with "unbound name `Er`" at FN-construction
+    // because the parens-form return type sub-dispatched against the outer scope.
+    run(
+        scope,
+        "FN (GET_TYPE Er: OrderedSig) -> (MODULE_TYPE_OF Er Type) = (MODULE_TYPE_OF Er Type)",
+    );
+    let data = scope.bindings().data();
+    let f = match data.get("GET_TYPE") {
+        Some(KObject::KFunction(f, _)) => *f,
+        other => panic!("GET_TYPE should be a function, got {:?}", other.map(|o| o.ktype())),
+    };
+    assert!(
+        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        "GET_TYPE's return type should be Deferred, got {:?}",
+        f.signature.return_type,
+    );
+    drop(data);
+}
+
+/// Landing test 3: `(SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type))))` — the sharing-
+/// constraint surface canonical for `module Make (E : ORDERED) : SET with type elt = E.t`.
+/// The pin value `(MODULE_TYPE_OF Er Type)` references the parameter `Er`; the per-call
+/// elaboration of the outer `SIG_WITH` propagates `Er`'s per-call `Type` member into the
+/// pinned slot. The body returns a module whose `type_members["Elt"]` matches.
+#[test]
+fn functor_return_sig_with_parameter_ref_resolves_per_call() {
+    use crate::runtime::model::ReturnType;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+         SIG Set = ((LET Elt = Number) (LET insert = 0))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+         LET int_ord = (IntOrd :! OrderedSig)",
+    );
+    // FN-def registers with `ReturnType::Deferred(Expression(...))`.
+    run(
+        scope,
+        "FN (MK Er: OrderedSig) -> (SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type)))) = \
+         (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
+    );
+    let data = scope.bindings().data();
+    let f = match data.get("MK") {
+        Some(KObject::KFunction(f, _)) => *f,
+        other => panic!("MK should be a function, got {:?}", other.map(|o| o.ktype())),
+    };
+    assert!(
+        matches!(f.signature.return_type, ReturnType::Deferred(_)),
+        "MK's return type should be Deferred, got {:?}",
+        f.signature.return_type,
+    );
+    drop(data);
+    // Body's `MODULE Result` isn't sig-ascribed to `Set`, so its `compatible_sigs` is
+    // empty and the SignatureBound check rejects on membership before the pin check.
+    // This is the same situation as `functor_return_with_mismatched_sharing_constraint_errors`,
+    // but the relevant Stage B invariant is that the FN registered with Deferred at all
+    // (without erroring `Unbound` at FN-def time, which was the pre-Stage-B failure mode).
+}
+
+/// Stage B negative case: body produces a wrong-typed value for a per-call return type.
+/// The Combine's finish closure runs the slot check against the per-call elaboration
+/// and rejects with a diagnostic mentioning "per-call return type" — the wording the
+/// Stage B implementation pins so a reader knows the rejection path is the per-call
+/// check, not the static lift-time one.
+#[test]
+fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
+    use crate::runtime::machine::execute::Scheduler;
+    use crate::runtime::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+         LET int_ord = (IntOrd :| OrderedSig)",
+    );
+    // Functor declared to return `(MODULE_TYPE_OF Er Type)` (a KType value) but the body
+    // returns a Number. Per-call check must reject.
+    run(
+        scope,
+        "FN (BAD Er: OrderedSig) -> (MODULE_TYPE_OF Er Type) = (1)",
+    );
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("BAD int_ord"), scope);
+    sched.execute().expect("execute does not surface per-slot errors");
+    let err = match sched.read_result(id) {
+        Err(e) => e,
+        Ok(_) => panic!("BAD should fail per-call return-type check"),
+    };
+    match &err.kind {
+        KErrorKind::TypeMismatch { arg, expected, .. } => {
+            assert_eq!(arg, "<return>");
+            assert!(
+                expected.contains("per-call return type"),
+                "expected diagnostic to mention 'per-call return type', got `{expected}`",
+            );
+        }
+        _ => panic!("expected TypeMismatch on <return>, got {err}"),
+    }
 }

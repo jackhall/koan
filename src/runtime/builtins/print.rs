@@ -1,4 +1,4 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Parseable, SignatureElement};
+use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Parseable, SignatureElement, ReturnType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{err, register_builtin};
@@ -26,7 +26,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope,
         "PRINT",
         ExpressionSignature {
-            return_type: KType::Str,
+            return_type: ReturnType::Resolved(KType::Str),
             elements: vec![
                 SignatureElement::Keyword("PRINT".into()),
                 SignatureElement::Argument(Argument { name: "msg".into(), ktype: KType::Any }),

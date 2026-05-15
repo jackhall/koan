@@ -71,6 +71,12 @@ is the ergonomic payoff of the design.
 
 **Requires:**
 
+- [Structural KFunction admission across deferred return types](kfunction-deferred-ret-precision.md)
+  — implicit search over functor-shaped candidates whose return
+  types reference per-call parameters needs precision-aware
+  structural-`KType` comparison; today's coarsening collapses
+  `Deferred(_)` to `KType::Any` at the structural-synthesis site.
+
 **Unblocks:**
 
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)

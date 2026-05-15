@@ -51,8 +51,18 @@ impl<'a> Scheduler<'a> {
                                 .arena;
                             let lifted_obj = lift_kobject(v, &frame);
                             if let Some(f) = prev_function {
+                                // Module-system functor-params Stage B: only run the lift-
+                                // time slot check for `Resolved(_)` return types. `Deferred`
+                                // returns route their per-call check through the Combine
+                                // finish that joins the body's lifted value with the
+                                // per-call elaboration's `KType` — the static carrier
+                                // here can't see the per-call resolution. `ReturnType::
+                                // matches_value` returns `true` for `Deferred(_)` to keep
+                                // the structural surface consistent, but skipping the
+                                // call entirely keeps the diagnostic from misattributing
+                                // a body-internal mismatch.
                                 let rt = &f.signature.return_type;
-                                if !rt.matches_value(&lifted_obj) {
+                                if rt.is_resolved() && !rt.matches_value(&lifted_obj) {
                                     let err = KError::new(KErrorKind::TypeMismatch {
                                         arg: "<return>".to_string(),
                                         expected: rt.name(),

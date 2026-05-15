@@ -33,7 +33,7 @@ pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
 pub fn register_builtin<'a>(
     scope: &'a Scope<'a>,
     name: &str,
-    signature: ExpressionSignature,
+    signature: ExpressionSignature<'a>,
     body: BuiltinFn,
 ) {
     register_builtin_with_pre_run(scope, name, signature, body, None);
@@ -44,7 +44,7 @@ pub fn register_builtin<'a>(
 pub(crate) fn register_builtin_with_pre_run<'a>(
     scope: &'a Scope<'a>,
     name: &str,
-    signature: ExpressionSignature,
+    signature: ExpressionSignature<'a>,
     body: BuiltinFn,
     pre_run: Option<PreRunFn>,
 ) {

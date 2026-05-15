@@ -10,7 +10,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::runtime::model::KObject;
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement};
+use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{KError, RuntimeArena, Scope};
 use crate::runtime::machine::execute::Scheduler;
 use crate::ast::KExpression;
@@ -97,9 +97,9 @@ pub(crate) fn marker<'a>(scope: &'a Scope<'a>, label: &'static str) -> &'a KObje
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`. Used by dispatch-test
 /// builtins on both sides of the scope/scheduler split.
-pub(crate) fn one_slot_sig(name: &str, kt: KType) -> ExpressionSignature {
+pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType) -> ExpressionSignature<'a> {
     ExpressionSignature {
-        return_type: KType::Any,
+        return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Argument(Argument {
             name: name.into(),
             ktype: kt,
