@@ -146,6 +146,22 @@ impl<'a> Scope<'a> {
         &self.bindings
     }
 
+    /// True iff `self`'s nearest non-`Anonymous` enclosing scope is a SIG decl_scope.
+    /// The walk starts at `self` — a SIG-body builtin's body runs against the SIG
+    /// decl_scope directly. A non-SIG named scope (`Module`) short-circuits to `false`;
+    /// `Anonymous` frames are transparent and the walk continues outward.
+    pub fn is_in_sig_body(&self) -> bool {
+        let mut current: Option<&Scope<'_>> = Some(self);
+        while let Some(s) = current {
+            match &s.kind {
+                ScopeKind::Sig { .. } => return true,
+                ScopeKind::Module { .. } => return false,
+                ScopeKind::Anonymous => current = s.outer,
+            }
+        }
+        false
+    }
+
     /// Bind `name` in this scope. Errors `Rebind` if `data` already holds `name`
     /// (same-scope rebind rejected; cross-scope shadowing allowed). Removes any matching
     /// placeholder this scope owns on success.

@@ -1,11 +1,11 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{
-    ArgumentBundle, BodyResult, KError, KErrorKind, Scope, ScopeKind, SchedulerHandle,
+    ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
 use crate::ast::{ExpressionPart, KExpression};
 
-use super::{err, register_builtin_with_pre_run};
+use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 /// `LET <name> = <value:Any>` — copies the bound value into an arena-allocated `KObject`,
 /// inserts it under `name`, and returns that same arena reference. Compound values recurse
@@ -125,7 +125,7 @@ pub fn body<'a>(
     // form. The check fires only for the value-route (neither Type-class LET nor a
     // nominal-identity carrier alias) so `LET Type = Number` and
     // `LET MyAlias = (some_module :| Sig)` keep working.
-    if type_for_types_map.is_none() && nominal_identity.is_none() && in_sig_body(scope) {
+    if type_for_types_map.is_none() && nominal_identity.is_none() && scope.is_in_sig_body() {
         return err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write \
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
@@ -155,20 +155,6 @@ pub fn body<'a>(
         return err(e);
     }
     BodyResult::Value(allocated)
-}
-
-/// Mirror of `val_decl::in_sig_body`: true iff the nearest non-`Anonymous` enclosing
-/// scope is a SIG decl_scope.
-fn in_sig_body(scope: &Scope<'_>) -> bool {
-    let mut current: Option<&Scope<'_>> = Some(scope);
-    while let Some(s) = current {
-        match &s.kind {
-            ScopeKind::Sig { .. } => return true,
-            ScopeKind::Module { .. } => return false,
-            ScopeKind::Anonymous => current = s.outer,
-        }
-    }
-    false
 }
 
 /// Recover the nominal identity (a `KType::UserType` or `KType::SignatureBound`) carried
@@ -223,30 +209,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "LET",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("LET".into()),
-                SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::Identifier }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any }),
-            ],
-        },
+        sig(KType::Any, vec![
+            kw("LET"),
+            arg("name", KType::Identifier),
+            kw("="),
+            arg("value", KType::Any),
+        ]),
         body,
         Some(pre_run),
     );
     register_builtin_with_pre_run(
         scope,
         "LET",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("LET".into()),
-                SignatureElement::Argument(Argument { name: "name".into(),  ktype: KType::TypeExprRef }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::Any }),
-            ],
-        },
+        sig(KType::Any, vec![
+            kw("LET"),
+            arg("name", KType::TypeExprRef),
+            kw("="),
+            arg("value", KType::Any),
+        ]),
         body,
         Some(pre_run),
     );

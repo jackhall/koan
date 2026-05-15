@@ -1,8 +1,8 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
-use super::{err, register_builtin};
+use super::{arg, err, kw, register_builtin, sig};
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`. The body is the captured raw AST,
 /// returned as a `KObject::KExpression` value with no evaluation. Lets the user thread raw
@@ -32,13 +32,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "QUOTE",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::KExpression),
-            elements: vec![
-                SignatureElement::Keyword("QUOTE".into()),
-                SignatureElement::Argument(Argument { name: "expr".into(), ktype: KType::KExpression }),
-            ],
-        },
+        sig(KType::KExpression, vec![kw("QUOTE"), arg("expr", KType::KExpression)]),
         body,
     );
 }

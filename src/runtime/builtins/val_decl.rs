@@ -55,32 +55,13 @@
 
 use crate::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::runtime::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope, ScopeKind,
+    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
 };
 use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
-use crate::runtime::model::{
-    Argument, ExpressionSignature, KObject, KType, ReturnType, SignatureElement,
-};
+use crate::runtime::model::{KObject, KType};
 
-use super::{err, register_builtin_with_pre_run};
-
-/// True iff `scope`'s nearest non-`Anonymous` enclosing scope is a SIG decl_scope.
-/// The walk starts at `scope` itself — VAL's body runs against the SIG decl_scope
-/// directly, since `plan_body_statements` dispatches each SIG body statement against
-/// it. A non-SIG named scope (a MODULE body) short-circuits to `false`; `Anonymous`
-/// frames are transparent and the walk continues.
-fn in_sig_body(scope: &Scope<'_>) -> bool {
-    let mut current: Option<&Scope<'_>> = Some(scope);
-    while let Some(s) = current {
-        match &s.kind {
-            ScopeKind::Sig { .. } => return true,
-            ScopeKind::Module { .. } => return false,
-            ScopeKind::Anonymous => current = s.outer,
-        }
-    }
-    false
-}
+use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 /// Sub-dispatch a single-part `[Type(te)]` expression against `decl_scope` so the
 /// dispatcher's replay-park machinery handles any sibling placeholder on `te.name`
@@ -166,7 +147,7 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     // Gate: VAL is meaningful only inside a SIG body. Outside, the user almost
     // certainly meant `LET`; surface a focused diagnostic naming both surfaces.
-    if !in_sig_body(scope) {
+    if !scope.is_in_sig_body() {
         return err(KError::new(KErrorKind::ShapeError(
             "VAL is only valid inside a SIG body — use LET for value bindings in \
              modules and run-root scope"
@@ -408,26 +389,17 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
+    // `VAL` returns the bound `KTypeValue` carrier so the surface form
+    // `(VAL name: Type)` evaluates to a value, mirroring `LET`'s return shape.
     register_builtin_with_pre_run(
         scope,
         "VAL",
-        ExpressionSignature {
-            // `VAL` returns the bound `KTypeValue` carrier so the surface form
-            // `(VAL name: Type)` evaluates to a value, mirroring `LET`'s return shape.
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("VAL".into()),
-                SignatureElement::Argument(Argument {
-                    name: "name".into(),
-                    ktype: KType::Identifier,
-                }),
-                SignatureElement::Keyword(":".into()),
-                SignatureElement::Argument(Argument {
-                    name: "ty".into(),
-                    ktype: KType::TypeExprRef,
-                }),
-            ],
-        },
+        sig(KType::Any, vec![
+            kw("VAL"),
+            arg("name", KType::Identifier),
+            kw(":"),
+            arg("ty", KType::TypeExprRef),
+        ]),
         body,
         Some(pre_run),
     );

@@ -1,7 +1,7 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::runtime::model::KType;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
-use super::{err, register_builtin};
+use super::{arg, err, register_builtin, sig};
 
 /// `<v:Any>` — single-part expression containing a literal (or a previously-evaluated future).
 /// Returns the value as a fresh arena-allocated `KObject` via `deep_clone`. Combined with
@@ -24,12 +24,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "value_pass",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
-            ],
-        },
+        sig(KType::Any, vec![arg("v", KType::Any)]),
         body,
     );
 }

@@ -22,11 +22,11 @@
 //! `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks unambiguously
 //! without a specificity tiebreaker.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
-use super::{err, register_builtin};
+use super::{arg, err, kw, register_builtin, sig};
 
 pub fn body_identifier<'a>(
     scope: &'a Scope<'a>,
@@ -242,51 +242,21 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "ATTR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::Identifier }),
-                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
-            ],
-        },
-        body_identifier,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument {
-                    name: "s".into(),
-                    ktype: KType::AnyUserType { kind: UserTypeKind::Struct },
-                }),
-                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
-            ],
-        },
-        body_struct,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument {
-                    name: "s".into(),
-                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
-                }),
-                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
-            ],
-        },
-        body_module,
-    );
+    let struct_ty = KType::AnyUserType { kind: UserTypeKind::Struct };
+    let module_ty = KType::AnyUserType { kind: UserTypeKind::Module };
+    let newtype_ty = KType::AnyUserType {
+        kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+    };
+
+    register_builtin(scope, "ATTR",
+        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::Identifier), arg("field", KType::Identifier)]),
+        body_identifier);
+    register_builtin(scope, "ATTR",
+        sig(KType::Any, vec![kw("ATTR"), arg("s", struct_ty), arg("field", KType::Identifier)]),
+        body_struct);
+    register_builtin(scope, "ATTR",
+        sig(KType::Any, vec![kw("ATTR"), arg("s", module_ty.clone()), arg("field", KType::Identifier)]),
+        body_module);
     // Stage 4.C: NEWTYPE fall-through. The slot's wildcard `AnyUserType { kind: Newtype
     // { repr: Any } }` admits any `KObject::Wrapped` (the manual `UserTypeKind::PartialEq`
     // ignores `repr` on the `Newtype` variant). The body reuses `body_struct` because
@@ -294,68 +264,20 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // recurses one level into `inner`. Disjoint from the Struct / Module slots above
     // (`Newtype` is a distinct `UserTypeKind` discriminant), so dispatch picks without
     // a specificity tiebreaker.
-    register_builtin(
-        scope,
-        "ATTR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument {
-                    name: "s".into(),
-                    ktype: KType::AnyUserType {
-                        kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
-                    },
-                }),
-                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
-            ],
-        },
-        body_struct,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::TypeExprRef }),
-                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::Identifier }),
-            ],
-        },
-        body_type_lhs,
-    );
-    register_builtin(
-        scope,
-        "ATTR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument { name: "s".into(),     ktype: KType::TypeExprRef }),
-                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_type_lhs,
-    );
+    register_builtin(scope, "ATTR",
+        sig(KType::Any, vec![kw("ATTR"), arg("s", newtype_ty), arg("field", KType::Identifier)]),
+        body_struct);
+    register_builtin(scope, "ATTR",
+        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::TypeExprRef), arg("field", KType::Identifier)]),
+        body_type_lhs);
+    register_builtin(scope, "ATTR",
+        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::TypeExprRef), arg("field", KType::TypeExprRef)]),
+        body_type_lhs);
     // Chained access where the lhs is a module value (`Outer.Inner.x` after the inner
     // resolves) and the field is itself a Type token (`Outer.Inner` step in `Outer.Inner.x`).
-    register_builtin(
-        scope,
-        "ATTR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("ATTR".into()),
-                SignatureElement::Argument(Argument {
-                    name: "s".into(),
-                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
-                }),
-                SignatureElement::Argument(Argument { name: "field".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_module,
-    );
+    register_builtin(scope, "ATTR",
+        sig(KType::Any, vec![kw("ATTR"), arg("s", module_ty), arg("field", KType::TypeExprRef)]),
+        body_module);
 }
 
 #[cfg(test)]

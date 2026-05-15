@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, Scope, SchedulerHandle};
 
-use super::{err, register_builtin};
+use super::{arg, err, kw, register_builtin, sig};
 
 /// `EVAL <expr:Any>` — surface form `$(expr)`. Resolves `expr` to a value and, if that value
 /// is a `KObject::KExpression`, dispatches the captured AST in a fresh per-call frame
@@ -51,13 +51,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "EVAL",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("EVAL".into()),
-                SignatureElement::Argument(Argument { name: "expr".into(), ktype: KType::Any }),
-            ],
-        },
+        sig(KType::Any, vec![kw("EVAL"), arg("expr", KType::Any)]),
         body,
     );
 }

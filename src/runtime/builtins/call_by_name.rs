@@ -1,9 +1,9 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Parseable, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType, Parseable};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::dispatch_constructor;
 
 use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
-use super::{err, register_builtin};
+use super::{arg, err, register_builtin, sig};
 
 /// `<verb:Identifier> <args:KExpression>` — surface syntax `f (a: 1, b: 2)`. When `verb`
 /// resolves to a `TaggedUnionType` or `StructType` instead of a function, delegates to
@@ -62,13 +62,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "call_by_name",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Argument(Argument { name: "verb".into(), ktype: KType::Identifier }),
-                SignatureElement::Argument(Argument { name: "args".into(), ktype: KType::KExpression }),
-            ],
-        },
+        sig(KType::Any, vec![
+            arg("verb", KType::Identifier),
+            arg("args", KType::KExpression),
+        ]),
         body,
     );
 }

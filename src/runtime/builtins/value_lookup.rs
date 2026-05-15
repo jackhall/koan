@@ -1,7 +1,7 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Parseable, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType, Parseable};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
-use super::{err, register_builtin};
+use super::{arg, err, register_builtin, sig};
 
 /// `<v:Identifier>` — single-part expression containing one identifier-classed name token.
 /// Looks `v` up via `Scope::lookup` (walking `data → placeholders → outer`) and returns
@@ -121,23 +121,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "value_lookup",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Identifier }),
-            ],
-        },
+        sig(KType::Any, vec![arg("v", KType::Identifier)]),
         body_identifier,
     );
     register_builtin(
         scope,
         "value_lookup",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
+        sig(KType::Any, vec![arg("v", KType::TypeExprRef)]),
         body_type_expr,
     );
 }

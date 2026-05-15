@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
 use crate::runtime::machine::substitute_params;
 use crate::ast::{ExpressionPart, KExpression, KLiteral};
 
 use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
-use super::{err, register_builtin};
+use super::{arg, err, kw, register_builtin, sig};
 
 /// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.
 ///
@@ -164,15 +164,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "MATCH",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("MATCH".into()),
-                SignatureElement::Argument(Argument { name: "value".into(),    ktype: KType::Any }),
-                SignatureElement::Keyword("WITH".into()),
-                SignatureElement::Argument(Argument { name: "branches".into(), ktype: KType::KExpression }),
-            ],
-        },
+        sig(KType::Any, vec![
+            kw("MATCH"),
+            arg("value", KType::Any),
+            kw("WITH"),
+            arg("branches", KType::KExpression),
+        ]),
         body,
     );
 }

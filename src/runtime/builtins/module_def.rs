@@ -17,15 +17,15 @@
 //! off the Combine's terminal — the parent's `Foo` binding lands at Combine-finish time,
 //! not when MODULE's body returns to the dispatcher.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::types::{ReturnType, UserTypeKind};
+use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::model::values::Module;
 
 use crate::ast::KExpression;
 
 use crate::runtime::machine::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{err, register_builtin_with_pre_run};
+use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -144,21 +144,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "MODULE",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::AnyUserType { kind: UserTypeKind::Module }),
-            elements: vec![
-                SignatureElement::Keyword("MODULE".into()),
-                SignatureElement::Argument(Argument {
-                    name: "name".into(),
-                    ktype: KType::TypeExprRef,
-                }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument {
-                    name: "body".into(),
-                    ktype: KType::KExpression,
-                }),
-            ],
-        },
+        sig(KType::AnyUserType { kind: UserTypeKind::Module }, vec![
+            kw("MODULE"),
+            arg("name", KType::TypeExprRef),
+            kw("="),
+            arg("body", KType::KExpression),
+        ]),
         body,
         Some(pre_run),
     );

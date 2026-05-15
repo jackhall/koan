@@ -17,14 +17,14 @@
 //! intermediate. Consumers reach the `KType` through `KObject::as_ktype()` /
 //! `extract_ktype()` and operate on the structural shape rather than the surface form.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator, ReturnType};
+use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::{resolve_module, resolve_signature};
 
 use super::ascribe::{abstract_type_names_of, is_abstract_type_name};
-use super::{err, register_builtin};
+use super::{arg, err, kw, register_builtin, sig};
 
 /// Pull a `KObject::KTypeValue`'s inner `KType` out of an arg slot. The slot is declared
 /// `KType::TypeExprRef`, so by `Argument::matches` shape-time it must be either an
@@ -488,106 +488,58 @@ pub fn body_sig_with<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin(
-        scope,
-        "LIST_OF",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::TypeExprRef),
-            elements: vec![
-                SignatureElement::Keyword("LIST_OF".into()),
-                SignatureElement::Argument(Argument { name: "elem".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_list_of,
-    );
-    register_builtin(
-        scope,
-        "DICT_OF",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::TypeExprRef),
-            elements: vec![
-                SignatureElement::Keyword("DICT_OF".into()),
-                SignatureElement::Argument(Argument { name: "key".into(),   ktype: KType::TypeExprRef }),
-                SignatureElement::Argument(Argument { name: "value".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_dict_of,
-    );
-    register_builtin(
-        scope,
-        "FUNCTION_OF",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::TypeExprRef),
-            elements: vec![
-                SignatureElement::Keyword("FUNCTION_OF".into()),
-                SignatureElement::Argument(Argument { name: "args".into(), ktype: KType::KExpression }),
-                SignatureElement::Keyword("->".into()),
-                SignatureElement::Argument(Argument { name: "ret".into(),  ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_function_of,
-    );
+    register_builtin(scope, "LIST_OF",
+        sig(KType::TypeExprRef, vec![kw("LIST_OF"), arg("elem", KType::TypeExprRef)]),
+        body_list_of);
+    register_builtin(scope, "DICT_OF",
+        sig(KType::TypeExprRef, vec![
+            kw("DICT_OF"),
+            arg("key", KType::TypeExprRef),
+            arg("value", KType::TypeExprRef),
+        ]),
+        body_dict_of);
+    register_builtin(scope, "FUNCTION_OF",
+        sig(KType::TypeExprRef, vec![
+            kw("FUNCTION_OF"),
+            arg("args", KType::KExpression),
+            kw("->"),
+            arg("ret", KType::TypeExprRef),
+        ]),
+        body_function_of);
     // Single overload: the `m` slot is `Module`. Bare Type-token operands
     // (`MODULE_TYPE_OF Foo Type`) ride the unified auto-wrap path and resolve through the
     // `value_lookup`-TypeExprRef overload to a `Future(KModule)`, which then matches this
     // slot strictly. Same shape as the ascription operators — no parallel TypeExprRef-lhs
     // overload needed.
-    register_builtin(
-        scope,
-        "MODULE_TYPE_OF",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::TypeExprRef),
-            elements: vec![
-                SignatureElement::Keyword("MODULE_TYPE_OF".into()),
-                SignatureElement::Argument(Argument {
-                    name: "m".into(),
-                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
-                }),
-                SignatureElement::Argument(Argument { name: "name".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_module_type_of,
-    );
+    register_builtin(scope, "MODULE_TYPE_OF",
+        sig(KType::TypeExprRef, vec![
+            kw("MODULE_TYPE_OF"),
+            arg("m", KType::AnyUserType { kind: UserTypeKind::Module }),
+            arg("name", KType::TypeExprRef),
+        ]),
+        body_module_type_of);
     // `TYPE_CONSTRUCTOR <param:TypeExprRef>` — declares a higher-kinded type-constructor
     // slot (template form). Inside a SIG body, `LET Wrap = (TYPE_CONSTRUCTOR Type)` binds
     // `Wrap` to a `KTypeValue(UserType { kind: TypeConstructor { param_names: ["T"] }, .. })`
     // template; `ascribe.rs:body_opaque` re-mints the slot with a fresh per-call
     // `scope_id` and the slot's declared name (e.g. `Wrap`) on opaque ascription.
-    register_builtin(
-        scope,
-        "TYPE_CONSTRUCTOR",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::TypeExprRef),
-            elements: vec![
-                SignatureElement::Keyword("TYPE_CONSTRUCTOR".into()),
-                SignatureElement::Argument(Argument { name: "param".into(), ktype: KType::TypeExprRef }),
-            ],
-        },
-        body_type_constructor,
-    );
+    register_builtin(scope, "TYPE_CONSTRUCTOR",
+        sig(KType::TypeExprRef, vec![
+            kw("TYPE_CONSTRUCTOR"),
+            arg("param", KType::TypeExprRef),
+        ]),
+        body_type_constructor);
     // `SIG_WITH <sig:Signature> <bindings:KExpression>` — see [`body_sig_with`] for the
     // inner-triple parsing rules. The `bindings` slot is `KExpression` (lazy), so the
     // dispatcher hands the parens group to the body verbatim; sub-Dispatch of inner
     // value expressions (`(Elt: (MODULE_TYPE_OF E Type))`) is the body's responsibility.
-    register_builtin(
-        scope,
-        "SIG_WITH",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::TypeExprRef),
-            elements: vec![
-                SignatureElement::Keyword("SIG_WITH".into()),
-                SignatureElement::Argument(Argument {
-                    name: "sig".into(),
-                    ktype: KType::Signature,
-                }),
-                SignatureElement::Argument(Argument {
-                    name: "bindings".into(),
-                    ktype: KType::KExpression,
-                }),
-            ],
-        },
-        body_sig_with,
-    );
+    register_builtin(scope, "SIG_WITH",
+        sig(KType::TypeExprRef, vec![
+            kw("SIG_WITH"),
+            arg("sig", KType::Signature),
+            arg("bindings", KType::KExpression),
+        ]),
+        body_sig_with);
 }
 
 #[cfg(test)]

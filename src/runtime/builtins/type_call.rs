@@ -3,13 +3,13 @@ use crate::runtime::machine::{
 };
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::model::values::dispatch_constructor;
-use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::runtime::model::KType;
 
 use super::newtype_def::newtype_construct;
 use crate::runtime::machine::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,
 };
-use super::{err, register_builtin};
+use super::{arg, err, register_builtin, sig};
 
 /// `<verb:TypeExprRef> <args:KExpression>` — the type-token construction path.
 ///
@@ -116,13 +116,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "type_call",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Argument(Argument { name: "verb".into(), ktype: KType::TypeExprRef }),
-                SignatureElement::Argument(Argument { name: "args".into(), ktype: KType::KExpression }),
-            ],
-        },
+        sig(KType::Any, vec![
+            arg("verb", KType::TypeExprRef),
+            arg("args", KType::KExpression),
+        ]),
         body,
     );
 }

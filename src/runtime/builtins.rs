@@ -1,6 +1,8 @@
 use crate::runtime::machine::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use crate::runtime::machine::core::{KError, Scope};
-use crate::runtime::model::types::{ExpressionSignature, KType, UserTypeKind};
+use crate::runtime::model::types::{
+    Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
+};
 use crate::runtime::model::values::KObject;
 
 mod ascribe;
@@ -29,6 +31,23 @@ pub(crate) mod test_support;
 
 pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
     BodyResult::Err(e)
+}
+
+/// Signature-element constructor for a keyword slot.
+pub(crate) fn kw(s: &str) -> SignatureElement {
+    SignatureElement::Keyword(s.into())
+}
+
+/// Signature-element constructor for an argument slot.
+pub(crate) fn arg(name: &str, ktype: KType) -> SignatureElement {
+    SignatureElement::Argument(Argument { name: name.into(), ktype })
+}
+
+/// Assemble an `ExpressionSignature` whose return type is `Resolved(return_type)`.
+/// All shipped builtins resolve their return type at registration time; FN-bodies that
+/// need `Deferred(...)` build the `ExpressionSignature` directly.
+pub(crate) fn sig<'a>(return_type: KType, elements: Vec<SignatureElement>) -> ExpressionSignature<'a> {
+    ExpressionSignature { return_type: ReturnType::Resolved(return_type), elements }
 }
 
 pub fn register_builtin<'a>(

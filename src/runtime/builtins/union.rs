@@ -2,20 +2,20 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::runtime::machine::core::PendingTypeEntry;
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
 };
 use crate::runtime::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, ReturnType,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
 };
 
 use crate::ast::KExpression;
 
 use crate::runtime::machine::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{err, register_builtin_with_pre_run};
+use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.
 ///
@@ -178,15 +178,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "UNION",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Type),
-            elements: vec![
-                SignatureElement::Keyword("UNION".into()),
-                SignatureElement::Argument(Argument { name: "name".into(),   ktype: KType::TypeExprRef }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument { name: "schema".into(), ktype: KType::KExpression }),
-            ],
-        },
+        sig(KType::Type, vec![
+            kw("UNION"),
+            arg("name", KType::TypeExprRef),
+            kw("="),
+            arg("schema", KType::KExpression),
+        ]),
         body,
         Some(pre_run),
     );

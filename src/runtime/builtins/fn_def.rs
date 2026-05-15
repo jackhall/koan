@@ -1,6 +1,6 @@
 mod signature;
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::model::{ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
 use crate::runtime::model::types::{elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, ReturnType};
 
@@ -8,7 +8,7 @@ use crate::runtime::machine::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
 use crate::ast::ExpressionPart;
-use super::{err, register_builtin_with_pre_run};
+use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 use signature::ParamListOutcome;
 
@@ -635,24 +635,21 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // signature. Module-system functor-params Stage B: if the captured `TypeExpr` carries
     // a parameter-name leaf, the body switches to `ReturnType::Deferred(TypeExpr)` and
     // re-elaborates per call against the dispatch-boundary scope.
+    // FN returns a function value, but there's no "any function" KType anymore —
+    // a function's structural type only exists once its signature is known. `Any`
+    // here lets the constructed `KObject::KFunction`'s projected `ktype()` (which
+    // does carry the full signature) flow through any caller's slot.
     register_builtin_with_pre_run(
         scope,
         "FN",
-        ExpressionSignature {
-            // FN returns a function value, but there's no "any function" KType anymore —
-            // a function's structural type only exists once its signature is known. `Any`
-            // here lets the constructed `KObject::KFunction`'s projected `ktype()` (which
-            // does carry the full signature) flow through any caller's slot.
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("FN".into()),
-                SignatureElement::Argument(Argument { name: "signature".into(),   ktype: KType::KExpression }),
-                SignatureElement::Keyword("->".into()),
-                SignatureElement::Argument(Argument { name: "return_type".into(), ktype: KType::TypeExprRef }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument { name: "body".into(),        ktype: KType::KExpression }),
-            ],
-        },
+        sig(KType::Any, vec![
+            kw("FN"),
+            arg("signature", KType::KExpression),
+            kw("->"),
+            arg("return_type", KType::TypeExprRef),
+            kw("="),
+            arg("body", KType::KExpression),
+        ]),
         body,
         Some(pre_run),
     );
@@ -675,17 +672,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "FN",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Any),
-            elements: vec![
-                SignatureElement::Keyword("FN".into()),
-                SignatureElement::Argument(Argument { name: "signature".into(),   ktype: KType::KExpression }),
-                SignatureElement::Keyword("->".into()),
-                SignatureElement::Argument(Argument { name: "return_type".into(), ktype: KType::KExpression }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument { name: "body".into(),        ktype: KType::KExpression }),
-            ],
-        },
+        sig(KType::Any, vec![
+            kw("FN"),
+            arg("signature", KType::KExpression),
+            kw("->"),
+            arg("return_type", KType::KExpression),
+            kw("="),
+            arg("body", KType::KExpression),
+        ]),
         body,
         Some(pre_run),
     );

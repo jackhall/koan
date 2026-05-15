@@ -5,12 +5,12 @@
 //! Stage 1 shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::{resolve_module, resolve_signature, Module};
 
-use super::register_builtin;
+use super::{arg, kw, register_builtin, sig};
 
 /// `<m:Module> :| <s:Signature>` — opaque ascription.
 pub fn body_opaque<'a>(
@@ -206,36 +206,25 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // replay-park rails in [`KFunction::classify_for_pick`] — they sub-dispatch through
     // the `value_lookup`-TypeExprRef overload to a `Future(KModule)` / `Future(KSignature)`,
     // which then matches these slots strictly. No parallel Type-Type overload required.
+    let module_ty = KType::AnyUserType { kind: UserTypeKind::Module };
     register_builtin(
         scope,
         ":|",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::AnyUserType { kind: UserTypeKind::Module }),
-            elements: vec![
-                SignatureElement::Argument(Argument {
-                    name: "m".into(),
-                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
-                }),
-                SignatureElement::Keyword(":|".into()),
-                SignatureElement::Argument(Argument { name: "s".into(), ktype: KType::Signature }),
-            ],
-        },
+        sig(module_ty.clone(), vec![
+            arg("m", module_ty.clone()),
+            kw(":|"),
+            arg("s", KType::Signature),
+        ]),
         body_opaque,
     );
     register_builtin(
         scope,
         ":!",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::AnyUserType { kind: UserTypeKind::Module }),
-            elements: vec![
-                SignatureElement::Argument(Argument {
-                    name: "m".into(),
-                    ktype: KType::AnyUserType { kind: UserTypeKind::Module },
-                }),
-                SignatureElement::Keyword(":!".into()),
-                SignatureElement::Argument(Argument { name: "s".into(), ktype: KType::Signature }),
-            ],
-        },
+        sig(module_ty.clone(), vec![
+            arg("m", module_ty),
+            kw(":!"),
+            arg("s", KType::Signature),
+        ]),
         body_transparent,
     );
 }

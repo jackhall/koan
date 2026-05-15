@@ -30,9 +30,9 @@ use crate::runtime::machine::{
 };
 use crate::runtime::model::types::UserTypeKind;
 use crate::runtime::model::values::KObject;
-use crate::runtime::model::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::runtime::model::KType;
 
-use super::{err, register_builtin_with_pre_run};
+use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 /// Body of `NEWTYPE <name> = <repr>`. Extracts the bare type name, resolves `repr`
 /// to a concrete [`KType`] (rejecting unresolved bare-leaf carriers), mints a
@@ -220,21 +220,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "NEWTYPE",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Type),
-            elements: vec![
-                SignatureElement::Keyword("NEWTYPE".into()),
-                SignatureElement::Argument(Argument {
-                    name: "name".into(),
-                    ktype: KType::TypeExprRef,
-                }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument {
-                    name: "repr".into(),
-                    ktype: KType::TypeExprRef,
-                }),
-            ],
-        },
+        sig(KType::Type, vec![
+            kw("NEWTYPE"),
+            arg("name", KType::TypeExprRef),
+            kw("="),
+            arg("repr", KType::TypeExprRef),
+        ]),
         body,
         Some(pre_run),
     );

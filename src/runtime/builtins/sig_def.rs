@@ -13,14 +13,14 @@
 //! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
 //! attaches axioms.
 
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::model::values::Signature;
 
 use crate::ast::KExpression;
 
 use crate::runtime::machine::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{err, register_builtin_with_pre_run};
+use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -82,21 +82,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "SIG",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Signature),
-            elements: vec![
-                SignatureElement::Keyword("SIG".into()),
-                SignatureElement::Argument(Argument {
-                    name: "name".into(),
-                    ktype: KType::TypeExprRef,
-                }),
-                SignatureElement::Keyword("=".into()),
-                SignatureElement::Argument(Argument {
-                    name: "body".into(),
-                    ktype: KType::KExpression,
-                }),
-            ],
-        },
+        sig(KType::Signature, vec![
+            kw("SIG"),
+            arg("name", KType::TypeExprRef),
+            kw("="),
+            arg("body", KType::KExpression),
+        ]),
         body,
         Some(pre_run),
     );

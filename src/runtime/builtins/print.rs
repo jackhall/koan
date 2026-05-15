@@ -1,7 +1,7 @@
-use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, Parseable, SignatureElement, ReturnType};
+use crate::runtime::model::{KObject, KType, Parseable};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
-use super::{err, register_builtin};
+use super::{arg, err, kw, register_builtin, sig};
 
 /// `PRINT <msg:Any>` — renders the bound value via `Parseable::summarize`, writes it to the
 /// nearest `out` writer (via `Scope::write_out`, which walks the `outer` chain) followed by
@@ -25,13 +25,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "PRINT",
-        ExpressionSignature {
-            return_type: ReturnType::Resolved(KType::Str),
-            elements: vec![
-                SignatureElement::Keyword("PRINT".into()),
-                SignatureElement::Argument(Argument { name: "msg".into(), ktype: KType::Any }),
-            ],
-        },
+        sig(KType::Str, vec![kw("PRINT"), arg("msg", KType::Any)]),
         body,
     );
 }
