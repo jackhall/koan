@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::runtime::machine::core::{KError, KErrorKind, Scope};
+use crate::runtime::machine::core::{KError, KErrorKind, Scope, ScopeId};
 
 use super::super::types::KType;
 use super::KObject;
@@ -38,7 +38,7 @@ pub struct Module<'a> {
     /// sig_id }` is an O(1) membership check against this set. `RefCell` because
     /// ascription writes after the surrounding `KObject::KModule` is already alloc'd —
     /// same shape as `type_members`.
-    pub compatible_sigs: RefCell<Vec<usize>>,
+    pub compatible_sigs: RefCell<Vec<ScopeId>>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -62,7 +62,7 @@ impl<'a> Module<'a> {
     /// ascription site) so future ascription paths are easy to grep for, and so the
     /// idempotency check sits in one place — re-ascribing the same module to the same sig
     /// (e.g. `(View :| OrderedSig)` after `(View :! OrderedSig)`) doesn't double-insert.
-    pub fn mark_satisfies(&self, sig_id: usize) {
+    pub fn mark_satisfies(&self, sig_id: ScopeId) {
         let mut s = self.compatible_sigs.borrow_mut();
         if !s.contains(&sig_id) {
             s.push(sig_id);
@@ -79,9 +79,10 @@ impl<'a> Module<'a> {
 
     /// Stable identity used to seed `KType::UserType { kind: Module, scope_id, .. }`.
     /// Two distinct opaque ascriptions of the same source module mint distinct
-    /// `UserType`s because each ascription allocates a fresh child scope.
-    pub fn scope_id(&self) -> usize {
-        self.child_scope_ptr as usize
+    /// `UserType`s because each ascription allocates a fresh child scope (and thus a
+    /// fresh `ScopeId`).
+    pub fn scope_id(&self) -> ScopeId {
+        self.child_scope().id
     }
 }
 
@@ -113,11 +114,11 @@ impl<'a> Signature<'a> {
     }
 
     /// Stable identity used to seed `KType::SignatureBound { sig_id, .. }`. Mirrors
-    /// `Module::scope_id` — the arena pins the `Signature` for the run, addresses are
-    /// stable and unique, and two `SIG Foo = (...)` declarations in the same scope
+    /// `Module::scope_id` — each `SIG` declares its own decl_scope and therefore mints
+    /// a fresh `ScopeId`; two `SIG Foo = (...)` declarations in the same lexical scope
     /// already error (`Rebind`), so distinct `Signature` values always have distinct ids.
-    pub fn sig_id(&self) -> usize {
-        self.decl_scope_ptr as usize
+    pub fn sig_id(&self) -> ScopeId {
+        self.decl_scope().id
     }
 }
 

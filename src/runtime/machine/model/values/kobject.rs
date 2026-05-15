@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 
 use crate::runtime::machine::model::ast::{KExpression, TypeExpr};
 use crate::runtime::machine::core::kfunction::KFunction;
-use crate::runtime::machine::core::{CallArena, KFuture};
+use crate::runtime::machine::core::{CallArena, KFuture, ScopeId};
 use crate::runtime::machine::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
 use super::module::{Module, Signature};
 
@@ -32,14 +32,15 @@ pub enum KObject<'a> {
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
     /// Tagged-union schema. `(name, scope_id)` is the declared type's identity —
     /// `name` is the declared type name (`Maybe`), `scope_id` is the declaring scope's
-    /// address (cast `*const Scope as usize`) and uses the same scheme `Module::scope_id()`
-    /// does. `ktype()` reports `KType::Type` (the schema is a value *of* the meta-type);
-    /// `Tagged` *values* synthesize `KType::UserType { kind: Tagged, .. }` from these
-    /// identity fields, which `crate::runtime::builtins::tagged_union::construct` copies onto each produced value.
+    /// `ScopeId` and uses the same scheme `Module::scope_id()` does. `ktype()` reports
+    /// `KType::Type` (the schema is a value *of* the meta-type); `Tagged` *values*
+    /// synthesize `KType::UserType { kind: Tagged, .. }` from these identity fields,
+    /// which `crate::runtime::builtins::tagged_union::construct` copies onto each
+    /// produced value.
     TaggedUnionType {
         schema: Rc<HashMap<String, KType>>,
         name: String,
-        scope_id: usize,
+        scope_id: ScopeId,
     },
     /// Struct schema. `(scope_id, name)` is the declared type's identity — same scheme
     /// as `TaggedUnionType`. `ktype()` reports `KType::Type`; produced `Struct` values
@@ -47,7 +48,7 @@ pub enum KObject<'a> {
     /// copied onto each value by `crate::runtime::builtins::struct_value::construct`.
     StructType {
         name: String,
-        scope_id: usize,
+        scope_id: ScopeId,
         fields: Rc<Vec<(String, KType)>>,
     },
     /// Tagged-union value. `(name, scope_id)` carries the declaring schema's identity
@@ -57,7 +58,7 @@ pub enum KObject<'a> {
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
-        scope_id: usize,
+        scope_id: ScopeId,
         name: String,
     },
     /// Struct value. `(name, scope_id)` carries the declaring schema's identity through
@@ -65,7 +66,7 @@ pub enum KObject<'a> {
     /// `KType::UserType { kind: Struct, .. }` from these fields.
     Struct {
         name: String,
-        scope_id: usize,
+        scope_id: ScopeId,
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
     /// First-class type value carrying the elaborated `KType` directly. The parser's
@@ -614,14 +615,14 @@ mod tests {
         let inner = arena.alloc_object(KObject::Number(3.0));
         let type_id: &KType = arena.alloc_ktype(KType::UserType {
             kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
-            scope_id: 0xAA,
+            scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
         let w = KObject::Wrapped { inner, type_id };
         match w.ktype() {
             KType::UserType { kind: UserTypeKind::Newtype { .. }, name, scope_id } => {
                 assert_eq!(name, "Distance");
-                assert_eq!(scope_id, 0xAA);
+                assert_eq!(scope_id, ScopeId::from_raw(0, 0xAA));
             }
             other => panic!("expected Newtype identity, got {other:?}"),
         }
@@ -637,7 +638,7 @@ mod tests {
         let inner = arena.alloc_object(KObject::Number(3.0));
         let type_id = arena.alloc_ktype(KType::UserType {
             kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
-            scope_id: 0xAA,
+            scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
         let w = KObject::Wrapped { inner, type_id };
@@ -653,7 +654,7 @@ mod tests {
         let inner = arena.alloc_object(KObject::Number(3.0));
         let type_id = arena.alloc_ktype(KType::UserType {
             kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
-            scope_id: 0xAA,
+            scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
         let original = KObject::Wrapped { inner, type_id };

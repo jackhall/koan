@@ -394,7 +394,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::builtins::default_scope;
-    use crate::runtime::machine::core::RuntimeArena;
+    use crate::runtime::machine::core::{RuntimeArena, ScopeId};
     use crate::runtime::machine::model::types::UserTypeKind;
     use crate::runtime::machine::model::values::{Module, Signature};
 
@@ -411,7 +411,7 @@ mod tests {
         let module = arena.alloc_module(Module::new("Foo".into(), child));
         let obj = arena.alloc_object(KObject::KModule(module, None));
         let declared = KType::SignatureBound {
-            sig_id: 42,
+            sig_id: ScopeId::from_raw(0, 42),
             sig_path: "OrderedSig".into(),
             pinned_slots: Vec::new(),
         };
@@ -506,7 +506,7 @@ mod tests {
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let obj = arena.alloc_object(KObject::Number(1.0));
         let declared = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: Vec::new(),
         };

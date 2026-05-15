@@ -20,7 +20,7 @@
 use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
-use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, ScopeId, SchedulerHandle};
 use crate::runtime::machine::model::values::{resolve_module, resolve_signature};
 
 use super::ascribe::{abstract_type_names_of, is_abstract_type_name};
@@ -211,7 +211,7 @@ pub fn body_type_constructor<'a>(
     BodyResult::Value(
         scope.arena.alloc_object(KObject::KTypeValue(KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec![param] },
-            scope_id: 0,
+            scope_id: ScopeId::SENTINEL,
             name: "_typeconstructor".into(),
         })),
     )
@@ -547,6 +547,7 @@ mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_silent};
     use crate::runtime::machine::model::{KObject, KType};
     use crate::runtime::machine::RuntimeArena;
+    use crate::runtime::machine::ScopeId;
     use crate::runtime::machine::execute::Scheduler;
 
     /// `(LIST_OF Number)` dispatches and produces a `KTypeValue` carrying the elaborated
@@ -838,7 +839,7 @@ mod tests {
             KObject::KTypeValue(kt) => match kt {
                 KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, scope_id, name } => {
                     assert_eq!(*param_names, vec!["Type".to_string()]);
-                    assert_eq!(*scope_id, 0);
+                    assert_eq!(*scope_id, ScopeId::SENTINEL);
                     assert_eq!(name, "_typeconstructor");
                 }
                 other => panic!("expected UserType(TypeConstructor), got {:?}", other),
@@ -886,7 +887,7 @@ mod tests {
             "Wrap".into(),
             KType::UserType {
                 kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-                scope_id: 0xC0DE,
+                scope_id: ScopeId::from_raw(0, 0xC0DE),
                 name: "Wrap".into(),
             },
         );

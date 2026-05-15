@@ -8,6 +8,8 @@
 //! live in `ktype_predicates.rs`; elaboration (`from_name`, `from_type_expr`, `join`,
 //! `join_iter`) lives in `ktype_resolution.rs`.
 
+use crate::runtime::machine::core::ScopeId;
+
 /// Surface-keyword classifier shared by `KType::UserType` and `KType::AnyUserType`. Each
 /// variant maps to the keyword that declares the carrier (`STRUCT`, anonymous-or-named
 /// `UNION` → `Tagged`, `MODULE`, `NEWTYPE`). The kind is sourced from the declaration site
@@ -120,7 +122,7 @@ pub enum KType {
     /// types (`Foo.Type` from opaque ascription) with `kind: Module` and `name` set to
     /// the abstract type's name (typically `"Type"`) — distinguished from a first-class
     /// module value by `name`.
-    UserType { kind: UserTypeKind, scope_id: usize, name: String },
+    UserType { kind: UserTypeKind, scope_id: ScopeId, name: String },
     /// Wildcard tag matching any user-declared carrier of the given `kind`. The surface
     /// names `"Struct"` / `"Tagged"` / `"Module"` resolve to this; a slot typed `Struct`
     /// accepts any `KObject::Struct{..}` regardless of declaring schema. Strictly more
@@ -148,7 +150,7 @@ pub enum KType {
     /// order-preserving — rather than a `HashMap` — so structural equality is
     /// deterministic and the diagnostic surface stays stable.
     SignatureBound {
-        sig_id: usize,
+        sig_id: ScopeId,
         sig_path: String,
         pinned_slots: Vec<(String, KType)>,
     },
@@ -349,7 +351,7 @@ mod tests {
         // diagnostic surface: a `Point` struct slot shows `Point`, not `Struct`.
         let t = KType::UserType {
             kind: UserTypeKind::Struct,
-            scope_id: 0x1234,
+            scope_id: ScopeId::from_raw(0, 0x1234),
             name: "Point".into(),
         };
         assert_eq!(t.name(), "Point");

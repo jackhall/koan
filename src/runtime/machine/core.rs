@@ -12,6 +12,7 @@ mod kerror;
 pub(crate) mod kfunction;
 mod pending;
 mod scope;
+mod scope_id;
 
 #[cfg(test)]
 mod tests;
@@ -20,3 +21,4 @@ pub use arena::{CallArena, RuntimeArena};
 pub use bindings::{ApplyOutcome, Bindings, PendingTypeEntry};
 pub use kerror::{Frame, KError, KErrorKind};
 pub use scope::{KFuture, ResolveOutcome, Resolution, Resolved, Scope, ScopeKind};
+pub use scope_id::ScopeId;

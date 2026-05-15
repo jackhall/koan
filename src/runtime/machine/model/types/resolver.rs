@@ -14,7 +14,7 @@ use std::collections::HashSet;
 
 use crate::runtime::machine::model::ast::{TypeExpr, TypeParams};
 use crate::runtime::machine::NodeId;
-use crate::runtime::machine::core::{Resolution, Scope};
+use crate::runtime::machine::core::{Resolution, Scope, ScopeId};
 
 use super::ktype::{KType, UserTypeKind};
 
@@ -54,7 +54,7 @@ pub struct Elaborator<'s, 'a> {
     pub self_id: Option<NodeId>,
     pub current_decl_name: Option<String>,
     pub current_decl_kind: Option<UserTypeKind>,
-    pub current_decl_scope_id: Option<usize>,
+    pub current_decl_scope_id: Option<ScopeId>,
 }
 
 impl<'s, 'a> Elaborator<'s, 'a> {
@@ -90,7 +90,7 @@ impl<'s, 'a> Elaborator<'s, 'a> {
         mut self,
         name: String,
         kind: UserTypeKind,
-        scope_id: usize,
+        scope_id: ScopeId,
     ) -> Self {
         self.current_decl_name = Some(name);
         self.current_decl_kind = Some(kind);
@@ -377,7 +377,7 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
     // a `Box<KType>`). `Clone` the kind out of the borrow. STRUCT / named-UNION are the
     // only carriers that participate in SCC cycle-close — neither produces a `Newtype`
     // variant here, so this clone is always a cheap variant-tag copy.
-    let identities: Vec<(String, UserTypeKind, usize)> = {
+    let identities: Vec<(String, UserTypeKind, ScopeId)> = {
         let pending = scope.bindings().pending_types();
         members
             .iter()
@@ -425,7 +425,7 @@ mod tests {
         // `ascribe.rs:body_opaque` mints at runtime).
         let ctor = KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: 0xC0DE,
+            scope_id: ScopeId::from_raw(0, 0xC0DE),
             name: "Wrap".into(),
         };
         scope.register_type("Wrap".into(), ctor.clone());
@@ -459,12 +459,12 @@ mod tests {
         let scope_b = arena.alloc_scope(crate::runtime::machine::core::Scope::child_under(scope));
         let ctor_a = KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: 0xAAAA,
+            scope_id: ScopeId::from_raw(0, 0xAAAA),
             name: "Wrap".into(),
         };
         let ctor_b = KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: 0xBBBB,
+            scope_id: ScopeId::from_raw(0, 0xBBBB),
             name: "Wrap".into(),
         };
         scope_a.register_type("Wrap".into(), ctor_a.clone());
@@ -496,7 +496,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         let ctor = KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: 0xC0DE,
+            scope_id: ScopeId::from_raw(0, 0xC0DE),
             name: "Wrap".into(),
         };
         scope.register_type("Wrap".into(), ctor);
@@ -554,7 +554,7 @@ mod tests {
     fn constructor_apply_name_renders_surface_form() {
         let ctor = KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: 0xC0DE,
+            scope_id: ScopeId::from_raw(0, 0xC0DE),
             name: "Wrap".into(),
         };
         let app = KType::ConstructorApply {

@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
-use crate::runtime::machine::core::{KError, KErrorKind, Scope};
+use crate::runtime::machine::core::{KError, KErrorKind, Scope, ScopeId};
 use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
@@ -76,7 +76,7 @@ pub fn apply<'a>(
 pub fn construct<'a>(
     schema: &HashMap<String, KType>,
     schema_name: &str,
-    schema_scope_id: usize,
+    schema_scope_id: ScopeId,
     tag: String,
     value: &KObject<'a>,
 ) -> Result<KObject<'a>, KError> {

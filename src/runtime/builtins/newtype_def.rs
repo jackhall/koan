@@ -104,7 +104,7 @@ pub fn body<'a>(
     // arm; identity equality (per the manual `UserTypeKind::PartialEq`) ignores `repr`
     // so the wildcard `AnyUserType { kind: Newtype { repr: <sentinel> } }` admits any
     // concrete identity.
-    let scope_id = scope as *const _ as usize;
+    let scope_id = scope.id;
     let identity = KType::UserType {
         kind: UserTypeKind::Newtype { repr: Box::new(repr) },
         scope_id,

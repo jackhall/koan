@@ -3,7 +3,7 @@
 
 use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::runtime::machine::model::KObject;
-use crate::runtime::machine::RuntimeArena;
+use crate::runtime::machine::{RuntimeArena, ScopeId};
 
 /// Verify that `LET MyList = (LIST_OF Number)` registers a type binding carrying the
 /// elaborated `KType::List(Number)`. Post-stage-1.7 storage flip the LET TypeExprRef
@@ -144,7 +144,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_num: &Module<'_> = arena.alloc_module(Module::new("NumPinned".into(), child_a));
     m_num.type_members.borrow_mut().insert("Type".into(), KType::Number);
-    m_num.mark_satisfies(42); // arbitrary sig_id matching the slot below
+    m_num.mark_satisfies(ScopeId::from_raw(0, 42)); // arbitrary sig_id matching the slot below
     let m_num_obj = arena.alloc_object(KObject::KModule(m_num, None));
 
     let child_b = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
@@ -153,7 +153,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_str: &Module<'_> = arena.alloc_module(Module::new("StrPinned".into(), child_b));
     m_str.type_members.borrow_mut().insert("Type".into(), KType::Str);
-    m_str.mark_satisfies(42);
+    m_str.mark_satisfies(ScopeId::from_raw(0, 42));
     let m_str_obj = arena.alloc_object(KObject::KModule(m_str, None));
 
     // A module that satisfies the sig but doesn't even have a `Type` pin — also rejected.
@@ -162,11 +162,11 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         "NoTypePin".into(),
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
-    m_none.mark_satisfies(42);
+    m_none.mark_satisfies(ScopeId::from_raw(0, 42));
     let m_none_obj = arena.alloc_object(KObject::KModule(m_none, None));
 
     let slot = KType::SignatureBound {
-        sig_id: 42,
+        sig_id: ScopeId::from_raw(0, 42),
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };

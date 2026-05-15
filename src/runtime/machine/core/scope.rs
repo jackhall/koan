@@ -9,6 +9,7 @@ use super::arena::RuntimeArena;
 use super::bindings::{ApplyOutcome, Bindings};
 use super::kerror::KError;
 use super::pending::PendingQueue;
+use super::scope_id::ScopeId;
 
 /// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
 /// and the `ArgumentBundle` from `KFunction::bind`. Unit of deferred work in dispatch.
@@ -58,6 +59,12 @@ pub struct Scope<'a> {
     pub bindings: Bindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
+    /// Position-independent identity. Minted from [`ScopeId::next`] at construction;
+    /// captured into `KType::UserType { scope_id, .. }` / `KType::SignatureBound {
+    /// sig_id, .. }` and the corresponding `KObject` schema variants so dispatch on
+    /// user-declared types compares ids rather than scope pointers. See
+    /// [`crate::runtime::machine::core::scope_id`].
+    pub id: ScopeId,
     /// Writes that hit a borrow conflict at `bind_value` / `register_function` time.
     /// Drained between dispatch nodes by `drain_pending`; direct writes bypass the queue.
     /// See [`PendingQueue`] for the deferral / retry surface.
@@ -89,6 +96,7 @@ impl<'a> Scope<'a> {
             bindings: Bindings::new(),
             out: RefCell::new(Some(out)),
             arena,
+            id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
         }
@@ -106,6 +114,7 @@ impl<'a> Scope<'a> {
             bindings: Bindings::new(),
             out: RefCell::new(None),
             arena: outer.arena,
+            id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
         }
@@ -120,6 +129,7 @@ impl<'a> Scope<'a> {
             bindings: Bindings::new(),
             out: RefCell::new(None),
             arena: outer.arena,
+            id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Sig { name },
         }
@@ -134,6 +144,7 @@ impl<'a> Scope<'a> {
             bindings: Bindings::new(),
             out: RefCell::new(None),
             arena: outer.arena,
+            id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Module { name },
         }

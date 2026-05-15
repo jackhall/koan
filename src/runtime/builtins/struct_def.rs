@@ -59,7 +59,7 @@ pub fn body<'a>(
     // STRUCT / named-UNION's elaboration can detect a closing cycle when it parks on
     // our placeholder. The entry carries the schema + kind + scope_id so cycle-close
     // can install our identity without re-entering dispatch.
-    let scope_id = scope as *const _ as usize;
+    let scope_id = scope.id;
     scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
@@ -132,7 +132,7 @@ fn finalize_struct<'a>(
     // the dual-written `KType::UserType` identity tag share these `(scope_id, name)`
     // fields so dispatch on the carrier (via its `ktype()`) and dispatch through a
     // slot typed by the identity reach the same `UserType` value.
-    let scope_id = scope as *const _ as usize;
+    let scope_id = scope.id;
     let struct_obj: &'a KObject<'a> = arena.alloc_object(KObject::StructType {
         name: name.clone(),
         scope_id,
@@ -469,7 +469,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         // Pre-seed both maps to mimic the cycle-close-then-finalize state.
-        let scope_id = scope as *const _ as usize;
+        let scope_id = scope.id;
         let pre_carrier: &KObject<'_> = arena.alloc_object(KObject::StructType {
             name: "Foo".into(),
             scope_id,

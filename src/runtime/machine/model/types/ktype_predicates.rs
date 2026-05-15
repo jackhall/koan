@@ -392,6 +392,7 @@ pub(super) fn function_compat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::machine::core::ScopeId;
 
     #[test]
     fn is_more_specific_concrete_beats_any() {
@@ -478,13 +479,13 @@ mod tests {
         let t = KType::AnyUserType { kind: UserTypeKind::Struct };
         let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
             name: "Point".into(),
-            scope_id: 0,
+            scope_id: ScopeId::SENTINEL,
             fields: Rc::new(IndexMap::new()),
         });
         let tagged: &KObject<'_> = arena.alloc_object(KObject::Tagged {
             tag: "some".into(),
             value: Rc::new(KObject::Number(1.0)),
-            scope_id: 0,
+            scope_id: ScopeId::SENTINEL,
             name: "Maybe".into(),
         });
         let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
@@ -507,13 +508,13 @@ mod tests {
         let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
         let type_id: &KType = arena.alloc_ktype(KType::UserType {
             kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
-            scope_id: 0xAA,
+            scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
         let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped { inner, type_id });
         let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
             name: "Point".into(),
-            scope_id: 0,
+            scope_id: ScopeId::SENTINEL,
             fields: std::rc::Rc::new(indexmap::IndexMap::new()),
         });
         assert!(t.accepts_part(&ExpressionPart::Future(w)));
@@ -533,7 +534,7 @@ mod tests {
         let any_struct = KType::AnyUserType { kind: UserTypeKind::Struct };
         let dist = KType::UserType {
             kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
-            scope_id: 0xAA,
+            scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         };
         assert!(dist.is_more_specific_than(&any_newtype));
@@ -553,7 +554,7 @@ mod tests {
         let any_tagged = KType::AnyUserType { kind: UserTypeKind::Tagged };
         let point = KType::UserType {
             kind: UserTypeKind::Struct,
-            scope_id: 0xAA,
+            scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Point".into(),
         };
         // `AnyUserType` strictly under `Any`.
@@ -575,14 +576,14 @@ mod tests {
     fn is_type_denoting_table() {
         // SignatureBound — module ascribed to a signature.
         let sb = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: Vec::new(),
         };
         assert!(sb.is_type_denoting());
         // SignatureBound with pins — still type-denoting.
         let sb_pinned = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: vec![("Type".into(), KType::Number)],
         };
@@ -604,7 +605,7 @@ mod tests {
         // be a no-op (or worse, a shadow).
         let ut = KType::UserType {
             kind: UserTypeKind::Module,
-            scope_id: 1,
+            scope_id: ScopeId::from_raw(0, 1),
             name: "Foo".into(),
         };
         assert!(!ut.is_type_denoting());
@@ -639,32 +640,32 @@ mod tests {
     #[test]
     fn is_more_specific_for_pinned_signature_bound() {
         let bare = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: Vec::new(),
         };
         let pinned_number = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: vec![("Type".into(), KType::Number)],
         };
         let pinned_str = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: vec![("Type".into(), KType::Str)],
         };
         let pinned_two = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
         };
         let other_sig = KType::SignatureBound {
-            sig_id: 2,
+            sig_id: ScopeId::from_raw(0, 2),
             sig_path: "HashedSig".into(),
             pinned_slots: vec![("Type".into(), KType::Number)],
         };
         let pinned_elt = KType::SignatureBound {
-            sig_id: 1,
+            sig_id: ScopeId::from_raw(0, 1),
             sig_path: "OrderedSig".into(),
             pinned_slots: vec![("Elt".into(), KType::Number)],
         };

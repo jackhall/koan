@@ -54,7 +54,7 @@ pub fn body<'a>(
     // Stage-3.2 SCC: install the binder's pending-type entry before launching the
     // elaborator so a fellow in-flight binder parking on this name closes the cycle
     // via DFS on `pending_types`.
-    let scope_id = scope as *const _ as usize;
+    let scope_id = scope.id;
     scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
@@ -114,7 +114,7 @@ fn finalize_union<'a>(
     // the schema carrier in `bindings.data` so type-name resolution finds the union by
     // name and dispatch on `(PICK x: Maybe)` lowers to the same `KType::UserType` the
     // carrier's `ktype()` reports.
-    let scope_id = scope as *const _ as usize;
+    let scope_id = scope.id;
     let union_obj: &'a KObject<'a> = arena.alloc_object(KObject::TaggedUnionType {
         schema: Rc::new(schema),
         name: name.clone(),
@@ -284,7 +284,7 @@ mod tests {
         use std::rc::Rc;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let scope_id = scope as *const _ as usize;
+        let scope_id = scope.id;
         let mut schema: HashMap<String, KType> = HashMap::new();
         schema.insert("some".into(), KType::Number);
         let pre_carrier: &KObject<'_> = arena.alloc_object(KObject::TaggedUnionType {

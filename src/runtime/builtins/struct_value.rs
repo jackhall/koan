@@ -21,7 +21,7 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
-use crate::runtime::machine::core::{KError, KErrorKind, Scope};
+use crate::runtime::machine::core::{KError, KErrorKind, Scope, ScopeId};
 use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
@@ -102,7 +102,7 @@ pub fn apply<'a>(
 /// builtin's body is a thin shim around this.
 pub fn construct<'a>(
     type_name: &str,
-    scope_id: usize,
+    scope_id: ScopeId,
     fields: &[(String, KType)],
     values: &[KObject<'a>],
 ) -> Result<KObject<'a>, KError> {

@@ -29,6 +29,7 @@ use crate::runtime::machine::model::types::{KType, UntypedKey, UserTypeKind};
 use crate::runtime::machine::model::values::KObject;
 
 use super::kerror::{KError, KErrorKind};
+use super::scope_id::ScopeId;
 
 /// Façade owning the four co-mutating `RefCell` maps that back every lexical binding:
 /// `types` (name → `&KType`, the dedicated type-binding home introduced in stage 1.2 of
@@ -77,7 +78,7 @@ pub struct Bindings<'a> {
 /// binder's placeholder.
 pub struct PendingTypeEntry<'a> {
     pub kind: UserTypeKind,
-    pub scope_id: usize,
+    pub scope_id: ScopeId,
     pub schema_expr: KExpression<'a>,
     pub edges: Vec<String>,
 }
@@ -715,12 +716,12 @@ mod tests {
         // each alloc their own.
         let kt_pre: &KType = arena.alloc_ktype(KType::UserType {
             kind: UserTypeKind::Struct,
-            scope_id: 0xDEAD_BEEF,
+            scope_id: ScopeId::from_raw(0, 0xDEAD_BEEF),
             name: "Foo".into(),
         });
         let kt_finalize: &KType = arena.alloc_ktype(KType::UserType {
             kind: UserTypeKind::Struct,
-            scope_id: 0xDEAD_BEEF,
+            scope_id: ScopeId::from_raw(0, 0xDEAD_BEEF),
             name: "Foo".into(),
         });
         assert!(!std::ptr::eq(kt_pre, kt_finalize), "alloc should produce distinct pointers");
