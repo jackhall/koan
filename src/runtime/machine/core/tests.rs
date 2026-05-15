@@ -251,7 +251,7 @@ fn bind_value_clears_own_placeholder() {
 // -------- resolve_dispatch smoke tests --------
 
 use super::ResolveOutcome;
-use crate::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::runtime::builtins::register_builtin;
 use crate::runtime::builtins::test_support::{marker, one_slot_sig};
 use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};

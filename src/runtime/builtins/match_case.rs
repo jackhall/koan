@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
 use crate::runtime::machine::substitute_params;
-use crate::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 use crate::runtime::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, err, kw, register_builtin, sig};

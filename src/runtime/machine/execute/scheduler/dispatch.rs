@@ -2,7 +2,7 @@ use crate::runtime::machine::model::Parseable;
 use crate::runtime::machine::{
     Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Resolved, Scope,
 };
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
@@ -164,7 +164,7 @@ impl<'a> Scheduler<'a> {
                 // Parameterized Type parts (List<…>, etc.) are structural type-syntax, not
                 // look-up targets.
                 Some(ExpressionPart::Type(t))
-                    if matches!(t.params, crate::ast::TypeParams::None) =>
+                    if matches!(t.params, crate::runtime::machine::model::ast::TypeParams::None) =>
                 {
                     t.name.as_str()
                 }

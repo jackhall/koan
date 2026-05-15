@@ -11,7 +11,7 @@ use crate::runtime::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
 };
 
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 
 use crate::runtime::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};

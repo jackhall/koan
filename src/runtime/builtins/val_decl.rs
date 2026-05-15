@@ -53,7 +53,7 @@
 //!   `defer_val_via_combine` and `defer_val_structural_via_combine` document the
 //!   detailed flow.
 
-use crate::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,

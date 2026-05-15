@@ -3,7 +3,7 @@ use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
@@ -40,13 +40,13 @@ pub fn body<'a>(
         // The `TypeClassBindingExpectsType` blocklist runs the same shape as the
         // `KTypeValue` arm: non-type RHS rejected before storage routing.
         Some(KObject::TypeNameRef(t, _)) => match &t.params {
-            crate::ast::TypeParams::List(_) | crate::ast::TypeParams::Function { .. } => {
+            crate::runtime::machine::model::ast::TypeParams::List(_) | crate::runtime::machine::model::ast::TypeParams::Function { .. } => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",
                     t.render(),
                 ))));
             }
-            crate::ast::TypeParams::None => {
+            crate::runtime::machine::model::ast::TypeParams::None => {
                 let resolved_name = t.name.clone();
                 if matches!(
                     value.ktype(),
@@ -243,7 +243,7 @@ mod tests {
     use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{ArgumentBundle, BodyResult};
     use crate::runtime::machine::execute::Scheduler;
-    use crate::ast::{ExpressionPart, KExpression, KLiteral};
+    use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
     fn let_inserts_binding_into_scope() {

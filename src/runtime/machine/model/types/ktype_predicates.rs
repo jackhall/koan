@@ -6,7 +6,7 @@
 use super::ktype::{KType, UserTypeKind};
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::runtime::machine::model::values::KObject;
-use crate::ast::{ExpressionPart, KLiteral};
+use crate::runtime::machine::model::ast::{ExpressionPart, KLiteral};
 
 impl KType {
     /// True iff this declared parameter `KType` denotes the type language — i.e. a

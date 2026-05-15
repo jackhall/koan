@@ -2,7 +2,7 @@
 //! with an `OperatorKind` and a builder that wraps surrounding operands into a nested
 //! `ExpressionPart`.
 
-use crate::ast::ExpressionPart;
+use crate::runtime::machine::model::ast::ExpressionPart;
 
 type Builder = for<'a> fn(Vec<ExpressionPart<'a>>) -> ExpressionPart<'a>;
 

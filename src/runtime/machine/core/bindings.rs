@@ -23,7 +23,7 @@
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 use crate::runtime::machine::core::kfunction::{KFunction, NodeId};
 use crate::runtime::machine::model::types::{KType, UntypedKey, UserTypeKind};
 use crate::runtime::machine::model::values::KObject;

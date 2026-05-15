@@ -5,7 +5,7 @@
 //! full `KExpression` debug output.
 
 use super::expression_tree::{build_tree, parse};
-use crate::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::quotes::mask_quotes;
 
 fn describe(e: &KExpression<'_>) -> String {

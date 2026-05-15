@@ -76,13 +76,13 @@ pub fn body_type_expr<'a>(
         // the `KTypeValue` arm does; otherwise the surface name (`t.name`) is the
         // lookup target.
         Some(KObject::TypeNameRef(t, _)) => match &t.params {
-            crate::ast::TypeParams::List(_) | crate::ast::TypeParams::Function { .. } => {
+            crate::runtime::machine::model::ast::TypeParams::List(_) | crate::runtime::machine::model::ast::TypeParams::Function { .. } => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "value_lookup: parameterized type expression `{}` is not a value-lookup target",
                     t.render()
                 ))));
             }
-            crate::ast::TypeParams::None => t.name.clone(),
+            crate::runtime::machine::model::ast::TypeParams::None => t.name.clone(),
         },
         other => {
             return err(KError::new(KErrorKind::TypeMismatch {

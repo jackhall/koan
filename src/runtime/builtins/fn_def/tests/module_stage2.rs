@@ -28,7 +28,7 @@ fn list_of_let_binding_is_ktype_value() {
 /// path that was deleted in phase 5.
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
-    use crate::ast::TypeExpr;
+    use crate::runtime::machine::model::ast::TypeExpr;
     use crate::runtime::machine::model::KType;
     use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
     let arena = RuntimeArena::new();
@@ -133,7 +133,7 @@ fn let_then_fn_in_same_batch_works() {
 /// admissibility logic.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
-    use crate::ast::ExpressionPart;
+    use crate::runtime::machine::model::ast::ExpressionPart;
     use crate::runtime::machine::model::KType;
     use crate::runtime::machine::model::values::Module;
     let arena = RuntimeArena::new();

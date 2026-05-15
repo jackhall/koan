@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::ast::{KExpression, TypeExpr};
+use crate::runtime::machine::model::ast::{KExpression, TypeExpr};
 use crate::runtime::machine::core::kfunction::KFunction;
 use crate::runtime::machine::core::{CallArena, KFuture};
 use crate::runtime::machine::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
@@ -297,7 +297,7 @@ impl<'a> KObject<'a> {
         }
         // Bare-leaf fast path: skip the elaborator entirely so a cycle of leaf carriers
         // can't recurse forever. The elaborator's threaded set is empty here.
-        use crate::ast::TypeParams;
+        use crate::runtime::machine::model::ast::TypeParams;
         let resolved: Option<&'a KType> = match &t.params {
             TypeParams::None => scope.resolve_type(&t.name),
             // Parameterized fallback: run the scope-aware elaborator and allocate the
@@ -511,7 +511,7 @@ mod tests {
     /// whether the carrier has been resolved yet.
     #[test]
     fn type_name_ref_summarize_renders_surface_form() {
-        use crate::ast::TypeExpr;
+        use crate::runtime::machine::model::ast::TypeExpr;
         let v = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()), OnceCell::new());
         use crate::runtime::machine::model::types::Parseable;
         assert_eq!(v.summarize(), "MyT");
@@ -521,7 +521,7 @@ mod tests {
     /// the fully-elaborated `KTypeValue` carrier. Pins the slot-routing invariant.
     #[test]
     fn type_name_ref_ktype_is_type_expr_ref() {
-        use crate::ast::TypeExpr;
+        use crate::runtime::machine::model::ast::TypeExpr;
         let v = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()), OnceCell::new());
         assert_eq!(v.ktype(), KType::TypeExprRef);
     }
@@ -531,7 +531,7 @@ mod tests {
     /// pointer without re-walking the scope chain.
     #[test]
     fn type_name_ref_resolve_in_scope_memoizes() {
-        use crate::ast::TypeExpr;
+        use crate::runtime::machine::model::ast::TypeExpr;
         use crate::runtime::builtins::test_support::run_root_bare;
         use crate::runtime::machine::RuntimeArena;
         let arena = RuntimeArena::new();
@@ -567,7 +567,7 @@ mod tests {
     /// `UnboundName` / `ShapeError` per their own diagnostic shape.
     #[test]
     fn type_name_ref_resolve_returns_none_for_unbound_name() {
-        use crate::ast::TypeExpr;
+        use crate::runtime::machine::model::ast::TypeExpr;
         use crate::runtime::builtins::test_support::run_root_bare;
         use crate::runtime::machine::RuntimeArena;
         let arena = RuntimeArena::new();
@@ -581,7 +581,7 @@ mod tests {
     /// semantics chosen for the cross-scope-cache-validity concern.
     #[test]
     fn type_name_ref_deep_clone_resets_cell() {
-        use crate::ast::TypeExpr;
+        use crate::runtime::machine::model::ast::TypeExpr;
         let cell: OnceCell<&'static KType> = OnceCell::new();
         let leaked: &'static KType = Box::leak(Box::new(KType::Number));
         let _ = cell.set(leaked);

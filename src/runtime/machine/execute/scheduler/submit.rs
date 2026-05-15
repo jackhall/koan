@@ -1,5 +1,5 @@
 use crate::runtime::machine::{CombineFinish, NodeId, Scope};
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 
 use super::super::nodes::{Node, NodeWork};
 use super::dep_graph::work_owned_edges;

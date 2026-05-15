@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::{CallArena, KFuture, RuntimeArena};
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
 /// an `Rc<CallArena>` to anchor any descendant that borrows into the dying arena.

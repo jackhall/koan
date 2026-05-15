@@ -5,7 +5,7 @@ use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{NodeId, RuntimeArena, Scope};
 use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 use super::super::nodes::{NodeOutput, NodeWork};
 use super::dep_graph::DepEdge;
@@ -340,7 +340,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     use crate::runtime::builtins::{default_scope, register_builtin};
     use crate::runtime::machine::model::{ExpressionSignature, KType, SignatureElement};
     use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Scope};
-    use crate::ast::ExpressionPart;
+    use crate::runtime::machine::model::ast::ExpressionPart;
 
     // Builtin "DEFERTEST": no args; schedules a Combine over zero deps whose finish
     // returns a known KString, then returns `BodyResult::DeferTo(combine_id)`.

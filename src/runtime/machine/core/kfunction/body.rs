@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 
 use crate::runtime::machine::core::{CallArena, KError, Scope};
 use crate::runtime::machine::model::values::KObject;

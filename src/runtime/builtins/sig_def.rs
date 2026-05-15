@@ -17,7 +17,7 @@ use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::machine::model::values::Signature;
 
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 
 use crate::runtime::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};

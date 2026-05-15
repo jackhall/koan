@@ -4,7 +4,7 @@
 //! state inline. Multi-part keys/values collapse into a sub-expression via
 //! `single_or_wrapped`.
 
-use crate::ast::ExpressionPart;
+use crate::runtime::machine::model::ast::ExpressionPart;
 
 /// In-progress dict literal: completed pairs plus the state of the current pair. Owns its
 /// own state machine so character handlers in `build_tree` delegate to `accept_colon`,

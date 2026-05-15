@@ -3,7 +3,7 @@ use std::fmt;
 use crate::runtime::machine::core::kfunction::KFunction;
 use crate::runtime::machine::model::types::Parseable;
 use crate::runtime::machine::model::KType;
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.

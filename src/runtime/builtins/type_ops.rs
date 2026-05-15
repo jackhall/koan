@@ -95,7 +95,7 @@ pub fn body_function_of<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    use crate::ast::ExpressionPart;
+    use crate::runtime::machine::model::ast::ExpressionPart;
     let args_expr = match bundle.get("args") {
         Some(obj) => match obj.as_kexpression() {
             Some(e) => e.clone(),
@@ -242,7 +242,7 @@ pub fn body_sig_with<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    use crate::ast::ExpressionPart;
+    use crate::runtime::machine::model::ast::ExpressionPart;
 
     let s = match bundle.get("sig") {
         Some(obj) => match resolve_signature(obj, "sig") {
@@ -285,7 +285,7 @@ pub fn body_sig_with<'a>(
             ))));
         }
         let slot_name = match &parts[0] {
-            ExpressionPart::Type(t) if matches!(t.params, crate::ast::TypeParams::None) => {
+            ExpressionPart::Type(t) if matches!(t.params, crate::runtime::machine::model::ast::TypeParams::None) => {
                 t.name.clone()
             }
             ExpressionPart::Type(t) => {
@@ -376,7 +376,7 @@ pub fn body_sig_with<'a>(
     // directly. Inner `Expression(...)` parts need a sub-Dispatch and force the
     // Combine path.
     let mut pinned: Vec<(String, KType)> = Vec::with_capacity(triples.len());
-    let mut sub_dispatches: Vec<(usize, crate::ast::KExpression<'a>)> = Vec::new();
+    let mut sub_dispatches: Vec<(usize, crate::runtime::machine::model::ast::KExpression<'a>)> = Vec::new();
     let mut placeholders: Vec<usize> = Vec::new(); // indices in `pinned` for sub-dispatch slots
     for (slot_name, value_part, _idx) in &triples {
         match value_part {

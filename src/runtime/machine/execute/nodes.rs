@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::{CallArena, CombineFinish, KError, KFunction, NodeId, Scope};
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.

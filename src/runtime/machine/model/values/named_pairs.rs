@@ -10,7 +10,7 @@
 //! "take the part verbatim", type-side over there is "resolve as a KType against scope".
 //! The wrapper closes over the right interpretation.
 
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 use crate::parse::parse_triple_list;
 
 /// Walk an expression's parts as repeated `<Identifier(name)> <Keyword(":")> <value>` triples
@@ -35,7 +35,7 @@ pub fn parse_named_value_pairs<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::KLiteral;
+    use crate::runtime::machine::model::ast::KLiteral;
 
     fn ident(s: &str) -> ExpressionPart<'static> {
         ExpressionPart::Identifier(s.to_string())

@@ -13,7 +13,7 @@ use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{KError, RuntimeArena, Scope};
 use crate::runtime::machine::execute::Scheduler;
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 use crate::parse::parse;
 
 use super::default_scope;

@@ -20,7 +20,7 @@
 //! `struct_def::defer_struct_via_combine`. No second registered builtin → no
 //! bucket-collision infinite loop with `type_call`.
 
-use crate::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 use crate::runtime::machine::core::ApplyOutcome;
 use crate::runtime::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_ktype, extract_type_name_ref,

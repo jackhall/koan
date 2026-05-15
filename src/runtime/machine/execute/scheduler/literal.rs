@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::runtime::machine::model::{KKey, KObject, Serializable};
 use crate::runtime::machine::{BodyResult, CombineFinish, Frame, NodeId, Scope};
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::NodeWork;
 use super::Scheduler;
@@ -143,7 +143,7 @@ impl<'a> Scheduler<'a> {
             }
             ExpressionPart::Type(t)
                 if wrap_identifiers
-                    && matches!(t.params, crate::ast::TypeParams::None) =>
+                    && matches!(t.params, crate::runtime::machine::model::ast::TypeParams::None) =>
             {
                 // Auto-wrap for bare leaf Type-tokens in value slots: `MAKESET IntOrd`
                 // sub-dispatches `(IntOrd)` through the TypeExprRef overload of

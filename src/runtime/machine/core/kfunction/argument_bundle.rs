@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{KExpression, TypeExpr, TypeParams};
+use crate::runtime::machine::model::ast::{KExpression, TypeExpr, TypeParams};
 
 use crate::runtime::machine::core::{KError, KErrorKind};
 use crate::runtime::machine::model::types::KType;

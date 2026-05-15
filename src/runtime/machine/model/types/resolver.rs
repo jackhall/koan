@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 
-use crate::ast::{TypeExpr, TypeParams};
+use crate::runtime::machine::model::ast::{TypeExpr, TypeParams};
 use crate::runtime::machine::NodeId;
 use crate::runtime::machine::core::{Resolution, Scope};
 
@@ -402,7 +402,7 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::TypeExpr;
+    use crate::runtime::machine::model::ast::TypeExpr;
     use crate::runtime::machine::RuntimeArena;
     use crate::runtime::builtins::test_support::run_root_silent;
 

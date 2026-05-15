@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 use crate::runtime::machine::core::{KError, KErrorKind, Scope};
 use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::model::types::{
@@ -184,7 +184,7 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::ast::KExpression;
+    use crate::runtime::machine::model::ast::KExpression;
     use crate::parse::parse;
     use crate::runtime::builtins::default_scope;
     use crate::runtime::machine::core::{KErrorKind, RuntimeArena, Scope};

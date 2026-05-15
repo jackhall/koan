@@ -7,7 +7,7 @@ use crate::runtime::machine::model::types::{elaborate_type_expr, DeferredReturn,
 use crate::runtime::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
-use crate::ast::ExpressionPart;
+use crate::runtime::machine::model::ast::ExpressionPart;
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 use signature::ParamListOutcome;
@@ -19,8 +19,8 @@ pub(crate) use signature::pre_run;
 /// at FN-def time: a match short-circuits the eager-elaborate path (which would
 /// fail or produce the wrong answer against the FN's outer scope, where the
 /// parameter is unbound by definition).
-fn type_expr_references_any(te: &crate::ast::TypeExpr, param_names: &[String]) -> bool {
-    use crate::ast::TypeParams;
+fn type_expr_references_any(te: &crate::runtime::machine::model::ast::TypeExpr, param_names: &[String]) -> bool {
+    use crate::runtime::machine::model::ast::TypeParams;
     if param_names.iter().any(|n| n == &te.name) {
         return true;
     }
@@ -40,14 +40,14 @@ fn type_expr_references_any(te: &crate::ast::TypeExpr, param_names: &[String]) -
 /// `Type(TypeExpr { name, .. })` matches one of `param_names`. Mirrors the
 /// recursive walk in `kfunction::invoke::substitute_part`.
 fn kexpression_references_any<'a>(
-    expr: &crate::ast::KExpression<'a>,
+    expr: &crate::runtime::machine::model::ast::KExpression<'a>,
     param_names: &[String],
 ) -> bool {
     expr.parts.iter().any(|p| part_references_any(p, param_names))
 }
 
 fn part_references_any<'a>(
-    part: &crate::ast::ExpressionPart<'a>,
+    part: &crate::runtime::machine::model::ast::ExpressionPart<'a>,
     param_names: &[String],
 ) -> bool {
     match part {
@@ -133,8 +133,8 @@ pub fn body<'a>(
     //    the parameter name is unbound.
     enum ReturnTypeRaw<'a> {
         Resolved(KType),
-        TypeExprCarrier(crate::ast::TypeExpr),
-        ExprCarrier(crate::ast::KExpression<'a>),
+        TypeExprCarrier(crate::runtime::machine::model::ast::TypeExpr),
+        ExprCarrier(crate::runtime::machine::model::ast::KExpression<'a>),
     }
     let return_type_raw = match bundle.get("return_type") {
         Some(KObject::KTypeValue(_)) => match extract_ktype(&mut bundle, "return_type") {
@@ -203,7 +203,7 @@ pub fn body<'a>(
     enum ReturnTypeState<'a> {
         Done(KType),
         Pending {
-            te: crate::ast::TypeExpr,
+            te: crate::runtime::machine::model::ast::TypeExpr,
             producers: Vec<crate::runtime::machine::NodeId>,
         },
         Deferred(DeferredReturn<'a>),
@@ -376,8 +376,8 @@ pub fn body<'a>(
 /// legacy `KType::from_name` fast path applies on the Combine wake. Parameterized
 /// shapes (`List<MyT>`, `Foo<Bar, Baz>`) route through `TypeExpr(te)` so the structured
 /// elaboration survives the boundary verbatim.
-fn make_capture<'a>(te: crate::ast::TypeExpr) -> ReturnTypeCapture<'a> {
-    use crate::ast::TypeParams;
+fn make_capture<'a>(te: crate::runtime::machine::model::ast::TypeExpr) -> ReturnTypeCapture<'a> {
+    use crate::runtime::machine::model::ast::TypeParams;
     match te.params {
         TypeParams::None => ReturnTypeCapture::Unresolved(te.name),
         TypeParams::List(_) | TypeParams::Function { .. } => ReturnTypeCapture::TypeExpr(te),
@@ -391,7 +391,7 @@ enum ParamListResult<'a> {
     Done(Vec<SignatureElement>),
     Pending {
         park_producers: Vec<crate::runtime::machine::NodeId>,
-        sub_dispatches: Vec<(usize, crate::ast::KExpression<'a>)>,
+        sub_dispatches: Vec<(usize, crate::runtime::machine::model::ast::KExpression<'a>)>,
     },
 }
 
@@ -416,7 +416,7 @@ enum ParamListResult<'a> {
 enum ReturnTypeCapture<'a> {
     Resolved(KType),
     Unresolved(String),
-    TypeExpr(crate::ast::TypeExpr),
+    TypeExpr(crate::runtime::machine::model::ast::TypeExpr),
     /// Module-system functor-params Stage B: parameter-name reference detected in the
     /// return-type carrier at FN-def time. The carrier is held verbatim and propagated
     /// through to the final `ReturnType::Deferred(_)` on the registered `KFunction`'s
@@ -441,7 +441,7 @@ fn finalize_fn<'a>(
     scope: &'a Scope<'a>,
     elements: Vec<SignatureElement>,
     return_type: ReturnType<'a>,
-    body_expr: crate::ast::KExpression<'a>,
+    body_expr: crate::runtime::machine::model::ast::KExpression<'a>,
 ) -> BodyResult<'a> {
     // Pick the first Keyword as the data-table key. `Bindings::functions` does the load-
     // bearing dispatch lookup by signature; `Bindings::data` is mostly for discoverability
@@ -501,11 +501,11 @@ fn finalize_fn<'a>(
 fn defer_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
-    signature_expr: crate::ast::KExpression<'a>,
+    signature_expr: crate::runtime::machine::model::ast::KExpression<'a>,
     return_type_capture: ReturnTypeCapture<'a>,
     park_producers: Vec<crate::runtime::machine::NodeId>,
-    sub_dispatches: Vec<(usize, crate::ast::KExpression<'a>)>,
-    body_expr: crate::ast::KExpression<'a>,
+    sub_dispatches: Vec<(usize, crate::runtime::machine::model::ast::KExpression<'a>)>,
+    body_expr: crate::runtime::machine::model::ast::KExpression<'a>,
 ) -> BodyResult<'a> {
     // Schedule sub-Dispatches up front. `splice_layout[k] = (slot_idx, results_pos)` says
     // "splice results[results_pos] into signature.parts[slot_idx] as `Future(_)`".
@@ -540,7 +540,7 @@ fn defer_via_combine<'a>(
             }
             spliced_parts[slot_idx] = ExpressionPart::Future(obj);
         }
-        let spliced_signature = crate::ast::KExpression { parts: spliced_parts };
+        let spliced_signature = crate::runtime::machine::model::ast::KExpression { parts: spliced_parts };
 
         // Park producers have finalized — re-elaborate against the now-stable scope. The
         // elaborator's `Park` arm cannot fire again because every parked producer is
@@ -556,7 +556,7 @@ fn defer_via_combine<'a>(
             ReturnTypeCapture::Resolved(kt) => ReturnType::Resolved(kt),
             ReturnTypeCapture::Unresolved(name) => match elaborate_type_expr(
                 &mut elaborator,
-                &crate::ast::TypeExpr::leaf(name.clone()),
+                &crate::runtime::machine::model::ast::TypeExpr::leaf(name.clone()),
             ) {
                 ElabResult::Done(kt) => ReturnType::Resolved(kt),
                 ElabResult::Park(_) => {

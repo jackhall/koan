@@ -4,6 +4,5 @@
 
 #![allow(dead_code)]
 
-pub mod ast;
 pub mod parse;
 pub mod runtime;

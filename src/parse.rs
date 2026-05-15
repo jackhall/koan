@@ -3,7 +3,7 @@
 //! desugaring, dict-pair state, and `<...>` type-param folding live in private submodules.
 //!
 //! The `pub use` block below is the entire public surface: the [`parse`] entry point and
-//! the shared `<name>: <slot>` triple walker. The AST node types live in [`crate::ast`].
+//! the shared `<name>: <slot>` triple walker. The AST node types live in [`crate::runtime::machine::model::ast`].
 //! Submodules are private — all callers go through this surface.
 //!
 //! See [design/expressions-and-parsing.md](../design/expressions-and-parsing.md).

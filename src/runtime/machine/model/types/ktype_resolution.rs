@@ -4,7 +4,7 @@
 //! `KObject::ktype` to infer container element types.
 
 use super::ktype::{KType, UserTypeKind};
-use crate::ast::{TypeExpr, TypeParams};
+use crate::runtime::machine::model::ast::{TypeExpr, TypeParams};
 
 impl KType {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
@@ -42,7 +42,7 @@ impl KType {
     /// User-defined / module-local type names (anything not in `from_name`) surface as
     /// `Err(_)` for the caller to either fall back on the
     /// [`crate::runtime::machine::model::values::KObject::TypeNameRef`] carrier (the
-    /// [`crate::ast::ExpressionPart::resolve_for`] seam at parser-side lowering) or
+    /// [`crate::runtime::machine::model::ast::ExpressionPart::resolve_for`] seam at parser-side lowering) or
     /// route through the scheduler-aware
     /// [`crate::runtime::machine::model::types::elaborate_type_expr`] (the FN / LET / STRUCT body
     /// path that consults `Scope` for placeholder + value lookups).

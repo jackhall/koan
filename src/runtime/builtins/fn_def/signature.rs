@@ -12,7 +12,7 @@
 use crate::runtime::machine::model::{Argument, KObject, SignatureElement};
 use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
 use crate::runtime::machine::NodeId;
-use crate::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 
 /// Extract parameter names from an FN signature's `KExpression` shape without running
 /// type elaboration. Used by Stage B's return-type scan (see

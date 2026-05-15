@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::runtime::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
@@ -179,8 +179,8 @@ impl<'a> KFunction<'a> {
                         let is_bare_name = matches!(
                             other,
                             ExpressionPart::Identifier(_)
-                                | ExpressionPart::Type(crate::ast::TypeExpr {
-                                    params: crate::ast::TypeParams::None,
+                                | ExpressionPart::Type(crate::runtime::machine::model::ast::TypeExpr {
+                                    params: crate::runtime::machine::model::ast::TypeParams::None,
                                     ..
                                 })
                         );
@@ -247,8 +247,8 @@ impl<'a> KFunction<'a> {
                     let is_bare_name = matches!(
                         part,
                         ExpressionPart::Identifier(_)
-                            | ExpressionPart::Type(crate::ast::TypeExpr {
-                                params: crate::ast::TypeParams::None,
+                            | ExpressionPart::Type(crate::runtime::machine::model::ast::TypeExpr {
+                                params: crate::runtime::machine::model::ast::TypeParams::None,
                                 ..
                             })
                     );
@@ -292,8 +292,8 @@ impl<'a> KFunction<'a> {
             let is_bare_name = matches!(
                 part,
                 ExpressionPart::Identifier(_)
-                    | ExpressionPart::Type(crate::ast::TypeExpr {
-                        params: crate::ast::TypeParams::None,
+                    | ExpressionPart::Type(crate::runtime::machine::model::ast::TypeExpr {
+                        params: crate::runtime::machine::model::ast::TypeParams::None,
                         ..
                     })
             );
@@ -430,7 +430,7 @@ impl<'a> KFunction<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{KLiteral, TypeExpr};
+    use crate::runtime::machine::model::ast::{KLiteral, TypeExpr};
     use crate::runtime::builtins::test_support::{marker, run_root_bare};
     use crate::runtime::builtins::{default_scope, register_builtin};
     use crate::runtime::machine::core::{RuntimeArena, Scope};

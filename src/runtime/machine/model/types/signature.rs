@@ -13,7 +13,7 @@
 //! historical site — and `Deferred(DeferredReturn)` carries the parser- or
 //! expression-preserved form for per-call re-elaboration at the dispatch boundary.
 
-use crate::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 
 use super::ktraits::Parseable;
 use super::ktype::KType;
@@ -156,7 +156,7 @@ fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
     if a.name != b.name {
         return false;
     }
-    use crate::ast::TypeParams;
+    use crate::runtime::machine::model::ast::TypeParams;
     match (&a.params, &b.params) {
         (TypeParams::None, TypeParams::None) => true,
         (TypeParams::List(xs), TypeParams::List(ys)) => {

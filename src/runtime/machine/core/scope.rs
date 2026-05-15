@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::io::Write;
 
-use crate::ast::KExpression;
+use crate::runtime::machine::model::ast::KExpression;
 
 use crate::runtime::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::runtime::machine::model::values::KObject;
@@ -469,9 +469,9 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
     expr.parts.iter().any(|p| {
         matches!(
             p,
-            crate::ast::ExpressionPart::Expression(_)
-                | crate::ast::ExpressionPart::ListLiteral(_)
-                | crate::ast::ExpressionPart::DictLiteral(_)
+            crate::runtime::machine::model::ast::ExpressionPart::Expression(_)
+                | crate::runtime::machine::model::ast::ExpressionPart::ListLiteral(_)
+                | crate::runtime::machine::model::ast::ExpressionPart::DictLiteral(_)
         )
     })
 }

@@ -2,7 +2,7 @@ use crate::runtime::machine::model::{KObject, Parseable};
 use crate::runtime::machine::{
     BodyResult, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId, ResolveOutcome, Scope,
 };
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::runtime::machine::core::{CallArena, KError, KErrorKind, RuntimeArena, Scope};
 use crate::runtime::machine::model::types::{
