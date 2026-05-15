@@ -56,36 +56,57 @@
   the return-type expression that references it. Single-letter
   parameter names follow koan's existing token-classification rules
   (`E` is reserved; `Er`, `Elem` work).
-- *Type-class parameter binding — open.* Two options. (a) Dual-write
-  the per-call binding to both `bindings.data` (value lookups) and
-  `bindings.types` (type-expression lookups via
-  `elaborate_type_expr`), so the Type-class name resolves identically
-  through both paths. (b) Keep the per-call binding value-only and
-  teach `elaborate_type_expr` to consult value-bound modules when it
-  sees a Type-class leaf that resolves to a `KModule` value.
-  Recommended: (a), for symmetry with how `LET Ty = (LIST_OF Number)`
-  already dual-writes through
-  [`Scope::register_type`](../src/runtime/machine/core/scope.rs).
-- *Templated return-type substitution — open.* Extend
-  `ReturnTypeCapture::TypeExpr(t)` to also capture the FN's parameter
-  list. At each dispatch boundary, walk the captured `TypeExpr` and
-  rewrite any leaf matching a parameter name into a
-  `Future(KObject::KTypeValue)` carrier whose value is the resolved
-  type-of-arg, then schedule the substituted expression as a
-  sub-Dispatch through the eager-sub-Dispatch rails. Open whether the
-  walk reuses
-  [`substitute_params`](../src/runtime/machine/kfunction/invoke.rs#L76)
-  (operates on `KExpression`) or a parallel TypeExpr walk.
-  Recommended: the parallel TypeExpr walk — `TypeExpr` is small,
-  param-name-keyed substitution is a structural rewrite, and reusing
-  the `KExpression`-shaped helper would force a round-trip through the
-  expression carrier just to walk a type shape.
+
+- *Type-class parameter binding — decided.* At call time, parameters
+  whose declared `KType` is **type-denoting** dual-write into
+  `bindings.types` (via the existing
+  [`Scope::register_type`](../src/runtime/machine/core/scope.rs))
+  alongside the value-side bind in `bindings.data`. The predicate
+  covers `KType::SignatureBound { .. }` (parameter is a module
+  ascribed to a signature; registers the module's nominal type
+  identity), `KType::Signature` (parameter is a signature value;
+  registers the signature itself), `KType::Type` (parameter is a
+  `KTypeValue`; registers it directly), and `KType::TypeExprRef`
+  (parameter carries a `TypeExpr`; registers the elaborated type). A
+  small `is_type_denoting` helper on `KType` keeps the per-call
+  [`invoke.rs`](../src/runtime/machine/kfunction/invoke.rs) site
+  declarative.
+
+- *Templated return-type substitution — decided.* No separate
+  substitution walk. Widen `ExpressionSignature::return_type` from
+  `KType` to a two-variant
+  `ReturnType { Resolved(KType), Deferred(TypeExpr) }`. Selection is
+  decidable at FN-definition by scanning the captured `TypeExpr` for
+  any leaf matching a parameter name: present → `Deferred`; absent →
+  `Resolved`. Per call, `Deferred` re-runs
+  [`elaborate_type_expr`](../src/runtime/model/types/resolver.rs)
+  against the per-call scope where dual-write has installed parameter
+  names; parameter-name leaves resolve naturally through
+  `bindings.types`. Return-type checking on the body's value runs
+  against the per-call resolution. Replaces the existing
+  [`ReturnTypeCapture::{Resolved, Unresolved, TypeExpr}`](../src/runtime/builtins/fn_def.rs#L239)
+  split — Combine-finish at FN-definition either lands
+  `Resolved(KType)` (no parameter refs and outer-scope elaboration
+  succeeds) or `Deferred(TypeExpr)`. Parameter-type parking machinery
+  ([`defer_via_combine`](../src/runtime/builtins/fn_def.rs)) is
+  unchanged — parameter types remain definition-time-elaborated for
+  dispatch keying.
+
 - *Arity scope — decided.* Arity-1 functor parameters only for the
-  initial cut. Multi-parameter functors with cross-parameter references
-  (`(MODULE_TYPE_OF E1 Type) -> (MODULE_TYPE_OF E2 Type)`) fall out for
-  free once both mechanisms land (the substitution walk is
-  param-name-keyed, not arity-keyed); test coverage focus stays on the
-  canonical OCaml-Make shape.
+  initial cut. Multi-parameter functors with cross-parameter
+  references in the *return* type
+  (`(MODULE_TYPE_OF E1 Type) -> (MODULE_TYPE_OF E2 Type)`) fall out
+  for free once the mechanisms above land (the per-call re-elaboration
+  is param-name-keyed, not arity-keyed); test coverage focus stays on
+  the canonical OCaml-Make shape.
+
+- *Dependent parameter annotations — deferred to
+  [Dependent parameter annotations](module-system-dependent-param-annotations.md).*
+  Allowing a parameter's type to reference an *earlier* parameter
+  (e.g. `(MAKE T: Type elt: T)`, OCaml's
+  `module Make (E : ORDERED) (S : SET with type elt = E.t)`) requires
+  staged left-to-right dispatch, which is independent of the
+  return-type machinery decided here.
 
 ## Dependencies
 
@@ -96,3 +117,6 @@
 - [Standard library](standard-library.md) — collection functors like
   `Make` over `ORDERED` are the canonical use case for sharing
   constraints that reference the functor's input module.
+- [Dependent parameter annotations](module-system-dependent-param-annotations.md)
+  — reuses the `Deferred(TypeExpr)` carrier and per-call re-elaboration
+  plumbing established by this item.

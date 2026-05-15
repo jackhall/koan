@@ -131,22 +131,9 @@ is no separate `with type` keyword.
 Pin values that reference only the FN's outer scope are elaborated at
 FN-construction time. Concrete builtins (`Number`, `Str`) and
 outer-scope-bound type values (`(MODULE_TYPE_OF Mo Type)` where `Mo` is
-bound outside the FN) both work as pin values resolved eagerly.
-
-Pin values that reference a per-call FN parameter
-(`(MODULE_TYPE_OF Er Type)` for an `Er` declared on the FN itself) are
-*templated*: the unresolved `TypeExpr` is captured on the FN at
-construction time. At each call's **dispatch boundary** — after
-parameters bind, before the body runs — `substitute_params` rewrites the
-parameter name in the captured expression and the substituted expression
-is scheduled as a sub-Dispatch. The result is the call's concrete
-return-type `KType`, known before the body produces its first value;
-body and return-type elaboration proceed concurrently and join at the
-outer Combine for the slot check. Elaborating the return at the dispatch
-boundary — rather than waiting until the body returns — keeps
-sharing-constraint pins meaningful as call-site contracts, parallelizes
-return-type work with body work, and parallels how parameter-typed slots
-already flow.
+bound outside the FN) both work as pin values resolved eagerly. Pin
+values that reference a per-call FN parameter are tracked as future
+work — see [Open work](#open-work).
 
 Multi-argument functors are ordinary multi-parameter FNs. Currying is just
 nested FNs.
@@ -562,6 +549,10 @@ signature) folds into stage 5.
   — two surfaces described in the body (Type-class FN parameters for
   module values, return-type expressions referencing per-call parameters)
   are not yet wired through the runtime.
+- [Dependent parameter annotations](../roadmap/module-system-dependent-param-annotations.md)
+  — parameter types that reference earlier parameters in the same FN
+  signature; required for OCaml-style multi-parameter functor signatures
+  with cross-parameter sharing constraints.
 - [Stage 4 — Property testing and axioms](../roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom
   syntax in signatures (`AXIOM #(...)` over quoted bool predicates);

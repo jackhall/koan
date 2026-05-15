@@ -203,6 +203,13 @@ incrementally, each producing a usable end state.
   signature. Both are described in
   [design/module-system.md § Functors](design/module-system.md#functors)
   but not wired through the runtime.
+- [Dependent parameter annotations](roadmap/module-system-dependent-param-annotations.md) —
+  parameter type slots that reference earlier parameters in the same FN
+  signature (`(MAKE T: Type elt: T)`, OCaml's
+  `module Make (E : ORDERED) (S : SET with type elt = E.t)`). Reuses the
+  `Deferred(TypeExpr)` carrier from
+  [Functor parameters](roadmap/module-system-functor-params.md); the new
+  work is staged left-to-right dispatch.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.
