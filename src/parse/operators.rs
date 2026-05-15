@@ -45,12 +45,27 @@ fn build_try<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     ExpressionPart::expression(vec![ExpressionPart::Keyword("TRY".to_string()), lhs])
 }
 
+/// Variant view returned by `find_suffix`: restricted to the two kinds that can appear
+/// after an atom (`Infix`, `Suffix`). `Prefix` is structurally absent so `parse_compound`'s
+/// match is exhaustive without an `unreachable!` arm.
+pub enum SuffixOp {
+    Infix(Builder),
+    Suffix(Builder),
+}
+
 pub fn find_prefix(c: char) -> Option<&'static Operator> {
     OPERATORS.iter().find(|op| op.trigger == c && matches!(op.kind, OperatorKind::Prefix))
 }
 
-pub fn find_suffix(c: char) -> Option<&'static Operator> {
-    OPERATORS.iter().find(|op| op.trigger == c && !matches!(op.kind, OperatorKind::Prefix))
+pub fn find_suffix(c: char) -> Option<SuffixOp> {
+    OPERATORS
+        .iter()
+        .find(|op| op.trigger == c)
+        .and_then(|op| match op.kind {
+            OperatorKind::Prefix => None,
+            OperatorKind::Infix => Some(SuffixOp::Infix(op.build)),
+            OperatorKind::Suffix => Some(SuffixOp::Suffix(op.build)),
+        })
 }
 
 pub fn is_atom_terminator(c: char) -> bool {

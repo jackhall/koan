@@ -14,7 +14,7 @@ use regex::Regex;
 
 use crate::runtime::machine::model::is_keyword_token;
 use crate::runtime::machine::model::ast::{ExpressionPart, KLiteral, TypeExpr};
-use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
+use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, SuffixOp};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap()
@@ -135,13 +135,12 @@ fn parse_compound<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>,
     while let Some(&c) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
         chars.next();
-        expr = match op.kind {
-            OperatorKind::Infix => {
+        expr = match op {
+            SuffixOp::Infix(build) => {
                 let rhs = read_atom(chars)?;
-                (op.build)(vec![expr, rhs])
+                build(vec![expr, rhs])
             }
-            OperatorKind::Suffix => (op.build)(vec![expr]),
-            OperatorKind::Prefix => unreachable!("find_suffix excludes Prefix"),
+            SuffixOp::Suffix(build) => build(vec![expr]),
         };
     }
 

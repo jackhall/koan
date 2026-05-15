@@ -8,9 +8,11 @@
 //!
 //! See [design/expressions-and-parsing.md](../design/expressions-and-parsing.md).
 
-mod expression_tree;
 mod dict_literal;
+mod expression_tree;
+mod frame;
 mod operators;
+mod parse_stack;
 mod quotes;
 mod tokens;
 mod triple_list;
