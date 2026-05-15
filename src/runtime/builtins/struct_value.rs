@@ -1,31 +1,34 @@
 //! Struct construction primitives, paralleling [`tagged_union`](super::tagged_union) for
 //! product types. `apply` is the entry point both surface forms (type-token call via
-//! [`type_call`](super::builtins::type_call) and identifier-bound type call via
-//! [`call_by_name`](super::builtins::call_by_name)) call. It synthesizes a tail expression
+//! [`type_call`](super::type_call) and identifier-bound type call via
+//! [`call_by_name`](super::call_by_name)) call. It synthesizes a tail expression
 //! that re-dispatches through the construction-primitive builtin defined here.
 //!
 //! Unlike the tagged-union primitive (3 fixed slots: schema/tag/value), struct construction
 //! is variable-arity — a `Point` schema declares 2 fields, a `User` schema might declare 5.
 //! Construction is **named-only**: the user writes `Point (x: 3, y: 4)` and `apply` parses
 //! the inner expression as `<name>: <value>` triples (via
-//! [`parse_named_value_pairs`](super::named_pairs::parse_named_value_pairs)), validates
-//! against the declared schema, and reorders the values to match schema declaration order.
-//! Reordered value-parts are then wrapped in single-part sub-expressions inside a
-//! `ListLiteral`. The scheduler aggregates the list, dispatching each wrapped sub-expression
-//! through `value_lookup`/`value_pass` so identifiers and literals both resolve to their
-//! values before the primitive sees the assembled `KObject::List`. The primitive then
-//! validates per-field types against the schema and emits a `KObject::Struct`.
+//! [`parse_named_value_pairs`](crate::runtime::model::values::parse_named_value_pairs)),
+//! validates against the declared schema, and reorders the values to match schema
+//! declaration order. Reordered value-parts are then wrapped in single-part sub-expressions
+//! inside a `ListLiteral`. The scheduler aggregates the list, dispatching each wrapped
+//! sub-expression through `value_lookup`/`value_pass` so identifiers and literals both
+//! resolve to their values before the primitive sees the assembled `KObject::List`. The
+//! primitive then validates per-field types against the schema and emits a `KObject::Struct`.
 
 use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::runtime::builtins::register_builtin;
-use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::runtime::machine::core::{KError, KErrorKind, Scope};
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, UserTypeKind, ReturnType};
-use crate::runtime::model::values::{KObject, parse_named_value_pairs};
 use crate::ast::{ExpressionPart, KExpression};
+use crate::runtime::machine::core::{KError, KErrorKind, Scope};
+use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::runtime::model::types::{
+    Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
+};
+use crate::runtime::model::values::{parse_named_value_pairs, KObject};
+
+use super::register_builtin;
 
 /// Parse the inner expression of a `Point (x: 3, y: 4)` form as named pairs, validate the
 /// names match the schema, reorder the values into schema declaration order, and synthesize
@@ -201,12 +204,12 @@ mod tests {
     use std::io::Write;
     use std::rc::Rc;
 
-    use crate::runtime::builtins::default_scope;
-    use crate::runtime::machine::core::{KErrorKind, RuntimeArena, Scope};
-    use crate::runtime::model::values::KObject;
-    use crate::runtime::machine::execute::Scheduler;
     use crate::ast::KExpression;
     use crate::parse::parse;
+    use crate::runtime::builtins::default_scope;
+    use crate::runtime::machine::core::{KErrorKind, RuntimeArena, Scope};
+    use crate::runtime::machine::execute::Scheduler;
+    use crate::runtime::model::values::KObject;
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl Write for SharedBuf {

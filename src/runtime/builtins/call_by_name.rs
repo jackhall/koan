@@ -1,9 +1,7 @@
 use crate::runtime::model::{KObject, KType, Parseable};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::values::dispatch_constructor;
-
 use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
-use super::{arg, err, register_builtin, sig};
+use super::{arg, dispatch_constructor, err, register_builtin, sig};
 
 /// `<verb:Identifier> <args:KExpression>` — surface syntax `f (a: 1, b: 2)`. When `verb`
 /// resolves to a `TaggedUnionType` or `StructType` instead of a function, delegates to

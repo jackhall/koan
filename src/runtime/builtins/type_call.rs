@@ -2,9 +2,9 @@ use crate::runtime::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
 use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::model::values::dispatch_constructor;
 use crate::runtime::model::KType;
 
+use super::dispatch_constructor;
 use super::newtype_def::newtype_construct;
 use crate::runtime::machine::kfunction::argument_bundle::{
     extract_bare_type_name, extract_kexpression,

@@ -1,3 +1,4 @@
+use crate::ast::ExpressionPart;
 use crate::runtime::machine::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use crate::runtime::machine::core::{KError, Scope};
 use crate::runtime::model::types::{
@@ -19,12 +20,29 @@ mod print;
 mod quote;
 mod sig_def;
 mod struct_def;
+pub(crate) mod struct_value;
+pub(crate) mod tagged_union;
 mod type_call;
 mod type_ops;
 mod union;
 mod val_decl;
 mod value_lookup;
 mod value_pass;
+
+/// Route a resolved verb-object to its construction primitive's `apply` function. Returns
+/// `Some(BodyResult)` for `TaggedUnionType` / `StructType`; `None` otherwise. Called from
+/// [`call_by_name`] and [`type_call`]; single growth point for any future first-class
+/// constructible carrier.
+pub(crate) fn dispatch_constructor<'a>(
+    verb_obj: &'a KObject<'a>,
+    args_parts: Vec<ExpressionPart<'a>>,
+) -> Option<BodyResult<'a>> {
+    match verb_obj {
+        KObject::TaggedUnionType { .. } => Some(tagged_union::apply(verb_obj, args_parts)),
+        KObject::StructType { .. } => Some(struct_value::apply(verb_obj, args_parts)),
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -122,9 +140,9 @@ pub fn default_scope<'a>(
     fn_def::register(scope);
     call_by_name::register(scope);
     union::register(scope);
-    crate::runtime::model::values::tagged_union::register(scope);
+    tagged_union::register(scope);
     struct_def::register(scope);
-    crate::runtime::model::values::struct_value::register(scope);
+    struct_value::register(scope);
     newtype_def::register(scope);
     type_call::register(scope);
     match_case::register(scope);

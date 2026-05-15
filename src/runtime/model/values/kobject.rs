@@ -35,7 +35,7 @@ pub enum KObject<'a> {
     /// address (cast `*const Scope as usize`) and uses the same scheme `Module::scope_id()`
     /// does. `ktype()` reports `KType::Type` (the schema is a value *of* the meta-type);
     /// `Tagged` *values* synthesize `KType::UserType { kind: Tagged, .. }` from these
-    /// identity fields, which `tagged_union::construct` copies onto each produced value.
+    /// identity fields, which `crate::runtime::builtins::tagged_union::construct` copies onto each produced value.
     TaggedUnionType {
         schema: Rc<HashMap<String, KType>>,
         name: String,
@@ -44,14 +44,14 @@ pub enum KObject<'a> {
     /// Struct schema. `(scope_id, name)` is the declared type's identity — same scheme
     /// as `TaggedUnionType`. `ktype()` reports `KType::Type`; produced `Struct` values
     /// synthesize `KType::UserType { kind: Struct, .. }` from these identity fields,
-    /// copied onto each value by `struct_value::construct`.
+    /// copied onto each value by `crate::runtime::builtins::struct_value::construct`.
     StructType {
         name: String,
         scope_id: usize,
         fields: Rc<Vec<(String, KType)>>,
     },
     /// Tagged-union value. `(name, scope_id)` carries the declaring schema's identity
-    /// through to the value, populated by `tagged_union::construct` from the schema
+    /// through to the value, populated by `crate::runtime::builtins::tagged_union::construct` from the schema
     /// in the bundle. `ktype()` synthesizes `KType::UserType { kind: Tagged, .. }`
     /// from these fields so dispatch on type identity sees the declared union.
     Tagged {
@@ -61,7 +61,7 @@ pub enum KObject<'a> {
         name: String,
     },
     /// Struct value. `(name, scope_id)` carries the declaring schema's identity through
-    /// to the value, populated by `struct_value::construct`. `ktype()` synthesizes
+    /// to the value, populated by `crate::runtime::builtins::struct_value::construct`. `ktype()` synthesizes
     /// `KType::UserType { kind: Struct, .. }` from these fields.
     Struct {
         name: String,
