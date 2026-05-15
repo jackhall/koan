@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::runtime::model::KObject;
+use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::{CallArena, CombineFinish, KError, KFunction, NodeId, Scope};
 use crate::ast::KExpression;
 

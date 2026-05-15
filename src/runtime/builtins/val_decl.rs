@@ -58,8 +58,8 @@ use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
 };
-use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
-use crate::runtime::model::{KObject, KType};
+use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::runtime::machine::model::{KObject, KType};
 
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
@@ -411,7 +411,7 @@ mod tests {
         parse_one, run, run_one_err, run_root_silent,
     };
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
-    use crate::runtime::model::{KObject, KType};
+    use crate::runtime::machine::model::{KObject, KType};
 
     /// Smoke test: `(VAL zero: Number)` inside a SIG body binds `zero` under the SIG's
     /// decl_scope as a `KTypeValue(KType::Number)` carrier. The slot exists in

@@ -1,4 +1,4 @@
-use crate::runtime::model::{KObject, KType, Parseable};
+use crate::runtime::machine::model::{KObject, KType, Parseable};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, dispatch_constructor, err, register_builtin, sig};
@@ -71,7 +71,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::runtime::model::{KObject, Parseable};
+    use crate::runtime::machine::model::{KObject, Parseable};
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
 
     #[test]

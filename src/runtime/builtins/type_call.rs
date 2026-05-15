@@ -1,8 +1,8 @@
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
-use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::model::KType;
+use crate::runtime::machine::model::types::UserTypeKind;
+use crate::runtime::machine::model::KType;
 
 use super::dispatch_constructor;
 use super::newtype_def::newtype_construct;
@@ -127,7 +127,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
 
     #[test]

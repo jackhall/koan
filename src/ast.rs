@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::runtime::model::{KKey, KObject, Parseable, Serializable, UntypedElement, UntypedKey};
+use crate::runtime::machine::model::{KKey, KObject, Parseable, Serializable, UntypedElement, UntypedKey};
 
 #[derive(Debug, Clone)]
 pub enum KLiteral {
@@ -130,7 +130,7 @@ impl<'a> ExpressionPart<'a> {
     /// rather than parser surface syntax.
     ///
     /// Two routes:
-    /// - When [`crate::runtime::model::types::KType::from_type_expr`] succeeds (builtin
+    /// - When [`crate::runtime::machine::model::types::KType::from_type_expr`] succeeds (builtin
     ///   leaf names like `Number`, or structural shapes like `List<Number>` /
     ///   `Function<(...)-> R>`), the result is packaged as `KObject::KTypeValue(kt)`.
     /// - When `from_type_expr` returns `Err` — i.e. a bare-leaf name that isn't a
@@ -139,7 +139,7 @@ impl<'a> ExpressionPart<'a> {
     ///   `TypeExpr`. The consuming body (`extract_bare_type_name`, ATTR's TypeExprRef
     ///   lhs, FN's deferred return-type elaboration, `LET <Type-class> = …`) reads the
     ///   surface name directly off the carrier or — when scope-aware elaboration is
-    ///   needed — calls [`crate::runtime::model::KObject::resolve_type_name_ref`] to
+    ///   needed — calls [`crate::runtime::machine::model::KObject::resolve_type_name_ref`] to
     ///   resolve and memoize against the consuming scope.
     ///
     /// The carrier shape is required because `resolve_for` runs at `KFunction::bind`
@@ -148,8 +148,8 @@ impl<'a> ExpressionPart<'a> {
     /// (deleted in stage 2) routed the surface name through the elaborated-type
     /// language; `TypeNameRef` keeps it on the value side where the rest of the
     /// bind-time surface-name plumbing lives.
-    pub fn resolve_for(&self, slot: &crate::runtime::model::KType) -> KObject<'a> {
-        use crate::runtime::model::types::KType;
+    pub fn resolve_for(&self, slot: &crate::runtime::machine::model::KType) -> KObject<'a> {
+        use crate::runtime::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
             return match KType::from_type_expr(t) {
                 Ok(kt) => KObject::KTypeValue(kt),
@@ -257,7 +257,7 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 
 impl<'a> Parseable for KExpression<'a> {
     fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
-    fn ktype(&self) -> crate::runtime::model::KType { crate::runtime::model::KType::KExpression }
+    fn ktype(&self) -> crate::runtime::machine::model::KType { crate::runtime::machine::model::KType::KExpression }
     fn summarize(&self) -> String {
         self.parts.iter()
             .map(|p| p.summarize())

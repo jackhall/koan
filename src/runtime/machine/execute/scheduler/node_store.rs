@@ -35,7 +35,7 @@ use std::rc::Rc;
 use crate::runtime::machine::core::{CallArena, Scope};
 use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::machine::NodeId;
-use crate::runtime::model::KObject;
+use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::KError;
 
 use super::super::nodes::{Node, NodeOutput, NodeWork};

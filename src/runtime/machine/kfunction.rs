@@ -21,8 +21,8 @@ use std::rc::Rc;
 use crate::ast::{ExpressionPart, KExpression};
 
 use crate::runtime::machine::core::{KError, KErrorKind, KFuture, Scope};
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
-use crate::runtime::model::values::{parse_named_value_pairs, KObject};
+use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
+use crate::runtime::machine::model::values::{parse_named_value_pairs, KObject};
 
 pub mod argument_bundle;
 pub mod body;
@@ -434,7 +434,7 @@ mod tests {
     use crate::runtime::builtins::test_support::{marker, run_root_bare};
     use crate::runtime::builtins::{default_scope, register_builtin};
     use crate::runtime::machine::core::{RuntimeArena, Scope};
-    use crate::runtime::model::types::{Argument, ExpressionSignature, KType, ReturnType};
+    use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
 
     fn body_any<'a>(
         s: &'a Scope<'a>,

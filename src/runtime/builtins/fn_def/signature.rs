@@ -9,8 +9,8 @@
 //! - [`pre_run`] — the dispatch-time placeholder extractor used by `register` to
 //!   announce the function's name before its body runs.
 
-use crate::runtime::model::{Argument, KObject, SignatureElement};
-use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
+use crate::runtime::machine::model::{Argument, KObject, SignatureElement};
+use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
 use crate::runtime::machine::NodeId;
 use crate::ast::{ExpressionPart, KExpression, TypeParams};
 

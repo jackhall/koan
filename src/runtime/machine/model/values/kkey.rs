@@ -1,7 +1,7 @@
 use std::hash::Hasher;
 
 use crate::runtime::machine::core::{KError, KErrorKind};
-use crate::runtime::model::types::{KType, Parseable, Serializable};
+use crate::runtime::machine::model::types::{KType, Parseable, Serializable};
 use super::kobject::KObject;
 
 /// Concrete dict-key type. The `KObject::Dict` runtime variant stores keys as

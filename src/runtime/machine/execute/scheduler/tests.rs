@@ -1,8 +1,8 @@
 use crate::runtime::builtins::default_scope;
 use crate::runtime::builtins::register_builtin;
 use crate::runtime::builtins::test_support::{marker, one_slot_sig, run_root_bare};
-use crate::runtime::model::KObject;
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::runtime::machine::model::KObject;
+use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{NodeId, RuntimeArena, Scope};
 use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression, KLiteral};
@@ -338,7 +338,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
     // Combine resolves to a value, and the builtin's slot ends up with the same
     // terminal as the Combine. Pins the binder-body wrap-up shape MODULE / SIG use.
     use crate::runtime::builtins::{default_scope, register_builtin};
-    use crate::runtime::model::{ExpressionSignature, KType, SignatureElement};
+    use crate::runtime::machine::model::{ExpressionSignature, KType, SignatureElement};
     use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Scope};
     use crate::ast::ExpressionPart;
 

@@ -1,13 +1,13 @@
 use std::rc::Rc;
 
 use crate::runtime::machine::core::PendingTypeEntry;
-use crate::runtime::model::{KObject, KType};
-use crate::runtime::model::types::UserTypeKind;
+use crate::runtime::machine::model::{KObject, KType};
+use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
 };
-use crate::runtime::model::types::{
+use crate::runtime::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
 };
 
@@ -21,7 +21,7 @@ use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 /// The schema slot is `KType::KExpression`: the user writes a parens-wrapped expression of
 /// repeated `<field:Identifier> : <type:Type>` triples (`STRUCT Point = (x: Number, y: Number)`).
 /// Same triple shape as `UNION` — both delegate to
-/// [`crate::runtime::model::types::parse_typed_field_list_via_elaborator`] so the
+/// [`crate::runtime::machine::model::types::parse_typed_field_list_via_elaborator`] so the
 /// parsing logic and error messages stay consistent.
 ///
 /// Unlike `UNION`, struct schemas preserve declaration order so [`struct_value::apply`]
@@ -221,7 +221,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
-    use crate::runtime::model::{KObject, KType};
+    use crate::runtime::machine::model::{KObject, KType};
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
 
     /// Smoke test for STRUCT's pre_run extractor: structural extraction of the `Type(_)`
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn mutually_recursive_struct_pair() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         use crate::runtime::machine::execute::Scheduler;
@@ -420,7 +420,7 @@ mod tests {
     /// finalize writes its carrier. Exercises the DFS depth past two members.
     #[test]
     fn three_way_mutual_recursion_struct_chain() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         use crate::runtime::machine::execute::Scheduler;
@@ -464,7 +464,7 @@ mod tests {
     /// regress the cycle-close-then-Combine-finish double-fire safety net.
     #[test]
     fn finalize_struct_is_idempotent_when_both_maps_populated() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         use std::rc::Rc;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
@@ -595,7 +595,7 @@ mod tests {
     /// for the same name after declaration.
     #[test]
     fn struct_dual_writes_to_types_and_data() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run_one(scope, parse_one("STRUCT Point = (x: Number, y: Number)"));

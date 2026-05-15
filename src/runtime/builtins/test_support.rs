@@ -9,8 +9,8 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::runtime::model::KObject;
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::runtime::machine::model::KObject;
+use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::runtime::machine::{KError, RuntimeArena, Scope};
 use crate::runtime::machine::execute::Scheduler;
 use crate::ast::KExpression;

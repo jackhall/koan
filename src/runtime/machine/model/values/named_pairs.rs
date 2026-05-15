@@ -3,7 +3,7 @@
 //! function calls ([`KFunction::apply`](crate::runtime::machine::kfunction::KFunction)) —
 //! the two paths that switched from positional to named arguments.
 //!
-//! Mirrors the shape of [`crate::runtime::model::types::parse_typed_field_list_via_elaborator`];
+//! Mirrors the shape of [`crate::runtime::machine::model::types::parse_typed_field_list_via_elaborator`];
 //! both parsers walk the same `<Identifier> : <slot>` triple shape and share the
 //! identifier/colon/duplicate scaffolding through [`crate::parse::parse_triple_list`].
 //! The third-slot interpretation is the only thing that differs — value-side here is

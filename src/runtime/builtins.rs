@@ -1,10 +1,10 @@
 use crate::ast::ExpressionPart;
 use crate::runtime::machine::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use crate::runtime::machine::core::{KError, Scope};
-use crate::runtime::model::types::{
+use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
 };
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::values::KObject;
 
 mod ascribe;
 mod attr;

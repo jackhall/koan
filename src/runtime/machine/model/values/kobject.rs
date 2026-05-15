@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use crate::ast::{KExpression, TypeExpr};
 use crate::runtime::machine::kfunction::KFunction;
 use crate::runtime::machine::core::{CallArena, KFuture};
-use crate::runtime::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
+use crate::runtime::machine::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
 use super::module::{Module, Signature};
 
 /// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
@@ -305,7 +305,7 @@ impl<'a> KObject<'a> {
             // Parking and unbound surface as `None` — the bind-time caller is not on a
             // scheduler-driven path and treats both as "didn't resolve here."
             _ => {
-                use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+                use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
                 let mut elaborator = Elaborator::new(scope);
                 match elaborate_type_expr(&mut elaborator, t) {
                     ElabResult::Done(kt) => Some(scope.arena.alloc_ktype(kt) as &'a KType),
@@ -324,7 +324,7 @@ impl<'a> KObject<'a> {
 }
 
 fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {
-    use crate::runtime::model::types::ReturnType;
+    use crate::runtime::machine::model::types::ReturnType;
     let args: Vec<KType> = f
         .signature
         .elements
@@ -418,7 +418,7 @@ impl<'a> Parseable for KObject<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::model::values::KKey;
+    use crate::runtime::machine::model::values::KKey;
     use std::collections::HashMap;
 
     #[test]
@@ -513,7 +513,7 @@ mod tests {
     fn type_name_ref_summarize_renders_surface_form() {
         use crate::ast::TypeExpr;
         let v = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()), OnceCell::new());
-        use crate::runtime::model::types::Parseable;
+        use crate::runtime::machine::model::types::Parseable;
         assert_eq!(v.summarize(), "MyT");
     }
 
@@ -600,7 +600,7 @@ mod tests {
         // `KObject::KTypeValue` summarizes through `KType::render`, mirroring the surface
         // form a user would write. Pins the post-refactor diagnostic shape.
         let v = KObject::KTypeValue(KType::List(Box::new(KType::Number)));
-        use crate::runtime::model::types::Parseable;
+        use crate::runtime::machine::model::types::Parseable;
         assert_eq!(v.summarize(), "List<Number>");
     }
 
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn wrapped_summarize_renders_surface_form() {
         use crate::runtime::machine::RuntimeArena;
-        use crate::runtime::model::types::Parseable;
+        use crate::runtime::machine::model::types::Parseable;
         let arena = RuntimeArena::new();
         let inner = arena.alloc_object(KObject::Number(3.0));
         let type_id = arena.alloc_ktype(KType::UserType {

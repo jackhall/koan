@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::runtime::model::{KObject, KType};
+use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
 use crate::runtime::machine::substitute_params;
 use crate::ast::{ExpressionPart, KExpression, KLiteral};

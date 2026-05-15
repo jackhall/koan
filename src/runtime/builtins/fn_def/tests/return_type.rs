@@ -1,7 +1,7 @@
 //! Parsing the `-> Type` slot, and the runtime return-type check.
 
 use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::runtime::model::{KObject, KType, ReturnType};
+use crate::runtime::machine::model::{KObject, KType, ReturnType};
 use crate::runtime::machine::{KErrorKind, RuntimeArena};
 use crate::runtime::machine::execute::Scheduler;
 use crate::parse::parse;

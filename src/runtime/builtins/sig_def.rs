@@ -13,9 +13,9 @@
 //! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
 //! attaches axioms.
 
-use crate::runtime::model::{KObject, KType};
+use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::values::Signature;
+use crate::runtime::machine::model::values::Signature;
 
 use crate::ast::KExpression;
 
@@ -96,7 +96,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{run, run_root_silent};
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::RuntimeArena;
     use crate::parse::parse;
 
@@ -151,7 +151,7 @@ mod tests {
         let inner = sig.decl_scope().bindings().data();
         let x = inner.get("x").expect("x must live in SIG's data");
         assert!(
-            matches!(x, KObject::KTypeValue(crate::runtime::model::KType::Number)),
+            matches!(x, KObject::KTypeValue(crate::runtime::machine::model::KType::Number)),
             "x's declared type must elaborate to Number through the alias, got {:?}",
             x.ktype(),
         );
@@ -178,7 +178,7 @@ mod tests {
     /// break every SIG-typed name lookup.
     #[test]
     fn sig_dual_writes_to_types_and_data() {
-        use crate::runtime::model::types::KType;
+        use crate::runtime::machine::model::types::KType;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x: Number)");

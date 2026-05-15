@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::runtime::model::is_keyword_token;
+use crate::runtime::machine::model::is_keyword_token;
 use crate::ast::{ExpressionPart, KLiteral, TypeExpr};
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, OperatorKind};
 
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn ascription_compound_tokens_classify_as_keywords() {
-        use crate::runtime::model::is_keyword_token;
+        use crate::runtime::machine::model::is_keyword_token;
         assert!(is_keyword_token(":|"));
         assert!(is_keyword_token(":!"));
     }

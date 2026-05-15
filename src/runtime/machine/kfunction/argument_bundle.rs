@@ -13,8 +13,8 @@ use std::rc::Rc;
 use crate::ast::{KExpression, TypeExpr, TypeParams};
 
 use crate::runtime::machine::core::{KError, KErrorKind};
-use crate::runtime::model::types::KType;
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::types::KType;
+use crate::runtime::machine::model::values::KObject;
 
 /// Name to resolved value, produced by `KFunction::bind` and consumed by the body.
 pub struct ArgumentBundle<'a> {

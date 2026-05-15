@@ -17,11 +17,11 @@
 //! intermediate. Consumers reach the `KType` through `KObject::as_ktype()` /
 //! `extract_ktype()` and operate on the structural shape rather than the surface form.
 
-use crate::runtime::model::{KObject, KType};
-use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+use crate::runtime::machine::model::{KObject, KType};
+use crate::runtime::machine::model::types::UserTypeKind;
+use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::values::{resolve_module, resolve_signature};
+use crate::runtime::machine::model::values::{resolve_module, resolve_signature};
 
 use super::ascribe::{abstract_type_names_of, is_abstract_type_name};
 use super::{arg, err, kw, register_builtin, sig};
@@ -146,7 +146,7 @@ pub fn body_function_of<'a>(
 /// as a scheduled call so a functor body can synthesize it from a parameter module value.
 /// The `m` slot is strictly `Module`; bare Type-token operands (`MODULE_TYPE_OF Foo Type`)
 /// ride the auto-wrap rails — they sub-dispatch through `value_lookup` and arrive here
-/// as a `Future(KModule)`. The shared [`crate::runtime::model::values::resolve_module`] helper
+/// as a `Future(KModule)`. The shared [`crate::runtime::machine::model::values::resolve_module`] helper
 /// covers both the direct `KModule` path and the `(KModule, frame)` lifted form.
 pub fn body_module_type_of<'a>(
     scope: &'a Scope<'a>,
@@ -545,7 +545,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-    use crate::runtime::model::{KObject, KType};
+    use crate::runtime::machine::model::{KObject, KType};
     use crate::runtime::machine::RuntimeArena;
     use crate::runtime::machine::execute::Scheduler;
 
@@ -620,7 +620,7 @@ mod tests {
                 // The abstract type member is recorded as `KType::UserType { kind:
                 // Module, .. }` by the ascription path; surface name is `Type`.
                 assert_eq!(kt.name(), "Type");
-                use crate::runtime::model::types::UserTypeKind;
+                use crate::runtime::machine::model::types::UserTypeKind;
                 assert!(matches!(
                     kt,
                     KType::UserType { kind: UserTypeKind::Module, .. }
@@ -706,7 +706,7 @@ mod tests {
     /// by ascription. Exercises the body's Combine-on-sub-dispatches path.
     #[test]
     fn sig_with_inner_module_attr_path_elaborates() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         // Use a multi-letter Type-token name for the ascribed module so it classifies as
@@ -830,7 +830,7 @@ mod tests {
     /// `scope_id`; this test just pins the template shape the builtin returns.
     #[test]
     fn type_constructor_builtin_returns_ktype_value() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let result = run_one(scope, parse_one("TYPE_CONSTRUCTOR Type"));
@@ -852,7 +852,7 @@ mod tests {
     /// in `bindings.types` under `Wrap`. Pins the LET-routing + register_type path.
     #[test]
     fn sig_declares_higher_kinded_slot() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))");
@@ -880,7 +880,7 @@ mod tests {
     /// LETs migrated.
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         scope.register_type(
@@ -907,7 +907,7 @@ mod tests {
             KObject::KFunction(f, _) => *f,
             other => panic!("pure not KFunction: {:?}", other.ktype()),
         };
-        use crate::runtime::model::ReturnType;
+        use crate::runtime::machine::model::ReturnType;
         match &f.signature.return_type {
             ReturnType::Resolved(KType::ConstructorApply { args, .. }) => {
                 assert_eq!(*args, vec![KType::Number]);
@@ -939,7 +939,7 @@ mod tests {
     /// the rationale (no safe park route for structural shapes today).
     #[test]
     fn monad_signature_smoke() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
@@ -1087,7 +1087,7 @@ mod tests {
 
     #[test]
     fn module_attr_access_returns_type_constructor() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(

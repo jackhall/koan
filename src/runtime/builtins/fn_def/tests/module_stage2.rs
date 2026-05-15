@@ -2,7 +2,7 @@
 //! functor lifting.
 
 use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::runtime::model::KObject;
+use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::RuntimeArena;
 
 /// Verify that `LET MyList = (LIST_OF Number)` registers a type binding carrying the
@@ -12,7 +12,7 @@ use crate::runtime::machine::RuntimeArena;
 /// storage shape.
 #[test]
 fn list_of_let_binding_is_ktype_value() {
-    use crate::runtime::model::KType;
+    use crate::runtime::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
@@ -29,8 +29,8 @@ fn list_of_let_binding_is_ktype_value() {
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
     use crate::ast::TypeExpr;
-    use crate::runtime::model::KType;
-    use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+    use crate::runtime::machine::model::KType;
+    use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
@@ -53,7 +53,7 @@ fn elaborator_lowers_ktype_value_binding() {
 /// `FN (LIFT Er: OrderedSig) -> ...` surface form actually parse.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
-    use crate::runtime::model::{Argument, KType, SignatureElement};
+    use crate::runtime::machine::model::{Argument, KType, SignatureElement};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     // Phase 3: single batch — the FN's signature elaboration parks on `OrderedSig`'s
@@ -134,8 +134,8 @@ fn let_then_fn_in_same_batch_works() {
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::ast::ExpressionPart;
-    use crate::runtime::model::KType;
-    use crate::runtime::model::values::Module;
+    use crate::runtime::machine::model::KType;
+    use crate::runtime::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let child_a = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
@@ -195,7 +195,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
 }
 
 /// Module-system stage 2 (functor slice). End-to-end shape mirror of
-/// [`crate::runtime::model::values::module::tests::functor_per_call_module_lifts_correctly`]:
+/// [`crate::runtime::machine::model::values::module::tests::functor_per_call_module_lifts_correctly`]:
 /// run a complete functor invocation through the scheduler, hold the returned
 /// `KModule` past several subsequent allocations and FN calls, and assert member
 /// access on the lifted module still returns the correct value. Pins the closure-
@@ -257,7 +257,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
 /// type check accepts the body's module against the pinned `SignatureBound`.
 #[test]
 fn functor_with_two_pinned_slots_round_trips() {
-    use crate::runtime::model::KType;
+    use crate::runtime::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -285,7 +285,7 @@ fn functor_with_two_pinned_slots_round_trips() {
         Some(KObject::KFunction(f, _)) => *f,
         other => panic!("TWOPIN should be a function, got {:?}", other.map(|o| o.ktype())),
     };
-    use crate::runtime::model::ReturnType;
+    use crate::runtime::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
             assert_eq!(sig_path, "Set");
@@ -310,7 +310,7 @@ fn functor_with_two_pinned_slots_round_trips() {
 /// Dispatch resolves without a parameter reference.
 #[test]
 fn functor_return_with_sharing_constraint_pins_output_type() {
-    use crate::runtime::model::KType;
+    use crate::runtime::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     // `Set` has an `Elt` abstract-type slot plus a value-level `insert` member; the
@@ -337,7 +337,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         other => panic!("MAKESETN should be a function, got {:?}", other.map(|o| o.ktype())),
     };
     // Stored return type: SignatureBound { sig_path: "SetSig", pinned_slots: [("Elt", Number)] }.
-    use crate::runtime::model::ReturnType;
+    use crate::runtime::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
             assert_eq!(sig_path, "SetSig");
@@ -399,14 +399,14 @@ fn functor_body_module_type_of_via_dual_write() {
         "FN (USE_TYPE Er: OrderedSig) -> Any = (MODULE_TYPE_OF Er Type)",
     );
     let result = run_one(scope, parse_one("USE_TYPE int_ord"));
-    use crate::runtime::model::KType;
+    use crate::runtime::machine::model::KType;
     // The abstract `Type` member of an opaquely-ascribed IntOrd is a fresh
     // per-ascription `KType::UserType { kind: Module, name: "Type", .. }` (the
     // module-system pattern documented on `Module::type_members`). Verify the
     // body returned that abstract identity.
     match result {
         KObject::KTypeValue(kt) => match kt {
-            KType::UserType { kind: crate::runtime::model::types::UserTypeKind::Module, name, .. } => {
+            KType::UserType { kind: crate::runtime::machine::model::types::UserTypeKind::Module, name, .. } => {
                 assert_eq!(name, "Type", "abstract type member should be named Type");
             }
             other => panic!("expected UserType {{ kind: Module, name: \"Type\", .. }}, got {:?}", other),
@@ -456,10 +456,10 @@ fn functor_closure_escape_pins_type_class_dual_write() {
     // per-call `Er -> UserType { kind: Module, .. }` entry installed by the outer
     // call's dual-write.
     let result = run_one(scope, parse_one("LOOKUP"));
-    use crate::runtime::model::KType;
+    use crate::runtime::machine::model::KType;
     match result {
         KObject::KTypeValue(kt) => match kt {
-            KType::UserType { kind: crate::runtime::model::types::UserTypeKind::Module, name, .. } => {
+            KType::UserType { kind: crate::runtime::machine::model::types::UserTypeKind::Module, name, .. } => {
                 assert_eq!(name, "Type");
             }
             other => panic!(
@@ -535,7 +535,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
 /// identity via `Scope::resolve_type` against the per-call scope's `bindings.types`.
 #[test]
 fn functor_return_bare_parameter_name_resolves_per_call() {
-    use crate::runtime::model::ReturnType;
+    use crate::runtime::machine::model::ReturnType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -601,7 +601,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 /// the VAL slot at ascription shape-check time.
 #[test]
 fn functor_return_module_type_of_parameter_resolves_per_call() {
-    use crate::runtime::model::ReturnType;
+    use crate::runtime::machine::model::ReturnType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -647,7 +647,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
 /// pinned slot. The body returns a module whose `type_members["Elt"]` matches.
 #[test]
 fn functor_return_sig_with_parameter_ref_resolves_per_call() {
-    use crate::runtime::model::ReturnType;
+    use crate::runtime::machine::model::ReturnType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(

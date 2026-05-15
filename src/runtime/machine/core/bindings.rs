@@ -25,8 +25,8 @@ use std::collections::HashMap;
 
 use crate::ast::KExpression;
 use crate::runtime::machine::kfunction::{KFunction, NodeId};
-use crate::runtime::model::types::{KType, UntypedKey, UserTypeKind};
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::types::{KType, UntypedKey, UserTypeKind};
+use crate::runtime::machine::model::values::KObject;
 
 use super::kerror::{KError, KErrorKind};
 
@@ -484,17 +484,17 @@ pub enum ApplyOutcome {
 /// `Argument::name` — two overloads with matching shape and types collide for dispatch
 /// regardless of parameter naming.
 ///
-/// Return-type equality flows through [`crate::runtime::model::types::ReturnType`]'s
+/// Return-type equality flows through [`crate::runtime::machine::model::types::ReturnType`]'s
 /// `PartialEq` impl. `Resolved` compares by inner `KType`; `Deferred` compares by
 /// carrier variant + payload (see `ReturnType::eq`'s docstring for the equality
 /// rule on the parens-form `Expression` variant). Two FN-defs whose deferred
 /// carriers are structurally identical surface as `DuplicateOverload`, which
 /// matches the existing semantic — they are interchangeable for dispatch.
 fn signatures_exact_equal<'a>(
-    a: &crate::runtime::model::types::ExpressionSignature<'a>,
-    b: &crate::runtime::model::types::ExpressionSignature<'a>,
+    a: &crate::runtime::machine::model::types::ExpressionSignature<'a>,
+    b: &crate::runtime::machine::model::types::ExpressionSignature<'a>,
 ) -> bool {
-    use crate::runtime::model::types::SignatureElement;
+    use crate::runtime::machine::model::types::SignatureElement;
     if a.return_type != b.return_type {
         return false;
     }
@@ -519,8 +519,8 @@ mod tests {
 
     use super::*;
     use crate::runtime::machine::core::arena::RuntimeArena;
-    use crate::runtime::model::types::KType;
-    use crate::runtime::model::values::KObject;
+    use crate::runtime::machine::model::types::KType;
+    use crate::runtime::machine::model::values::KObject;
 
     #[test]
     fn try_register_type_inserts_into_types_map() {

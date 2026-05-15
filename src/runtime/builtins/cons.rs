@@ -20,7 +20,7 @@
 //! first depending on the queue. Use placeholder-bearing statements (`LET`) to enforce
 //! ordering when needed.
 
-use crate::runtime::model::KType;
+use crate::runtime::machine::model::KType;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::ast::{ExpressionPart, KExpression};
 
@@ -110,7 +110,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{run, run_one, parse_one, run_root_silent, run_root_with_buf};
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::RuntimeArena;
 
     fn capture(source: &str) -> Vec<u8> {

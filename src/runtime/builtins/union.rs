@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::runtime::machine::core::PendingTypeEntry;
-use crate::runtime::model::{KObject, KType};
-use crate::runtime::model::types::UserTypeKind;
+use crate::runtime::machine::model::{KObject, KType};
+use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
 };
-use crate::runtime::model::types::{
+use crate::runtime::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
 };
 
@@ -192,7 +192,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
-    use crate::runtime::model::{KObject, KType};
+    use crate::runtime::machine::model::{KObject, KType};
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
 
     /// Smoke test for the named-UNION pre_run extractor: structural extraction of the
@@ -279,7 +279,7 @@ mod tests {
     /// and `bindings.data[name]` are already populated. Pins the defensive guard.
     #[test]
     fn finalize_union_is_idempotent_when_both_maps_populated() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         use std::collections::HashMap;
         use std::rc::Rc;
         let arena = RuntimeArena::new();
@@ -320,7 +320,7 @@ mod tests {
     /// run, the field types carry `UserType` references.
     #[test]
     fn struct_union_mutual_recursion() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         use crate::runtime::machine::execute::Scheduler;

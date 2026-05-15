@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::runtime::builtins::default_scope;
-use koan::runtime::model::KObject;
+use koan::runtime::machine::model::KObject;
 use koan::runtime::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -121,7 +121,7 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
 /// `bindings.types` chain.
 #[test]
 fn forward_let_type_alias_resolves_to_number() {
-    use koan::runtime::model::KType;
+    use koan::runtime::machine::model::KType;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&arena, captured, "LET Ty = Un\nLET Un = Number");
@@ -140,7 +140,7 @@ fn forward_let_type_alias_resolves_to_number() {
 /// overload routes that carrier through `register_type` on the parent scope.
 #[test]
 fn let_alias_via_module_qualified_type_resolves() {
-    use koan::runtime::model::KType;
+    use koan::runtime::machine::model::KType;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
@@ -208,7 +208,7 @@ fn type_frame_with_module_qualified_element_resolves() {
 /// usable `KTypeValue` for type-position consumers across the chain.
 #[test]
 fn chained_module_qualified_type_resolves() {
-    use koan::runtime::model::KType;
+    use koan::runtime::machine::model::KType;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(

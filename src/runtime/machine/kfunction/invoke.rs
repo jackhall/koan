@@ -3,11 +3,11 @@ use std::rc::Rc;
 use crate::ast::{ExpressionPart, KExpression};
 
 use crate::runtime::machine::core::{CallArena, KError, KErrorKind, RuntimeArena, Scope};
-use crate::runtime::model::types::{
+use crate::runtime::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
     SignatureElement, UserTypeKind,
 };
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::values::KObject;
 
 use super::argument_bundle::ArgumentBundle;
 use super::body::{Body, BodyResult};
@@ -243,7 +243,7 @@ impl<'a> KFunction<'a> {
 fn signature_argument_by_name<'a>(
     f: &'a KFunction<'a>,
     param_name: &str,
-) -> Option<&'a crate::runtime::model::types::Argument> {
+) -> Option<&'a crate::runtime::machine::model::types::Argument> {
     f.signature.elements.iter().find_map(|el| match el {
         SignatureElement::Argument(a) if a.name == param_name => Some(a),
         _ => None,
@@ -311,7 +311,7 @@ pub(crate) fn type_identity_for<'a>(
         KType::TypeExprRef => match obj {
             KObject::KTypeValue(kt) => Some(kt.clone()),
             KObject::TypeNameRef(t, _) => {
-                use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+                use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
                 let mut el = Elaborator::new(definition_scope);
                 match elaborate_type_expr(&mut el, t) {
                     ElabResult::Done(kt) => Some(kt),
@@ -395,8 +395,8 @@ mod tests {
     use super::*;
     use crate::runtime::builtins::default_scope;
     use crate::runtime::machine::core::RuntimeArena;
-    use crate::runtime::model::types::UserTypeKind;
-    use crate::runtime::model::values::{Module, Signature};
+    use crate::runtime::machine::model::types::UserTypeKind;
+    use crate::runtime::machine::model::values::{Module, Signature};
 
     /// `SignatureBound`-declared parameter bound to a `KModule` yields a
     /// `UserType { kind: Module, scope_id, name }` identity.

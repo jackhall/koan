@@ -1,4 +1,4 @@
-use crate::runtime::model::{KObject, KType};
+use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use crate::runtime::machine::kfunction::argument_bundle::extract_kexpression;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::runtime::model::{KKey, KObject, Serializable};
+use crate::runtime::machine::model::{KKey, KObject, Serializable};
 use crate::runtime::machine::{BodyResult, CombineFinish, Frame, NodeId, Scope};
 use crate::ast::{ExpressionPart, KExpression};
 

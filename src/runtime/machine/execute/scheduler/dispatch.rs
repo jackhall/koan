@@ -1,4 +1,4 @@
-use crate::runtime::model::Parseable;
+use crate::runtime::machine::model::Parseable;
 use crate::runtime::machine::{
     Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Resolved, Scope,
 };

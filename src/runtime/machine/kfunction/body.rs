@@ -8,7 +8,7 @@ use std::rc::Rc;
 use crate::ast::KExpression;
 
 use crate::runtime::machine::core::{CallArena, KError, Scope};
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::values::KObject;
 
 use super::argument_bundle::ArgumentBundle;
 use super::scheduler_handle::{NodeId, SchedulerHandle};

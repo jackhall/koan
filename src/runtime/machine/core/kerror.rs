@@ -1,8 +1,8 @@
 use std::fmt;
 
 use crate::runtime::machine::kfunction::KFunction;
-use crate::runtime::model::types::Parseable;
-use crate::runtime::model::KType;
+use crate::runtime::machine::model::types::Parseable;
+use crate::runtime::machine::model::KType;
 use crate::ast::KExpression;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate

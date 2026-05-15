@@ -17,10 +17,10 @@
 //! off the Combine's terminal — the parent's `Foo` binding lands at Combine-finish time,
 //! not when MODULE's body returns to the dispatcher.
 
-use crate::runtime::model::{KObject, KType};
+use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::model::values::Module;
+use crate::runtime::machine::model::types::UserTypeKind;
+use crate::runtime::machine::model::values::Module;
 
 use crate::ast::KExpression;
 
@@ -158,7 +158,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
 
     /// Smoke test for MODULE's pre_run extractor: structural extraction of the `Type(_)`
@@ -290,8 +290,8 @@ mod tests {
     /// `try_register_nominal_*` tests plus the idempotent register_nominal arm.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
-        use crate::runtime::model::types::{KType, UserTypeKind};
-        use crate::runtime::model::values::Module;
+        use crate::runtime::machine::model::types::{KType, UserTypeKind};
+        use crate::runtime::machine::model::values::Module;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(

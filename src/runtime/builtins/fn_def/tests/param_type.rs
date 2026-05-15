@@ -1,7 +1,7 @@
 //! Typed parameters: dispatch routing on parameter types, overloads, shape errors.
 
 use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::runtime::model::{Argument, KObject, KType, SignatureElement};
+use crate::runtime::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::runtime::machine::{KErrorKind, RuntimeArena};
 use crate::runtime::machine::execute::Scheduler;
 

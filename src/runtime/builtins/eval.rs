@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::runtime::model::{KObject, KType};
+use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{arg, err, kw, register_builtin, sig};

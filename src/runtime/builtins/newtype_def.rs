@@ -28,9 +28,9 @@ use crate::runtime::machine::kfunction::argument_bundle::{
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle,
 };
-use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::model::values::KObject;
-use crate::runtime::model::KType;
+use crate::runtime::machine::model::types::UserTypeKind;
+use crate::runtime::machine::model::values::KObject;
+use crate::runtime::machine::model::KType;
 
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
@@ -237,8 +237,8 @@ mod tests {
         parse_one, run, run_one, run_one_err, run_root_silent,
     };
     use crate::runtime::machine::{KErrorKind, RuntimeArena, Scheduler};
-    use crate::runtime::model::types::UserTypeKind;
-    use crate::runtime::model::{KObject, KType};
+    use crate::runtime::machine::model::types::UserTypeKind;
+    use crate::runtime::machine::model::{KObject, KType};
 
     /// NEWTYPE declaration writes the per-declaration identity into `bindings.types`
     /// (with `kind: Newtype { repr: <resolved> }`) and writes *nothing* into

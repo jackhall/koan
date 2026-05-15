@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::runtime::model::KObject;
+use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::{CallArena, KFuture, RuntimeArena};
 use crate::ast::{ExpressionPart, KExpression};
 
@@ -239,10 +239,10 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
 mod tests {
     use super::*;
     use crate::runtime::builtins::default_scope;
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{CallArena, KError, KErrorKind, ResolveOutcome, Scope};
     use crate::parse::parse;
-    use crate::runtime::model::Parseable;
+    use crate::runtime::machine::model::Parseable;
 
     /// Test-only `(scope, expr) → KFuture` driver for one-shot bind without spinning a
     /// `Scheduler`. Not production API — the scheduler drives all real dispatches.
@@ -270,7 +270,7 @@ mod tests {
     /// below defeats `functions_is_empty()`'s fast path so the slow path runs.
     #[test]
     fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
-        use crate::runtime::model::{ExpressionSignature, KType, SignatureElement, ReturnType};
+        use crate::runtime::machine::model::{ExpressionSignature, KType, SignatureElement, ReturnType};
         use crate::runtime::machine::{Body, KFunction};
 
         let arena = RuntimeArena::new();
@@ -315,7 +315,7 @@ mod tests {
     /// allocated in the dying arena must lift with `frame: Some(rc)`.
     #[test]
     fn unanchored_kfuture_with_arena_borrow_does_anchor() {
-        use crate::runtime::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
+        use crate::runtime::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
         use crate::runtime::machine::{Body, KFunction};
 
         let arena = RuntimeArena::new();

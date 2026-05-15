@@ -1,4 +1,4 @@
-use crate::runtime::model::{KObject, Parseable};
+use crate::runtime::machine::model::{KObject, Parseable};
 use crate::runtime::machine::{
     BodyResult, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId, ResolveOutcome, Scope,
 };

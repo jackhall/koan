@@ -3,7 +3,7 @@
 //! `UntypedKey` groups overloads by shape; `Specificity` ranks candidates within a bucket.
 //!
 //! Not to be confused with the **module-signature** type (`SIG`-declared) at
-//! [`crate::runtime::model::values::module::Signature`].
+//! [`crate::runtime::machine::model::values::module::Signature`].
 //!
 //! The `return_type` field is a [`ReturnType`] rather than a bare [`KType`] so functor
 //! return types that reference a per-call parameter (`-> Er`, `-> (MODULE_TYPE_OF Er Type)`,
@@ -212,7 +212,7 @@ impl<'a> ReturnType<'a> {
     /// [`crate::runtime::machine::execute::scheduler::execute::Scheduler::execute`]
     /// skips the per-slot check for `Deferred(_)` to avoid a redundant (and
     /// always-passing) `Any`-style accept here.
-    pub fn matches_value(&self, obj: &crate::runtime::model::values::KObject<'_>) -> bool {
+    pub fn matches_value(&self, obj: &crate::runtime::machine::model::values::KObject<'_>) -> bool {
         match self {
             ReturnType::Resolved(kt) => kt.matches_value(obj),
             ReturnType::Deferred(_) => true,

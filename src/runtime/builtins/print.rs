@@ -1,4 +1,4 @@
-use crate::runtime::model::{KObject, KType, Parseable};
+use crate::runtime::machine::model::{KObject, KType, Parseable};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{arg, err, kw, register_builtin, sig};

@@ -4,7 +4,7 @@
 //! **Terminology — "module-signature" vs "expression-signature".** `Signature` here is the
 //! **module-signature** type (`SIG`-declared) — an interface a module can be ascribed to
 //! via `:|` / `:!`. The **expression-signature** machinery (`ExpressionSignature`,
-//! `Argument`, `SignatureElement`) lives in [`crate::runtime::model::types::signature`]. The two
+//! `Argument`, `SignatureElement`) lives in [`crate::runtime::machine::model::types::signature`]. The two
 //! are distinct concepts; do not conflate.
 //!
 //! Lifetime erasure on the scope pointer follows the same pattern as
@@ -167,7 +167,7 @@ mod tests {
     use super::*;
     use crate::runtime::builtins::default_scope;
     use crate::runtime::machine::core::RuntimeArena;
-    use crate::runtime::model::types::KType;
+    use crate::runtime::machine::model::types::KType;
     use std::io::sink;
     use std::ptr;
     #[test]
@@ -179,7 +179,7 @@ mod tests {
         assert!(ptr::eq(recovered, scope));
         // Re-borrow after a sibling alloc — tree borrows is sensitive to interleaved
         // mutation under live shared borrows.
-        let _other = arena.alloc_object(crate::runtime::model::values::KObject::Number(1.0));
+        let _other = arena.alloc_object(crate::runtime::machine::model::values::KObject::Number(1.0));
         let recovered2 = module.child_scope();
         assert!(ptr::eq(recovered2, scope));
     }
@@ -194,7 +194,7 @@ mod tests {
         let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
         let recovered = sig.decl_scope();
         assert!(ptr::eq(recovered, scope));
-        let _other = arena.alloc_object(crate::runtime::model::values::KObject::Number(1.0));
+        let _other = arena.alloc_object(crate::runtime::machine::model::values::KObject::Number(1.0));
         let recovered2 = sig.decl_scope();
         assert!(ptr::eq(recovered2, scope));
     }
@@ -204,7 +204,7 @@ mod tests {
     /// borrows is strict about interior mutation under a live shared borrow.
     #[test]
     fn module_type_members_refcell_mutation_with_held_module_ref() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(sink()));
         let module = arena.alloc_module(Module::new("M".into(), scope));
@@ -237,8 +237,8 @@ mod tests {
     fn functor_per_call_module_lifts_correctly() {
         use crate::runtime::machine::kfunction::{Body, KFunction};
         use crate::runtime::machine::core::{CallArena, RuntimeArena as RA};
-        use crate::runtime::model::types::{ExpressionSignature, KType, SignatureElement, ReturnType};
-        use crate::runtime::model::values::KObject;
+        use crate::runtime::machine::model::types::{ExpressionSignature, KType, SignatureElement, ReturnType};
+        use crate::runtime::machine::model::values::KObject;
         use crate::runtime::machine::execute::lift_kobject_for_test;
         use std::rc::Rc;
 

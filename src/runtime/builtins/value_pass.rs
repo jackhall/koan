@@ -1,4 +1,4 @@
-use crate::runtime::model::KType;
+use crate::runtime::machine::model::KType;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{arg, err, register_builtin, sig};
@@ -36,7 +36,7 @@ mod tests {
 
     use super::body;
     use crate::runtime::builtins::test_support::run_root_bare;
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{ArgumentBundle, BodyResult};
     use crate::runtime::machine::execute::Scheduler;
 

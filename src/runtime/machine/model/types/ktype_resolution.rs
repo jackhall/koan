@@ -41,10 +41,10 @@ impl KType {
     ///
     /// User-defined / module-local type names (anything not in `from_name`) surface as
     /// `Err(_)` for the caller to either fall back on the
-    /// [`crate::runtime::model::values::KObject::TypeNameRef`] carrier (the
+    /// [`crate::runtime::machine::model::values::KObject::TypeNameRef`] carrier (the
     /// [`crate::ast::ExpressionPart::resolve_for`] seam at parser-side lowering) or
     /// route through the scheduler-aware
-    /// [`crate::runtime::model::types::elaborate_type_expr`] (the FN / LET / STRUCT body
+    /// [`crate::runtime::machine::model::types::elaborate_type_expr`] (the FN / LET / STRUCT body
     /// path that consults `Scope` for placeholder + value lookups).
     pub fn from_type_expr(t: &TypeExpr) -> Result<KType, String> {
         match (t.name.as_str(), &t.params) {
@@ -253,7 +253,7 @@ mod tests {
     /// Builtin lookup directly: `from_type_expr` for a paramless leaf routes through
     /// `from_name` exclusively. Scope-aware shadowing of builtins (a binding rebinding
     /// `Number` to a struct type, for instance) lives one layer up in
-    /// [`crate::runtime::model::types::elaborate_type_expr`], which consults `Scope`
+    /// [`crate::runtime::machine::model::types::elaborate_type_expr`], which consults `Scope`
     /// before falling through to `from_name`.
     #[test]
     fn from_type_expr_leaf_falls_through_to_builtin() {

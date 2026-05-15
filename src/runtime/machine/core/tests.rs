@@ -1,8 +1,8 @@
 use super::{Resolution, RuntimeArena, Scope};
 use crate::runtime::builtins::test_support::run_root_bare;
 use crate::runtime::machine::kfunction::{Body, KFunction, NodeId};
-use crate::runtime::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::runtime::machine::model::values::KObject;
 
 fn unit_signature<'a>() -> ExpressionSignature<'a> {
     ExpressionSignature {

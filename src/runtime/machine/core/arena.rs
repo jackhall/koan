@@ -4,8 +4,8 @@ use std::rc::Rc;
 use typed_arena::Arena;
 
 use crate::runtime::machine::kfunction::KFunction;
-use crate::runtime::model::types::KType;
-use crate::runtime::model::values::{KObject, Module, Signature};
+use crate::runtime::machine::model::types::KType;
+use crate::runtime::machine::model::values::{KObject, Module, Signature};
 use super::scope::Scope;
 /// Run-lifetime allocator. Lives for one program run.
 ///
@@ -334,7 +334,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::builtins::default_scope;
-    use crate::runtime::model::types::KType;
+    use crate::runtime::machine::model::types::KType;
 
     #[test]
     fn null_singleton_returns_null_kobject() {
@@ -484,9 +484,9 @@ mod tests {
         // carried `Rc`, so the placeholder `KFunction` body is irrelevant.
         let dummy_fn_obj = outer.alloc_object(KObject::KFunction(
             outer.alloc_function(crate::runtime::machine::kfunction::KFunction::new(
-                crate::runtime::model::types::ExpressionSignature {
-                    return_type: crate::runtime::model::types::ReturnType::Resolved(crate::runtime::model::types::KType::Null),
-                    elements: vec![crate::runtime::model::types::SignatureElement::Keyword("DUMMY".into())],
+                crate::runtime::machine::model::types::ExpressionSignature {
+                    return_type: crate::runtime::machine::model::types::ReturnType::Resolved(crate::runtime::machine::model::types::KType::Null),
+                    elements: vec![crate::runtime::machine::model::types::SignatureElement::Keyword("DUMMY".into())],
                 },
                 crate::runtime::machine::kfunction::Body::Builtin(|_, _, _|
                     crate::runtime::machine::kfunction::BodyResult::Value(null_singleton())),

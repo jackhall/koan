@@ -8,7 +8,7 @@
 //! is variable-arity — a `Point` schema declares 2 fields, a `User` schema might declare 5.
 //! Construction is **named-only**: the user writes `Point (x: 3, y: 4)` and `apply` parses
 //! the inner expression as `<name>: <value>` triples (via
-//! [`parse_named_value_pairs`](crate::runtime::model::values::parse_named_value_pairs)),
+//! [`parse_named_value_pairs`](crate::runtime::machine::model::values::parse_named_value_pairs)),
 //! validates against the declared schema, and reorders the values to match schema
 //! declaration order. Reordered value-parts are then wrapped in single-part sub-expressions
 //! inside a `ListLiteral`. The scheduler aggregates the list, dispatching each wrapped
@@ -23,10 +23,10 @@ use indexmap::IndexMap;
 use crate::ast::{ExpressionPart, KExpression};
 use crate::runtime::machine::core::{KError, KErrorKind, Scope};
 use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::runtime::model::types::{
+use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
 };
-use crate::runtime::model::values::{parse_named_value_pairs, KObject};
+use crate::runtime::machine::model::values::{parse_named_value_pairs, KObject};
 
 use super::register_builtin;
 
@@ -209,7 +209,7 @@ mod tests {
     use crate::runtime::builtins::default_scope;
     use crate::runtime::machine::core::{KErrorKind, RuntimeArena, Scope};
     use crate::runtime::machine::execute::Scheduler;
-    use crate::runtime::model::values::KObject;
+    use crate::runtime::machine::model::values::KObject;
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl Write for SharedBuf {
@@ -417,7 +417,7 @@ mod tests {
             }
             other => panic!("expected Struct, got {:?}", other.ktype()),
         }
-        let summary = crate::runtime::model::types::Parseable::summarize(result);
+        let summary = crate::runtime::machine::model::types::Parseable::summarize(result);
         assert_eq!(
             summary, "Triple(z: 1, a: 2, m: 3)",
             "summary must emit fields in declaration order"
@@ -432,7 +432,7 @@ mod tests {
         let scope = build_scope(&arena, captured);
         run(scope, "STRUCT Point = (x: Number, y: Number)");
         let result = run_one(scope, parse_one("Point (x: 3, y: 4)"));
-        let summary = crate::runtime::model::types::Parseable::summarize(result);
+        let summary = crate::runtime::machine::model::types::Parseable::summarize(result);
         assert!(summary.starts_with("Point("), "summary should start with Point(, got {summary}");
         assert!(summary.contains("x: 3"), "summary should include x: 3, got {summary}");
         assert!(summary.contains("y: 4"), "summary should include y: 4, got {summary}");

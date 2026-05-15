@@ -24,10 +24,10 @@ use std::rc::Rc;
 use crate::ast::{ExpressionPart, KExpression};
 use crate::runtime::machine::core::{KError, KErrorKind, Scope};
 use crate::runtime::machine::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
-use crate::runtime::model::types::{
+use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
 };
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::values::KObject;
 
 use super::register_builtin;
 
@@ -189,7 +189,7 @@ mod tests {
     use crate::runtime::builtins::default_scope;
     use crate::runtime::machine::core::{KErrorKind, RuntimeArena, Scope};
     use crate::runtime::machine::execute::Scheduler;
-    use crate::runtime::model::values::KObject;
+    use crate::runtime::machine::model::values::KObject;
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
     impl Write for SharedBuf {

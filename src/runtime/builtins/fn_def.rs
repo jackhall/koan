@@ -1,8 +1,8 @@
 mod signature;
 
-use crate::runtime::model::{ExpressionSignature, KObject, KType, SignatureElement};
+use crate::runtime::machine::model::{ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
-use crate::runtime::model::types::{elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, ReturnType};
+use crate::runtime::machine::model::types::{elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, ReturnType};
 
 use crate::runtime::machine::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,

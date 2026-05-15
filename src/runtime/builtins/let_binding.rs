@@ -1,5 +1,5 @@
-use crate::runtime::model::{KObject, KType};
-use crate::runtime::model::types::UserTypeKind;
+use crate::runtime::machine::model::{KObject, KType};
+use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
@@ -240,7 +240,7 @@ mod tests {
     use super::body;
     use crate::runtime::builtins::default_scope;
     use crate::runtime::builtins::test_support::run_root_bare;
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{ArgumentBundle, BodyResult};
     use crate::runtime::machine::execute::Scheduler;
     use crate::ast::{ExpressionPart, KExpression, KLiteral};
@@ -362,7 +362,7 @@ mod tests {
     fn let_type_class_with_non_type_value_errors() {
         use crate::runtime::machine::RuntimeArena;
         use crate::runtime::machine::KErrorKind;
-        use crate::runtime::model::KType;
+        use crate::runtime::machine::model::KType;
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn let_type_class_with_type_value_still_binds() {
         use crate::runtime::machine::RuntimeArena;
-        use crate::runtime::model::KType;
+        use crate::runtime::machine::model::KType;
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -473,8 +473,8 @@ mod tests {
     #[test]
     fn let_type_class_with_module_carrier_dual_writes() {
         use crate::runtime::machine::RuntimeArena;
-        use crate::runtime::model::types::UserTypeKind;
-        use crate::runtime::model::KType;
+        use crate::runtime::machine::model::types::UserTypeKind;
+        use crate::runtime::machine::model::KType;
         use crate::runtime::builtins::test_support::run;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn let_aliases_struct_preserves_type_identity() {
         use crate::runtime::machine::RuntimeArena;
-        use crate::runtime::model::KType;
+        use crate::runtime::machine::model::KType;
         use crate::runtime::builtins::test_support::run;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -536,7 +536,7 @@ mod tests {
     fn let_type_class_with_string_value_errors() {
         use crate::runtime::machine::RuntimeArena;
         use crate::runtime::machine::KErrorKind;
-        use crate::runtime::model::KType;
+        use crate::runtime::machine::model::KType;
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));

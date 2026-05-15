@@ -22,8 +22,8 @@
 //! `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks unambiguously
 //! without a specificity tiebreaker.
 
-use crate::runtime::model::{KObject, KType};
-use crate::runtime::model::types::UserTypeKind;
+use crate::runtime::machine::model::{KObject, KType};
+use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{arg, err, kw, register_builtin, sig};
@@ -283,7 +283,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
 
     #[test]

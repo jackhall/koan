@@ -5,10 +5,10 @@
 //! Stage 1 shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
-use crate::runtime::model::{KObject, KType};
-use crate::runtime::model::types::UserTypeKind;
+use crate::runtime::machine::model::{KObject, KType};
+use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::model::values::{resolve_module, resolve_signature, Module};
+use crate::runtime::machine::model::values::{resolve_module, resolve_signature, Module};
 
 use super::{arg, kw, register_builtin, sig};
 
@@ -125,7 +125,7 @@ pub fn body_transparent<'a>(
 /// Verify every non-abstract-type name in `sig` has a binding in `src_scope`.
 /// Abstract-type declarations are skipped: they shape the abstraction, not the implementation.
 fn shape_check<'a>(
-    sig: &crate::runtime::model::values::Signature<'a>,
+    sig: &crate::runtime::machine::model::values::Signature<'a>,
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
     // Snapshot abstract-type names first so the helper's `data` borrow releases before
@@ -188,7 +188,7 @@ pub(super) fn is_abstract_type_name(name: &str) -> bool {
 /// `TypeMismatch` arm is a defensive guard against a future caller wiring something else.
 fn resolve_module_and_signature<'a>(
     bundle: &ArgumentBundle<'a>,
-) -> Result<(&'a crate::runtime::model::values::Module<'a>, &'a crate::runtime::model::values::Signature<'a>), KError> {
+) -> Result<(&'a crate::runtime::machine::model::values::Module<'a>, &'a crate::runtime::machine::model::values::Signature<'a>), KError> {
     let m_obj = bundle
         .get("m")
         .ok_or_else(|| KError::new(KErrorKind::MissingArg("m".to_string())))?;
@@ -232,7 +232,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::runtime::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::runtime::model::{KObject, KType};
+    use crate::runtime::machine::model::{KObject, KType};
     use crate::runtime::machine::{KErrorKind, RuntimeArena};
     use crate::runtime::machine::execute::Scheduler;
     use crate::parse::parse;
@@ -313,7 +313,7 @@ mod tests {
         };
         let a_t = a.type_members.borrow().get("Type").cloned();
         let b_t = b.type_members.borrow().get("Type").cloned();
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         assert!(matches!(
             &a_t,
             Some(KType::UserType { kind: UserTypeKind::Module, .. })
@@ -380,7 +380,7 @@ mod tests {
             .get("Type")
             .cloned()
             .expect("opaque ascription should mint a Type member");
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         match &minted {
             KType::UserType { kind: UserTypeKind::Module, name, .. } => assert_eq!(name, "Type"),
             other => panic!("minted abstract type must be UserType(Module), got {:?}", other),
@@ -656,7 +656,7 @@ mod tests {
     /// for higher-kinded slots.
     #[test]
     fn opaque_ascription_mints_fresh_type_constructor_per_call() {
-        use crate::runtime::model::types::UserTypeKind;
+        use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let src = "SIG MonadSig = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))\n\

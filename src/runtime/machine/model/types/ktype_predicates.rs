@@ -5,7 +5,7 @@
 
 use super::ktype::{KType, UserTypeKind};
 use super::signature::{ExpressionSignature, SignatureElement};
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::values::KObject;
 use crate::ast::{ExpressionPart, KLiteral};
 
 impl KType {
@@ -350,7 +350,7 @@ pub(super) fn function_compat(
     args: &[KType],
     ret: &KType,
 ) -> bool {
-    use crate::runtime::model::types::ReturnType;
+    use crate::runtime::machine::model::types::ReturnType;
     let sig_ret_kt: &KType = match &sig.return_type {
         ReturnType::Resolved(kt) => kt,
         ReturnType::Deferred(_) => {

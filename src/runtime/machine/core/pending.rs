@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 
 use crate::runtime::machine::kfunction::KFunction;
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::values::KObject;
 
 use super::bindings::{ApplyOutcome, Bindings};
 
@@ -27,7 +27,7 @@ enum PendingWrite<'a> {
     /// argument shape; the variant tag preserves the `types`-map collision check on
     /// retry (a single shared retry path would collapse with `Value` and lose the
     /// `data`-vs-`types` storage distinction).
-    Type { name: String, kt: &'a crate::runtime::model::types::KType },
+    Type { name: String, kt: &'a crate::runtime::machine::model::types::KType },
 }
 
 /// Queue of writes deferred when their `try_borrow_mut` collided. Owned by [`super::scope::Scope`]
@@ -58,7 +58,7 @@ impl<'a> PendingQueue<'a> {
 
     /// Queue a `Scope::register_type` retry. Mirrors [`Bindings::try_register_type`]'s
     /// argument shape so the caller's try-then-defer site is symmetric.
-    pub fn defer_type(&self, name: String, kt: &'a crate::runtime::model::types::KType) {
+    pub fn defer_type(&self, name: String, kt: &'a crate::runtime::machine::model::types::KType) {
         self.pending.borrow_mut().push(PendingWrite::Type { name, kt });
     }
 
@@ -153,7 +153,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::machine::core::arena::RuntimeArena;
-    use crate::runtime::model::types::KType;
+    use crate::runtime::machine::model::types::KType;
 
     /// `defer_type` queues a write; `drain` replays it through `try_register_type` and
     /// lands the `&KType` in the `types` map. Pins the symmetry with `defer_value` /

@@ -52,7 +52,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::runtime::model::KObject;
+    use crate::runtime::machine::model::KObject;
     use crate::runtime::machine::{KErrorKind, Scope};
 
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -232,7 +232,7 @@ mod tests {
 
     // --- Dict literal integration tests ---
 
-    use crate::runtime::model::{KKey, Serializable};
+    use crate::runtime::machine::model::{KKey, Serializable};
 
     fn lookup_string_key<'a, 'b>(
         d: &'b std::collections::HashMap<Box<dyn Serializable + 'a>, KObject<'a>>,

@@ -4,7 +4,7 @@ use std::io::Write;
 use crate::ast::KExpression;
 
 use crate::runtime::machine::kfunction::{ArgumentBundle, KFunction, NodeId};
-use crate::runtime::model::values::KObject;
+use crate::runtime::machine::model::values::KObject;
 use super::arena::RuntimeArena;
 use super::bindings::{ApplyOutcome, Bindings};
 use super::kerror::KError;
@@ -212,8 +212,8 @@ impl<'a> Scope<'a> {
     /// [`PendingQueue::defer_type`] on borrow conflict. Infallible like the prior
     /// implementation — a name collision at builtin registration is a programming
     /// error, so the [`KError`] from `try_register_type` is dropped.
-    pub fn register_type(&self, name: String, ktype: crate::runtime::model::types::KType) {
-        let kt_ref: &'a crate::runtime::model::types::KType = self.arena.alloc_ktype(ktype);
+    pub fn register_type(&self, name: String, ktype: crate::runtime::machine::model::types::KType) {
+        let kt_ref: &'a crate::runtime::machine::model::types::KType = self.arena.alloc_ktype(ktype);
         match self.bindings.try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref),
@@ -227,7 +227,7 @@ impl<'a> Scope<'a> {
     /// deferring through the pending queue. Panics on `Rebind` too — a cycle
     /// member's identity must not already be in `types` when cycle-close fires.
     ///
-    /// Called by [`crate::runtime::model::types::resolver::close_type_cycle`] from
+    /// Called by [`crate::runtime::machine::model::types::resolver::close_type_cycle`] from
     /// inside the elaborator's `Resolution::Placeholder` arm. At that call site no
     /// outer `bindings` borrow is held (the placeholder lookup released its `Ref`
     /// before returning), so a conflict here is a programming error. The
@@ -237,9 +237,9 @@ impl<'a> Scope<'a> {
     pub fn cycle_close_install_identity(
         &self,
         name: String,
-        ktype: crate::runtime::model::types::KType,
+        ktype: crate::runtime::machine::model::types::KType,
     ) {
-        let kt_ref: &'a crate::runtime::model::types::KType = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::runtime::machine::model::types::KType = self.arena.alloc_ktype(ktype);
         match self.bindings.try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
@@ -266,10 +266,10 @@ impl<'a> Scope<'a> {
     pub fn register_nominal(
         &self,
         name: String,
-        kt: crate::runtime::model::types::KType,
+        kt: crate::runtime::machine::model::types::KType,
         obj: &'a KObject<'a>,
     ) -> Result<&'a KObject<'a>, KError> {
-        let kt_ref: &'a crate::runtime::model::types::KType = self.arena.alloc_ktype(kt);
+        let kt_ref: &'a crate::runtime::machine::model::types::KType = self.arena.alloc_ktype(kt);
         match self.bindings.try_register_nominal(&name, kt_ref, obj)? {
             ApplyOutcome::Applied => Ok(obj),
             ApplyOutcome::Conflict => {
@@ -336,7 +336,7 @@ impl<'a> Scope<'a> {
     /// Drops the `Ref<'_, _>` returned by [`Bindings::types`] before recursing into
     /// `outer` so a deep chain doesn't accumulate live read borrows — same NLL-safe
     /// release-before-recurse discipline as [`Self::resolve_dispatch`].
-    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::runtime::model::types::KType> {
+    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::runtime::machine::model::types::KType> {
         let mut current: Option<&Scope<'a>> = Some(self);
         while let Some(scope) = current {
             let types_guard = scope.bindings.types();
@@ -403,9 +403,9 @@ impl<'a> Scope<'a> {
                     .copied()
                     .filter(|f| f.signature.matches(expr))
                     .collect();
-                let strict_sigs: Vec<&crate::runtime::model::types::ExpressionSignature> =
+                let strict_sigs: Vec<&crate::runtime::machine::model::types::ExpressionSignature> =
                     strict.iter().map(|f| &f.signature).collect();
-                match crate::runtime::model::types::ExpressionSignature::most_specific(&strict_sigs)
+                match crate::runtime::machine::model::types::ExpressionSignature::most_specific(&strict_sigs)
                 {
                     Some(i) => {
                         let picked = strict[i];
@@ -423,9 +423,9 @@ impl<'a> Scope<'a> {
                     .copied()
                     .filter(|f| f.accepts_for_wrap(expr))
                     .collect();
-                let tentative_sigs: Vec<&crate::runtime::model::types::ExpressionSignature> =
+                let tentative_sigs: Vec<&crate::runtime::machine::model::types::ExpressionSignature> =
                     tentative.iter().map(|f| &f.signature).collect();
-                match crate::runtime::model::types::ExpressionSignature::most_specific(
+                match crate::runtime::machine::model::types::ExpressionSignature::most_specific(
                     &tentative_sigs,
                 ) {
                     Some(i) => {

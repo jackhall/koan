@@ -2,7 +2,7 @@
 //! replay-park routing in `run_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../../design/execution-model.md#dispatch-time-name-placeholders)).
 use crate::runtime::builtins::default_scope;
-use crate::runtime::model::KObject;
+use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::{KErrorKind, RuntimeArena};
 use super::Scheduler;
 use crate::parse::parse;
@@ -223,7 +223,7 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
 /// LHS because single-letter uppercase tokens don't classify as Type names.)
 #[test]
 fn let_t_equals_number_still_binds_ktype_value() {
-    use crate::runtime::model::KType;
+    use crate::runtime::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
