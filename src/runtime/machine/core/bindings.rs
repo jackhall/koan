@@ -120,6 +120,30 @@ impl<'a> Bindings<'a> {
         self.types.borrow()
     }
 
+    /// Test helper: assert a slot is present in `bindings.data` and return the
+    /// `KObject`. Collapses the `data().get(name).copied().expect(msg)` /
+    /// `let data = ...; let v = data.get(name).expect(msg)` patterns repeated
+    /// across SIG-shape unit tests.
+    #[cfg(test)]
+    pub fn expect_value(&self, name: &str) -> &'a KObject<'a> {
+        *self
+            .data
+            .borrow()
+            .get(name)
+            .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
+    }
+
+    /// Test helper: assert a slot is present in `bindings.types`. Same role as
+    /// [`Bindings::expect_value`] for the type-side map.
+    #[cfg(test)]
+    pub fn expect_type(&self, name: &str) -> &'a KType {
+        *self
+            .types
+            .borrow()
+            .get(name)
+            .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
+    }
+
     /// Read-only handle for the SCC pre-registration map. Same `Ref<'_, _>` semantics
     /// as [`Bindings::data`]. Stage-3.2 writers are [`Bindings::insert_pending_type`]
     /// / [`Bindings::record_pending_edge`] / [`Bindings::remove_pending_type`] plus

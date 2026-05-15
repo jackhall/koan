@@ -425,8 +425,7 @@ mod tests {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("OrderedSig must bind a KSignature"),
         };
-        let data = s.decl_scope().bindings().data();
-        let zero = data.get("zero").expect("zero must live in SIG's data");
+        let zero = s.decl_scope().bindings().expect_value("zero");
         match zero {
             KObject::KTypeValue(kt) => assert_eq!(*kt, KType::Number),
             other => panic!("expected KTypeValue(Number), got {:?}", other.ktype()),
@@ -450,8 +449,7 @@ mod tests {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("WithZero must bind a KSignature"),
         };
-        let data = s.decl_scope().bindings().data();
-        let zero = data.get("zero").expect("zero must live in SIG's data");
+        let zero = s.decl_scope().bindings().expect_value("zero");
         match zero {
             KObject::KTypeValue(kt) => assert_eq!(
                 *kt, KType::Number,
@@ -516,8 +514,7 @@ mod tests {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("OrderedSig must bind a KSignature"),
         };
-        let data = s.decl_scope().bindings().data();
-        let compare = data.get("compare").expect("compare must live in SIG's data");
+        let compare = s.decl_scope().bindings().expect_value("compare");
         match compare {
             KObject::KTypeValue(KType::KFunction { args, ret }) => {
                 assert_eq!(args.len(), 2);
@@ -586,12 +583,9 @@ mod tests {
             _ => panic!("WithZero must bind a KSignature"),
         };
         // `Type` lives in the SIG's `bindings.types`; `zero` lives in `bindings.data`.
-        let types = s.decl_scope().bindings().types();
-        let type_kt = types.get("Type").copied().expect("Type must be in types");
+        let type_kt = s.decl_scope().bindings().expect_type("Type");
         assert_eq!(*type_kt, KType::Number);
-        drop(types);
-        let data = s.decl_scope().bindings().data();
-        let zero = data.get("zero").expect("zero must be in data");
+        let zero = s.decl_scope().bindings().expect_value("zero");
         assert!(matches!(zero, KObject::KTypeValue(KType::Number)));
     }
 }

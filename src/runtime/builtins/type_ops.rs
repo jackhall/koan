@@ -860,8 +860,7 @@ mod tests {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("Monad must bind a KSignature"),
         };
-        let decl_types = s.decl_scope().bindings().types();
-        let wrap_kt: &KType = decl_types.get("Wrap").copied().expect("Wrap must live in types");
+        let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         match wrap_kt {
             KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. } => {
                 assert_eq!(*param_names, vec!["Type".to_string()]);
@@ -902,7 +901,7 @@ mod tests {
             Err(e) => panic!("FN with Wrap<Number> return failed: {}", e),
         }
         // Verify the FN's return type is ConstructorApply<Wrap, [Number]>.
-        let pure = scope.bindings().data().get("pure").copied().expect("pure bound");
+        let pure = scope.bindings().expect_value("pure");
         let f = match pure {
             KObject::KFunction(f, _) => *f,
             other => panic!("pure not KFunction: {:?}", other.ktype()),
@@ -966,22 +965,16 @@ mod tests {
             other => panic!("Monad must bind a KSignature, got {:?}", other.map(|o| o.ktype())),
         };
         // `Wrap` lives in the SIG's `bindings.types` as a TypeConstructor template.
-        let decl_types = s.decl_scope().bindings().types();
-        let wrap_kt: &KType = decl_types
-            .get("Wrap")
-            .copied()
-            .expect("Wrap must live in SIG's types map");
+        let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         assert!(matches!(
             wrap_kt,
             KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }
         ));
-        drop(decl_types);
         // `pure` is bound in the SIG's `bindings.data` as a `KTypeValue` carrying the
         // declared `Function<(Number) -> Wrap<Number>>` type (post-VAL slot shape).
         // The inner `Wrap<Number>` elaborated against the SIG decl_scope as a
         // `ConstructorApply { ctor: Wrap, args: [Number] }`.
-        let decl_data = s.decl_scope().bindings().data();
-        let pure = decl_data.get("pure").copied().expect("pure must live in SIG's data");
+        let pure = s.decl_scope().bindings().expect_value("pure");
         let kt = match pure {
             KObject::KTypeValue(kt) => kt,
             other => panic!("pure must be a KTypeValue, got {:?}", other.ktype()),
