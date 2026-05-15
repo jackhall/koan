@@ -241,7 +241,7 @@ mod tests {
     use crate::runtime::builtins::default_scope;
     use crate::runtime::builtins::test_support::run_root_bare;
     use crate::runtime::machine::model::KObject;
-    use crate::runtime::machine::{ArgumentBundle, BodyResult};
+    use crate::runtime::machine::ArgumentBundle;
     use crate::runtime::machine::execute::Scheduler;
     use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
@@ -255,14 +255,7 @@ mod tests {
         args.insert("name".to_string(), Rc::new(KObject::KString("x".into())));
         args.insert("value".to_string(), Rc::new(KObject::Number(42.0)));
 
-        let result = body(scope, &mut sched, ArgumentBundle { args });
-
-        let value = match result {
-            BodyResult::Value(v) => v,
-            BodyResult::Tail { .. } => panic!("LET should not produce a Tail"),
-            BodyResult::DeferTo(_) => panic!("LET should not produce a DeferTo"),
-            BodyResult::Err(e) => panic!("LET errored unexpectedly: {e}"),
-        };
+        let value = body(scope, &mut sched, ArgumentBundle { args }).expect_value("LET");
         assert!(matches!(value, KObject::Number(n) if *n == 42.0));
         let data = scope.bindings().data();
         let entry = data.get("x").expect("expected binding 'x'");

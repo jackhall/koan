@@ -37,7 +37,7 @@ mod tests {
     use super::body;
     use crate::runtime::builtins::test_support::run_root_bare;
     use crate::runtime::machine::model::KObject;
-    use crate::runtime::machine::{ArgumentBundle, BodyResult};
+    use crate::runtime::machine::ArgumentBundle;
     use crate::runtime::machine::execute::Scheduler;
 
     #[test]
@@ -49,12 +49,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("v".to_string(), Rc::new(KObject::Number(7.0)));
 
-        let result = match body(scope, &mut sched, ArgumentBundle { args }) {
-            BodyResult::Value(v) => v,
-            BodyResult::Tail { .. } => panic!("value_pass should not produce a Tail"),
-            BodyResult::DeferTo(_) => panic!("value_pass should not produce a DeferTo"),
-            BodyResult::Err(e) => panic!("value_pass errored unexpectedly: {e}"),
-        };
+        let result = body(scope, &mut sched, ArgumentBundle { args }).expect_value("value_pass");
 
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }

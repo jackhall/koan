@@ -62,6 +62,20 @@ impl<'a> BodyResult<'a> {
     pub fn err(e: KError) -> Self {
         BodyResult::Err(e)
     }
+
+    /// Test helper for bodies that contractually only yield `Value` or `Err`:
+    /// extracts the `Value` payload, panicking with `ctx` and the actual
+    /// variant name otherwise. Collapses the 4-arm match pattern that used to
+    /// be repeated across builtin unit tests.
+    #[cfg(test)]
+    pub fn expect_value(self, ctx: &str) -> &'a KObject<'a> {
+        match self {
+            BodyResult::Value(v) => v,
+            BodyResult::Tail { .. } => panic!("{ctx}: expected Value, got Tail"),
+            BodyResult::DeferTo(_) => panic!("{ctx}: expected Value, got DeferTo"),
+            BodyResult::Err(e) => panic!("{ctx}: expected Value, got Err({e})"),
+        }
+    }
 }
 
 /// Builtin body. `for<'a>` so a single `fn` works for any caller scope lifetime;

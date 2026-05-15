@@ -148,12 +148,7 @@ mod tests {
         bundle: ArgumentBundle<'a>,
     ) -> &'a KObject<'a> {
         let mut sched = Scheduler::new();
-        match body_identifier(scope, &mut sched, bundle) {
-            BodyResult::Value(v) => v,
-            BodyResult::Tail { .. } => panic!("value_lookup should not produce a Tail"),
-            BodyResult::DeferTo(_) => panic!("value_lookup should not produce a DeferTo"),
-            BodyResult::Err(e) => panic!("value_lookup errored unexpectedly: {e}"),
-        }
+        body_identifier(scope, &mut sched, bundle).expect_value("value_lookup")
     }
 
     /// Like `run_body` but returns the `BodyResult` so error-path tests can pattern-match
