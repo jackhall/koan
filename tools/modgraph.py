@@ -2,16 +2,30 @@
 """Measure a complexity index for a module partition.
 
 Reads a cargo-modules DOT file and a TOML partition spec, then reports:
-  index = cross_edges + alpha * feedback_weight
+  index(m) = cross_edges(m) + alpha * feedback_weight(m) + beta
+  total    = Σ index(m) · loc(m)        (summed over non-leaf m)
+  per-loc  = total / loc(root)          (under --fractal)
 
 where feedback_weight is the total weight of edges that go against the
 best topological ordering of the groups. For N <= 6 groups the best order
 is found by exhaustive search; above that, the Eades-Lin-Smyth GR
 heuristic is used.
 
+The `--fractal` per-loc number is normalised by the root subtree's LOC
+(a fixed constant for a given crate). This is what makes nesting cost
+something: every interior level contributes its own loc to the sum, so
+adding a wrapper around a heavy subtree adds (β + cross + α·fb) · loc.
+
+`beta` is a flat per-non-leaf charge. The default of 5.0 says "one extra
+module layer costs roughly what 5 cross edges cost" — calibrated by
+sweeping β across known structures (gratuitous wrappers, useful
+wrappers, nesting refactors); above ~10 the metric starts preferring
+known-bad moves (e.g. dropping a load-bearing wrapper) over deep
+nesting, and at β=0 a passthrough wrapper is undetectable.
+
 Usage:
   python3 tools/modgraph.py --edges <dot-file> --partition <toml-file>
-                            [--alpha 2.0]
+                            [--alpha 2.0] [--beta 5.0]
 
 Partition TOML:
   [groups]
@@ -289,24 +303,27 @@ def fractal_report(
     root: str,
     src_root: Path,
     alpha: float,
+    beta: float,
     exact_threshold: int,
 ) -> int:
     modules = discover_modules(edges)
 
     weighted_sum = 0.0
-    total_weight = 0
+    nonleaf_loc_sum = 0
+    root_loc = subtree_loc(root, modules, src_root)
 
     def walk(module: str, depth: int) -> None:
-        nonlocal weighted_sum, total_weight
+        nonlocal weighted_sum, nonleaf_loc_sum
         children = direct_children(module, modules)
         loc = subtree_loc(module, modules, src_root)
         if not children:
             print(f"{'  ' * depth}{module:<60} loc {loc:>6}   leaf")
             return
         partition = {c: [f"{module}::{c}"] for c in children}
-        index, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
+        raw_index, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
+        index = raw_index + beta
         weighted_sum += index * loc
-        total_weight += loc
+        nonleaf_loc_sum += loc
         print(f"{'  ' * depth}{module:<60} loc {loc:>6}   "
               f"children {len(children)}   cross {cross}   fb {fb}   index {index:.1f}")
         for c in children:
@@ -314,10 +331,13 @@ def fractal_report(
 
     walk(root, 0)
     print()
-    if total_weight:
-        avg = weighted_sum / total_weight
-        print(f"fractal complexity (Σ index·loc):       {weighted_sum:.0f}")
-        print(f"loc-normalized (Σ index·loc / Σ loc):   {avg:.2f}")
+    print(f"total Σ index·loc:                          {weighted_sum:.0f}")
+    if root_loc:
+        per_root_loc = weighted_sum / root_loc
+        print(f"per root-loc (Σ index·loc / loc({root})):  {per_root_loc:.2f}")
+    if nonleaf_loc_sum:
+        avg = weighted_sum / nonleaf_loc_sum
+        print(f"per nonleaf-loc (legacy avg):               {avg:.2f}")
     return 0
 
 
@@ -346,6 +366,9 @@ def main() -> int:
     ap.add_argument("--src-root", type=Path, default=Path("src"),
                     help="source root for LOC lookup (default: src)")
     ap.add_argument("--alpha", type=float, default=2.0, help="feedback penalty (default 2.0)")
+    ap.add_argument("--beta", type=float, default=5.0,
+                    help="per-non-leaf charge under --fractal; "
+                         "penalises passthrough wrappers and tree depth (default 5.0)")
     ap.add_argument("--exact-threshold", type=int, default=6,
                     help="use exact search for N <= this many groups (default 6)")
     args = ap.parse_args()
@@ -353,7 +376,7 @@ def main() -> int:
     edges = load_edges(args.edges)
     if args.fractal:
         return fractal_report(edges, args.fractal, args.src_root,
-                              args.alpha, args.exact_threshold)
+                              args.alpha, args.beta, args.exact_threshold)
     if args.partition:
         partition = load_partition(args.partition)
     else:
