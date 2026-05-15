@@ -27,7 +27,7 @@ use super::{arg, err, kw, register_builtin, sig};
 /// surrounding scope. For `Bool` matches `it` is `Null` — accurate, since there is no
 /// payload.
 ///
-/// No matching branch → `ShapeError("inexhaustive match: no branch for `X`")` — same
+/// No matching branch → `ShapeError("inexhaustive match = no branch for `X`")` — same
 /// rule for `Bool` as for `Tagged`, so `MATCH cond WITH (true -> ...)` against a
 /// `false` value is an error rather than a silent null. Malformed branch shape (not
 /// `<tag> -> <body>` triples) → `ShapeError`.
@@ -63,7 +63,7 @@ pub fn body<'a>(
         Ok(Some(body)) => body,
         Ok(None) => {
             return err(KError::new(KErrorKind::ShapeError(format!(
-                "inexhaustive match: no branch for `{}`",
+                "inexhaustive match = no branch for `{}`",
                 tag
             ))));
         }
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn match_dispatches_branch_for_matching_tag() {
         let bytes = run_program(
-            "UNION Maybe = (some: Number none: Null)\n\
+            "UNION Maybe = (some :Number none :Null)\n\
              LET m = (Maybe (some 42))\n\
              MATCH (m) WITH (some -> (PRINT \"got\") none -> (PRINT \"no\"))",
         );
@@ -203,7 +203,7 @@ mod tests {
         // wants a Str literal or Future, and substitution rewrites the `it` Identifier into
         // a `Future(value)` so the bind succeeds.
         let bytes = run_program(
-            "UNION Result = (ok: Str err: Str)\n\
+            "UNION Result = (ok :Str err :Str)\n\
              LET r = (Result (ok \"all good\"))\n\
              MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
         );
@@ -214,7 +214,7 @@ mod tests {
     fn match_does_not_run_unmatched_branches() {
         // Lazy: the `none` branch's PRINT must not fire when the value is `some`.
         let bytes = run_program(
-            "UNION Maybe = (some: Number none: Null)\n\
+            "UNION Maybe = (some :Number none :Null)\n\
              LET m = (Maybe (some 1))\n\
              MATCH (m) WITH (some -> (PRINT \"yes\") none -> (PRINT \"NO_SHOULD_NOT_APPEAR\"))",
         );
@@ -227,7 +227,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "UNION Maybe = (some: Number none: Null)\nLET m = (Maybe (none null))",
+            "UNION Maybe = (some :Number none :Null)\nLET m = (Maybe (none null))",
         );
         let err = run_one_err(scope, parse_one("MATCH (m) WITH (some -> (PRINT \"yes\"))"));
         assert!(
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn match_other_branch_runs_when_tag_matches() {
         let bytes = run_program(
-            "UNION Maybe = (some: Number none: Null)\n\
+            "UNION Maybe = (some :Number none :Null)\n\
              LET m = (Maybe (none null))\n\
              MATCH (m) WITH (some -> (PRINT \"yes\") none -> (PRINT \"nothing\"))",
         );
@@ -273,8 +273,8 @@ mod tests {
         // Fixed by chaining the call-site frame's Rc onto the new `CallArena` via
         // `SchedulerHandle::current_frame` + `outer_frame`.
         let bytes = run_program(
-            "UNION Bit = (one: Null zero: Null)\n\
-             FN (HOP b: Tagged) -> Any = (MATCH (b) WITH (\
+            "UNION Bit = (one :Null zero :Null)\n\
+             FN (HOP b :Tagged) -> Any = (MATCH (b) WITH (\
                  one -> (HOP (Bit (zero null)))\
                  zero -> (PRINT \"done\")\
              ))\n\

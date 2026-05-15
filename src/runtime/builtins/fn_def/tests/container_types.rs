@@ -14,7 +14,7 @@ use super::capture_program_output;
 #[test]
 fn fn_with_typed_list_param_accepts_matching_list() {
     let bytes = capture_program_output(
-        "FN (HEAD xs: List<Number>) -> Number = (1)\n\
+        "FN (HEAD xs :(List Number)) -> Number = (1)\n\
          PRINT (HEAD [1 2 3])",
     );
     assert_eq!(bytes, b"1\n");
@@ -25,7 +25,7 @@ fn fn_with_typed_list_param_accepts_matching_list() {
 #[test]
 fn fn_returning_typed_list_accepts_matching_value() {
     let bytes = capture_program_output(
-        "FN (NUMS) -> List<Number> = ([1 2 3])\n\
+        "FN (NUMS) -> :(List Number) = ([1 2 3])\n\
          PRINT (NUMS)",
     );
     assert_eq!(bytes, b"[1, 2, 3]\n");
@@ -39,14 +39,14 @@ fn fn_returning_typed_list_accepts_matching_value() {
 fn fn_returning_typed_list_rejects_wrong_element_type() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (BAD) -> List<Number> = ([1 \"x\"])");
+    run(scope, "FN (BAD) -> :(List Number) = ([1 \"x\"])");
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("BAD"), scope);
     sched.execute().expect("scheduler runs to completion");
     let res = sched.read_result(id);
     assert!(
         res.is_err(),
-        "expected return-type mismatch when body produces List<Any> for declared List<Number>"
+        "expected return-type mismatch when body produces :(List Any) for declared :(List Number)"
     );
 }
 
@@ -57,7 +57,7 @@ fn fn_with_invalid_list_arity_errors_at_definition() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
-    let exprs = parse("FN (BAD xs: List<Number, Str>) -> Null = (xs)").expect("parse ok");
+    let exprs = parse("FN (BAD xs :(List Number, Str)) -> Null = (xs)").expect("parse ok");
     let mut ids = Vec::new();
     for e in exprs {
         ids.push(sched.add_dispatch(e, scope));
@@ -65,7 +65,7 @@ fn fn_with_invalid_list_arity_errors_at_definition() {
     sched.execute().expect("scheduler runs");
     assert!(
         ids.iter().any(|id| sched.read_result(*id).is_err()),
-        "FN definition with `List<Number, Str>` should fail with an arity error"
+        "FN definition with `:(List Number, Str)` should fail with an arity error"
     );
 }
 
@@ -73,7 +73,7 @@ fn fn_with_invalid_list_arity_errors_at_definition() {
 #[test]
 fn fn_with_typed_dict_param_accepts_matching_dict() {
     let bytes = capture_program_output(
-        "FN (SIZE d: Dict<Str, Number>) -> Number = (1)\n\
+        "FN (SIZE d :(Dict Str Number)) -> Number = (1)\n\
          PRINT (SIZE {\"a\": 1, \"b\": 2})",
     );
     assert_eq!(bytes, b"1\n");
@@ -86,8 +86,8 @@ fn fn_with_typed_dict_param_accepts_matching_dict() {
 #[test]
 fn fn_with_typed_function_param_accepts_matching_function() {
     let bytes = capture_program_output(
-        "FN (USE f: Function<(Number) -> Str>) -> Str = (\"got fn\")\n\
-         PRINT (USE (FN (SHOW x: Number) -> Str = (\"hi\")))",
+        "FN (USE f :(Function (Number) -> Str)) -> Str = (\"got fn\")\n\
+         PRINT (USE (FN (SHOW x :Number) -> Str = (\"hi\")))",
     );
     assert_eq!(bytes, b"got fn\n");
 }
@@ -98,8 +98,8 @@ fn fn_with_typed_function_param_accepts_matching_function() {
 #[test]
 fn dispatch_picks_more_specific_list_overload() {
     let bytes = capture_program_output(
-        "FN (PICK xs: List<Any>) -> Str = (\"any\")\n\
-         FN (PICK xs: List<Number>) -> Str = (\"number\")\n\
+        "FN (PICK xs :(List Any)) -> Str = (\"any\")\n\
+         FN (PICK xs :(List Number)) -> Str = (\"number\")\n\
          PRINT (PICK [1 2 3])",
     );
     assert_eq!(bytes, b"number\n");
@@ -112,31 +112,31 @@ fn dispatch_picks_more_specific_list_overload() {
 #[test]
 fn fn_with_parens_wrapped_list_of_param_accepts_matching_list() {
     let bytes = capture_program_output(
-        "FN (HEAD xs: (LIST_OF Number)) -> Number = (1)\n\
+        "FN (HEAD xs (LIST_OF Number)) -> Number = (1)\n\
          PRINT (HEAD [1 2 3])",
     );
     assert_eq!(bytes, b"1\n");
 }
 
-/// Nested parens-wrapped type expression in a FN parameter slot: `xs: (LIST_OF (LIST_OF
+/// Nested parens-wrapped type expression in a FN parameter slot: `xs (LIST_OF (LIST_OF
 /// Number))` exercises the same scheduler path the standalone `(LIST_OF (LIST_OF
 /// Number))` test in `type_ops` exercises, but via the FN-def Combine.
 #[test]
 fn fn_with_nested_parens_wrapped_type_param_dispatches() {
     let bytes = capture_program_output(
-        "FN (HEAD xs: (LIST_OF (LIST_OF Number))) -> Number = (1)\n\
+        "FN (HEAD xs (LIST_OF (LIST_OF Number))) -> Number = (1)\n\
          PRINT (HEAD [[1 2] [3]])",
     );
     assert_eq!(bytes, b"1\n");
 }
 
-/// `xs: (DICT_OF Str Number)` walks the same parens-wrapped sub-Dispatch path as the
+/// `d (DICT_OF Str Number)` walks the same parens-wrapped sub-Dispatch path as the
 /// LIST_OF case but with two type args, exercising the multi-arg shape of
 /// `parse_fn_param_list`'s `Future(_)` re-walk arm.
 #[test]
 fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
     let bytes = capture_program_output(
-        "FN (SIZE d: (DICT_OF Str Number)) -> Number = (1)\n\
+        "FN (SIZE d (DICT_OF Str Number)) -> Number = (1)\n\
          PRINT (SIZE {\"a\": 1, \"b\": 2})",
     );
     assert_eq!(bytes, b"1\n");
@@ -153,7 +153,7 @@ fn fn_typed_list_param_rejects_wrong_element_type_at_call() {
     // Single overload typed List<Number> — wrong-element-type call must error.
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (HEAD xs: List<Number>) -> Number = (1)");
+    run(scope, "FN (HEAD xs :(List Number)) -> Number = (1)");
     let mut sched = Scheduler::new();
     sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
     // Dispatch-time matching is shape-only; the call binds. The error surfaces only

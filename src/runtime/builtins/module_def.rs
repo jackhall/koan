@@ -214,7 +214,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "MODULE Foo = (LET double = (FN (DOUBLE x: Number) -> Number = (x)))",
+            "MODULE Foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))",
         );
         let data = scope.bindings().data();
         let foo = match data.get("Foo") {

@@ -5,11 +5,10 @@
 //! since they bind `ParseStack` and the token-buffer flush.
 
 use crate::parse::tokens::classify_token;
-use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
+use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::dict_literal::DictFrame;
 use super::frame::Frame;
-use super::type_frame::TypeFrame;
 
 pub(super) struct ParseStack<'a> {
     root: KExpression<'a>,
@@ -36,32 +35,8 @@ impl<'a> ParseStack<'a> {
         }
     }
 
-    /// Pop the last part of the topmost frame iff it is a bare `Type` (`TypeParams::None`).
-    /// Wrong shape (or none) is restored via `Frame::push` / pushed back onto the parts
-    /// vec so the caller observes no mutation on the `None` arm.
-    pub(super) fn pop_if_bare_type_part(&mut self) -> Option<TypeExpr> {
-        let popped = match self.rest.last_mut() {
-            Some(f) => f.pop_last_part(),
-            None => self.root.parts.pop(),
-        }?;
-        match popped {
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => Some(t),
-            other => {
-                match self.rest.last_mut() {
-                    Some(f) => f.push(other),
-                    None => self.root.parts.push(other),
-                }
-                None
-            }
-        }
-    }
-
     pub(super) fn peek_top(&self) -> Option<&Frame<'a>> {
         self.rest.last()
-    }
-
-    pub(super) fn top_is_type(&self) -> bool {
-        matches!(self.rest.last(), Some(Frame::Type(_)))
     }
 
     /// Top-of-stack frame as a `Dict` for in-place state-machine ops. Returns `None`
@@ -70,16 +45,6 @@ impl<'a> ParseStack<'a> {
         match self.rest.last_mut()? {
             Frame::Dict(d) => Some(d),
             _ => None,
-        }
-    }
-
-    pub(super) fn pop_if_type(&mut self) -> Option<TypeFrame<'a>> {
-        match self.rest.pop()? {
-            Frame::Type(tf) => Some(tf),
-            other => {
-                self.rest.push(other);
-                None
-            }
         }
     }
 
@@ -92,8 +57,7 @@ impl<'a> ParseStack<'a> {
     pub(super) fn finish(self) -> Result<KExpression<'a>, String> {
         if !self.rest.is_empty() {
             return Err(
-                "open paren, bracket, brace, or angle-bracket without matching close"
-                    .to_string(),
+                "open paren, bracket, or brace without matching close".to_string(),
             );
         }
         Ok(self.root)

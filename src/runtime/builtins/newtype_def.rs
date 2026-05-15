@@ -87,7 +87,7 @@ pub fn body<'a>(
                 Some(kt) => kt.clone(),
                 None => {
                     return err(KError::new(KErrorKind::ShapeError(format!(
-                        "NEWTYPE repr slot: unknown type name `{}`",
+                        "NEWTYPE repr slot = unknown type name `{}`",
                         te.name,
                     ))));
                 }
@@ -126,7 +126,7 @@ pub fn body<'a>(
         // structured error rather than panicking so a future re-entrant caller still
         // gets a recoverable diagnostic.
         Ok(ApplyOutcome::Conflict) => err(KError::new(KErrorKind::ShapeError(format!(
-            "NEWTYPE `{name}` registration deferred: bindings borrow contention",
+            "NEWTYPE `{name}` registration deferred = bindings borrow contention",
         )))),
         Err(e) => err(e),
     }
@@ -355,8 +355,8 @@ mod tests {
         run(
             scope,
             "NEWTYPE Distance = Number\n\
-             FN (TAKES_NUM x: Number) -> Str = (\"num\")\n\
-             FN (TAKES_DIST x: Distance) -> Str = (\"dist\")",
+             FN (TAKES_NUM x :Number) -> Str = (\"num\")\n\
+             FN (TAKES_DIST x :Distance) -> Str = (\"dist\")",
         );
         // Distance-typed slot accepts a Distance value.
         let r1 = run_one(scope, parse_one("TAKES_DIST (Distance (3.0))"));
@@ -442,7 +442,7 @@ mod tests {
         run(
             scope,
             "NEWTYPE Distance = Number\n\
-             FN (MAKE_NUM x: Number) -> Number = (x)",
+             FN (MAKE_NUM x :Number) -> Number = (x)",
         );
         let result = run_one(scope, parse_one("Distance (MAKE_NUM 3.0)"));
         match result {

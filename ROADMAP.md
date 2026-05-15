@@ -285,6 +285,11 @@ incrementally, each producing a usable end state.
   …) and standard effect modules (`Random`, `IO`, `Time`) ship as Koan-source
   functor FNs across multiple `.koan` files; doubles as the canonical example
   of idiomatic module / signature / functor / import composition.
+- [Type-expression sigil — replace `<>` brackets with glued `:`](roadmap/type-expression-sigil.md)
+  — `List<Number>` / `Dict<K, V>` / `Function<(A) -> R>` become `:(List Number)` /
+  `:(Dict K V)` / `:(Function (A) -> R)`, freeing `<`, `>`, `<=`, `>=` for arithmetic
+  comparison operators and unifying type-position marking under one glued-right `:`
+  sigil across ascription, return type, type-arg slots, and LET type bindings.
 
 ### Future-facing
 

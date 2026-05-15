@@ -13,7 +13,7 @@ use super::capture_program_output;
 fn fn_typed_param_records_ktype_on_signature() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
+    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
     let data = scope.bindings().data();
     let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
@@ -27,7 +27,7 @@ fn fn_typed_param_records_ktype_on_signature() {
             assert_eq!(name, "x");
             assert_eq!(*ktype, KType::Number);
         }
-        _ => panic!("expected signature shape [Keyword(\"DOUBLE\"), Argument(x: Number)]"),
+        _ => panic!("expected signature shape [Keyword(\"DOUBLE\"), Argument(x :Number)]"),
     }
 }
 
@@ -36,7 +36,7 @@ fn fn_typed_param_records_ktype_on_signature() {
 fn fn_typed_param_dispatches_on_matching_call() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
+    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let result = run_one(scope, parse_one("DOUBLE 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
@@ -48,7 +48,7 @@ fn fn_typed_param_dispatches_on_matching_call() {
 fn fn_typed_param_rejects_mismatched_call() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
+    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let mut sched = Scheduler::new();
     let _ = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
     // The dispatch failure surfaces via `execute()` here (the queue can't make
@@ -67,8 +67,8 @@ fn fn_typed_param_rejects_mismatched_call() {
 #[test]
 fn fn_overloads_dispatch_by_param_type() {
     let bytes = capture_program_output(
-        "FN (DESCRIBE x: Number) -> Null = (PRINT \"number\")\n\
-         FN (DESCRIBE x: Str) -> Null = (PRINT \"string\")\n\
+        "FN (DESCRIBE x :Number) -> Null = (PRINT \"number\")\n\
+         FN (DESCRIBE x :Str) -> Null = (PRINT \"string\")\n\
          DESCRIBE 7\n\
          DESCRIBE \"hi\"",
     );
@@ -103,7 +103,7 @@ fn fn_param_with_unknown_type_name_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("FN (DOUBLE x: Bogus) -> Number = (x)"), scope);
+    let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
     sched.execute().expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
@@ -121,7 +121,7 @@ fn fn_param_with_unknown_type_name_is_rejected() {
 #[test]
 fn fn_comma_separated_typed_params_register() {
     let bytes = capture_program_output(
-        "FN (FIRST x: Number, y: Number) -> Number = (x)\n\
+        "FN (FIRST x :Number, y :Number) -> Number = (x)\n\
          PRINT (FIRST 1 2)",
     );
     assert_eq!(bytes, b"1\n");

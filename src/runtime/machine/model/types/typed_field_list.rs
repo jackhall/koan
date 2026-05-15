@@ -1,11 +1,12 @@
-//! Shared parser for `(<name>: <Type> <name>: <Type> ...)` schema expressions, used by
+//! Shared parser for `(<name> :<Type> <name> :<Type> ...)` schema expressions, used by
 //! `UNION` (order discarded into a `HashMap<tag, KType>`) and `STRUCT` (order preserved for
-//! positional construction).
+//! positional construction). Under the Design-B sigil regime, the `:` is consumed by the
+//! type sigil; each typed field lands as an `[Identifier, Type]` pair.
 
 use super::ktype::KType;
 use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
-use crate::parse::parse_triple_list;
+use crate::parse::parse_pair_list;
 use crate::runtime::machine::NodeId;
 
 /// Result of one walk over a schema's field list.
@@ -29,14 +30,14 @@ pub fn parse_typed_field_list_via_elaborator(
     elaborator: &mut Elaborator<'_, '_>,
 ) -> FieldListOutcome {
     let mut parks: Vec<NodeId> = Vec::new();
-    let parsed = parse_triple_list(expr, context, |part, name| match part {
+    let parsed = parse_pair_list(expr, context, |part, name| match part {
         ExpressionPart::Type(t) => match elaborate_type_expr(elaborator, t) {
             ElabResult::Done(kt) => Ok(kt),
             ElabResult::Park(producers) => {
                 parks.extend(producers);
                 // Placeholder KType — discarded when the caller routes through the Park
-                // outcome. Keeps the parse_triple_list walk going so we accumulate every
-                // parking producer in one pass.
+                // outcome. Keeps the pair-list walk going so we accumulate every parking
+                // producer in one pass.
                 Ok(KType::Any)
             }
             ElabResult::Unbound(msg) => Err(format!("{msg} in {context} for `{}`", name)),

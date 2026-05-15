@@ -200,7 +200,7 @@ mod tests {
     /// pre_run.
     #[test]
     fn pre_run_extracts_named_union_name() {
-        let expr = parse_one("UNION Maybe = (some: Number, none: Null)");
+        let expr = parse_one("UNION Maybe = (some :Number, none :Null)");
         let name = super::pre_run(&expr);
         assert_eq!(name.as_deref(), Some("Maybe"));
     }
@@ -211,7 +211,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         let result = run_one(
             scope,
-            parse_one("UNION Maybe = (some: Number none: Null)"),
+            parse_one("UNION Maybe = (some :Number none :Null)"),
         );
         assert!(matches!(result, KObject::TaggedUnionType { .. }));
         let data = scope.bindings().data();
@@ -234,7 +234,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
-        sched.add_dispatch(parse_one("UNION (ok: Number err: Str)"), scope);
+        sched.add_dispatch(parse_one("UNION (ok :Number err :Str)"), scope);
         let err = sched.execute().expect_err("bare UNION should fail dispatch");
         assert!(
             matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
@@ -246,7 +246,7 @@ mod tests {
     fn union_rejects_unknown_type_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("UNION Bad = (some: Bogus)"));
+        let err = run_one_err(scope, parse_one("UNION Bad = (some :Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
@@ -268,7 +268,7 @@ mod tests {
     fn union_rejects_duplicate_tag() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("UNION Dupe = (some: Number some: Str)"));
+        let err = run_one_err(scope, parse_one("UNION Dupe = (some :Number some :Str)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`some`")),
             "expected ShapeError on duplicate tag, got {err}",
@@ -327,7 +327,7 @@ mod tests {
         use crate::parse::parse;
         let mut sched = Scheduler::new();
         for e in parse(
-            "STRUCT Wrap = (m: Maybe)\nUNION Maybe = (just: Wrap, none: Null)",
+            "STRUCT Wrap = (m :Maybe)\nUNION Maybe = (just :Wrap, none :Null)",
         )
         .unwrap()
         {
@@ -356,13 +356,16 @@ mod tests {
     }
 
     #[test]
-    fn union_rejects_missing_colon() {
+    fn union_rejects_odd_part_count() {
+        // Under the Design-B sigil regime, typed variants parse as `[Identifier, Type]`
+        // PAIRS. An odd number of parts (a name without its type slot) is rejected by
+        // the pair-list walker.
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("UNION Pair = (some Number none: Null)"));
+        let err = run_one_err(scope, parse_one("UNION Pair = (some :Number none)"));
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("triple")),
-            "expected ShapeError on missing colon, got {err}",
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("pair") || msg.contains("multiple of 2")),
+            "expected ShapeError on odd part count, got {err}",
         );
     }
 }

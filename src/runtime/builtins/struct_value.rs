@@ -264,8 +264,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let result = run_one(scope, parse_one("Point (x: 3, y: 4)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let result = run_one(scope, parse_one("Point (x = 3, y = 4)"));
         match result {
             KObject::Struct { name: type_name, fields, .. } => {
                 assert_eq!(type_name, "Point");
@@ -282,8 +282,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let err = run_one_err(scope, parse_one("Point (x: 3)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let err = run_one_err(scope, parse_one("Point (x = 3)"));
         assert!(
             matches!(&err.kind, KErrorKind::MissingArg(name) if name == "y"),
             "expected MissingArg(\"y\"), got {err}",
@@ -295,8 +295,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let err = run_one_err(scope, parse_one("Point (x: 3, y: 4, z: 5)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let err = run_one_err(scope, parse_one("Point (x = 3, y = 4, z = 5)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown field") && msg.contains("`z`")),
             "expected ShapeError on unknown field z, got {err}",
@@ -308,8 +308,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let err = run_one_err(scope, parse_one("Point (x: 3, y: \"oops\")"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let err = run_one_err(scope, parse_one("Point (x = 3, y = \"oops\")"));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "y");
@@ -327,8 +327,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)\nLET ax = 7\nLET ay = 9");
-        let result = run_one(scope, parse_one("Point (x: ax, y: ay)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)\nLET ax = 7\nLET ay = 9");
+        let result = run_one(scope, parse_one("Point (x = ax, y = ay)"));
         match result {
             KObject::Struct { fields, .. } => {
                 assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 7.0));
@@ -345,8 +345,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let result = run_one(scope, parse_one("Point (y: 4, x: 3)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let result = run_one(scope, parse_one("Point (y = 4, x = 3)"));
         match result {
             KObject::Struct { fields, .. } => {
                 assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
@@ -361,7 +361,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
         let err = run_one_err(scope, parse_one("Point (x 3, y 4)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("separator") || msg.contains("triples")),
@@ -374,8 +374,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let err = run_one_err(scope, parse_one("Point (x: 1, x: 2)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let err = run_one_err(scope, parse_one("Point (x = 1, x = 2)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
             "expected ShapeError on duplicate name, got {err}",
@@ -387,7 +387,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        let err = run_one_err(scope, parse_one("Bogus (x: 1, y: 2)"));
+        let err = run_one_err(scope, parse_one("Bogus (x = 1, y = 2)"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "Bogus"),
             "expected UnboundName(\"Bogus\"), got {err}",
@@ -404,8 +404,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Triple = (z: Number, a: Number, m: Number)");
-        let result = run_one(scope, parse_one("Triple (a: 2, m: 3, z: 1)"));
+        run(scope, "STRUCT Triple = (z :Number, a :Number, m :Number)");
+        let result = run_one(scope, parse_one("Triple (a = 2, m = 3, z = 1)"));
         match result {
             KObject::Struct { fields, .. } => {
                 let keys: Vec<&str> = fields.keys().map(|s| s.as_str()).collect();
@@ -430,8 +430,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let result = run_one(scope, parse_one("Point (x: 3, y: 4)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let result = run_one(scope, parse_one("Point (x = 3, y = 4)"));
         let summary = crate::runtime::machine::model::types::Parseable::summarize(result);
         assert!(summary.starts_with("Point("), "summary should start with Point(, got {summary}");
         assert!(summary.contains("x: 3"), "summary should include x: 3, got {summary}");

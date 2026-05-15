@@ -1,8 +1,8 @@
 //! Top-level parser: runs the `quote-mask → whitespace-collapse → tokenize →
 //! tree-build` pipeline and returns a `KExpression`. The parse-stack and frame
 //! abstractions live in sibling modules ([`super::parse_stack`], [`super::frame`]);
-//! dict-pair state lives on [`super::dict_literal::DictFrame`] and type-parameter
-//! folding lives on [`super::type_frame::TypeFrame`] so framing arms here stay
+//! dict-pair state lives on [`super::dict_literal::DictFrame`] and type-expression
+//! folding lives on [`super::type_expr_frame::TypeExprFrame`] so framing arms here stay
 //! one-liners.
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
@@ -16,7 +16,7 @@ use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral}
 use super::dict_literal::DictFrame;
 use super::frame::{close_paren_to_part, Frame};
 use super::parse_stack::{close_collection, flush_token, open_collection, ParseStack};
-use super::type_frame::TypeFrame;
+use super::type_expr_frame::TypeExprFrame;
 
 fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<String, String> {
     if inner.is_empty() {
@@ -44,6 +44,9 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
     // paren-only (`#foo`, `# (foo)`, `#42` are parse errors); enforced by the top-of-loop
     // guard below, so individual arms don't repeat the check.
     let mut pending_sigil: Option<char> = None;
+    // `true` after consuming a `:(` glued type-expression sigil. The next `(` arm opens a
+    // `TypeExpr` frame instead of an `Expression` frame.
+    let mut pending_type_paren = false;
 
     while let Some(c) = chars.next() {
         if let Some(s) = pending_sigil {
@@ -64,15 +67,20 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
             }
             '(' => {
                 flush_token(&mut stack, &mut buf)?;
-                let head = match pending_sigil.take() {
-                    Some('#') => Some("QUOTE"),
-                    Some('$') => Some("EVAL"),
-                    _ => None,
-                };
-                stack.push_frame(Frame::Expression {
-                    expr: KExpression { parts: Vec::new() },
-                    head,
-                });
+                if pending_type_paren {
+                    pending_type_paren = false;
+                    stack.push_frame(Frame::TypeExpr(TypeExprFrame::new()));
+                } else {
+                    let head = match pending_sigil.take() {
+                        Some('#') => Some("QUOTE"),
+                        Some('$') => Some("EVAL"),
+                        _ => None,
+                    };
+                    stack.push_frame(Frame::Expression {
+                        expr: KExpression { parts: Vec::new() },
+                        head,
+                    });
+                }
             }
             ')' => {
                 flush_token(&mut stack, &mut buf)?;
@@ -97,9 +105,12 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                 chars.peek().copied(),
                 "closed brace without matching open brace",
             )?,
-            // `:|` / `:!` (ascription operators) must be assembled here, not in
-            // `classify_token`: `!` is independently a prefix operator, so a bare `!` after
-            // `:` would route through `parse_compound` and never reach keyword classification.
+            // Dispatch order: dict-pair separator first (state-machine has its own rules),
+            // then `:|` / `:!` ascription operators (assembled here because `!` is itself a
+            // prefix operator and would never reach keyword classification), then the
+            // glued-right type sigils `:(` and `:T`. A lone `:` outside a dict (with
+            // whitespace after or at EOF) is a parse error — type-position annotation must
+            // glue the sigil to its operand.
             ':' => {
                 flush_token(&mut stack, &mut buf)?;
                 if let Some(d) = stack.top_dict_mut() {
@@ -118,7 +129,37 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                             prev = Some('!');
                             continue;
                         }
-                        _ => stack.push_part(ExpressionPart::Keyword(":".to_string())),
+                        Some('(') => {
+                            pending_type_paren = true;
+                            // Don't consume the '(' — let the next loop iteration's '(' arm
+                            // see it and open the TypeExpr frame because pending_type_paren
+                            // is set.
+                        }
+                        Some(ch) if ch.is_ascii_uppercase() => {
+                            // Glued type sigil: the next token starts with an uppercase
+                            // letter and will classify as a `Type` per `classify_atom`. We
+                            // consume the `:` here and let the regular tokenizer produce
+                            // the `ExpressionPart::Type`.
+                        }
+                        Some(ch) if ch.is_whitespace() => {
+                            return Err(
+                                "':' must be glued to its operand at a type position; \
+                                 write `name :Type` (no space after `:`) or `:(List ...)`"
+                                    .to_string(),
+                            );
+                        }
+                        None => {
+                            return Err(
+                                "trailing ':' at end of input; expected a type name or `(`"
+                                    .to_string(),
+                            );
+                        }
+                        Some(ch) => {
+                            return Err(format!(
+                                "':' must be followed by a type name (uppercase-leading) or `(`; \
+                                 got `{ch}`"
+                            ));
+                        }
                     }
                 }
             }
@@ -130,35 +171,17 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                     d.accept_comma()?;
                 }
             }
-            // Opens a `Frame::Type` only when the parent's last part is a bare `Type` (no
-            // params); otherwise emits `Keyword("<")` and requires whitespace separation, so
-            // `List<Number>` parses but `a<b` is rejected as glued.
-            '<' => {
-                flush_token(&mut stack, &mut buf)?;
-                if let Some(t) = stack.pop_if_bare_type_part() {
-                    stack.push_frame(Frame::Type(TypeFrame::new(t.name)));
-                } else {
-                    check_separator_adjacency('<', prev)?;
-                    stack.push_part(ExpressionPart::Keyword("<".to_string()));
-                }
-            }
-            // Part of the `->` arrow token; applies both inside and outside a TypeFrame so
-            // `Function<Number -> Str>` keeps its arrow contiguous.
+            // `<` and `>` no longer carry type-position meaning (Design B retired the
+            // `<>` TypeFrame in favour of the `:(...)` sigil). They flush the buffer and
+            // emit standalone `Keyword` parts, leaving room for future numeric-comparison
+            // operators to dispatch on. The `->` arrow stays contiguous because the
+            // `prev == Some('-')` carve-out keeps `>` glued to the leading `-`.
             '>' if prev == Some('-') => {
                 buf.push('>');
             }
-            '>' => {
+            '<' | '>' => {
                 flush_token(&mut stack, &mut buf)?;
-                if stack.top_is_type() {
-                    let tf = stack
-                        .pop_if_type()
-                        .expect("top_is_type checked above; flush_token preserves variant");
-                    let parameterized = tf.build()?;
-                    stack.push_part(ExpressionPart::Type(parameterized));
-                } else {
-                    check_separator_adjacency('>', prev)?;
-                    stack.push_part(ExpressionPart::Keyword(">".to_string()));
-                }
+                stack.push_part(ExpressionPart::Keyword(c.to_string()));
             }
             '\'' | '"' => {
                 flush_token(&mut stack, &mut buf)?;
@@ -188,20 +211,6 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
     }
     flush_token(&mut stack, &mut buf)?;
     stack.finish()
-}
-
-/// Rejects glued shapes like `Number>` / `a<b` so they surface as parse errors instead of
-/// silently splitting into separate tokens. TypeFrame open/close paths bypass this check.
-fn check_separator_adjacency(c: char, prev: Option<char>) -> Result<(), String> {
-    if matches!(prev, None | Some('(' | ')' | '[' | ']' | '{' | '}' | ','))
-        || matches!(prev, Some(p) if p.is_whitespace())
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "'{c}' must be preceded by whitespace or a delimiter (got {prev:?}); \
-         '<' and '>' outside type position cannot be glued to a token",
-    ))
 }
 
 /// Collapses single-`Expression` wrappers so `((foo bar))` and `(foo bar)` dispatch the same.

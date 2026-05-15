@@ -374,7 +374,7 @@ mod tests {
                     KErrorKind::TypeClassBindingExpectsType { name, got }
                         if name == "Foo" && matches!(got, KType::Number),
                 ),
-                "expected TypeClassBindingExpectsType {{ name: \"Foo\", got: Number }}, got {e}",
+                "expected TypeClassBindingExpectsType {{ name = \"Foo\", got :Number }}, got {e}",
             ),
             Ok(v) => panic!("expected bind-time error, got value {:?}", v.ktype()),
         }
@@ -443,7 +443,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();
-        let exprs = parse("LET List<Number> = 1").unwrap();
+        let exprs = parse("LET :(List Number) = 1").unwrap();
         let mut ids = Vec::new();
         for e in exprs {
             ids.push(sched.add_dispatch(e, scope));
@@ -474,7 +474,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = (LET compare = 0)\n\
-             SIG OrderedSig = (VAL compare: Number)\n\
+             SIG OrderedSig = (VAL compare :Number)\n\
              LET IntOrdA = (IntOrd :| OrderedSig)",
         );
         let types = scope.bindings().types();
@@ -508,7 +508,7 @@ mod tests {
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         run(
             scope,
-            "STRUCT Point = (x: Number, y: Number)\n\
+            "STRUCT Point = (x :Number, y :Number)\n\
              LET Pt = Point",
         );
         let types = scope.bindings().types();
@@ -548,7 +548,7 @@ mod tests {
                     KErrorKind::TypeClassBindingExpectsType { name, got }
                         if name == "Foo" && matches!(got, KType::Str),
                 ),
-                "expected TypeClassBindingExpectsType {{ name: \"Foo\", got: Str }}, got {e}",
+                "expected TypeClassBindingExpectsType {{ name = \"Foo\", got :Str }}, got {e}",
             ),
             Ok(v) => panic!("expected bind-time error, got value {:?}", v.ktype()),
         }
@@ -607,7 +607,7 @@ mod tests {
         use crate::runtime::machine::RuntimeArena;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG WithType = ((LET Type = Number) (VAL zero: Number))");
+        run(scope, "SIG WithType = ((LET Type = Number) (VAL zero :Number))");
         let s = match scope.bindings().data().get("WithType") {
             Some(KObject::KSignature(s)) => *s,
             other => panic!("WithType should be a signature, got {:?}", other.map(|o| o.ktype())),

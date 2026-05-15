@@ -131,8 +131,8 @@ mod tests {
         // chaining the call-site frame's Rc onto the new frame, dropping the enclosing
         // frame on TCO replace would free memory the EVAL frame still references.
         let bytes = run_program(
-            "UNION Bit = (one: Null zero: Null)\n\
-             FN (HOP b: Tagged) -> Any = (MATCH (b) WITH (\
+            "UNION Bit = (one :Null zero :Null)\n\
+             FN (HOP b :Tagged) -> Any = (MATCH (b) WITH (\
                  one -> $(#(HOP (Bit (zero null))))\
                  zero -> (PRINT \"done\")\
              ))\n\

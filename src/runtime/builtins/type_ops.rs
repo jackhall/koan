@@ -220,10 +220,10 @@ pub fn body_type_constructor<'a>(
 /// `SIG_WITH <sig:Signature> <bindings:KExpression>` → `TypeExprRef` carrying
 /// `KType::SignatureBound { sig_id, sig_path, pinned_slots }`. The `bindings` slot is a
 /// `KExpression` whose parts are themselves `Expression(...)` groups, one per inner
-/// `(slot_name: value)` triple. Each inner expression must match
-/// `[Type(slot_name), Keyword(":"), <value>]` — bare Type-token slot names only
-/// (`Type`, `Elt`); lowercase identifiers are rejected because abstract-type slots
-/// classify as Type per [`is_abstract_type_name`].
+/// `(slot_name :value)` pair. Each inner expression must match `[Type(slot_name),
+/// <value>]` — bare Type-token slot names only (`Type`, `Elt`); lowercase identifiers
+/// are rejected because abstract-type slots classify as Type per
+/// [`is_abstract_type_name`].
 ///
 /// Value-part shapes:
 /// - `Type(t)` — bare type name or `List<Number>`-style; elaborated via
@@ -266,21 +266,21 @@ pub fn body_sig_with<'a>(
     };
 
     // Pre-walk: the bindings_expr's shape comes from the parser's peel-redundant
-    // pass. `((Type: Number))` collapses to a single Expression with parts
-    // `[Type, Keyword(:), Type]`; `((Type: Number) (Elt: IntOrd))` stays as two
-    // top-level Expression parts each wrapping a triple. Detect both shapes here:
-    // - 3 parts shaped `[Type/_, Keyword(:), _]` => the whole bindings IS one
-    //   triple (single-slot case after peeling).
-    // - Every part is `Expression(...)` => each is its own triple (multi-slot case).
+    // pass. `((Type :Number))` collapses to a single Expression with parts
+    // `[Type, Type]`; `((Type :Number) (Elt :IntOrd))` stays as two top-level
+    // Expression parts each wrapping a pair. Detect both shapes here:
+    // - 2 parts shaped `[Type, <value>]` => the whole bindings IS one pair
+    //   (single-slot case after peeling).
+    // - Every part is `Expression(...)` => each is its own pair (multi-slot case).
     // Anything else is a user error with a focused message.
-    fn parse_triple<'a>(
+    fn parse_pair<'a>(
         parts: &[ExpressionPart<'a>],
         out: &mut Vec<(String, ExpressionPart<'a>, usize)>,
         idx: usize,
     ) -> Result<(), KError> {
-        if parts.len() != 3 {
+        if parts.len() != 2 {
             return Err(KError::new(KErrorKind::ShapeError(format!(
-                "SIG_WITH binding must be a `(Name: Type)` triple (3 parts), got {} parts",
+                "SIG_WITH binding must be a `(Name :Type)` pair (2 parts), got {} parts",
                 parts.len(),
             ))));
         }
@@ -307,27 +307,20 @@ pub fn body_sig_with<'a>(
                 ))));
             }
         };
-        match &parts[1] {
-            ExpressionPart::Keyword(k) if k == ":" => {}
-            other => {
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "SIG_WITH binding separator must be `:`, got `{}`",
-                    other.summarize(),
-                ))));
-            }
-        }
-        out.push((slot_name, parts[2].clone(), idx));
+        out.push((slot_name, parts[1].clone(), idx));
         Ok(())
     }
 
     let mut triples: Vec<(String, ExpressionPart<'a>, usize)> = Vec::new();
     let parts = &bindings_expr.parts;
-    let is_single_triple = parts.len() == 3
-        && matches!(parts[1], ExpressionPart::Keyword(ref k) if k == ":");
     let all_expression_parts = !parts.is_empty()
         && parts.iter().all(|p| matches!(p, ExpressionPart::Expression(_)));
-    if is_single_triple {
-        if let Err(e) = parse_triple(parts, &mut triples, 0) {
+    // A 2-part bindings list with non-Expression elements is the single-pair case after
+    // peel-redundant. Routes through `parse_pair` so the Type-token / pair-shape error
+    // surfaces with its focused diagnostic rather than the structural fallback.
+    let is_single_pair = parts.len() == 2 && !all_expression_parts;
+    if is_single_pair {
+        if let Err(e) = parse_pair(parts, &mut triples, 0) {
             return err(e);
         }
     } else if all_expression_parts {
@@ -336,14 +329,14 @@ pub fn body_sig_with<'a>(
                 ExpressionPart::Expression(boxed) => boxed.as_ref(),
                 _ => unreachable!("all_expression_parts gates this arm"),
             };
-            if let Err(e) = parse_triple(&inner.parts, &mut triples, idx) {
+            if let Err(e) = parse_pair(&inner.parts, &mut triples, idx) {
                 return err(e);
             }
         }
     } else {
         let summary: Vec<String> = parts.iter().map(|p| p.summarize()).collect();
         return err(KError::new(KErrorKind::ShapeError(format!(
-            "SIG_WITH bindings must be a list of parens-wrapped `(Name: Type)` triples, \
+            "SIG_WITH bindings must be a list of parens-wrapped `(Name :Type)` pairs, \
              got `[{}]`",
             summary.join(" "),
         ))));
@@ -612,7 +605,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = ((LET Type = Number) (LET compare = 0))\n\
-             SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+             SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
              LET Mod = (IntOrd :| OrderedSig)",
         );
         let result = run_one(scope, parse_one("MODULE_TYPE_OF Mod Type"));
@@ -655,13 +648,13 @@ mod tests {
     fn sig_with_one_slot_returns_signature_bound_with_pinned_slot() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
         // Pull the SIG's sig_id out of the scope so we can compare.
         let sig_id = match scope.bindings().data().get("OrderedSig") {
             Some(KObject::KSignature(s)) => s.sig_id(),
             _ => panic!("OrderedSig must bind a KSignature"),
         };
-        let result = run_one(scope, parse_one("SIG_WITH OrderedSig ((Type: Number))"));
+        let result = run_one(scope, parse_one("SIG_WITH OrderedSig ((Type :Number))"));
         match result {
             KObject::KTypeValue(kt) => match kt {
                 KType::SignatureBound { sig_id: id, sig_path, pinned_slots } => {
@@ -687,9 +680,9 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag: Number))",
+            "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))",
         );
-        let result = run_one(scope, parse_one("SIG_WITH Set ((Elt: Number) (Ord: Str))"));
+        let result = run_one(scope, parse_one("SIG_WITH Set ((Elt :Number) (Ord :Str))"));
         match result {
             KObject::KTypeValue(KType::SignatureBound { pinned_slots, .. }) => {
                 assert_eq!(pinned_slots.len(), 2);
@@ -716,13 +709,13 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = ((LET Type = Number) (LET compare = 0))\n\
-             SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
-             SIG SetSig = ((LET Elt = Number) (VAL insert: Number))\n\
+             SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
+             SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
              LET Elem = (IntOrd :| OrderedSig)",
         );
         let result = run_one(
             scope,
-            parse_one("SIG_WITH SetSig ((Elt: (MODULE_TYPE_OF Elem Type)))"),
+            parse_one("SIG_WITH SetSig ((Elt (MODULE_TYPE_OF Elem Type)))"),
         );
         match result {
             KObject::KTypeValue(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
@@ -749,9 +742,9 @@ mod tests {
     fn sig_with_rejects_unknown_slot() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig ((Bogus: Number))"), scope);
+        let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig ((Bogus :Number))"), scope);
         sched.execute().expect("scheduler runs to completion");
         let err = match sched.read_result(id) {
             Ok(_) => panic!("SIG_WITH on unknown slot must err"),
@@ -770,12 +763,12 @@ mod tests {
     fn sig_with_rejects_identifier_slot_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
         let mut sched = Scheduler::new();
         // `type` is an Identifier (lowercase first letter). The body rejects this
         // before the abstract-type-slot lookup, so the error names the classification
         // rule.
-        let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig ((type: Number))"), scope);
+        let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig ((type :Number))"), scope);
         sched.execute().expect("scheduler runs to completion");
         let err = match sched.read_result(id) {
             Ok(_) => panic!("SIG_WITH with lowercase slot must err"),
@@ -803,13 +796,13 @@ mod tests {
     fn sig_with_rejects_non_parens_bindings_form() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
-        // `(Type Number)` is a single Expression at the bindings slot — its parts
-        // are bare `Type(Type)`, `Type(Number)`, neither wrapped in their own
-        // parens. The body should reject because the top-level parts inside the
-        // bindings group must each be `Expression(...)`.
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
+        // `(Type Number Extra)` is a single Expression at the bindings slot — three
+        // parts, more than the 2-part pair shape SIG_WITH bindings require. The body
+        // should reject because the single-pair fallback requires exactly 2 parts and
+        // the multi-pair fallback requires all parts to be `Expression(...)`.
         let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig (Type Number)"), scope);
+        let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig (Type Number Extra)"), scope);
         sched.execute().expect("scheduler runs to completion");
         let err = match sched.read_result(id) {
             Ok(_) => panic!("malformed bindings form must err"),
@@ -817,7 +810,7 @@ mod tests {
         };
         let msg = format!("{}", err);
         assert!(
-            msg.contains("SIG_WITH bindings") || msg.contains("parens-wrapped"),
+            msg.contains("SIG_WITH bindings") || msg.contains("parens-wrapped") || msg.contains("pair"),
             "expected diagnostic to mention the bindings shape, got: {msg}",
         );
     }
@@ -893,13 +886,13 @@ mod tests {
         );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(
-            parse_one("LET pure = (FN (PURE a: Number) -> Wrap<Number> = (1))"),
+            parse_one("LET pure = (FN (PURE a :Number) -> :(Wrap Number) = (1))"),
             scope,
         );
         sched.execute().expect("scheduler should run");
         match sched.read_result(id) {
             Ok(_) => {}
-            Err(e) => panic!("FN with Wrap<Number> return failed: {}", e),
+            Err(e) => panic!("FN with :(Wrap Number) return failed: {}", e),
         }
         // Verify the FN's return type is ConstructorApply<Wrap, [Number]>.
         let pure = scope.bindings().expect_value("pure");
@@ -944,7 +937,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let src = "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)) \
-             (VAL pure: Function<(Number) -> Wrap<Number>>))";
+             (VAL pure :(Function (Number) -> :(Wrap Number))))";
         let exprs = parse(src).expect("parse should succeed");
         let mut sched = Scheduler::new();
         let mut ids = Vec::new();
@@ -1027,7 +1020,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
              MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
              LET elem_mod = (IntOrd :| OrderedSig)",
         );
@@ -1038,7 +1031,7 @@ mod tests {
         // gives a value-side binding to read back.
         run(
             scope,
-            "FN (LIFT_TYPE Er: OrderedSig) -> Module = \
+            "FN (LIFT_TYPE Er :OrderedSig) -> Module = \
              (MODULE Result = ((LET Tslot = (MODULE_TYPE_OF Er Type)) (LET probe = 11)))",
         );
         run(scope, "LET held = (LIFT_TYPE (elem_mod))");

@@ -16,11 +16,11 @@ mod parse_stack;
 mod quotes;
 mod tokens;
 mod triple_list;
-mod type_frame;
+mod type_expr_frame;
 mod whitespace;
 
 pub use expression_tree::parse;
-pub use triple_list::parse_triple_list;
+pub use triple_list::{parse_keyword_triple_list, parse_pair_list};
 
 #[cfg(test)]
 mod expression_tree_tests;

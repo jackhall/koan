@@ -58,7 +58,7 @@ pub fn apply<'a>(
     let value_part = iter.next().unwrap();
     if !matches!(tag_part, ExpressionPart::Identifier(_)) {
         return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-            "tagged-union construction: first arg must be a bare-identifier tag, got {}",
+            "tagged-union construction = first arg must be a bare-identifier tag, got {}",
             tag_part.summarize()
         ))));
     }
@@ -248,7 +248,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
+        run(scope, "UNION Maybe = (some :Number none :Null)\nLET maybe = Maybe");
         let result = run_one(scope, parse_one("(maybe) some 42"));
         match result {
             KObject::Tagged { tag, value, .. } => {
@@ -264,7 +264,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
+        run(scope, "UNION Maybe = (some :Number none :Null)\nLET maybe = Maybe");
         let err = run_one_err(scope, parse_one("(maybe) other 42"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`other`")),
@@ -277,7 +277,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured = Rc::new(RefCell::new(Vec::new()));
         let scope = build_scope(&arena, captured);
-        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
+        run(scope, "UNION Maybe = (some :Number none :Null)\nLET maybe = Maybe");
         let err = run_one_err(scope, parse_one("(maybe) some \"oops\""));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {

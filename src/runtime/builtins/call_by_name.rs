@@ -78,8 +78,8 @@ mod tests {
     fn fn_callable_via_call_by_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET f = (FN (DOUBLE x: Number) -> Number = (x))");
-        let result = run_one(scope, parse_one("f (x: 7)"));
+        run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+        let result = run_one(scope, parse_one("f (x = 7)"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
 
@@ -88,8 +88,8 @@ mod tests {
     fn call_by_name_weaves_internal_keyword() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
-        let result = run_one(scope, parse_one("f (a: 1, b: 2)"));
+        run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+        let result = run_one(scope, parse_one("f (a = 1, b = 2)"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
@@ -97,8 +97,8 @@ mod tests {
     fn call_by_name_named_args_order_independent() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
-        let result = run_one(scope, parse_one("f (b: 2, a: 1)"));
+        run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+        let result = run_one(scope, parse_one("f (b = 2, a = 1)"));
         assert!(matches!(result, KObject::Number(n) if *n == 1.0));
     }
 
@@ -106,8 +106,8 @@ mod tests {
     fn call_by_name_missing_named_arg() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
-        let err = run_one_err(scope, parse_one("f (a: 1)"));
+        run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+        let err = run_one_err(scope, parse_one("f (a = 1)"));
         assert!(
             matches!(&err.kind, KErrorKind::MissingArg(name) if name == "b"),
             "expected MissingArg(\"b\"), got {err}",
@@ -120,8 +120,8 @@ mod tests {
     fn call_by_name_unknown_named_arg() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET f = (FN (a: Number PICK b: Number) -> Number = (a))");
-        let err = run_one_err(scope, parse_one("f (a: 1, b: 2, c: 3)"));
+        run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+        let err = run_one_err(scope, parse_one("f (a = 1, b = 2, c = 3)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown name") && msg.contains("`c`")),
             "expected ShapeError on unknown name c, got {err}",
@@ -132,7 +132,7 @@ mod tests {
     fn call_by_name_missing_colon() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET f = (FN (DOUBLE x: Number) -> Number = (x))");
+        run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
         let err = run_one_err(scope, parse_one("f (a 1)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("separator") || msg.contains("triples")),
@@ -144,8 +144,8 @@ mod tests {
     fn call_by_name_duplicate_named_arg() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET f = (FN (DOUBLE x: Number) -> Number = (x))");
-        let err = run_one_err(scope, parse_one("f (x: 1, x: 2)"));
+        run(scope, "LET f = (FN (DOUBLE x :Number) -> Number = (x))");
+        let err = run_one_err(scope, parse_one("f (x = 1, x = 2)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
             "expected ShapeError on duplicate name, got {err}",
@@ -159,7 +159,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET x = 42");
-        let err = run_one_err(scope, parse_one("x (foo: 7)"));
+        let err = run_one_err(scope, parse_one("x (foo = 7)"));
         assert!(
             matches!(
                 &err.kind,
@@ -174,7 +174,7 @@ mod tests {
     fn call_by_name_on_tagged_union_constructs() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "UNION Maybe = (some: Number none: Null)\nLET maybe = Maybe");
+        run(scope, "UNION Maybe = (some :Number none :Null)\nLET maybe = Maybe");
         let result = run_one(scope, parse_one("maybe (some 42)"));
         match result {
             KObject::Tagged { tag, value, .. } => {
@@ -191,8 +191,8 @@ mod tests {
     fn call_by_name_on_struct_type_constructs() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET pt = (STRUCT Pt = (x: Number, y: Number))");
-        let result = run_one(scope, parse_one("pt (x: 3, y: 4)"));
+        run(scope, "LET pt = (STRUCT Pt = (x :Number, y :Number))");
+        let result = run_one(scope, parse_one("pt (x = 3, y = 4)"));
         match result {
             KObject::Struct { name: type_name, fields, .. } => {
                 assert_eq!(type_name, "Pt");
@@ -207,7 +207,7 @@ mod tests {
     fn call_by_name_unbound_returns_error() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("undefined (foo: 7)"));
+        let err = run_one_err(scope, parse_one("undefined (foo = 7)"));
         assert!(
             matches!(&err.kind, KErrorKind::UnboundName(name) if name == "undefined"),
             "expected UnboundName(\"undefined\"), got {err}",
@@ -223,7 +223,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "FN (MAKE) -> Function<() -> Str> = (FN (INNER) -> Str = (\"hi\"))\n\
+            "FN (MAKE) -> :(Function () -> Str) = (FN (INNER) -> Str = (\"hi\"))\n\
              LET f = (MAKE)",
         );
         let result = run_one(scope, parse_one("f ()"));
@@ -240,10 +240,10 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "FN (MAKE) -> Function<(Number) -> Number> = (FN (ECHO x: Number) -> Number = (x))\n\
+            "FN (MAKE) -> :(Function (Number) -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
              LET f = (MAKE)",
         );
-        let result = run_one(scope, parse_one("f (x: 42)"));
+        let result = run_one(scope, parse_one("f (x = 42)"));
         assert!(matches!(result, KObject::Number(n) if *n == 42.0));
     }
 
@@ -255,7 +255,7 @@ mod tests {
     fn list_of_closures_escapes_outer_call_with_rc_attached() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "FN (MAKE) -> List = ([(FN (ECHO x: Number) -> Number = (x))])");
+        run(scope, "FN (MAKE) -> List = ([(FN (ECHO x :Number) -> Number = (x))])");
         let result = run_one(scope, parse_one("(MAKE)"));
         let items = match result {
             KObject::List(items) => items,
@@ -265,7 +265,7 @@ mod tests {
         match &items[0] {
             KObject::KFunction(_, frame) => assert!(
                 frame.is_some(),
-                "list-borne escaping closure must have an Rc<CallArena> attached by \
+                "list-borne escaping closure must have an :(Rc CallArena) attached by \
                  lift_kobject's recursion through the List variant",
             ),
             other => panic!("list element should be a KFunction, got {}", other.summarize()),

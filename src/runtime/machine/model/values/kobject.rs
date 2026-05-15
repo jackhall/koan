@@ -602,7 +602,7 @@ mod tests {
         // form a user would write. Pins the post-refactor diagnostic shape.
         let v = KObject::KTypeValue(KType::List(Box::new(KType::Number)));
         use crate::runtime::machine::model::types::Parseable;
-        assert_eq!(v.summarize(), "List<Number>");
+        assert_eq!(v.summarize(), ":(List Number)");
     }
 
     /// Stage 4: `Wrapped::ktype()` reports a clone of `*type_id`, preserving the full

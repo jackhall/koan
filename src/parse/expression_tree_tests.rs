@@ -489,26 +489,34 @@ fn key_without_colon_errors() {
 }
 
 #[test]
-fn colon_outside_dict_emits_keyword() {
-    // `:` outside a dict frame is the type-annotation separator and parses as
-    // a standalone `Keyword(":")`. UNION schemas (and, eventually, function
-    // signatures) consume the resulting `[Identifier, Keyword(":"), Type]` triples.
-    assert_eq!(tree("a: Number").unwrap(), "[t(a) t(:) T(Number)]");
+fn colon_outside_dict_with_space_errors() {
+    // `: ` outside a dict frame is a parse error under the type-sigil regime — the colon
+    // must be glued to its operand (`:Number` for bare, `:(List ...)` for parameterized).
+    // The string below is built from pieces so source-rewrite tooling can't migrate the
+    // colon away — the point of the test is precisely the bad-glue form.
+    let bad: String = format!("a{}{} Number", ':', "");
+    assert!(tree(&bad).is_err());
+}
+
+#[test]
+fn glued_colon_outside_dict_emits_type() {
+    // Glued `:T` produces an `ExpressionPart::Type` directly, no `Keyword(":")` in between.
+    assert_eq!(tree("a :Number").unwrap(), "[t(a) T(Number)]");
 }
 
 #[test]
 fn comma_in_expression_is_whitespace() {
     // `,` inside an expression frame is a no-op — same parsed shape as whitespace.
-    // Lets type-annotation triples and future function-signature parameter lists
-    // use commas as visual separators without affecting the tree.
+    // Lets future named-argument parameter lists use commas as visual separators without
+    // affecting the tree.
     assert_eq!(tree("a, b").unwrap(), tree("a b").unwrap());
     assert_eq!(tree("(a,, b)").unwrap(), tree("(a b)").unwrap());
-    assert_eq!(tree("(a: Number, b: Str)").unwrap(), tree("(a: Number b: Str)").unwrap());
+    assert_eq!(tree("(a :Number, b :Str)").unwrap(), tree("(a :Number b :Str)").unwrap());
 }
 
 #[test]
 fn unclosed_dict_errors() {
-    assert!(tree("{a: 1").is_err());
+    assert!(tree("{a = 1").is_err());
 }
 
 #[test]
@@ -544,20 +552,20 @@ fn multiline_dict_via_top_level_pipeline() {
     );
 }
 
-// --- Parameterized type tests (angle-bracket TypeFrame) ---
+// --- Parameterized type tests (Design-B `:(...)` sigil) ---
 
 #[test]
 fn type_with_one_param() {
     // `List<Number>` parses as one Type part with one nested param. The describe helper
     // renders TypeExpr via `render()`, so the structural distinction is visible.
-    assert_eq!(tree("List<Number>").unwrap(), "[T(List<Number>)]");
+    assert_eq!(tree(":(List Number)").unwrap(), "[T(:(List Number))]");
 }
 
 #[test]
 fn type_with_two_params() {
     assert_eq!(
-        tree("Dict<String, Number>").unwrap(),
-        "[T(Dict<String, Number>)]"
+        tree(":(Dict String Number)").unwrap(),
+        "[T(:(Dict String Number))]"
     );
 }
 
@@ -566,16 +574,16 @@ fn type_with_two_params_no_comma() {
     // Whitespace-only separation is also legal — `,` is a no-op inside expression frames,
     // and the same precedent applies inside TypeFrames.
     assert_eq!(
-        tree("Dict<String Number>").unwrap(),
-        tree("Dict<String, Number>").unwrap(),
+        tree(":(Dict String Number)").unwrap(),
+        tree(":(Dict String Number)").unwrap(),
     );
 }
 
 #[test]
 fn type_nested_two_levels() {
     assert_eq!(
-        tree("List<Dict<String, Number>>").unwrap(),
-        "[T(List<Dict<String, Number>>)]"
+        tree(":(List :(Dict String Number))").unwrap(),
+        "[T(:(List :(Dict String Number)))]"
     );
 }
 
@@ -584,24 +592,24 @@ fn function_type_unary() {
     // Function args are always parenthesized — `Function<(arg) -> ret>` for one arg,
     // `Function<() -> ret>` for nullary.
     assert_eq!(
-        tree("Function<(Number) -> Str>").unwrap(),
-        "[T(Function<(Number) -> Str>)]"
+        tree(":(Function (Number) -> Str)").unwrap(),
+        "[T(:(Function (Number) -> Str))]"
     );
 }
 
 #[test]
 fn function_type_nullary() {
     assert_eq!(
-        tree("Function<() -> Number>").unwrap(),
-        "[T(Function<() -> Number>)]"
+        tree(":(Function () -> Number)").unwrap(),
+        "[T(:(Function () -> Number))]"
     );
 }
 
 #[test]
 fn function_type_multi_arg() {
     assert_eq!(
-        tree("Function<(Number, Bool) -> Number>").unwrap(),
-        "[T(Function<(Number, Bool) -> Number>)]"
+        tree(":(Function (Number Bool) -> Number)").unwrap(),
+        "[T(:(Function (Number Bool) -> Number))]"
     );
 }
 
@@ -610,32 +618,34 @@ fn function_type_multi_arg_no_comma() {
     // Inside the `(...)` arg group, commas are no-ops just like elsewhere in expression
     // frames — whitespace alone separates args.
     assert_eq!(
-        tree("Function<(Number Bool) -> Number>").unwrap(),
-        tree("Function<(Number, Bool) -> Number>").unwrap(),
+        tree(":(Function (Number Bool) -> Number)").unwrap(),
+        tree(":(Function (Number Bool) -> Number)").unwrap(),
     );
 }
 
 #[test]
 fn function_type_bare_arrow_no_parens_errors() {
-    // `Function<-> R>` is rejected — the user must use the explicit `()` for nullary.
-    assert!(tree("Function<-> Number>").is_err());
+    // `:(Function -> R)` (no args at all) is rejected — the user must use the explicit
+    // `()` for nullary.
+    assert!(tree(":(Function -> Number)").is_err());
 }
 
 #[test]
 fn function_type_unparenthesized_args_errors() {
-    // `Function<A -> R>` (no parens) is rejected so the syntax stays uniform: args are
-    // ALWAYS parenthesized, even for the single-arg case.
-    assert!(tree("Function<Number -> Str>").is_err());
-    assert!(tree("Function<Number, Bool -> Str>").is_err());
+    // `:(Function A -> R)` (no parens around the args) is rejected so the syntax stays
+    // uniform: args are ALWAYS parenthesized, even for the single-arg case.
+    assert!(tree(":(Function Number -> Str)").is_err());
+    assert!(tree(":(Function Number Bool -> Str)").is_err());
 }
 
 #[test]
 fn function_type_arg_nested_parameterized() {
-    // Args themselves can be parameterized types — the inner TypeFrame closes before the
-    // outer Function frame's args expression closes.
+    // New sigil form: args themselves can be parameterized types. The inner sigil
+    // closes before the outer Function frame's args expression. Render uses Design-B
+    // sigil syntax, so the parsed-and-rendered shape round-trips.
     assert_eq!(
-        tree("Function<(List<Number>, Str) -> Bool>").unwrap(),
-        "[T(Function<(List<Number>, Str) -> Bool>)]"
+        tree(":(Function (:(List Number) Str) -> Bool)").unwrap(),
+        "[T(:(Function (:(List Number) Str) -> Bool))]"
     );
 }
 
@@ -647,27 +657,22 @@ fn lt_after_non_type_with_whitespace_emits_keyword() {
 }
 
 #[test]
-fn lt_glued_to_non_type_errors() {
-    // `<` glued to a non-Type token is rejected as a glue error, by symmetry with the
-    // existing `[` and `{` adjacency rules.
-    assert!(tree("a<b").is_err());
-    assert!(tree("foo<Number>").is_err());
+fn lt_glued_to_non_type_no_longer_special() {
+    // Under Design B the `<` / `>` characters carry no type-position meaning, so glued
+    // forms like `a<b` lex into separate tokens `a`, `<`, `b` with no glue error. The
+    // freed-up syntax is reserved for future numeric-comparison operators.
+    assert_eq!(tree("a<b").unwrap(), "[t(a) t(<) t(b)]");
 }
 
 #[test]
-fn gt_outside_type_frame_with_whitespace_emits_keyword() {
-    // `>` whitespace-separated outside a TypeFrame emits a keyword. The `prev=='-'` rule
-    // still keeps `->` contiguous so `a -> b` continues to tokenize as one keyword.
+fn gt_lt_outside_type_emit_keywords() {
+    // `<` and `>` always emit standalone keywords now — whitespace-glued or not. The
+    // `prev=='-'` rule still keeps `->` contiguous so `a -> b` continues to tokenize as
+    // one keyword.
     assert_eq!(tree("a > b").unwrap(), "[t(a) t(>) t(b)]");
     assert_eq!(tree("Number > 0").unwrap(), "[T(Number) t(>) n(0)]");
     assert_eq!(tree("a -> b").unwrap(), "[t(a) t(->) t(b)]");
-}
-
-#[test]
-fn gt_glued_to_token_errors() {
-    // `>` immediately following a token (no opening `<` to make it a closer) is rejected.
-    assert!(tree("Number>").is_err());
-    assert!(tree("a>b").is_err());
+    assert_eq!(tree("a>b").unwrap(), "[t(a) t(>) t(b)]");
 }
 
 #[test]
@@ -690,36 +695,111 @@ fn identifier_underscore_allowed() {
 }
 
 #[test]
-fn unclosed_angle_bracket_errors() {
-    assert!(tree("List<Number").is_err());
+fn unclosed_type_sigil_errors() {
+    // `:(List Number` (no close paren) leaves the TypeExpr frame open at EOF.
+    assert!(tree(":(List Number").is_err());
 }
 
 #[test]
 fn function_arrow_in_non_function_type_errors() {
-    assert!(tree("List<Number -> Str>").is_err());
+    // `->` is exclusive to the `Function` head — other parameterized types must reject.
+    assert!(tree(":(List Number -> Str)").is_err());
 }
 
 #[test]
 fn double_arrow_in_function_type_errors() {
-    assert!(tree("Function<A -> B -> C>").is_err());
+    // Two `->`s inside one Function sigil — rejected.
+    assert!(tree(":(Function A -> B -> C)").is_err());
 }
 
 #[test]
-fn type_with_lt_separated_still_starts_typeframe() {
-    // Whitespace between `List` and `<` — flush makes Type("List") the most recent part,
-    // so `<` still opens a TypeFrame (the check is part-level, not character-level).
-    assert_eq!(tree("List <Number>").unwrap(), "[T(List<Number>)]");
-}
-
-#[test]
-fn comma_outside_type_frame_unchanged_inside_paren() {
-    // Sanity: signatures like `(xs: List<Number>, ys: List<Str>)` still parse — the comma
-    // is a no-op inside the expression frame, and `>` followed by `,` then `ys` flushes
-    // and continues normally.
+fn list_with_whitespace_then_lt_is_three_tokens() {
+    // Under Design B `<` carries no type meaning, so `List <Number>` parses as three
+    // tokens: Type, `<` keyword, Type — not the legacy single TypeFrame.
     assert_eq!(
-        tree("(xs: List<Number>, ys: List<Str>)").unwrap(),
-        "[[t(xs) t(:) T(List<Number>) t(ys) t(:) T(List<Str>)]]",
+        tree("List <Number>").unwrap(),
+        "[T(List) t(<) T(Number) t(>)]",
     );
+}
+
+#[test]
+fn comma_outside_type_sigil_unchanged_inside_paren() {
+    // Sanity: signatures like `(xs :(List Number), ys :(List Str))` still parse — the
+    // comma is a no-op inside the expression frame, and `)` followed by `,` then `ys`
+    // continues normally.
+    assert_eq!(
+        tree("(xs :(List Number), ys :(List Str))").unwrap(),
+        "[[t(xs) T(:(List Number)) t(ys) T(:(List Str))]]",
+    );
+}
+
+// --- Type-sigil validation (Design-B `:(...)` and `:T`) ---
+
+#[test]
+fn type_sigil_bare_emits_type_part() {
+    // `:Number` consumes the `:` and emits the bare Type token as a single Type part.
+    assert_eq!(tree("LET x :Number = 5").unwrap(), "[t(LET) t(x) T(Number) t(=) n(5)]");
+}
+
+#[test]
+fn type_sigil_parameterized_list() {
+    // `:(List Number)` opens a TypeExpr frame; close folds into a parameterized Type.
+    assert_eq!(tree("LET ns :(List Number)").unwrap(), "[t(LET) t(ns) T(:(List Number))]");
+}
+
+#[test]
+fn type_sigil_function_nullary() {
+    assert_eq!(
+        tree("LET f :(Function () -> Str)").unwrap(),
+        "[t(LET) t(f) T(:(Function () -> Str))]",
+    );
+}
+
+#[test]
+fn type_sigil_function_unary() {
+    assert_eq!(
+        tree("LET f :(Function (Number) -> Str)").unwrap(),
+        "[t(LET) t(f) T(:(Function (Number) -> Str))]",
+    );
+}
+
+#[test]
+fn type_sigil_function_multi_arg() {
+    assert_eq!(
+        tree("LET f :(Function (Number Str) -> Bool)").unwrap(),
+        "[t(LET) t(f) T(:(Function (Number Str) -> Bool))]",
+    );
+}
+
+#[test]
+fn type_sigil_nested_dict_of_list() {
+    assert_eq!(
+        tree("LET d :(Dict Str (List Number))").unwrap(),
+        "[t(LET) t(d) T(:(Dict Str :(List Number)))]",
+    );
+}
+
+#[test]
+fn type_sigil_let_type_binding_rhs() {
+    // `LET t = :(List Number)` is unambiguously a type binding because the RHS is
+    // sigil-prefixed.
+    assert_eq!(
+        tree("LET t = :(List Number)").unwrap(),
+        "[t(LET) t(t) t(=) T(:(List Number))]",
+    );
+}
+
+#[test]
+fn type_sigil_lone_colon_with_eof_errors() {
+    // Trailing `:` at end of input.
+    assert!(tree("LET x :").is_err());
+}
+
+#[test]
+fn type_sigil_lone_colon_glued_to_lowercase_errors() {
+    // `:` followed by a lowercase identifier is a parse error — type sigils require
+    // an uppercase head.
+    assert!(tree("LET x :foo").is_err());
 }
 
 // --- Sigil tests (`#(...)` quote, `$(...)` eval) ---

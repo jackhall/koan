@@ -189,11 +189,11 @@ impl KType {
             KType::Str => "Str".into(),
             KType::Bool => "Bool".into(),
             KType::Null => "Null".into(),
-            KType::List(t) => format!("List<{}>", t.name()),
-            KType::Dict(k, v) => format!("Dict<{}, {}>", k.name(), v.name()),
+            KType::List(t) => format!(":(List {})", t.name()),
+            KType::Dict(k, v) => format!(":(Dict {} {})", k.name(), v.name()),
             KType::KFunction { args, ret } => {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
-                format!("Function<({}) -> {}>", arg_names.join(", "), ret.name())
+                format!(":(Function ({}) -> {})", arg_names.join(" "), ret.name())
             }
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
@@ -220,7 +220,7 @@ impl KType {
             KType::RecursiveRef(name) => name.clone(),
             KType::ConstructorApply { ctor, args } => {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
-                format!("{}<{}>", ctor.name(), arg_names.join(", "))
+                format!(":({} {})", ctor.name(), arg_names.join(" "))
             }
             KType::Any => "Any".into(),
         }
@@ -240,13 +240,13 @@ mod tests {
     #[test]
     fn name_renders_parameterized_list() {
         let t = KType::List(Box::new(KType::List(Box::new(KType::Number))));
-        assert_eq!(t.name(), "List<List<Number>>");
+        assert_eq!(t.name(), ":(List :(List Number))");
     }
 
     #[test]
     fn name_renders_dict() {
         let t = KType::Dict(Box::new(KType::Str), Box::new(KType::Number));
-        assert_eq!(t.name(), "Dict<Str, Number>");
+        assert_eq!(t.name(), ":(Dict Str Number)");
     }
 
     #[test]
@@ -255,7 +255,7 @@ mod tests {
             args: vec![KType::Number, KType::Str],
             ret: Box::new(KType::Bool),
         };
-        assert_eq!(t.name(), "Function<(Number, Str) -> Bool>");
+        assert_eq!(t.name(), ":(Function (Number Str) -> Bool)");
     }
 
     #[test]
@@ -264,7 +264,7 @@ mod tests {
             args: vec![],
             ret: Box::new(KType::Any),
         };
-        assert_eq!(t.name(), "Function<() -> Any>");
+        assert_eq!(t.name(), ":(Function () -> Any)");
     }
 
     #[test]

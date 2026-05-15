@@ -268,8 +268,8 @@ mod tests {
     fn multiline_dict_literal_continues() {
         // Same continuation rule as lists: `{` opens, lines append, `}` closes.
         assert_eq!(
-            collapse_whitespace("LET d = {\n  a: 1\n  b: 2\n}").unwrap(),
-            "(LET d = { a: 1 b: 2 })",
+            collapse_whitespace("LET d = {\n  a = 1\n  b = 2\n}").unwrap(),
+            "(LET d = { a = 1 b = 2 })",
         );
     }
 
@@ -316,9 +316,9 @@ mod tests {
         // The motivating UNION shape: open paren on line 1, comma signals continuation,
         // close paren on line 2.
         assert_eq!(
-            collapse_whitespace("UNION Maybe = (some: Number,\n               none: Null)")
+            collapse_whitespace("UNION Maybe = (some :Number,\n               none :Null)")
                 .unwrap(),
-            "(UNION Maybe = (some: Number, none: Null))",
+            "(UNION Maybe = (some :Number, none :Null))",
         );
     }
 
@@ -441,8 +441,8 @@ mod tests {
         // The motivating dict-as-struct shape from the roadmap: each value is a `#(...)`
         // QUOTE that the struct constructor will dispatch on later.
         assert_eq!(
-            collapse_whitespace("LET d = {\n  x: #(foo)\n  y: #(bar)\n}").unwrap(),
-            "(LET d = { x: #(foo) y: #(bar) })",
+            collapse_whitespace("LET d = {\n  x = #(foo)\n  y = #(bar)\n}").unwrap(),
+            "(LET d = { x = #(foo) y = #(bar) })",
         );
     }
 }

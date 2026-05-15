@@ -390,14 +390,14 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // `VAL` returns the bound `KTypeValue` carrier so the surface form
-    // `(VAL name: Type)` evaluates to a value, mirroring `LET`'s return shape.
+    // `(VAL name :Type)` evaluates to a value, mirroring `LET`'s return shape. The
+    // Design-B sigil consumes the `:`, so the signature has no explicit colon keyword.
     register_builtin_with_pre_run(
         scope,
         "VAL",
         sig(KType::Any, vec![
             kw("VAL"),
             arg("name", KType::Identifier),
-            kw(":"),
             arg("ty", KType::TypeExprRef),
         ]),
         body,
@@ -420,7 +420,7 @@ mod tests {
     fn val_inside_sig_binds_typeexpr_carrier() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((VAL zero: Number))");
+        run(scope, "SIG OrderedSig = ((VAL zero :Number))");
         let s = match scope.bindings().data().get("OrderedSig") {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("OrderedSig must bind a KSignature"),
@@ -443,7 +443,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithZero = ((LET Type = Number) (VAL zero: Type))",
+            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
         );
         let s = match scope.bindings().data().get("WithZero") {
             Some(KObject::KSignature(s)) => *s,
@@ -465,7 +465,7 @@ mod tests {
     fn val_outside_sig_errors() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("VAL x: Number"));
+        let err = run_one_err(scope, parse_one("VAL x :Number"));
         match &err.kind {
             KErrorKind::ShapeError(msg) => {
                 assert!(
@@ -485,7 +485,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         let err = run_one_err(
             scope,
-            parse_one("MODULE Foo = ((VAL x: Number))"),
+            parse_one("MODULE Foo = ((VAL x :Number))"),
         );
         match &err.kind {
             KErrorKind::ShapeError(msg) => {
@@ -508,7 +508,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = ((VAL compare: Function<(Number, Number) -> Number>))",
+            "SIG OrderedSig = ((VAL compare :(Function (Number Number) -> Number)))",
         );
         let s = match scope.bindings().data().get("OrderedSig") {
             Some(KObject::KSignature(s)) => *s,
@@ -535,7 +535,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithCompare = ((VAL compare: Number))\n\
+            "SIG WithCompare = ((VAL compare :Number))\n\
              MODULE Empty = (LET unrelated = 0)",
         );
         let err = run_one_err(scope, parse_one("Empty :| WithCompare"));
@@ -560,7 +560,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithCompare = ((VAL compare: Number))\n\
+            "SIG WithCompare = ((VAL compare :Number))\n\
              MODULE IntOrd = (LET compare = 0)\n\
              LET Ord = (IntOrd :| WithCompare)",
         );
@@ -576,7 +576,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG WithZero = ((LET Type = Number) (VAL zero: Type))",
+            "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
         );
         let s = match scope.bindings().data().get("WithZero") {
             Some(KObject::KSignature(s)) => *s,

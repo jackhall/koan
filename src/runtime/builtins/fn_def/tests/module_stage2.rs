@@ -37,7 +37,7 @@ fn elaborator_lowers_ktype_value_binding() {
     let mut el = Elaborator::new(scope);
     match elaborate_type_expr(&mut el, &TypeExpr::leaf("MyList".into())) {
         ElabResult::Done(kt) => assert_eq!(kt, KType::List(Box::new(KType::Number))),
-        other => panic!("expected Done(List<Number>), got {:?}", other),
+        other => panic!("expected Done(:(List Number)), got {:?}", other),
     }
 }
 
@@ -61,8 +61,8 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     // required two batches because the synchronous type-name resolution didn't park.
     run(
         scope,
-        "SIG OrderedSig = (VAL compare: Number)\n\
-         FN (USE_ORD Er: OrderedSig) -> Null = (PRINT \"ok\")",
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         FN (USE_ORD Er :OrderedSig) -> Null = (PRINT \"ok\")",
     );
     let data = scope.bindings().data();
     let sig_id = match data.get("OrderedSig") {
@@ -87,7 +87,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
                 other => panic!("expected SignatureBound, got {:?}", other),
             }
         }
-        _ => panic!("expected [Keyword(USE_ORD), Argument(Er: SignatureBound)]"),
+        _ => panic!("expected [Keyword(USE_ORD), Argument(Er :SignatureBound)]"),
     }
 }
 
@@ -106,7 +106,7 @@ fn let_then_fn_in_same_batch_works() {
     let mut sched = Scheduler::new();
     let exprs = parse(
         "LET MyList = (LIST_OF Number)\n\
-         FN (USE xs: MyList) -> Number = (1)",
+         FN (USE xs :MyList) -> Number = (1)",
     )
     .unwrap();
     for e in exprs {
@@ -206,13 +206,13 @@ fn functor_body_module_dispatch_does_not_dangle() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare: Number)\n\
+        "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
     run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
     run(
         scope,
-        "FN (MAKESET elem: OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
+        "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
     );
     run(scope, "LET held_set = (MAKESET (int_ord_a))");
 
@@ -262,8 +262,8 @@ fn functor_with_two_pinned_slots_round_trips() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag: Number))\n\
-         SIG OrderedSig = (VAL compare: Number)\n\
+        "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))\n\
+         SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -272,7 +272,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     // satisfy the pin via its mirrored `type_members`.
     run(
         scope,
-        "FN (TWOPIN p: OrderedSig) -> (SIG_WITH Set ((Elt: Number) (Ord: Number))) = \
+        "FN (TWOPIN p :OrderedSig) -> (SIG_WITH Set ((Elt :Number) (Ord :Number))) = \
          (MODULE Result = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0)))",
     );
     // Need the body's module to satisfy `Set`'s shape (tag/Elt/Ord), so we ascribe it
@@ -321,14 +321,14 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     // module's mirrored `type_members` carries `Elt = Number`.
     run(
         scope,
-        "SIG OrderedSig = (VAL compare: Number)\n\
-         SIG SetSig = ((LET Elt = Number) (VAL insert: Number))\n\
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
     run(
         scope,
-        "FN (MAKESETN p: OrderedSig) -> (SIG_WITH SetSig ((Elt: Number))) = \
+        "FN (MAKESETN p :OrderedSig) -> (SIG_WITH SetSig ((Elt :Number))) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
     let data = scope.bindings().data();
@@ -383,7 +383,7 @@ fn functor_body_module_type_of_via_dual_write() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :| OrderedSig)",
     );
@@ -396,7 +396,7 @@ fn functor_body_module_type_of_via_dual_write() {
     // `m: Module` slot.
     run(
         scope,
-        "FN (USE_TYPE Er: OrderedSig) -> Any = (MODULE_TYPE_OF Er Type)",
+        "FN (USE_TYPE Er :OrderedSig) -> Any = (MODULE_TYPE_OF Er Type)",
     );
     let result = run_one(scope, parse_one("USE_TYPE int_ord"));
     use crate::runtime::machine::model::KType;
@@ -409,7 +409,7 @@ fn functor_body_module_type_of_via_dual_write() {
             KType::UserType { kind: crate::runtime::machine::model::types::UserTypeKind::Module, name, .. } => {
                 assert_eq!(name, "Type", "abstract type member should be named Type");
             }
-            other => panic!("expected UserType {{ kind: Module, name: \"Type\", .. }}, got {:?}", other),
+            other => panic!("expected UserType {{ kind :Module, name = \"Type\", .. }}, got {:?}", other),
         },
         other => panic!("expected KTypeValue carrying the abstract Type identity, got {:?}", other.ktype()),
     }
@@ -433,7 +433,7 @@ fn functor_closure_escape_pins_type_class_dual_write() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :| OrderedSig)",
     );
@@ -444,7 +444,7 @@ fn functor_closure_escape_pins_type_class_dual_write() {
     // walks up through the same scope.
     run(
         scope,
-        "FN (MAKE_LOOKUP Er: OrderedSig) -> Any = \
+        "FN (MAKE_LOOKUP Er :OrderedSig) -> Any = \
             (FN (LOOKUP) -> Any = (MODULE_TYPE_OF Er Type))",
     );
     run(scope, "LET _maker = (MAKE_LOOKUP int_ord)");
@@ -494,8 +494,8 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = (VAL compare: Number)\n\
-         SIG SetSig = ((LET Elt = Number) (VAL insert: Number))\n\
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -504,7 +504,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     // check failure at lift time.
     run(
         scope,
-        "FN (MAKEBAD p: OrderedSig) -> (SIG_WITH SetSig ((Elt: Number))) = \
+        "FN (MAKEBAD p :OrderedSig) -> (SIG_WITH SetSig ((Elt :Number))) = \
          (MODULE Result = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut sched = Scheduler::new();
@@ -540,7 +540,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -548,7 +548,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     // returns the bound module value via value_lookup.
     run(
         scope,
-        "FN (USE_ID Er: OrderedSig) -> Er = (Er)",
+        "FN (USE_ID Er :OrderedSig) -> Er = (Er)",
     );
     let data = scope.bindings().data();
     let f = match data.get("USE_ID") {
@@ -606,7 +606,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG WithZero = ((LET Type = Number) (VAL zero: Type))\n\
+        "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
          MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
          LET int_ord = (IntOrd :| WithZero)",
     );
@@ -626,7 +626,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
     // caveat docstring above documents.
     run(
         scope,
-        "FN (GET_ZERO Er: WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",
+        "FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",
     );
     let data = scope.bindings().data();
     let f = match data.get("GET_ZERO") {
@@ -652,15 +652,15 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
-         SIG Set = ((LET Elt = Number) (VAL insert: Number))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
+         SIG Set = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
     // FN-def registers with `ReturnType::Deferred(Expression(...))`.
     run(
         scope,
-        "FN (MK Er: OrderedSig) -> (SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type)))) = \
+        "FN (MK Er :OrderedSig) -> (SIG_WITH Set ((Elt (MODULE_TYPE_OF Er Type)))) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
     let data = scope.bindings().data();
@@ -694,7 +694,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :| OrderedSig)",
     );
@@ -702,7 +702,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     // returns a Number. Per-call check must reject.
     run(
         scope,
-        "FN (BAD Er: OrderedSig) -> (MODULE_TYPE_OF Er Type) = (1)",
+        "FN (BAD Er :OrderedSig) -> (MODULE_TYPE_OF Er Type) = (1)",
     );
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("BAD int_ord"), scope);

@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn multi_statement_match_branch_returns_last_value() {
         let bytes = capture(
-            "UNION Maybe = (some: Number none: Null)\n\
+            "UNION Maybe = (some :Number none :Null)\n\
              LET m = (Maybe (some 5))\n\
              MATCH (m) WITH (\
                  some -> ((PRINT \"got\") (PRINT it))\
@@ -166,8 +166,8 @@ mod tests {
         // statement is the recursive call, and CONS's tail-replace preserves the FN slot.
         // Without TCO, deep recursion would blow the scheduler.
         let bytes = capture(
-            "UNION Bit = (one: Null zero: Null)\n\
-             FN (HOP b: Tagged) -> Any = (\
+            "UNION Bit = (one :Null zero :Null)\n\
+             FN (HOP b :Tagged) -> Any = (\
                  (PRINT \"step\")\
                  (MATCH (b) WITH (\
                      one -> (HOP (Bit (zero null)))\

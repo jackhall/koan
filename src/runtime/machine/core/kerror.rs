@@ -92,7 +92,7 @@ impl fmt::Display for KErrorKind {
             KErrorKind::MissingArg(name) => write!(f, "missing argument '{name}'"),
             KErrorKind::UnboundName(name) => write!(f, "unbound name '{name}'"),
             KErrorKind::ArityMismatch { expected, got } => {
-                write!(f, "arity mismatch: expected {expected} arguments, got {got}")
+                write!(f, "arity mismatch = expected {expected} arguments, got {got}")
             }
             KErrorKind::AmbiguousDispatch { expr, candidates } => write!(
                 f,

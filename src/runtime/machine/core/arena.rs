@@ -110,7 +110,7 @@ impl RuntimeArena {
     pub fn alloc_function<'a>(&'a self, f: KFunction<'a>) -> &'a KFunction<'a> {
         debug_assert!(
             std::ptr::eq(self as *const RuntimeArena, f.captured_scope().arena as *const RuntimeArena),
-            "alloc_function invariant: KFunction must be allocated into the same RuntimeArena \
+            "alloc_function invariant :KFunction must be allocated into the same RuntimeArena \
              that owns its captured scope"
         );
         let static_f: KFunction<'static> = unsafe {

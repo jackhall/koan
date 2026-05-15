@@ -228,7 +228,7 @@ mod tests {
     /// token at `parts[1]`.
     #[test]
     fn pre_run_extracts_struct_name() {
-        let expr = parse_one("STRUCT Point = (x: Number, y: Number)");
+        let expr = parse_one("STRUCT Point = (x :Number, y :Number)");
         let name = super::pre_run(&expr);
         assert_eq!(name.as_deref(), Some("Point"));
     }
@@ -239,7 +239,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         let result = run_one(
             scope,
-            parse_one("STRUCT Point = (x: Number, y: Number)"),
+            parse_one("STRUCT Point = (x :Number, y :Number)"),
         );
         match result {
             KObject::StructType { name, fields, .. } => {
@@ -259,7 +259,7 @@ mod tests {
     fn struct_returns_type_value() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one("STRUCT Point = (x: Number, y: Number)"));
+        let result = run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
         assert_eq!(result.ktype(), KType::Type);
     }
 
@@ -267,7 +267,7 @@ mod tests {
     fn struct_preserves_field_order() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("STRUCT Backwards = (b: Number, a: Number)"));
+        run_one(scope, parse_one("STRUCT Backwards = (b :Number, a :Number)"));
         let data = scope.bindings().data();
         match data.get("Backwards").unwrap() {
             KObject::StructType { fields, .. } => {
@@ -282,7 +282,7 @@ mod tests {
     fn struct_rejects_unknown_type_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("STRUCT Bad = (a: Bogus)"));
+        let err = run_one_err(scope, parse_one("STRUCT Bad = (a :Bogus)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
@@ -304,7 +304,7 @@ mod tests {
     fn struct_rejects_duplicate_field() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("STRUCT Pair = (x: Number, x: Str)"));
+        let err = run_one_err(scope, parse_one("STRUCT Pair = (x :Number, x :Str)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("duplicate") && msg.contains("`x`")),
             "expected ShapeError on duplicate field, got {err}",
@@ -319,7 +319,7 @@ mod tests {
     fn recursive_struct_tree_elaborates_with_recursive_ref_on_field() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("STRUCT Tree = (children: List<Tree>)"));
+        run_one(scope, parse_one("STRUCT Tree = (children :(List Tree))"));
         let data = scope.bindings().data();
         match data.get("Tree").expect("Tree should be bound") {
             KObject::StructType { name, fields, .. } => {
@@ -354,7 +354,7 @@ mod tests {
         use crate::runtime::machine::execute::Scheduler;
         use crate::parse::parse;
         let mut sched = Scheduler::new();
-        for e in parse("STRUCT Aa = (x: Number)\nSTRUCT Bb = (y: Aa)").unwrap() {
+        for e in parse("STRUCT Aa = (x :Number)\nSTRUCT Bb = (y :Aa)").unwrap() {
             sched.add_dispatch(e, scope);
         }
         sched.execute().unwrap();
@@ -382,7 +382,7 @@ mod tests {
         use crate::runtime::machine::execute::Scheduler;
         use crate::parse::parse;
         let mut sched = Scheduler::new();
-        for e in parse("STRUCT TreeA = (b: TreeB)\nSTRUCT TreeB = (a: TreeA)").unwrap() {
+        for e in parse("STRUCT TreeA = (b :TreeB)\nSTRUCT TreeB = (a :TreeA)").unwrap() {
             sched.add_dispatch(e, scope);
         }
         sched.execute().unwrap();
@@ -427,7 +427,7 @@ mod tests {
         use crate::parse::parse;
         let mut sched = Scheduler::new();
         for e in parse(
-            "STRUCT Aaa = (b: Bbb)\nSTRUCT Bbb = (c: Ccc)\nSTRUCT Ccc = (a: Aaa)",
+            "STRUCT Aaa = (b :Bbb)\nSTRUCT Bbb = (c :Ccc)\nSTRUCT Ccc = (a :Aaa)",
         )
         .unwrap()
         {
@@ -505,8 +505,8 @@ mod tests {
     fn struct_pair_same_scope_distinct_names_share_scope_id() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("STRUCT Foo = (x: Number)"));
-        run_one(scope, parse_one("STRUCT Bar = (x: Number)"));
+        run_one(scope, parse_one("STRUCT Foo = (x :Number)"));
+        run_one(scope, parse_one("STRUCT Bar = (x :Number)"));
         let data = scope.bindings().data();
         let foo_id = match data.get("Foo") {
             Some(KObject::StructType { scope_id, name, .. }) => {
@@ -526,13 +526,16 @@ mod tests {
     }
 
     #[test]
-    fn struct_rejects_missing_colon() {
+    fn struct_rejects_odd_part_count() {
+        // Under the Design-B sigil regime, typed fields parse as `[Identifier, Type]`
+        // PAIRS. An odd number of parts (a name without its type slot) is rejected by
+        // the pair-list walker.
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let err = run_one_err(scope, parse_one("STRUCT Pair = (x Number, y: Number)"));
+        let err = run_one_err(scope, parse_one("STRUCT Pair = (x :Number y)"));
         assert!(
-            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`:`") || msg.contains("triple")),
-            "expected ShapeError on missing colon, got {err}",
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("pair") || msg.contains("multiple of 2")),
+            "expected ShapeError on odd part count, got {err}",
         );
     }
 
@@ -548,17 +551,17 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Foo = (a: Number)\n\
-             STRUCT Bar = (a: Number)\n\
-             FN (PICK x: Foo) -> Str = (\"foo\")\n\
-             FN (PICK x: Bar) -> Str = (\"bar\")",
+            "STRUCT Foo = (a :Number)\n\
+             STRUCT Bar = (a :Number)\n\
+             FN (PICK x :Foo) -> Str = (\"foo\")\n\
+             FN (PICK x :Bar) -> Str = (\"bar\")",
         );
-        let foo_result = run_one(scope, parse_one("PICK (Foo (a: 1))"));
+        let foo_result = run_one(scope, parse_one("PICK (Foo (a = 1))"));
         match foo_result {
             KObject::KString(s) => assert_eq!(s, "foo"),
             other => panic!("expected \"foo\", got {:?}", other.ktype()),
         }
-        let bar_result = run_one(scope, parse_one("PICK (Bar (a: 1))"));
+        let bar_result = run_one(scope, parse_one("PICK (Bar (a = 1))"));
         match bar_result {
             KObject::KString(s) => assert_eq!(s, "bar"),
             other => panic!("expected \"bar\", got {:?}", other.ktype()),
@@ -575,12 +578,12 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "STRUCT Foo = (a: Number)\n\
-             STRUCT Bar = (a: Number)\n\
-             FN (PICK x: Struct) -> Str = (\"any\")",
+            "STRUCT Foo = (a :Number)\n\
+             STRUCT Bar = (a :Number)\n\
+             FN (PICK x :Struct) -> Str = (\"any\")",
         );
-        let foo_result = run_one(scope, parse_one("PICK (Foo (a: 1))"));
-        let bar_result = run_one(scope, parse_one("PICK (Bar (a: 1))"));
+        let foo_result = run_one(scope, parse_one("PICK (Foo (a = 1))"));
+        let bar_result = run_one(scope, parse_one("PICK (Bar (a = 1))"));
         match (foo_result, bar_result) {
             (KObject::KString(a), KObject::KString(b)) => {
                 assert_eq!(a, "any");
@@ -598,7 +601,7 @@ mod tests {
         use crate::runtime::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("STRUCT Point = (x: Number, y: Number)"));
+        run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
         let types = scope.bindings().types();
         let kt = types.get("Point").expect("Point should be in bindings.types");
         assert!(matches!(

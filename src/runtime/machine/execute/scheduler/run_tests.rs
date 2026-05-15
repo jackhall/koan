@@ -92,7 +92,7 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     for e in parse_all(
-        "FN (ADD a: Number BY b: Number) -> Number = (a)\n\
+        "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
          LET out = (ADD aa BY bb)\n\
          LET aa = 3\n\
          LET bb = 4",
@@ -113,7 +113,7 @@ fn call_by_name_replay_parks_on_forward_function_reference() {
     let mut sched = Scheduler::new();
     for e in parse_all(
         "LET out = (DOUBLE 7)\n\
-         FN (DOUBLE x: Number) -> Number = (x)",
+         FN (DOUBLE x :Number) -> Number = (x)",
     ) {
         sched.add_dispatch(e, scope);
     }
@@ -127,7 +127,7 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     for e in parse_all(
-        "FN (ADD a: Number BY b: Number) -> Number = (b)\n\
+        "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET out = (ADD aa BY bb)\n\
          LET aa = 11\n\
          LET bb = 22",
@@ -162,7 +162,7 @@ fn replay_park_minimal_program_for_miri() {
     let mut sched = Scheduler::new();
     for e in parse_all(
         "LET out = (DOUBLE 7)\n\
-         FN (DOUBLE x: Number) -> Number = (x)",
+         FN (DOUBLE x :Number) -> Number = (x)",
     ) {
         sched.add_dispatch(e, scope);
     }
@@ -205,7 +205,7 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     for e in parse_all(
         "LET aResult = (IntOrd :| OrderedSig)\n\
          MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = (VAL compare: Number)",
+         SIG OrderedSig = (VAL compare :Number)",
     ) {
         sched.add_dispatch(e, scope);
     }

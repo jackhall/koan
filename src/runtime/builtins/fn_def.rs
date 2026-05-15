@@ -151,7 +151,7 @@ pub fn body<'a>(
         },
         _ => {
             return err(KError::new(KErrorKind::ShapeError(
-                "FN return-type slot must be a type expression (e.g. `Number`, `List<Str>`)"
+                "FN return-type slot must be a type expression (e.g. `Number`, `:(List Str)`)"
                     .to_string(),
             )));
         }
@@ -227,7 +227,7 @@ pub fn body<'a>(
                         Some(kt) => ReturnTypeState::Done(kt),
                         None => {
                             return err(KError::new(KErrorKind::ShapeError(format!(
-                                "FN return-type slot: unknown type name `{name}`"
+                                "FN return-type slot = unknown type name `{name}`"
                             ))));
                         }
                     },
@@ -568,7 +568,7 @@ fn defer_via_combine<'a>(
                     Some(kt) => ReturnType::Resolved(kt),
                     None => {
                         return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN return-type slot: unknown type name `{name}`"
+                            "FN return-type slot = unknown type name `{name}`"
                         ))));
                     }
                 },

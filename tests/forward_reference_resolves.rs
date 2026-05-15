@@ -71,7 +71,7 @@ fn multi_name_forward_reference_resolves() {
     let scope = run(
         &arena,
         captured,
-        "FN (ADD a: Number BY b: Number) -> Number = (b)\n\
+        "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET out = (ADD aa BY bb)\n\
          LET aa = 1\n\
          LET bb = 2",
@@ -90,7 +90,7 @@ fn forward_call_by_name_resolves_after_fn_definition() {
         &arena,
         captured,
         "LET out = (DOUBLE 5)\n\
-         FN (DOUBLE x: Number) -> Number = (x)",
+         FN (DOUBLE x :Number) -> Number = (x)",
     );
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 5.0));
 }
@@ -109,8 +109,8 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
         &arena,
         captured,
         "LET v = p.x\n\
-         STRUCT Pt = (x: Number, y: Number)\n\
-         LET p = (Pt (x: 7, y: 9))",
+         STRUCT Pt = (x :Number, y :Number)\n\
+         LET p = (Pt (x = 7, y = 9))",
     );
     assert!(matches!(scope.lookup("v"), Some(KObject::Number(n)) if *n == 7.0));
 }
@@ -173,7 +173,7 @@ fn fn_param_with_module_qualified_type_resolves() {
         &arena,
         captured,
         "MODULE Mo = ((LET Ty = Number))\n\
-         FN (ID x: Mo.Ty) -> Mo.Ty = (x)\n\
+         FN (ID x Mo.Ty) -> Mo.Ty = (x)\n\
          LET y = (ID 7)",
     );
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));

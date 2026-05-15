@@ -21,17 +21,17 @@ use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, TypeParam
 /// happen at FN-def time, before the eager-elaborate path would surface an `Unbound`
 /// against a parameter name.
 ///
-/// Walks the same `(Identifier|Type) ":" <type-slot>` triple shape the full parser
-/// recognizes, but skips the type-slot validation (anything that looks like a typed
-/// param contributes the bare name). Returns names in declaration order.
+/// Walks the same `(Identifier|Type) <type-slot>` pair shape the full parser recognizes,
+/// but skips the type-slot validation (anything that looks like a typed param contributes
+/// the bare name). Returns names in declaration order.
 pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) -> Vec<String> {
     let parts = &signature.parts;
     let mut names: Vec<String> = Vec::new();
     let mut i = 0;
     while i < parts.len() {
-        // Recognize a parameter-name slot: either a lowercase `Identifier` (`xs`)
-        // or a Type-classified bare-leaf token (`Er`, `Elem` — Stage A's surface
-        // form). The `<name>: <type>` shape requires the next part to be a `:`.
+        // Recognize a parameter-name slot: either a lowercase `Identifier` (`xs`) or a
+        // Type-classified bare-leaf token (`Er`, `Elem` — Stage A's surface form). The
+        // `<name> :<Type>` shape requires the next part to be a `Type` slot.
         let param_name: Option<String> = match &parts[i] {
             ExpressionPart::Identifier(name) => Some(name.clone()),
             ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
@@ -40,11 +40,16 @@ pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
             _ => None,
         };
         if let Some(name) = param_name {
-            let colon = parts.get(i + 1);
-            let is_colon = matches!(colon, Some(ExpressionPart::Keyword(c)) if c == ":");
-            if is_colon {
+            let next = parts.get(i + 1);
+            let next_is_type_slot = matches!(
+                next,
+                Some(ExpressionPart::Type(_))
+                    | Some(ExpressionPart::Expression(_))
+                    | Some(ExpressionPart::Future(_))
+            );
+            if next_is_type_slot {
                 names.push(name);
-                i += 3;
+                i += 2;
                 continue;
             }
         }
@@ -81,10 +86,11 @@ pub(super) enum ParamListOutcome<'a> {
 
 /// Convert the captured FN-parameter-list `KExpression` into a list of `SignatureElement`s.
 /// Walks the parts left-to-right, consuming bare `Keyword` parts as fixed tokens and
-/// `Identifier(name) Keyword(":") <type-slot>` triples as typed `Argument` slots, where
-/// `<type-slot>` is one of:
+/// `Identifier(name) <type-slot>` pairs as typed `Argument` slots, where `<type-slot>` is
+/// one of:
 ///
-/// - `Type(t)` — bare type token (the original surface form).
+/// - `Type(t)` — bare type token or sigil-parsed parameterized type (`:Number`,
+///   `:(List Number)`).
 /// - `Expression(e)` — parens-wrapped type expression like `(LIST_OF Number)`. The walk
 ///   records its `(slot_idx, e)` for the caller to schedule as a sub-Dispatch; the slot
 ///   is left unfilled until the Combine wakes and a re-walk sees the spliced
@@ -92,8 +98,8 @@ pub(super) enum ParamListOutcome<'a> {
 /// - `Future(KObject::KTypeValue(kt))` — already-resolved type value spliced in by the
 ///   Combine finish. Lifted directly into the slot's `KType`.
 ///
-/// Stray `:`, stray `Type`, missing `: Type` annotations, and other malformed shapes
-/// surface as [`ParamListOutcome::Err`].
+/// Stray `Type`, missing type annotations, and other malformed shapes surface as
+/// [`ParamListOutcome::Err`].
 ///
 /// Type-name resolution rides on the scheduler-aware [`elaborate_type_expr`]: it consults
 /// the captured scope's `placeholders` map alongside its `data` map, returning
@@ -130,25 +136,12 @@ pub(super) fn parse_fn_param_list<'a>(
             _ => None,
         };
         match (param_name, &parts[i]) {
-            (_, ExpressionPart::Keyword(s)) if s == ":" => {
-                return ParamListOutcome::Err(
-                    "FN signature has a stray `:` outside a `<name>: <Type>` triple".to_string(),
-                );
-            }
             (_, ExpressionPart::Keyword(s)) => {
                 elements.push(SignatureElement::Keyword(s.clone()));
                 i += 1;
             }
             (Some(name), _) => {
-                let colon = parts.get(i + 1);
-                let ty = parts.get(i + 2);
-                let is_colon = matches!(colon, Some(ExpressionPart::Keyword(c)) if c == ":");
-                if !is_colon {
-                    return ParamListOutcome::Err(format!(
-                        "FN signature parameter `{name}` requires a `: Type` annotation \
-                         (e.g. `{name}: Number`)",
-                    ));
-                }
+                let ty = parts.get(i + 1);
                 match ty {
                     Some(ExpressionPart::Type(t)) => {
                         match elaborate_type_expr(elaborator, t) {
@@ -168,16 +161,16 @@ pub(super) fn parse_fn_param_list<'a>(
                             }
                             ElabResult::Unbound(_) => {}
                         }
-                        i += 3;
+                        i += 2;
                     }
                     Some(ExpressionPart::Expression(boxed)) => {
-                        // Parens-wrapped type expression (`xs: (LIST_OF Number)`). Schedule
+                        // Parens-wrapped type expression (`xs (LIST_OF Number)`). Schedule
                         // its sub-Dispatch via the caller; the result splices back as a
                         // `Future(KTypeValue(_))` on re-walk. Record `(slot_idx, sub_expr)`
                         // — `slot_idx` is the position of this `Expression` part within
                         // `signature.parts` so the splice goes to the right place.
-                        sub_dispatches.push((i + 2, (**boxed).clone()));
-                        i += 3;
+                        sub_dispatches.push((i + 1, (**boxed).clone()));
+                        i += 2;
                     }
                     Some(ExpressionPart::Future(KObject::KTypeValue(kt))) => {
                         // Spliced result from a prior sub-Dispatch (Combine wake re-walk).
@@ -186,35 +179,35 @@ pub(super) fn parse_fn_param_list<'a>(
                             name: name.clone(),
                             ktype: (*kt).clone(),
                         }));
-                        i += 3;
+                        i += 2;
                     }
                     Some(ExpressionPart::Future(other)) => {
                         return ParamListOutcome::Err(format!(
                             "FN signature parameter `{name}` type slot resolved to a non-type \
-                             value `{}` (expected a type expression like `Number` or `List<Str>`)",
+                             value `{}` (expected a type expression like `:Number` or `:(List Str)`)",
                             other.summarize(),
                         ));
                     }
                     _ => {
                         return ParamListOutcome::Err(format!(
-                            "FN signature parameter `{name}` requires a `: Type` annotation \
-                             (e.g. `{name}: Number`)",
+                            "FN signature parameter `{name}` requires a `:<Type>` annotation \
+                             (e.g. `{name} :Number`)",
                         ));
                     }
                 }
             }
             (None, ExpressionPart::Type(t)) => {
-                // Type-classified token with parameters (`Foo<Bar>`) outside the
-                // `<name>: <Type>` triple is a stray type — the bare-leaf in-position
+                // Type-classified token with parameters (`:(Foo Bar)`) outside the
+                // `<name> :<Type>` pair is a stray type — the bare-leaf in-position
                 // case is already handled above.
                 return ParamListOutcome::Err(format!(
-                    "FN signature has a stray type `{}` outside a `<name>: <Type>` triple",
+                    "FN signature has a stray type `{}` outside a `<name> :<Type>` pair",
                     t.render(),
                 ));
             }
             (None, other) => {
                 return ParamListOutcome::Err(format!(
-                    "FN signature part `{}` is not a Keyword, Identifier, or `<name>: <Type>` triple",
+                    "FN signature part `{}` is not a Keyword, Identifier, or `<name> :<Type>` pair",
                     other.summarize(),
                 ));
             }

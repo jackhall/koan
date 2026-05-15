@@ -176,7 +176,7 @@ pub fn elaborate_type_expr(
             }
         }
         (name, TypeParams::List(items)) if name == "List" => ElabResult::Unbound(format!(
-            "List<...> expects exactly 1 type parameter, got {}",
+            ":(List ...) expects exactly 1 type parameter, got {}",
             items.len()
         )),
         (name, TypeParams::List(items)) if name == "Dict" && items.len() == 2 => {
@@ -185,7 +185,7 @@ pub fn elaborate_type_expr(
             merge_two_into_dict(k, v)
         }
         (name, TypeParams::List(items)) if name == "Dict" => ElabResult::Unbound(format!(
-            "Dict<...> expects exactly 2 type parameters, got {}",
+            ":(Dict ...) expects exactly 2 type parameters, got {}",
             items.len()
         )),
         (name, TypeParams::Function { args, ret }) if name == "Function" => {
@@ -561,6 +561,6 @@ mod tests {
             ctor: Box::new(ctor),
             args: vec![KType::Number],
         };
-        assert_eq!(app.name(), "Wrap<Number>");
+        assert_eq!(app.name(), ":(Wrap Number)");
     }
 }

@@ -78,7 +78,7 @@ pub fn body<'a>(
                 None => {
                     debug_assert!(
                         false,
-                        "dual-write invariant: STRUCT/UNION identity in types \
+                        "dual-write invariant = STRUCT/UNION identity in types \
                          without matching data carrier for `{verb}`",
                     );
                     return err(KError::new(KErrorKind::UnboundName(verb)));
@@ -134,7 +134,7 @@ mod tests {
     fn type_token_calls_construct_tagged_value() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "UNION Maybe = (some: Number none: Null)");
+        run(scope, "UNION Maybe = (some :Number none :Null)");
         let result = run_one(scope, parse_one("Maybe (some 42)"));
         match result {
             KObject::Tagged { tag, value, .. } => {
@@ -161,7 +161,7 @@ mod tests {
         // The synthesized TAG call surfaces the schema's tag check.
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "UNION Maybe = (some: Number none: Null)");
+        run(scope, "UNION Maybe = (some :Number none :Null)");
         let err = run_one_err(scope, parse_one("Maybe (other 42)"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`other`")),
@@ -175,7 +175,7 @@ mod tests {
         // before TAG's typed-slot bind sees it.
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "UNION Maybe = (some: Number none: Null)\nLET x = 7");
+        run(scope, "UNION Maybe = (some :Number none :Null)\nLET x = 7");
         let result = run_one(scope, parse_one("Maybe (some (x))"));
         match result {
             KObject::Tagged { tag, value, .. } => {
@@ -195,8 +195,8 @@ mod tests {
     fn struct_dual_write_path_still_works() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "STRUCT Point = (x: Number, y: Number)");
-        let result = run_one(scope, parse_one("Point (x: 1, y: 2)"));
+        run(scope, "STRUCT Point = (x :Number, y :Number)");
+        let result = run_one(scope, parse_one("Point (x = 1, y = 2)"));
         match result {
             KObject::Struct { name, fields, .. } => {
                 assert_eq!(name, "Point");
@@ -215,7 +215,7 @@ mod tests {
     fn union_dual_write_path_still_works() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "UNION Maybe = (some: Number none: Null)");
+        run(scope, "UNION Maybe = (some :Number none :Null)");
         let result = run_one(scope, parse_one("Maybe (some 42)"));
         match result {
             KObject::Tagged { tag, value, .. } => {

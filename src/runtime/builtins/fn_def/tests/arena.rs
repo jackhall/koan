@@ -23,7 +23,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     assert_eq!(
         sched.len(),
         1,
-        "tail-call slot reuse: AA -> BB -> PRINT should collapse into one slot, got {}",
+        "tail-call slot reuse = AA -> BB -> PRINT should collapse into one slot, got {}",
         sched.len(),
     );
 }
@@ -38,7 +38,7 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (ECHO v: Number) -> Number = (v)");
+    run(scope, "FN (ECHO v :Number) -> Number = (v)");
     let baseline = arena.alloc_count();
     for _ in 0..50 {
         let _ = run_one(scope, parse_one("ECHO 7"));
@@ -79,8 +79,8 @@ fn body_subexpression_slots_recycle_across_calls() {
 
     run(
         scope,
-        "UNION Bit = (one: Null zero: Null)\n\
-         FN (LOOK b: Tagged) -> Any = (MATCH (b) WITH (\
+        "UNION Bit = (one :Null zero :Null)\n\
+         FN (LOOK b :Tagged) -> Any = (MATCH (b) WITH (\
              one -> (PRINT \"one\")\
              zero -> (PRINT \"zero\")\
          ))",

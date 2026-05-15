@@ -175,7 +175,7 @@ impl<'a> Bindings<'a> {
         let mut map = self.pending_types.borrow_mut();
         if map.contains_key(&name) {
             panic!(
-                "insert_pending_type: `{name}` already in flight — duplicate dispatch \
+                "insert_pending_type = `{name}` already in flight — duplicate dispatch \
                  reached body-entry, which the placeholder install should have blocked",
             );
         }

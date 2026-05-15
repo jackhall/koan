@@ -580,7 +580,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         run(
-            "UNION Result = (ok: Str err: Str)\n\
+            "UNION Result = (ok :Str err :Str)\n\
              LET r = (Result (ok \"all good\"))\n\
              MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
             &arena,
@@ -594,7 +594,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         run(
-            "UNION Result = (ok: Str err: Str)\n\
+            "UNION Result = (ok :Str err :Str)\n\
              LET result = Result\n\
              LET r = (result (err \"oops\"))\n\
              MATCH (r) WITH (ok -> (PRINT \"good\") err -> (PRINT it))",
@@ -609,7 +609,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
         run(
-            "UNION Maybe = (some: Number none: Null)\n\
+            "UNION Maybe = (some :Number none :Null)\n\
              LET m = (Maybe (none null))\n\
              MATCH (m) WITH (some -> (PRINT \"some-branch\") none -> (PRINT \"none-branch\"))",
             &arena,

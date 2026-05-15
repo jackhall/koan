@@ -64,7 +64,7 @@ pub fn body_type_expr<'a>(
             | KType::Mu { .. }
             | KType::RecursiveRef(_) => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
-                    "value_lookup: parameterized type expression `{}` is not a value-lookup target",
+                    "value_lookup = parameterized type expression `{}` is not a value-lookup target",
                     t.render()
                 ))));
             }
@@ -78,7 +78,7 @@ pub fn body_type_expr<'a>(
         Some(KObject::TypeNameRef(t, _)) => match &t.params {
             crate::runtime::machine::model::ast::TypeParams::List(_) | crate::runtime::machine::model::ast::TypeParams::Function { .. } => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
-                    "value_lookup: parameterized type expression `{}` is not a value-lookup target",
+                    "value_lookup = parameterized type expression `{}` is not a value-lookup target",
                     t.render()
                 ))));
             }

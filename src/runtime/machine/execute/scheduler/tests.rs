@@ -240,7 +240,7 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
         for &consumer in consumers {
             assert!(
                 !freed.contains(&consumer),
-                "stale notify edge: producer slot {producer_idx} still lists \
+                "stale notify edge = producer slot {producer_idx} still lists \
                  freed consumer slot {consumer} in its notify_list",
             );
         }
@@ -401,7 +401,7 @@ fn tail_call_reuses_node_slot_in_place() {
     assert_eq!(
         sched.len(),
         1,
-        "tail-call slot reuse: the MATCH's original slot should have been rewritten \
+        "tail-call slot reuse = the MATCH's original slot should have been rewritten \
          to evaluate the matched branch's body, not allocate a new slot",
     );
 }

@@ -42,17 +42,19 @@ impl TypeExpr {
         TypeExpr { name, params: TypeParams::None }
     }
 
-    /// Render in surface syntax (`List<Number>`, `Function<(A) -> R>`).
+    /// Render in surface syntax — Design-B sigil form. Leaves render bare (`Number`);
+    /// parameterized types render with the `:(...)` sigil so the output round-trips
+    /// through the parser unchanged: `:(List Number)`, `:(Function (A) -> R)`.
     pub fn render(&self) -> String {
         match &self.params {
             TypeParams::None => self.name.clone(),
             TypeParams::List(items) => {
                 let inner: Vec<String> = items.iter().map(|t| t.render()).collect();
-                format!("{}<{}>", self.name, inner.join(", "))
+                format!(":({} {})", self.name, inner.join(" "))
             }
             TypeParams::Function { args, ret } => {
                 let inner: Vec<String> = args.iter().map(|t| t.render()).collect();
-                format!("{}<({}) -> {}>", self.name, inner.join(", "), ret.render())
+                format!(":({} ({}) -> {})", self.name, inner.join(" "), ret.render())
             }
         }
     }
@@ -183,7 +185,7 @@ impl<'a> ExpressionPart<'a> {
                 for (k, v) in pairs {
                     let key_obj = k.resolve();
                     let kkey = KKey::try_from_kobject(&key_obj).unwrap_or_else(|e| {
-                        panic!("DictLiteral::resolve: non-scalar key reached resolve(): {e}")
+                        panic!("DictLiteral::resolve = non-scalar key reached resolve(): {e}")
                     });
                     map.insert(Box::new(kkey), v.resolve());
                 }

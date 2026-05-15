@@ -54,7 +54,7 @@ impl KType {
                 Ok(KType::List(Box::new(KType::from_type_expr(&items[0])?)))
             }
             ("List", TypeParams::List(items)) => Err(format!(
-                "List<...> expects exactly 1 type parameter, got {}",
+                ":(List ...) expects exactly 1 type parameter, got {}",
                 items.len()
             )),
             ("Dict", TypeParams::List(items)) if items.len() == 2 => Ok(KType::Dict(
@@ -62,7 +62,7 @@ impl KType {
                 Box::new(KType::from_type_expr(&items[1])?),
             )),
             ("Dict", TypeParams::List(items)) => Err(format!(
-                "Dict<...> expects exactly 2 type parameters, got {}",
+                ":(Dict ...) expects exactly 2 type parameters, got {}",
                 items.len()
             )),
             ("Function", TypeParams::Function { args, ret }) => {

@@ -110,7 +110,7 @@ impl Serializable for KKey {
                 KKey::Number(f64::from_bits(u64::from_ne_bytes(buf)))
             }
             Some(&2) => KKey::Bool(bytes.get(1).copied().unwrap_or(0) != 0),
-            _ => panic!("KKey::decode: unrecognized tag byte"),
+            _ => panic!("KKey::decode = unrecognized tag byte"),
         }
     }
 

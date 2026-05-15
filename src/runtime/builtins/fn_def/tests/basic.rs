@@ -11,7 +11,7 @@ use super::capture_program_output;
 /// not at `parts[1]` directly).
 #[test]
 fn pre_run_extracts_first_keyword_of_signature() {
-    let expr = parse_one("FN (DOUBLE x: Number) -> Number = (x)");
+    let expr = parse_one("FN (DOUBLE x :Number) -> Number = (x)");
     let name = crate::runtime::builtins::fn_def::pre_run(&expr);
     assert_eq!(name.as_deref(), Some("DOUBLE"));
 }
@@ -100,7 +100,7 @@ fn calling_user_fn_repeatedly_runs_body_each_time() {
 #[test]
 fn fn_with_single_param_substitutes_at_call_site() {
     let bytes = capture_program_output(
-        "FN (SAY x: Str) -> Null = (PRINT x)\n\
+        "FN (SAY x :Str) -> Null = (PRINT x)\n\
          SAY \"hello\"",
     );
     assert_eq!(bytes, b"hello\n");
@@ -109,7 +109,7 @@ fn fn_with_single_param_substitutes_at_call_site() {
 #[test]
 fn fn_with_two_params_binds_each_by_name() {
     let bytes = capture_program_output(
-        "FN (FIRST x: Str y: Str) -> Null = (PRINT x)\n\
+        "FN (FIRST x :Str y :Str) -> Null = (PRINT x)\n\
          FIRST \"one\" \"two\"",
     );
     assert_eq!(bytes, b"one\n");
@@ -118,7 +118,7 @@ fn fn_with_two_params_binds_each_by_name() {
 #[test]
 fn fn_with_infix_shape_dispatches_on_keyword_position() {
     let bytes = capture_program_output(
-        "FN (a: Str SAID) -> Null = (PRINT a)\n\
+        "FN (a :Str SAID) -> Null = (PRINT a)\n\
          \"hi\" SAID",
     );
     assert_eq!(bytes, b"hi\n");
@@ -128,7 +128,7 @@ fn fn_with_infix_shape_dispatches_on_keyword_position() {
 fn fn_param_shadows_outer_binding_at_call_site() {
     let bytes = capture_program_output(
         "LET msg = \"outer\"\n\
-         FN (SAY msg: Str) -> Null = (PRINT msg)\n\
+         FN (SAY msg :Str) -> Null = (PRINT msg)\n\
          SAY \"param wins\"",
     );
     assert_eq!(bytes, b"param wins\n");
@@ -137,7 +137,7 @@ fn fn_param_shadows_outer_binding_at_call_site() {
 #[test]
 fn fn_param_substitutes_inside_nested_subexpression() {
     let bytes = capture_program_output(
-        "FN (WRAP x: Str) -> Null = (PRINT (x))\n\
+        "FN (WRAP x :Str) -> Null = (PRINT (x))\n\
          WRAP \"wrapped\"",
     );
     assert_eq!(bytes, b"wrapped\n");
@@ -147,7 +147,7 @@ fn fn_param_substitutes_inside_nested_subexpression() {
 fn fn_returns_param_value_directly() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (ECHO v: Number) -> Number = (v)");
+    run(scope, "FN (ECHO v :Number) -> Number = (v)");
 
     let result = run_one(scope, parse_one("ECHO 7"));
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
@@ -157,7 +157,7 @@ fn fn_returns_param_value_directly() {
 fn fn_signature_with_no_keyword_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (x: Number) -> Null = (PRINT \"oops\")");
+    run(scope, "FN (x :Number) -> Null = (PRINT \"oops\")");
     let data = scope.bindings().data();
     assert!(data.get("x").is_none());
 }
@@ -169,7 +169,7 @@ fn fn_signature_with_no_keyword_is_rejected() {
 fn fn_def_returns_the_registered_kfunction() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let result = run_one(scope, parse_one("FN (DOUBLE x: Number) -> Number = (x)"));
+    let result = run_one(scope, parse_one("FN (DOUBLE x :Number) -> Number = (x)"));
     assert!(
         matches!(result, KObject::KFunction(_, _)),
         "FN should return its registered KFunction",

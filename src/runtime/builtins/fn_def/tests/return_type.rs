@@ -12,7 +12,7 @@ use crate::parse::parse;
 fn fn_parses_declared_return_type_onto_signature() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (DOUBLE x: Number) -> Number = (x)");
+    run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
     let data = scope.bindings().data();
     let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
@@ -30,7 +30,7 @@ fn fn_parses_declared_return_type_onto_signature() {
 fn fn_without_return_type_annotation_does_not_register() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let exprs = parse("FN (DOUBLE x: Number) = (PRINT \"x\")").expect("parse should succeed");
+    let exprs = parse("FN (DOUBLE x :Number) = (PRINT \"x\")").expect("parse should succeed");
     let mut sched = Scheduler::new();
     for expr in exprs {
         sched.add_dispatch(expr, scope);
@@ -46,7 +46,7 @@ fn fn_with_unknown_return_type_name_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("FN (DOUBLE x: Number) -> Bogus = (x)"), scope);
+    let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
     sched.execute().expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
@@ -95,7 +95,7 @@ fn fn_with_user_bound_return_type_works() {
     use super::capture_program_output;
     let bytes = capture_program_output(
         "LET MyT = Number\n\
-         FN (DOIT xs: MyT) -> MyT = (xs)\n\
+         FN (DOIT xs :MyT) -> MyT = (xs)\n\
          PRINT (DOIT 7)",
     );
     assert_eq!(bytes, b"7\n");
@@ -110,7 +110,7 @@ fn fn_with_user_bound_return_type_works() {
 fn fn_with_forward_user_bound_return_type_works() {
     use super::capture_program_output;
     let bytes = capture_program_output(
-        "FN (DOIT xs: MyT) -> MyT = (xs)\n\
+        "FN (DOIT xs :MyT) -> MyT = (xs)\n\
          LET MyT = Number\n\
          PRINT (DOIT 7)",
     );

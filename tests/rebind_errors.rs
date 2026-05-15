@@ -67,7 +67,7 @@ fn let_function_collides_with_let_value() {
     let results = run_collecting_errors(
         scope,
         "LET x = 1\n\
-         LET x = (FN (DOUBLE y: Number) -> Number = (y))",
+         LET x = (FN (DOUBLE y :Number) -> Number = (y))",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {
@@ -90,8 +90,8 @@ fn exact_signature_duplicate_errors() {
     let scope = build_scope(&arena);
     let results = run_collecting_errors(
         scope,
-        "FN (DOUBLE x: Number) -> Number = (x)\n\
-         FN (DOUBLE x: Number) -> Number = (x)",
+        "FN (DOUBLE x :Number) -> Number = (x)\n\
+         FN (DOUBLE x :Number) -> Number = (x)",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {
