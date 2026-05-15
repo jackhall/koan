@@ -255,7 +255,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = (LET compare = 0)\n\
-             SIG OrderedSig = (LET compare = 0)\n\
+             SIG OrderedSig = (VAL compare: Number)\n\
              LET IntOrdAbstract = (IntOrd :| OrderedSig)",
         );
         let data = scope.bindings().data();
@@ -269,7 +269,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = (LET compare = 0)\n\
-             SIG OrderedSig = (LET compare = 0)\n\
+             SIG OrderedSig = (VAL compare: Number)\n\
              LET IntOrdView = (IntOrd :! OrderedSig)",
         );
         let data = scope.bindings().data();
@@ -283,7 +283,7 @@ mod tests {
         run(
             scope,
             "MODULE Empty = (LET unrelated = 0)\n\
-             SIG OrderedSig = (LET compare = 0)",
+             SIG OrderedSig = (VAL compare: Number)",
         );
         let err = run_one_err(scope, parse_one("Empty :| OrderedSig"));
         assert!(
@@ -298,7 +298,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let src = "MODULE IntOrd = (LET compare = 0)\n\
-             SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+             SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
              LET FirstAbstract = (IntOrd :| OrderedSig)\n\
              LET SecondAbstract = (IntOrd :| OrderedSig)";
         let exprs = parse(src).expect("parse should succeed");
@@ -343,7 +343,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = (LET compare = 0)\n\
-             SIG OrderedSig = (LET compare = 0)\n\
+             SIG OrderedSig = (VAL compare: Number)\n\
              LET ViewMod = (IntOrd :! OrderedSig)",
         );
         let data = scope.bindings().data();
@@ -361,7 +361,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = (LET compare = 42)\n\
-             SIG OrderedSig = (LET compare = 0)\n\
+             SIG OrderedSig = (VAL compare: Number)\n\
              LET IntOrdAbstract = (IntOrd :| OrderedSig)",
         );
         let result = run_one(scope, parse_one("IntOrdAbstract.compare"));
@@ -376,7 +376,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-             SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+             SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
              LET IntOrdAbstract = (IntOrd :| OrderedSig)",
         );
 
@@ -432,7 +432,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = (LET compare = 7)",
         );
         run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
@@ -460,7 +460,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = (LET compare = 7)",
         );
         run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
@@ -492,7 +492,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = (LET compare = 7)",
         );
         run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
@@ -536,7 +536,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = (LET compare = 7)",
         );
         run(
@@ -568,8 +568,8 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
-             SIG HashedSig = (LET hash = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
+             SIG HashedSig = (VAL hash: Number)\n\
              MODULE IntOrd = (LET compare = 7)\n\
              MODULE IntHash = (LET hash = 11)",
         );
@@ -610,7 +610,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = (LET compare = 7)",
         );
         run(scope, "LET int_view = (IntOrd :! OrderedSig)");
@@ -639,7 +639,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = (LET compare = 7)",
         );
         run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
@@ -739,7 +739,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = (LET compare = 7)\n\
              LET IntOrdA = (IntOrd :| OrderedSig)",
         );
@@ -768,7 +768,7 @@ mod tests {
         // FN member that still rides through the re-bind walk.
         run(
             scope,
-            "SIG OrderedSig = (LET compare = 0)\n\
+            "SIG OrderedSig = (VAL compare: Number)\n\
              MODULE IntOrd = ((LET compare = 7) (LET helper = (FN (HELP x: Number) -> Number = (x))))\n\
              LET Held = (IntOrd :| OrderedSig)",
         );

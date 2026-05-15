@@ -61,7 +61,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     // required two batches because the synchronous type-name resolution didn't park.
     run(
         scope,
-        "SIG OrderedSig = (LET compare = 0)\n\
+        "SIG OrderedSig = (VAL compare: Number)\n\
          FN (USE_ORD Er: OrderedSig) -> Null = (PRINT \"ok\")",
     );
     let data = scope.bindings().data();
@@ -206,7 +206,7 @@ fn functor_body_module_dispatch_does_not_dangle() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = (LET compare = 0)\n\
+        "SIG OrderedSig = (VAL compare: Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
     run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
@@ -262,8 +262,8 @@ fn functor_with_two_pinned_slots_round_trips() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG Set = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0))\n\
-         SIG OrderedSig = (LET compare = 0)\n\
+        "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag: Number))\n\
+         SIG OrderedSig = (VAL compare: Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -321,8 +321,8 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     // module's mirrored `type_members` carries `Elt = Number`.
     run(
         scope,
-        "SIG OrderedSig = (LET compare = 0)\n\
-         SIG SetSig = ((LET Elt = Number) (LET insert = 0))\n\
+        "SIG OrderedSig = (VAL compare: Number)\n\
+         SIG SetSig = ((LET Elt = Number) (VAL insert: Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -383,7 +383,7 @@ fn functor_body_module_type_of_via_dual_write() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :| OrderedSig)",
     );
@@ -433,7 +433,7 @@ fn functor_closure_escape_pins_type_class_dual_write() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :| OrderedSig)",
     );
@@ -494,8 +494,8 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = (LET compare = 0)\n\
-         SIG SetSig = ((LET Elt = Number) (LET insert = 0))\n\
+        "SIG OrderedSig = (VAL compare: Number)\n\
+         SIG SetSig = ((LET Elt = Number) (VAL insert: Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -540,7 +540,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -575,16 +575,30 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 /// because the parens-form return type sub-dispatched against the outer scope where
 /// `Er` is unbound).
 ///
-/// The body returns a type-value via `(MODULE_TYPE_OF Er Type)`. The per-call slot
-/// check then compares the resolved abstract `KType` (from opaque ascription) against
-/// the body's `.ktype() = KType::TypeExprRef` — those don't structurally match (body
-/// returns the *type* as a value; annotation says "value of that type"), so the
-/// per-call check rejects with the documented "per-call return type" diagnostic. The
-/// negative-case test below pins that diagnostic; here we pin only the routing — that
-/// FN-def doesn't error and the registration carries `Deferred(_)`. Exercising a
-/// successful end-to-end body-vs-annotation pairing for this shape needs SIG-design
-/// surface for `Type`-typed value slots (e.g. `(LET zero: Type = 0)`), which is a
-/// composition concern tracked separately.
+/// **Post-VAL surface form.** The SIG declares a `Type`-typed value slot
+/// (`(VAL zero: Type)`). A MODULE supplying `zero = 0` satisfies the slot under
+/// name-presence shape-check, and the FN signature `(GET_ZERO Er: WithZero) ->
+/// (MODULE_TYPE_OF Er Type) = (Er.zero)` parses and registers with
+/// `ReturnType::Deferred(_)`.
+///
+/// **Caveat — kept simpler variant.** The plan also drafted an end-to-end
+/// invocation `(GET_ZERO int_ord)` returning the underlying `Number(0)` carrier.
+/// That fails today: the per-call return-type check on `Deferred(_)` returns runs
+/// at lift-time and compares the body's `.ktype()` (Number, from the underlying
+/// ATTR-read) against the per-call-elaborated `KType::UserType { kind: Module,
+/// name: "Type", .. }`. ATTR returns the raw underlying value rather than
+/// re-tagging it with the per-call abstract identity minted by `:|`. The slot
+/// check rejects with the documented "per-call return type" diagnostic
+/// (`functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic` pins
+/// that wording). Closing this end-to-end variant is tracked by
+/// `roadmap/val-slot-abstract-identity-tagging.md` (tag ascribed-module
+/// value-slot reads with the per-call abstract identity at ATTR time, or relax
+/// the slot check to accept "value of declared-abstract-Type" by
+/// carrier-recovery rather than KType equality). Until then, the test pins
+/// only the VAL substrate: VAL is a valid SIG surface form, the functor's
+/// FN-def succeeds with `Deferred(_)` carrying the parens-form return-type
+/// reference, and the underlying-MODULE-Type's `LET zero = 0` cleanly satisfies
+/// the VAL slot at ascription shape-check time.
 #[test]
 fn functor_return_module_type_of_parameter_resolves_per_call() {
     use crate::runtime::model::ReturnType;
@@ -592,27 +606,38 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
-         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-         LET int_ord = (IntOrd :| OrderedSig)",
+        "SIG WithZero = ((LET Type = Number) (VAL zero: Type))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
+         LET int_ord = (IntOrd :| WithZero)",
     );
+    // The ascription succeeded — that's the canonical VAL-slot-satisfied-by-LET
+    // pairing this item exists to enable.
+    let data = scope.bindings().data();
+    assert!(
+        matches!(data.get("int_ord"), Some(KObject::KModule(_, _))),
+        "int_ord should be an opaquely-ascribed module satisfying WithZero's VAL zero slot",
+    );
+    drop(data);
     // FN-def. Pre-Stage-B this errored with "unbound name `Er`" at FN-construction
     // because the parens-form return type sub-dispatched against the outer scope.
+    // Post-VAL, the SIG-typed parameter `Er` carries the SIG body's `Type` slot
+    // surface and the body's `(Er.zero)` reads through it. The functor registers
+    // with `ReturnType::Deferred(_)`; the per-call check at lift-time is what the
+    // caveat docstring above documents.
     run(
         scope,
-        "FN (GET_TYPE Er: OrderedSig) -> (MODULE_TYPE_OF Er Type) = (MODULE_TYPE_OF Er Type)",
+        "FN (GET_ZERO Er: WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",
     );
     let data = scope.bindings().data();
-    let f = match data.get("GET_TYPE") {
+    let f = match data.get("GET_ZERO") {
         Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("GET_TYPE should be a function, got {:?}", other.map(|o| o.ktype())),
+        other => panic!("GET_ZERO should be a function, got {:?}", other.map(|o| o.ktype())),
     };
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
-        "GET_TYPE's return type should be Deferred, got {:?}",
+        "GET_ZERO's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    drop(data);
 }
 
 /// Landing test 3: `(SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type))))` — the sharing-
@@ -627,8 +652,8 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
-         SIG Set = ((LET Elt = Number) (LET insert = 0))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+         SIG Set = ((LET Elt = Number) (VAL insert: Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
@@ -669,7 +694,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+        "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET int_ord = (IntOrd :| OrderedSig)",
     );

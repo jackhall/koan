@@ -62,15 +62,35 @@ doesn't exist yet.
   declaration. The memoization scheme (argument-identity hashing vs.
   structural equality on argument values) is part of this item.
 
+Canonical signatures use the `VAL` declarator
+([design/module-system.md § Structures and signatures](../design/module-system.md#structures-and-signatures))
+for value slots. An `ORDERED` signature reads
+
+```
+SIG OrderedSig = (
+  (LET Type = Number)
+  (VAL compare: Function<(Type, Type) -> Number>)
+)
+```
+
+and a `SET` functor's signature reads
+
+```
+SIG SetSig = (
+  (LET Elt = Number)
+  (VAL empty: Type)
+  (VAL insert: Function<(Type, Elt) -> Type>)
+)
+```
+
+— operations declared against the SIG's abstract `Type` / `Elt` members
+directly, without standing in an example value of an arbitrary
+concrete type.
+
 ## Dependencies
 
 **Requires:**
 
-- [SIG slot explicit-type ascription](sig-explicit-type-ascription.md)
-  — canonical `ORDERED` / `SET` signatures declare operations against
-  the abstract `Type` member (`val compare : t -> t -> int`,
-  `val empty : t`), which today's ascription-by-example SIG surface
-  can't express.
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
 

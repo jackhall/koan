@@ -60,11 +60,8 @@ the constraint in the body or routing through a paired tuple-module.
 
 ## Dependencies
 
-**Requires:**
-
-- [SIG slot explicit-type ascription](sig-explicit-type-ascription.md)
-  — the value-side surface for declaring slots whose type is an
-  earlier parameter (the `elt: T` shape in `(BUILD T: Type elt: T)`)
-  shares its surface form with the SIG-body gap that item designs.
-
-**Unblocks:**
+None — the SIG-side surface for declaring slots whose type is an
+earlier-parameter reference (the `elt: T` shape in `(BUILD T: Type elt:
+T)`) shares its surface form with the SIG-body `VAL` declarator already
+shipped at
+[design/module-system.md § Structures and signatures](../design/module-system.md#structures-and-signatures).

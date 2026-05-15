@@ -118,6 +118,21 @@ pub fn body<'a>(
         }
         None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
+    // SIG-body strict rejection: value slots inside a SIG body must use
+    // `(VAL <name>: <Type>)`, not the ascription-by-example `(LET <name> = <value>)`
+    // form. The check fires only for the value-route (neither Type-class LET nor a
+    // nominal-identity carrier alias) so `LET Type = Number` and
+    // `LET MyAlias = (some_module :| Sig)` keep working. The walk inspects the
+    // immediate-enclosing labeled scope's `name` field, the same brittle
+    // string-prefix gate `val_decl::enclosing_sig_label` uses; both migrate to a
+    // `ScopeKind` enum under the `val-slot-abstract-identity-tagging` roadmap
+    // item's `ScopeKind` Direction.
+    if type_for_types_map.is_none() && nominal_identity.is_none() && enclosing_sig_label(scope) {
+        return err(KError::new(KErrorKind::ShapeError(format!(
+            "inside a SIG body, value slots must use VAL — write \
+             `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
+        ))));
+    }
     let cloned = value.deep_clone();
     let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
@@ -142,6 +157,23 @@ pub fn body<'a>(
         return err(e);
     }
     BodyResult::Value(allocated)
+}
+
+/// True iff `scope`'s nearest enclosing labeled scope is a SIG decl_scope (its
+/// `name` starts with `"SIG "`). Mirror of `val_decl::enclosing_sig_label`; both
+/// use the brittle string-prefix gate that's a candidate for replacement by a
+/// `ScopeKind` enum on `Scope`, tracked under
+/// [`val-slot-abstract-identity-tagging.md`](../../../roadmap/val-slot-abstract-identity-tagging.md)'s
+/// `ScopeKind` Direction.
+fn enclosing_sig_label(scope: &Scope<'_>) -> bool {
+    let mut current: Option<&Scope<'_>> = Some(scope);
+    while let Some(s) = current {
+        if !s.name.is_empty() {
+            return s.name.starts_with("SIG ");
+        }
+        current = s.outer;
+    }
+    false
 }
 
 /// Recover the nominal identity (a `KType::UserType` or `KType::SignatureBound`) carried
@@ -474,7 +506,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = (LET compare = 0)\n\
-             SIG OrderedSig = (LET compare = 0)\n\
+             SIG OrderedSig = (VAL compare: Number)\n\
              LET IntOrdA = (IntOrd :| OrderedSig)",
         );
         let types = scope.bindings().types();
@@ -552,5 +584,70 @@ mod tests {
             ),
             Ok(v) => panic!("expected bind-time error, got value {:?}", v.ktype()),
         }
+    }
+
+    /// A lowercase-name `LET` inside a SIG body must surface a focused `ShapeError`
+    /// directing the user to `VAL`. The check fires only for the value-route
+    /// (neither Type-class LET nor a nominal-identity carrier alias); `LET Type =
+    /// Number` and `LET MyMod = (Some :| Sig)` keep working inside SIG bodies.
+    #[test]
+    fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
+        use crate::runtime::builtins::test_support::{parse_one, run_one_err, run_root_silent};
+        use crate::runtime::machine::RuntimeArena;
+        use crate::runtime::machine::KErrorKind;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        // Outer parse-and-execute: the SIG body errors via `(LET compare = 0)`. The
+        // inner body's error propagates through the SIG outer Combine; the SIG node
+        // itself does not bind.
+        let _err = run_one_err(scope, parse_one("SIG Bad = (LET compare = 0)"));
+        // The diagnostic for the lowercase-LET-in-SIG rejection lives on a child
+        // node; the outer SIG node's error is a combine-propagated shape error. The
+        // assertion below pins the SIG itself didn't bind — the migration-loud
+        // observable. The diagnostic text is best-effort discoverable via a debug
+        // run; the integration smoke is what blocks regressions.
+        assert!(
+            scope.bindings().data().get("Bad").is_none(),
+            "SIG with lowercase-LET in body must not bind",
+        );
+        // Verify the diagnostic shape by running the LET directly against a
+        // synthetic SIG-named scope. The strict-reject check fires at body time
+        // when the immediate enclosing scope's name starts with `"SIG "`.
+        use crate::runtime::machine::Scope;
+        let sig_scope = arena.alloc_scope(Scope::child_under_named(
+            scope,
+            "SIG SyntheticForTest".to_string(),
+        ));
+        let err = run_one_err(sig_scope, parse_one("LET compare = 0"));
+        match &err.kind {
+            KErrorKind::ShapeError(msg) => {
+                assert!(
+                    msg.contains("VAL") && msg.contains("compare"),
+                    "expected diagnostic mentioning VAL and slot name, got: {msg}",
+                );
+            }
+            _ => panic!("expected ShapeError, got something else"),
+        }
+    }
+
+    /// SIG-body `LET <Type-class> = ...` keeps working post-VAL — the strict reject
+    /// only fires for the value-route. `LET Type = Number` lands on `register_type`,
+    /// not `bind_value`, so the SIG-body gate doesn't fire.
+    #[test]
+    fn let_type_class_in_sig_body_still_works() {
+        use crate::runtime::builtins::test_support::{run, run_root_silent};
+        use crate::runtime::machine::RuntimeArena;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run(scope, "SIG WithType = ((LET Type = Number) (VAL zero: Number))");
+        let s = match scope.bindings().data().get("WithType") {
+            Some(KObject::KSignature(s)) => *s,
+            other => panic!("WithType should be a signature, got {:?}", other.map(|o| o.ktype())),
+        };
+        let types = s.decl_scope().bindings().types();
+        assert!(
+            types.contains_key("Type"),
+            "Type binding should survive in SIG types map after Type-class LET",
+        );
     }
 }

@@ -181,10 +181,19 @@ and `(SIG_WITH Set ((Elt: Er)))` survive FN-def without sub-dispatching
 against the outer scope), with the FN-param parser
 ([`fn_def/signature.rs`](src/runtime/builtins/fn_def/signature.rs))
 relaxed to admit Type-classified bare-leaf tokens in the parameter-name
-slot of the `<name>: <Type>` triple. Unblocks standard-library
-collection functors (`Make` over `ORDERED`) once
-[SIG slot explicit-type ascription](roadmap/sig-explicit-type-ascription.md)
-lands the value-side SIG surface.
+slot of the `<name>: <Type>` triple; and the SIG-slot explicit-type
+ascription surface — the `VAL <name>: <TypeExpr>` declarator
+([`val_decl.rs`](src/runtime/builtins/val_decl.rs)) is the canonical
+value-slot declaration inside a SIG body, replacing the
+ascription-by-example `(LET name = <value>)` form (rejected inside SIG
+bodies with a diagnostic directing to `VAL`), with the slot's declared
+type recorded as a `KType::KTypeValue` carrier under the SIG decl_scope's
+`bindings.data` so the existing name-presence shape check in
+[`ascribe.rs`](src/runtime/builtins/ascribe.rs) admits any supplying
+member uniformly, full type-shape checking against the declared slot type
+deferred to [Modular implicits](roadmap/module-system-5-modular-implicits.md).
+Unblocks standard-library collection functors (`Make` over `ORDERED`)
+and dependent parameter annotations.
 
 ## Next items
 
@@ -220,16 +229,6 @@ type-constructor slots, and the post-stage-1 Miri audit-slate
 carry-forward), and the remaining stages below land the rest
 incrementally, each producing a usable end state.
 
-- [SIG slot explicit-type ascription](roadmap/sig-explicit-type-ascription.md) —
-  SIG slots are *ascription-by-example* today (`(LET compare = 0)`
-  declares `compare: Number` because `0.ktype() = Number`). There is
-  no surface form for a slot whose value-type is the SIG's own
-  abstract `Type` member, so `val zero : t` / `val compare : t -> t
-  -> int` inside an `ORDERED` signature is unwritable. The Stage-B
-  templated-return-type surface lands the FN-side dispatch routing
-  but cannot exercise an end-to-end body-vs-annotation pairing
-  because the canonical body shape needs an SIG `Type`-typed value
-  slot the surface can't express.
 - [Dependent parameter annotations](roadmap/module-system-dependent-param-annotations.md) —
   parameter type slots that reference earlier parameters in the same FN
   signature (`(MAKE T: Type elt: T)`, OCaml's
@@ -239,6 +238,14 @@ incrementally, each producing a usable end state.
   and the per-call re-elaboration plumbing in
   [`KFunction::invoke`](src/runtime/machine/kfunction/invoke.rs); the new
   work is staged left-to-right dispatch.
+- [VAL-slot value-carrier abstract-identity tagging](roadmap/val-slot-abstract-identity-tagging.md)
+  — a value read from an `:|`-ascribed module's VAL-declared slot today
+  carries the underlying value's `KType`, not the per-call abstract
+  identity `:|` minted for the SIG's `Type` member; closes the
+  deferred end-to-end functor-on-VAL-slot call test variant in
+  [`functor_return_module_type_of_parameter_resolves_per_call`](src/runtime/builtins/fn_def/tests/module_stage2.rs)
+  and aligns dispatch keys for stage 5's implicit search over
+  VAL-typed values.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
   — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
   signatures with compile-time checking on ascription.

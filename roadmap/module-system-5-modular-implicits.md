@@ -76,6 +76,10 @@ is the ergonomic payoff of the design.
   types reference per-call parameters needs precision-aware
   structural-`KType` comparison; today's coarsening collapses
   `Deferred(_)` to `KType::Any` at the structural-synthesis site.
+- [VAL-slot value-carrier abstract-identity tagging](val-slot-abstract-identity-tagging.md)
+  — implicit search dispatches on parameter types; VAL-slot reads
+  must carry the SIG's abstract identity so dispatch keys align with
+  the declared abstract types.
 
 **Unblocks:**
 

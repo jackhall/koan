@@ -20,6 +20,7 @@ mod struct_def;
 mod type_call;
 mod type_ops;
 mod union;
+mod val_decl;
 mod value_lookup;
 mod value_pass;
 
@@ -113,6 +114,7 @@ pub fn default_scope<'a>(
     eval::register(scope);
     module_def::register(scope);
     sig_def::register(scope);
+    val_decl::register(scope);
     ascribe::register(scope);
     type_ops::register(scope);
     cons::register(scope);

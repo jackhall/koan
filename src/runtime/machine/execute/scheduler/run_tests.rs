@@ -205,7 +205,7 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     for e in parse_all(
         "LET aResult = (IntOrd :| OrderedSig)\n\
          MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = (LET compare = 0)",
+         SIG OrderedSig = (VAL compare: Number)",
     ) {
         sched.add_dispatch(e, scope);
     }

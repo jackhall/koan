@@ -659,7 +659,7 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = ((LET Type = Number) (LET compare = 0))\n\
-             SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+             SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
              LET Mod = (IntOrd :| OrderedSig)",
         );
         let result = run_one(scope, parse_one("MODULE_TYPE_OF Mod Type"));
@@ -702,7 +702,7 @@ mod tests {
     fn sig_with_one_slot_returns_signature_bound_with_pinned_slot() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))");
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
         // Pull the SIG's sig_id out of the scope so we can compare.
         let sig_id = match scope.bindings().data().get("OrderedSig") {
             Some(KObject::KSignature(s)) => s.sig_id(),
@@ -734,7 +734,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG Set = ((LET Elt = Number) (LET Ord = Number) (LET tag = 0))",
+            "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag: Number))",
         );
         let result = run_one(scope, parse_one("SIG_WITH Set ((Elt: Number) (Ord: Str))"));
         match result {
@@ -763,8 +763,8 @@ mod tests {
         run(
             scope,
             "MODULE IntOrd = ((LET Type = Number) (LET compare = 0))\n\
-             SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
-             SIG SetSig = ((LET Elt = Number) (LET insert = 0))\n\
+             SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
+             SIG SetSig = ((LET Elt = Number) (VAL insert: Number))\n\
              LET Elem = (IntOrd :| OrderedSig)",
         );
         let result = run_one(
@@ -796,7 +796,7 @@ mod tests {
     fn sig_with_rejects_unknown_slot() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))");
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig ((Bogus: Number))"), scope);
         sched.execute().expect("scheduler runs to completion");
@@ -817,7 +817,7 @@ mod tests {
     fn sig_with_rejects_identifier_slot_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))");
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
         let mut sched = Scheduler::new();
         // `type` is an Identifier (lowercase first letter). The body rejects this
         // before the abstract-type-slot lookup, so the error names the classification
@@ -850,7 +850,7 @@ mod tests {
     fn sig_with_rejects_non_parens_bindings_form() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))");
+        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))");
         // `(Type Number)` is a single Expression at the bindings slot — its parts
         // are bare `Type(Type)`, `Type(Number)`, neither wrapped in their own
         // parens. The body should reject because the top-level parts inside the
@@ -918,19 +918,14 @@ mod tests {
         }
     }
 
-    /// Module-system stage 2 Workstream B2: end-to-end smoke test for the monad-shaped
-    /// signature. `SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)) (LET pure = (FN
-    /// (PURE a: Number) -> Wrap<Number> = 1)))` parses, the SIG body's FN-def
-    /// elaborates `Wrap<Number>` through the new `ConstructorApply` arm in
-    /// `elaborate_type_expr`, and the resulting `pure` member is bound under the
-    /// SIG's decl-scope. Load-bearing for `monadic-side-effects.md`.
-    ///
-    /// Fn-def whose return type is `Wrap<Number>` against a root-scope-bound
+    /// FN-def whose return type is `Wrap<Number>` against a root-scope-bound
     /// TypeConstructor `Wrap`. Pins the dispatch path: `resolve_for` turns the
     /// parameterized type into a `TypeNameRef` carrier, `elaborate_type_expr` runs
     /// the new ConstructorApply arm, and the FN's stored signature carries a
     /// `KType::ConstructorApply { ctor: Wrap, args: [Number] }`. Isolates the path
     /// from SIG-body forward-reference parking (covered by `monad_signature_smoke`).
+    /// Root-scope LET is unchanged by the VAL refactor — only SIG-body lowercase
+    /// LETs migrated.
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
         use crate::runtime::model::types::UserTypeKind;
@@ -970,28 +965,34 @@ mod tests {
     }
 
     /// Module-system stage 2 Workstream B2: end-to-end smoke test for the monad-shaped
-    /// signature. `SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)) (LET pure = (FN
-    /// (PURE a: Number) -> Wrap<Number> = 1)))` parses, the SIG body's FN-def
-    /// elaborates `Wrap<Number>` through the new `ConstructorApply` arm in
-    /// `elaborate_type_expr`, and the resulting `pure` member is bound under the
-    /// SIG's decl-scope. Load-bearing for `monadic-side-effects.md`.
+    /// signature. `SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)) (VAL pure:
+    /// Function<(Number) -> Wrap<Number>>))` parses, the SIG body's VAL slot elaborates
+    /// `Function<(Number) -> Wrap<Number>>` through the existing `Function` arm in
+    /// `elaborate_type_expr` and the inner `Wrap<Number>` through the new
+    /// `ConstructorApply` arm. The resulting `pure` member is bound under the SIG's
+    /// decl-scope as a `KTypeValue(KFunction { args, ret: ConstructorApply{Wrap, …} })`
+    /// carrier (the post-VAL slot shape; pre-VAL the slot bound the ascription-by-example
+    /// FN value directly). Load-bearing for `monadic-side-effects.md`.
     ///
     /// `Number` is used as the parameter type rather than `T` because koan's token
     /// classification rejects single-letter Type tokens (needs ≥1 lowercase). The
     /// roadmap-decided surface form `(TYPE_CONSTRUCTOR T)` is conceptual; the runtime
     /// param symbol is whatever Type-classified token the user writes (here `Type`,
     /// a builtin meta-type name).
+    ///
+    /// SIG-body order matters: `LET Wrap` precedes the `VAL pure` slot so the inner
+    /// `Wrap<Number>` resolves synchronously against the SIG decl_scope's
+    /// `bindings.types["Wrap"]` entry. VAL's structural-`TypeNameRef` arm elaborates
+    /// synchronously and surfaces a ShapeError on park — see `val_decl.rs`'s body for
+    /// the rationale (no safe park route for structural shapes today).
     #[test]
     fn monad_signature_smoke() {
         use crate::runtime::model::types::UserTypeKind;
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        // FN body must be a parens-wrapped expression — `KType::KExpression` slot
-        // requires `ExpressionPart::Expression(_)`, not a bare `Literal`. Use `(1)`
-        // accordingly so the dispatch reaches `body_fn`.
         let src = "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)) \
-             (LET pure = (FN (PURE a: Number) -> Wrap<Number> = (1))))";
+             (VAL pure: Function<(Number) -> Wrap<Number>>))";
         let exprs = parse(src).expect("parse should succeed");
         let mut sched = Scheduler::new();
         let mut ids = Vec::new();
@@ -1023,34 +1024,34 @@ mod tests {
             KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }
         ));
         drop(decl_types);
-        // `pure` is bound in the SIG's `bindings.data`; its FN signature's return type
-        // must be a ConstructorApply (elaborated against the SIG body's decl-scope
-        // where Wrap is in scope).
+        // `pure` is bound in the SIG's `bindings.data` as a `KTypeValue` carrying the
+        // declared `Function<(Number) -> Wrap<Number>>` type (post-VAL slot shape).
+        // The inner `Wrap<Number>` elaborated against the SIG decl_scope as a
+        // `ConstructorApply { ctor: Wrap, args: [Number] }`.
         let decl_data = s.decl_scope().bindings().data();
         let pure = decl_data.get("pure").copied().expect("pure must live in SIG's data");
-        let f = match pure {
-            KObject::KFunction(f, _) => *f,
-            other => panic!("pure must be a KFunction, got {:?}", other.ktype()),
+        let kt = match pure {
+            KObject::KTypeValue(kt) => kt,
+            other => panic!("pure must be a KTypeValue, got {:?}", other.ktype()),
         };
-        use crate::runtime::model::ReturnType;
-        match &f.signature.return_type {
-            ReturnType::Resolved(KType::ConstructorApply { ctor, args }) => {
-                // The constructor is the SIG-body's template `Wrap` (scope_id 0, name
-                // `_typeconstructor` per body_type_constructor's template form — note
-                // the SIG body's `LET Wrap = ...` does NOT rebrand the template; the
-                // re-mint happens at opaque ascription, not at SIG declaration). What
-                // matters for the smoke is that the ConstructorApply was emitted at all
-                // and carries the right structural shape.
-                assert!(matches!(
-                    ctor.as_ref(),
-                    KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }
-                ), "ConstructorApply.ctor must be a TypeConstructor, got {:?}", ctor);
+        match kt {
+            KType::KFunction { args, ret } => {
                 assert_eq!(*args, vec![KType::Number]);
+                match ret.as_ref() {
+                    KType::ConstructorApply { ctor, args } => {
+                        assert!(matches!(
+                            ctor.as_ref(),
+                            KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }
+                        ), "ConstructorApply.ctor must be a TypeConstructor, got {:?}", ctor);
+                        assert_eq!(*args, vec![KType::Number]);
+                    }
+                    other => panic!(
+                        "pure return type must be ConstructorApply(Wrap, [Number]), got {:?}",
+                        other,
+                    ),
+                }
             }
-            other => panic!(
-                "pure's return type must be Resolved(ConstructorApply), got {:?}",
-                other,
-            ),
+            other => panic!("pure must be a Function type, got {:?}", other),
         }
     }
 
@@ -1080,7 +1081,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+            "SIG OrderedSig = ((LET Type = Number) (VAL compare: Number))\n\
              MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
              LET elem_mod = (IntOrd :| OrderedSig)",
         );

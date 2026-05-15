@@ -116,7 +116,7 @@ mod tests {
     /// token at `parts[1]`.
     #[test]
     fn pre_run_extracts_sig_name() {
-        let mut exprs = parse("SIG OrderedSig = (LET x = 1)").expect("parse should succeed");
+        let mut exprs = parse("SIG OrderedSig = (VAL x: Number)").expect("parse should succeed");
         let expr = exprs.remove(0);
         let name = super::pre_run(&expr);
         assert_eq!(name.as_deref(), Some("OrderedSig"));
@@ -126,7 +126,7 @@ mod tests {
     fn sig_binds_under_name_in_scope() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = (LET x = 1)");
+        run(scope, "SIG OrderedSig = (VAL x: Number)");
         let data = scope.bindings().data();
         assert!(matches!(data.get("OrderedSig"), Some(KObject::KSignature(_))));
     }
@@ -135,7 +135,7 @@ mod tests {
     fn sig_path_records_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = (LET x = 1)");
+        run(scope, "SIG OrderedSig = (VAL x: Number)");
         let data = scope.bindings().data();
         let sig = match data.get("OrderedSig") {
             Some(KObject::KSignature(s)) => *s,
@@ -144,30 +144,40 @@ mod tests {
         assert_eq!(sig.path, "OrderedSig");
     }
 
-    /// Body-statement forward-reference: SIG body's `LET x = y` references a sibling
-    /// top-level binding. Mirrors `module_def::module_body_parks_on_outer_placeholder` —
-    /// post-refactor the body statement parks on the outer placeholder.
+    /// Body-statement forward-reference: a SIG body's `VAL x: SomeType` references an
+    /// outer-scope-bound type alias. Mirrors `module_def::module_body_parks_on_outer_placeholder`
+    /// — post-refactor the body statement's type-resolution sub-Dispatch parks on the
+    /// outer placeholder. The outer `LET MyAlias = Number` (Type-class binder name —
+    /// stays on the LET path) finalizes first; the SIG body's VAL slot then sees
+    /// `MyAlias` resolved against the outer scope.
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "LET y = 7\nSIG Foo = (LET x = y)");
+        run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x: MyAlias)");
         let data = scope.bindings().data();
         let sig = match data.get("Foo") {
             Some(KObject::KSignature(s)) => *s,
             _ => panic!("Foo should be a signature"),
         };
         let inner = sig.decl_scope().bindings().data();
-        assert!(matches!(inner.get("x"), Some(KObject::Number(n)) if *n == 7.0));
+        let x = inner.get("x").expect("x must live in SIG's data");
+        assert!(
+            matches!(x, KObject::KTypeValue(crate::runtime::model::KType::Number)),
+            "x's declared type must elaborate to Number through the alias, got {:?}",
+            x.ktype(),
+        );
     }
 
     /// Failing body statement surfaces as the SIG node's error and must NOT bind `Foo` in
-    /// the parent scope.
+    /// the parent scope. The failing surface is a VAL slot whose declared type names a
+    /// nonexistent name; the type-resolution sub-Dispatch errors `UnboundName`, the
+    /// VAL Combine propagates the error, and the SIG Combine short-circuits.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG Foo = (LET x = nonexistent_name)");
+        run(scope, "SIG Foo = (VAL x: NonexistentType)");
         assert!(
             scope.bindings().data().get("Foo").is_none(),
             "Foo must not bind when its body errors",
@@ -183,7 +193,7 @@ mod tests {
         use crate::runtime::model::types::KType;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = (LET x = 1)");
+        run(scope, "SIG OrderedSig = (VAL x: Number)");
         let types = scope.bindings().types();
         let kt = types
             .get("OrderedSig")

@@ -27,7 +27,7 @@ A **signature** (declared with `SIG`) is a module type — an interface
 specifying what a structure must contain:
 
 ```
-SIG OrderedSig = ((LET Type = Number) (LET compare = (FN ...)))
+SIG OrderedSig = ((LET Type = Number) (VAL compare: Function<(Type, Type) -> Number>))
 ```
 
 Module and signature names use the **Type-token** spelling: first character
@@ -35,11 +35,26 @@ ASCII-uppercase plus at least one lowercase character (`IntOrd`, `OrderedSig`,
 `MakeSet`). Abstract types declared inside a signature use the same shape —
 the convention is `Type` for the principal abstract type, with additional
 abstract types named `Elt`, `Key`, `Val`, etc. when more than one is needed.
-A bare `LET <TypeName> = <expr>` inside a signature body declares an abstract
-type slot rather than a value binding. The token-class rule that distinguishes
-`MODULE` (keyword: ≥2 uppercase, no lowercase) from `IntOrd` (Type token:
-uppercase-leading with at least one lowercase) is described in
+The token-class rule that distinguishes `MODULE` (keyword: ≥2 uppercase, no
+lowercase) from `IntOrd` (Type token: uppercase-leading with at least one
+lowercase) is described in
 [type-system.md](type-system.md#token-classes--the-parser-level-foundation).
+
+SIG bodies accept two declarators. `LET <TypeName> = <expr>` declares an
+abstract type slot (the binder name is Type-classified, so it lands on the
+type-class binder path). `(VAL <name>: <TypeExpr>)` declares a value slot:
+the canonical surface for naming an operation the signature requires, with
+the slot's declared type recorded explicitly rather than inferred from an
+example value. `VAL` is meaningful only inside a SIG body; outside it the
+declarator is unbound. The lowercase-name `(LET name = <value>)` form,
+which previously declared a value slot by example, is rejected inside SIG
+bodies with a diagnostic directing to `VAL`. The implementation lives at
+[`val_decl.rs`](../src/runtime/builtins/val_decl.rs); ascription's
+name-presence shape check ([`ascribe.rs`](../src/runtime/builtins/ascribe.rs))
+admits any module member that supplies the named slot regardless of how
+the member was declared — full type-shape checking against the VAL slot's
+declared type is owned by
+[Modular implicits](../roadmap/module-system-5-modular-implicits.md).
 
 Structures can be **ascribed** to signatures via two operators that differ
 only by a whitespace gap in the visual rendering, expressing "you can see
@@ -196,8 +211,8 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (LET Wrap = (TYPE_CONSTRUCTOR Type))
-  (LET pure = (FN (PURE x: Number) -> Wrap<Number> = ...))
-  (LET bind = (FN (BIND m: Wrap<Number> f: Function<(Number) -> Wrap<Number>>) -> Wrap<Number> = ...))
+  (VAL pure: Function<(Number) -> Wrap<Number>>)
+  (VAL bind: Function<(Wrap<Number>, Function<(Number) -> Wrap<Number>>) -> Wrap<Number>>)
 )
 ```
 
@@ -360,8 +375,8 @@ operations:
 ```
 SIG OrderedSig = (
   (LET Type = ...)
-  (LET compare = (FN (COMPARE x: Type y: Type) -> Number = ...))
-  (LET gen = (FN (GEN r: Random) -> Type = ...))
+  (VAL compare: Function<(Type, Type) -> Number>)
+  (VAL gen: Function<(Random) -> Type>)
 
   (AXIOM #((compare x x) = 0))
   (AXIOM #((sign (compare x y)) = (- (sign (compare y x)))))
@@ -389,8 +404,9 @@ non-transitive comparisons, hashes that disagree with their own equality,
 monoids whose identity isn't.
 
 **Generators live in modules; the signature requires them.** A
-`LET gen = (FN ...)` slot in a signature body is an obligation: every
-ascribing module must supply a generator for the abstract type. This folds
+`(VAL gen: Function<(Random) -> Type>)` slot in a signature body is an
+obligation: every ascribing module must supply a generator for the abstract
+type. This folds
 generator presence into the existing structural-conformance check —
 ascription of a module without a `gen` slot fails with the same
 "missing field" error as any other unsupplied operation. There is no

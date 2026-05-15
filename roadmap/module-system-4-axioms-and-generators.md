@@ -72,6 +72,10 @@ independent of signatures.
 - [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
   — generators thread randomness via the `Random` effect module rather than
   ambient entropy.
+- [VAL-slot value-carrier abstract-identity tagging](val-slot-abstract-identity-tagging.md)
+  — axiom quotes reference VAL-slot members by name and rely on those
+  reads carrying the SIG's abstract type identity for the
+  quote-elaboration scope to type-check.
 
 **Unblocks:**
 

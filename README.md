@@ -157,6 +157,7 @@ src/
     │   ├── newtype_def.rs         NEWTYPE
     │   ├── module_def.rs          MODULE
     │   ├── sig_def.rs             SIG
+    │   ├── val_decl.rs            VAL (SIG-body value-slot declarator)
     │   ├── ascribe.rs             :| / :! module ascription
     │   ├── test_support.rs
     │   ├── quote.rs               # surface form `#(expr)`
