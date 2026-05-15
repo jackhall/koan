@@ -131,9 +131,22 @@ is no separate `with type` keyword.
 Pin values that reference only the FN's outer scope are elaborated at
 FN-construction time. Concrete builtins (`Number`, `Str`) and
 outer-scope-bound type values (`(MODULE_TYPE_OF Mo Type)` where `Mo` is
-bound outside the FN) both work as pin values resolved eagerly. Pin
-values that reference a per-call FN parameter are tracked as future
-work — see [Open work](#open-work).
+bound outside the FN) both work as pin values resolved eagerly.
+
+A Type-class FN parameter (`Er: OrderedSig`) binds the parameter name as
+a type-language binder at the call site: at each call,
+[`KFunction::invoke`](../src/runtime/machine/kfunction/invoke.rs)
+dual-writes the per-call argument into the child scope's `bindings.types`
+alongside the existing value-side `bind_value`. The
+[`KType::is_type_denoting`](../src/runtime/model/types/ktype_predicates.rs)
+predicate gates the dual-write — `SignatureBound`, `Signature`, `Type`,
+`TypeExprRef`, and `AnyUserType { kind: Module }` carry meaningful
+type-language identity at the binder. Body-position references to the
+parameter (`(MODULE_TYPE_OF Er Type)` inside the body) resolve through
+`Scope::resolve_type`'s outer-chain walk against the per-call scope.
+Return-type expressions that reference a per-call FN parameter
+(`-> (MODULE_TYPE_OF Er Type)` and similar templated return types) are
+tracked as future work — see [Open work](#open-work).
 
 Multi-argument functors are ordinary multi-parameter FNs. Currying is just
 nested FNs.
@@ -546,9 +559,11 @@ Signature-bound dispatch (modules-as-values typed against a specific
 signature) folds into stage 5.
 
 - [Functor parameters — Type-class names and templated return types](../roadmap/module-system-functor-params.md)
-  — two surfaces described in the body (Type-class FN parameters for
-  module values, return-type expressions referencing per-call parameters)
-  are not yet wired through the runtime.
+  — return-type expressions that reference a per-call FN parameter
+  (`-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`) need
+  deferred per-call elaboration; today the return-type slot elaborates
+  against the FN's outer scope at construction time, so a parameter-name
+  leaf in that position errors unbound.
 - [Dependent parameter annotations](../roadmap/module-system-dependent-param-annotations.md)
   — parameter types that reference earlier parameters in the same FN
   signature; required for OCaml-style multi-parameter functor signatures

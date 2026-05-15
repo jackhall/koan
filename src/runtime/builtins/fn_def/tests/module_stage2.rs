@@ -41,10 +41,16 @@ fn elaborator_lowers_ktype_value_binding() {
     }
 }
 
-/// FN-def integration: a parameter typed `E: OrderedSig` lowers via the scope-aware
+/// FN-def integration: a parameter typed `Er: OrderedSig` lowers via the scope-aware
 /// `elaborate_type_expr` into `KType::SignatureBound { sig_id, sig_path: "OrderedSig" }`,
 /// with `sig_id` equal to the declaring `Signature::sig_id()`. Pins the elaborator-to-
 /// FN-signature path that drives functor dispatch.
+///
+/// Module-system functor-params Stage A: this test was migrated from a lowercase
+/// `elem` parameter to Type-class `Er` (the documented surface form). The FN-def
+/// parameter parser now admits Type-classified bare-leaf tokens as parameter names
+/// in addition to lowercase Identifiers, which is what makes the documented
+/// `FN (LIFT Er: OrderedSig) -> ...` surface form actually parse.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::runtime::model::{Argument, KType, SignatureElement};
@@ -56,7 +62,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     run(
         scope,
         "SIG OrderedSig = (LET compare = 0)\n\
-         FN (USE_ORD elem: OrderedSig) -> Null = (PRINT \"ok\")",
+         FN (USE_ORD Er: OrderedSig) -> Null = (PRINT \"ok\")",
     );
     let data = scope.bindings().data();
     let sig_id = match data.get("OrderedSig") {
@@ -71,7 +77,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     match f.signature.elements.as_slice() {
         [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
             assert_eq!(kw, "USE_ORD");
-            assert_eq!(name, "elem");
+            assert_eq!(name, "Er");
             match ktype {
                 KType::SignatureBound { sig_id: id, sig_path, pinned_slots } => {
                     assert_eq!(*id, sig_id, "sig_id must match Signature::sig_id()");
@@ -81,7 +87,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
                 other => panic!("expected SignatureBound, got {:?}", other),
             }
         }
-        _ => panic!("expected [Keyword(USE_ORD), Argument(elem: SignatureBound)]"),
+        _ => panic!("expected [Keyword(USE_ORD), Argument(Er: SignatureBound)]"),
     }
 }
 
@@ -338,6 +344,131 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         other => panic!(
             "expected SignatureBound on MAKESETN's return type, got {:?}",
             other,
+        ),
+    }
+}
+
+// ---------- Module-system functor-params Stage A — per-call type-side dual-write -----
+//
+// At call time, parameters whose declared `KType` is type-denoting
+// (`SignatureBound`, `Signature`, `Type`, `TypeExprRef`,
+// `AnyUserType { kind: Module }`) dual-write into the per-call scope's
+// `bindings.types` alongside the existing value-side `bind_value` write. This is
+// what lets a FN body's type-position references to the parameter (`Er` in a
+// `(MODULE_TYPE_OF Er Type)` call inside the body) resolve through
+// `Scope::resolve_type`'s outer-chain walk.
+
+/// End-to-end per-call dual-write read-back: a FN `(USE_TYPE Er: OrderedSig)` whose
+/// body does `(MODULE_TYPE_OF Er Type)` succeeds because `Er` resolves as a Type-class
+/// reference through the per-call `bindings.types` entry the dual-write installs.
+/// Without the dual-write, the body's auto-wrapped `(Er)` sub-Dispatch would hit
+/// `value_lookup`'s TypeExprRef arm and surface `UnboundName(Er)` against the FN's
+/// captured outer scope (where `Er` is per-call, not lexically present).
+///
+/// Uses opaque ascription (`:|`) so the bound module has an abstract `Type` member —
+/// the body's `(MODULE_TYPE_OF Er Type)` lookup then has something to return, and
+/// the value-side recovery path through `value_lookup::body_type_expr`'s dual-write
+/// invariant (UserType { kind: Module, .. } → paired KModule carrier) hands the
+/// module value to `MODULE_TYPE_OF` as expected.
+///
+/// Stage A only ships *parameter-position* dual-write — the FN return type stays on
+/// the `Any` shape rather than templated forms like `-> (MODULE_TYPE_OF Er Type)`.
+/// Stage B widens the return-type carrier to allow parameter-name references in
+/// return-type positions.
+#[test]
+fn functor_body_module_type_of_via_dual_write() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+         LET int_ord = (IntOrd :| OrderedSig)",
+    );
+    // Body invokes `(MODULE_TYPE_OF Er Type)`. The `Er` slot has declared type
+    // `OrderedSig` (a `SignatureBound`); the dual-write puts `Er` into the per-call
+    // `bindings.types` with the bound module's nominal identity, which the body's
+    // auto-wrapped `(Er)` sub-Dispatch reads through `value_lookup`'s TypeExprRef
+    // arm. The lookup returns the paired KModule carrier (per the dual-write
+    // invariant in `value_lookup::body_type_expr`), feeding it into MODULE_TYPE_OF's
+    // `m: Module` slot.
+    run(
+        scope,
+        "FN (USE_TYPE Er: OrderedSig) -> Any = (MODULE_TYPE_OF Er Type)",
+    );
+    let result = run_one(scope, parse_one("USE_TYPE int_ord"));
+    use crate::runtime::model::KType;
+    // The abstract `Type` member of an opaquely-ascribed IntOrd is a fresh
+    // per-ascription `KType::UserType { kind: Module, name: "Type", .. }` (the
+    // module-system pattern documented on `Module::type_members`). Verify the
+    // body returned that abstract identity.
+    match result {
+        KObject::KTypeValue(kt) => match kt {
+            KType::UserType { kind: crate::runtime::model::types::UserTypeKind::Module, name, .. } => {
+                assert_eq!(name, "Type", "abstract type member should be named Type");
+            }
+            other => panic!("expected UserType {{ kind: Module, name: \"Type\", .. }}, got {:?}", other),
+        },
+        other => panic!("expected KTypeValue carrying the abstract Type identity, got {:?}", other.ktype()),
+    }
+}
+
+/// Closure-escape pin (Stage A A3). A FN that returns a nested FN closing over its
+/// type-class parameter `Er` must keep the per-call scope alive long enough for the
+/// nested FN's invocation to read `Er` from the per-call `bindings.types`. The
+/// existing `KFunction(&fn, Some(Rc<CallArena>))` lift on the lifted FN value
+/// already pins the per-call arena; this test confirms the type-side binding (not
+/// just the value-side) survives the closure escape.
+///
+/// Shape: an outer functor whose body returns an inner FN whose body uses `Er` in a
+/// type-position. Call the outer to get back the inner FN bound at the run-root
+/// scope, then call the inner FN. If the per-call arena's scope (and the dual-write
+/// it owns) outlives the inner FN value, the inner body's type-position resolution
+/// of `Er` succeeds.
+#[test]
+fn functor_closure_escape_pins_type_class_dual_write() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = ((LET Type = Number) (LET compare = 0))\n\
+         MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
+         LET int_ord = (IntOrd :| OrderedSig)",
+    );
+    // Outer FN captures `Er: OrderedSig`; its body defines an inner FN that returns
+    // a `(MODULE_TYPE_OF Er Type)` value when called. The outer call binds `Er` on
+    // the per-call scope (both value-side and type-side). The inner FN's captured
+    // scope is the outer's per-call scope, so the inner body's reference to `Er`
+    // walks up through the same scope.
+    run(
+        scope,
+        "FN (MAKE_LOOKUP Er: OrderedSig) -> Any = \
+            (FN (LOOKUP) -> Any = (MODULE_TYPE_OF Er Type))",
+    );
+    run(scope, "LET _maker = (MAKE_LOOKUP int_ord)");
+    // Subsequent churn so the per-call arena's drop-discipline is exercised.
+    for _ in 0..5 {
+        run_one(scope, parse_one("PRINT 1"));
+    }
+    // Now invoke the nested LOOKUP. The inner FN's captured scope still holds the
+    // per-call `Er -> UserType { kind: Module, .. }` entry installed by the outer
+    // call's dual-write.
+    let result = run_one(scope, parse_one("LOOKUP"));
+    use crate::runtime::model::KType;
+    match result {
+        KObject::KTypeValue(kt) => match kt {
+            KType::UserType { kind: crate::runtime::model::types::UserTypeKind::Module, name, .. } => {
+                assert_eq!(name, "Type");
+            }
+            other => panic!(
+                "expected UserType {{ kind: Module, name: \"Type\", .. }} \
+                 after closure escape, got {:?}",
+                other,
+            ),
+        },
+        other => panic!(
+            "expected KTypeValue carrying the abstract Type identity after closure escape, got {:?}",
+            other.ktype(),
         ),
     }
 }

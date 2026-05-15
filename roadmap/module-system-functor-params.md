@@ -1,34 +1,27 @@
 # Functor parameters — Type-class names and templated return types
 
-**Problem.** Two runtime gaps under the design surface from
-[design/module-system.md § Functors](../design/module-system.md#functors):
+**Problem.** FN return-type expressions referencing a per-call
+parameter fail at FN-construction. Declaring
+`FN (LIFT Er: OrderedSig) -> (MODULE_TYPE_OF Er Type) = ...` errors with
+"unbound name `Er`". The
+[`ReturnTypeCapture::TypeExpr`](../src/runtime/builtins/fn_def.rs#L239)
+arm re-elaborates the captured expression against the FN's outer scope
+at Combine-finish;
+[`substitute_params`](../src/runtime/machine/kfunction/invoke.rs)
+exists for FN bodies but is not wired into return-type elaboration.
+Several shipped functor tests
+([fn_def/tests/module_stage2.rs](../src/runtime/builtins/fn_def/tests/module_stage2.rs)
+return-type-position cases, [ascribe.rs:441](../src/runtime/builtins/ascribe.rs#L441),
+and neighbours) work around this with a lowercase identifier parameter
+(`elem`, `p`) in the return-type slot rather than the documented
+Type-class form.
 
-1. **Type-class FN parameters for module values park.** The design names
-   a signature-typed FN parameter as a Type-class binder — "a
-   signature-typed FN parameter (`Er: OrderedSig`) is a type-language
-   binder, like an OCaml functor's parameter." Declaring
-   `FN (LIFT Er: OrderedSig) -> Module` and calling `LIFT some_module`
-   parks the dispatch — the Type-class arg name routes through
-   type-resolution rather than per-call value binding. Every shipped
-   functor test
-   ([fn_def/tests/module_stage2.rs:59](../src/runtime/builtins/fn_def/tests/module_stage2.rs#L59),
-   [fn_def/tests/module_stage2.rs:209](../src/runtime/builtins/fn_def/tests/module_stage2.rs#L209),
-   [ascribe.rs:441](../src/runtime/builtins/ascribe.rs#L441), and
-   neighbours) works around this with a lowercase identifier parameter
-   (`elem`, `p`).
-
-2. **FN return-type expressions referencing a per-call parameter fail at
-   FN-construction.** Declaring
-   `FN (LIFT Er: OrderedSig) -> (MODULE_TYPE_OF Er Type) = ...` errors
-   with "unbound name `Er`". The
-   [`ReturnTypeCapture::TypeExpr`](../src/runtime/builtins/fn_def.rs#L239)
-   arm re-elaborates the captured expression against the FN's outer
-   scope at Combine-finish;
-   [`substitute_params`](../src/runtime/machine/kfunction/invoke.rs#L76)
-   exists for FN bodies but is not wired into return-type elaboration.
-   [ROADMAP.md](../ROADMAP.md) and
-   [design/module-system.md § Functors](../design/module-system.md#functors)
-   both describe (2) as shipped; those statements are stale.
+(Parameter-position references — a Type-class FN parameter `Er:
+OrderedSig` carrying a type-language binding for body-position lookups
+like `(MODULE_TYPE_OF Er Type)` — already resolve through per-call
+dual-write into `bindings.types`; see
+[design/module-system.md § Functors](../design/module-system.md#functors).
+This roadmap item is the return-type-position residual.)
 
 **Impact.**
 
@@ -39,38 +32,22 @@
 - *Standard-library collection functors generalize naturally.* `Make`
   over `ORDERED` and similar shapes carry sharing constraints between
   input and output abstract types at the FN signature.
-- *Design-doc / runtime drift closes.* The design surface and the
-  runtime agree on the same form; the lowercase-identifier workaround
-  in the test suite migrates to the documented surface.
-- *Audit-slate pin tightens.* The slate test
-  [`type_op_dispatch_does_not_dangle`](../src/runtime/builtins/type_ops.rs)
-  currently exercises per-call-arena type-op dispatch via a
-  lowercase-identifier parameter; once Type-class params land, the same
-  shape exercises the dispatch-boundary substitution path.
+- *Design-doc / runtime drift closes for the return-type slot.* The
+  remaining lowercase-identifier workaround in return-type-position
+  tests migrates to the documented Type-class form.
+- *Substrate for dependent parameter annotations.* The `Deferred(_)`
+  return-type carrier and per-call re-elaboration plumbing established
+  here is the same machinery
+  [Dependent parameter annotations](module-system-dependent-param-annotations.md)
+  reuses for earlier-parameter references in later parameter types.
 
 **Directions.**
 
 - *Surface form — decided per
   [design/module-system.md § Functors](../design/module-system.md#functors).*
-  `Er: OrderedSig` for the parameter; `(MODULE_TYPE_OF Er Type)` for
-  the return-type expression that references it. Single-letter
-  parameter names follow koan's existing token-classification rules
-  (`E` is reserved; `Er`, `Elem` work).
-
-- *Type-class parameter binding — decided.* At call time, parameters
-  whose declared `KType` is **type-denoting** dual-write into
-  `bindings.types` (via the existing
-  [`Scope::register_type`](../src/runtime/machine/core/scope.rs))
-  alongside the value-side bind in `bindings.data`. The predicate
-  covers `KType::SignatureBound { .. }` (parameter is a module
-  ascribed to a signature; registers the module's nominal type
-  identity), `KType::Signature` (parameter is a signature value;
-  registers the signature itself), `KType::Type` (parameter is a
-  `KTypeValue`; registers it directly), and `KType::TypeExprRef`
-  (parameter carries a `TypeExpr`; registers the elaborated type). A
-  small `is_type_denoting` helper on `KType` keeps the per-call
-  [`invoke.rs`](../src/runtime/machine/kfunction/invoke.rs) site
-  declarative.
+  `(MODULE_TYPE_OF Er Type)` for the return-type expression that
+  references the parameter; `(SIG_WITH Set ((Elt: (MODULE_TYPE_OF Er Type))))`
+  for sharing-constraint pins that reference it.
 
 - *Templated return-type substitution — decided.* No separate
   substitution walk. Widen `ExpressionSignature::return_type` from
@@ -80,8 +57,8 @@
   any leaf matching a parameter name: present → `Deferred`; absent →
   `Resolved`. Per call, `Deferred` re-runs
   [`elaborate_type_expr`](../src/runtime/model/types/resolver.rs)
-  against the per-call scope where dual-write has installed parameter
-  names; parameter-name leaves resolve naturally through
+  against the per-call scope where Stage A's dual-write has installed
+  parameter names; parameter-name leaves resolve naturally through
   `bindings.types`. Return-type checking on the body's value runs
   against the per-call resolution. Replaces the existing
   [`ReturnTypeCapture::{Resolved, Unresolved, TypeExpr}`](../src/runtime/builtins/fn_def.rs#L239)
@@ -91,6 +68,23 @@
   ([`defer_via_combine`](../src/runtime/builtins/fn_def.rs)) is
   unchanged — parameter types remain definition-time-elaborated for
   dispatch keying.
+
+- *Parens-form return-type carrier — decided.* Raw parens-form return
+  types (`(MODULE_TYPE_OF Er Type)`, `(SIG_WITH Set ((Elt: Er)))`)
+  land via a second FN overload whose return-type slot is
+  `KType::KExpression` rather than `KType::TypeExprRef`, so the
+  expression survives FN-def without sub-dispatching against the
+  outer scope. The body branch on `bundle.get("return_type")`'s shape
+  decides between today's eager-elaborate path and the deferred
+  `Expression`-carrier path.
+
+- *Per-call elaboration at dispatch boundary — decided.* The deferred
+  return-type elaboration runs as a sibling of the body in a Combine
+  joined for the lift-time slot check, rather than as a separate
+  substitution pass. The `BodyResult::tail_with_frame` shape today's
+  invoke uses widens to a `DeferTo(combine_id)` form for the
+  `Deferred(_)` path; the slot check moves into the Combine's finish
+  closure.
 
 - *Arity scope — decided.* Arity-1 functor parameters only for the
   initial cut. Multi-parameter functors with cross-parameter

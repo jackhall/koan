@@ -160,7 +160,20 @@ dispatch in stage 5, coherence in stage 6. And the module-system stage-2
 audit-slate sign-off: the post-stage-1 Miri tree-borrows slate re-ran
 clean across every unsafe site introduced by stage-2 substrate (opaque
 ascription re-binds, type-op dispatch through the per-call arena),
-closing the carry-forward.
+closing the carry-forward; and the functor-params parameter-position
+dual-write — the
+[`KType::is_type_denoting`](src/runtime/model/types/ktype_predicates.rs)
+predicate plus
+[`KFunction::invoke`](src/runtime/machine/kfunction/invoke.rs)'s per-call
+bind loop registering the per-call binding into `bindings.types`
+alongside the existing `bind_value`, so a Type-class FN parameter
+(`Er: OrderedSig`) is a type-language binder for body-position
+references (`(MODULE_TYPE_OF Er Type)` resolves through the per-call
+scope), with the FN-param parser
+([`fn_def/signature.rs`](src/runtime/builtins/fn_def/signature.rs))
+relaxed to admit Type-classified bare-leaf tokens in the parameter-name
+slot of the `<name>: <Type>` triple. Return-type position references
+remain future work.
 
 ## Next items
 
@@ -197,12 +210,16 @@ carry-forward), and the remaining stages below land the rest
 incrementally, each producing a usable end state.
 
 - [Functor parameters — Type-class names and templated return types](roadmap/module-system-functor-params.md) —
-  Type-class FN parameters (`Er: OrderedSig`) for module values and
   return-type expressions that reference per-call parameters
-  (`(MODULE_TYPE_OF Er Type)`) — the canonical OCaml-`Make`-shape functor
-  signature. Both are described in
-  [design/module-system.md § Functors](design/module-system.md#functors)
-  but not wired through the runtime.
+  (`-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`) — the
+  canonical OCaml-`Make`-shape functor return type. Parameter-position
+  references (a Type-class FN parameter `Er: OrderedSig` carrying a
+  type-language binding inside the body) now resolve through per-call
+  dual-write into `bindings.types`; return-type position still
+  elaborates against the FN's outer scope at construction time, so a
+  parameter-name leaf in that position errors unbound. Both surfaces
+  are described in
+  [design/module-system.md § Functors](design/module-system.md#functors).
 - [Dependent parameter annotations](roadmap/module-system-dependent-param-annotations.md) —
   parameter type slots that reference earlier parameters in the same FN
   signature (`(MAKE T: Type elt: T)`, OCaml's

@@ -12,7 +12,7 @@
 use crate::runtime::model::{Argument, KObject, SignatureElement};
 use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
 use crate::runtime::machine::NodeId;
-use crate::ast::{ExpressionPart, KExpression};
+use crate::ast::{ExpressionPart, KExpression, TypeParams};
 
 /// Result of one walk over an FN signature's part list.
 pub(super) enum ParamListOutcome<'a> {
@@ -73,17 +73,34 @@ pub(super) fn parse_fn_param_list<'a>(
     let mut first_err: Option<String> = None;
     let mut i = 0;
     while i < parts.len() {
-        match &parts[i] {
-            ExpressionPart::Keyword(s) if s == ":" => {
+        // Recognize the parameter-name slot up front: either a lowercase `Identifier`
+        // (`xs`, `elem`) or a Type-classified bare-leaf token (`Er`, `Elem`). The
+        // Type-classified case is what makes `FN (LIFT Er: OrderedSig) -> ...` work —
+        // `Er` parses as `Type(TypeExpr { name: "Er", params: None })` per the
+        // tokenizer's classify_atom rules, but in *parameter-name position* it
+        // semantically denotes a binder name, not a type reference. Module-system
+        // functor-params Stage A: dual-write of the per-call value's type-language
+        // identity in `KFunction::invoke` makes this binder name accessible to the
+        // FN body's type-position references, which is the whole point of admitting
+        // it here.
+        let param_name: Option<String> = match &parts[i] {
+            ExpressionPart::Identifier(name) => Some(name.clone()),
+            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+                Some(t.name.clone())
+            }
+            _ => None,
+        };
+        match (param_name, &parts[i]) {
+            (_, ExpressionPart::Keyword(s)) if s == ":" => {
                 return ParamListOutcome::Err(
                     "FN signature has a stray `:` outside a `<name>: <Type>` triple".to_string(),
                 );
             }
-            ExpressionPart::Keyword(s) => {
+            (_, ExpressionPart::Keyword(s)) => {
                 elements.push(SignatureElement::Keyword(s.clone()));
                 i += 1;
             }
-            ExpressionPart::Identifier(name) => {
+            (Some(name), _) => {
                 let colon = parts.get(i + 1);
                 let ty = parts.get(i + 2);
                 let is_colon = matches!(colon, Some(ExpressionPart::Keyword(c)) if c == ":");
@@ -147,13 +164,16 @@ pub(super) fn parse_fn_param_list<'a>(
                     }
                 }
             }
-            ExpressionPart::Type(t) => {
+            (None, ExpressionPart::Type(t)) => {
+                // Type-classified token with parameters (`Foo<Bar>`) outside the
+                // `<name>: <Type>` triple is a stray type — the bare-leaf in-position
+                // case is already handled above.
                 return ParamListOutcome::Err(format!(
                     "FN signature has a stray type `{}` outside a `<name>: <Type>` triple",
                     t.render(),
                 ));
             }
-            other => {
+            (None, other) => {
                 return ParamListOutcome::Err(format!(
                     "FN signature part `{}` is not a Keyword, Identifier, or `<name>: <Type>` triple",
                     other.summarize(),

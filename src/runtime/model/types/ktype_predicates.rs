@@ -9,6 +9,41 @@ use crate::runtime::model::values::KObject;
 use crate::ast::{ExpressionPart, KLiteral};
 
 impl KType {
+    /// True iff this declared parameter `KType` denotes the type language — i.e. a
+    /// FN parameter declared with this `KType` carries (at call time) a value whose
+    /// nominal type identity is meaningful as a *type* binding, not just as a value
+    /// binding. Used by [`crate::runtime::machine::kfunction::KFunction::invoke`]
+    /// to decide whether to dual-write the per-call binding into
+    /// [`crate::runtime::machine::core::Bindings::types`] alongside the usual
+    /// value-side `bind_value`.
+    ///
+    /// Variants returning `true`:
+    /// - [`KType::SignatureBound`]: parameter is a module ascribed to a signature;
+    ///   the bound `KObject::KModule` carries a nominal `UserType { kind: Module, .. }`.
+    /// - [`KType::Signature`]: parameter is a first-class signature value; its
+    ///   nominal identity is `SignatureBound { sig_id, sig_path, pinned_slots: [] }`.
+    /// - [`KType::Type`]: parameter is a `KObject::KTypeValue(kt)` schema; the
+    ///   identity is `kt` itself.
+    /// - [`KType::TypeExprRef`]: parameter carries a type expression
+    ///   (`KObject::KTypeValue` / `KObject::TypeNameRef`); identity is the
+    ///   elaborated `KType`.
+    /// - [`KType::AnyUserType`] with `kind: Module`: parameter is an unascribed
+    ///   module; identity is the module's nominal `UserType { kind: Module, .. }`.
+    ///
+    /// Everything else (`Number`, `Str`, `List<_>`, `KExpression`, `Identifier`,
+    /// concrete `UserType`, etc.) returns `false` — those parameters carry no
+    /// type-language identity.
+    pub fn is_type_denoting(&self) -> bool {
+        match self {
+            KType::SignatureBound { .. } => true,
+            KType::Signature => true,
+            KType::Type => true,
+            KType::TypeExprRef => true,
+            KType::AnyUserType { kind: UserTypeKind::Module } => true,
+            _ => false,
+        }
+    }
+
     /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`; for parameterized
     /// containers, refinement of any inner slot makes the whole type more specific (covariant in
     /// element / key / value / arg / return positions). Strict — returns `false` for equal types.
@@ -498,6 +533,68 @@ mod tests {
         // Different-kind pairs incomparable.
         assert!(!point.is_more_specific_than(&any_tagged));
         assert!(!any_tagged.is_more_specific_than(&point));
+    }
+
+    /// `is_type_denoting` returns `true` exactly for the variants enumerated in the
+    /// predicate's docstring — the parameters whose declared `KType` makes the bound
+    /// value's nominal identity meaningful at the type level. Anchors the dual-write
+    /// gate in [`crate::runtime::machine::kfunction::KFunction::invoke`].
+    #[test]
+    fn is_type_denoting_table() {
+        // SignatureBound — module ascribed to a signature.
+        let sb = KType::SignatureBound {
+            sig_id: 1,
+            sig_path: "OrderedSig".into(),
+            pinned_slots: Vec::new(),
+        };
+        assert!(sb.is_type_denoting());
+        // SignatureBound with pins — still type-denoting.
+        let sb_pinned = KType::SignatureBound {
+            sig_id: 1,
+            sig_path: "OrderedSig".into(),
+            pinned_slots: vec![("Type".into(), KType::Number)],
+        };
+        assert!(sb_pinned.is_type_denoting());
+        // Signature — first-class signature value.
+        assert!(KType::Signature.is_type_denoting());
+        // Type — schema meta-type.
+        assert!(KType::Type.is_type_denoting());
+        // TypeExprRef — TypeExpr carrier.
+        assert!(KType::TypeExprRef.is_type_denoting());
+        // AnyUserType { kind: Module } — unascribed module wildcard.
+        assert!(KType::AnyUserType { kind: UserTypeKind::Module }.is_type_denoting());
+        // Sibling AnyUserType kinds are NOT type-denoting at the parameter level —
+        // a STRUCT-typed parameter doesn't make its name a type-language binder.
+        assert!(!KType::AnyUserType { kind: UserTypeKind::Struct }.is_type_denoting());
+        assert!(!KType::AnyUserType { kind: UserTypeKind::Tagged }.is_type_denoting());
+        // Per-declaration UserType is NOT type-denoting — the nominal identity already
+        // lives in the declaring scope's `bindings.types`; rebinding per-call would
+        // be a no-op (or worse, a shadow).
+        let ut = KType::UserType {
+            kind: UserTypeKind::Module,
+            scope_id: 1,
+            name: "Foo".into(),
+        };
+        assert!(!ut.is_type_denoting());
+        // Primitives, containers, function shapes — none denote types.
+        assert!(!KType::Number.is_type_denoting());
+        assert!(!KType::Str.is_type_denoting());
+        assert!(!KType::Bool.is_type_denoting());
+        assert!(!KType::Null.is_type_denoting());
+        assert!(!KType::Any.is_type_denoting());
+        assert!(!KType::Identifier.is_type_denoting());
+        assert!(!KType::KExpression.is_type_denoting());
+        assert!(!KType::List(Box::new(KType::Number)).is_type_denoting());
+        assert!(!KType::Dict(
+            Box::new(KType::Str),
+            Box::new(KType::Number),
+        )
+        .is_type_denoting());
+        assert!(!KType::KFunction {
+            args: vec![KType::Number],
+            ret: Box::new(KType::Number),
+        }
+        .is_type_denoting());
     }
 
     /// `SignatureBound { pinned_slots }` specificity rules:
