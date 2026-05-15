@@ -23,7 +23,7 @@ documents this caveat. The test currently pins only the FN-def routing
 succeeds); the end-to-end `(GET_ZERO int_ord)` call returning the
 underlying `Number(0)` is deferred to this item.
 
-Two adjacent gaps share the same "VAL slot type-identity" theme and ride
+One adjacent gap shares the same "VAL slot type-identity" theme and rides
 along with this work:
 
 - *Structural-form inner-name re-elaboration.*
@@ -40,15 +40,6 @@ along with this work:
   exercises a SIG body that shadows `Type` *and* uses it inside a
   structural form, so the gap doesn't bite, but it'll surface once
   modular implicits force full type-shape checking.
-- *`ScopeKind` enum for SIG-body classification.*
-  [`val_decl.rs`](../src/runtime/builtins/val_decl.rs)'s
-  `enclosing_sig_label` and
-  [`let_binding.rs`](../src/runtime/builtins/let_binding.rs)'s mirror
-  helper both gate on `scope.name.starts_with("SIG ")`, the literal
-  label `sig_def::body` stamps on the SIG decl_scope's child. A
-  future scope-naming convention change silently mis-classifies the
-  gate; both call sites already carry comments naming this item as
-  the home for the cleanup.
 
 **Impact.**
 
@@ -102,18 +93,6 @@ along with this work:
   unless a shipped test forces it sooner; modular implicits owns
   full structural-shape checking and will re-elaborate inner
   positions as part of its dispatch-key construction.
-- *`ScopeKind` enum for SIG-body classification — open.* Replace the
-  `scope.name.starts_with("SIG ")` string-prefix gate in
-  [`val_decl::enclosing_sig_label`](../src/runtime/builtins/val_decl.rs)
-  and
-  [`let_binding::enclosing_sig_label`](../src/runtime/builtins/let_binding.rs)
-  with a `ScopeKind` enum on `Scope` (`Sig`, `Module`, `Function`,
-  `Root`, …). One-touch internal refactor — no observable behavior
-  change, no new tests beyond keeping the existing gates green. The
-  call sites already document this item as the cleanup's home.
-  Lands alongside the identity-tagging work since both touch the
-  SIG-body classification path.
-
 ## Dependencies
 
 **Requires:**

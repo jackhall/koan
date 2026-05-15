@@ -404,9 +404,9 @@ mod tests {
     fn type_identity_for_signature_bound_yields_module_user_type() {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+        let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
             scope,
-            "MODULE Foo".into(),
+            "Foo".into(),
         ));
         let module = arena.alloc_module(Module::new("Foo".into(), child));
         let obj = arena.alloc_object(KObject::KModule(module, None));
@@ -433,9 +433,9 @@ mod tests {
     fn type_identity_for_any_module_yields_module_user_type() {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+        let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
             scope,
-            "MODULE Bar".into(),
+            "Bar".into(),
         ));
         let module = arena.alloc_module(Module::new("Bar".into(), child));
         let obj = arena.alloc_object(KObject::KModule(module, None));

@@ -138,18 +138,18 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::runtime::model::values::Module;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let child_a = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+    let child_a = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
         scope,
-        "MODULE NumPinned".into(),
+        "NumPinned".into(),
     ));
     let m_num: &Module<'_> = arena.alloc_module(Module::new("NumPinned".into(), child_a));
     m_num.type_members.borrow_mut().insert("Type".into(), KType::Number);
     m_num.mark_satisfies(42); // arbitrary sig_id matching the slot below
     let m_num_obj = arena.alloc_object(KObject::KModule(m_num, None));
 
-    let child_b = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+    let child_b = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
         scope,
-        "MODULE StrPinned".into(),
+        "StrPinned".into(),
     ));
     let m_str: &Module<'_> = arena.alloc_module(Module::new("StrPinned".into(), child_b));
     m_str.type_members.borrow_mut().insert("Type".into(), KType::Str);
@@ -157,9 +157,9 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_str_obj = arena.alloc_object(KObject::KModule(m_str, None));
 
     // A module that satisfies the sig but doesn't even have a `Type` pin — also rejected.
-    let child_c = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+    let child_c = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
         scope,
-        "MODULE NoTypePin".into(),
+        "NoTypePin".into(),
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(42);
@@ -182,9 +182,9 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     assert!(!slot.accepts_part(&ExpressionPart::Future(m_none_obj)));
 
     // Reject: module not in `compatible_sigs` set, even if its type_members would match.
-    let child_d = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+    let child_d = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
         scope,
-        "MODULE Unascribed".into(),
+        "Unascribed".into(),
     ));
     let m_unascribed: &Module<'_> = arena.alloc_module(Module::new("Unascribed".into(), child_d));
     m_unascribed.type_members.borrow_mut().insert("Type".into(), KType::Number);

@@ -268,7 +268,7 @@ mod tests {
         // Module's `child_scope` lives in `inner_arena` — exactly the shape a functor
         // body's `MODULE Result = (...)` produces. Lift must observe the arena match.
         let inner_scope = inner_arena.alloc_scope(
-            crate::runtime::machine::core::Scope::child_under_named(frame.scope(), "Inner".into()),
+            crate::runtime::machine::core::Scope::child_under_module(frame.scope(), "Inner".into()),
         );
         let module = inner_arena.alloc_module(Module::new("Inner".into(), inner_scope));
         let m_obj = KObject::KModule(module, None);

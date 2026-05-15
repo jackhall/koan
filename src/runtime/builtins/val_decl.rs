@@ -4,9 +4,9 @@
 //! signatures" section for the surface design.
 //!
 //! `VAL` exists exclusively inside SIG bodies — outside a SIG body its body returns a
-//! structured `ShapeError`. The gate walks the immediate enclosing labeled scope and
-//! requires its `name` to start with `"SIG "` (the label `sig_def::body` stamps onto
-//! its `decl_scope` via `Scope::child_under_named`).
+//! structured `ShapeError`. The gate walks outward through `Anonymous` frames and pivots
+//! on the first non-`Anonymous` [`ScopeKind`]: `Sig` admits VAL, `Module` rejects.
+//! `sig_def::body` stamps `ScopeKind::Sig` on its decl_scope via `Scope::child_under_sig`.
 //!
 //! Storage: the bound name lives in `bindings.data[name] = KObject::KTypeValue(declared_kt)`.
 //! The carrier overloads `KTypeValue`'s meaning inside a SIG decl_scope: at run-root or
@@ -55,7 +55,8 @@
 
 use crate::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::runtime::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope, SchedulerHandle,
+    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope, ScopeKind,
+    SchedulerHandle,
 };
 use crate::runtime::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::runtime::model::{
@@ -64,20 +65,19 @@ use crate::runtime::model::{
 
 use super::{err, register_builtin_with_pre_run};
 
-/// True iff `scope`'s nearest enclosing labeled scope is a SIG decl_scope (its `name`
-/// field starts with `"SIG "`, the label `sig_def::body` stamps on its child scope).
+/// True iff `scope`'s nearest non-`Anonymous` enclosing scope is a SIG decl_scope.
 /// The walk starts at `scope` itself — VAL's body runs against the SIG decl_scope
 /// directly, since `plan_body_statements` dispatches each SIG body statement against
-/// it. A future-scope-rename would break this; the brittleness is tracked under
-/// the `ScopeKind` enum Direction in
-/// [`val-slot-abstract-identity-tagging.md`](../../../roadmap/val-slot-abstract-identity-tagging.md).
-fn enclosing_sig_label(scope: &Scope<'_>) -> bool {
+/// it. A non-SIG named scope (a MODULE body) short-circuits to `false`; `Anonymous`
+/// frames are transparent and the walk continues.
+fn in_sig_body(scope: &Scope<'_>) -> bool {
     let mut current: Option<&Scope<'_>> = Some(scope);
     while let Some(s) = current {
-        if !s.name.is_empty() {
-            return s.name.starts_with("SIG ");
+        match &s.kind {
+            ScopeKind::Sig { .. } => return true,
+            ScopeKind::Module { .. } => return false,
+            ScopeKind::Anonymous => current = s.outer,
         }
-        current = s.outer;
     }
     false
 }
@@ -166,7 +166,7 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     // Gate: VAL is meaningful only inside a SIG body. Outside, the user almost
     // certainly meant `LET`; surface a focused diagnostic naming both surfaces.
-    if !enclosing_sig_label(scope) {
+    if !in_sig_body(scope) {
         return err(KError::new(KErrorKind::ShapeError(
             "VAL is only valid inside a SIG body — use LET for value bindings in \
              modules and run-root scope"

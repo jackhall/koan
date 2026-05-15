@@ -24,9 +24,9 @@ pub fn body_opaque<'a>(
     };
 
     let arena = scope.arena;
-    let new_scope = arena.alloc_scope(Scope::child_under_named(
+    let new_scope = arena.alloc_scope(Scope::child_under_module(
         scope,
-        format!("MODULE {} :| {}", m.path, s.path),
+        format!("{} :| {}", m.path, s.path),
     ));
 
     // Mirror the source module's bindings into the new scope by reference (values are

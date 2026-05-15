@@ -50,10 +50,7 @@ pub fn body<'a>(
     };
 
     let arena = scope.arena;
-    let child_scope = arena.alloc_scope(Scope::child_under_named(
-        scope,
-        format!("MODULE {}", name),
-    ));
+    let child_scope = arena.alloc_scope(Scope::child_under_module(scope, name.clone()));
 
     // Plan each top-level body statement onto the outer scheduler. A statement referencing
     // a sibling name dispatched in the same batch parks on its placeholder via the standard
@@ -306,9 +303,9 @@ mod tests {
         use crate::runtime::model::values::Module;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_named(
+        let child = arena.alloc_scope(crate::runtime::machine::Scope::child_under_module(
             scope,
-            "MODULE Foo".into(),
+            "Foo".into(),
         ));
         let module: &Module<'_> = arena.alloc_module(Module::new("Foo".into(), child));
         let module_obj = arena.alloc_object(KObject::KModule(module, None));

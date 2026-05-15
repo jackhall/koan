@@ -17,6 +17,6 @@ pub use kfunction::{
 pub(crate) use kfunction::substitute_params;
 pub use core::{
     Bindings, CallArena, Frame, KError, KErrorKind, KFuture, ResolveOutcome, Resolution,
-    Resolved, RuntimeArena, Scope,
+    Resolved, RuntimeArena, Scope, ScopeKind,
 };
 pub use execute::{Scheduler, interpret, interpret_with_writer};

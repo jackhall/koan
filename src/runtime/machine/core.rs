@@ -15,4 +15,4 @@ mod tests;
 pub use arena::{CallArena, RuntimeArena};
 pub use bindings::{ApplyOutcome, Bindings, PendingTypeEntry};
 pub use kerror::{Frame, KError, KErrorKind};
-pub use scope::{KFuture, ResolveOutcome, Resolution, Resolved, Scope};
+pub use scope::{KFuture, ResolveOutcome, Resolution, Resolved, Scope, ScopeKind};

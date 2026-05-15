@@ -1,6 +1,8 @@
 use crate::runtime::model::{Argument, ExpressionSignature, KObject, KType, SignatureElement, ReturnType};
 use crate::runtime::model::types::UserTypeKind;
-use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::runtime::machine::{
+    ArgumentBundle, BodyResult, KError, KErrorKind, Scope, ScopeKind, SchedulerHandle,
+};
 use crate::ast::{ExpressionPart, KExpression};
 
 use super::{err, register_builtin_with_pre_run};
@@ -122,12 +124,8 @@ pub fn body<'a>(
     // `(VAL <name>: <Type>)`, not the ascription-by-example `(LET <name> = <value>)`
     // form. The check fires only for the value-route (neither Type-class LET nor a
     // nominal-identity carrier alias) so `LET Type = Number` and
-    // `LET MyAlias = (some_module :| Sig)` keep working. The walk inspects the
-    // immediate-enclosing labeled scope's `name` field, the same brittle
-    // string-prefix gate `val_decl::enclosing_sig_label` uses; both migrate to a
-    // `ScopeKind` enum under the `val-slot-abstract-identity-tagging` roadmap
-    // item's `ScopeKind` Direction.
-    if type_for_types_map.is_none() && nominal_identity.is_none() && enclosing_sig_label(scope) {
+    // `LET MyAlias = (some_module :| Sig)` keep working.
+    if type_for_types_map.is_none() && nominal_identity.is_none() && in_sig_body(scope) {
         return err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write \
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
@@ -159,19 +157,16 @@ pub fn body<'a>(
     BodyResult::Value(allocated)
 }
 
-/// True iff `scope`'s nearest enclosing labeled scope is a SIG decl_scope (its
-/// `name` starts with `"SIG "`). Mirror of `val_decl::enclosing_sig_label`; both
-/// use the brittle string-prefix gate that's a candidate for replacement by a
-/// `ScopeKind` enum on `Scope`, tracked under
-/// [`val-slot-abstract-identity-tagging.md`](../../../roadmap/val-slot-abstract-identity-tagging.md)'s
-/// `ScopeKind` Direction.
-fn enclosing_sig_label(scope: &Scope<'_>) -> bool {
+/// Mirror of `val_decl::in_sig_body`: true iff the nearest non-`Anonymous` enclosing
+/// scope is a SIG decl_scope.
+fn in_sig_body(scope: &Scope<'_>) -> bool {
     let mut current: Option<&Scope<'_>> = Some(scope);
     while let Some(s) = current {
-        if !s.name.is_empty() {
-            return s.name.starts_with("SIG ");
+        match &s.kind {
+            ScopeKind::Sig { .. } => return true,
+            ScopeKind::Module { .. } => return false,
+            ScopeKind::Anonymous => current = s.outer,
         }
-        current = s.outer;
     }
     false
 }
@@ -611,12 +606,12 @@ mod tests {
             "SIG with lowercase-LET in body must not bind",
         );
         // Verify the diagnostic shape by running the LET directly against a
-        // synthetic SIG-named scope. The strict-reject check fires at body time
-        // when the immediate enclosing scope's name starts with `"SIG "`.
+        // synthetic SIG-classified scope. The strict-reject check fires at body time
+        // when the nearest non-`Anonymous` enclosing scope is `ScopeKind::Sig`.
         use crate::runtime::machine::Scope;
-        let sig_scope = arena.alloc_scope(Scope::child_under_named(
+        let sig_scope = arena.alloc_scope(Scope::child_under_sig(
             scope,
-            "SIG SyntheticForTest".to_string(),
+            "SyntheticForTest".to_string(),
         ));
         let err = run_one_err(sig_scope, parse_one("LET compare = 0"));
         match &err.kind {

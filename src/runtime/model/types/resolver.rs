@@ -455,10 +455,8 @@ mod tests {
     fn wrap_applied_distinct_per_ascription() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let scope_a = arena.alloc_scope(crate::runtime::machine::core::Scope::child_under_named(
-            scope, "A".into()));
-        let scope_b = arena.alloc_scope(crate::runtime::machine::core::Scope::child_under_named(
-            scope, "B".into()));
+        let scope_a = arena.alloc_scope(crate::runtime::machine::core::Scope::child_under(scope));
+        let scope_b = arena.alloc_scope(crate::runtime::machine::core::Scope::child_under(scope));
         let ctor_a = KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
             scope_id: 0xAAAA,

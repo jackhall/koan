@@ -62,10 +62,24 @@ pub struct Scope<'a> {
     /// Drained between dispatch nodes by `drain_pending`; direct writes bypass the queue.
     /// See [`PendingQueue`] for the deferral / retry surface.
     pending: PendingQueue<'a>,
-    /// Lexical-context label set at construction by `child_under_named` (e.g. `"MODULE Foo"`,
-    /// `"SIG OrderedSig"`); empty for run-root and ordinary call frames. Record-only;
-    /// reserved for future diagnostics.
-    pub name: String,
+    /// Lexical-context classification set at construction. `Anonymous` for run-root and
+    /// ordinary call frames; `Sig` / `Module` for the named decl-scope variants stamped
+    /// by `sig_def`, `module_def`, and `ascribe`. Read by `val_decl` / `let_binding`'s
+    /// SIG-body gate; the per-variant `name` field is record-only (carries the surface
+    /// label for diagnostics).
+    pub kind: ScopeKind,
+}
+
+/// Lexical classification for a [`Scope`]. The SIG-body gate in `val_decl` and
+/// `let_binding` walks outward from the active scope and pivots on the first non-
+/// `Anonymous` variant: `Sig` means "value-slot declarators (VAL) are admitted,
+/// LET-by-example is rejected"; `Module` means the opposite. Extend with `Function`
+/// or other variants when a caller actually stamps them — kept minimal today.
+#[derive(Debug, Clone)]
+pub enum ScopeKind {
+    Anonymous,
+    Sig { name: String },
+    Module { name: String },
 }
 
 impl<'a> Scope<'a> {
@@ -76,7 +90,7 @@ impl<'a> Scope<'a> {
             out: RefCell::new(Some(out)),
             arena,
             pending: PendingQueue::new(),
-            name: String::new(),
+            kind: ScopeKind::Anonymous,
         }
     }
 
@@ -93,19 +107,35 @@ impl<'a> Scope<'a> {
             out: RefCell::new(None),
             arena: outer.arena,
             pending: PendingQueue::new(),
-            name: String::new(),
+            kind: ScopeKind::Anonymous,
         }
     }
 
-    /// Like `child_under` but stamps the scope's `name` with a lexical-context label.
-    pub fn child_under_named(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+    /// Like `child_under` but stamps the scope as a SIG decl_scope. The SIG-body gate
+    /// in `val_decl` / `let_binding` returns true at the first such scope on the outer
+    /// walk.
+    pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
             bindings: Bindings::new(),
             out: RefCell::new(None),
             arena: outer.arena,
             pending: PendingQueue::new(),
-            name,
+            kind: ScopeKind::Sig { name },
+        }
+    }
+
+    /// Like `child_under` but stamps the scope as a MODULE body (also used for the
+    /// per-ascription view minted by `:|`). The SIG-body gate returns false at the
+    /// first such scope on the outer walk.
+    pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
+        Scope {
+            outer: Some(outer),
+            bindings: Bindings::new(),
+            out: RefCell::new(None),
+            arena: outer.arena,
+            pending: PendingQueue::new(),
+            kind: ScopeKind::Module { name },
         }
     }
 

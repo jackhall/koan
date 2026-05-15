@@ -41,10 +41,7 @@ pub fn body<'a>(
     };
 
     let arena = scope.arena;
-    let decl_scope = arena.alloc_scope(Scope::child_under_named(
-        scope,
-        format!("SIG {}", name),
-    ));
+    let decl_scope = arena.alloc_scope(Scope::child_under_sig(scope, name.clone()));
 
     let deps = sched.plan_body_statements(decl_scope, body_expr);
 
