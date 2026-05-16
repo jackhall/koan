@@ -15,10 +15,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::runtime::machine::core::{KError, KErrorKind, Scope, ScopeId};
+use crate::runtime::machine::core::{Scope, ScopeId};
 
 use super::super::types::KType;
-use super::KObject;
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
@@ -120,42 +119,6 @@ impl<'a> Signature<'a> {
     pub fn sig_id(&self) -> ScopeId {
         self.decl_scope().id
     }
-}
-
-/// Resolve a `KObject` slot to a borrowed `&Module`. Ascribe and MODULE_TYPE_OF both
-/// declare their `m` slot as `KType::AnyUserType { kind: Module }`, so the
-/// `Argument::matches` filter already guarantees `obj.as_module()` is `Some` on the
-/// happy path; the `TypeMismatch` arm is a defensive guard against a future caller
-/// routing a non-module value through here.
-///
-/// `arg_name` is the surface argument label threaded into any produced `TypeMismatch`.
-pub(crate) fn resolve_module<'a>(
-    obj: &KObject<'a>,
-    arg_name: &str,
-) -> Result<&'a Module<'a>, KError> {
-    if let Some(m) = obj.as_module() {
-        return Ok(m);
-    }
-    Err(KError::new(KErrorKind::TypeMismatch {
-        arg: arg_name.to_string(),
-        expected: "Module".to_string(),
-        got: obj.ktype().name(),
-    }))
-}
-
-/// Symmetric to [`resolve_module`] for `&Signature`.
-pub(crate) fn resolve_signature<'a>(
-    obj: &KObject<'a>,
-    arg_name: &str,
-) -> Result<&'a Signature<'a>, KError> {
-    if let Some(s) = obj.as_signature() {
-        return Ok(s);
-    }
-    Err(KError::new(KErrorKind::TypeMismatch {
-        arg: arg_name.to_string(),
-        expected: "Signature".to_string(),
-        got: obj.ktype().name(),
-    }))
 }
 
 #[cfg(test)]

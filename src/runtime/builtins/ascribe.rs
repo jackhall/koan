@@ -8,7 +8,7 @@
 use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::runtime::machine::model::values::{resolve_module, resolve_signature, Module};
+use crate::runtime::machine::model::values::Module;
 
 use super::{arg, kw, register_builtin, sig};
 
@@ -184,19 +184,13 @@ pub(super) fn is_abstract_type_name(name: &str) -> bool {
 }
 
 /// Resolve `m` and `s` from the bundle. Both slots are typed `Module` / `Signature`, so
-/// the resolver is just a typed `as_module()` / `as_signature()` projection; the
+/// the resolver is just a typed `require_module()` / `require_signature()` projection; the
 /// `TypeMismatch` arm is a defensive guard against a future caller wiring something else.
 fn resolve_module_and_signature<'a>(
     bundle: &ArgumentBundle<'a>,
 ) -> Result<(&'a crate::runtime::machine::model::values::Module<'a>, &'a crate::runtime::machine::model::values::Signature<'a>), KError> {
-    let m_obj = bundle
-        .get("m")
-        .ok_or_else(|| KError::new(KErrorKind::MissingArg("m".to_string())))?;
-    let s_obj = bundle
-        .get("s")
-        .ok_or_else(|| KError::new(KErrorKind::MissingArg("s".to_string())))?;
-    let m = resolve_module(m_obj, "m")?;
-    let s = resolve_signature(s_obj, "s")?;
+    let m = bundle.require_module("m")?;
+    let s = bundle.require_signature("s")?;
     Ok((m, s))
 }
 

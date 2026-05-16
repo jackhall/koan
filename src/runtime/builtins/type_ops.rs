@@ -21,29 +21,9 @@ use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::runtime::machine::{ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, ScopeId, SchedulerHandle};
-use crate::runtime::machine::model::values::{resolve_module, resolve_signature};
 
 use super::ascribe::{abstract_type_names_of, is_abstract_type_name};
 use super::{arg, err, kw, register_builtin, sig};
-
-/// Pull a `KObject::KTypeValue`'s inner `KType` out of an arg slot. The slot is declared
-/// `KType::TypeExprRef`, so by `Argument::matches` shape-time it must be either an
-/// `ExpressionPart::Type(_)` (lowered into `KTypeValue` by `resolve_for`) or a
-/// `Future(KObject::KTypeValue(_))` lifted from a previous sub-dispatch. Anything else
-/// reaching here is a `TypeMismatch` from the dispatcher's perspective.
-fn read_ktype<'a>(bundle: &ArgumentBundle<'a>, name: &str) -> Result<KType, KError> {
-    let Some(obj) = bundle.get(name) else {
-        return Err(KError::new(KErrorKind::MissingArg(name.to_string())));
-    };
-    if let Some(kt) = obj.as_ktype() {
-        return Ok(kt.clone());
-    }
-    Err(KError::new(KErrorKind::TypeMismatch {
-        arg: name.to_string(),
-        expected: "TypeExprRef".to_string(),
-        got: obj.ktype().name(),
-    }))
-}
 
 /// `LIST_OF <elem:TypeExprRef>` → `TypeExprRef` carrying `List<elem>`.
 pub fn body_list_of<'a>(
@@ -51,8 +31,8 @@ pub fn body_list_of<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let elem = match read_ktype(&bundle, "elem") {
-        Ok(t) => t,
+    let elem = match bundle.require_ktype("elem") {
+        Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
     BodyResult::Value(
@@ -69,12 +49,12 @@ pub fn body_dict_of<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let key = match read_ktype(&bundle, "key") {
-        Ok(t) => t,
+    let key = match bundle.require_ktype("key") {
+        Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    let value = match read_ktype(&bundle, "value") {
-        Ok(t) => t,
+    let value = match bundle.require_ktype("value") {
+        Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
     BodyResult::Value(
@@ -96,21 +76,12 @@ pub fn body_function_of<'a>(
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     use crate::runtime::machine::model::ast::ExpressionPart;
-    let args_expr = match bundle.get("args") {
-        Some(obj) => match obj.as_kexpression() {
-            Some(e) => e.clone(),
-            None => {
-                return err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "args".to_string(),
-                    expected: "KExpression".to_string(),
-                    got: obj.ktype().name(),
-                }));
-            }
-        },
-        None => return err(KError::new(KErrorKind::MissingArg("args".to_string()))),
+    let args_expr = match bundle.require_kexpression("args") {
+        Ok(e) => e.clone(),
+        Err(e) => return err(e),
     };
-    let ret = match read_ktype(&bundle, "ret") {
-        Ok(t) => t,
+    let ret = match bundle.require_ktype("ret") {
+        Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
     let mut args: Vec<KType> = Vec::with_capacity(args_expr.parts.len());
@@ -153,21 +124,17 @@ pub fn body_module_type_of<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let m = match bundle.get("m") {
-        Some(obj) => match resolve_module(obj, "m") {
-            Ok(m) => m,
-            Err(e) => return err(e),
-        },
-        None => return err(KError::new(KErrorKind::MissingArg("m".to_string()))),
+    let m = match bundle.require_module("m") {
+        Ok(m) => m,
+        Err(e) => return err(e),
     };
     // The `name` slot accepts a Type token (e.g. `Type`, `Elt`) — abstract type names
     // classify as Type per the token-classification rules, not Identifier. The lookup uses
     // the bare leaf name from the resolved `KType`.
-    let name_kt = match read_ktype(&bundle, "name") {
-        Ok(t) => t,
+    let name = match bundle.require_ktype("name") {
+        Ok(t) => t.name(),
         Err(e) => return err(e),
     };
-    let name = name_kt.name();
     // Pull the abstract type's concrete `KType` (post-3.1: `KType::UserType { kind:
     // Module, .. }` minted by opaque ascription) out of the `type_members` table directly
     // so the consumer downstream sees the identity-bearing variant rather than a
@@ -200,8 +167,8 @@ pub fn body_type_constructor<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let param_kt = match read_ktype(&bundle, "param") {
-        Ok(t) => t,
+    let param_kt = match bundle.require_ktype("param") {
+        Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
     // The parameter symbol is the bare Type-token name (`T`, `Elt`, ...). Structural
@@ -244,25 +211,13 @@ pub fn body_sig_with<'a>(
 ) -> BodyResult<'a> {
     use crate::runtime::machine::model::ast::ExpressionPart;
 
-    let s = match bundle.get("sig") {
-        Some(obj) => match resolve_signature(obj, "sig") {
-            Ok(s) => s,
-            Err(e) => return err(e),
-        },
-        None => return err(KError::new(KErrorKind::MissingArg("sig".to_string()))),
+    let s = match bundle.require_signature("sig") {
+        Ok(s) => s,
+        Err(e) => return err(e),
     };
-    let bindings_expr = match bundle.get("bindings") {
-        Some(obj) => match obj.as_kexpression() {
-            Some(e) => e.clone(),
-            None => {
-                return err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "bindings".to_string(),
-                    expected: "KExpression".to_string(),
-                    got: obj.ktype().name(),
-                }));
-            }
-        },
-        None => return err(KError::new(KErrorKind::MissingArg("bindings".to_string()))),
+    let bindings_expr = match bundle.require_kexpression("bindings") {
+        Ok(e) => e.clone(),
+        Err(e) => return err(e),
     };
 
     // Pre-walk: the bindings_expr's shape comes from the parser's peel-redundant

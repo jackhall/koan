@@ -14,7 +14,7 @@ use crate::runtime::machine::model::ast::{KExpression, TypeExpr, TypeParams};
 
 use crate::runtime::machine::core::{KError, KErrorKind};
 use crate::runtime::machine::model::types::KType;
-use crate::runtime::machine::model::values::KObject;
+use crate::runtime::machine::model::values::{KObject, Module, Signature};
 
 /// Name to resolved value, produced by `KFunction::bind` and consumed by the body.
 pub struct ArgumentBundle<'a> {
@@ -37,6 +37,55 @@ impl<'a> ArgumentBundle<'a> {
                 .collect(),
         }
     }
+
+    /// Borrow `name`'s slot as a `&KExpression`. `MissingArg` if absent;
+    /// `TypeMismatch { expected: "KExpression" }` if the slot holds a non-`KExpression`
+    /// variant.
+    pub fn require_kexpression(&self, name: &str) -> Result<&KExpression<'a>, KError> {
+        let obj = self.get_or_missing(name)?;
+        obj.as_kexpression().ok_or_else(|| mismatch(name, "KExpression", obj))
+    }
+
+    /// Borrow `name`'s slot as a `&KType`. `MissingArg` / `TypeMismatch` shaped the same
+    /// way as [`require_kexpression`](Self::require_kexpression).
+    pub fn require_ktype(&self, name: &str) -> Result<&KType, KError> {
+        let obj = self.get_or_missing(name)?;
+        obj.as_ktype().ok_or_else(|| mismatch(name, "TypeExprRef", obj))
+    }
+
+    /// Borrow `name`'s slot as a `&Module`. Same error shape as the sister `require_*`
+    /// methods.
+    pub fn require_module(&self, name: &str) -> Result<&'a Module<'a>, KError> {
+        let obj = self.get_or_missing(name)?;
+        obj.as_module().ok_or_else(|| mismatch(name, "Module", obj))
+    }
+
+    /// Borrow `name`'s slot as a `&Signature`. Same error shape as the sister `require_*`
+    /// methods.
+    pub fn require_signature(&self, name: &str) -> Result<&'a Signature<'a>, KError> {
+        let obj = self.get_or_missing(name)?;
+        obj.as_signature().ok_or_else(|| mismatch(name, "Signature", obj))
+    }
+
+    /// Borrow `name`'s slot as any `&KObject`. `MissingArg` if absent; no variant
+    /// narrowing — the caller dispatches on `KObject` arms itself. Use the variant-typed
+    /// `require_*` siblings when only one shape is acceptable.
+    pub fn require(&self, name: &str) -> Result<&KObject<'a>, KError> {
+        self.get_or_missing(name)
+    }
+
+    fn get_or_missing(&self, name: &str) -> Result<&KObject<'a>, KError> {
+        self.get(name)
+            .ok_or_else(|| KError::new(KErrorKind::MissingArg(name.to_string())))
+    }
+}
+
+fn mismatch(arg: &str, expected: &str, got: &KObject<'_>) -> KError {
+    KError::new(KErrorKind::TypeMismatch {
+        arg: arg.to_string(),
+        expected: expected.to_string(),
+        got: got.ktype().name(),
+    })
 }
 
 /// Take ownership of a `KType::KExpression`-typed argument out of `bundle.args`, cloning

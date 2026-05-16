@@ -112,9 +112,9 @@ pub fn body_struct<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let target = match bundle.get("s") {
-        Some(obj) => obj,
-        None => return err(KError::new(KErrorKind::MissingArg("s".to_string()))),
+    let target = match bundle.require("s") {
+        Ok(obj) => obj,
+        Err(e) => return err(e),
     };
     let field_name = match read_field_name(&bundle) {
         Ok(s) => s,
@@ -130,9 +130,9 @@ pub fn body_module<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let target = match bundle.get("s") {
-        Some(obj) => obj,
-        None => return err(KError::new(KErrorKind::MissingArg("s".to_string()))),
+    let target = match bundle.require("s") {
+        Ok(obj) => obj,
+        Err(e) => return err(e),
     };
     let field_name = match read_field_name(&bundle) {
         Ok(s) => s,

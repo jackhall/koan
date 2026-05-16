@@ -95,11 +95,6 @@ incrementally, each producing a usable end state.
   `debug_assert!` at the coarsening branch is the tripwire; the decision
   is forced when stage 5 implicit search or a precise FN-typed slot
   ascription first exercises the scenario.
-- [Encode `CallArena` heap-pinning in the type system](roadmap/arena-heap-pinning.md) —
-  `CallArena`'s `'static` transmute, `KFunction<'a>`'s `NonNull<Scope<'a>>`,
-  and module child-scope pointer chains are sound only because nothing moves
-  the `Rc`'d payload, a no-move property nowhere encoded; promote the contract
-  with a `Pinned<Scope>` newtype around the `Rc`.
 
 ### Surface and ergonomics
 

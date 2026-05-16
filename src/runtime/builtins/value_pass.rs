@@ -1,5 +1,5 @@
 use crate::runtime::machine::model::KType;
-use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::runtime::machine::{ArgumentBundle, BodyResult, Scope, SchedulerHandle};
 
 use super::{arg, err, register_builtin, sig};
 
@@ -12,9 +12,9 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let cloned = match bundle.get("v") {
-        Some(obj) => obj.deep_clone(),
-        None => return err(KError::new(KErrorKind::MissingArg("v".to_string()))),
+    let cloned = match bundle.require("v") {
+        Ok(obj) => obj.deep_clone(),
+        Err(e) => return err(e),
     };
     let arena = scope.arena;
     BodyResult::Value(arena.alloc_object(cloned))

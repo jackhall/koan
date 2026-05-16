@@ -1,5 +1,5 @@
 use crate::runtime::machine::model::{KObject, KType, Parseable};
-use crate::runtime::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::runtime::machine::{ArgumentBundle, BodyResult, Scope, SchedulerHandle};
 
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -12,9 +12,9 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let rendered = match bundle.get("msg") {
-        Some(obj) => obj.summarize(),
-        None => return err(KError::new(KErrorKind::MissingArg("msg".to_string()))),
+    let rendered = match bundle.require("msg") {
+        Ok(obj) => obj.summarize(),
+        Err(e) => return err(e),
     };
     let line = format!("{rendered}\n");
     scope.write_out(line.as_bytes());

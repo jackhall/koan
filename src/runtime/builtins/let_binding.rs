@@ -19,9 +19,9 @@ pub fn body<'a>(
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    let value = match bundle.get("value") {
-        Some(v) => v,
-        None => return err(KError::new(KErrorKind::MissingArg("value".to_string()))),
+    let value = match bundle.require("value") {
+        Ok(v) => v,
+        Err(e) => return err(e),
     };
     // `type_for_types_map` is `Some(kt)` iff this call should route storage through
     // `register_type` (a Type-class LHS with an actual `KTypeValue(kt)` RHS).
