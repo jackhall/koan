@@ -1,0 +1,3 @@
+# columns: date  short-sha  per-loc  structure  size
+# (all three numeric columns are per root-loc)
+# managed by tools/modgraph.py --baseline; newest first, capped to 5 entries

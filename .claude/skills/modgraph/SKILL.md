@@ -34,13 +34,11 @@ python3 tools/modgraph.py --edges /tmp/koan.dot --root koan
 python3 tools/modgraph.py --edges /tmp/koan.dot --root koan::runtime::machine
 ```
 
-Per-module breakdown plus a bottom-line split:
-
-- `structure Σ index·loc` — coupling per level × subtree LOC.
-- `size Σ γ·L·log(1+L/T)` — per-file size charge over every module's own file (leaves and parents alike, so fat `mod.rs` files don't hide).
-- `total` and `per root-loc` (with structure/size split).
+Per-module breakdown plus a single bottom-line number: the **per root-loc** score, split into `structure` (coupling/nesting) and `size` (per-file size charge over every module's own file — including fat `mod.rs` files above small children). Absolute totals are intentionally not reported; only the per-loc number is calibrated to compare across runs and tree shapes.
 
 Each row prints `own N size N.N` so the biggest offenders are visible in-line. Tune the size term with `--gamma` / `--size-pivot`; tune structure with `--alpha` / `--beta`.
+
+For tracked baselines (used by the `verify` skill), pass `--baseline <file>` — modgraph prunes stale entries (unreachable SHAs, prior dirty snapshots), prepends today's measurement, trims to 5, and prints a delta line. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
 
 ### 3. Score a *refactor* (renames, not moves)
 

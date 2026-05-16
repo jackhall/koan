@@ -11,7 +11,7 @@ Command-line workflow for Rust refactors in the koan repo. Three tools, in order
 2. **`cargo fix` / `cargo clippy --fix`** — auto-apply suggestions the compiler already knows about.
 3. **`ast-grep`** — pattern-based structural rewrites for things the compiler can't do alone (renames, moves, signature reshapes).
 
-Assumes `ast-grep` and `cargo clippy` are on PATH. For *scoring* a proposed module reshuffle (partition / rename / split) before doing it, see the dedicated `modgraph` skill.
+Assumes `ast-grep` and `cargo clippy` are on PATH. For *scoring* a proposed module reshuffle (partition / rename / split) before doing it, see the dedicated `modgraph` skill. When the refactor is done, run the `verify` skill to confirm tests + clippy are clean and to record the new modgraph score against the prior baseline — that's the single check that proves the refactor didn't regress anything.
 
 ## When to reach for which tool
 
@@ -101,3 +101,4 @@ Then delete what's truly dead, or mark `#[allow(dead_code)]` deliberately for th
 
 - `ast-grep` is syntactic, not type-aware. It cannot disambiguate two `foo`s in different modules — scope by path or do the rewrite in stages.
 - Don't stack `cargo clippy --fix` on top of uncommitted `ast-grep` rewrites in the same pass. Commit between phases so a bad rewrite is easy to revert.
+- `cargo build` alone doesn't catch test regressions or new clippy issues introduced by a rewrite. Run the `verify` skill before declaring the refactor done.

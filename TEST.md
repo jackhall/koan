@@ -37,6 +37,24 @@ wrong (e.g., the `clippy::unnecessary_cast` allows in
 [src/runtime/model/values/module.rs](src/runtime/machine/model/values/module.rs) where the
 through-`'static` cast is required by the lifetime-erasure pattern).
 
+## Modgraph complexity baseline
+
+The verify skill records the koan crate's modgraph fractal-complexity score
+to [`tools/complexity.txt`](tools/complexity.txt) on every run, newest
+first, capped to five entries. A refactor should either reduce the score
+by more than rounding noise, reduce code duplication, or enforce some
+invariant using the type system.
+
+`tools/modgraph.py --baseline tools/complexity.txt` manages the file end-to-end:
+it prunes entries whose commit isn't reachable from HEAD (covers `git
+checkout`, `git reset --hard`, rebase drops) and every prior dirty-snapshot
+(`+`-suffixed) entry, then prepends today's measurement and prints a one-
+line delta against the prior top entry.
+
+Captured at `--root koan` with default `α=2, β=5, γ=10, T=400`. Scoring
+details and tuning lives in
+[.claude/skills/modgraph/SKILL.md](.claude/skills/modgraph/SKILL.md).
+
 ## Miri audit slate
 
 The audit slate is the load-bearing memory-safety check. It runs every unsafe
