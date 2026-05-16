@@ -39,7 +39,7 @@ pub fn body<'a>(
         // function arrow forms) are rejected — the binder name must be a bare leaf.
         // The `TypeClassBindingExpectsType` blocklist runs the same shape as the
         // `KTypeValue` arm: non-type RHS rejected before storage routing.
-        Some(KObject::TypeNameRef(t, _)) => match &t.params {
+        Some(KObject::TypeNameRef(t)) => match &t.params {
             crate::runtime::machine::model::ast::TypeParams::List(_) | crate::runtime::machine::model::ast::TypeParams::Function { .. } => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "LET name must be a bare type name, got `{}`",

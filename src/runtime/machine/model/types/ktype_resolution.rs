@@ -118,9 +118,22 @@ mod tests {
     use super::*;
 
     fn leaf(n: &str) -> TypeExpr {
+        TypeExpr::leaf(n.into())
+    }
+
+    fn list_typeexpr(name: &str, items: Vec<TypeExpr>) -> TypeExpr {
         TypeExpr {
-            name: n.into(),
-            params: TypeParams::None,
+            name: name.into(),
+            params: TypeParams::List(items),
+            builtin_cache: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn function_typeexpr(args: Vec<TypeExpr>, ret: TypeExpr) -> TypeExpr {
+        TypeExpr {
+            name: "Function".into(),
+            params: TypeParams::Function { args, ret: Box::new(ret) },
+            builtin_cache: std::cell::OnceCell::new(),
         }
     }
 
@@ -131,10 +144,7 @@ mod tests {
 
     #[test]
     fn from_type_expr_list_of_number() {
-        let te = TypeExpr {
-            name: "List".into(),
-            params: TypeParams::List(vec![leaf("Number")]),
-        };
+        let te = list_typeexpr("List", vec![leaf("Number")]);
         assert_eq!(
             KType::from_type_expr(&te).unwrap(),
             KType::List(Box::new(KType::Number))
@@ -143,10 +153,7 @@ mod tests {
 
     #[test]
     fn from_type_expr_dict_string_number() {
-        let te = TypeExpr {
-            name: "Dict".into(),
-            params: TypeParams::List(vec![leaf("Str"), leaf("Number")]),
-        };
+        let te = list_typeexpr("Dict", vec![leaf("Str"), leaf("Number")]);
         assert_eq!(
             KType::from_type_expr(&te).unwrap(),
             KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
@@ -155,13 +162,7 @@ mod tests {
 
     #[test]
     fn from_type_expr_function_unary() {
-        let te = TypeExpr {
-            name: "Function".into(),
-            params: TypeParams::Function {
-                args: vec![leaf("Number")],
-                ret: Box::new(leaf("Str")),
-            },
-        };
+        let te = function_typeexpr(vec![leaf("Number")], leaf("Str"));
         assert_eq!(
             KType::from_type_expr(&te).unwrap(),
             KType::KFunction {
@@ -173,13 +174,7 @@ mod tests {
 
     #[test]
     fn from_type_expr_function_nullary() {
-        let te = TypeExpr {
-            name: "Function".into(),
-            params: TypeParams::Function {
-                args: vec![],
-                ret: Box::new(leaf("Number")),
-            },
-        };
+        let te = function_typeexpr(vec![], leaf("Number"));
         assert_eq!(
             KType::from_type_expr(&te).unwrap(),
             KType::KFunction {
@@ -191,14 +186,8 @@ mod tests {
 
     #[test]
     fn from_type_expr_nested_list() {
-        let inner = TypeExpr {
-            name: "List".into(),
-            params: TypeParams::List(vec![leaf("Number")]),
-        };
-        let te = TypeExpr {
-            name: "List".into(),
-            params: TypeParams::List(vec![inner]),
-        };
+        let inner = list_typeexpr("List", vec![leaf("Number")]);
+        let te = list_typeexpr("List", vec![inner]);
         assert_eq!(
             KType::from_type_expr(&te).unwrap(),
             KType::List(Box::new(KType::List(Box::new(KType::Number))))
@@ -207,19 +196,13 @@ mod tests {
 
     #[test]
     fn from_type_expr_list_wrong_arity_errors() {
-        let te = TypeExpr {
-            name: "List".into(),
-            params: TypeParams::List(vec![leaf("A"), leaf("B")]),
-        };
+        let te = list_typeexpr("List", vec![leaf("A"), leaf("B")]);
         assert!(KType::from_type_expr(&te).is_err());
     }
 
     #[test]
     fn from_type_expr_dict_wrong_arity_errors() {
-        let te = TypeExpr {
-            name: "Dict".into(),
-            params: TypeParams::List(vec![leaf("Str")]),
-        };
+        let te = list_typeexpr("Dict", vec![leaf("Str")]);
         assert!(KType::from_type_expr(&te).is_err());
     }
 
@@ -231,10 +214,7 @@ mod tests {
 
     #[test]
     fn from_type_expr_unknown_with_params_errors() {
-        let te = TypeExpr {
-            name: "Banana".into(),
-            params: TypeParams::List(vec![leaf("Number")]),
-        };
+        let te = list_typeexpr("Banana", vec![leaf("Number")]);
         assert!(KType::from_type_expr(&te).is_err());
     }
 
@@ -246,6 +226,7 @@ mod tests {
                 args: vec![],
                 ret: Box::new(leaf("Number")),
             },
+            builtin_cache: std::cell::OnceCell::new(),
         };
         assert!(KType::from_type_expr(&te).is_err());
     }

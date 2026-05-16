@@ -81,7 +81,7 @@ pub fn body_type_lhs<'a>(
         // landed here as a `TypeNameRef`. The surface name is the `TypeExpr.name`
         // directly — `Foo.x` where `Foo` is user-bound resolves to its value-side
         // binding via `scope.lookup` below, the same path the `KTypeValue` arm takes.
-        Some(KObject::TypeNameRef(t, _)) => t.name.clone(),
+        Some(KObject::TypeNameRef(t)) => t.name.clone(),
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
@@ -151,7 +151,7 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
         // Stage-2 carrier: a Type-classed field whose name isn't in the builtin table
         // lands as a `TypeNameRef`. `t.name` is the surface identifier — same shape as
         // the `KTypeValue::name()` path.
-        Some(KObject::TypeNameRef(t, _)) => Ok(t.name.clone()),
+        Some(KObject::TypeNameRef(t)) => Ok(t.name.clone()),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "field".to_string(),
             expected: "Identifier".to_string(),

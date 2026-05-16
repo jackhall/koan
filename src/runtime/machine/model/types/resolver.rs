@@ -407,9 +407,14 @@ mod tests {
     use crate::runtime::builtins::test_support::run_root_silent;
 
     fn leaf(n: &str) -> TypeExpr {
+        TypeExpr::leaf(n.into())
+    }
+
+    fn list_typeexpr(name: &str, items: Vec<TypeExpr>) -> TypeExpr {
         TypeExpr {
-            name: n.into(),
-            params: TypeParams::None,
+            name: name.into(),
+            params: TypeParams::List(items),
+            builtin_cache: std::cell::OnceCell::new(),
         }
     }
 
@@ -430,10 +435,7 @@ mod tests {
         };
         scope.register_type("Wrap".into(), ctor.clone());
         // Surface form: `Wrap<Number>` — a TypeExpr with name "Wrap" + List params.
-        let te = TypeExpr {
-            name: "Wrap".into(),
-            params: TypeParams::List(vec![leaf("Number")]),
-        };
+        let te = list_typeexpr("Wrap", vec![leaf("Number")]);
         let mut el = Elaborator::new(scope);
         match elaborate_type_expr(&mut el, &te) {
             ElabResult::Done(kt) => match kt {
@@ -470,10 +472,7 @@ mod tests {
         scope_a.register_type("Wrap".into(), ctor_a.clone());
         scope_b.register_type("Wrap".into(), ctor_b.clone());
 
-        let te = TypeExpr {
-            name: "Wrap".into(),
-            params: TypeParams::List(vec![leaf("Number")]),
-        };
+        let te = list_typeexpr("Wrap", vec![leaf("Number")]);
         let mut ela = Elaborator::new(scope_a);
         let kt_a = match elaborate_type_expr(&mut ela, &te) {
             ElabResult::Done(kt) => kt,
@@ -501,10 +500,7 @@ mod tests {
         };
         scope.register_type("Wrap".into(), ctor);
         // Two args against a single-param constructor: arity mismatch.
-        let te = TypeExpr {
-            name: "Wrap".into(),
-            params: TypeParams::List(vec![leaf("Number"), leaf("Str")]),
-        };
+        let te = list_typeexpr("Wrap", vec![leaf("Number"), leaf("Str")]);
         let mut el = Elaborator::new(scope);
         match elaborate_type_expr(&mut el, &te) {
             ElabResult::Unbound(msg) => {
@@ -536,10 +532,7 @@ mod tests {
             scope,
         );
         scope.install_placeholder("Wrap".into(), dummy).expect("placeholder install");
-        let te = TypeExpr {
-            name: "Wrap".into(),
-            params: TypeParams::List(vec![leaf("Number")]),
-        };
+        let te = list_typeexpr("Wrap", vec![leaf("Number")]);
         let mut el = Elaborator::new(scope);
         match elaborate_type_expr(&mut el, &te) {
             ElabResult::Park(ids) => {

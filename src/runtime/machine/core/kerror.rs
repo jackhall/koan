@@ -34,6 +34,18 @@ pub enum KErrorKind {
     /// LET on a Type-class binder with a non-type RHS — caught at bind time
     /// rather than at downstream elaboration. Pairs with stage 1.7's routing flip.
     TypeClassBindingExpectsType { name: String, got: KType },
+    /// A `TypeNameRef` carrier landed at the dispatch boundary's per-call
+    /// parameter dual-write (`type_identity_for`) but its `TypeExpr` couldn't
+    /// be elaborated in the FN's captured definition scope because some
+    /// referenced type-binding is still pending finalization. Replaces today's
+    /// silent skip — surfaces the precise context (parameter, surface form,
+    /// pending finalize-node) so a workload that hits this regularly is
+    /// debuggable without diving into the dispatcher's internals.
+    TypeIdentityPendingAtDispatch {
+        param: String,
+        surface: String,
+        pending_on: Vec<crate::runtime::machine::core::kfunction::NodeId>,
+    },
 }
 
 /// One entry in an error's call-stack trace. Both fields are `summarize()` text because
@@ -115,6 +127,11 @@ impl fmt::Display for KErrorKind {
                 f,
                 "type-class binding `{name}` expects a type value, got `{}`",
                 got.name(),
+            ),
+            KErrorKind::TypeIdentityPendingAtDispatch { param, surface, pending_on } => write!(
+                f,
+                "per-call type identity for `{param}` (surface form `{surface}`) is \
+                 pending finalize on producer node(s) {pending_on:?}",
             ),
         }
     }

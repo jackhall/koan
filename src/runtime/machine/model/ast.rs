@@ -3,9 +3,11 @@
 //! keywords), collection literals (lists, dicts), and nested expressions. `KLiteral`
 //! enumerates the concrete literal kinds the lexer can produce.
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::runtime::machine::model::types::KType;
 use crate::runtime::machine::model::{KKey, KObject, Parseable, Serializable, UntypedElement, UntypedKey};
 
 #[derive(Debug, Clone)]
@@ -19,15 +21,52 @@ pub enum KLiteral {
 /// Surface representation of a type token. Leaf types like `Number` carry `TypeParams::None`;
 /// container types like `List<Number>` and `Function<A, B -> R>` carry their inner types in
 /// the structured `TypeParams` variant.
-#[derive(Debug, Clone)]
+///
+/// `builtin_cache` is the Layer-1 resolution cache: when
+/// [`crate::runtime::machine::model::types::KType::from_type_expr`] succeeds against
+/// the builtin table, the resulting `KType` is stored here so subsequent
+/// `resolve_for` calls skip the recursive walk. Scope-independent — the result depends
+/// only on the surface form. `from_type_expr` failures (user-bound names) are not
+/// cached here; those route through the scope-owned Layer-2 memo on `Scope`.
+#[derive(Debug)]
 pub struct TypeExpr {
     pub name: String,
     pub params: TypeParams,
+    pub builtin_cache: OnceCell<KType>,
+}
+
+impl Clone for TypeExpr {
+    fn clone(&self) -> Self {
+        let cache = OnceCell::new();
+        if let Some(kt) = self.builtin_cache.get() {
+            let _ = cache.set(kt.clone());
+        }
+        TypeExpr {
+            name: self.name.clone(),
+            params: self.params.clone(),
+            builtin_cache: cache,
+        }
+    }
+}
+
+impl PartialEq for TypeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.params == other.params
+    }
+}
+
+impl Eq for TypeExpr {}
+
+impl std::hash::Hash for TypeExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.params.hash(state);
+    }
 }
 
 /// Inner-type carrier on a `TypeExpr`. The variant split bakes the `Function` arrow rule
 /// into the *shape* — downstream consumers don't have to know that `Function` is special.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeParams {
     /// Leaf type (`Number`, `Str`, `Any`) or an unparameterized container (`List`).
     None,
@@ -39,7 +78,11 @@ pub enum TypeParams {
 
 impl TypeExpr {
     pub fn leaf(name: String) -> TypeExpr {
-        TypeExpr { name, params: TypeParams::None }
+        TypeExpr {
+            name,
+            params: TypeParams::None,
+            builtin_cache: OnceCell::new(),
+        }
     }
 
     /// Render in surface syntax — Design-B sigil form. Leaves render bare (`Number`);
@@ -137,12 +180,12 @@ impl<'a> ExpressionPart<'a> {
     ///   `Function<(...)-> R>`), the result is packaged as `KObject::KTypeValue(kt)`.
     /// - When `from_type_expr` returns `Err` — i.e. a bare-leaf name that isn't a
     ///   builtin (`Point`, `IntOrd`, `MyList`) — the carrier becomes a
-    ///   `KObject::TypeNameRef(t, OnceCell::new())` preserving the parser-side
-    ///   `TypeExpr`. The consuming body (`extract_bare_type_name`, ATTR's TypeExprRef
-    ///   lhs, FN's deferred return-type elaboration, `LET <Type-class> = …`) reads the
-    ///   surface name directly off the carrier or — when scope-aware elaboration is
-    ///   needed — calls [`crate::runtime::machine::model::KObject::resolve_type_name_ref`] to
-    ///   resolve and memoize against the consuming scope.
+    ///   `KObject::TypeNameRef(t)` preserving the parser-side `TypeExpr`. The
+    ///   consuming body (`extract_bare_type_name`, ATTR's TypeExprRef lhs, FN's
+    ///   deferred return-type elaboration, `LET <Type-class> = …`) reads the surface
+    ///   name directly off the carrier or — when scope-aware elaboration is needed —
+    ///   calls [`crate::runtime::machine::core::Scope::resolve_type_expr`] which
+    ///   memoizes the resolution per-scope.
     ///
     /// The carrier shape is required because `resolve_for` runs at `KFunction::bind`
     /// time — before any body sees the slot — and the bind-time pass has no `Scope`
@@ -153,9 +196,17 @@ impl<'a> ExpressionPart<'a> {
     pub fn resolve_for(&self, slot: &crate::runtime::machine::model::KType) -> KObject<'a> {
         use crate::runtime::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
+            // Layer-1 cache: builtin-only resolution is surface-form-only, so the
+            // result is invariant across dispatches against this same `TypeExpr`.
+            if let Some(kt) = t.builtin_cache.get() {
+                return KObject::KTypeValue(kt.clone());
+            }
             return match KType::from_type_expr(t) {
-                Ok(kt) => KObject::KTypeValue(kt),
-                Err(_) => KObject::TypeNameRef(t.clone(), std::cell::OnceCell::new()),
+                Ok(kt) => {
+                    let _ = t.builtin_cache.set(kt.clone());
+                    KObject::KTypeValue(kt)
+                }
+                Err(_) => KObject::TypeNameRef(t.clone()),
             };
         }
         self.resolve()
@@ -265,6 +316,47 @@ impl<'a> Parseable for KExpression<'a> {
             .map(|p| p.summarize())
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::runtime::machine::model::types::KType;
+
+    /// Layer-1 cache: a builtin `TypeExpr` populates `builtin_cache` on first
+    /// `resolve_for` and re-uses the cached `KType` on subsequent calls.
+    #[test]
+    fn resolve_for_populates_builtin_cache() {
+        let part: ExpressionPart<'static> = ExpressionPart::Type(TypeExpr::leaf("Number".into()));
+        let slot = KType::TypeExprRef;
+        let _ = part.resolve_for(&slot);
+        if let ExpressionPart::Type(t) = &part {
+            assert_eq!(t.builtin_cache.get(), Some(&KType::Number));
+        } else {
+            panic!("expected Type part");
+        }
+        // Second call returns the cached value without re-walking.
+        let r2 = part.resolve_for(&slot);
+        match r2 {
+            KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
+            _ => panic!("expected KTypeValue"),
+        }
+    }
+
+    /// Layer-1 cache does NOT cache user-bound names: a leaf not in the builtin
+    /// table produces a `TypeNameRef` carrier and `builtin_cache` remains empty.
+    #[test]
+    fn resolve_for_skips_cache_for_user_bound_leaf() {
+        let part: ExpressionPart<'static> = ExpressionPart::Type(TypeExpr::leaf("MyType".into()));
+        let slot = KType::TypeExprRef;
+        let r = part.resolve_for(&slot);
+        assert!(matches!(r, KObject::TypeNameRef(_)));
+        if let ExpressionPart::Type(t) = &part {
+            assert!(t.builtin_cache.get().is_none());
+        } else {
+            panic!("expected Type part");
+        }
     }
 }
 

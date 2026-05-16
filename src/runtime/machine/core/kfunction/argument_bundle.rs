@@ -99,7 +99,7 @@ pub(crate) fn extract_bare_type_name<'a>(
     surface: &str,
 ) -> Result<String, KError> {
     match bundle.get(name) {
-        Some(KObject::TypeNameRef(t, _)) => match &t.params {
+        Some(KObject::TypeNameRef(t)) => match &t.params {
             TypeParams::None => Ok(t.name.clone()),
             // Parameterized surface form on a `TypeNameRef` carrier — the parser saw
             // something like `Foo<Bar>` where `Foo` isn't a builtin and the user wrote
@@ -168,10 +168,10 @@ pub(crate) fn extract_type_name_ref<'a>(
 ) -> Option<TypeExpr> {
     let rc = bundle.args.remove(name)?;
     match Rc::try_unwrap(rc) {
-        Ok(KObject::TypeNameRef(t, _)) => Some(t),
+        Ok(KObject::TypeNameRef(t)) => Some(t),
         Ok(_) => None,
         Err(rc) => match &*rc {
-            KObject::TypeNameRef(t, _) => Some(t.clone()),
+            KObject::TypeNameRef(t) => Some(t.clone()),
             _ => None,
         },
     }

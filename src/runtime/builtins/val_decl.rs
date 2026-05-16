@@ -53,12 +53,12 @@
 //!   `defer_val_via_combine` and `defer_val_structural_via_combine` document the
 //!   detailed flow.
 
+use crate::runtime::machine::core::ResolveTypeExprOutcome;
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
 };
-use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::runtime::machine::model::{KObject, KType};
 
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
@@ -119,7 +119,7 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
             | KType::TypeExprRef => Ok(CarrierForm::Leaf(TypeExpr::leaf(kt.name()))),
             _ => Ok(CarrierForm::Direct(kt.clone())),
         },
-        KObject::TypeNameRef(te, _) => Ok(CarrierForm::Raw(te.clone())),
+        KObject::TypeNameRef(te) => Ok(CarrierForm::Raw(te.clone())),
         other => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "ty".to_string(),
             expected: "TypeExprRef".to_string(),
@@ -220,10 +220,9 @@ pub fn body<'a>(
                 let resolve_id = schedule_type_resolve(sched, scope, &te);
                 return defer_val_via_combine(scope, sched, name, te, resolve_id);
             }
-            let mut el = Elaborator::new(scope);
-            match elaborate_type_expr(&mut el, &te) {
-                ElabResult::Done(kt) => finalize_val(scope, name, kt),
-                ElabResult::Park(_) => {
+            match scope.resolve_type_expr(&te) {
+                ResolveTypeExprOutcome::Done(kt) => finalize_val(scope, name, kt.clone()),
+                ResolveTypeExprOutcome::Park(_) => {
                     // Collect the leaf names the structural form references; sub-Dispatch
                     // each through `value_lookup` so the dispatcher's replay-park installs
                     // a Notify edge on each placeholder. When all leaf sub-Dispatches
@@ -237,7 +236,7 @@ pub fn body<'a>(
                     }
                     defer_val_structural_via_combine(scope, sched, name, te, dep_ids)
                 }
-                ElabResult::Unbound(msg) => {
+                ResolveTypeExprOutcome::Unbound(msg) => {
                     err(KError::new(KErrorKind::ShapeError(format!("VAL type: {msg}"))))
                 }
             }
@@ -362,15 +361,14 @@ fn defer_val_structural_via_combine<'a>(
         // `run_combine`'s dep-error propagation before reaching this closure). All
         // referenced leaf names now have entries in `decl_scope.bindings.types`, so
         // the elaborator's bare-leaf arm resolves them synchronously.
-        let mut el = Elaborator::new(scope);
-        match elaborate_type_expr(&mut el, &te_for_finish) {
-            ElabResult::Done(kt) => finalize_val(scope, name_for_finish.clone(), kt),
-            ElabResult::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+        match scope.resolve_type_expr(&te_for_finish) {
+            ResolveTypeExprOutcome::Done(kt) => finalize_val(scope, name_for_finish.clone(), kt.clone()),
+            ResolveTypeExprOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
                 "VAL type `{}` elaboration parked again after all leaf sub-Dispatches \
                  terminalized — internal scheduling invariant violated",
                 te_for_finish.render(),
             )))),
-            ElabResult::Unbound(msg) => {
+            ResolveTypeExprOutcome::Unbound(msg) => {
                 BodyResult::Err(KError::new(KErrorKind::ShapeError(format!("VAL type: {msg}"))))
             }
         }

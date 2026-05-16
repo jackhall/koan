@@ -1,8 +1,9 @@
 mod signature;
 
+use crate::runtime::machine::core::ResolveTypeExprOutcome;
 use crate::runtime::machine::model::{ExpressionSignature, KObject, KType, SignatureElement};
 use crate::runtime::machine::{ArgumentBundle, Body, BodyResult, CombineFinish, KError, KErrorKind, KFunction, Scope, SchedulerHandle};
-use crate::runtime::machine::model::types::{elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, ReturnType};
+use crate::runtime::machine::model::types::{DeferredReturn, Elaborator, ReturnType};
 
 use crate::runtime::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
@@ -141,7 +142,7 @@ pub fn body<'a>(
             Some(t) => ReturnTypeRaw::Resolved(t),
             None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
         },
-        Some(KObject::TypeNameRef(_, _)) => match extract_type_name_ref(&mut bundle, "return_type") {
+        Some(KObject::TypeNameRef(_)) => match extract_type_name_ref(&mut bundle, "return_type") {
             Some(te) => ReturnTypeRaw::TypeExprCarrier(te),
             None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
         },
@@ -220,10 +221,10 @@ pub fn body<'a>(
                 ReturnTypeState::Deferred(DeferredReturn::TypeExpr(te))
             } else {
                 let name = te.name.clone();
-                match elaborate_type_expr(&mut elaborator, &te) {
-                    ElabResult::Done(kt) => ReturnTypeState::Done(kt),
-                    ElabResult::Park(producers) => ReturnTypeState::Pending { te, producers },
-                    ElabResult::Unbound(_) => match KType::from_name(&name) {
+                match scope.resolve_type_expr(&te) {
+                    ResolveTypeExprOutcome::Done(kt) => ReturnTypeState::Done(kt.clone()),
+                    ResolveTypeExprOutcome::Park(producers) => ReturnTypeState::Pending { te, producers },
+                    ResolveTypeExprOutcome::Unbound(_) => match KType::from_name(&name) {
                         Some(kt) => ReturnTypeState::Done(kt),
                         None => {
                             return err(KError::new(KErrorKind::ShapeError(format!(
@@ -554,41 +555,38 @@ fn defer_via_combine<'a>(
         let mut elaborator = Elaborator::new(scope);
         let return_type: ReturnType<'a> = match return_type_capture {
             ReturnTypeCapture::Resolved(kt) => ReturnType::Resolved(kt),
-            ReturnTypeCapture::Unresolved(name) => match elaborate_type_expr(
-                &mut elaborator,
-                &crate::runtime::machine::model::ast::TypeExpr::leaf(name.clone()),
-            ) {
-                ElabResult::Done(kt) => ReturnType::Resolved(kt),
-                ElabResult::Park(_) => {
-                    return BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                        "FN return type parked after Combine wake".to_string(),
-                    )));
-                }
-                ElabResult::Unbound(_) => match KType::from_name(&name) {
-                    Some(kt) => ReturnType::Resolved(kt),
-                    None => {
-                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN return-type slot = unknown type name `{name}`"
-                        ))));
+            ReturnTypeCapture::Unresolved(name) => {
+                let te = crate::runtime::machine::model::ast::TypeExpr::leaf(name.clone());
+                match scope.resolve_type_expr(&te) {
+                    ResolveTypeExprOutcome::Done(kt) => ReturnType::Resolved(kt.clone()),
+                    ResolveTypeExprOutcome::Park(_) => {
+                        return BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                            "FN return type parked after Combine wake".to_string(),
+                        )));
                     }
-                },
-            },
+                    ResolveTypeExprOutcome::Unbound(_) => match KType::from_name(&name) {
+                        Some(kt) => ReturnType::Resolved(kt),
+                        None => {
+                            return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                                "FN return-type slot = unknown type name `{name}`"
+                            ))));
+                        }
+                    },
+                }
+            }
             // Structured-TypeExpr capture: re-elaborate the full parser-preserved shape
             // against the now-final scope. The Park arm is a protocol error (every parked
             // producer is terminal by Combine-finish invariant); the Unbound arm fails the
             // FN-def because the surface form references a name that didn't resolve
             // anywhere reachable.
-            ReturnTypeCapture::TypeExpr(t) => match elaborate_type_expr(
-                &mut elaborator,
-                &t,
-            ) {
-                ElabResult::Done(kt) => ReturnType::Resolved(kt),
-                ElabResult::Park(_) => {
+            ReturnTypeCapture::TypeExpr(t) => match scope.resolve_type_expr(&t) {
+                ResolveTypeExprOutcome::Done(kt) => ReturnType::Resolved(kt.clone()),
+                ResolveTypeExprOutcome::Park(_) => {
                     return BodyResult::Err(KError::new(KErrorKind::ShapeError(
                         "FN return type parked after Combine wake".to_string(),
                     )));
                 }
-                ElabResult::Unbound(msg) => {
+                ResolveTypeExprOutcome::Unbound(msg) => {
                     return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
                         "FN return-type slot: {msg}"
                     ))));

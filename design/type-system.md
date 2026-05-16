@@ -394,15 +394,13 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   [`KType::from_name`](../src/runtime/model/types/ktype.rs)'s builtin table
   (`Point`, `IntOrd`, `MyList`) are lowered by
   [`ExpressionPart::resolve_for`](../src/ast.rs) into
-  `KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)` rather than a
-  placeholder `KType` variant. The carrier preserves the parser-side
-  `TypeExpr` for diagnostics and consumers that want the user's surface
-  identifier verbatim, and the cell memoizes the eventual scope-resolved
-  `&'a KType` via
-  [`KObject::resolve_type_name_ref`](../src/runtime/model/values/kobject.rs).
-  Both `TypeNameRef` and the fully-resolved `KTypeValue` report `ktype() =
-  KType::TypeExprRef`, so the slot's dispatch position is identical;
-  whether the carrier resolved at bind time or memoizes lazily is an
+  `KObject::TypeNameRef(TypeExpr)` rather than a placeholder `KType`
+  variant. The carrier preserves the parser-side `TypeExpr` for diagnostics
+  and for consumers that want the user's surface identifier verbatim; it
+  carries no internal cache. Both `TypeNameRef` and the fully-resolved
+  `KTypeValue` report `ktype() = KType::TypeExprRef`, so the slot's
+  dispatch position is identical — whether the surface form already lowered
+  to a concrete `KType` at bind time or is still in parser-form is an
   internal detail. The four downstream consumers each carry a
   `TypeNameRef` arm beside the existing `KTypeValue` arm: the shared
   [`extract_bare_type_name`](../src/runtime/machine/kfunction/argument_bundle.rs)
@@ -414,21 +412,68 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   [`value_lookup::body_type_expr`](../src/runtime/builtins/value_lookup.rs)
   (which resolves through `bindings.types` and, on a nominal `UserType` /
   `SignatureBound` hit, recovers the paired value-side carrier from
-  `bindings.data`). FN's deferred
-  return-type elaboration peeks the slot to pick between
+  `bindings.data`). FN's deferred return-type elaboration peeks the slot
+  to pick between
   [`extract_ktype`](../src/runtime/machine/kfunction/argument_bundle.rs)
   (resolved carrier) and the sibling
   [`extract_type_name_ref`](../src/runtime/machine/kfunction/argument_bundle.rs)
   (deferred carrier consuming the parser-preserved `TypeExpr`), then drives
-  the existing park-on-placeholder machinery from there. The `OnceCell` is
-  reset by `deep_clone` rather than preserved across clones: the cached
-  `&'a KType` is into the originating scope's arena and the semantic
-  validity of "this is what `Scope::resolve_type` would return *in the
-  cloning scope*" is not guaranteed when the clone crosses scope chains.
-  If profiling ever surfaces the post-clone re-resolution as hot, the cell
-  can move to `Rc<OnceCell<&'a KType>>` for shared memoization with no API
-  break — the carrier's public surface (`KObject::resolve_type_name_ref`
-  plus the `KType::TypeExprRef` dispatch shape) stays unchanged.
+  the existing park-on-placeholder machinery from there.
+
+  Two complementary caches amortize the elaboration cost rather than one
+  cell on the carrier:
+
+    * **Layer 1 — surface-form, scope-independent.** A
+      `OnceCell<KType>` lives on
+      [`TypeExpr`](../src/runtime/machine/model/ast.rs) itself
+      (`TypeExpr.builtin_cache`, excluded from `PartialEq` / `Hash`).
+      `ExpressionPart::resolve_for` reads the cell first; on miss it
+      runs [`KType::from_type_expr`](../src/runtime/machine/model/types/ktype_resolution.rs)
+      and writes the result back when the surface form resolves against
+      the builtin table. `from_type_expr` failures (user-bound leaves)
+      are intentionally not cached here — those flow through Layer 2.
+      Subsequent `KFunction::bind` passes against the same `TypeExpr`
+      pay one `OnceCell::get`. No scope keying needed: the cached
+      `KType` depends solely on the surface form.
+
+    * **Layer 2 — scope-bound resolution memo.** A
+      `RefCell<HashMap<TypeExpr, &'a KType>>` lives on
+      [`Bindings`](../src/runtime/machine/core/bindings.rs)
+      (`type_expr_memo`). Reached through
+      [`Scope::resolve_type_expr`](../src/runtime/machine/core/scope.rs),
+      which returns the three-outcome
+      `ResolveTypeExprOutcome::{Done(&'a KType), Park(Vec<NodeId>),
+      Unbound(String)}`. Cache miss runs the elaborator against
+      `self`, then checks a **finalize gate** before writing:
+      every user-type referenced by the result must be fully finalized
+      (its name absent from the owning scope's `bindings.pending_types`)
+      or the outcome becomes `Park(producers)` and the entry is *not*
+      written. The walk is top-level only — SCC closure is atomic
+      across members, so a finalized `Foo` guarantees every user-type
+      embedded in `Foo`'s payload is also finalized. The memo is
+      monotonic: once `(te → kt)` is written, neither key nor value
+      changes for the scope's lifetime (Koan data is immutable, and the
+      finalize gate prevents caching mid-SCC opaque identities). No
+      invalidation, no staleness window. Cache size is bounded by the
+      scope's source-form TypeExpr corpus, which is syntactically
+      bounded.
+
+  Consumers that need the scope-resolved identity —
+  [`type_identity_for`](../src/runtime/machine/core/kfunction/invoke.rs)
+  at the dispatch boundary's per-call parameter dual-write,
+  [`val_decl::body`](../src/runtime/builtins/val_decl.rs)'s structural
+  carrier path and its post-Combine finish, and
+  [`fn_def::body`](../src/runtime/builtins/fn_def.rs)'s return-type
+  elaboration — go through `Scope::resolve_type_expr`. NEWTYPE's bare-leaf
+  user-bound repr path keeps the simpler `Scope::resolve_type` lookup
+  (it's intentionally non-park-aware: an unresolvable repr is a hard
+  error, not a forward reference). The dispatch boundary's `type_identity_for`
+  surfaces a `Park` outcome as the structured
+  `KError::TypeIdentityPendingAtDispatch { param, surface, pending_on }`
+  rather than silently skipping the dual-write — replaces the prior
+  silent-on-`Park` fallback so a workload that triggers it is debuggable
+  from the error alone.
+
   Every `KType` flowing through dispatch is fully elaborated — there is no
   surface-name carrier variant inside `KType` itself.
 - Type identity stage 3 — per-declaration `KType::UserType` carrier and

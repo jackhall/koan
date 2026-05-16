@@ -2,7 +2,9 @@ use std::rc::Rc;
 
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::runtime::machine::core::{CallArena, KError, KErrorKind, RuntimeArena, Scope};
+use crate::runtime::machine::core::{
+    CallArena, KError, KErrorKind, ResolveTypeExprOutcome, RuntimeArena, Scope,
+};
 use crate::runtime::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
     SignatureElement, UserTypeKind,
@@ -75,10 +77,12 @@ impl<'a> KFunction<'a> {
                     // outer-chain walk — the per-call scope is the body's lexical parent.
                     if let Some(arg) = signature_argument_by_name(self, name) {
                         if arg.ktype.is_type_denoting() {
-                            if let Some(identity) =
-                                type_identity_for(allocated, &arg.ktype, outer)
-                            {
-                                child.register_type(name.clone(), identity);
+                            match type_identity_for(name, allocated, &arg.ktype, outer) {
+                                Ok(Some(identity)) => {
+                                    child.register_type(name.clone(), identity);
+                                }
+                                Ok(None) => {}
+                                Err(e) => return BodyResult::Err(e),
                             }
                         }
                     }
@@ -263,71 +267,80 @@ fn signature_argument_by_name<'a>(
 /// | `Signature`                    | `KSignature(s)`        | `SignatureBound { sig_id: s.sig_id(), sig_path, .. }` |
 /// | `Type`                         | `KTypeValue(kt)`       | `kt.clone()`                                          |
 /// | `TypeExprRef`                  | `KTypeValue(kt)`       | `kt.clone()`                                          |
-/// | `TypeExprRef`                  | `TypeNameRef(t, _)`    | elaborated via `definition_scope`                     |
+/// | `TypeExprRef`                  | `TypeNameRef(t)`       | elaborated via `definition_scope.resolve_type_expr`   |
 ///
-/// Returns `None` when the carrier shape doesn't match any of the table rows —
-/// the dispatcher's `matches_value` filter already ran before this site, so a `None`
-/// here indicates an `is_type_denoting`/`matches` disagreement (programming error,
+/// Returns `Ok(None)` when the carrier shape doesn't match any of the table rows —
+/// the dispatcher's `matches_value` filter already ran before this site, so this case
+/// indicates an `is_type_denoting`/`matches` disagreement (programming error,
 /// not user error). Production behavior: skip the dual-write silently; tests can
 /// debug-assert if they want stricter coverage.
+///
+/// Returns `Err(KError::TypeIdentityPendingAtDispatch)` when a `TypeNameRef`
+/// carrier elaborates against `definition_scope` but the result references a
+/// type that is still pending finalization. Surfaces the precise context
+/// (parameter, surface form, pending finalize-node) instead of silently
+/// skipping the dual-write — replaces the legacy silent-on-Park fallback.
 ///
 /// `definition_scope` is the FN's captured (definition-time) scope, used to elaborate
 /// a `TypeNameRef` carrier — the carrier's `TypeExpr` references type-side bindings
 /// from the definition's lexical environment, not the call site's.
 pub(crate) fn type_identity_for<'a>(
+    param_name: &str,
     obj: &KObject<'a>,
     declared: &KType,
     definition_scope: &'a Scope<'a>,
-) -> Option<KType> {
+) -> Result<Option<KType>, KError> {
     match declared {
-        KType::SignatureBound { .. } => match obj {
+        KType::SignatureBound { .. } => Ok(match obj {
             KObject::KModule(m, _) => Some(KType::UserType {
                 kind: UserTypeKind::Module,
                 scope_id: m.scope_id(),
                 name: m.path.clone(),
             }),
             _ => None,
-        },
-        KType::AnyUserType { kind: UserTypeKind::Module } => match obj {
+        }),
+        KType::AnyUserType { kind: UserTypeKind::Module } => Ok(match obj {
             KObject::KModule(m, _) => Some(KType::UserType {
                 kind: UserTypeKind::Module,
                 scope_id: m.scope_id(),
                 name: m.path.clone(),
             }),
             _ => None,
-        },
-        KType::Signature => match obj {
+        }),
+        KType::Signature => Ok(match obj {
             KObject::KSignature(s) => Some(KType::SignatureBound {
                 sig_id: s.sig_id(),
                 sig_path: s.path.clone(),
                 pinned_slots: Vec::new(),
             }),
             _ => None,
-        },
-        KType::Type => match obj {
+        }),
+        KType::Type => Ok(match obj {
             KObject::KTypeValue(kt) => Some(kt.clone()),
             _ => None,
-        },
+        }),
         KType::TypeExprRef => match obj {
-            KObject::KTypeValue(kt) => Some(kt.clone()),
-            KObject::TypeNameRef(t, _) => {
-                use crate::runtime::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
-                let mut el = Elaborator::new(definition_scope);
-                match elaborate_type_expr(&mut el, t) {
-                    ElabResult::Done(kt) => Some(kt),
-                    // The carrier landed in `bindings.data` at definition time as part
-                    // of the FN-def Combine finish — re-elaborating against the FN's
-                    // captured scope ought to succeed. A `Park` or `Unbound` here means
-                    // the scope shape changed between definition and call, which would
-                    // already have surfaced upstream; skip the dual-write.
-                    ElabResult::Park(_) | ElabResult::Unbound(_) => None,
+            KObject::KTypeValue(kt) => Ok(Some(kt.clone())),
+            KObject::TypeNameRef(t) => match definition_scope.resolve_type_expr(t) {
+                ResolveTypeExprOutcome::Done(kt) => Ok(Some(kt.clone())),
+                ResolveTypeExprOutcome::Park(pending_on) => {
+                    Err(KError::new(KErrorKind::TypeIdentityPendingAtDispatch {
+                        param: param_name.to_string(),
+                        surface: t.render(),
+                        pending_on,
+                    }))
                 }
-            }
-            _ => None,
+                // Unbound: the carrier was constructed at definition time but the
+                // name no longer resolves here. The body's own value-side dispatch
+                // will surface the real error; skip the dual-write rather than
+                // erroring here to preserve the legacy unbound-at-dispatch shape.
+                ResolveTypeExprOutcome::Unbound(_) => Ok(None),
+            },
+            _ => Ok(None),
         },
         // Any other variant is non-type-denoting; caller already gated, so this is
         // unreachable on the happy path.
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -415,7 +428,9 @@ mod tests {
             sig_path: "OrderedSig".into(),
             pinned_slots: Vec::new(),
         };
-        let identity = type_identity_for(obj, &declared, scope).expect("module identity expected");
+        let identity = type_identity_for("p", obj, &declared, scope)
+            .expect("Ok expected")
+            .expect("module identity expected");
         assert_eq!(
             identity,
             KType::UserType {
@@ -440,7 +455,9 @@ mod tests {
         let module = arena.alloc_module(Module::new("Bar".into(), child));
         let obj = arena.alloc_object(KObject::KModule(module, None));
         let declared = KType::AnyUserType { kind: UserTypeKind::Module };
-        let identity = type_identity_for(obj, &declared, scope).expect("module identity expected");
+        let identity = type_identity_for("p", obj, &declared, scope)
+            .expect("Ok expected")
+            .expect("module identity expected");
         assert_eq!(
             identity,
             KType::UserType {
@@ -460,7 +477,9 @@ mod tests {
         let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
         let obj = arena.alloc_object(KObject::KSignature(sig));
         let declared = KType::Signature;
-        let identity = type_identity_for(obj, &declared, scope).expect("signature identity expected");
+        let identity = type_identity_for("p", obj, &declared, scope)
+            .expect("Ok expected")
+            .expect("signature identity expected");
         assert_eq!(
             identity,
             KType::SignatureBound {
@@ -479,7 +498,9 @@ mod tests {
         let inner = KType::List(Box::new(KType::Number));
         let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
         let declared = KType::Type;
-        let identity = type_identity_for(obj, &declared, scope).expect("type identity expected");
+        let identity = type_identity_for("p", obj, &declared, scope)
+            .expect("Ok expected")
+            .expect("type identity expected");
         assert_eq!(identity, inner);
     }
 
@@ -492,11 +513,13 @@ mod tests {
         let inner = KType::Number;
         let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
         let declared = KType::TypeExprRef;
-        let identity = type_identity_for(obj, &declared, scope).expect("type identity expected");
+        let identity = type_identity_for("p", obj, &declared, scope)
+            .expect("Ok expected")
+            .expect("type identity expected");
         assert_eq!(identity, inner);
     }
 
-    /// Mismatched carrier for a type-denoting declared `KType` returns `None` —
+    /// Mismatched carrier for a type-denoting declared `KType` returns `Ok(None)` —
     /// the dispatcher's `matches_value` filter already gated, so this path
     /// indicates an `is_type_denoting` / `matches_value` disagreement (skip the
     /// dual-write rather than panic).
@@ -510,6 +533,6 @@ mod tests {
             sig_path: "OrderedSig".into(),
             pinned_slots: Vec::new(),
         };
-        assert!(type_identity_for(obj, &declared, scope).is_none());
+        assert!(type_identity_for("p", obj, &declared, scope).expect("Ok expected").is_none());
     }
 }

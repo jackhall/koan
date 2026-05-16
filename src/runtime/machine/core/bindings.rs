@@ -23,7 +23,7 @@
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 
-use crate::runtime::machine::model::ast::KExpression;
+use crate::runtime::machine::model::ast::{KExpression, TypeExpr};
 use crate::runtime::machine::core::kfunction::{KFunction, NodeId};
 use crate::runtime::machine::model::types::{KType, UntypedKey, UserTypeKind};
 use crate::runtime::machine::model::values::KObject;
@@ -67,6 +67,16 @@ pub struct Bindings<'a> {
     /// NOT participate — module bodies park on the outer scheduler, not on type-name
     /// resolution inside elaboration (see roadmap stage 3.2).
     pending_types: RefCell<HashMap<String, PendingTypeEntry<'a>>>,
+    /// Layer-2 scope-bound TypeExpr resolution cache. Maps a surface
+    /// [`TypeExpr`] to the arena-allocated `&KType` `Scope::resolve_type_expr`
+    /// produced in this scope. Monotonic — once an entry is written it never
+    /// changes (Koan data is immutable; rebinding within a scope is illegal,
+    /// so a fully-finalized type's resolution is stable for the scope's lifetime).
+    /// Entries are written only when the elaborated `KType` and every user-type
+    /// it references are fully finalized — the finalize gate prevents caching
+    /// mid-SCC pre-close identities. See
+    /// `Scope::resolve_type_expr` for the writer + finalize-gate logic.
+    type_expr_memo: RefCell<HashMap<TypeExpr, &'a KType>>,
 }
 
 /// Per-binder state captured at the moment a STRUCT / named-UNION enters its
@@ -91,7 +101,26 @@ impl<'a> Bindings<'a> {
             functions: RefCell::new(HashMap::new()),
             placeholders: RefCell::new(HashMap::new()),
             pending_types: RefCell::new(HashMap::new()),
+            type_expr_memo: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Layer-2 cache reader: look up `te` in this scope's `type_expr_memo`. Returns
+    /// the cached `&'a KType` if present. `Scope::resolve_type_expr` owns the writer
+    /// side — see the finalize-gate logic there.
+    pub fn type_expr_memo_get(&self, te: &TypeExpr) -> Option<&'a KType> {
+        self.type_expr_memo.borrow().get(te).copied()
+    }
+
+    /// Layer-2 cache writer: insert `(te → kt)` into this scope's `type_expr_memo`.
+    /// Caller is responsible for arena-allocating `kt` and checking the
+    /// finalize gate before writing. Monotonic — overwrites are not expected and
+    /// would indicate a violation of the immutable-binding invariant; we silently
+    /// keep the existing entry rather than panic since the value would be equal
+    /// by definition.
+    pub fn type_expr_memo_insert(&self, te: TypeExpr, kt: &'a KType) {
+        let mut memo = self.type_expr_memo.borrow_mut();
+        memo.entry(te).or_insert(kt);
     }
 
     /// Read-only handle for the ~12 read sites in builtins and resolver code. The returned

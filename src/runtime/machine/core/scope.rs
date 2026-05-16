@@ -360,6 +360,91 @@ impl<'a> Scope<'a> {
         None
     }
 
+    /// Layer-2 scope-bound TypeExpr resolution memo. Tries the cache first; on miss,
+    /// runs [`crate::runtime::machine::model::types::elaborate_type_expr`] against
+    /// `self`, checks the finalize gate ([`Self::referenced_user_types`] vs
+    /// `pending_types`), and writes back into the cache when every user-type the
+    /// result references is fully finalized.
+    ///
+    /// Three outcomes:
+    /// - `Done(kt)`: elaboration succeeded and every referenced user-type is
+    ///   finalized. The result is arena-allocated and cached for subsequent calls.
+    /// - `Park(producers)`: the elaborator parked on a placeholder, OR the
+    ///   elaborated result references a still-pending user-type. The producer
+    ///   `NodeId`s identify the wake sources the caller should park on. **No
+    ///   cache write** in the Park case — caching mid-SCC-window would observe
+    ///   pre-close opaque identity.
+    /// - `Unbound(msg)`: a leaf name didn't resolve anywhere. Caller wraps in
+    ///   a structured `ShapeError`.
+    pub fn resolve_type_expr(
+        &'a self,
+        te: &crate::runtime::machine::model::ast::TypeExpr,
+    ) -> ResolveTypeExprOutcome<'a> {
+        use crate::runtime::machine::model::types::{
+            elaborate_type_expr, ElabResult, Elaborator,
+        };
+        if let Some(kt) = self.bindings.type_expr_memo_get(te) {
+            return ResolveTypeExprOutcome::Done(kt);
+        }
+        let mut elaborator = Elaborator::new(self);
+        match elaborate_type_expr(&mut elaborator, te) {
+            ElabResult::Done(kt) => {
+                let pending = self.referenced_pending_producers(&kt);
+                if pending.is_empty() {
+                    let kt_ref: &'a crate::runtime::machine::model::types::KType =
+                        self.arena.alloc_ktype(kt);
+                    self.bindings.type_expr_memo_insert(te.clone(), kt_ref);
+                    ResolveTypeExprOutcome::Done(kt_ref)
+                } else {
+                    ResolveTypeExprOutcome::Park(pending)
+                }
+            }
+            ElabResult::Park(producers) => ResolveTypeExprOutcome::Park(producers),
+            ElabResult::Unbound(msg) => ResolveTypeExprOutcome::Unbound(msg),
+        }
+    }
+
+    /// For every user-type `(scope_id, name)` reachable from the *top-level* of `kt`
+    /// (no recursion into `UserType`'s `kind` payload — SCC closure is atomic across
+    /// members, so a finalized `Foo` guarantees every user-type embedded in `Foo`'s
+    /// payload is also finalized), check whether the scope owning that id has the
+    /// name in its `pending_types`. Return the producer `NodeId`s for the pending
+    /// entries — the wake sources the caller parks on.
+    fn referenced_pending_producers(
+        &'a self,
+        kt: &crate::runtime::machine::model::types::KType,
+    ) -> Vec<crate::runtime::machine::core::kfunction::NodeId> {
+        let mut pending: Vec<crate::runtime::machine::core::kfunction::NodeId> = Vec::new();
+        for (scope_id, name) in referenced_user_types(kt) {
+            let Some(owner) = self.find_scope_by_id(scope_id) else { continue };
+            if !owner.bindings.pending_types().contains_key(&name) {
+                continue;
+            }
+            if let Some(node_id) = owner.bindings.placeholders().get(&name).copied() {
+                if !pending.contains(&node_id) {
+                    pending.push(node_id);
+                }
+            }
+        }
+        pending
+    }
+
+    /// Walk the `outer` chain to find the scope whose `id` matches `scope_id`.
+    /// Returns `None` if no such scope is on the chain.
+    fn find_scope_by_id(
+        &'a self,
+        scope_id: ScopeId,
+    ) -> Option<&'a Scope<'a>> {
+        let mut current: Option<&'a Scope<'a>> = Some(self);
+        while let Some(scope) = current {
+            if scope.id == scope_id {
+                return Some(scope);
+            }
+            current = scope.outer;
+        }
+        None
+    }
+
     /// Walk the `outer` chain for the nearest scope holding a writer and write `bytes`.
     /// Writer errors are silently dropped.
     pub fn write_out(&self, bytes: &[u8]) {
@@ -523,4 +608,135 @@ pub enum ResolveOutcome<'a> {
     Ambiguous(usize),
     Deferred,
     Unmatched,
+}
+
+/// Outcome of [`Scope::resolve_type_expr`]. The three variants mirror
+/// [`crate::runtime::machine::model::types::ElabResult`] but `Done` carries the
+/// arena-allocated cache reference and `Park` carries scheduler `NodeId`s the
+/// caller parks on.
+pub enum ResolveTypeExprOutcome<'a> {
+    Done(&'a crate::runtime::machine::model::types::KType),
+    Park(Vec<crate::runtime::machine::core::kfunction::NodeId>),
+    Unbound(String),
+}
+
+/// Walk the *top-level* of `kt` and collect every user-type `(scope_id, name)` pair
+/// it references. Recurses through structural variants (`List`, `Dict`, `KFunction`,
+/// `Mu`, `ConstructorApply`); does NOT recurse into a `UserType`'s `kind` payload —
+/// SCC closure is atomic across members, so a finalized `Foo` guarantees every
+/// user-type embedded in `Foo`'s payload is also finalized. Skips leaves and
+/// `AnyUserType` / `RecursiveRef`.
+fn referenced_user_types(
+    kt: &crate::runtime::machine::model::types::KType,
+) -> Vec<(ScopeId, String)> {
+    use crate::runtime::machine::model::types::KType;
+    let mut out: Vec<(ScopeId, String)> = Vec::new();
+    fn walk(kt: &KType, out: &mut Vec<(ScopeId, String)>) {
+        match kt {
+            KType::UserType { scope_id, name, .. } => {
+                out.push((*scope_id, name.clone()));
+            }
+            KType::SignatureBound { sig_id, sig_path, .. } => {
+                out.push((*sig_id, sig_path.clone()));
+            }
+            KType::List(inner) => walk(inner, out),
+            KType::Dict(k, v) => {
+                walk(k, out);
+                walk(v, out);
+            }
+            KType::KFunction { args, ret } => {
+                for a in args {
+                    walk(a, out);
+                }
+                walk(ret, out);
+            }
+            KType::Mu { body, .. } => walk(body, out),
+            KType::ConstructorApply { ctor, args } => {
+                walk(ctor, out);
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            // Leaves / wildcards: no nested user-type references at this level.
+            KType::Number
+            | KType::Str
+            | KType::Bool
+            | KType::Null
+            | KType::Identifier
+            | KType::KExpression
+            | KType::TypeExprRef
+            | KType::Type
+            | KType::Signature
+            | KType::Any
+            | KType::AnyUserType { .. }
+            | KType::RecursiveRef(_) => {}
+        }
+    }
+    walk(kt, &mut out);
+    out
+}
+
+#[cfg(test)]
+mod resolve_type_expr_tests {
+    use super::*;
+    use crate::runtime::builtins::test_support::run_root_silent;
+    use crate::runtime::machine::core::RuntimeArena;
+    use crate::runtime::machine::model::ast::TypeExpr;
+    use crate::runtime::machine::model::types::KType;
+
+    /// Builtin leaf resolves to `Done` and caches the result; the second call returns
+    /// the same arena pointer without re-walking.
+    #[test]
+    fn resolve_type_expr_builtin_leaf_caches() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        let te = TypeExpr::leaf("Number".into());
+        let first = match scope.resolve_type_expr(&te) {
+            ResolveTypeExprOutcome::Done(kt) => kt,
+            _ => panic!("expected Done"),
+        };
+        assert_eq!(*first, KType::Number);
+        let second = match scope.resolve_type_expr(&te) {
+            ResolveTypeExprOutcome::Done(kt) => kt,
+            _ => panic!("expected Done on second call"),
+        };
+        assert!(std::ptr::eq(first, second), "second call should hit the memo");
+    }
+
+    /// A genuinely unbound leaf surfaces as `Unbound` and is not cached.
+    #[test]
+    fn resolve_type_expr_unbound_returns_unbound() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        let te = TypeExpr::leaf("NotABuiltin".into());
+        match scope.resolve_type_expr(&te) {
+            ResolveTypeExprOutcome::Unbound(_) => {}
+            _ => panic!("expected Unbound for unknown leaf"),
+        }
+    }
+
+    /// User-bound types reached after finalize land in the memo. Build a STRUCT,
+    /// then resolve a TypeExpr for its name — should `Done` and cache.
+    #[test]
+    fn resolve_type_expr_user_struct_caches_after_finalize() {
+        use crate::runtime::builtins::test_support::{parse_one, run_one};
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
+        let te = TypeExpr::leaf("Point".into());
+        let kt = match scope.resolve_type_expr(&te) {
+            ResolveTypeExprOutcome::Done(kt) => kt,
+            _ => panic!("expected Done after STRUCT declaration"),
+        };
+        match kt {
+            KType::UserType { name, .. } => assert_eq!(name, "Point"),
+            _ => panic!("expected UserType for Point"),
+        }
+        // Second resolve hits the memo and returns the same pointer.
+        let kt2 = match scope.resolve_type_expr(&te) {
+            ResolveTypeExprOutcome::Done(kt) => kt,
+            _ => panic!("expected Done on memo hit"),
+        };
+        assert!(std::ptr::eq(kt, kt2));
+    }
 }

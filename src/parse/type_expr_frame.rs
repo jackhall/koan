@@ -94,7 +94,7 @@ fn build_list_params<'a>(
     rest: Vec<ExpressionPart<'a>>,
 ) -> Result<TypeExpr, String> {
     if rest.is_empty() {
-        return Ok(TypeExpr { name, params: TypeParams::None });
+        return Ok(TypeExpr { name, params: TypeParams::None, builtin_cache: std::cell::OnceCell::new() });
     }
     let params = rest
         .into_iter()
@@ -115,7 +115,7 @@ fn build_list_params<'a>(
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(TypeExpr { name, params: TypeParams::List(params) })
+    Ok(TypeExpr { name, params: TypeParams::List(params), builtin_cache: std::cell::OnceCell::new() })
 }
 
 fn build_function_params<'a>(
@@ -136,6 +136,7 @@ fn build_function_params<'a>(
             args,
             ret: Box::new(ret),
         },
+        builtin_cache: std::cell::OnceCell::new(),
     })
 }
 

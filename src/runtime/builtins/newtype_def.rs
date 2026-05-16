@@ -68,7 +68,7 @@ pub fn body<'a>(
             Some(t) => t,
             None => unreachable!("get(KTypeValue) then extract_ktype must succeed"),
         },
-        Some(KObject::TypeNameRef(_, _)) => {
+        Some(KObject::TypeNameRef(_)) => {
             // Carrier path: a bare leaf the parser couldn't lower (`NEWTYPE Bar = Foo`
             // where `Foo` is itself user-declared). Walk the scope chain for the
             // resolved identity; reject if unresolved (the NEWTYPE declaration is the

@@ -75,7 +75,7 @@ pub fn body_type_expr<'a>(
         // `Type(t) → (Type(t))` sub-Dispatch. Reject parameterized shapes the same way
         // the `KTypeValue` arm does; otherwise the surface name (`t.name`) is the
         // lookup target.
-        Some(KObject::TypeNameRef(t, _)) => match &t.params {
+        Some(KObject::TypeNameRef(t)) => match &t.params {
             crate::runtime::machine::model::ast::TypeParams::List(_) | crate::runtime::machine::model::ast::TypeParams::Function { .. } => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
                     "value_lookup = parameterized type expression `{}` is not a value-lookup target",
