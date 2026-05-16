@@ -203,5 +203,5 @@ specificity scores against.
   returns. Lifting this needs literal-element peeking for fully-literal
   collections plus a deferred check for sub-expression elements.
 
-The static-typing-and-jit work in [open-work.md](open-work.md) closes the first
+The two-phase execution work in [open-work.md](open-work.md) closes the first
 two uniformly.

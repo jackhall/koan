@@ -44,10 +44,10 @@ Future work on the type and module system. Each entry points at a
 - [Group-based operators](../../roadmap/group-based-operators.md) — paired
   operators like `+`/`-` as a single algebraic declaration. Lands on top of
   the module-system substrate.
-- [Static type checking and JIT compilation](../../roadmap/static-typing-and-jit.md)
+- [Two-phase execution](../../roadmap/two-phase-execution.md)
   — closes the TCO and builtin runtime-check gaps uniformly, and is the
-  language's performance ceiling. The compile-time scheduling
+  language's performance ceiling. The build-time scheduling
   ([scheduler.md](scheduler.md)) — type-returning builtins dispatched and
   bound through the same `Dispatch`/`Bind` machinery values use, with
   implicit search layered as a `SEARCH_IMPLICIT` builtin — is the substrate
-  this work builds on.
+  the pegged-frontier build phase builds on.

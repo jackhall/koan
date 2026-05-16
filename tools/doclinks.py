@@ -32,7 +32,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-MD_GLOBS = ("*.md", "design/*.md", "roadmap/*.md")
+MD_GLOBS = ("*.md", "design/**/*.md", "roadmap/**/*.md")
 SRC_GLOBS = ("src/**/*.rs",)
 
 # [text](target) — target stops at the first ')' that isn't escaped, no nesting,
@@ -287,7 +287,7 @@ def _check_deps() -> int:
 def _check_orphans() -> int:
     targets: list[Path] = []
     for sub in ("design", "roadmap"):
-        targets.extend((REPO / sub).glob("*.md"))
+        targets.extend((REPO / sub).glob("**/*.md"))
     targets.sort()
 
     referenced: set[Path] = set()

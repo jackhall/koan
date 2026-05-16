@@ -86,7 +86,7 @@ is the ergonomic payoff of the design.
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](module-system-7-syntax-tuning.md)
 - [Group-based operators](group-based-operators.md)
-- [Static type checking and JIT compilation](static-typing-and-jit.md)
+- [Two-phase execution](two-phase-execution.md)
 
 Stage 4 (axioms) is not a hard prerequisite — modular implicits can ship
 without axiom checking — but the cross-implicit equivalence story (stage 6)

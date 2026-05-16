@@ -118,5 +118,6 @@ incrementally, each producing a usable end state.
 
 ### Future-facing
 
-- [Static type checking and JIT compilation](roadmap/static-typing-and-jit.md) — the
-  tooling and performance ceiling; both want a phase between parse and execution.
+- [Two-phase execution: build-time with pegged inputs, run-time resume](roadmap/two-phase-execution.md) —
+  pre-run error surfacing and the performance ceiling, both falling out of
+  the same pegged-frontier scheduler run plus stalled-DAG snapshot.
