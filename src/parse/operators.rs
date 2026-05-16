@@ -1,47 +1,42 @@
 //! Operator table driving compound-atom desugaring. Each entry pairs a trigger character
-//! with an `OperatorKind` and a builder that wraps surrounding operands into a nested
-//! `ExpressionPart`.
+//! with an `OperatorKind` whose arity-typed builder constructs the resulting expression.
 
 use crate::runtime::machine::model::ast::ExpressionPart;
 
-type Builder = for<'a> fn(Vec<ExpressionPart<'a>>) -> ExpressionPart<'a>;
+pub type UnaryBuild  = for<'a> fn(ExpressionPart<'a>) -> ExpressionPart<'a>;
+pub type BinaryBuild = for<'a> fn(ExpressionPart<'a>, ExpressionPart<'a>) -> ExpressionPart<'a>;
 
 pub enum OperatorKind {
-    /// `<trigger> compound` — builder receives `[expr]`.
-    Prefix,
-    /// `lhs <trigger> atom` — builder receives `[lhs, rhs]`.
-    Infix,
-    /// `lhs <trigger>` — builder receives `[lhs]`.
-    Suffix,
+    /// `<trigger> compound` — builder takes the single operand.
+    Prefix(UnaryBuild),
+    /// `lhs <trigger> atom` — builder takes lhs and rhs.
+    Infix(BinaryBuild),
+    /// `lhs <trigger>` — builder takes the single operand.
+    Suffix(UnaryBuild),
 }
 
 pub struct Operator {
     pub trigger: char,
     pub kind: OperatorKind,
-    pub build: Builder,
 }
 
 /// `[` and `]` are intentionally absent: they're list-literal delimiters handled one level up,
 /// not token-internal operators, so compound indexing like `foo[idx]` is not expressible here.
 const OPERATORS: &[Operator] = &[
-    Operator { trigger: '!', kind: OperatorKind::Prefix, build: build_not  },
-    Operator { trigger: '.', kind: OperatorKind::Infix,  build: build_attr },
-    Operator { trigger: '?', kind: OperatorKind::Suffix, build: build_try  },
+    Operator { trigger: '!', kind: OperatorKind::Prefix(build_not)  },
+    Operator { trigger: '.', kind: OperatorKind::Infix(build_attr)  },
+    Operator { trigger: '?', kind: OperatorKind::Suffix(build_try)  },
 ];
 
-fn build_not<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    let expr = ops.pop().unwrap();
+fn build_not<'a>(expr: ExpressionPart<'a>) -> ExpressionPart<'a> {
     ExpressionPart::expression(vec![ExpressionPart::Keyword("NOT".to_string()), expr])
 }
 
-fn build_attr<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    let rhs = ops.pop().unwrap();
-    let lhs = ops.pop().unwrap();
+fn build_attr<'a>(lhs: ExpressionPart<'a>, rhs: ExpressionPart<'a>) -> ExpressionPart<'a> {
     ExpressionPart::expression(vec![ExpressionPart::Keyword("ATTR".to_string()), lhs, rhs])
 }
 
-fn build_try<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    let lhs = ops.pop().unwrap();
+fn build_try<'a>(lhs: ExpressionPart<'a>) -> ExpressionPart<'a> {
     ExpressionPart::expression(vec![ExpressionPart::Keyword("TRY".to_string()), lhs])
 }
 
@@ -49,12 +44,15 @@ fn build_try<'a>(mut ops: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
 /// after an atom (`Infix`, `Suffix`). `Prefix` is structurally absent so `parse_compound`'s
 /// match is exhaustive without an `unreachable!` arm.
 pub enum SuffixOp {
-    Infix(Builder),
-    Suffix(Builder),
+    Infix(BinaryBuild),
+    Suffix(UnaryBuild),
 }
 
-pub fn find_prefix(c: char) -> Option<&'static Operator> {
-    OPERATORS.iter().find(|op| op.trigger == c && matches!(op.kind, OperatorKind::Prefix))
+pub fn find_prefix(c: char) -> Option<UnaryBuild> {
+    OPERATORS.iter().find_map(|op| match op.kind {
+        OperatorKind::Prefix(b) if op.trigger == c => Some(b),
+        _ => None,
+    })
 }
 
 pub fn find_suffix(c: char) -> Option<SuffixOp> {
@@ -62,9 +60,9 @@ pub fn find_suffix(c: char) -> Option<SuffixOp> {
         .iter()
         .find(|op| op.trigger == c)
         .and_then(|op| match op.kind {
-            OperatorKind::Prefix => None,
-            OperatorKind::Infix => Some(SuffixOp::Infix(op.build)),
-            OperatorKind::Suffix => Some(SuffixOp::Suffix(op.build)),
+            OperatorKind::Prefix(_) => None,
+            OperatorKind::Infix(b)  => Some(SuffixOp::Infix(b)),
+            OperatorKind::Suffix(b) => Some(SuffixOp::Suffix(b)),
         })
 }
 

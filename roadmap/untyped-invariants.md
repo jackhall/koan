@@ -64,22 +64,6 @@ single-writer methods, and a phase witness (e.g. a `PostCombine<'a>` token
 mintable only by the scheduler) threaded into the cycle-close path so its
 panicking branches become statically unreachable.
 
-### Parser arity types (remaining unwraps)
-
-**Where.** [`operators.rs:33,38,39,44`](../src/parse/operators.rs),
-[`dict_literal.rs:35`](../src/parse/dict_literal.rs),
-[`type_expr_frame.rs:153,186`](../src/parse/type_expr_frame.rs).
-
-The `expression_tree.rs` frame-variant unwraps are gone (post-types-refactor:
-`ParseStack` plus `pop_if_list/dict/type` and `pop_top` helpers; two surviving
-`.expect`s at `]` / `}` close are forced by the flush-token ordering between
-variant check and pop). What remains: four `ops.pop().unwrap()` for
-prefix/infix arity in `operators.rs`, one pair-count parity assumption in
-`dict_literal.rs`, two "exactly one" `into_iter().next().unwrap()` sites in
-`type_expr_frame.rs`. Promote with the same shape-checked-pop pattern `ParseStack`
-introduced — a `NonEmptyOpStack` or a `consume_arity::<N>()` method that
-returns a fixed-size tuple rather than N pops.
-
 ### Index newtypes for allocator-managed arrays
 
 **Where.** [`expression_tree.rs:83`](../src/parse/expression_tree.rs),
@@ -95,15 +79,11 @@ with index newtypes the allocator hands out and indexed-collection wrappers
 
 ## Priority
 
-1. **Parser arity types (remaining unwraps)** — the `ParseStack` /
-   `pop_if_*` pattern is already in the parser; extending it with a
-   `consume_arity::<N>()` reuses proven shape and clears seven `.unwrap()`
-   sites across three files.
-2. **`Bindings` / `Scope` state-machine encapsulation** — bounded to the
+1. **`Bindings` / `Scope` state-machine encapsulation** — bounded to the
    binding/scope mutation surface; a `PostCombine<'a>` phase witness has a
    clear mintable-only-by-scheduler shape that turns several panic branches
    statically unreachable.
-3. **Index newtypes for allocator-managed arrays** — moderate blast radius
+2. **Index newtypes for allocator-managed arrays** — moderate blast radius
    (touches `NodeId`-typed call sites across the scheduler); the
    `IndexedVec<NodeId, Node>` shape encodes presence at index handout time
    so the "missing-arg check above guarantees presence" comments become

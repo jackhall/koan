@@ -147,10 +147,9 @@ fn extract_function_args<'a>(
         "type `:(Function ...)` args must be parenthesized = \
          `:(Function (arg1 arg2 ...) -> R)` (use `:(Function () -> R)` for nullary)";
 
-    if before.len() != 1 {
-        return Err(MISSING_PARENS.to_string());
-    }
-    let arg_parts = match before.into_iter().next().unwrap() {
+    let [only] = <[ExpressionPart<'a>; 1]>::try_from(before)
+        .map_err(|_| MISSING_PARENS.to_string())?;
+    let arg_parts = match only {
         ExpressionPart::Expression(boxed) => boxed.parts,
         _ => return Err(MISSING_PARENS.to_string()),
     };
@@ -177,13 +176,11 @@ fn extract_function_args<'a>(
 fn extract_function_return<'a>(
     after: Vec<ExpressionPart<'a>>,
 ) -> Result<TypeExpr, String> {
-    if after.len() != 1 {
-        return Err(format!(
-            "type `:(Function ... -> R)` needs exactly one return type after the arrow, got {}",
-            after.len()
-        ));
-    }
-    match after.into_iter().next().unwrap() {
+    let [only] = <[ExpressionPart<'a>; 1]>::try_from(after).map_err(|after| format!(
+        "type `:(Function ... -> R)` needs exactly one return type after the arrow, got {}",
+        after.len()
+    ))?;
+    match only {
         ExpressionPart::Type(t) => Ok(t),
         // The return slot can itself be a parameterized type:
         // `:(Function (Number) -> (List Str))` wraps the return in parens.

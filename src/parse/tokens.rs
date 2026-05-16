@@ -14,7 +14,7 @@ use regex::Regex;
 
 use crate::runtime::machine::model::is_keyword_token;
 use crate::runtime::machine::model::ast::{ExpressionPart, KLiteral, TypeExpr};
-use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, Operator, SuffixOp};
+use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap()
@@ -123,11 +123,11 @@ fn is_type_name(tok: &str) -> bool {
 /// constructs the resulting expression — the dispatcher knows operand arity and source per
 /// kind, the builder knows the output shape per operator.
 fn parse_compound<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, String> {
-    let mut prefixes: Vec<&Operator> = Vec::new();
+    let mut prefixes: Vec<UnaryBuild> = Vec::new();
     while let Some(&c) = chars.peek() {
-        let Some(op) = find_prefix(c) else { break };
+        let Some(build) = find_prefix(c) else { break };
         chars.next();
-        prefixes.push(op);
+        prefixes.push(build);
     }
 
     let mut expr = read_atom(chars)?;
@@ -138,14 +138,14 @@ fn parse_compound<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>,
         expr = match op {
             SuffixOp::Infix(build) => {
                 let rhs = read_atom(chars)?;
-                build(vec![expr, rhs])
+                build(expr, rhs)
             }
-            SuffixOp::Suffix(build) => build(vec![expr]),
+            SuffixOp::Suffix(build) => build(expr),
         };
     }
 
-    for op in prefixes.into_iter().rev() {
-        expr = (op.build)(vec![expr]);
+    for build in prefixes.into_iter().rev() {
+        expr = build(expr);
     }
     Ok(expr)
 }
