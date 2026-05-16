@@ -4,7 +4,7 @@ use crate::runtime::machine::{
 };
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
-use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
@@ -116,22 +116,22 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Returns a fresh `NodeOutput` referencing `results[from]`'s terminal value. The
-    /// `&KObject<'a>` is the same reference the producer wrote, not a clone — the arena
-    /// lifetime contract must hold across notify-wake and re-run. The execute loop's
-    /// Done arm handles frame-aware deep-cloning into the outer arena.
+    /// Consume the stamped Lift state. By the time the slot pops, the notify-walk
+    /// in `Scheduler::finalize` has transitioned `Pending → Ready`, so this match
+    /// performs no result-table lookup and the `&KObject<'a>` inside `Value` is the
+    /// same reference the producer wrote — not a clone. The execute loop's Done arm
+    /// handles frame-aware deep-cloning into the outer arena.
     ///
-    /// `result_slot` returns `Option` to keep the absence case representable at the
-    /// type level; the `.expect` here pins the caller-side invariant that the
-    /// notify-walk only wakes a Lift after its producer's terminal write.
-    pub(super) fn run_lift(&self, from: NodeId) -> NodeOutput<'a> {
-        let slot = self
-            .store
-            .result_slot(from)
-            .expect("scheduler invariant: notify-walk fired before terminal write");
-        match slot {
-            NodeOutput::Value(v) => NodeOutput::Value(*v),
-            NodeOutput::Err(e) => NodeOutput::Err(e.clone_for_propagation()),
+    /// The `Pending` arm is a wake-misfire panic that localizes to the notify graph:
+    /// reaching it means a Lift slot was enqueued without its `from` finalizing,
+    /// which would indicate a bug in `Scheduler::finalize`'s stamp or `DepGraph`'s
+    /// pending-deps accounting — not in any read-side caller.
+    pub(super) fn run_lift(state: LiftState<'a>) -> NodeOutput<'a> {
+        match state {
+            LiftState::Ready(output) => output,
+            LiftState::Pending(_) => panic!(
+                "scheduler invariant: notify-walk must stamp Lift to Ready before enqueue",
+            ),
         }
     }
 

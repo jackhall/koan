@@ -98,10 +98,9 @@ incrementally, each producing a usable end state.
 - [Promote untyped invariants into the type system](roadmap/untyped-invariants.md) —
   a survey of runtime invariants enforced by caller discipline plus runtime
   panics rather than the type system (`TypeNameRef`'s resolved-vs-unresolved
-  phase, `NodeStore`'s pending-vs-completed temporal ordering, `CallArena`'s
-  heap-pinning contract, and several smaller `Bindings`/parser/index sites).
-  Each element is independently shippable; the file ships a small priority
-  list rather than one cohesive design.
+  phase, `CallArena`'s heap-pinning contract, and several smaller
+  `Bindings`/parser/index sites). Each element is independently shippable;
+  the file ships a small priority list rather than one cohesive design.
 
 ### Surface and ergonomics
 

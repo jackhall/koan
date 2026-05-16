@@ -54,8 +54,9 @@ pub struct Scheduler<'a> {
     /// that keeps the three vectors in lockstep across `alloc_slot ->
     /// take_for_run -> reinstall* -> finalize -> free_one`. See
     /// `node_store.rs` for the invariants and the small set of mutation
-    /// entry points. Scope matches `deps` and `queues`; `scheduler/finish.rs::run_lift`
-    /// calls `store.result_slot` from a sibling submodule.
+    /// entry points. Scope matches `deps` and `queues`; `Scheduler::finalize`
+    /// reaches `store.stamp_lift_ready` from a sibling submodule to transition
+    /// `NodeWork::Lift(Pending → Ready)` at notify-walk time.
     pub(in crate::runtime::machine::execute::scheduler) store: NodeStore<'a>,
     /// Frame Rc of the slot currently being executed. Read via `SchedulerHandle::current_frame`
     /// so frame-creating builtins (MATCH) can chain it onto their new frame; see

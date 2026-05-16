@@ -38,7 +38,7 @@ use crate::runtime::machine::NodeId;
 use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::KError;
 
-use super::super::nodes::{Node, NodeOutput, NodeWork};
+use super::super::nodes::{LiftState, Node, NodeOutput, NodeWork};
 
 /// Slot-table state for the scheduler. Three private vectors sharing an
 /// index space; all mutation goes through the named methods below so the
@@ -199,15 +199,38 @@ impl<'a> NodeStore<'a> {
         self.results[idx].is_none()
     }
 
-    /// Direct projection of the terminal result for `run_lift`. `None`
-    /// means the slot hasn't been finalized — by the scheduler's notify-walk
-    /// invariant, Lift only runs after `from`'s terminal write, so production
-    /// paths never observe `None`; the option API lets `run_lift` surface a
-    /// `KError` instead of panicking if the invariant ever breaks.
-    /// `scheduler/finish.rs::run_lift` reaches this via `pub(super)` because
-    /// both files sit under `scheduler::`.
-    pub(super) fn result_slot(&self, from: NodeId) -> Option<&NodeOutput<'a>> {
-        self.results[from.index()].as_ref()
+    /// Notify-walk transition for the Lift two-state shape: if the consumer slot's
+    /// work is `Lift(Pending(from))` with `from.index() == producer_idx`, stamp it
+    /// to `Lift(Ready(_))` by cloning the producer's just-finalized terminal out of
+    /// `results[producer_idx]`. The clone matches the previous `run_lift` read-side
+    /// behavior (Value copies the `&'a KObject`; Err calls `clone_for_propagation`)
+    /// but happens once at stamp time rather than on every Lift pop.
+    ///
+    /// No-op when the consumer isn't a Lift, when its work is already `Ready`, or
+    /// when its `from` doesn't name this producer — invariants of the notify-walk
+    /// pair imply at most one of those branches fires for each woken consumer, but
+    /// the body stays defensive so a future call site can stamp speculatively.
+    pub(super) fn stamp_lift_ready(&mut self, consumer_idx: usize, producer_idx: usize) {
+        let is_lift_pending = matches!(
+            self.nodes[consumer_idx].as_ref().map(|n| &n.work),
+            Some(NodeWork::Lift(LiftState::Pending(from))) if from.index() == producer_idx,
+        );
+        if !is_lift_pending {
+            return;
+        }
+        let stamped = match self.results[producer_idx]
+            .as_ref()
+            .expect("producer just finalized")
+        {
+            &NodeOutput::Value(v) => NodeOutput::Value(v),
+            NodeOutput::Err(e) => NodeOutput::Err(e.clone_for_propagation()),
+        };
+        let node = self.nodes[consumer_idx]
+            .as_mut()
+            .expect("checked is_lift_pending above");
+        if let NodeWork::Lift(state) = &mut node.work {
+            *state = LiftState::Ready(stamped);
+        }
     }
 
     // --- Test-only helpers for synthetic-state setup. ---

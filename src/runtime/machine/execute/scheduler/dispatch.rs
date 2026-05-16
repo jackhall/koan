@@ -4,7 +4,7 @@ use crate::runtime::machine::{
 };
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
-use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
@@ -129,7 +129,7 @@ impl<'a> Scheduler<'a> {
                     // placeholder's slot, so `producer_id` is not yet terminal here.
                     self.deps.add_park_edge(producer_id, NodeId(idx));
                     Some(NodeStep::Replace {
-                        work: NodeWork::Lift { from: producer_id },
+                        work: NodeWork::Lift(LiftState::Pending(producer_id)),
                         frame: None,
                         function: None,
                     })

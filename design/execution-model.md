@@ -46,12 +46,14 @@ BodyResult { Value(&KObject) | Tail(KExpression) | Err(KError) }
 
 When a body cannot produce its result inline — its expression has nested
 sub-expressions whose own evaluation hasn't run yet — the slot's work is
-rewritten to `Lift { from: NodeId }` (a [`NodeWork`](../src/runtime/machine/execute/nodes.rs)
-variant). The Lift shim parks on the spawned `Bind`'s notify-list, waits
-for that slot's terminal write, and copies the result into its own slot when
-it runs. The original slot keeps its frame and notify-list across the
-rewrite, so consumers downstream see the eventual terminal as if the body
-had produced it directly.
+rewritten to `Lift(LiftState::Pending(NodeId))` (a [`NodeWork`](../src/runtime/machine/execute/nodes.rs)
+variant). The Lift shim parks on the spawned `Bind`'s notify-list; the
+notify-walk transitions `Pending → Ready(NodeOutput)` at wake time by
+stamping the producer's terminal directly into the Lift's work, so when the
+slot pops the terminal is already in hand and `run_lift` just unwraps it —
+no result-table lookup. The original slot keeps its frame and notify-list
+across the rewrite, so consumers downstream see the eventual terminal as if
+the body had produced it directly.
 
 ## Push/notify dependency edges
 
@@ -229,7 +231,7 @@ The five rails the resolution feeds:
 - **Bare-name short-circuit** (phase 1, runs before resolution). A
   single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
   directly: `Value` returns inline, `Placeholder` rewrites the slot's work
-  to `Lift { from: producer_id }` (the same shim `BodyResult::Tail` uses for
+  to `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail` uses for
   sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
   produces the structured error.
 - **Head-Keyword placeholder fallback** (phase 2, runs inside the

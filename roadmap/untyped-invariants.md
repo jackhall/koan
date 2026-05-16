@@ -4,11 +4,10 @@
 discipline plus runtime panics rather than by the type system. A dozen-plus
 `panic!("expected \`xs\` bound to a List", ...)` sites in
 [`interpret.rs`](../src/runtime/machine/execute/interpret.rs) assert a variant
-tag a binding "must" have; `NodeStore::read(id)` asserts `NodeOutput::Value(_)`
-rather than returning a `Result`; `Wrapped.inner` is invariantly not a
-`Wrapped` only by construction-site discipline; `CallArena`'s `'static`
-transmute is sound only because nothing moves its `Rc`'d payload. The survey
-below catalogs the most load-bearing of these. Each entry is a candidate for
+tag a binding "must" have; `Wrapped.inner` is invariantly not a `Wrapped`
+only by construction-site discipline; `CallArena`'s `'static` transmute is
+sound only because nothing moves its `Rc`'d payload. The survey below
+catalogs the most load-bearing of these. Each entry is a candidate for
 promotion into the type system whose footprint is local to one module.
 
 **Impact.**
@@ -17,8 +16,8 @@ promotion into the type system whose footprint is local to one module.
   invariants are caught by `cargo check`, not by the test suite's coverage of
   unusual paths.
 - *Constructor and accessor APIs become self-documenting.* A
-  `NodeId<Pending>` returned from `take_for_run` reads as the contract
-  "completes once before consumption" without a doc comment.
+  `Pinned<Scope>` returned from `CallArena::new` reads as the contract
+  "the scope never moves while this handle is live" without a doc comment.
 
 **Directions.**
 
@@ -45,42 +44,6 @@ child-scope pointer validity rides on the same `Rc` heap-pinning. Promote with
 a typed handle whose constructors enforce the pinning contract (e.g. a
 `Pinned<Scope>` newtype around the `Rc` with a single `as_ref` API and the raw
 pointer never escaping).
-
-### `NodeStore` temporal-ordering invariants
-
-**Where.** [`node_store.rs:97,175`](../src/runtime/machine/execute/scheduler/node_store.rs),
-[`finish.rs::run_lift`](../src/runtime/machine/execute/scheduler/finish.rs).
-
-Three sites assume a temporal ordering the type can't express: `take_for_run`
-("scheduler must not revisit a completed node"); `read(id)` asserts
-`NodeOutput::Value(_)` rather than returning `Result`; `read_result` asserts
-`results[idx]` is `Some` ("result must be ready by the time it's read"). The
-Lift-wake path additionally reads `results[from]` via `result_slot`, relying
-on the notify-walk having fired.
-
-A full `NodeId<Pending>` / `NodeId<Completed>` typestate is not the right
-shape here: `NodeId` is `Copy` and flows through `SchedulerHandle`,
-`BodyResult::DeferTo`, `DepEdge::{Owned,Notify}`, the work queue, and back
-into builtins — phantom-tagging propagates everywhere while only a handful
-of sites benefit, and the `Pending → Completed` transition can't be
-witnessed at consumer sites without a runtime check anyway.
-
-Targeted shape for the Lift-wake site: **make `NodeWork::Lift` carry the
-producer's result by reference, not just `from: NodeId`**. Restructure as a
-two-state `NodeWork::Lift(LiftState)` with `LiftState::Pending(NodeId)` and
-`LiftState::Ready(&'a NodeOutput<'a>)`; `defer_to_lift` constructs
-`Pending(from)`, and the notify-walk transitions `Pending → Ready` at wake
-time by stamping in the producer's now-known result slot. `run_lift` then
-takes `&'a NodeOutput<'a>` directly — no lookup, no Option, no panic
-possibility. The wake-misfire invariant (queue-popping a `Pending` Lift)
-stays a panic but localizes to the notify graph rather than the read path.
-
-For the remaining `take_for_run` / `read` / `read_result` sites: their
-panics encode scheduler-internal queue/dep-edge invariants whose only
-caller-side response is "this is a scheduler bug". Relocating the panics
-to call sites via `Option`-return adds API churn without reducing panic
-surface; leave the messages co-located with the node_store invariant they
-encode.
 
 ### `Bindings` / `Scope` state-machine encapsulation
 
@@ -155,13 +118,31 @@ hand the typed shape to the sub-eval site.
 
 ## Priority
 
-1. **`NodeStore` temporal-ordering invariants — Lift two-state restructure** —
-   the targeted `NodeWork::Lift(LiftState)` shape encodes the notify-walk
-   precondition in the work variant itself; `run_lift`'s signature alone
-   proves the producer's result is in hand.
+1. **Variant-tag accessors in `interpret` / `type_ops`** — highest leverage
+   per unit of work: a dozen-plus panic sites collapse to typed accessors
+   in two files, with no API churn outside the builtin internals.
+2. **Multi-part expression shape at builtin sub-eval** — smallest blast
+   radius (single file, two sites); a smart constructor at the producer
+   moves the invariant into the type and clears the `unreachable!` /
+   `expect` at the sub-eval site.
+3. **Parser arity types (remaining unwraps)** — the `ParseStack` /
+   `pop_if_*` pattern is already in the parser; extending it with a
+   `consume_arity::<N>()` reuses proven shape and clears seven `.unwrap()`
+   sites across three files.
+4. **`Bindings` / `Scope` state-machine encapsulation** — bounded to the
+   binding/scope mutation surface; a `PostCombine<'a>` phase witness has a
+   clear mintable-only-by-scheduler shape that turns several panic branches
+   statically unreachable.
+5. **Index newtypes for allocator-managed arrays** — moderate blast radius
+   (touches `NodeId`-typed call sites across the scheduler); the
+   `IndexedVec<NodeId, Node>` shape encodes presence at index handout time
+   so the "missing-arg check above guarantees presence" comments become
+   the index's existence.
 
-The remaining elements are sequenced by opportunity, not dependency — pick
-whichever sits adjacent to other work in the same file or module.
+Arena lifetime and heap-pinning discipline is sequenced last (not listed
+above) — highest blast radius, deepest into `unsafe`, and load-bearing
+across the runtime; best taken on after the cheaper elements clear the
+surrounding noise.
 
 ## Dependencies
 

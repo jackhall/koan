@@ -1,7 +1,7 @@
 use crate::runtime::machine::{Frame, KError, KErrorKind, NodeId};
 
 use super::super::lift::lift_kobject;
-use super::super::nodes::{Node, NodeOutput, NodeStep, NodeWork};
+use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
@@ -31,7 +31,7 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope, idx)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
                 NodeWork::Combine { deps, finish } => self.run_combine(deps, finish, scope, idx),
-                NodeWork::Lift { from } => NodeStep::Done(self.run_lift(from)),
+                NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
             self.active_frame = prev_active;
             // Drain pending re-entrant writes while `scope` is still guaranteed live —
@@ -135,7 +135,11 @@ impl<'a> Scheduler<'a> {
     /// Terminal write + notify-walk for slot `idx`. The single entry point for
     /// landing a `NodeOutput` and waking parked consumers — pairs
     /// `NodeStore::finalize` with `DepGraph::drain_notify` so the two halves
-    /// of the terminal step happen in one method body.
+    /// of the terminal step happen in one method body. Each woken consumer
+    /// whose work is `Lift(Pending(idx))` is stamped to
+    /// `Lift(Ready(producer_output))` before enqueue, so the matching
+    /// `run_lift` pop has the terminal in hand and never reads
+    /// `results[idx]`.
     ///
     /// Invariant: every consumer drained here is parked with a non-zero
     /// counter. Freed slots are scrubbed from every producer's `notify_list`
@@ -143,7 +147,11 @@ impl<'a> Scheduler<'a> {
     /// `freed_slot_does_not_appear_in_other_notify_lists` test).
     pub(super) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
         self.store.finalize(idx, output);
-        for consumer in self.deps.drain_notify(idx) {
+        let woken = self.deps.drain_notify(idx);
+        for consumer in &woken {
+            self.store.stamp_lift_ready(*consumer, idx);
+        }
+        for consumer in woken {
             self.queues.push_woken(consumer);
         }
     }
@@ -190,7 +198,7 @@ impl<'a> Scheduler<'a> {
         // holds. Atomic +1 across the three vectors closes the deferred-fixup gap.
         self.deps.add_owned_edge(bind_id, NodeId(idx));
         NodeStep::Replace {
-            work: NodeWork::Lift { from: bind_id },
+            work: NodeWork::Lift(LiftState::Pending(bind_id)),
             frame: None,
             function: None,
         }
