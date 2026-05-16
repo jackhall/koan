@@ -18,7 +18,7 @@ the constraint in the body or routing through a paired tuple-module.
 - *Multi-parameter OCaml-style functors with sharing constraints become
   writable.* Generalizes the single-parameter functor surface
   described in
-  [design/module-system.md § Functors](../design/module-system.md#functors)
+  [design/typing/functors.md](../design/typing/functors.md)
   so the second parameter's signature can pin a slot to the first
   parameter's abstract type.
 - *Dependent value-typed parameters become writable.* Constructions
@@ -64,4 +64,4 @@ None — the SIG-side surface for declaring slots whose type is an
 earlier-parameter reference (the `elt: T` shape in `(BUILD T: Type elt:
 T)`) shares its surface form with the SIG-body `VAL` declarator already
 shipped at
-[design/module-system.md § Structures and signatures](../design/module-system.md#structures-and-signatures).
+[design/typing/modules.md § Structures and signatures](../design/typing/modules.md#structures-and-signatures).

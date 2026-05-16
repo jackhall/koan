@@ -19,7 +19,7 @@ breaks no existing programs.
   coherence checking can't silently pick.
 - *Deductive coherence as an opt-in.* Witness types reflect the implicit's
   identity as a module-kind slot on the type constructor (see
-  [design/module-system.md](../design/module-system.md#type-expressions-and-constraints))
+  [design/typing/functors.md](../design/typing/functors.md#type-expressions-and-constraints))
   — distinct module values bound to that slot produce distinct types, and
   the type system enforces non-mixing. Users who want
   stronger-than-probabilistic certainty get it, at the cost of a slightly
@@ -37,7 +37,7 @@ breaks no existing programs.
   stage 7 fixes the form against the patterns of use. May coincide with
   the block-scoped binding form (block applies to many calls; explicit
   applies to one). Same deferral discipline as the sugar candidates above.
-- *Witness type encoding — decided per [design/module-system.md § Type expressions and constraints](../design/module-system.md#type-expressions-and-constraints).*
+- *Witness type encoding — decided per [design/typing/functors.md § Type expressions and constraints](../design/typing/functors.md#type-expressions-and-constraints).*
   The type constructor declares a module-kind slot whose value carries
   through type identity — a `Set` with `Elt` pinned to `Number` becomes
   `(SIG_WITH Set ((Elt: Number) (Ord: IntOrd)))` when `IntOrd` is the

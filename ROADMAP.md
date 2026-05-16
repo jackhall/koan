@@ -10,14 +10,13 @@ engineering rework: doing one item before another it depends on means doing the 
 item twice. Each per-item file ends with a **Dependencies** section linking to its
 prerequisites and the items it unblocks.
 
-Design rationale for what's already in the language lives in [design/](design/) — six
-topical docs covering the execution model, memory model, functional programming, type
-system, expressions and parsing, and error handling. Two further design docs capture
-cross-cutting work in flight: [design/module-system.md](design/module-system.md) — the
-module-based abstraction system end-to-end (stages 1 and 2 shipped, remaining stages
-tracked as `module-system-*` roadmap items below) — and
-[design/effects.md](design/effects.md) — in-language monadic side effects (tracked in
-[roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md)).
+Design rationale for what's already in the language lives in [design/](design/) — five
+topical docs covering the execution model, memory model, functional programming,
+expressions and parsing, and error handling, plus the [design/typing/](design/typing/README.md)
+subdirectory covering the type and module systems end-to-end (the module language and
+runtime type system shipped, implicit-search and axiom stages tracked as `module-system-*`
+roadmap items below). [design/effects.md](design/effects.md) captures the in-language
+monadic side-effects design (tracked in [roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md)).
 
 ## Next items
 
@@ -45,7 +44,7 @@ without first landing something else:
 
 ### Module system
 
-The agreed design is captured in [design/module-system.md](design/module-system.md);
+The agreed design is captured in [design/typing/](design/typing/README.md);
 stages 1 and 2 shipped (the module language: `MODULE`/`SIG` declarators,
 `:|`/`:!` ascription, per-module type identity, plus the scheduler-driven
 elaborator, `SIG_WITH` sharing constraints, higher-kinded

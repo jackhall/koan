@@ -86,17 +86,17 @@ for how this lets users add what look like new keyword forms.
 ## Open work
 
 The generic-function story extends through the [module
-system](module-system.md). Modular implicits
+system](typing/modules.md). Modular implicits
 ([stage 5](../roadmap/module-system-5-modular-implicits.md)) add a second
 kind of dispatch alongside slot-specificity: a function declares an implicit
 module parameter, and the compiler infers and inserts a satisfying module at
 each call site. `sort {Mo : ORDERED} (xs :(List Mo.t))` is an ordinary `FN`
 in the value language whose `Mo` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
-([module-system.md § Functors](module-system.md#functors)) give the *module*
+([typing/functors.md](typing/functors.md)) give the *module*
 language the analog of the higher-order story this doc covers — a module
 parameterized by another module, applied generatively to produce fresh
-abstract types. See [module-system.md](module-system.md) for the full
+abstract types. See [typing/](typing/README.md) for the full
 plan; container type parameterization (`:(List Number)`,
 `:(Function (args) -> R)`, etc.) is shipped today and is documented in
-[type-system.md](type-system.md).
+[typing/ktype.md](typing/ktype.md).

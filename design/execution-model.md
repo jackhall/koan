@@ -292,7 +292,7 @@ this placeholder mechanism: a type-binding site registers in
 `Scope::placeholders` exactly like a value binding, external lookups park
 the same way, and self-references during a binding's own elaboration
 short-circuit through the elaborator's threaded-set recognition (see
-[type-system.md § Type elaboration](type-system.md#type-elaboration)) so
+[typing/elaboration.md](typing/elaboration.md)) so
 recursive type definitions don't deadlock on their own placeholder.
 FN-signature elaboration plugs into the same mechanism: when
 [`elaborate_type_expr`](../src/runtime/machine/model/types/resolver.rs) hits a
@@ -319,14 +319,14 @@ generically rather than as a special case in the elaborator.
 ## Open work
 
 - **Inference and search as scheduler work**
-  ([module-system.md § Inference and search](module-system.md#inference-and-search-as-scheduler-work)).
+  ([typing/scheduler.md](typing/scheduler.md)).
   Type inference and modular-implicit resolution reduce to the existing
   `Dispatch` and `Bind` machinery — type-returning builtins on the value
   path, `Bind` as the refinement-and-wake-up mechanism, and stage 5
   implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
   node kind. Higher-kinded slots and sharing constraints layer on top of
   the scheduler-driven elaborator (see
-  [module-system.md](module-system.md));
+  [typing/](typing/README.md));
   [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
   implicit search.
 - **Monadic side-effect capture**

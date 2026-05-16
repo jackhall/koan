@@ -35,7 +35,7 @@ is scaffolding without a building.
   higher-kinded slot surface (`(TYPE_CONSTRUCTOR Type)` declaration form,
   `KType::ConstructorApply` application) has landed via module-system
   stage 2; see
-  [design/module-system.md § Higher-kinded type slots](../design/module-system.md#higher-kinded-type-slots).
+  [design/typing/functors.md § Higher-kinded type slots](../design/typing/functors.md#higher-kinded-type-slots).
 - *Standard effect modules — decided.* `Random`, `IO`, `Time`, plus existing
   `PRINT`-emitting builtins folded into `IO`. Each ascribes the `Monad` signature plus
   per-effect operations.

@@ -1,5 +1,5 @@
 //! `Module` and `Signature` — first-class module values produced by the `MODULE` and `SIG`
-//! builtins. See [design/module-system.md](../../../../../design/module-system.md).
+//! builtins. See [design/typing/modules.md](../../../../../design/typing/modules.md).
 //!
 //! **Terminology — "module-signature" vs "expression-signature".** `Signature` here is the
 //! **module-signature** type (`SIG`-declared) — an interface a module can be ascribed to

@@ -1,8 +1,8 @@
 //! Ascription operators `:|` (opaque) and `:!` (transparent) — bolt a [`Signature`] onto
 //! a [`Module`]. Both consume `(Module, Signature)` and produce a `Module`.
-//! See [design/module-system.md](../../../design/module-system.md).
+//! See [design/typing/modules.md](../../../design/typing/modules.md).
 //!
-//! Stage 1 shape-checking is name-presence only; full type-shape checks are deferred to
+//! Today's shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
 use crate::runtime::machine::model::{KObject, KType};
@@ -173,7 +173,7 @@ pub(super) fn abstract_type_names_of<'a>(scope: &crate::runtime::machine::Scope<
 }
 
 /// True iff `name` classifies as a Type token (first char uppercase + at least one
-/// lowercase elsewhere). See [design/type-system.md](../../../design/type-system.md#token-classes--the-parser-level-foundation).
+/// lowercase elsewhere). See [design/typing/tokens.md](../../../design/typing/tokens.md).
 pub(super) fn is_abstract_type_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else { return false; };
@@ -357,7 +357,7 @@ mod tests {
         assert!(matches!(result, KObject::Number(n) if *n == 42.0));
     }
 
-    /// End-to-end example from [design/module-system.md](../../../design/module-system.md).
+    /// End-to-end example from [design/typing/modules.md](../../../design/typing/modules.md).
     #[test]
     fn roadmap_example_int_ord_with_ordered_sig() {
         let arena = RuntimeArena::new();

@@ -24,7 +24,7 @@ SIG Monad = (
 
 The `Wrap` slot is a type-constructor slot declared with
 `(TYPE_CONSTRUCTOR <param>)` — the higher-kinded surface form lives in
-[module-system.md § Higher-kinded type slots](module-system.md#higher-kinded-type-slots).
+[typing/functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots).
 Opaque ascription mints a per-call `KType::UserType { kind:
 TypeConstructor, .. }` under the ascribed module's `type_members[Wrap]`,
 so different `Monad`-ascribed modules carry distinct `Wrap` identities.

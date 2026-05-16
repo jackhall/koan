@@ -216,21 +216,20 @@ sections may be aspirational where a decision has landed ahead of code.
 
 - [design/execution-model.md](design/execution-model.md) — scheduler, deferred dispatch, per-call arenas.
 - [design/memory-model.md](design/memory-model.md) — value ownership, lifting, lexical closures.
-- [design/type-system.md](design/type-system.md) — `KType`, dispatch by signature, structs and tagged unions.
+- [design/typing/](design/typing/README.md) — `KType`, dispatch by signature, structs and tagged
+  unions, plus the module language (`MODULE`/`SIG`, ascription, functors, modular implicits,
+  axiom-checked signatures, equivalence-checked coherence). Subdirectory because the type and
+  module systems share the same scheduler-driven elaborator and nominal-identity carrier; the
+  module language and `KType` runtime are shipped, with the implicit-search and axiom stages
+  tracked under `roadmap/module-system-*.md`.
 - [design/functional-programming.md](design/functional-programming.md) — function values, tail calls, signature-driven evaluation.
 - [design/expressions-and-parsing.md](design/expressions-and-parsing.md) — the parse pipeline and `KExpression` shape.
 - [design/error-handling.md](design/error-handling.md) — `KError`, propagation, and frame attribution.
 
-Two forward-looking design docs capture agreed cross-cutting designs ahead of
-implementation, since each spans several roadmap items:
-
-- [design/module-system.md](design/module-system.md) — modules, signatures, functors,
-  first-class modules, modular implicits, axiom-checked signatures, and equivalence-checked
-  coherence. Stage 1 (the module language plus first-class module values) shipped;
-  remaining work runs as the `roadmap/module-system-*.md` items.
-- [design/effects.md](design/effects.md) — in-language monadic side effects: a `Monad`
-  signature in Koan with concrete effect modules (`Random`, `IO`, `Time`) ascribing it.
-  Implementation is tracked in [roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md).
+[design/effects.md](design/effects.md) captures one further cross-cutting design ahead of
+implementation: in-language monadic side effects — a `Monad` signature in Koan with concrete
+effect modules (`Random`, `IO`, `Time`) ascribing it. Implementation is tracked in
+[roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md).
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. [ROADMAP.md](ROADMAP.md) keeps the curated ordering and the

@@ -1,7 +1,7 @@
 //! `VAL <name:Identifier> : <ty:TypeExprRef>` — SIG-body-only declarator for value
 //! slots whose declared type is recorded explicitly. See
-//! [design/module-system.md](../../../design/module-system.md)'s "Structures and
-//! signatures" section for the surface design.
+//! [design/typing/modules.md § Structures and signatures](../../../design/typing/modules.md#structures-and-signatures)
+//! for the surface design.
 //!
 //! `VAL` exists exclusively inside SIG bodies — outside a SIG body its body returns a
 //! structured `ShapeError`. The gate walks outward through `Anonymous` frames and pivots

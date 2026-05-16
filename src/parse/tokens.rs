@@ -55,7 +55,7 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
 }
 
 /// Classify a sub-token (the piece between operators inside a compound token) per the token-class
-/// rules in [design/type-system.md](../../design/type-system.md#token-classes--the-parser-level-foundation):
+/// rules in [design/typing/tokens.md](../../design/typing/tokens.md):
 ///
 /// 1. Literal first (`null`, `true`, numbers).
 /// 2. `Keyword` per `is_keyword_token` — pure-symbol or ≥2 uppercase letters with no lowercase.

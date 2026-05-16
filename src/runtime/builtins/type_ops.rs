@@ -7,7 +7,7 @@
 //! only after the inner sub-dispatch resolves to a concrete `KType` value.
 //!
 //! **Why builtins rather than a parallel registration table.** The design in
-//! [design/module-system.md](../../../design/module-system.md)
+//! [design/typing/scheduler.md](../../../design/typing/scheduler.md)
 //! reduces type-expression evaluation to ordinary dispatch: the same scope-lookup chain,
 //! the same `Bind`-waits-for-subs refinement, the same `lift_kobject` rules. No new node
 //! kind, no `KType::TypeVar`, no second registration table — a `TypeExprRef`-typed binding

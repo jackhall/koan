@@ -24,7 +24,7 @@ system.
    prefix/suffix operators). A token that starts uppercase but classifies as
    neither keyword nor type (single uppercase letter, or uppercase + digits
    only) is a parse error. See
-   [type-system.md](type-system.md#token-classes--the-parser-level-foundation)
+   [typing/tokens.md](typing/tokens.md)
    for what the three classes mean.
 5. [operators.rs](../src/parse/operators.rs) — table of compound-token
    operators (`!`, `.`, `[]`, `?`); add a row to extend.
@@ -40,7 +40,7 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
 - `Keyword` parts contribute fixed tokens to a signature's bucket key (the part
   that has to match exactly).
 - `Identifier`, `Type`, literals, and sub-expressions become slots that compete
-  on type specificity (see [type-system.md](type-system.md)).
+  on type specificity (see [typing/ktype.md](typing/ktype.md)).
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
 unevaluated expression as a value, pass it around, and evaluate it on demand.
