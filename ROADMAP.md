@@ -95,11 +95,11 @@ incrementally, each producing a usable end state.
   `debug_assert!` at the coarsening branch is the tripwire; the decision
   is forced when stage 5 implicit search or a precise FN-typed slot
   ascription first exercises the scenario.
-- [Promote untyped invariants into the type system](roadmap/untyped-invariants.md) —
-  a survey of runtime invariants enforced by caller discipline plus runtime
-  panics rather than the type system (`CallArena`'s heap-pinning contract and
-  `Bindings`/`Scope` coherence). Each element is independently shippable; the
-  file ships a small priority list rather than one cohesive design.
+- [Encode `CallArena` heap-pinning in the type system](roadmap/arena-heap-pinning.md) —
+  `CallArena`'s `'static` transmute, `KFunction<'a>`'s `NonNull<Scope<'a>>`,
+  and module child-scope pointer chains are sound only because nothing moves
+  the `Rc`'d payload, a no-move property nowhere encoded; promote the contract
+  with a `Pinned<Scope>` newtype around the `Rc`.
 
 ### Surface and ergonomics
 

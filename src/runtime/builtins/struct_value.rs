@@ -8,9 +8,8 @@
 //! is variable-arity — a `Point` schema declares 2 fields, a `User` schema might declare 5.
 //! Construction is **named-only**: the user writes `Point (x: 3, y: 4)` and `apply` parses
 //! the inner expression as `<name>: <value>` triples (via
-//! [`parse_named_value_pairs`](crate::runtime::machine::model::values::parse_named_value_pairs)),
-//! validates against the declared schema, and reorders the values to match schema
-//! declaration order. Reordered value-parts are then wrapped in single-part sub-expressions
+//! [`NamedPairs`](crate::runtime::machine::model::values::NamedPairs)) and consumes one
+//! value per declared field in schema-declaration order. Reordered value-parts are then wrapped in single-part sub-expressions
 //! inside a `ListLiteral`. The scheduler aggregates the list, dispatching each wrapped
 //! sub-expression through `value_lookup`/`value_pass` so identifiers and literals both
 //! resolve to their values before the primitive sees the assembled `KObject::List`. The
@@ -26,7 +25,7 @@ use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, Sched
 use crate::runtime::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
 };
-use crate::runtime::machine::model::values::{parse_named_value_pairs, KObject};
+use crate::runtime::machine::model::values::{KObject, NamedPairs};
 
 use super::register_builtin;
 
@@ -34,9 +33,12 @@ use super::register_builtin;
 /// names match the schema, reorder the values into schema declaration order, and synthesize
 /// a tail that re-dispatches through the construction primitive.
 ///
-/// Validation precedence (when both fire, the first wins): missing field → unknown field →
-/// arity. Missing-first because telling the user "you forgot `y`" is more actionable than
-/// "you have a stray `z`" — adding the missing field is what they need either way.
+/// Validation precedence (first wins): missing field → unknown field. Missing-first
+/// because telling the user "you forgot `y`" is more actionable than "you have a stray
+/// `z`" — adding the missing field is what they need either way. Arity is implicit:
+/// [`NamedPairs`](crate::runtime::machine::model::values::NamedPairs) rejects duplicate
+/// names at parse time, so once every declared field has been taken and the residual is
+/// empty, the input matched the schema exactly.
 ///
 /// After reordering, each value-part is wrapped in a single-part sub-expression so bare
 /// identifiers route through `value_lookup` and bare literals through `value_pass` —
@@ -57,38 +59,25 @@ pub fn apply<'a>(
         }
     };
     let tmp_expr = KExpression { parts: args_parts };
-    let pairs = match parse_named_value_pairs(&tmp_expr, "struct construction") {
+    let mut pairs = match NamedPairs::parse(&tmp_expr, "struct construction") {
         Ok(p) => p,
         Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
     };
-    // Missing-first error precedence: any missing field shadows arity / unknown checks.
-    for (field_name, _) in fields.iter() {
-        if !pairs.iter().any(|(n, _)| n == field_name) {
-            return BodyResult::Err(KError::new(KErrorKind::MissingArg(field_name.clone())));
-        }
-    }
-    for (pair_name, _) in pairs.iter() {
-        if !fields.iter().any(|(n, _)| n == pair_name) {
-            return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                "unknown field `{}` in struct construction",
-                pair_name
-            ))));
-        }
-    }
-    if pairs.len() != fields.len() {
-        return BodyResult::Err(KError::new(KErrorKind::ArityMismatch {
-            expected: fields.len(),
-            got: pairs.len(),
-        }));
-    }
+    // Missing-first error precedence: each declared field consumes its named value, so
+    // a missing-field error fires before any unknown-field surfacing.
     let mut wrapped: Vec<ExpressionPart<'a>> = Vec::with_capacity(fields.len());
     for (field_name, _) in fields.iter() {
-        let value_part = pairs
-            .iter()
-            .find(|(n, _)| n == field_name)
-            .map(|(_, v)| v.clone())
-            .expect("missing-field check above guarantees presence");
-        wrapped.push(ExpressionPart::expression(vec![value_part]));
+        match pairs.take(field_name) {
+            Some(v) => wrapped.push(ExpressionPart::expression(vec![v])),
+            None => {
+                return BodyResult::Err(KError::new(KErrorKind::MissingArg(field_name.clone())));
+            }
+        }
+    }
+    if let Some(unknown) = pairs.into_unknown() {
+        return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+            "unknown field `{unknown}` in struct construction",
+        ))));
     }
     let parts = vec![
         ExpressionPart::Future(schema_obj),

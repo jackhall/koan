@@ -17,4 +17,4 @@ pub use kkey::KKey;
 pub use kobject::{KObject, NonWrappedRef};
 pub use module::{Module, Signature};
 pub(crate) use module::{resolve_module, resolve_signature};
-pub use named_pairs::parse_named_value_pairs;
+pub use named_pairs::NamedPairs;

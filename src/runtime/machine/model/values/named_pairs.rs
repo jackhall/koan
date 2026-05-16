@@ -14,6 +14,14 @@
 //!
 //! The parser inspects the input shape: a single `ExpressionPart::DictLiteral` chooses
 //! the dict-form path; anything else routes through the keyword-triple walker.
+//!
+//! After parsing, [`NamedPairs`] wraps the resulting name→value map as a consume-by-name
+//! handle: callers `take(name)` for each declared slot, and any residual entry surfaces
+//! via [`NamedPairs::into_unknown`] as the unknown-name error. The wrapper encodes the
+//! presence-once invariant the call sites previously enforced via three passes plus a
+//! `.expect("missing-arg check above guarantees presence")`.
+
+use std::collections::HashMap;
 
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::parse_keyword_triple_list;
@@ -48,6 +56,38 @@ pub fn parse_named_value_pairs<'a>(
         return Ok(out);
     }
     parse_keyword_triple_list(expr, context, "=", |part, _name| Ok(part.clone()))
+}
+
+/// Consume-by-name view over a named-argument list. Built from
+/// [`parse_named_value_pairs`]; callers `take(name)` for each declared slot and call
+/// [`into_unknown`](Self::into_unknown) at the end to surface any unconsumed name.
+///
+/// Duplicate names are rejected during parsing, so the map is bijective: each `take`
+/// either returns the unique value or yields a missing-name error. Arity is implicit —
+/// once every declared name has been taken and the residual is empty, the input
+/// matched the declaration exactly.
+pub struct NamedPairs<'a> {
+    map: HashMap<String, ExpressionPart<'a>>,
+}
+
+impl<'a> NamedPairs<'a> {
+    /// Parse `expr` as a named-value list and wrap it for consume-by-name access.
+    pub fn parse(expr: &KExpression<'a>, context: &str) -> Result<Self, String> {
+        let pairs = parse_named_value_pairs(expr, context)?;
+        Ok(Self { map: pairs.into_iter().collect() })
+    }
+
+    /// Pop the value bound to `name`, or `None` if the caller did not provide it.
+    pub fn take(&mut self, name: &str) -> Option<ExpressionPart<'a>> {
+        self.map.remove(name)
+    }
+
+    /// Return the name of an arbitrary unconsumed entry, or `None` if the map is empty.
+    /// Call after all declared slots have been [`take`](Self::take)n; a `Some` indicates
+    /// the caller supplied a name the declaration did not expect.
+    pub fn into_unknown(self) -> Option<String> {
+        self.map.into_keys().next()
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +175,31 @@ mod tests {
         };
         let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
         assert!(err.contains("triples"), "got: {err}");
+    }
+
+    #[test]
+    fn named_pairs_take_consumes_by_name() {
+        let expr = KExpression {
+            parts: vec![
+                ident("x"), eq_kw(), num(3.0),
+                ident("y"), eq_kw(), num(4.0),
+            ],
+        };
+        let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
+        assert!(matches!(pairs.take("y"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 4.0));
+        assert!(matches!(pairs.take("x"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 3.0));
+        assert!(pairs.take("y").is_none(), "second take returns None");
+        assert!(pairs.into_unknown().is_none(), "all entries consumed");
+    }
+
+    #[test]
+    fn named_pairs_into_unknown_reports_residual() {
+        let expr = KExpression {
+            parts: vec![ident("x"), eq_kw(), num(3.0), ident("z"), eq_kw(), num(9.0)],
+        };
+        let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
+        let _ = pairs.take("x");
+        assert_eq!(pairs.into_unknown().as_deref(), Some("z"));
     }
 
     #[test]

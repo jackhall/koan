@@ -22,7 +22,7 @@ use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::runtime::machine::core::{KError, KErrorKind, KFuture, Scope};
 use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, Parseable, SignatureElement};
-use crate::runtime::machine::model::values::{parse_named_value_pairs, KObject};
+use crate::runtime::machine::model::values::{KObject, NamedPairs};
 
 pub mod argument_bundle;
 pub mod body;
@@ -370,58 +370,34 @@ impl<'a> KFunction<'a> {
     }
 
     /// Apply this function to a named-argument list (the inner parts of `f (a: 1, b: 2)`):
-    /// parse name-value pairs, reorder values into signature order, and emit a
+    /// parse name-value pairs, consume one per declared argument, and emit a
     /// `BodyResult::Tail` matching the keyword-bucketed signature on re-dispatch.
     ///
-    /// Validation precedence (first wins): missing arg → unknown arg → arity. Missing-first
-    /// because "you forgot `b`" is more actionable than "you have a stray `c`".
+    /// Validation precedence (first wins): missing arg → unknown arg. Arity is implicit —
+    /// [`NamedPairs`] rejects duplicate names at parse time, so consuming every declared
+    /// argument and finding the residual empty witnesses an exact match.
     pub fn apply<'b>(&self, args: Vec<ExpressionPart<'b>>) -> BodyResult<'b> {
         let tmp_expr = KExpression { parts: args };
-        let pairs = match parse_named_value_pairs(&tmp_expr, "function call") {
+        let mut pairs = match NamedPairs::parse(&tmp_expr, "function call") {
             Ok(p) => p,
             Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
         };
-        let arg_names: Vec<&str> = self
-            .signature
-            .elements
-            .iter()
-            .filter_map(|el| match el {
-                SignatureElement::Argument(a) => Some(a.name.as_str()),
-                _ => None,
-            })
-            .collect();
-        for name in &arg_names {
-            if !pairs.iter().any(|(n, _)| n == name) {
-                return BodyResult::Err(KError::new(KErrorKind::MissingArg((*name).to_string())));
-            }
-        }
-        for (pair_name, _) in &pairs {
-            if !arg_names.iter().any(|n| n == pair_name) {
-                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                    "unknown name `{}` in function call",
-                    pair_name
-                ))));
-            }
-        }
-        if pairs.len() != arg_names.len() {
-            return BodyResult::Err(KError::new(KErrorKind::ArityMismatch {
-                expected: arg_names.len(),
-                got: pairs.len(),
-            }));
-        }
         let mut parts = Vec::with_capacity(self.signature.elements.len());
         for el in &self.signature.elements {
             match el {
                 SignatureElement::Keyword(s) => parts.push(ExpressionPart::Keyword(s.clone())),
-                SignatureElement::Argument(a) => {
-                    let value_part = pairs
-                        .iter()
-                        .find(|(n, _)| n == &a.name)
-                        .map(|(_, v)| v.clone())
-                        .expect("missing-arg check above guarantees presence");
-                    parts.push(value_part);
-                }
+                SignatureElement::Argument(a) => match pairs.take(&a.name) {
+                    Some(v) => parts.push(v),
+                    None => {
+                        return BodyResult::Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
+                    }
+                },
             }
+        }
+        if let Some(unknown) = pairs.into_unknown() {
+            return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                "unknown name `{unknown}` in function call",
+            ))));
         }
         BodyResult::tail(KExpression { parts })
     }
