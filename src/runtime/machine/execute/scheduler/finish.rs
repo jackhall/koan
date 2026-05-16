@@ -121,12 +121,16 @@ impl<'a> Scheduler<'a> {
     /// lifetime contract must hold across notify-wake and re-run. The execute loop's
     /// Done arm handles frame-aware deep-cloning into the outer arena.
     ///
-    /// Invariant: when notify-walk wakes a Lift, `results[from]` is `Some` (Value or Err).
-    /// A `None` would mean the wake fired without a terminal write, which is impossible
-    /// by construction.
+    /// `result_slot` returns `Option` to keep the absence case representable at the
+    /// type level; the `.expect` here pins the caller-side invariant that the
+    /// notify-walk only wakes a Lift after its producer's terminal write.
     pub(super) fn run_lift(&self, from: NodeId) -> NodeOutput<'a> {
-        match self.store.result_slot(from) {
-            NodeOutput::Value(v) => NodeOutput::Value(v),
+        let slot = self
+            .store
+            .result_slot(from)
+            .expect("scheduler invariant: notify-walk fired before terminal write");
+        match slot {
+            NodeOutput::Value(v) => NodeOutput::Value(*v),
             NodeOutput::Err(e) => NodeOutput::Err(e.clone_for_propagation()),
         }
     }

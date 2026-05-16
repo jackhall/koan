@@ -199,15 +199,15 @@ impl<'a> NodeStore<'a> {
         self.results[idx].is_none()
     }
 
-    /// Direct projection of the terminal result for `run_lift`. The
-    /// `expect` here pins the invariant: Lift only runs after notify-walk
-    /// observes a terminal write on `from`. `scheduler/finish.rs::run_lift`
-    /// reaches this via `pub(super)` because both files sit under
-    /// `scheduler::`.
-    pub(super) fn result_slot(&self, from: NodeId) -> &NodeOutput<'a> {
-        self.results[from.index()]
-            .as_ref()
-            .expect("Lift only runs after notify wakes it from `from`'s terminal write")
+    /// Direct projection of the terminal result for `run_lift`. `None`
+    /// means the slot hasn't been finalized — by the scheduler's notify-walk
+    /// invariant, Lift only runs after `from`'s terminal write, so production
+    /// paths never observe `None`; the option API lets `run_lift` surface a
+    /// `KError` instead of panicking if the invariant ever breaks.
+    /// `scheduler/finish.rs::run_lift` reaches this via `pub(super)` because
+    /// both files sit under `scheduler::`.
+    pub(super) fn result_slot(&self, from: NodeId) -> Option<&NodeOutput<'a>> {
+        self.results[from.index()].as_ref()
     }
 
     // --- Test-only helpers for synthetic-state setup. ---

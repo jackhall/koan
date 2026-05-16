@@ -19,12 +19,6 @@ promotion into the type system whose footprint is local to one module.
 - *Constructor and accessor APIs become self-documenting.* A
   `NodeId<Pending>` returned from `take_for_run` reads as the contract
   "completes once before consumption" without a doc comment.
-- *Phase-ordered passes become unambiguous at the type level.* Phase-tagged
-  carriers (`TypeNameRef<Resolved>`) make "did Stage-2 run?" a type check, not
-  a memo-cell inspection.
-- *Substrate for a future static-typing pass.* That pass needs to know which
-  carriers are resolved at entry; the `TypeNameRef` phase tag is on the
-  critical path.
 
 **Directions.**
 
@@ -36,19 +30,6 @@ promotion into the type system whose footprint is local to one module.
   trade-offs.
 
 ## Elements
-
-### Phase tag on `TypeNameRef` (resolved vs unresolved)
-
-**Where.** [`kobject.rs:87-92,215`](../src/runtime/machine/model/values/kobject.rs),
-[`fn_def/tests/return_type.rs`](../src/runtime/builtins/fn_def/tests/return_type.rs);
-also the `KTypeValue` vs `TypeNameRef` variant split in `TypeExprRef` slots.
-
-`TypeNameRef`'s `OnceCell<&'a KType>` memoizes resolution and resets on
-`deep_clone` across scope boundaries; Stage-2 elaboration is supposed to fill
-the cell before any consumer sees the carrier. Promote with a phase parameter
-— `TypeNameRef<Unresolved>` vs `TypeNameRef<Resolved>` — so Stage-2 elaboration
-returns the resolved variant and downstream consumers cannot pattern-match an
-unresolved carrier at all.
 
 ### Arena lifetime and heap-pinning discipline
 
@@ -65,19 +46,41 @@ a typed handle whose constructors enforce the pinning contract (e.g. a
 `Pinned<Scope>` newtype around the `Rc` with a single `as_ref` API and the raw
 pointer never escaping).
 
-### `NodeStore` temporal-ordering typestate
+### `NodeStore` temporal-ordering invariants
 
-**Where.** [`node_store.rs:97,175,210`](../src/runtime/machine/execute/scheduler/node_store.rs),
-[`finish.rs`](../src/runtime/machine/execute/scheduler/finish.rs).
+**Where.** [`node_store.rs:97,175`](../src/runtime/machine/execute/scheduler/node_store.rs),
+[`finish.rs::run_lift`](../src/runtime/machine/execute/scheduler/finish.rs).
 
-Four sites assume a temporal ordering the type can't express: `take_for_run`
+Three sites assume a temporal ordering the type can't express: `take_for_run`
 ("scheduler must not revisit a completed node"); `read(id)` asserts
-`NodeOutput::Value(_)` rather than returning `Result`; `result_slot` is only
-safe after the notify-walk wakes the consumer; the `finish` Lift wake assumes
-`results[from]` is `Some`. Promote with a typestate on node handles —
-`NodeId<Pending>` vs `NodeId<Completed>` — so `read` / `result_slot` accept
-only completed handles and `take_for_run` consumes a `Pending`, returning
-either a `Completed` or nothing.
+`NodeOutput::Value(_)` rather than returning `Result`; `read_result` asserts
+`results[idx]` is `Some` ("result must be ready by the time it's read"). The
+Lift-wake path additionally reads `results[from]` via `result_slot`, relying
+on the notify-walk having fired.
+
+A full `NodeId<Pending>` / `NodeId<Completed>` typestate is not the right
+shape here: `NodeId` is `Copy` and flows through `SchedulerHandle`,
+`BodyResult::DeferTo`, `DepEdge::{Owned,Notify}`, the work queue, and back
+into builtins — phantom-tagging propagates everywhere while only a handful
+of sites benefit, and the `Pending → Completed` transition can't be
+witnessed at consumer sites without a runtime check anyway.
+
+Targeted shape for the Lift-wake site: **make `NodeWork::Lift` carry the
+producer's result by reference, not just `from: NodeId`**. Restructure as a
+two-state `NodeWork::Lift(LiftState)` with `LiftState::Pending(NodeId)` and
+`LiftState::Ready(&'a NodeOutput<'a>)`; `defer_to_lift` constructs
+`Pending(from)`, and the notify-walk transitions `Pending → Ready` at wake
+time by stamping in the producer's now-known result slot. `run_lift` then
+takes `&'a NodeOutput<'a>` directly — no lookup, no Option, no panic
+possibility. The wake-misfire invariant (queue-popping a `Pending` Lift)
+stays a panic but localizes to the notify graph rather than the read path.
+
+For the remaining `take_for_run` / `read` / `read_result` sites: their
+panics encode scheduler-internal queue/dep-edge invariants whose only
+caller-side response is "this is a scheduler bug". Relocating the panics
+to call sites via `Option`-return adds API churn without reducing panic
+surface; leave the messages co-located with the node_store invariant they
+encode.
 
 ### `Bindings` / `Scope` state-machine encapsulation
 
@@ -152,13 +155,10 @@ hand the typed shape to the sub-eval site.
 
 ## Priority
 
-1. **Phase tag on `TypeNameRef`** — eliminates an entire class of "did Stage-2
-   actually run?" bugs; any future consumer that wants to assume a resolved
-   type at a slot boundary depends on it.
-2. **`NodeStore` temporal-ordering typestate** — eliminates the four most
-   load-bearing `panic!`s in the scheduler; the typestate pattern is
-   well-trodden and the scheduler's test surface is large enough to catch
-   regressions.
+1. **`NodeStore` temporal-ordering invariants — Lift two-state restructure** —
+   the targeted `NodeWork::Lift(LiftState)` shape encodes the notify-walk
+   precondition in the work variant itself; `run_lift`'s signature alone
+   proves the producer's result is in hand.
 
 The remaining elements are sequenced by opportunity, not dependency — pick
 whichever sits adjacent to other work in the same file or module.
@@ -168,7 +168,4 @@ whichever sits adjacent to other work in the same file or module.
 **Requires:** none — each element is local to its named module and can land
 independently.
 
-**Unblocks:** none directly. The `TypeNameRef` phase tag is on the critical
-path for any future analysis pass
-([Static type checking and JIT compilation](static-typing-and-jit.md)) that
-wants to assume elaboration has run before its analyses begin.
+**Unblocks:** none.
