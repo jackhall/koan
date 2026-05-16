@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Measure a complexity index for a module partition.
+"""Measure a fractal complexity index for a module subtree.
 
-Reads a cargo-modules DOT file and a TOML partition spec, then reports:
-  index(m) = cross_edges(m) + alpha * feedback_weight(m) + beta
-  total    = Σ index(m) · loc(m)        (summed over non-leaf m)
-  per-loc  = total / loc(root)          (under --fractal)
+Reads a cargo-modules DOT file, recursively walks the module tree from
+`--root`, and reports per node:
+  index(m)   = cross_edges(m) + alpha * feedback_weight(m) + beta
+  size(m)    = gamma * own_loc(m) * log(1 + own_loc(m) / pivot)
+plus the aggregated total:
+  total      = Σ index(m) · loc(m)   +   Σ size(m)
+                  (structure)              (per-file size)
+  per-loc    = total / loc(root)
 
-where feedback_weight is the total weight of edges that go against the
-best topological ordering of the groups. For N <= 6 groups the best order
-is found by exhaustive search; above that, the Eades-Lin-Smyth GR
-heuristic is used.
+`cross_edges` and `feedback_weight` are computed at every interior node
+against the one-group-per-child partition of its children. For N ≤ 6
+children the best topological order is found by exhaustive search;
+above that, the Eades-Lin-Smyth GR heuristic is used.
 
-The `--fractal` per-loc number is normalised by the root subtree's LOC
-(a fixed constant for a given crate). This is what makes nesting cost
-something: every interior level contributes its own loc to the sum, so
-adding a wrapper around a heavy subtree adds (β + cross + α·fb) · loc.
+The per-loc number is normalised by the root subtree's LOC (a fixed
+constant for a given root). This is what makes nesting cost something:
+every interior level contributes its own loc to the sum, so adding a
+wrapper around a heavy subtree adds (β + cross + α·fb) · loc.
 
 `beta` is a flat per-non-leaf charge. The default of 5.0 says "one extra
 module layer costs roughly what 5 cross edges cost" — calibrated by
@@ -23,26 +27,27 @@ wrappers, nesting refactors); above ~10 the metric starts preferring
 known-bad moves (e.g. dropping a load-bearing wrapper) over deep
 nesting, and at β=0 a passthrough wrapper is undetectable.
 
-Usage:
-  python3 tools/modgraph.py --edges <dot-file> --partition <toml-file>
-                            [--alpha 2.0] [--beta 5.0]
+`gamma`/`pivot` shape the per-file size charge. Without it, a single
+3000-line leaf scores zero while any split incurs structural cost, so
+the metric strictly rewards inaction. The charge `γ · L · log(1 + L/T)`
+is sub-linear in L for L ≪ T (small files are nearly free) and turns
+super-linear as L ≫ T. Defaults (γ=10, T=400) put a 400-line file at
+~2773 and a 1000-line file at ~12530 — roughly the cost of an extra
+wrapper layer around an 800-LOC subtree. Applied to every module's own
+file (leaves and parents alike), so fat `mod.rs` files above small
+children are also penalised.
 
-Partition TOML:
-  [groups]
-  parse    = ["koan::parse"]
-  model    = ["koan::dispatch::types", "koan::dispatch::values"]
-  machine  = ["koan::dispatch::kfunction", "koan::dispatch::runtime",
-              "koan::execute"]
-  builtins = ["koan::builtins"]
+Usage:
+  python3 tools/modgraph.py --edges <dot-file> --root koan
+  python3 tools/modgraph.py --edges <dot-file> --root koan::runtime::machine
 """
 
 from __future__ import annotations
 
 import argparse
 import itertools
+import math
 import re
-import sys
-import tomllib
 from collections import defaultdict
 from pathlib import Path
 
@@ -56,30 +61,6 @@ def load_edges(path: Path) -> list[tuple[str, str]]:
         if m:
             edges.append((m.group(1), m.group(2)))
     return edges
-
-
-def load_partition(path: Path) -> dict[str, list[str]]:
-    data = tomllib.loads(path.read_text())
-    groups = data.get("groups")
-    if not isinstance(groups, dict) or not groups:
-        sys.exit(f"{path}: missing or empty [groups] table")
-    return {name: list(prefixes) for name, prefixes in groups.items()}
-
-
-def partition_from_children(
-    edges: list[tuple[str, str]], parent: str
-) -> dict[str, list[str]]:
-    """One group per direct child of `parent`, named by the child's last segment."""
-    prefix = parent + "::"
-    children: set[str] = set()
-    for src, dst in edges:
-        for mod in (src, dst):
-            if mod.startswith(prefix):
-                tail = mod[len(prefix):].split("::", 1)[0]
-                children.add(tail)
-    if not children:
-        sys.exit(f"--children-of {parent}: no descendants found in edges")
-    return {child: [f"{parent}::{child}"] for child in sorted(children)}
 
 
 def classify(module: str, partition: dict[str, list[str]]) -> str | None:
@@ -266,6 +247,19 @@ def file_loc(path: Path) -> int:
     return count
 
 
+def own_file_loc(module: str, src_root: Path) -> int:
+    """LOC of just this module's own backing file (no descendants)."""
+    f = module_to_file(module, src_root)
+    return file_loc(f) if f is not None else 0
+
+
+def size_charge(own_loc: int, gamma: float, pivot: float) -> float:
+    """Soft log-shaped penalty per file: γ·L·log(1 + L/T)."""
+    if own_loc <= 0 or gamma <= 0.0 or pivot <= 0.0:
+        return 0.0
+    return gamma * own_loc * math.log(1.0 + own_loc / pivot)
+
+
 def subtree_loc(module: str, modules: set[str], src_root: Path) -> int:
     prefix = module + "::"
     total = 0
@@ -304,115 +298,82 @@ def fractal_report(
     src_root: Path,
     alpha: float,
     beta: float,
+    gamma: float,
+    pivot: float,
     exact_threshold: int,
 ) -> int:
     modules = discover_modules(edges)
 
-    weighted_sum = 0.0
+    structure_sum = 0.0
+    size_sum = 0.0
     nonleaf_loc_sum = 0
     root_loc = subtree_loc(root, modules, src_root)
 
     def walk(module: str, depth: int) -> None:
-        nonlocal weighted_sum, nonleaf_loc_sum
+        nonlocal structure_sum, size_sum, nonleaf_loc_sum
         children = direct_children(module, modules)
         loc = subtree_loc(module, modules, src_root)
+        own_loc = own_file_loc(module, src_root)
+        size = size_charge(own_loc, gamma, pivot)
+        size_sum += size
+        size_str = f"   own {own_loc:>4}  size {size:>6.1f}" if own_loc else ""
         if not children:
-            print(f"{'  ' * depth}{module:<60} loc {loc:>6}   leaf")
+            print(f"{'  ' * depth}{module:<60} loc {loc:>6}   leaf{size_str}")
             return
         partition = {c: [f"{module}::{c}"] for c in children}
         raw_index, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
         index = raw_index + beta
-        weighted_sum += index * loc
+        structure_sum += index * loc
         nonleaf_loc_sum += loc
         print(f"{'  ' * depth}{module:<60} loc {loc:>6}   "
-              f"children {len(children)}   cross {cross}   fb {fb}   index {index:.1f}")
+              f"children {len(children)}   cross {cross}   fb {fb}   index {index:.1f}"
+              f"{size_str}")
         for c in children:
             walk(f"{module}::{c}", depth + 1)
 
     walk(root, 0)
+    total = structure_sum + size_sum
     print()
-    print(f"total Σ index·loc:                          {weighted_sum:.0f}")
+    print(f"structure Σ index·loc:                      {structure_sum:>12.0f}")
+    print(f"size      Σ γ·L·log(1+L/T):                 {size_sum:>12.0f}   "
+          f"(γ={gamma}, T={pivot:g})")
+    print(f"total:                                      {total:>12.0f}")
     if root_loc:
-        per_root_loc = weighted_sum / root_loc
-        print(f"per root-loc (Σ index·loc / loc({root})):  {per_root_loc:.2f}")
+        print(f"per root-loc (total / loc({root})):        "
+              f"{total / root_loc:>12.2f}   "
+              f"(structure {structure_sum / root_loc:.2f}, "
+              f"size {size_sum / root_loc:.2f})")
     if nonleaf_loc_sum:
-        avg = weighted_sum / nonleaf_loc_sum
-        print(f"per nonleaf-loc (legacy avg):               {avg:.2f}")
+        avg = structure_sum / nonleaf_loc_sum
+        print(f"structure per nonleaf-loc (legacy avg):     {avg:>12.2f}")
     return 0
-
-
-def render_matrix(order: list[str], matrix: dict[tuple[str, str], int]) -> str:
-    width = max(len(g) for g in order)
-    lines = []
-    header = " " * (width + 4) + "  ".join(f"{g:>{width}}" for g in order)
-    lines.append(header)
-    for src in order:
-        row = [f"{matrix.get((src, dst), 0):>{width}}" for dst in order]
-        lines.append(f"  {src:>{width}}  " + "  ".join(row))
-    return "\n".join(lines)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--edges", required=True, type=Path, help="cargo-modules DOT output")
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--partition", type=Path, help="partition TOML")
-    src.add_argument("--children-of", dest="children_of", metavar="MODULE",
-                     help="auto-partition into one group per direct sub-module of MODULE "
-                          "(e.g. --children-of koan::dispatch)")
-    src.add_argument("--fractal", metavar="MODULE",
-                     help="recursively score every parent module under MODULE; "
-                          "aggregate weighted by lines of code")
+    ap.add_argument("--root", required=True, metavar="MODULE",
+                    help="root module to score recursively (e.g. koan, koan::runtime::machine)")
     ap.add_argument("--src-root", type=Path, default=Path("src"),
                     help="source root for LOC lookup (default: src)")
     ap.add_argument("--alpha", type=float, default=2.0, help="feedback penalty (default 2.0)")
     ap.add_argument("--beta", type=float, default=5.0,
-                    help="per-non-leaf charge under --fractal; "
+                    help="per-non-leaf charge; "
                          "penalises passthrough wrappers and tree depth (default 5.0)")
+    ap.add_argument("--gamma", type=float, default=10.0,
+                    help="per-file size charge weight; "
+                         "size(m) = γ·own_loc·log(1+own_loc/T) (default 10.0)")
+    ap.add_argument("--size-pivot", type=float, default=400.0,
+                    help="LOC pivot T in the size charge; files much smaller than T "
+                         "are near-free, files much larger turn super-linear (default 400)")
     ap.add_argument("--exact-threshold", type=int, default=6,
                     help="use exact search for N <= this many groups (default 6)")
     args = ap.parse_args()
 
     edges = load_edges(args.edges)
-    if args.fractal:
-        return fractal_report(edges, args.fractal, args.src_root,
-                              args.alpha, args.beta, args.exact_threshold)
-    if args.partition:
-        partition = load_partition(args.partition)
-    else:
-        partition = partition_from_children(edges, args.children_of)
-    groups = list(partition.keys())
-
-    matrix, cross, unclassified = build_matrix(edges, partition)
-
-    if len(groups) <= args.exact_threshold:
-        order, fb = best_order_exact(groups, matrix)
-        method = f"exact (N={len(groups)})"
-    else:
-        order, fb = best_order_greedy(groups, matrix)
-        method = f"greedy GR (N={len(groups)})"
-
-    index = cross + args.alpha * fb
-
-    print(f"groups: {len(groups)}   cross edges: {cross}   "
-          f"feedback: {fb}   index: {index:.1f}   alpha: {args.alpha}")
-    print(f"method: {method}")
-    print(f"best order: {' -> '.join(order)}")
-    if unclassified:
-        print(f"unclassified edges (skipped): {unclassified}")
-    print()
-
-    rank = {g: i for i, g in enumerate(order)}
-    back = [(a, b, w) for (a, b), w in matrix.items() if rank[a] > rank[b]]
-    if back:
-        print(f"back edges ({sum(w for _, _, w in back)}):")
-        for a, b, w in sorted(back, key=lambda t: -t[2]):
-            print(f"  {a} -> {b}: {w}")
-        print()
-
-    print("matrix (rows = src group, cols = dst group):")
-    print(render_matrix(order, matrix))
-    return 0
+    return fractal_report(edges, args.root, args.src_root,
+                          args.alpha, args.beta, args.gamma, args.size_pivot,
+                          args.exact_threshold)
 
 
 if __name__ == "__main__":

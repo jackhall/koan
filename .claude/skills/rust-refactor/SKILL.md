@@ -1,18 +1,17 @@
 ---
 name: rust-refactor
-description: Use this skill when refactoring Rust code in the koan repo — renaming symbols across the crate, moving items between files/modules, extracting a function or sub-module, applying batch structural search-and-replace, pruning unused code, auto-fixing compiler/clippy diagnostics, or evaluating module-structure changes against the dep graph. Pairs `ast-grep` for structural rewrites, `cargo clippy --fix` / `cargo fix` for lint-driven cleanup, `cargo build` as the verification step, and `tools/modgraph.py` for partition-complexity scoring.
+description: Use this skill when refactoring Rust code in the koan repo — renaming symbols across the crate, moving items between files/modules, extracting a function or sub-module, applying batch structural search-and-replace, pruning unused code, or auto-fixing compiler/clippy diagnostics. Pairs `ast-grep` for structural rewrites, `cargo clippy --fix` / `cargo fix` for lint-driven cleanup, and `cargo build` as the verification step. For *scoring* a proposed module reshuffle before doing it, see the dedicated `modgraph` skill.
 ---
 
 # rust-refactor
 
-Command-line workflow for Rust refactors in the koan repo. Four tools, in order of trust:
+Command-line workflow for Rust refactors in the koan repo. Three tools, in order of trust:
 
 1. **`cargo build` / `cargo clippy`** — the compiler is the source of truth.
 2. **`cargo fix` / `cargo clippy --fix`** — auto-apply suggestions the compiler already knows about.
 3. **`ast-grep`** — pattern-based structural rewrites for things the compiler can't do alone (renames, moves, signature reshapes).
-4. **`cargo modules` + `tools/modgraph.py`** — score a proposed top-level module partition against the live dep graph before committing to a reshuffle. Pair with **`tools/modgraph_rewrite.py`** to score a refactor (renamed layout) under `--fractal` without moving real files.
 
-Assumes `ast-grep`, `cargo clippy`, and `cargo modules` are on PATH.
+Assumes `ast-grep` and `cargo clippy` are on PATH. For *scoring* a proposed module reshuffle (partition / rename / split) before doing it, see the dedicated `modgraph` skill.
 
 ## When to reach for which tool
 
@@ -23,7 +22,7 @@ Assumes `ast-grep`, `cargo clippy`, and `cargo modules` are on PATH.
 | Renaming a symbol across the crate | `ast-grep` + `cargo build` |
 | Moving an item between files/modules | move by hand, then `cargo build` + `cargo fix` |
 | Anything touching types, lifetimes, or trait bounds | finish with `cargo build` to verify |
-| Considering a module split / merge / rename, or moving several items between files/modules | `cargo modules` + `tools/modgraph.py` |
+| Considering a module split / merge / rename, or scoring a partition reshuffle | see the `modgraph` skill |
 
 ## Recipes
 
@@ -97,84 +96,6 @@ cargo clippy -- -W dead_code -W unused
 ```
 
 Then delete what's truly dead, or mark `#[allow(dead_code)]` deliberately for things kept on purpose. If `cargo machete` is on PATH, run it for unused-dependency detection.
-
-### 8. Score a proposed module partition
-
-Before reshuffling code between top-level modules, measure whether the new shape actually
-reduces cross-module coupling. `tools/modgraph.py` reads a [cargo-modules](https://github.com/regexident/cargo-modules)
-DOT graph and a TOML partition spec, then reports a complexity index
-(`cross_edges + alpha * feedback_weight`, where feedback is the weight of
-edges that go against the best topological order).
-
-```sh
-cargo modules dependencies --package koan --lib \
-    --no-externs --no-sysroot --no-traits --no-fns --no-types \
-    > /tmp/koan.dot
-
-cat > /tmp/partition.toml <<'EOF'
-[groups]
-parse    = ["koan::parse"]
-model    = ["koan::dispatch::types", "koan::dispatch::values"]
-machine  = ["koan::dispatch::kfunction", "koan::dispatch::runtime",
-            "koan::dispatch", "koan::execute"]
-builtins = ["koan::builtins"]
-EOF
-
-python3 tools/modgraph.py --edges /tmp/koan.dot --partition /tmp/partition.toml
-```
-
-Output reports the index, the best topological order, the back-edges (which
-moves would most reduce the index), and the full src→dst matrix. Score the
-current partition the same way — a proposed reshuffle is only worth doing if
-its index is lower.
-
-To score the internal coupling of a single subtree (one group per direct
-child), skip the TOML and use `--children-of`:
-
-```sh
-python3 tools/modgraph.py --edges /tmp/koan.dot --children-of koan::dispatch
-```
-
-To score every parent module recursively and aggregate (weighted by lines
-of code per subtree):
-
-```sh
-python3 tools/modgraph.py --edges /tmp/koan.dot --fractal koan
-```
-
-Reports per-module index plus `Σ index·loc` and the LOC-normalized average.
-Each level's coupling index is weighted by the LOC under that node, so
-internal tangles in large modules count for more than the same tangle in a
-small one.
-
-### 9. Score a proposed *refactor* (renames the existing layout)
-
-`tools/modgraph.py --partition` only re-classifies edges at one level; it
-can't model the LOC-weighted fractal score after a real rename. Use
-`tools/modgraph_rewrite.py` to apply `OLD=NEW` module renames to the DOT
-graph and mirror `src/` to a parallel tree, then re-run `modgraph.py
---fractal` against the rewritten pair.
-
-```sh
-python3 tools/modgraph_rewrite.py \
-    --edges /tmp/koan.dot \
-    --output-edges /tmp/koan_proposed.dot \
-    --output-src /tmp/koan_proposed_src \
-    --rename koan::parse::kexpression=koan::ast \
-    --rename koan::execute=koan::dispatch::execute
-
-python3 tools/modgraph.py --edges /tmp/koan_proposed.dot --fractal koan \
-                          --src-root /tmp/koan_proposed_src
-```
-
-Each `--rename OLD=NEW` rebinds module paths matching `OLD` or starting
-with `OLD::`; both DOT tokens and the mirrored `src/` filenames update.
-Renames apply against the original path only — chains (`A=B`, `B=C`)
-must be expressed as the final target. For long lists, use
-`--rename-file <path>` (one `OLD=NEW` per line, `#` for comments).
-
-The score before/after gap is what to optimize: a rename is worth doing
-only if `--fractal koan` drops by more than rounding noise.
 
 ## Pitfalls
 
