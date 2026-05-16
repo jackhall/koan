@@ -67,22 +67,14 @@ pub fn body<'a>(
 /// statement like `(LET x = (FN ...))` doesn't get mis-split (its inner `Expression`
 /// would otherwise look like a second statement).
 pub(crate) fn fold_multi_statement<'a>(body: KExpression<'a>) -> KExpression<'a> {
-    let is_multi = body.parts.len() >= 2
-        && body.parts.iter().all(|p| matches!(p, ExpressionPart::Expression(_)));
-    if !is_multi {
+    if body.parts.len() < 2 {
         return body;
     }
-    let mut stmts: Vec<KExpression<'a>> = body
-        .parts
-        .into_iter()
-        .map(|p| match p {
-            ExpressionPart::Expression(e) => *e,
-            _ => unreachable!("is_multi guarantees every part is Expression(_)"),
-        })
-        .collect();
-    // Right fold: pop the last as the seed, then wrap each preceding statement around it.
-    let mut acc = stmts.pop().expect("is_multi guarantees len >= 2");
-    while let Some(stmt) = stmts.pop() {
+    let (mut preceding, mut acc) = match body.try_take_inner_expressions_split() {
+        Ok(t) => t,
+        Err(body) => return body,
+    };
+    while let Some(stmt) = preceding.pop() {
         acc = KExpression {
             parts: vec![
                 ExpressionPart::Keyword("CONS".into()),

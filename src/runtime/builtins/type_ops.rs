@@ -313,22 +313,20 @@ pub fn body_sig_with<'a>(
 
     let mut triples: Vec<(String, ExpressionPart<'a>, usize)> = Vec::new();
     let parts = &bindings_expr.parts;
-    let all_expression_parts = !parts.is_empty()
-        && parts.iter().all(|p| matches!(p, ExpressionPart::Expression(_)));
+    // `borrow_inner_expressions` returns `Some(exprs)` iff every part is `Expression(_)`
+    // (and parts is non-empty). The typed view lets the per-element loop iterate
+    // `&KExpression` directly — no downstream `unreachable!` arm needed.
+    let inner_exprs = bindings_expr.borrow_inner_expressions().filter(|v| !v.is_empty());
     // A 2-part bindings list with non-Expression elements is the single-pair case after
     // peel-redundant. Routes through `parse_pair` so the Type-token / pair-shape error
     // surfaces with its focused diagnostic rather than the structural fallback.
-    let is_single_pair = parts.len() == 2 && !all_expression_parts;
+    let is_single_pair = parts.len() == 2 && inner_exprs.is_none();
     if is_single_pair {
         if let Err(e) = parse_pair(parts, &mut triples, 0) {
             return err(e);
         }
-    } else if all_expression_parts {
-        for (idx, part) in parts.iter().enumerate() {
-            let inner = match part {
-                ExpressionPart::Expression(boxed) => boxed.as_ref(),
-                _ => unreachable!("all_expression_parts gates this arm"),
-            };
+    } else if let Some(exprs) = inner_exprs {
+        for (idx, inner) in exprs.iter().enumerate() {
             if let Err(e) = parse_pair(&inner.parts, &mut triples, idx) {
                 return err(e);
             }

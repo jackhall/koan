@@ -300,6 +300,62 @@ impl<'a> KExpression<'a> {
             _ => None,
         }
     }
+
+    /// If every part is `Expression(_)`, return refs to the inner expressions; otherwise
+    /// `None`. The returned `Vec` encodes the all-`Expression` shape — callers iterate
+    /// `&KExpression` directly without re-matching the variant.
+    pub fn borrow_inner_expressions(&self) -> Option<Vec<&KExpression<'a>>> {
+        let mut out = Vec::with_capacity(self.parts.len());
+        for p in &self.parts {
+            match p {
+                ExpressionPart::Expression(b) => out.push(b.as_ref()),
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    /// Consuming counterpart of [`Self::borrow_inner_expressions`], shaped for right-fold
+    /// consumers: returns `(preceding, last)` where every preceding expression keeps its
+    /// source order and `last` is the rightmost inner expression — both already unwrapped
+    /// from `ExpressionPart::Expression`. Requires non-empty `parts`. On shape mismatch
+    /// (any non-`Expression` part, or empty) returns the original `KExpression` back
+    /// unmodified so the caller can pass through.
+    pub fn try_take_inner_expressions_split(
+        self,
+    ) -> Result<(Vec<KExpression<'a>>, KExpression<'a>), Self> {
+        let mut iter = self.parts.into_iter();
+        let Some(first) = iter.next() else {
+            return Err(KExpression { parts: Vec::new() });
+        };
+        let mut last: KExpression<'a> = match first {
+            ExpressionPart::Expression(b) => *b,
+            other => {
+                let mut parts = vec![other];
+                parts.extend(iter);
+                return Err(KExpression { parts });
+            }
+        };
+        let mut preceding: Vec<KExpression<'a>> = Vec::new();
+        for p in iter.by_ref() {
+            match p {
+                ExpressionPart::Expression(b) => {
+                    preceding.push(std::mem::replace(&mut last, *b));
+                }
+                other => {
+                    let mut parts: Vec<ExpressionPart<'a>> = preceding
+                        .into_iter()
+                        .map(|e| ExpressionPart::Expression(Box::new(e)))
+                        .collect();
+                    parts.push(ExpressionPart::Expression(Box::new(last)));
+                    parts.push(other);
+                    parts.extend(iter);
+                    return Err(KExpression { parts });
+                }
+            }
+        }
+        Ok((preceding, last))
+    }
 }
 
 impl<'a> std::fmt::Debug for KExpression<'a> {

@@ -1,14 +1,14 @@
 # Promote untyped invariants into the type system
 
 **Problem.** Runtime invariants across the codebase are enforced by caller
-discipline plus runtime panics rather than by the type system. A dozen-plus
-`panic!("expected \`xs\` bound to a List", ...)` sites in
-[`interpret.rs`](../src/runtime/machine/execute/interpret.rs) assert a variant
-tag a binding "must" have; `Wrapped.inner` is invariantly not a `Wrapped`
-only by construction-site discipline; `CallArena`'s `'static` transmute is
-sound only because nothing moves its `Rc`'d payload. The survey below
-catalogs the most load-bearing of these. Each entry is a candidate for
-promotion into the type system whose footprint is local to one module.
+discipline plus runtime panics rather than by the type system. Parser arity
+unwraps depend on shape-checks several frames up; `Bindings`/`Scope` coherence
+relies on single-writer methods and phase ordering external to the type;
+allocator-managed indices are validated by free-list discipline rather than
+typed handout; `CallArena`'s `'static` transmute is sound only because
+nothing moves its `Rc`'d payload. The survey below catalogs the most
+load-bearing of these. Each entry is a candidate for promotion into the type
+system whose footprint is local to one module.
 
 **Impact.**
 
@@ -64,19 +64,6 @@ single-writer methods, and a phase witness (e.g. a `PostCombine<'a>` token
 mintable only by the scheduler) threaded into the cycle-close path so its
 panicking branches become statically unreachable.
 
-### Variant-tag accessors in `interpret` / `type_ops`
-
-**Where.** [`interpret.rs:160-574`](../src/runtime/machine/execute/interpret.rs),
-[`type_ops.rs`](../src/runtime/builtins/type_ops.rs).
-
-A dozen-plus `panic!("expected \`xs\` bound to a List", ...)` sites assert a
-binding looked up by name is a specific `KObject` variant; slot values in
-type-ops are asserted to be `KTypeValue` / `KSignature` / `KModule` ("Wrap
-must be a TypeConstructor"). No type-level dispatch on the variant. Promote
-with typed accessors that return `Option<&List>` / `Option<&KSignature>` and
-propagate `KError` on mismatch, or by lifting the dispatch into the signature
-so the slot type encodes which variant is required.
-
 ### Parser arity types (remaining unwraps)
 
 **Where.** [`operators.rs:33,38,39,44`](../src/parse/operators.rs),
@@ -106,34 +93,17 @@ with index newtypes the allocator hands out and indexed-collection wrappers
 (e.g. `IndexedVec<NodeId, Node>` with typed `Index` / `IndexMut`) so the
 "presence" claim is encoded by the index's existence.
 
-### Multi-part expression shape at builtin sub-eval
-
-**Where.** [`cons.rs:80,84`](../src/runtime/builtins/cons.rs).
-
-`is_multi` guarantees every part is `Expression(_)` and `len >= 2`; the
-`unreachable!` and `expect` rely on the caller having filtered first. AST-
-level, not `BodyResult`-level. Promote with a multi-part-expression type the
-caller constructs via a smart constructor that enforces both invariants, then
-hand the typed shape to the sub-eval site.
-
 ## Priority
 
-1. **Variant-tag accessors in `interpret` / `type_ops`** — highest leverage
-   per unit of work: a dozen-plus panic sites collapse to typed accessors
-   in two files, with no API churn outside the builtin internals.
-2. **Multi-part expression shape at builtin sub-eval** — smallest blast
-   radius (single file, two sites); a smart constructor at the producer
-   moves the invariant into the type and clears the `unreachable!` /
-   `expect` at the sub-eval site.
-3. **Parser arity types (remaining unwraps)** — the `ParseStack` /
+1. **Parser arity types (remaining unwraps)** — the `ParseStack` /
    `pop_if_*` pattern is already in the parser; extending it with a
    `consume_arity::<N>()` reuses proven shape and clears seven `.unwrap()`
    sites across three files.
-4. **`Bindings` / `Scope` state-machine encapsulation** — bounded to the
+2. **`Bindings` / `Scope` state-machine encapsulation** — bounded to the
    binding/scope mutation surface; a `PostCombine<'a>` phase witness has a
    clear mintable-only-by-scheduler shape that turns several panic branches
    statically unreachable.
-5. **Index newtypes for allocator-managed arrays** — moderate blast radius
+3. **Index newtypes for allocator-managed arrays** — moderate blast radius
    (touches `NodeId`-typed call sites across the scheduler); the
    `IndexedVec<NodeId, Node>` shape encodes presence at index handout time
    so the "missing-arg check above guarantees presence" comments become
