@@ -1,19 +1,23 @@
-# Simplify runtime::machine and shrink AI context cost
+# Reduce module-graph coupling and shrink AI context cost
 
-**Problem.** Two forms of bloat hold koan back. *Structural:* at HEAD the
-dominant module-graph knot has migrated up a level from `runtime::machine`
-into `runtime` itself; `koan::runtime` accounts for roughly two-thirds of the
-crate-wide Σ index·loc, driven by back-edges from `model` into `machine`
-(the data layer reaching into runtime machinery instead of sitting under
-it). *Context-cost:* ten non-test files exceed 550 lines, and a handful
+**Problem.** Two forms of bloat hold koan back. *Structural:* the
+dominant module-graph knot lives inside `koan::machine` — `machine::model`
+(ast, types, values) reaches downward into `machine::core` (Scope,
+KFunction, Arena handles) for runtime hooks the data layer shouldn't
+depend on, contributing the bulk of `koan::machine`'s 97 cross-edges
+and feeding the 217 cross-edges at the crate root between `builtins`,
+`machine`, and `parse`. The crate-wide per-loc score (γ=50) is 407.69,
+of which 313.79 is coupling. *Context-cost:* roughly a dozen non-test
+files exceed 200 measured LOC (the modgraph size pivot), and a handful
 of structurally-defensive `unreachable!` arms encode multi-step
 extractor protocols the type system could fold into single calls.
 
 **Impact.**
 
 - *Module-graph coupling drops where it matters.* Reshuffles that break
-  `model → machine` back-edges pull the loc-normalized fractal score
-  meaningfully below today's baseline.
+  the `machine::model` ↓ `machine::core` back-edges pull the
+  loc-normalized fractal score meaningfully below today's baseline of
+  407.69.
 - *AI context cost falls per file touched.* Each oversized file becomes
   several focused submodules a reader (human or model) can load
   independently; common edits stop dragging in 600–1100 lines of
@@ -36,49 +40,38 @@ extractor protocols the type system could fold into single calls.
   two-step protocol the caller cannot get wrong by construction (peek
   the variant, then take it). A combined `take_X_or_error` returning
   `Result<X, KError>` directly removes all six.
-- *Split [`type_ops.rs`](../src/builtins/type_ops.rs) (1102
-  LOC) — open.* Six independent builtin bodies sharing one trivial
-  helper; one submodule per body under `type_ops/` is the obvious
-  partition. Largest file in the crate; clean isolation.
-- *Split
-  [`ktype_predicates.rs`](../src/machine/model/types/ktype_predicates.rs)
-  (698 LOC) — open.* Three disjoint concerns under one module:
-  specificity ordering, per-`ExpressionPart` admissibility, per-value
-  type-tagging. Each is independent of the others.
-- *Split [`ascribe.rs`](../src/builtins/ascribe.rs) (800
-  LOC) — open.* The two body functions (`body_opaque`,
-  `body_transparent`) plus shape-checking and abstract-type-name
-  sweeping; partition along those seams.
-- *Split [`bindings.rs`](../src/machine/core/bindings.rs) (855
-  LOC) — open.* Single façade `impl` with high cohesion but identifiable
-  bands: data/functions write primitives, types write primitive,
-  transactional nominal dual-writes, and the `PendingBinderGuard` RAII
-  machinery. Lower partition return than the others above; bundle with
-  a `machine` reshuffle pass rather than as a standalone PR.
-- *Split [`scope.rs`](../src/machine/core/scope.rs) (742 LOC)
-  and the remaining 600+-line builtins
-  ([`fn_def.rs`](../src/builtins/fn_def.rs),
-  [`struct_def.rs`](../src/builtins/struct_def.rs),
-  [`let_binding.rs`](../src/builtins/let_binding.rs),
-  [`interpret.rs`](../src/machine/execute/interpret.rs),
-  [`kfunction.rs`](../src/machine/core/kfunction.rs)) — open.*
-  Each is plausibly 2–3 focused submodules but the right seams depend
-  on the structural reshuffle below. Score candidate splits in the same
-  [`modgraph_rewrite.py`](../tools/modgraph_rewrite.py) pass so LOC
-  redistribution and edge re-classification are evaluated together.
-- *Break the `model → machine` back-edges — open.* The dominant knot
-  has moved up a level; `runtime::model` reaches into `runtime::machine`
-  enough times to drive most of the crate-wide Σ index·loc. Identify
-  what `model::types` and `model::values` reach into `machine` for
-  (Scope, KFunction, Arena handles, scheduler types) and either lift
-  the offending APIs out of `model` into `machine`, or demote the
-  shared substrate from `machine` to a sibling of `model` so the
-  dependency points downward. Score candidates with
+- *Split [`type_ops.rs`](../src/builtins/type_ops.rs) (345 measured
+  LOC across 6 independent builtins) — open.* One submodule per body
+  under `type_ops/` is the obvious partition. Scored at γ=50: net −0.36
+  per-loc on the koan-wide modgraph, the only standalone file-split
+  candidate that clears rounding noise on the current tree.
+- *Split [`scope.rs`](../src/machine/core/scope.rs) (419
+  measured LOC, dominated by one ~290-loc `impl Scope` block),
+  [`fn_def.rs`](../src/builtins/fn_def.rs) (417 own-loc with a single
+  `signature` child — a thin 1-child wrapper paying amplified β·scale),
+  and [`kfunction.rs`](../src/machine/core/kfunction.rs) (258 own-loc,
+  also a wrapper) — open.* Standalone scoring at γ=50 says scope.rs's
+  natural 3-way split loses by +0.36 per-loc (the cohesive impl block
+  stays oversized after any clean partition); fn_def's wrapper situation
+  is the more promising target since splitting its mod.rs into siblings
+  of `signature` both shrinks the largest leaf and drops the
+  thin-wrapper β·scale=3 penalty. Re-score under
+  [`modgraph_rewrite.py`](../tools/modgraph_rewrite.py) bundled with
+  the structural reshuffle below — LOC redistribution and edge
+  re-classification need joint evaluation.
+- *Break the `machine::model` ↓ `machine::core` back-edges — open.*
+  `machine::model::types` and `machine::model::values` reach
+  sideways/downward into `machine::core` (Scope, KFunction, Arena
+  handles) and `machine::execute` (scheduler types) enough times to
+  drive most of `machine`'s 97 cross-edges. Either lift the offending
+  APIs out of `model` into `core`/`execute`, or promote the shared
+  substrate (e.g. `ast`, `types`) out of `model` to a sibling of
+  `machine` so dependencies point one way. Score candidates with
   [`modgraph_rewrite.py`](../tools/modgraph_rewrite.py); adopt only
   reshuffles whose loc-normalized score drops by more than rounding
-  noise off today's baseline. The smaller `core → kfunction` tangle
-  inside `machine` is a secondary target — bundle only if a single
-  partition addresses both.
+  noise off today's baseline (407.69 at γ=50). The `core` ↔ `kfunction`
+  tangle inside `machine` is a secondary target — bundle only if a
+  single partition addresses both.
 - *Trim scheduler tests against the sub-struct surface — decided.*
   Delete tests asserting tri-vector shape invariants that `DepGraph` /
   `NodeStore` now type-enforce; keep behavior-level tests (scheduling
