@@ -34,14 +34,14 @@ impl KType {
     /// concrete `UserType`, etc.) returns `false` — those parameters carry no
     /// type-language identity.
     pub fn is_type_denoting(&self) -> bool {
-        match self {
-            KType::SignatureBound { .. } => true,
-            KType::Signature => true,
-            KType::Type => true,
-            KType::TypeExprRef => true,
-            KType::AnyUserType { kind: UserTypeKind::Module } => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            KType::SignatureBound { .. }
+                | KType::Signature
+                | KType::Type
+                | KType::TypeExprRef
+                | KType::AnyUserType { kind: UserTypeKind::Module }
+        )
     }
 
     /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`; for parameterized
@@ -511,7 +511,10 @@ mod tests {
             scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
-        let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped { inner, type_id });
+        let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped {
+            inner: crate::runtime::machine::model::values::NonWrappedRef::peel(inner),
+            type_id,
+        });
         let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
             name: "Point".into(),
             scope_id: ScopeId::SENTINEL,

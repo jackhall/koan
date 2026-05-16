@@ -185,7 +185,7 @@ fn access_field<'a>(
         // (allowed by the type system though no shipping NEWTYPE-over-module exists today),
         // or a scalar like `Number` (rejected by the `other` arm below) — the existing arms
         // handle it without a redo at every accessor.
-        KObject::Wrapped { inner, .. } => access_field(scope, inner, field),
+        KObject::Wrapped { inner, .. } => access_field(scope, inner.get(), field),
         other => err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
             expected: "Struct".to_string(),

@@ -123,7 +123,6 @@ impl<'a> KFunction<'a> {
                         // (Expression arm). The closure captures only what it
                         // needs — no live borrow of `self.signature` survives the
                         // sub-Dispatch spawning below.
-                        let body_id;
                         let typ_id_opt: Option<crate::runtime::machine::NodeId>;
                         let inline_typ: Option<KType>;
                         match d {
@@ -177,7 +176,7 @@ impl<'a> KFunction<'a> {
                         sched.with_active_frame(frame.clone(), &mut |s| {
                             bid = Some(s.add_dispatch(substituted.clone(), child));
                         });
-                        body_id = bid.expect("body dispatch must spawn");
+                        let body_id = bid.expect("body dispatch must spawn");
 
                         // Build the Combine's dep list: body first, then optional
                         // return-type sub-Dispatch. Closure reads `results[0]` for

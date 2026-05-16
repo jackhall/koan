@@ -156,10 +156,10 @@ impl<'a> Bindings<'a> {
     /// across SIG-shape unit tests.
     #[cfg(test)]
     pub fn expect_value(&self, name: &str) -> &'a KObject<'a> {
-        *self
-            .data
+        self.data
             .borrow()
             .get(name)
+            .copied()
             .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
     }
 
@@ -167,10 +167,10 @@ impl<'a> Bindings<'a> {
     /// [`Bindings::expect_value`] for the type-side map.
     #[cfg(test)]
     pub fn expect_type(&self, name: &str) -> &'a KType {
-        *self
-            .types
+        self.types
             .borrow()
             .get(name)
+            .copied()
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
     }
 

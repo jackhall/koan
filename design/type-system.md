@@ -557,11 +557,14 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   which schedules the value sub-expression via `add_dispatch` and waits on
   it via a `Combine` whose finish closure type-checks against `repr` and
   produces a
-  [`KObject::Wrapped { inner: &'a KObject, type_id: &'a KType }`](../src/runtime/machine/model/values/kobject.rs)
-  carrier. Newtype-over-newtype collapse is pinned in the finish closure:
-  `Wrapped.inner` is invariantly non-`Wrapped`, so `Bar(some_foo)` peels
-  `some_foo.inner` and rewraps with `Bar`'s `type_id` — at most one layer
-  of wrapping at any point. The construction path is driven from
+  [`KObject::Wrapped { inner: NonWrappedRef<'a>, type_id: &'a KType }`](../src/runtime/machine/model/values/kobject.rs)
+  carrier. Newtype-over-newtype collapse is encoded in the field type:
+  [`NonWrappedRef`](../src/runtime/machine/model/values/kobject.rs) is a
+  copy-newtype around `&'a KObject<'a>` whose sole constructor `peel` collapses
+  any `Wrapped` layer at construction time. `Bar(some_foo)` runs through
+  `NonWrappedRef::peel(some_foo)` and rewraps with `Bar`'s `type_id` — at most
+  one layer of wrapping at any point, and the invariant is a `cargo check`
+  guarantee rather than a caller-discipline contract. The construction path is driven from
   `type_call::body` (which now resolves the verb through `scope.resolve_type`
   first and branches on the resolved `kind`) rather than a second registered
   builtin: a sibling primitive would share `type_call`'s `[TypeExprRef, …]`

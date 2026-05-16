@@ -9,6 +9,30 @@ use crate::runtime::machine::core::{CallArena, KFuture, ScopeId};
 use crate::runtime::machine::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
 use super::module::{Module, Signature};
 
+/// Reference to a [`KObject`] that is statically guaranteed not to be a
+/// [`KObject::Wrapped`]. The only constructor is [`Self::peel`], which collapses any
+/// `Wrapped` layer at construction time; by induction (every prior construction went
+/// through the same peel), peeling one level is enough. Used as the field type of
+/// `KObject::Wrapped.inner` so the newtype-over-newtype collapse invariant is encoded
+/// in the type rather than enforced by caller discipline.
+#[derive(Copy, Clone)]
+pub struct NonWrappedRef<'a>(&'a KObject<'a>);
+
+impl<'a> NonWrappedRef<'a> {
+    /// Sole constructor. Peels any `Wrapped` layer so the wrapped reference is
+    /// invariantly not to a `Wrapped`.
+    pub fn peel(value: &'a KObject<'a>) -> Self {
+        match value {
+            KObject::Wrapped { inner, .. } => *inner,
+            _ => Self(value),
+        }
+    }
+
+    pub fn get(&self) -> &'a KObject<'a> {
+        self.0
+    }
+}
+
 /// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
 /// reference to a function in some scope. The universal value type that `KFunction`s consume
 /// and produce; implements `Parseable` so values can be compared and rendered uniformly.
@@ -91,11 +115,12 @@ pub enum KObject<'a> {
     KModule(&'a Module<'a>, Option<Rc<CallArena>>),
     KSignature(&'a Signature<'a>),
     /// Stage-4 NEWTYPE carrier. Tags a representation value with a NEWTYPE type identity.
-    /// `inner` is the underlying representation value (arena-allocated, invariantly *not*
-    /// a `Wrapped` — newtype-over-newtype is collapsed to a single layer at construction
-    /// time in `newtype_def::newtype_construct`'s Combine finish). `type_id` is the
-    /// `&'a KType::UserType { kind: Newtype, .. }` minted at NEWTYPE declaration time
-    /// (the same arena reference `bindings.types[name]` holds).
+    /// `inner` is the underlying representation value, invariantly *not* a `Wrapped` —
+    /// the [`NonWrappedRef`] field type enforces newtype-over-newtype collapse at the
+    /// only construction path ([`crate::runtime::builtins::newtype_def::newtype_construct`]'s
+    /// Combine finish, which builds the carrier through [`NonWrappedRef::peel`]).
+    /// `type_id` is the `&'a KType::UserType { kind: Newtype, .. }` minted at NEWTYPE
+    /// declaration time (the same arena reference `bindings.types[name]` holds).
     ///
     /// `ktype()` reports `(*type_id).clone()` — the per-declaration nominal identity.
     /// Dispatch on a slot typed by `Distance` admits a `Wrapped` whose `type_id`
@@ -103,7 +128,7 @@ pub enum KObject<'a> {
     /// `inner` (`access_field`'s `Wrapped` arm), so wrapping a struct in a NEWTYPE
     /// doesn't force every field accessor to redo.
     Wrapped {
-        inner: &'a KObject<'a>,
+        inner: NonWrappedRef<'a>,
         type_id: &'a KType,
     },
     Null,
@@ -208,7 +233,7 @@ impl<'a> KObject<'a> {
             // immutable-carrier contract. `inner` already lives in the arena, so no
             // deep allocation is needed here.
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
-                inner,
+                inner: *inner,
                 type_id,
             },
         }
@@ -346,7 +371,7 @@ impl<'a> Parseable for KObject<'a> {
             KObject::Wrapped { inner, type_id } => format!(
                 "{}({})",
                 type_id.name(),
-                Parseable::summarize(*inner),
+                Parseable::summarize(inner.get()),
             ),
         }
     }
@@ -485,7 +510,7 @@ mod tests {
             scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
-        let w = KObject::Wrapped { inner, type_id };
+        let w = KObject::Wrapped { inner: NonWrappedRef::peel(inner), type_id };
         match w.ktype() {
             KType::UserType { kind: UserTypeKind::Newtype { .. }, name, scope_id } => {
                 assert_eq!(name, "Distance");
@@ -508,7 +533,7 @@ mod tests {
             scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
-        let w = KObject::Wrapped { inner, type_id };
+        let w = KObject::Wrapped { inner: NonWrappedRef::peel(inner), type_id };
         assert_eq!(w.summarize(), "Distance(3)");
     }
 
@@ -524,11 +549,11 @@ mod tests {
             scope_id: ScopeId::from_raw(0, 0xAA),
             name: "Distance".into(),
         });
-        let original = KObject::Wrapped { inner, type_id };
+        let original = KObject::Wrapped { inner: NonWrappedRef::peel(inner), type_id };
         let cloned = original.deep_clone();
         match cloned {
             KObject::Wrapped { inner: ci, type_id: ct } => {
-                assert!(std::ptr::eq(ci, inner));
+                assert!(std::ptr::eq(ci.get(), inner));
                 assert!(std::ptr::eq(ct, type_id));
             }
             _ => panic!("expected Wrapped after deep_clone"),

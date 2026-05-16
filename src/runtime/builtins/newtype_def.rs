@@ -29,7 +29,7 @@ use crate::runtime::machine::{
     ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle,
 };
 use crate::runtime::machine::model::types::UserTypeKind;
-use crate::runtime::machine::model::values::KObject;
+use crate::runtime::machine::model::values::{KObject, NonWrappedRef};
 use crate::runtime::machine::model::KType;
 
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
@@ -190,20 +190,13 @@ pub fn newtype_construct<'a>(
                 got: value.ktype().name(),
             }));
         }
-        // Collapse invariant: a `Wrapped` inner is invariantly non-`Wrapped` by
-        // induction (every prior construction collapsed through this same closure).
+        // Newtype-over-newtype collapse is the `NonWrappedRef::peel` contract:
         // `Bar(some_foo)` where `some_foo: Foo` takes `some_foo.inner` directly so
-        // the produced `Wrapped` is exactly one layer over the bottom representation
-        // value. Avoids unbounded nesting and lets stage-4.C ATTR fall-through recurse
-        // only one level.
-        let inner_ref: &'a KObject<'a> = match value {
-            KObject::Wrapped { inner, .. } => inner,
-            // `add_dispatch` writes its result into an arena slot, so `value` is
-            // already arena-resident — reuse it directly.
-            _ => value,
-        };
+        // the produced `Wrapped` is exactly one layer over the bottom representation.
+        // `add_dispatch` writes its result into an arena slot, so non-`Wrapped`
+        // values are already arena-resident and `peel` keeps the reference.
         let wrapped = KObject::Wrapped {
-            inner: inner_ref,
+            inner: NonWrappedRef::peel(value),
             type_id: identity,
         };
         BodyResult::Value(scope.arena.alloc_object(wrapped))
@@ -291,7 +284,7 @@ mod tests {
                     } => assert_eq!(name, "Distance"),
                     ref other => panic!("expected Newtype type_id, got {other:?}"),
                 }
-                assert!(matches!(inner, KObject::Number(n) if *n == 3.0));
+                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
@@ -329,9 +322,9 @@ mod tests {
                 }
                 // Critical: `inner` must be the bare Number, NOT another Wrapped.
                 assert!(
-                    matches!(inner, KObject::Number(n) if *n == 3.0),
+                    matches!(inner.get(), KObject::Number(n) if *n == 3.0),
                     "expected bare Number inner, got {:?}",
-                    inner.ktype(),
+                    inner.get().ktype(),
                 );
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
@@ -409,7 +402,7 @@ mod tests {
                     KType::UserType { ref name, .. } => assert_eq!(name, "Distance"),
                     ref other => panic!("expected Distance identity, got {other:?}"),
                 }
-                assert!(matches!(inner, KObject::Number(n) if *n == 3.0));
+                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
@@ -451,7 +444,7 @@ mod tests {
                     KType::UserType { ref name, .. } => assert_eq!(name, "Distance"),
                     ref other => panic!("expected Distance identity, got {other:?}"),
                 }
-                assert!(matches!(inner, KObject::Number(n) if *n == 3.0));
+                assert!(matches!(inner.get(), KObject::Number(n) if *n == 3.0));
             }
             other => panic!("expected Wrapped, got {:?}", other.ktype()),
         }
