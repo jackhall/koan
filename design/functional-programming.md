@@ -1,7 +1,7 @@
 # Support for functional programming
 
 Functions are first-class values in Koan. `KFunction` is a `KObject` variant
-([kobject.rs](../src/runtime/model/values/kobject.rs)), so a function can be returned from a
+([kobject.rs](../src/runtime/machine/model/values/kobject.rs)), so a function can be returned from a
 body, bound via `LET`, looked up by name, and invoked via
 [`call_by_name`](../src/runtime/builtins/call_by_name.rs) or by appearing in a
 position the dispatcher resolves.
@@ -14,7 +14,7 @@ The surface form is:
 FN (<signature>) -> ReturnType = (<body>)
 ```
 
-The signature is itself a [`KExpression`](../src/ast.rs) mixing
+The signature is itself a [`KExpression`](../src/runtime/machine/model/ast.rs) mixing
 fixed `Keyword` tokens and `name: Type` parameter triples. The triple form is
 required — a bare identifier without `: Type` is a parse error; use `: Any` to
 opt out of type-checking for a slot. Keyword tokens are part of the dispatch
@@ -23,7 +23,7 @@ key. The body is a `KExpression` evaluated at call time.
 Example:
 
 ```
-FN (ECHO x: Number) -> Number = (x)
+FN (ECHO x :Number) -> Number = (x)
 LET y = (ECHO 21)
 ```
 
@@ -33,7 +33,7 @@ LET y = (ECHO 21)
 Body { Builtin(BuiltinFn) | UserDefined(KExpression) }
 ```
 
-(in [kfunction.rs](../src/runtime/machine/kfunction.rs)). The `UserDefined(KExpression)`
+(in [kfunction.rs](../src/runtime/machine/core/kfunction.rs)). The `UserDefined(KExpression)`
 shape was chosen over `Box<dyn Fn>` so that the TCO and error-frame paths can
 introspect the body — TCO needs to recognize the tail position; error frames
 need to know which function the trace step belongs to. A boxed closure would
@@ -90,13 +90,13 @@ system](module-system.md). Modular implicits
 ([stage 5](../roadmap/module-system-5-modular-implicits.md)) add a second
 kind of dispatch alongside slot-specificity: a function declares an implicit
 module parameter, and the compiler infers and inserts a satisfying module at
-each call site. `sort {Mo : ORDERED} (xs: List<Mo.t>)` is an ordinary `FN`
+each call site. `sort {Mo : ORDERED} (xs :(List Mo.t))` is an ordinary `FN`
 in the value language whose `Mo` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
 ([module-system.md § Functors](module-system.md#functors)) give the *module*
 language the analog of the higher-order story this doc covers — a module
 parameterized by another module, applied generatively to produce fresh
 abstract types. See [module-system.md](module-system.md) for the full
-plan; container type parameterization (`List<Number>`,
-`Function<(args) -> R>`, etc.) is shipped today and is documented in
+plan; container type parameterization (`:(List Number)`,
+`:(Function (args) -> R)`, etc.) is shipped today and is documented in
 [type-system.md](type-system.md).

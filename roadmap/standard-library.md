@@ -69,7 +69,7 @@ for value slots. An `ORDERED` signature reads
 ```
 SIG OrderedSig = (
   (LET Type = Number)
-  (VAL compare: Function<(Type, Type) -> Number>)
+  (VAL compare :(Function (Type, Type) -> Number))
 )
 ```
 
@@ -78,8 +78,8 @@ and a `SET` functor's signature reads
 ```
 SIG SetSig = (
   (LET Elt = Number)
-  (VAL empty: Type)
-  (VAL insert: Function<(Type, Elt) -> Type>)
+  (VAL empty :Type)
+  (VAL insert :(Function (Type, Elt) -> Type))
 )
 ```
 

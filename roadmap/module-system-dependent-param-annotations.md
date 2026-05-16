@@ -30,7 +30,7 @@ the constraint in the body or routing through a paired tuple-module.
 - *Carrier — decided.* Reuse the
   `ReturnType { Resolved(KType), Deferred(DeferredReturn) }` carrier
   shipped at
-  [`ExpressionSignature::return_type`](../src/runtime/model/types/signature.rs).
+  [`ExpressionSignature::return_type`](../src/runtime/machine/model/types/signature.rs).
   Parameter type slots widen to the same two-variant shape; selection
   is decidable at FN-definition by scanning each parameter type's
   `TypeExpr` for any leaf matching an *earlier* parameter name.

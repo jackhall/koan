@@ -31,7 +31,7 @@ system.
 
 ## `KExpression` shape
 
-Output is one [`KExpression`](../src/ast.rs) per top-level line:
+Output is one [`KExpression`](../src/runtime/machine/model/ast.rs) per top-level line:
 an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
 nested `Expression`, `ListLiteral`, `DictLiteral`, or typed `Literal`.
 
@@ -69,7 +69,7 @@ declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
 [`SchedulerHandle::add_dispatch`](../src/runtime/machine/core/scope.rs) submits a child
-node directly, while [`BodyResult::Tail`](../src/runtime/machine/kfunction.rs) — used
+node directly, while [`BodyResult::Tail`](../src/runtime/machine/core/kfunction.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.
 
@@ -78,7 +78,7 @@ place.
 Users add what look like new keyword forms by writing `FN` definitions.
 
 ```
-FN (LOOP body: KExpression) -> Any = (...)
+FN (LOOP body :KExpression) -> Any = (...)
 ```
 
 defines a new dispatchable signature: keyword `LOOP`, slot `body`. The parser

@@ -18,7 +18,7 @@ three classes:
   `my_var`, `_internal`).
 
 This split is what lets the language reserve a syntactic slot for type names
-without quoting. `FN (x: Number) -> Str = (...)` works because `Number` and
+without quoting. `FN (x :Number) -> Str = (...)` works because `Number` and
 `Str` are recognizable as types from their shape alone.
 
 A token that starts uppercase but classifies as neither keyword nor type
@@ -41,7 +41,7 @@ convention is `LET Type = ...` for the principal abstract type, with `Elt`,
 
 ## `KType` — the runtime type system
 
-[`KType`](../src/runtime/model/types/ktype.rs) has a variant for every concrete `KObject`:
+[`KType`](../src/runtime/machine/model/types/ktype.rs) has a variant for every concrete `KObject`:
 
 - Scalars: `Number`, `Str`, `Bool`, `Null`.
 - Containers: `List(Box<KType>)`, `Dict(Box<KType>, Box<KType>)`,
@@ -70,7 +70,7 @@ convention is `LET Type = ...` for the principal abstract type, with `Elt`,
   ascription, construction primitives' return types. The surface keywords
   `Newtype` and `TypeConstructor` are pinned for diagnostic rendering but not
   registered as writable surface names (no entry in
-  [`KType::from_name`](../src/runtime/model/types/ktype_resolution.rs)).
+  [`KType::from_name`](../src/runtime/machine/model/types/ktype_resolution.rs)).
 - Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
   Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
   / `Dict(_, _)`. Emitted by `elaborate_type_expr` when the outer name of a
@@ -85,24 +85,25 @@ convention is `LET Type = ...` for the principal abstract type, with `Elt`,
   uniformly through `Scope::resolve_type`.
 - `Any` — the no-op fast-path.
 
-[`KType::matches_value`](../src/runtime/model/types/ktype_predicates.rs) plus
-[`KObject::ktype`](../src/runtime/model/values/kobject.rs) close the loop on runtime
+[`KType::matches_value`](../src/runtime/machine/model/types/ktype_predicates.rs) plus
+[`KObject::ktype`](../src/runtime/machine/model/values/kobject.rs) close the loop on runtime
 checking: every value has a queryable type, and any declared type can be checked
 against it.
 
 ## Container type parameterization
 
-`List<T>`, `Dict<K, V>`, and `Function<(args) -> ret>` carry their inner types
-on the variant directly. `KType` is not `Copy`; structural payloads are
+`:(List T)`, `:(Dict K V)`, and `:(Function (args) -> ret)` carry their inner
+types on the variant directly. `KType` is not `Copy`; structural payloads are
 `Box`ed where the variant would otherwise be self-referential.
 
-**Surface syntax** is angle brackets. The parser treats `<...>` as an intratoken
-group anchored to a preceding type identifier — `List<Number>` is one
-[`ExpressionPart::Type`](../src/ast.rs) carrying a structured
-`TypeExpr`, not three tokens. A bare `<` or `>` outside that context (e.g.,
-`a < b` with whitespace) flows through as a `Keyword`, so a future less-than
-builtin is unblocked. The framing logic lives in
-[type_frame.rs](../src/parse/type_frame.rs).
+**Surface syntax** is a glued-right `:` sigil opening an S-expression
+type-expression group. The parser treats `:(...)` as a type-position frame
+anchored to the `:` — `:(List Number)` is one
+[`ExpressionPart::Type`](../src/runtime/machine/model/ast.rs) carrying a structured
+`TypeExpr`, not four tokens. `<` and `>` flow through unencumbered as
+keyword tokens, leaving the arithmetic comparison operators available. The
+framing logic lives in
+[type_expr_frame.rs](../src/parse/type_expr_frame.rs).
 
 ### Variance
 
@@ -117,9 +118,9 @@ Three sites consume parameterized types, and each has its own behavior:
 
 | Site | What it does | Variance |
 | --- | --- | --- |
-| `matches_value` | Walks a runtime value against a declared type at the return-type check. | **Covariant** for `List` / `Dict`: `List<Any>` accepts any list because `Any.matches_value(_)` is always true; `Dict<Str, Any>` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. | **Covariant in every parameter position** (element, key, value, arg, ret): `List<Number>` ≺ `List<Any>`, `Dict<Str, Number>` ≺ `Dict<Str, Any>`, `Function<(Number) -> Str>` ≺ `Function<(Any) -> Any>`. |
-| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x: Number) -> Str` fills only `Function<(Number) -> Str>`, not `Function<(Any) -> Str>`. |
+| `matches_value` | Walks a runtime value against a declared type at the return-type check. | **Covariant** for `List` / `Dict`: `:(List Any)` accepts any list because `Any.matches_value(_)` is always true; `:(Dict Str Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(List Number)` ≺ `:(List Any)`, `:(Dict Str Number)` ≺ `:(Dict Str Any)`, `:(Function (Number) -> Str)` ≺ `:(Function (Any) -> Any)`. |
+| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(Function (Number) -> Str)`, not `:(Function (Any) -> Str)`. |
 
 The combination is sound for dispatch even though `is_more_specific_than`
 ranks `Function`-typed slots covariantly while `function_compat` is invariant.
@@ -127,7 +128,7 @@ The covariant ranking only matters when two parameterized function slots both
 match the same call; with `function_compat`'s strict equality, a function
 value matches at most one parameterized function slot, so the ranking has no
 tie to break in that case. The covariance is observable for `List` / `Dict`
-tournaments — `(xs: List<Number>)` strictly outranks `(xs: List<Any>)` for a
+tournaments — `(xs :(List Number))` strictly outranks `(xs :(List Any))` for a
 number-list call — and benign for `Function`.
 
 Concretely:
@@ -135,31 +136,31 @@ Concretely:
 ```
 LET nums = [1 2 3]
 
-FN (PICK xs: List<Any>)    -> Str = ("any")
-FN (PICK xs: List<Number>) -> Str = ("number")
+FN (PICK xs :(List Any))    -> Str = ("any")
+FN (PICK xs :(List Number)) -> Str = ("number")
 
-PICK nums   # → "number"   (covariant: List<Number> ≺ List<Any>)
+PICK nums   # → "number"   (covariant: :(List Number) ≺ :(List Any))
 ```
 
 ```
-FN (BAD) -> List<Number> = ([1 "x"])
-BAD   # → TypeMismatch: expected List<Number>, got List<Any>
+FN (BAD) -> :(List Number) = ([1 "x"])
+BAD   # → TypeMismatch: expected :(List Number), got :(List Any)
         # (matches_value walks elements; covariant — Any.matches_value(_) is true,
         #  Number.matches_value("x") is false)
 ```
 
 ```
-FN (USE f: Function<(Number) -> Str>) -> Str = ("got fn")
+FN (USE f :(Function (Number) -> Str)) -> Str = ("got fn")
 
-USE (FN (SHOW x: Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal)
-USE (FN (SHOW x: Any)    -> Str = ("hi"))   # → DispatchFailed
+USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal)
+USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → DispatchFailed
                                             #   (function_compat: invariant, not equal)
 ```
 
 **Element-type inference for literals** is the join of element types via
-[`KType::join_iter`](../src/runtime/model/types/ktype_resolution.rs): `[1, 2, 3]` → `List<Number>`,
-`[1, "x"]` → `List<Any>`, `[]` → `List<Any>`.
-[`KObject::ktype`](../src/runtime/model/values/kobject.rs) walks list elements and dict
+[`KType::join_iter`](../src/runtime/machine/model/types/ktype_resolution.rs): `[1, 2, 3]` → `:(List Number)`,
+`[1, "x"]` → `:(List Any)`, `[]` → `:(List Any)`.
+[`KObject::ktype`](../src/runtime/machine/model/values/kobject.rs) walks list elements and dict
 keys/values on each call to project the parameterized form; functions project
 their declared signature (`KObject::KFunction(f, _)` → `KFunction { args, ret }`
 read off `f.signature`).
@@ -167,18 +168,18 @@ read off `f.signature`).
 **Element validation runs on returns, not arguments.** The scheduler's
 runtime return-type check walks `matches_value` over the returned value,
 recursing into containers (a list literal `[1, "x"]` returned where
-`List<Number>` was declared fails with a structured `TypeMismatch` naming both
+`:(List Number)` was declared fails with a structured `TypeMismatch` naming both
 types). Argument-position element validation is shape-only at dispatch — an
 `[x, y]` literal with sub-expression elements can't be type-checked until the
 elements evaluate. See open work for the static-pass-driven closure of this
 gap.
 
 **Arity is enforced at FN-definition time** by `KType::from_type_expr`:
-`List<A, B>` rejects with a precise error before the function is ever called.
+`:(List A B)` rejects with a precise error before the function is ever called.
 
 `KFunction` is no longer a surface-declarable type name — there's no
 "any function" KType, since a function with no signature has nothing to
-dispatch on. Use `Function<(args) -> R>` for typed shapes or `Any` for
+dispatch on. Use `:(Function (args) -> R)` for typed shapes or `Any` for
 unconstrained values. FN's own registered return type is `KType::Any` for the
 same reason: the constructed function's projected `ktype()` carries its real
 shape at runtime.
@@ -189,7 +190,7 @@ shape at runtime.
 token (`ExpressionPart::Type(_)`). The slot resolves to a
 `KObject::KTypeValue(KType)` carrying the elaborated type — name, nested
 parameters, and (for recursive types) `Mu` / `RecursiveRef` structure — so
-parameterized types like `List<Number>` and recursive types like `Tree`
+parameterized types like `:(List Number)` and recursive types like `Tree`
 survive the parser → dispatch boundary as a single canonical value. Used by
 FN's return-type slot, by STRUCT and UNION's name slots, and by `type_call`'s
 verb slot. Slots that want only a bare name (STRUCT/UNION) check the elaborated
@@ -329,9 +330,9 @@ Per-call FN-parameter substitution into return-type pins — the templated
 return-type surface described in
 [module-system.md § Functors](module-system.md#functors) — rides the
 `ReturnType` / `DeferredReturn` carriers at
-[`ExpressionSignature::return_type`](../src/runtime/model/types/signature.rs)
+[`ExpressionSignature::return_type`](../src/runtime/machine/model/types/signature.rs)
 and the dispatch-boundary re-elaboration in
-[`KFunction::invoke`](../src/runtime/machine/kfunction/invoke.rs);
+[`KFunction::invoke`](../src/runtime/machine/core/kfunction/invoke.rs);
 together with the shipped identifier-class hardening at the bare-leaf
 arm of `elaborate_type_expr`, it completes the surface
 "modules-as-types" presentation.
@@ -391,9 +392,9 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   RHS) or to `data` (other type-language carriers).
 - Type identity stage 2 — `KObject::TypeNameRef` carrier. Bare-leaf type
   names that aren't in
-  [`KType::from_name`](../src/runtime/model/types/ktype.rs)'s builtin table
+  [`KType::from_name`](../src/runtime/machine/model/types/ktype.rs)'s builtin table
   (`Point`, `IntOrd`, `MyList`) are lowered by
-  [`ExpressionPart::resolve_for`](../src/ast.rs) into
+  [`ExpressionPart::resolve_for`](../src/runtime/machine/model/ast.rs) into
   `KObject::TypeNameRef(TypeExpr)` rather than a placeholder `KType`
   variant. The carrier preserves the parser-side `TypeExpr` for diagnostics
   and for consumers that want the user's surface identifier verbatim; it
@@ -403,7 +404,7 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   to a concrete `KType` at bind time or is still in parser-form is an
   internal detail. The four downstream consumers each carry a
   `TypeNameRef` arm beside the existing `KTypeValue` arm: the shared
-  [`extract_bare_type_name`](../src/runtime/machine/kfunction/argument_bundle.rs)
+  [`extract_bare_type_name`](../src/runtime/machine/core/kfunction/argument_bundle.rs)
   helper (used by STRUCT/UNION declaration sites and `type_call`'s verb
   slot), [ATTR's `body_type_lhs` and `read_field_name`](../src/runtime/builtins/attr.rs),
   [`let_binding`'s name slot](../src/runtime/builtins/let_binding.rs) (which
@@ -414,9 +415,9 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   `SignatureBound` hit, recovers the paired value-side carrier from
   `bindings.data`). FN's deferred return-type elaboration peeks the slot
   to pick between
-  [`extract_ktype`](../src/runtime/machine/kfunction/argument_bundle.rs)
+  [`extract_ktype`](../src/runtime/machine/core/kfunction/argument_bundle.rs)
   (resolved carrier) and the sibling
-  [`extract_type_name_ref`](../src/runtime/machine/kfunction/argument_bundle.rs)
+  [`extract_type_name_ref`](../src/runtime/machine/core/kfunction/argument_bundle.rs)
   (deferred carrier consuming the parser-preserved `TypeExpr`), then drives
   the existing park-on-placeholder machinery from there.
 
@@ -477,31 +478,31 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   Every `KType` flowing through dispatch is fully elaborated — there is no
   surface-name carrier variant inside `KType` itself.
 - Type identity stage 3 — per-declaration `KType::UserType` carrier and
-  dual-write. [`enum UserTypeKind { Struct, Tagged, Module, Newtype { repr } }`](../src/runtime/model/types/ktype.rs)
+  dual-write. [`enum UserTypeKind { Struct, Tagged, Module, Newtype { repr } }`](../src/runtime/machine/model/types/ktype.rs)
   with a `surface_keyword()` accessor (the `Newtype` variant lands with
   stage 4 below; its `repr` is variant-internal and a manual
   `UserTypeKind::PartialEq` ignores it so wildcard / identity comparisons
   key on kind and `(scope_id, name)` only),
-  [`KType::UserType { kind, scope_id, name }`](../src/runtime/model/types/ktype.rs)
+  [`KType::UserType { kind, scope_id, name }`](../src/runtime/machine/model/types/ktype.rs)
   (per-declaration identity tag), and
-  [`KType::AnyUserType { kind }`](../src/runtime/model/types/ktype.rs)
+  [`KType::AnyUserType { kind }`](../src/runtime/machine/model/types/ktype.rs)
   (wildcard kind tag) are the carriers; the old `KType::Struct` /
   `KType::Tagged` / `KType::Module` / `KType::ModuleType` singletons are
   gone. The surface names `"Struct"` / `"Tagged"` / `"Module"` lower to
   `AnyUserType { kind }` in
-  [`KType::from_name`](../src/runtime/model/types/ktype_resolution.rs), and
+  [`KType::from_name`](../src/runtime/machine/model/types/ktype_resolution.rs), and
   [`scope.register_type`](../src/runtime/builtins.rs) agrees so the
   type-resolver and the builtin registry produce the same wildcard
   carrier. Predicate arms
-  ([`ktype_predicates.rs`](../src/runtime/model/types/ktype_predicates.rs))
+  ([`ktype_predicates.rs`](../src/runtime/machine/model/types/ktype_predicates.rs))
   place `UserType { kind: K, .. }` strictly below `AnyUserType { kind: K }`
   strictly below `Any` in `is_more_specific_than`, and `AnyUserType {
   kind }` matches any `KObject::Struct` / `Tagged` / `KModule` of the
   matching kind. Value carriers —
-  [`KObject::Struct`](../src/runtime/model/values/kobject.rs),
-  [`KObject::Tagged`](../src/runtime/model/values/kobject.rs),
-  [`KObject::StructType`](../src/runtime/model/values/kobject.rs),
-  [`KObject::TaggedUnionType`](../src/runtime/model/values/kobject.rs),
+  [`KObject::Struct`](../src/runtime/machine/model/values/kobject.rs),
+  [`KObject::Tagged`](../src/runtime/machine/model/values/kobject.rs),
+  [`KObject::StructType`](../src/runtime/machine/model/values/kobject.rs),
+  [`KObject::TaggedUnionType`](../src/runtime/machine/model/values/kobject.rs),
   and `KObject::KModule` — carry `(scope_id, name)` identity fields
   populated at finalize time via the `scope as *const _ as usize` scheme
   `Module::scope_id()` uses; `ktype()` on a `KObject::Struct` / `Tagged` /
@@ -530,7 +531,7 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   { kind, scope_id, schema_expr, edges }` before launching its
   elaborator; the elaborator's `Resolution::Placeholder` arm records
   edges and runs DFS from `current_decl_name`; a closed cycle invokes
-  [`close_type_cycle`](../src/runtime/model/types/resolver.rs), which
+  [`close_type_cycle`](../src/runtime/machine/model/types/resolver.rs), which
   synchronously installs every member's identity into `bindings.types`
   via the panic-on-conflict
   [`Scope::cycle_close_install_identity`](../src/runtime/machine/core/scope.rs)
@@ -547,7 +548,7 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
 - Type identity stage 4 — `NEWTYPE` keyword and `KObject::Wrapped` carrier.
   `NEWTYPE Distance = Number` declares a fresh nominal identity over a
   transparent representation: declaration mints a per-declaration
-  [`KType::UserType { kind: UserTypeKind::Newtype { repr: Box<KType> }, scope_id, name }`](../src/runtime/model/types/ktype.rs)
+  [`KType::UserType { kind: UserTypeKind::Newtype { repr: Box<KType> }, scope_id, name }`](../src/runtime/machine/model/types/ktype.rs)
   and writes only `bindings.types` — unlike STRUCT / UNION / MODULE, NEWTYPE
   has no value-side schema carrier (no payload to bind at the declaration
   site). Construction (`Distance(3.0)`, `Bar(Foo(3.0))`) flows through
@@ -556,7 +557,7 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   which schedules the value sub-expression via `add_dispatch` and waits on
   it via a `Combine` whose finish closure type-checks against `repr` and
   produces a
-  [`KObject::Wrapped { inner: &'a KObject, type_id: &'a KType }`](../src/runtime/model/values/kobject.rs)
+  [`KObject::Wrapped { inner: &'a KObject, type_id: &'a KType }`](../src/runtime/machine/model/values/kobject.rs)
   carrier. Newtype-over-newtype collapse is pinned in the finish closure:
   `Wrapped.inner` is invariantly non-`Wrapped`, so `Bar(some_foo)` peels
   `some_foo.inner` and rewraps with `Bar`'s `type_id` — at most one layer
@@ -580,7 +581,7 @@ token-kind-driven lookup at the resolver — Type-class tokens consult
   established, so `Newtype` ranks alongside `Struct` / `Tagged` / `Module`
   with no per-kind branching at the dispatcher. The wildcard surface name
   `Newtype` is intentionally *not* registered in
-  [`KType::from_name`](../src/runtime/model/types/ktype_resolution.rs) —
+  [`KType::from_name`](../src/runtime/machine/model/types/ktype_resolution.rs) —
   it's reserved as the writable form once a builtin signature surfaces the
   need; today it appears only synthesized inside ATTR's `AnyUserType { kind:
   Newtype { repr: Any } }` slot.

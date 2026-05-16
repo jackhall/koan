@@ -48,7 +48,7 @@ independent of signatures.
   Generators compose through functor application: a functor body builds
   the result module's `gen` from its parameter's `gen`.
 - *Built-in type generators — decided.* The engine ships `Random`-using
-  generators for `Number`, `Str`, `Bool`, `List<Ty>`, `Dict<Ke, Va>`,
+  generators for `Number`, `Str`, `Bool`, `:(List Ty)`, `:(Dict Ke Va)`,
   etc. —
   these are the leaves of the composition story.
 - *Missing-generator policy — decided.* The structural-conformance check
@@ -60,8 +60,8 @@ independent of signatures.
   exact algorithm after investigating Hypothesis's implementation.
 - *Sample size and budget — decided.* Sample count scales with the
   generator's type complexity, capped at 100. `Bool` exhausts at 2;
-  `Number` needs a handful; `List<Ty>` needs more than `Ty`;
-  `List<List<Ty>>`
+  `Number` needs a handful; `:(List Ty)` needs more than `Ty`;
+  `:(List :(List Ty))`
   more again. The engine derives the count from the generator structure
   rather than taking a single global config knob.
 

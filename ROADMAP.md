@@ -77,25 +77,25 @@ ascription's abstract-type member sweep walking both maps so SIG
 abstract-type declarations stay visible across the storage split
 ([`ascribe.rs`](src/runtime/builtins/ascribe.rs)); and the type-identity
 stage 2 carrier replacement
-([`KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)`](src/runtime/model/values/kobject.rs))
+([`KObject::TypeNameRef(TypeExpr, OnceCell<&'a KType>)`](src/runtime/machine/model/values/kobject.rs))
 that lowers bare-leaf type names not in `KType::from_name`'s builtin table
 on the value side at `resolve_for` time, memoizes the scope-resolved
 `&'a KType` in the cell via
-[`KObject::resolve_type_name_ref`](src/runtime/model/values/kobject.rs), and
+[`KObject::resolve_type_name_ref`](src/runtime/machine/model/values/kobject.rs), and
 deletes the placeholder `KType::Unresolved` variant so every `KType` flowing
 through dispatch is fully elaborated; and the type-identity stage 3
 per-declaration carrier and dual-write — the
-[`KType::UserType { kind, scope_id, name }` per-declaration tag and `KType::AnyUserType { kind }` wildcard kind tag](src/runtime/model/types/ktype.rs)
+[`KType::UserType { kind, scope_id, name }` per-declaration tag and `KType::AnyUserType { kind }` wildcard kind tag](src/runtime/machine/model/types/ktype.rs)
 (with the old `KType::Struct` / `Tagged` / `Module` / `ModuleType` singletons
 deleted), the surface names `"Struct"` / `"Tagged"` / `"Module"` lowering to
 the wildcard via
-[`KType::from_name`](src/runtime/model/types/ktype_resolution.rs),
+[`KType::from_name`](src/runtime/machine/model/types/ktype_resolution.rs),
 `(scope_id, name)` identity fields populated at finalize time on
-[`KObject::Struct` / `Tagged` / `StructType` / `TaggedUnionType`](src/runtime/model/values/kobject.rs)
+[`KObject::Struct` / `Tagged` / `StructType` / `TaggedUnionType`](src/runtime/machine/model/values/kobject.rs)
 under the `scope as *const _ as usize` scheme `Module::scope_id()` uses,
 predicate arms placing `UserType { kind: K, .. }` strictly under
 `AnyUserType { kind: K }` strictly under `Any` in
-[`ktype_predicates.rs`](src/runtime/model/types/ktype_predicates.rs),
+[`ktype_predicates.rs`](src/runtime/machine/model/types/ktype_predicates.rs),
 `KObject::Struct` / `Tagged` / `KModule` synthesizing `KType::UserType`
 from their identity fields in `ktype()`, STRUCT / UNION-named / MODULE /
 SIG finalize routing through the
@@ -112,9 +112,9 @@ pre-installing every member's identity into `bindings.types` so each
 finalize hits `try_register_nominal`'s idempotent arm — with the
 anonymous `UNION (...)` overload deleted so every tagged value carries a
 real per-declaration identity; and the type-identity stage 4 `NEWTYPE`
-keyword and [`KObject::Wrapped`](src/runtime/model/values/kobject.rs)
+keyword and [`KObject::Wrapped`](src/runtime/machine/model/values/kobject.rs)
 carrier — `NEWTYPE Distance = Number` mints a fresh nominal identity
-([`KType::UserType { kind: Newtype { repr }, scope_id, name }`](src/runtime/model/types/ktype.rs))
+([`KType::UserType { kind: Newtype { repr }, scope_id, name }`](src/runtime/machine/model/types/ktype.rs))
 over a transparent representation, `Distance(3.0)` constructs through
 [`type_call`'s `Newtype` arm](src/runtime/builtins/type_call.rs) into
 [`newtype_def::newtype_construct`](src/runtime/builtins/newtype_def.rs)
@@ -128,7 +128,7 @@ Boxed = Point(...)` reads the underlying struct's field without forcing
 every accessor to redo; and the module-system stage-2 sharing-constraint
 surface — the `SIG_WITH` builtin
 ([`type_ops.rs::body_sig_with`](src/runtime/builtins/type_ops.rs)),
-[`KType::SignatureBound { pinned_slots }`](src/runtime/model/types/ktype.rs)
+[`KType::SignatureBound { pinned_slots }`](src/runtime/machine/model/types/ktype.rs)
 carrying the pins through admissibility and specificity, FN return-type
 slots elaborating parens-wrapped `(SIG_WITH ...)` expressions via the
 existing eager-sub-dispatch rails (with a `ReturnTypeCapture::TypeExpr`
@@ -141,10 +141,10 @@ Combine-boundary case), and MODULE-body finalize mirroring
 higher-kinded type-constructor slot surface — the
 [`TYPE_CONSTRUCTOR`](src/runtime/builtins/type_ops.rs) builtin returning
 a template
-[`KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`](src/runtime/model/types/ktype.rs),
-[`elaborate_type_expr`'s constructor-application arm](src/runtime/model/types/resolver.rs)
+[`KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`](src/runtime/machine/model/types/ktype.rs),
+[`elaborate_type_expr`'s constructor-application arm](src/runtime/machine/model/types/resolver.rs)
 emitting structural
-[`KType::ConstructorApply { ctor, args }`](src/runtime/model/types/ktype.rs)
+[`KType::ConstructorApply { ctor, args }`](src/runtime/machine/model/types/ktype.rs)
 on `Wrap<Number>` against a `TypeConstructor`-resolved outer name (with
 arity check and a placeholder-park rail mirroring the bare-leaf arm),
 and [`ascribe.rs:body_opaque`](src/runtime/builtins/ascribe.rs)'s
@@ -162,16 +162,16 @@ clean across every unsafe site introduced by stage-2 substrate (opaque
 ascription re-binds, type-op dispatch through the per-call arena),
 closing the carry-forward; and the functor-params surface end-to-end —
 parameter-position dual-write (the
-[`KType::is_type_denoting`](src/runtime/model/types/ktype_predicates.rs)
+[`KType::is_type_denoting`](src/runtime/machine/model/types/ktype_predicates.rs)
 predicate plus
-[`KFunction::invoke`](src/runtime/machine/kfunction/invoke.rs)'s per-call
+[`KFunction::invoke`](src/runtime/machine/core/kfunction/invoke.rs)'s per-call
 bind loop registering the per-call binding into `bindings.types`
 alongside the existing `bind_value`, so a Type-class FN parameter
 (`Er: OrderedSig`) is a type-language binder for body-position
 references like `(MODULE_TYPE_OF Er Type)`) plus the templated
 return-type surface (the
 [`ReturnType<'a>` / `DeferredReturn<'a>` carriers at
-`ExpressionSignature::return_type`](src/runtime/model/types/signature.rs)
+`ExpressionSignature::return_type`](src/runtime/machine/model/types/signature.rs)
 routing parameter-name-bearing return types through deferred per-call
 elaboration in `KFunction::invoke`'s Combine-finish closure, with the
 parens-form return-type overload in
@@ -182,7 +182,7 @@ against the outer scope), with the FN-param parser
 ([`fn_def/signature.rs`](src/runtime/builtins/fn_def/signature.rs))
 relaxed to admit Type-classified bare-leaf tokens in the parameter-name
 slot of the `<name>: <Type>` triple; and the SIG-slot explicit-type
-ascription surface — the `VAL <name>: <TypeExpr>` declarator
+ascription surface — the `VAL <name> :<TypeExpr>` declarator
 ([`val_decl.rs`](src/runtime/builtins/val_decl.rs)) is the canonical
 value-slot declaration inside a SIG body, replacing the
 ascription-by-example `(LET name = <value>)` form (rejected inside SIG
@@ -193,7 +193,12 @@ type recorded as a `KType::KTypeValue` carrier under the SIG decl_scope's
 member uniformly, full type-shape checking against the declared slot type
 deferred to [Modular implicits](roadmap/module-system-5-modular-implicits.md).
 Unblocks standard-library collection functors (`Make` over `ORDERED`)
-and dependent parameter annotations.
+and dependent parameter annotations. The type-expression sigil also
+shipped: parameterized types and ascriptions ride a glued-right `:`
+opening an S-expression group ([`type_expr_frame.rs`](src/parse/type_expr_frame.rs)),
+so `:(List Number)` / `:(Dict K V)` / `:(Function (A) -> R)` replace the
+prior `<...>` parameterization and `<`, `>`, `<=`, `>=` are free for
+future arithmetic comparison operators.
 
 ## Next items
 
@@ -234,9 +239,9 @@ incrementally, each producing a usable end state.
   signature (`(MAKE T: Type elt: T)`, OCaml's
   `module Make (E : ORDERED) (S : SET with type elt = E.t)`). Reuses
   the `ReturnType` / `DeferredReturn` carrier shipped at
-  [`ExpressionSignature::return_type`](src/runtime/model/types/signature.rs)
+  [`ExpressionSignature::return_type`](src/runtime/machine/model/types/signature.rs)
   and the per-call re-elaboration plumbing in
-  [`KFunction::invoke`](src/runtime/machine/kfunction/invoke.rs); the new
+  [`KFunction::invoke`](src/runtime/machine/core/kfunction/invoke.rs); the new
   work is staged left-to-right dispatch.
 - [VAL-slot value-carrier abstract-identity tagging](roadmap/val-slot-abstract-identity-tagging.md)
   — a value read from an `:|`-ascribed module's VAL-declared slot today
@@ -263,11 +268,11 @@ incrementally, each producing a usable end state.
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
 - [Structural KFunction admission across deferred return types](roadmap/kfunction-deferred-ret-precision.md) —
-  [`function_value_ktype`](src/runtime/model/values/kobject.rs) synthesizes
+  [`function_value_ktype`](src/runtime/machine/model/values/kobject.rs) synthesizes
   `KType::KFunction { ret: KType::Any }` for deferred-return FNs because the
   structural function-type language has no surface for "per-call
   elaboration of this expression"; the symmetric coarsening in
-  [`function_compat`](src/runtime/model/types/ktype_predicates.rs) admits-or-
+  [`function_compat`](src/runtime/machine/model/types/ktype_predicates.rs) admits-or-
   rejects-by-`==` so today's strict refusal stays safe but silent. A
   `debug_assert!` at the coarsening branch is the tripwire; the decision
   is forced when stage 5 implicit search or a precise FN-typed slot
@@ -285,11 +290,6 @@ incrementally, each producing a usable end state.
   …) and standard effect modules (`Random`, `IO`, `Time`) ship as Koan-source
   functor FNs across multiple `.koan` files; doubles as the canonical example
   of idiomatic module / signature / functor / import composition.
-- [Type-expression sigil — replace `<>` brackets with glued `:`](roadmap/type-expression-sigil.md)
-  — `List<Number>` / `Dict<K, V>` / `Function<(A) -> R>` become `:(List Number)` /
-  `:(Dict K V)` / `:(Function (A) -> R)`, freeing `<`, `>`, `<=`, `>=` for arithmetic
-  comparison operators and unifying type-position marking under one glued-right `:`
-  sigil across ascription, return type, type-arg slots, and LET type bindings.
 
 ### Future-facing
 

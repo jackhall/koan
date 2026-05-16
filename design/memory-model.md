@@ -8,7 +8,7 @@ freed when the call's slot finalizes.
 ## Scoping: lexical
 
 Free names in a user-fn body resolve through the function's **definition**
-scope, carried on [`KFunction.captured`](../src/runtime/machine/kfunction.rs) — not the
+scope, carried on [`KFunction.captured`](../src/runtime/machine/core/kfunction.rs) — not the
 call-site scope. Top-level `FN` definitions capture the run-root, so their free
 names resolve through it; nested `FN`s correctly close over their enclosing
 locals.
@@ -89,7 +89,7 @@ The fix is a frame-chain Rc on
 Option<Rc<CallArena>>` keeps the parent frame alive whenever the child's
 `outer` points into per-call memory. The scheduler exposes the active slot's
 frame Rc through
-[`SchedulerHandle::current_frame`](../src/runtime/machine/kfunction.rs), which MATCH
+[`SchedulerHandle::current_frame`](../src/runtime/machine/core/kfunction.rs), which MATCH
 clones into its `CallArena::new` call. `Scheduler::active_frame` is set per
 slot run and inherited by `add()` so spawned sub-dispatch / sub-bind /
 sub-combine slots also see the right ancestor. Top-level FN invokes pass

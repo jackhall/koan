@@ -19,7 +19,7 @@ use super::module::{Module, Signature};
 /// matches schema declaration order.
 ///
 /// `KFunction` and `KFuture` carry an `Option<Rc<CallArena>>` lifecycle anchor; see
-/// [memory-model.md § Closure escape](../../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
+/// [memory-model.md § Closure escape](../../../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),

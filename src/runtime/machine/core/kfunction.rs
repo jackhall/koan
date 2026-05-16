@@ -562,7 +562,7 @@ mod tests {
     /// Type-token, lands the Type slot in `ref_name_indices` the same way an Identifier in
     /// an Identifier slot does — replay-park parks the call on the Type-token's
     /// placeholder. Symmetry pinned by
-    /// [design/execution-model.md § Dispatch-time name placeholders](../../../design/execution-model.md#dispatch-time-name-placeholders).
+    /// [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
     #[test]
     fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
         let arena = RuntimeArena::new();

@@ -25,7 +25,7 @@ can also add `Dispatch` nodes.
 
 `Combine` is the host-side dual of `Bind`: an N→1 combinator that waits on a
 fixed set of dep slots and then runs an arbitrary host closure
-([`CombineFinish`](../src/runtime/machine/kfunction.rs)) over their resolved values.
+([`CombineFinish`](../src/runtime/machine/core/kfunction.rs)) over their resolved values.
 List- and dict-literal planners use it; the construction logic — including
 already-resolved literal scalars that don't need a dep slot — lives in the
 closure's capture rather than in fixed-shape variants. Body-finalization for
@@ -82,7 +82,7 @@ call site.
 
 ## Tail-call optimization
 
-[`BodyResult::Tail(KExpression)`](../src/runtime/machine/kfunction.rs) makes a tail
+[`BodyResult::Tail(KExpression)`](../src/runtime/machine/core/kfunction.rs) makes a tail
 return rewrite the **current scheduler slot's work** to a fresh
 `Dispatch(expr)` and re-run in place — no new node allocated. Both deferring
 builtins (`match_case`, `KFunction::invoke` for user-fns) are tail by
@@ -272,7 +272,7 @@ The five rails the resolution feeds:
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's
 `(SignatureElement, ExpressionPart)` shape lands in at most one bucket.
-[`KFunction::classify_for_pick`](../src/runtime/machine/kfunction.rs) is
+[`KFunction::classify_for_pick`](../src/runtime/machine/core/kfunction.rs) is
 the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
 by value), so the disjointness invariant lives in one place rather than as
 comment-enforced rules across the scheduler driver.
@@ -295,7 +295,7 @@ short-circuit through the elaborator's threaded-set recognition (see
 [type-system.md § Type elaboration](type-system.md#type-elaboration)) so
 recursive type definitions don't deadlock on their own placeholder.
 FN-signature elaboration plugs into the same mechanism: when
-[`elaborate_type_expr`](../src/runtime/model/types/resolver.rs) hits a
+[`elaborate_type_expr`](../src/runtime/machine/model/types/resolver.rs) hits a
 bare type-name leaf whose binder is in
 `Scope::placeholders` but not yet finalized, it returns
 `ElabResult::Park(producers)` and FN-def's body schedules a `Combine`

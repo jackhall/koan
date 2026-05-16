@@ -34,7 +34,7 @@ Run these locally before pushing. Clippy is configured per-crate in
 [Cargo.toml](Cargo.toml); per-site `#[allow(...)]` is fine when the lint is
 wrong (e.g., the `clippy::unnecessary_cast` allows in
 [src/runtime/machine/core/arena.rs](src/runtime/machine/core/arena.rs) and
-[src/runtime/model/values/module.rs](src/runtime/model/values/module.rs) where the
+[src/runtime/model/values/module.rs](src/runtime/machine/model/values/module.rs) where the
 through-`'static` cast is required by the lifetime-erasure pattern).
 
 ## Miri audit slate
@@ -146,7 +146,7 @@ reclamation discipline.
 
 - `type_op_dispatch_does_not_dangle`
 
-**Module / Signature lifetime erasure** ([src/runtime/model/values/module.rs](src/runtime/model/values/module.rs)) — `Module`
+**Module / Signature lifetime erasure** ([src/runtime/model/values/module.rs](src/runtime/machine/model/values/module.rs)) — `Module`
 and `Signature` carry their captured scope as `*const Scope<'static>` and
 re-attach `'a` via transmute on access; `Module::type_members` mutates a
 `RefCell<HashMap>` while a `&'a Module<'a>` is live (the opaque-ascription

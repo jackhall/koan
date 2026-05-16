@@ -2,15 +2,15 @@
 
 **Problem.** The structural function-type language coarsens
 deferred-return FNs. When a `KFunction`'s `signature.return_type` is
-[`ReturnType::Deferred(_)`](../src/runtime/model/types/signature.rs),
+[`ReturnType::Deferred(_)`](../src/runtime/machine/model/types/signature.rs),
 the structural `KType::KFunction { args, ret }` synthesis at
-[`function_value_ktype`](../src/runtime/model/values/kobject.rs)
+[`function_value_ktype`](../src/runtime/machine/model/values/kobject.rs)
 collapses `ret` to `KType::Any` because the structural language has
 no surface for "per-call elaboration of this expression." The
 symmetric coarsening on the admission side lives at
-[`function_compat`](../src/runtime/model/types/ktype_predicates.rs) —
+[`function_compat`](../src/runtime/machine/model/types/ktype_predicates.rs) —
 when a deferred-return candidate is admission-checked against a slot
-typed `Function<(_) -> SpecificT>`, the comparison reads the
+typed `:(Function (_) -> SpecificT)`, the comparison reads the
 candidate's `ret` as `Any` and the strict `==` refuses admission
 silently.
 
@@ -29,9 +29,9 @@ the structural `KType` would.
 
 **Impact.**
 
-- *Precise `Function<(_) -> SpecificT>` slot ascription against
+- *Precise `:(Function (_) -> SpecificT)` slot ascription against
   deferred-return candidates becomes well-defined.* A binding like
-  `LET cb: Function<(Er) -> Er> = make_fn` where `make_fn` returns a
+  `LET cb :(Function (Er) -> Er) = make_fn` where `make_fn` returns a
   `Deferred(Expression)`-carrying FN admits-or-rejects with a real
   shape comparison, not a silent refusal.
 - *Modular-implicit search
@@ -63,7 +63,7 @@ the structural `KType` would.
     `KType` (e.g. structural slot ascription that's already lost the
     `KFunction` carrier).
 - *Admission side — open.* The
-  [`function_compat`](../src/runtime/model/types/ktype_predicates.rs)
+  [`function_compat`](../src/runtime/machine/model/types/ktype_predicates.rs)
   branch's `debug_assert!` is the tripwire — when it fires, the
   decision between (a) and (b) above is forced. Today's strict-`==`
   refusal stays safe until the first non-`Any` slot-ret comparison

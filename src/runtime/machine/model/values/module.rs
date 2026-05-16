@@ -1,5 +1,5 @@
 //! `Module` and `Signature` — first-class module values produced by the `MODULE` and `SIG`
-//! builtins. See [design/module-system.md](../../../../design/module-system.md).
+//! builtins. See [design/module-system.md](../../../../../design/module-system.md).
 //!
 //! **Terminology — "module-signature" vs "expression-signature".** `Signature` here is the
 //! **module-signature** type (`SIG`-declared) — an interface a module can be ascribed to
@@ -164,7 +164,7 @@ mod tests {
     //! `*const Scope<'static>` lifetime-erasure transmutes and `type_members` `RefCell`
     //! mutation under a held `&'a Module<'a>` borrow. Each shape is exercised in
     //! isolation so a regression attributes to a single site rather than an end-to-end run.
-    //! See [`design/memory-model.md`](../../../../design/memory-model.md).
+    //! See [`design/memory-model.md`](../../../../../design/memory-model.md).
     use super::*;
     use crate::runtime::builtins::default_scope;
     use crate::runtime::machine::core::RuntimeArena;

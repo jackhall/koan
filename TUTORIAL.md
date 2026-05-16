@@ -23,7 +23,7 @@ runs in submission order against the same scope; failures surface as structured
 
 A Koan source file is a list of top-level expressions. An expression is an
 ordered sequence of *parts*: tokens, literals, and nested sub-expressions. The
-parser produces one [`KExpression`](src/ast.rs) per top-level line
+parser produces one [`KExpression`](src/runtime/machine/model/ast.rs) per top-level line
 and hands it to dispatch.
 
 ### Tokens
@@ -173,40 +173,49 @@ Every value in Koan has a type. The names you can write in source are:
 | `Str`                      | string                              | `"hi"`, `'hi'`                            |
 | `Bool`                     | boolean                             | `true`, `false`                           |
 | `Null`                     | the null value                      | `null`                                    |
-| `List<T>`                  | ordered sequence                    | `[1, 2, 3]`                               |
-| `Dict<K, V>`               | scalar-keyed map                    | `{a: 1, b: 2}`                            |
-| `Function<(args) -> R>`    | callable function value             | `(FN (DOUBLE x: Number) -> Number = (x))` |
+| `:(List T)`                | ordered sequence                    | `[1, 2, 3]`                               |
+| `:(Dict K V)`              | scalar-keyed map                    | `{a: 1, b: 2}`                            |
+| `:(Function (args) -> R)`  | callable function value             | `(FN (DOUBLE x :Number) -> Number = (x))` |
 | `Tagged`                   | a value of a tagged union           | `Maybe (some 42)` (see `UNION` below)     |
 | `Any`                      | wildcard — accepts any value        | (used in annotations only)                |
 
 A type name appears wherever you annotate something: the type of a parameter
-slot (`x: List<Number>`), the return type on a function (`-> Number`), the
-type of a tagged-union variant (`some: Number`). Container types are always
-parameterized — bare `List` lowers to `List<Any>`, bare `Dict` to
-`Dict<Any, Any>`. There is no bare `Function`; write
-`Function<(args) -> R>` for a typed function or `Any` for an unconstrained
-value (a function with no signature has nothing to dispatch on).
+slot (`x :(List Number)`), the return type on a function (`-> Number`), the
+type of a tagged-union variant (`some :Number`). Ascriptions use the
+glued-right `:` sigil with no space between the `:` and the type — `x :Number`,
+not `x: Number`. Parameterized type expressions extend the same form into an
+S-expression group: `:(List Number)`, `:(Dict Str Number)`,
+`:(Function (Number) -> Str)`. Bare non-parameterized type tokens in
+non-ascription positions (e.g. the RHS of `LET Type = Number`) keep working
+without the sigil.
+
+Container types are always parameterized — bare `List` lowers to
+`:(List Any)`, bare `Dict` to `:(Dict Any Any)`. There is no bare `Function`;
+write `:(Function (args) -> R)` for a typed function or `Any` for an
+unconstrained value (a function with no signature has nothing to dispatch
+on).
 
 You'll also see `KExpression` (an unevaluated parenthesized expression carried
 as data) referenced in builtin signatures and error messages — it's a real
 type, but you rarely write it yourself. List/dict literal types are inferred
-as the join of element types: `[1, 2, 3]` is `List<Number>`, `[1, "x"]` is
-`List<Any>`, `[]` is `List<Any>`.
+as the join of element types: `[1, 2, 3]` is `:(List Number)`, `[1, "x"]` is
+`:(List Any)`, `[]` is `:(List Any)`.
 
 ## User-defined functions
 
 `FN <signature> -> <ReturnType> = <body>` registers a function. The signature
 is a parens-wrapped expression mixing fixed `Keyword` tokens (the dispatch
-shape) and typed parameter slots written as `name: Type`. The body is a
-parens-wrapped expression evaluated at call time.
+shape) and typed parameter slots written as `name :Type` (glued-right `:` for
+parameterized types; the space form `name: Type` is accepted for bare types).
+The body is a parens-wrapped expression evaluated at call time.
 
 ```
-FN (DOUBLE x: Number) -> Number = (x)
-FN (a: Str SAID) -> Null = (PRINT a)            # infix-shaped — keyword in non-leading position
-FN (FIRST x: Str y: Str) -> Null = (PRINT x)    # multiple params
-FN (ADD x: Number, y: Number) -> Number = (x)   # commas optional, same shape
-FN (HEAD xs: List<Number>) -> Number = (1)      # parameterized container in a slot
-FN (NUMS) -> List<Number> = ([1 2 3])           # parameterized return type
+FN (DOUBLE x :Number) -> Number = (x)
+FN (a :Str SAID) -> Null = (PRINT a)            # infix-shaped — keyword in non-leading position
+FN (FIRST x :Str y :Str) -> Null = (PRINT x)    # multiple params
+FN (ADD x :Number, y :Number) -> Number = (x)   # commas optional, same shape
+FN (HEAD xs :(List Number)) -> Number = (1)     # parameterized container in a slot
+FN (NUMS) -> :(List Number) = ([1 2 3])         # parameterized return type
 
 DOUBLE 21        # → 21
 "hi" SAID        # prints "hi"
@@ -214,17 +223,17 @@ FIRST "a" "b"    # prints "a"
 ```
 
 Both the parameter types and the return type are **non-optional**. A bare
-`x` without `: Type` is a parse error. Calls whose argument types don't satisfy
+`x` without `:Type` is a parse error. Calls whose argument types don't satisfy
 the signature fail at dispatch (`KErrorKind::DispatchFailed`); the same call
 shape with different parameter types routes to a different overload by
-slot-specificity (more specific wins — `List<Number>` beats `List<Any>` beats
-`Any`). Use `: Any` to opt a slot out of type checking.
+slot-specificity (more specific wins — `:(List Number)` beats `:(List Any)` beats
+`Any`). Use `:Any` to opt a slot out of type checking.
 
 The return type is **enforced at runtime**. A body whose result doesn't match
 the declared type fails with `KErrorKind::TypeMismatch { arg: "<return>", … }`.
 For parameterized container returns, the check walks elements: a function
-declared `-> List<Number>` whose body returns `[1, "x"]` errors with
-`expected List<Number>, got List<Any>`. Use `-> Any` to opt out.
+declared `-> :(List Number)` whose body returns `[1, "x"]` errors with
+`expected :(List Number), got :(List Any)`. Use `-> Any` to opt out.
 
 A signature must contain at least one `Keyword` (the dispatch token); otherwise
 it would shadow `value_lookup`/`value_pass`.
@@ -232,7 +241,7 @@ it would shadow `value_lookup`/`value_pass`.
 `FN` returns the registered function value, so you can capture it as a value:
 
 ```
-LET f = (FN (DOUBLE x: Number) -> Number = (x))
+LET f = (FN (DOUBLE x :Number) -> Number = (x))
 f (x: 21)        # → 21, via call_by_name (named arguments)
 ```
 
@@ -241,7 +250,7 @@ introduced by its parameter name and a colon. Order is independent of the
 declaration:
 
 ```
-LET pair = (FN (a: Number TIMES b: Number) -> Number = (a))
+LET pair = (FN (a :Number TIMES b :Number) -> Number = (a))
 pair (a: 3, b: 4)        # → 3
 pair (b: 4, a: 3)        # → 3 (same call, different argument order)
 ```
@@ -258,11 +267,11 @@ body. Recursion is the iteration model; tail calls reuse the calling slot.
 `UNION` declares a type whose values carry a *tag* and a payload:
 
 ```
-UNION Maybe = (some: Number none: Null)
+UNION Maybe = (some :Number none :Null)
 ```
 
 A tag is a bare identifier; a type is a type-name token. The schema body is a
-parens-wrapped sequence of `<tag>: <Type>` triples. Every UNION carries a
+parens-wrapped sequence of `<tag> :<Type>` triples. Every UNION carries a
 per-declaration identity — the bare `UNION (...)` form is not accepted.
 
 Construct a value by calling the type with a `(tag value)` pair:
@@ -289,7 +298,7 @@ Only the matching branch's body is dispatched. Inside a branch, `it` is bound
 to the inner value:
 
 ```
-UNION Result = (ok: Str err: Str)
+UNION Result = (ok :Str err :Str)
 LET r = (Result (ok "all good"))
 MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT "failed"))
 ```
@@ -303,8 +312,8 @@ A non-exhaustive match (no branch for the actual tag) errors with
 a declared type. The form mirrors `UNION`:
 
 ```
-STRUCT Point = (x: Number, y: Number)
-STRUCT User = (id: Number, name: Str, active: Bool)
+STRUCT Point = (x :Number, y :Number)
+STRUCT User = (id :Number, name :Str, active :Bool)
 ```
 
 Construction is **named**: each value is introduced by its field name and a
@@ -350,7 +359,7 @@ Read a field off a struct value with the `.` operator (an alias for the
 LET dx = p.x                             # 3
 PRINT (p.y)                              # 4
 
-STRUCT Line = (start: Struct, finish: Struct)
+STRUCT Line = (start :Struct, finish :Struct)
 LET seg = (Line (start: p, finish: q))
 LET tipx = seg.finish.x                  # chained: 3
 ```
@@ -390,8 +399,8 @@ distinct at dispatch — a slot typed `Number` rejects a `Distance`, and a
 slot typed `Distance` rejects a raw `Number`:
 
 ```
-FN (KM_FROM x: Number)   -> Str = ("got Number")
-FN (KM_FROM x: Distance) -> Str = ("got Distance")
+FN (KM_FROM x :Number)   -> Str = ("got Number")
+FN (KM_FROM x :Distance) -> Str = ("got Distance")
 
 KM_FROM 3.0        # → "got Number"   (raw Number; Distance slot rejects)
 KM_FROM d          # → "got Distance" (Distance value; Number slot rejects)
@@ -404,7 +413,7 @@ but mean different things, without wrapping each in a single-field record.
 The representation can be any type, including another struct:
 
 ```
-STRUCT Point = (x: Number, y: Number)
+STRUCT Point = (x :Number, y :Number)
 NEWTYPE Boxed = Point
 
 LET p = (Point (x: 1, y: 2))
@@ -495,9 +504,9 @@ values (the `null` literal, `PRINT`'s return) are not errors.
 ## Putting it together
 
 ```
-UNION Greeting = (formal: Str casual: Str)
+UNION Greeting = (formal :Str casual :Str)
 
-FN (SAY msg: Str) -> Null = (PRINT msg)
+FN (SAY msg :Str) -> Null = (PRINT msg)
 
 LET hello = (Greeting (casual "hey"))
 
@@ -509,7 +518,7 @@ MATCH (hello) WITH
 What runs:
 
 1. `UNION Greeting = ...` registers a tagged-union type with two variants.
-2. `FN (SAY msg: Str) -> Null = (PRINT msg)` defines a one-arg function over
+2. `FN (SAY msg :Str) -> Null = (PRINT msg)` defines a one-arg function over
    strings.
 3. `LET hello = (Greeting (casual "hey"))` builds a `Tagged` value with tag
    `casual` and payload `"hey"`, and binds it as `hello`.

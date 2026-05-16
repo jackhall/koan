@@ -12,7 +12,7 @@ after the Bindings / PendingQueue / scope-test-split work), with a residual
 files still exceed 550 lines —
 [interpret.rs](../src/runtime/machine/execute/interpret.rs) (619),
 [ascribe.rs](../src/runtime/builtins/ascribe.rs) (614),
-[kfunction.rs](../src/runtime/machine/kfunction.rs) (561). The scheduler's
+[kfunction.rs](../src/runtime/machine/core/kfunction.rs) (561). The scheduler's
 two test files
 ([tests.rs](../src/runtime/machine/execute/scheduler/tests.rs) 486 lines,
 [run_tests.rs](../src/runtime/machine/execute/scheduler/run_tests.rs) 244

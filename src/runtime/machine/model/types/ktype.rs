@@ -16,7 +16,7 @@ use crate::runtime::machine::core::ScopeId;
 /// at finalize time and lives on both the per-declaration identity tag (`UserType`) and
 /// the wildcard "any user-declared X" tag (`AnyUserType`). This is the dispatcher's
 /// primary kind discriminator for user-declared types. See
-/// [per-declaration type identity](../../../../design/type-system.md).
+/// [per-declaration type identity](../../../../../design/type-system.md).
 ///
 /// Stage 4 added the `Newtype { repr }` variant which carries a `Box<KType>`, so the enum
 /// is no longer `Copy`. Module-system stage 2 added the `TypeConstructor { param_names }`

@@ -8,7 +8,7 @@ effect Koan eventually wants to support — file IO, time, randomness, network,
 environment access, even error reporting — would either grow `Scope` by another ad-hoc
 `Box<dyn ...>` field or get baked into `std::io` calls inside individual builtins.
 
-Meanwhile the [`Monadic`](../src/runtime/model/types/ktraits.rs) trait already exists, with `pure` +
+Meanwhile the [`Monadic`](../src/runtime/machine/model/types/ktraits.rs) trait already exists, with `pure` +
 `bind` over a `Wrap<T>` GAT, and its doc comment says it is "intended as the abstraction
 Koan's deferred-task and error-handling combinators will share once they're fleshed out."
 Today it is implemented only for `Option` and threaded through nothing in the runtime. It

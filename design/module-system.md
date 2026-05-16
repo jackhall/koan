@@ -27,7 +27,7 @@ A **signature** (declared with `SIG`) is a module type — an interface
 specifying what a structure must contain:
 
 ```
-SIG OrderedSig = ((LET Type = Number) (VAL compare: Function<(Type, Type) -> Number>))
+SIG OrderedSig = ((LET Type = Number) (VAL compare :(Function (Type, Type) -> Number)))
 ```
 
 Module and signature names use the **Type-token** spelling: first character
@@ -78,7 +78,7 @@ Opaque ascription is **generative**: each application mints a fresh
 type. Two distinct opaque ascriptions of the same source module yield
 distinct `scope_id`s and therefore distinct types that cannot be confused.
 The carrier lives in
-[`KType`](../src/runtime/model/types/ktype.rs); the operators are registered as
+[`KType`](../src/runtime/machine/model/types/ktype.rs); the operators are registered as
 ordinary builtins in [`ascribe.rs`](../src/runtime/builtins/ascribe.rs).
 
 Opaque ascription is the type-abstraction primitive. It replaces the
@@ -110,10 +110,10 @@ type-language binder, the machine sees a value parameter whose value is a
 module:
 
 ```
-LET MakeSet = (FN (MAKESET Er: OrderedSig) -> SetSig = (
+LET MakeSet = (FN (MAKESET Er :OrderedSig) -> SetSig = (
   MODULE Result = (
     (LET Type = ...)
-    (LET insert = (FN (INSERT s: Type x: Er.Type) -> Type = ...))
+    (LET insert = (FN (INSERT s :Type x :Er.Type) -> Type = ...))
     ...
   )
 ))
@@ -150,10 +150,10 @@ bound outside the FN) both work as pin values resolved eagerly.
 
 A Type-class FN parameter (`Er: OrderedSig`) binds the parameter name as
 a type-language binder at the call site: at each call,
-[`KFunction::invoke`](../src/runtime/machine/kfunction/invoke.rs)
+[`KFunction::invoke`](../src/runtime/machine/core/kfunction/invoke.rs)
 dual-writes the per-call argument into the child scope's `bindings.types`
 alongside the existing value-side `bind_value`. The
-[`KType::is_type_denoting`](../src/runtime/model/types/ktype_predicates.rs)
+[`KType::is_type_denoting`](../src/runtime/machine/model/types/ktype_predicates.rs)
 predicate gates the dual-write — `SignatureBound`, `Signature`, `Type`,
 `TypeExprRef`, and `AnyUserType { kind: Module }` carry meaningful
 type-language identity at the binder. Body-position references to the
@@ -163,7 +163,7 @@ parameter (`(MODULE_TYPE_OF Er Type)` inside the body) resolve through
 Return-type expressions that reference a per-call FN parameter
 (`-> Er`, `-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`)
 ride the same per-call scope through a *deferred* return-type carrier.
-[`ExpressionSignature::return_type`](../src/runtime/model/types/signature.rs)
+[`ExpressionSignature::return_type`](../src/runtime/machine/model/types/signature.rs)
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
 every static case (builtins and FNs whose return type doesn't reference a
 parameter), while `Deferred(DeferredReturn<'a>)` holds the surface form
@@ -178,7 +178,7 @@ expression survives FN-def without sub-dispatching against the outer
 scope.
 
 Per-call elaboration runs at the dispatch boundary in
-[`KFunction::invoke`](../src/runtime/machine/kfunction/invoke.rs). The
+[`KFunction::invoke`](../src/runtime/machine/core/kfunction/invoke.rs). The
 `Deferred(_)` arm spawns the body Dispatch and (for the `Expression`
 carrier) an optional return-type sub-Dispatch under the per-call frame
 via `SchedulerHandle::with_active_frame`, then joins them in a `Combine`
@@ -192,9 +192,9 @@ gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the Combine
 finish where the per-call elaboration is in hand. The structural
 `KType::KFunction { ret }` synthesis at
-[`function_value_ktype`](../src/runtime/model/values/kobject.rs) and the
+[`function_value_ktype`](../src/runtime/machine/model/values/kobject.rs) and the
 admission helper at
-[`function_compat`](../src/runtime/model/types/ktype_predicates.rs)
+[`function_compat`](../src/runtime/machine/model/types/ktype_predicates.rs)
 coarsen `Deferred(_)` to `KType::Any` because the structural function-type
 language has no surface for "per-call elaboration of this expression" —
 see [Open work](#open-work) for the precision refinement.
@@ -211,8 +211,8 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (LET Wrap = (TYPE_CONSTRUCTOR Type))
-  (VAL pure: Function<(Number) -> Wrap<Number>>)
-  (VAL bind: Function<(Wrap<Number>, Function<(Number) -> Wrap<Number>>) -> Wrap<Number>>)
+  (VAL pure :(Function (Number) -> :(Wrap Number)))
+  (VAL bind :(Function (:(Wrap Number), :(Function (Number) -> :(Wrap Number))) -> :(Wrap Number)))
 )
 ```
 
@@ -222,9 +222,9 @@ binds the slot name (`Wrap` above) to a template
 carrying the parameter symbol list. The builtin lives in
 [`type_ops.rs`](../src/runtime/builtins/type_ops.rs).
 
-Application uses the existing `<>` parameterization surface:
-`Wrap<Number>` in a type-position slot elaborates through
-[`elaborate_type_expr`](../src/runtime/model/types/resolver.rs)'s
+Application uses the type-expression sigil:
+`:(Wrap Number)` in a type-position slot elaborates through
+[`elaborate_type_expr`](../src/runtime/machine/model/types/resolver.rs)'s
 constructor-application arm into
 `KType::ConstructorApply { ctor: <the Wrap UserType>, args: [Number] }` —
 structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.
@@ -287,14 +287,14 @@ uses the `SIG_WITH` builtin in
 
 ## Type expressions and constraints
 
-The `<>` parameterization shipped for `List<T>`, `Dict<K, V>`, and
-`Function<(args) -> R>`
+The `:(...)` type-expression sigil parameterizes `:(List T)`, `:(Dict K V)`,
+and `:(Function (args) -> R)`
 ([type-system.md](type-system.md#container-type-parameterization))
-covers positional structural types. Sharing constraints,
+for positional structural types. Sharing constraints,
 modular-implicit signature constraints, and witness-typed
 instantiations ride on a separate **parens-form builtin family** that
 reuses the `name: value` triple shape FN parameters and STRUCT fields
-use. The two surfaces stay disjoint: `<>` for structural shapes whose
+use. The two surfaces stay disjoint: `:(...)` for structural shapes whose
 slot semantics are positional, parens-form builtins for slot-named
 constraints.
 
@@ -325,7 +325,7 @@ see [Modular implicits](#modular-implicits).
 A function can declare an **implicit module parameter**:
 
 ```
-LET sort = (FN (SORT xs: List<Mo.Type> {Mo: OrderedSig}) -> List<Mo.Type> = (...))
+LET sort = (FN (SORT xs :(List Mo.Type) {Mo: OrderedSig}) -> :(List Mo.Type) = (...))
 ```
 
 At a call site `(SORT [3, 1, 2])`, the compiler infers `Mo.Type = Number`,
@@ -375,8 +375,8 @@ operations:
 ```
 SIG OrderedSig = (
   (LET Type = ...)
-  (VAL compare: Function<(Type, Type) -> Number>)
-  (VAL gen: Function<(Random) -> Type>)
+  (VAL compare :(Function (Type, Type) -> Number))
+  (VAL gen :(Function (Random) -> Type))
 
   (AXIOM #((compare x x) = 0))
   (AXIOM #((sign (compare x y)) = (- (sign (compare y x)))))
@@ -404,7 +404,7 @@ non-transitive comparisons, hashes that disagree with their own equality,
 monoids whose identity isn't.
 
 **Generators live in modules; the signature requires them.** A
-`(VAL gen: Function<(Random) -> Type>)` slot in a signature body is an
+`(VAL gen :(Function (Random) -> Type))` slot in a signature body is an
 obligation: every ascribing module must supply a generator for the abstract
 type. This folds
 generator presence into the existing structural-conformance check —
@@ -514,7 +514,7 @@ The mechanism:
   subsequent FN signatures with no per-lookup re-elaboration.
 - **Type expressions in source position re-elaborate to a synthesized
   call.** A parameter or return type written as `(LIST_OF Number)` (or
-  `List<Number>`) is dispatched directly as a sub-expression whose value
+  `:(List Number)`) is dispatched directly as a sub-expression whose value
   is a `KType`. Bare type identifiers in FN signatures park on the
   binding's scheduler placeholder via the same `notify_list` /
   `pending_deps` machinery value-name forward references use; recursive

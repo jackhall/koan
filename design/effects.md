@@ -16,9 +16,9 @@ system rather than implicit in builtin internals.
 
 ```
 SIG Monad = (
-  (LET Wrap = (TYPE_CONSTRUCTOR Type))   -- type constructor: T → Wrap<T>
-  (VAL pure: Function<(Number) -> Wrap<Number>>)
-  (VAL bind: Function<(Wrap<Number>, Function<(Number) -> Wrap<Number>>) -> Wrap<Number>>)
+  (LET Wrap = (TYPE_CONSTRUCTOR Type))   -- type constructor: T → :(Wrap T)
+  (VAL pure :(Function (Number) -> :(Wrap Number)))
+  (VAL bind :(Function (:(Wrap Number), :(Function (Number) -> :(Wrap Number))) -> :(Wrap Number)))
 )
 ```
 
@@ -54,7 +54,7 @@ the dependency at the FN's parameter list; the call site supplies the
 module:
 
 ```
-LET gen = (FN (GEN r: Random) -> Number = (... r ...))
+LET gen = (FN (GEN r :Random) -> Number = (... r ...))
 ```
 
 Stage 5's implicit dispatch elides the parameter at call sites where the
@@ -70,7 +70,7 @@ single channel: a default handler performs them; a test handler captures
 them; a replay handler feeds recorded results.
 
 The Rust-side
-[`Monadic`](../src/runtime/model/types/ktraits.rs) trait, currently scaffolding
+[`Monadic`](../src/runtime/machine/model/types/ktraits.rs) trait, currently scaffolding
 for `Option`, becomes the bridge between the in-language `Monad`
 signature and the runtime's effect drainage. It implements the carrier
 shape the runtime uses for `Effectful<T>` — a value paired with pending

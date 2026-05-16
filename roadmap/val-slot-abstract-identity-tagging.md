@@ -3,16 +3,16 @@
 **Problem.** A value read from an `:|`-ascribed module's `VAL`-declared slot
 carries the underlying value's `KType`, not the per-call abstract identity
 the SIG body's declared slot type names. For `SIG WithZero = ((LET Type =
-Number) (VAL zero: Type))` plus `MODULE IntOrd = ((LET Type = Number) (LET
+Number) (VAL zero :Type))` plus `MODULE IntOrd = ((LET Type = Number) (LET
 zero = 0))` plus `LET int_ord = (IntOrd :| WithZero)`, the ATTR read
 `(int_ord.zero)` returns `Number(0)` — the underlying value's `ktype()` is
 `KType::Number`, not the fresh per-call `KType::UserType { kind: Module,
 name: "Type", scope_id: <int_ord-mint> }` that `:|` minted for
 `int_ord.Type`. The functor return-type check in
-[`KFunction::invoke`](../src/runtime/machine/kfunction/invoke.rs)'s
+[`KFunction::invoke`](../src/runtime/machine/core/kfunction/invoke.rs)'s
 Combine-finish closure compares the body's `.ktype()` against the per-call
 elaborated return type by structural equality, so a functor declared
-`(FN (GET_ZERO Er: WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero))`
+`(FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero))`
 errors at the per-call return-type check even though the slot value is
 semantically a member of the declared abstract type.
 
@@ -29,12 +29,12 @@ along with this work:
 - *Structural-form inner-name re-elaboration.*
   [`val_decl.rs`](../src/runtime/builtins/val_decl.rs)'s
   `CarrierForm::Raw` parameterized branch elaborates structural shapes
-  like `Function<(Type, Type) -> Number>` via `Elaborator` directly
+  like `:(Function (Type, Type) -> Number)` via `Elaborator` directly
   against `decl_scope`, then sub-Dispatches each free leaf through
   `value_lookup` if the elaboration parks. The leaf-lookup path
   resolves the *outermost* `Type` reference against the SIG-local
   `LET Type = ...` shadow, but inner positions inside the structural
-  shape (`Function<(Type, Type) -> Number>`'s arg slots) are
+  shape (`:(Function (Type, Type) -> Number)`'s arg slots) are
   elaborated once before the leaf sub-Dispatches complete — the
   shadow on inner names isn't honored. Today no shipped test
   exercises a SIG body that shadows `Type` *and* uses it inside a
@@ -86,7 +86,7 @@ along with this work:
   options: (a) round-trip the structural `TypeExpr` through
   `resolve_for` (or an equivalent per-position re-elaboration) before
   the leaf sub-Dispatches park, so every `Type` reference inside
-  `Function<(Type, Type) -> Number>` picks up the SIG-local shadow;
+  `:(Function (Type, Type) -> Number)` picks up the SIG-local shadow;
   (b) accept the gap and let modular-implicits' full type-shape
   checking absorb it when stage 5 lands. Deferred to
   [Stage 5 — Modular implicits](module-system-5-modular-implicits.md)
