@@ -34,9 +34,9 @@ python3 tools/modgraph.py --edges /tmp/koan.dot --root koan
 python3 tools/modgraph.py --edges /tmp/koan.dot --root koan::runtime::machine
 ```
 
-Per-module breakdown plus a single bottom-line number: the **per root-loc** score, split into `coupling` (cross/feedback edges at each wrapper), `nesting` (β·loc charge per wrapper layer), and `size` (per-file charge over every module's own file — including fat `mod.rs` files above small children). Absolute totals are intentionally not reported; only the per-loc number is calibrated to compare across runs and tree shapes.
+Per-module breakdown plus a single bottom-line number: the **per root-loc** score, split into `coupling` (cross/feedback edges at each wrapper, deduplicated per `(source_group, dst_module)` so splitting a file doesn't multiply its shared imports), `nesting` (β·loc charge per wrapper layer), and `size` (per-file charge over every module's own file using **raw LOC** — tests, doc comments, and inline comments all count toward the size penalty, even though structural terms ignore them). Absolute totals are intentionally not reported; only the per-loc number is calibrated to compare across runs and tree shapes.
 
-Each row prints `nest N.N` next to `index N.N` (the rolled-up structural cost) and `own N size N.N`, so wrappers carrying their β·scale charge and fat files are both visible in-line. Tune size with `--gamma` / `--size-pivot`; tune coupling/nesting with `--alpha` / `--beta` / `--beta-children-pivot`.
+Each row prints `nest N.N` next to `index N.N` (the rolled-up structural cost) and `own N (raw N) size N.N`, exposing both the production-LOC measure used for coupling/nesting weighting and the raw-LOC measure used for the size penalty. Tune size with `--gamma` / `--size-pivot`; tune coupling/nesting with `--alpha` / `--beta` / `--beta-children-pivot`.
 
 For tracked baselines (used by the `verify` skill), pass `--baseline <file>` — modgraph prunes stale entries (unreachable SHAs, prior dirty snapshots), prepends today's measurement, trims to 5, and prints a delta line. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
 

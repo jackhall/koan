@@ -4,7 +4,7 @@
 Reads a cargo-modules DOT file, recursively walks the module tree from
 `--root`, and reports per node:
   index(m)   = cross_edges(m) + alpha * feedback_weight(m) + beta
-  size(m)    = gamma * own_loc(m) * log(1 + own_loc(m) / pivot)
+  size(m)    = gamma * raw_loc(m) * log(1 + raw_loc(m) / pivot)
 The aggregate is reported as a single normalised number — the per-root-loc
 score, split into three components:
   per-loc    = (Σ (cross + α·fb)(m) · loc(m)        ← coupling
@@ -14,6 +14,15 @@ The split lets you see whether complexity is coupling (cross/feedback
 edges at each wrapper), nesting (wrapper layers themselves), or per-file
 (large files). The absolute totals are intentionally not surfaced — only
 the per-loc number is calibrated to compare against prior runs.
+
+Two LOC measures are used. Production LOC (`own_loc` / `subtree_loc`)
+filters out test files and `#[cfg(test)] mod` blocks and is what the
+structural terms (coupling, nesting) weight by — it captures the load-
+bearing code surface a refactor reshuffles. Raw LOC (`raw_loc`) counts
+every non-blank line in the file, including tests, doc comments, and
+inline comments, and is what the per-file size penalty uses — a 1000-line
+test-heavy file is 1000 lines of context for any reader (human or model),
+even if only 300 of those lines are production code.
 
 `cross_edges` and `feedback_weight` are computed at every interior node
 against the one-group-per-child partition of its children. For N ≤ 6
@@ -127,9 +136,22 @@ def classify(module: str, partition: dict[str, list[str]]) -> str | None:
 def build_matrix(
     edges: list[tuple[str, str]], partition: dict[str, list[str]]
 ) -> tuple[dict[tuple[str, str], int], int, int]:
+    """Edges are deduplicated by `(source_group, dst_module)` before being
+    aggregated to `(source_group, dst_group)`. This counts the number of
+    *distinct target modules* a source group reaches in each target group,
+    not the raw cargo-modules edge sum.
+
+    Without this dedup, splitting a file into N submodules that share
+    imports multiplies coupling by N (each child redundantly points at the
+    same target), penalising the split even though the semantic dependency
+    is unchanged. After dedup, "type_ops depends on N distinct things in
+    machine" is invariant under how type_ops is internally subdivided —
+    the metric measures the subtree-level dependency surface, not the
+    number of `use` sites."""
     matrix: dict[tuple[str, str], int] = defaultdict(int)
     cross = 0
     unclassified = 0
+    seen: set[tuple[str, str]] = set()
     for src, dst in edges:
         sg = classify(src, partition)
         dg = classify(dst, partition)
@@ -137,6 +159,10 @@ def build_matrix(
             unclassified += 1
             continue
         if sg != dg:
+            key = (sg, dst)
+            if key in seen:
+                continue
+            seen.add(key)
             matrix[(sg, dg)] += 1
             cross += 1
     return matrix, cross, unclassified
@@ -306,11 +332,33 @@ def own_file_loc(module: str, src_root: Path) -> int:
     return file_loc(f) if f is not None else 0
 
 
-def size_charge(own_loc: int, gamma: float, pivot: float) -> float:
-    """Soft log-shaped penalty per file: γ·L·log(1 + L/T)."""
-    if own_loc <= 0 or gamma <= 0.0 or pivot <= 0.0:
+def file_loc_raw(path: Path) -> int:
+    """Count every non-blank line in the file, including test code, doc
+    comments, and inline comments. This is the per-reader context-cost
+    measure used by `size_charge` — tests and comments are real lines a
+    reader has to load, even if the structural terms (coupling, nesting)
+    ignore them."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
+def own_file_loc_raw(module: str, src_root: Path) -> int:
+    """Raw LOC of just this module's own backing file (no descendants).
+    Counterpart to [`own_file_loc`] that does not filter tests/comments."""
+    f = module_to_file(module, src_root)
+    return file_loc_raw(f) if f is not None else 0
+
+
+def size_charge(raw_loc: int, gamma: float, pivot: float) -> float:
+    """Soft log-shaped penalty per file: γ·L·log(1 + L/T). L is raw LOC
+    (tests + comments included) — the size term measures per-file context
+    cost, where every line a reader has to load counts."""
+    if raw_loc <= 0 or gamma <= 0.0 or pivot <= 0.0:
         return 0.0
-    return gamma * own_loc * math.log(1.0 + own_loc / pivot)
+    return gamma * raw_loc * math.log(1.0 + raw_loc / pivot)
 
 
 def subtree_loc(module: str, modules: set[str], src_root: Path) -> int:
@@ -366,8 +414,12 @@ def fractal_report(
         children = direct_children(module, modules)
         loc = subtree_loc(module, modules, src_root)
         own_loc = own_file_loc(module, src_root)
-        size = size_charge(own_loc, gamma, pivot)
-        size_tail = f"   own {own_loc:>4}  size {size:>6.1f}" if own_loc else ""
+        raw_loc = own_file_loc_raw(module, src_root)
+        size = size_charge(raw_loc, gamma, pivot)
+        size_tail = (
+            f"   own {own_loc:>4} (raw {raw_loc:>4})  size {size:>6.1f}"
+            if (own_loc or raw_loc) else ""
+        )
         head = f"{indent}{module:<60} loc {loc:>6}"
 
         if not children:
