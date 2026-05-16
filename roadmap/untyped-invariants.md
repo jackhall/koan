@@ -45,24 +45,19 @@ a typed handle whose constructors enforce the pinning contract (e.g. a
 `Pinned<Scope>` newtype around the `Rc` with a single `as_ref` API and the raw
 pointer never escaping).
 
-### `Bindings` / `Scope` state-machine encapsulation
+### `cycle_close_install_identity` / `register_nominal` phase witness
 
-**Where.** [`scope.rs:36-38,228-280`](../src/runtime/machine/core/scope.rs),
-[`bindings.rs`](../src/runtime/machine/core/bindings.rs),
-[`struct_def.rs:63,87,107,110`](../src/runtime/builtins/struct_def.rs).
+**Where.** [`scope.rs:248-294`](../src/runtime/machine/core/scope.rs),
+[`bindings.rs`](../src/runtime/machine/core/bindings.rs).
 
-Several coherence invariants on `Bindings`/`Scope` are enforced by caller
-discipline rather than the type: `data` and `placeholders` never both hold the
-same name (relies on `bind_value` doing remove+insert atomically); every
-`data[name]` wrapping a `KFunction` mirrors into `functions[sig_key]` (relies
-on `try_register_function` being the sole writer); `pending_types` register/
-remove lifecycle around Stage-3.2 SCC; `cycle_close_install_identity` and
-`register_nominal` panic on borrow conflicts and pre-existing `types` entries,
-with the "post-Combine, non-re-entrant" phase ordering external to the type.
-Promote with a `Bindings` API that hides the multi-map structure behind
-single-writer methods, and a phase witness (e.g. a `PostCombine<'a>` token
-mintable only by the scheduler) threaded into the cycle-close path so its
-panicking branches become statically unreachable.
+Both `cycle_close_install_identity` and `register_nominal` panic on borrow
+conflict and on pre-existing `types` entries, with the "post-Combine,
+non-re-entrant" phase ordering external to the type. Promote with a phase
+witness (e.g. a `PostCombine<'a>` token mintable only by the scheduler)
+threaded into the cycle-close path so the panicking branches become
+statically unreachable. Lower leverage than the other elements — `RefCell`
+enforces borrow contention at runtime regardless of the witness; the marker
+primarily documents intent.
 
 ### Index newtypes for allocator-managed arrays
 
@@ -79,20 +74,21 @@ with index newtypes the allocator hands out and indexed-collection wrappers
 
 ## Priority
 
-1. **`Bindings` / `Scope` state-machine encapsulation** — bounded to the
-   binding/scope mutation surface; a `PostCombine<'a>` phase witness has a
-   clear mintable-only-by-scheduler shape that turns several panic branches
-   statically unreachable.
-2. **Index newtypes for allocator-managed arrays** — moderate blast radius
+1. **Index newtypes for allocator-managed arrays** — moderate blast radius
    (touches `NodeId`-typed call sites across the scheduler); the
    `IndexedVec<NodeId, Node>` shape encodes presence at index handout time
    so the "missing-arg check above guarantees presence" comments become
    the index's existence.
 
-Arena lifetime and heap-pinning discipline is sequenced last (not listed
-above) — highest blast radius, deepest into `unsafe`, and load-bearing
-across the runtime; best taken on after the cheaper elements clear the
-surrounding noise.
+Two elements are sequenced after Index newtypes:
+
+- **`cycle_close_install_identity` / `register_nominal` phase witness** —
+  low leverage; `RefCell` already enforces borrow contention at runtime, so
+  the witness primarily documents intent. Tractable as a small follow-up
+  whenever the surrounding code is being touched.
+- **Arena lifetime and heap-pinning discipline** — highest blast radius,
+  deepest into `unsafe`, and load-bearing across the runtime; best taken
+  on after the cheaper elements clear the surrounding noise.
 
 ## Dependencies
 

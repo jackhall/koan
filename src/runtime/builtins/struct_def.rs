@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::runtime::machine::core::PendingTypeEntry;
+use crate::runtime::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{
@@ -58,9 +58,11 @@ pub fn body<'a>(
     // Stage-3.2 SCC: register this binder in `pending_types` so a fellow in-flight
     // STRUCT / named-UNION's elaboration can detect a closing cycle when it parks on
     // our placeholder. The entry carries the schema + kind + scope_id so cycle-close
-    // can install our identity without re-entering dispatch.
+    // can install our identity without re-entering dispatch. The returned guard's
+    // Drop removes the entry — synchronous arms let it drop at body exit; the Park
+    // path moves it into the Combine-finish closure.
     let scope_id = scope.id;
-    scope.bindings().insert_pending_type(
+    let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
             kind: UserTypeKind::Struct,
@@ -83,16 +85,14 @@ pub fn body<'a>(
     );
     match outcome {
         FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields),
-        FieldListOutcome::Err(msg) => {
-            scope.bindings().remove_pending_type(&name);
-            err(KError::new(KErrorKind::ShapeError(msg)))
-        }
+        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Park(producers) => defer_struct_via_combine(
             scope,
             sched,
             name,
             schema_expr,
             producers,
+            pending_guard,
         ),
     }
 }
@@ -104,10 +104,11 @@ fn finalize_struct<'a>(
     name: String,
     fields: Vec<(String, KType)>,
 ) -> BodyResult<'a> {
-    // Stage-3.2 cleanup: drop our `pending_types` entry. Idempotent — cycle-close
-    // never removes entries (carrier-write is the finalize's job), and the entry
-    // may still be there from this binder's earlier park.
-    scope.bindings().remove_pending_type(&name);
+    // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`; the
+    // guard drops on body / Combine-finish return and removes the entry. Cycle-close
+    // never removes entries (carrier-write is the finalize's job), so by the time
+    // we land here the guard is the sole source of truth for cleanup.
+    //
     // Idempotent-finalize guard: if both maps are already populated for this name,
     // a parallel finalize (cycle-close + Combine-finish, or two Combine-finishes)
     // already produced a carrier. Return it without re-allocating. Defense-in-depth
@@ -150,16 +151,22 @@ fn finalize_struct<'a>(
 }
 
 /// Schedule a `Combine` over `producers` and re-run the schema elaboration in the finish
-/// closure. Same shape MODULE / SIG / FN-def use post-phase-3.
+/// closure. Same shape MODULE / SIG / FN-def use post-phase-3. `pending_guard` is moved
+/// into the closure so the `pending_types` entry survives the wait and is dropped
+/// regardless of which finish arm fires.
 fn defer_struct_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     name: String,
     schema_expr: KExpression<'a>,
     producers: Vec<NodeId>,
+    pending_guard: PendingBinderGuard<'a>,
 ) -> BodyResult<'a> {
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+        // Move the guard into the closure's frame so its Drop runs on closure exit
+        // regardless of finish arm.
+        let _pending_guard = pending_guard;
         // Producers terminalized — re-elaborate against the now-final scope. The
         // Combine-finish path runs AFTER the dispatch-time park; if cycle-close
         // populated `bindings.types` while we were parked, `resolve_type` resolves
@@ -175,21 +182,15 @@ fn defer_struct_via_combine<'a>(
             FieldListOutcome::Done(fields) => {
                 finalize_struct(scope, name_for_finish.clone(), fields)
             }
-            FieldListOutcome::Err(msg) => {
-                scope.bindings().remove_pending_type(&name_for_finish);
-                BodyResult::Err(
-                    KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
-                        function: "<struct>".to_string(),
-                        expression: format!("STRUCT {} schema", name_for_finish),
-                    }),
-                )
-            }
-            FieldListOutcome::Park(_) => {
-                scope.bindings().remove_pending_type(&name_for_finish);
-                BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                    "STRUCT schema elaboration parked again after Combine wake".to_string(),
-                )))
-            }
+            FieldListOutcome::Err(msg) => BodyResult::Err(
+                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
+                    function: "<struct>".to_string(),
+                    expression: format!("STRUCT {} schema", name_for_finish),
+                }),
+            ),
+            FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                "STRUCT schema elaboration parked again after Combine wake".to_string(),
+            ))),
         }
     });
     let combine_id = sched.add_combine(producers, scope, finish);
@@ -286,6 +287,22 @@ mod tests {
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("Bogus")),
             "expected ShapeError mentioning Bogus, got {err}",
+        );
+    }
+
+    /// RAII pending-types lifecycle: a body-Err arm (here: unknown type name in
+    /// the schema, which routes through `FieldListOutcome::Err`) must leave
+    /// `bindings.pending_types` empty. With the guard the cleanup is
+    /// unconditional; this test pins the property against a regression that
+    /// shadows / forgets the guard on the early-return path.
+    #[test]
+    fn struct_err_arm_drops_pending_types_entry() {
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        let _ = run_one_err(scope, parse_one("STRUCT Bad = (a :Bogus)"));
+        assert!(
+            scope.bindings().pending_types().is_empty(),
+            "pending_types must be empty after a STRUCT body Err arm",
         );
     }
 

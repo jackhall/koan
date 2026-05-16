@@ -18,7 +18,7 @@ mod scope_id;
 mod tests;
 
 pub use arena::{CallArena, RuntimeArena};
-pub use bindings::{ApplyOutcome, Bindings, PendingTypeEntry};
+pub use bindings::{ApplyOutcome, Bindings, PendingBinderGuard, PendingTypeEntry};
 pub use kerror::{Frame, KError, KErrorKind};
 pub use scope::{KFuture, ResolveOutcome, ResolveTypeExprOutcome, Resolution, Resolved, Scope, ScopeKind};
 pub use scope_id::ScopeId;

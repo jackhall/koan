@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::runtime::machine::core::PendingTypeEntry;
+use crate::runtime::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::runtime::machine::model::{KObject, KType};
 use crate::runtime::machine::model::types::UserTypeKind;
 use crate::runtime::machine::{
@@ -53,9 +53,11 @@ pub fn body<'a>(
     };
     // Stage-3.2 SCC: install the binder's pending-type entry before launching the
     // elaborator so a fellow in-flight binder parking on this name closes the cycle
-    // via DFS on `pending_types`.
+    // via DFS on `pending_types`. The returned guard's Drop removes the entry —
+    // synchronous arms let it drop at body exit; the Park path moves it into the
+    // Combine-finish closure.
     let scope_id = scope.id;
-    scope.bindings().insert_pending_type(
+    let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
             kind: UserTypeKind::Tagged,
@@ -75,12 +77,9 @@ pub fn body<'a>(
         parse_typed_field_list_via_elaborator(&schema_expr, "UNION schema", &mut elaborator);
     match outcome {
         FieldListOutcome::Done(fields) => finalize_union(scope, name, fields),
-        FieldListOutcome::Err(msg) => {
-            scope.bindings().remove_pending_type(&name);
-            err(KError::new(KErrorKind::ShapeError(msg)))
-        }
+        FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Park(producers) => {
-            defer_union_via_combine(scope, sched, name, schema_expr, producers)
+            defer_union_via_combine(scope, sched, name, schema_expr, producers, pending_guard)
         }
     }
 }
@@ -90,9 +89,8 @@ fn finalize_union<'a>(
     name: String,
     fields: Vec<(String, KType)>,
 ) -> BodyResult<'a> {
-    // Stage-3.2 cleanup + idempotent-finalize guard. See `finalize_struct` for the
-    // symmetric rationale.
-    scope.bindings().remove_pending_type(&name);
+    // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`. See
+    // `finalize_struct` for the symmetric rationale.
     let bindings = scope.bindings();
     if bindings.types().get(&name).is_some() {
         if let Some(existing) = bindings.data().get(&name).copied() {
@@ -137,9 +135,11 @@ fn defer_union_via_combine<'a>(
     name: String,
     schema_expr: KExpression<'a>,
     producers: Vec<NodeId>,
+    pending_guard: PendingBinderGuard<'a>,
 ) -> BodyResult<'a> {
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+        let _pending_guard = pending_guard;
         let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
         match parse_typed_field_list_via_elaborator(
             &schema_expr,
@@ -147,21 +147,15 @@ fn defer_union_via_combine<'a>(
             &mut elaborator,
         ) {
             FieldListOutcome::Done(fields) => finalize_union(scope, name_for_finish.clone(), fields),
-            FieldListOutcome::Err(msg) => {
-                scope.bindings().remove_pending_type(&name_for_finish);
-                BodyResult::Err(
-                    KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
-                        function: "<union>".to_string(),
-                        expression: format!("UNION {} schema", name_for_finish),
-                    }),
-                )
-            }
-            FieldListOutcome::Park(_) => {
-                scope.bindings().remove_pending_type(&name_for_finish);
-                BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                    "UNION schema elaboration parked again after Combine wake".to_string(),
-                )))
-            }
+            FieldListOutcome::Err(msg) => BodyResult::Err(
+                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
+                    function: "<union>".to_string(),
+                    expression: format!("UNION {} schema", name_for_finish),
+                }),
+            ),
+            FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                "UNION schema elaboration parked again after Combine wake".to_string(),
+            ))),
         }
     });
     let combine_id = sched.add_combine(producers, scope, finish);

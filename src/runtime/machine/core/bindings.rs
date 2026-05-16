@@ -20,7 +20,7 @@
 //! it isn't re-exported beyond `core::` — the `Conflict` variant is an internal queueing
 //! signal, not part of any user-visible API.
 
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
 use crate::runtime::machine::model::ast::{KExpression, TypeExpr};
@@ -91,6 +91,35 @@ pub struct PendingTypeEntry<'a> {
     pub scope_id: ScopeId,
     pub schema_expr: KExpression<'a>,
     pub edges: Vec<String>,
+}
+
+/// RAII handle returned by [`Bindings::insert_pending_type`]. Dropping the guard
+/// removes the matching entry from `pending_types`. The guard is the *only*
+/// removal path — struct_def / union body sites hold it for the duration of the
+/// synchronous elaboration, and the Park path moves it into the `CombineFinish`
+/// closure so the entry survives the wait and is cleaned up regardless of the
+/// finish arm (Done, Err, second-Park).
+///
+/// `try_borrow_mut` in Drop is defensive: no caller is expected to hold
+/// `pending_types` when a guard drops (the read-borrow in `detect_pending_cycle`
+/// is released before any guard could drop, and cycle-close holds only a
+/// short-lived read borrow). Silent skip is safe — the entry persists until
+/// the next drain point, and no later code observes a stale entry once the
+/// matching binder has finalized.
+#[must_use = "PendingBinderGuard removes the pending_types entry on drop; \
+              bind it for the elaboration's lifetime, or move it into the \
+              CombineFinish closure on the Park path"]
+pub struct PendingBinderGuard<'a> {
+    bindings: &'a Bindings<'a>,
+    name: String,
+}
+
+impl<'a> Drop for PendingBinderGuard<'a> {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.bindings.pending_types.try_borrow_mut() {
+            map.remove(&self.name);
+        }
+    }
 }
 
 impl<'a> Bindings<'a> {
@@ -176,31 +205,29 @@ impl<'a> Bindings<'a> {
 
     /// Read-only handle for the SCC pre-registration map. Same `Ref<'_, _>` semantics
     /// as [`Bindings::data`]. Stage-3.2 writers are [`Bindings::insert_pending_type`]
-    /// / [`Bindings::record_pending_edge`] / [`Bindings::remove_pending_type`] plus
-    /// the `RefMut` accessor [`Bindings::pending_types_mut`] for the cycle-close sweep.
+    /// (returns a [`PendingBinderGuard`] whose Drop removes the entry) and
+    /// [`Bindings::record_pending_edge`].
     pub fn pending_types(&self) -> Ref<'_, HashMap<String, PendingTypeEntry<'a>>> {
         self.pending_types.borrow()
     }
 
-    /// Mutable handle for the cycle-close sweep — it removes every cycle member's
-    /// entry under one borrow before re-elaborating any schema. Callers at the
-    /// elaborator's `Resolution::Placeholder` arm should use the targeted
-    /// [`Bindings::record_pending_edge`] / [`Bindings::remove_pending_type`]
-    /// methods instead so that nested elaboration calls don't deadlock against a
-    /// held `RefMut`.
-    pub fn pending_types_mut(&self) -> RefMut<'_, HashMap<String, PendingTypeEntry<'a>>> {
-        self.pending_types.borrow_mut()
-    }
-
-    /// Install a new in-flight binder entry. Called by struct_def / union before
-    /// running the elaborator so the elaborator's placeholder arm can observe the
-    /// binder's `pending_types` presence and record cross-binder edges.
+    /// Install a new in-flight binder entry and return an RAII guard whose Drop
+    /// removes the entry. Called by struct_def / union before running the
+    /// elaborator so the elaborator's placeholder arm can observe the binder's
+    /// `pending_types` presence and record cross-binder edges. The caller binds
+    /// the guard for the elaboration's lifetime; on the Park path the guard is
+    /// moved into the `CombineFinish` closure so the entry survives the wait
+    /// and is cleaned up when the closure returns.
     ///
     /// Panics on borrow conflict — pending-type writes happen at body-entry, outside
     /// the re-entrant `try_apply` hot path; a conflict here is a programming error.
     /// Panics on duplicate name — same scope cannot have two in-flight binders for
     /// one name (placeholders block the second dispatch from progressing this far).
-    pub fn insert_pending_type(&self, name: String, entry: PendingTypeEntry<'a>) {
+    pub fn insert_pending_type(
+        &'a self,
+        name: String,
+        entry: PendingTypeEntry<'a>,
+    ) -> PendingBinderGuard<'a> {
         let mut map = self.pending_types.borrow_mut();
         if map.contains_key(&name) {
             panic!(
@@ -208,7 +235,8 @@ impl<'a> Bindings<'a> {
                  reached body-entry, which the placeholder install should have blocked",
             );
         }
-        map.insert(name, entry);
+        map.insert(name.clone(), entry);
+        PendingBinderGuard { bindings: self, name }
     }
 
     /// Append `to` to `from`'s adjacency list (no-op if `from` isn't a pending binder —
@@ -226,14 +254,6 @@ impl<'a> Bindings<'a> {
                 entry.edges.push(to);
             }
         }
-    }
-
-    /// Remove and return `name`'s entry. The cycle-close sweep removes every cycle
-    /// member before re-elaborating, and the happy-path finalize removes the
-    /// just-finalized binder. Panics on borrow conflict (same rationale as
-    /// [`Bindings::insert_pending_type`]).
-    pub fn remove_pending_type(&self, name: &str) -> Option<PendingTypeEntry<'a>> {
-        self.pending_types.borrow_mut().remove(name)
     }
 
     /// LET-style value bind. Errors `Rebind` if `data[name]` already exists. When `obj`
@@ -769,6 +789,52 @@ mod tests {
         // The data entry is the finalize's carrier.
         let stored_obj = *bindings.data().get("Foo").expect("Foo in data");
         assert!(std::ptr::eq(stored_obj, obj));
+    }
+
+    /// RAII guard: dropping the value returned by `insert_pending_type` removes the
+    /// matching entry from `pending_types`. Pins the lifecycle invariant that the
+    /// guard — not any caller-side `remove` — is the sole removal path.
+    #[test]
+    fn pending_binder_guard_drop_removes_entry() {
+        use crate::runtime::machine::model::ast::KExpression;
+        let bindings: Box<Bindings<'static>> = Box::default();
+        let bindings: &'static Bindings<'static> = Box::leak(bindings);
+        let entry = PendingTypeEntry {
+            kind: UserTypeKind::Struct,
+            scope_id: ScopeId::from_raw(0, 0xBEEF),
+            schema_expr: KExpression { parts: Vec::new() },
+            edges: Vec::new(),
+        };
+        {
+            let _guard = bindings.insert_pending_type("Foo".into(), entry);
+            assert!(bindings.pending_types().contains_key("Foo"));
+        } // guard drops here
+        assert!(
+            !bindings.pending_types().contains_key("Foo"),
+            "guard Drop should have removed the pending_types entry",
+        );
+    }
+
+    /// Guard Drop tolerates an entry that has already been removed (e.g. a future
+    /// path where finalize drains explicitly). The current code never double-removes,
+    /// but the Drop must not panic if the map turns out to be empty for the name.
+    #[test]
+    fn pending_binder_guard_drop_tolerates_absent_entry() {
+        use crate::runtime::machine::model::ast::KExpression;
+        let bindings: Box<Bindings<'static>> = Box::default();
+        let bindings: &'static Bindings<'static> = Box::leak(bindings);
+        let entry = PendingTypeEntry {
+            kind: UserTypeKind::Struct,
+            scope_id: ScopeId::from_raw(0, 0xBEEF),
+            schema_expr: KExpression { parts: Vec::new() },
+            edges: Vec::new(),
+        };
+        let guard = bindings.insert_pending_type("Foo".into(), entry);
+        // Pull the entry out from under the guard.
+        bindings.pending_types.borrow_mut().remove("Foo");
+        // Guard drop should silently succeed.
+        drop(guard);
+        assert!(!bindings.pending_types().contains_key("Foo"));
     }
 
     #[test]
