@@ -64,10 +64,10 @@ bound outside the FN) both work as pin values resolved eagerly.
 
 A Type-class FN parameter (`Er: OrderedSig`) binds the parameter name as
 a type-language binder at the call site: at each call,
-[`KFunction::invoke`](../../src/runtime/machine/core/kfunction/invoke.rs)
+[`KFunction::invoke`](../../src/machine/core/kfunction/invoke.rs)
 dual-writes the per-call argument into the child scope's `bindings.types`
 alongside the existing value-side `bind_value`. The
-[`KType::is_type_denoting`](../../src/runtime/machine/model/types/ktype_predicates.rs)
+[`KType::is_type_denoting`](../../src/machine/model/types/ktype_predicates.rs)
 predicate gates the dual-write — `SignatureBound`, `Signature`, `Type`,
 `TypeExprRef`, and `AnyUserType { kind: Module }` carry meaningful
 type-language identity at the binder. Body-position references to the
@@ -77,14 +77,14 @@ parameter (`(MODULE_TYPE_OF Er Type)` inside the body) resolve through
 Return-type expressions that reference a per-call FN parameter
 (`-> Er`, `-> (MODULE_TYPE_OF Er Type)`, `-> (SIG_WITH Set ((Elt: Er)))`)
 ride the same per-call scope through a *deferred* return-type carrier.
-[`ExpressionSignature::return_type`](../../src/runtime/machine/model/types/signature.rs)
+[`ExpressionSignature::return_type`](../../src/machine/model/types/signature.rs)
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
 every static case (builtins and FNs whose return type doesn't reference a
 parameter), while `Deferred(DeferredReturn<'a>)` holds the surface form
 verbatim — either `TypeExpr(TypeExpr)` for parser-preserved structured
 forms or `Expression(KExpression<'a>)` for captured parens-form
 expressions. Routing happens at FN-definition in
-[`fn_def.rs`](../../src/runtime/builtins/fn_def.rs): a parameter-name scan
+[`fn_def.rs`](../../src/builtins/fn_def.rs): a parameter-name scan
 over the captured return-type carrier picks `Deferred(_)` when any leaf
 matches a parameter name and `Resolved(_)` otherwise. The parens-form
 overload registers its return-type slot as `KType::KExpression` so the
@@ -92,7 +92,7 @@ expression survives FN-def without sub-dispatching against the outer
 scope.
 
 Per-call elaboration runs at the dispatch boundary in
-[`KFunction::invoke`](../../src/runtime/machine/core/kfunction/invoke.rs). The
+[`KFunction::invoke`](../../src/machine/core/kfunction/invoke.rs). The
 `Deferred(_)` arm spawns the body Dispatch and (for the `Expression`
 carrier) an optional return-type sub-Dispatch under the per-call frame
 via `SchedulerHandle::with_active_frame`, then joins them in a `Combine`
@@ -101,14 +101,14 @@ surfaces mismatches with `(per-call return type)` wording. The
 `TypeExpr` carrier elaborates inline against the per-call scope where the
 dual-write has installed the parameter-name identities; both carriers feed
 the same Combine. The lift-time return-type check in
-[`scheduler/execute.rs`](../../src/runtime/machine/execute/scheduler/execute.rs)
+[`scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the Combine
 finish where the per-call elaboration is in hand. The structural
 `KType::KFunction { ret }` synthesis at
-[`function_value_ktype`](../../src/runtime/machine/model/values/kobject.rs) and the
+[`function_value_ktype`](../../src/machine/model/values/kobject.rs) and the
 admission helper at
-[`function_compat`](../../src/runtime/machine/model/types/ktype_predicates.rs)
+[`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
 coarsen `Deferred(_)` to `KType::Any` because the structural function-type
 language has no surface for "per-call elaboration of this expression" —
 see [open-work.md](open-work.md) for the precision refinement.
@@ -134,11 +134,11 @@ SIG Monad = (
 binds the slot name (`Wrap` above) to a template
 `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`
 carrying the parameter symbol list. The builtin lives in
-[`type_ops.rs`](../../src/runtime/builtins/type_ops.rs).
+[`type_ops.rs`](../../src/builtins/type_ops.rs).
 
 Application uses the type-expression sigil:
 `:(Wrap Number)` in a type-position slot elaborates through
-[`elaborate_type_expr`](../../src/runtime/machine/model/types/resolver.rs)'s
+[`elaborate_type_expr`](../../src/machine/model/types/resolver.rs)'s
 constructor-application arm into
 `KType::ConstructorApply { ctor: <the Wrap UserType>, args: [Number] }` —
 structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.

@@ -1,9 +1,9 @@
 # Support for functional programming
 
 Functions are first-class values in Koan. `KFunction` is a `KObject` variant
-([kobject.rs](../src/runtime/machine/model/values/kobject.rs)), so a function can be returned from a
+([kobject.rs](../src/machine/model/values/kobject.rs)), so a function can be returned from a
 body, bound via `LET`, looked up by name, and invoked via
-[`call_by_name`](../src/runtime/builtins/call_by_name.rs) or by appearing in a
+[`call_by_name`](../src/builtins/call_by_name.rs) or by appearing in a
 position the dispatcher resolves.
 
 ## User-defined functions
@@ -14,7 +14,7 @@ The surface form is:
 FN (<signature>) -> ReturnType = (<body>)
 ```
 
-The signature is itself a [`KExpression`](../src/runtime/machine/model/ast.rs) mixing
+The signature is itself a [`KExpression`](../src/machine/model/ast.rs) mixing
 fixed `Keyword` tokens and `name: Type` parameter triples. The triple form is
 required — a bare identifier without `: Type` is a parse error; use `: Any` to
 opt out of type-checking for a slot. Keyword tokens are part of the dispatch
@@ -33,7 +33,7 @@ LET y = (ECHO 21)
 Body { Builtin(BuiltinFn) | UserDefined(KExpression) }
 ```
 
-(in [kfunction.rs](../src/runtime/machine/core/kfunction.rs)). The `UserDefined(KExpression)`
+(in [kfunction.rs](../src/machine/core/kfunction.rs)). The `UserDefined(KExpression)`
 shape was chosen over `Box<dyn Fn>` so that the TCO and error-frame paths can
 introspect the body — TCO needs to recognize the tail position; error frames
 need to know which function the trace step belongs to. A boxed closure would
@@ -63,9 +63,9 @@ mechanics — `lift_kobject`, the `Option<Rc<CallArena>>` carried by
 
 End-to-end verification:
 
-- [`closure_escapes_outer_call_and_remains_invocable`](../src/runtime/builtins/call_by_name.rs)
+- [`closure_escapes_outer_call_and_remains_invocable`](../src/builtins/call_by_name.rs)
   — return a closure from a body, call it after the outer frame has finalized.
-- [`escaped_closure_with_param_returns_body_value`](../src/runtime/builtins/call_by_name.rs)
+- [`escaped_closure_with_param_returns_body_value`](../src/builtins/call_by_name.rs)
   — escaped closure with a parameter still substitutes correctly.
 
 ## Composition with the language extension story

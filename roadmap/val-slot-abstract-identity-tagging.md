@@ -9,7 +9,7 @@ zero = 0))` plus `LET int_ord = (IntOrd :| WithZero)`, the ATTR read
 `KType::Number`, not the fresh per-call `KType::UserType { kind: Module,
 name: "Type", scope_id: <int_ord-mint> }` that `:|` minted for
 `int_ord.Type`. The functor return-type check in
-[`KFunction::invoke`](../src/runtime/machine/core/kfunction/invoke.rs)'s
+[`KFunction::invoke`](../src/machine/core/kfunction/invoke.rs)'s
 Combine-finish closure compares the body's `.ktype()` against the per-call
 elaborated return type by structural equality, so a functor declared
 `(FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero))`
@@ -17,7 +17,7 @@ errors at the per-call return-type check even though the slot value is
 semantically a member of the declared abstract type.
 
 The Stage B landing test
-[`functor_return_module_type_of_parameter_resolves_per_call`](../src/runtime/builtins/fn_def/tests/module_stage2.rs)
+[`functor_return_module_type_of_parameter_resolves_per_call`](../src/builtins/fn_def/tests/module_stage2.rs)
 documents this caveat. The test currently pins only the FN-def routing
 (registration as `Deferred(_)` succeeds, ascription against the SIG
 succeeds); the end-to-end `(GET_ZERO int_ord)` call returning the
@@ -27,7 +27,7 @@ One adjacent gap shares the same "VAL slot type-identity" theme and rides
 along with this work:
 
 - *Structural-form inner-name re-elaboration.*
-  [`val_decl.rs`](../src/runtime/builtins/val_decl.rs)'s
+  [`val_decl.rs`](../src/builtins/val_decl.rs)'s
   `CarrierForm::Raw` parameterized branch elaborates structural shapes
   like `:(Function (Type, Type) -> Number)` via `Elaborator` directly
   against `decl_scope`, then sub-Dispatches each free leaf through
@@ -60,7 +60,7 @@ along with this work:
 
 - *Tagging site — open.* Two candidates:
   - (a) *ATTR-time tagging.* The
-    [`attr.rs` access path for modules](../src/runtime/builtins/attr.rs)
+    [`attr.rs` access path for modules](../src/builtins/attr.rs)
     inspects the source module's SIG (when the carrier is an
     opaquely-ascribed `KModule`) for a VAL slot named under the requested
     attribute, and wraps the read value with the per-call abstract

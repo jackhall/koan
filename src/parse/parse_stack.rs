@@ -5,7 +5,7 @@
 //! since they bind `ParseStack` and the token-buffer flush.
 
 use crate::parse::tokens::classify_token;
-use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::dict_literal::DictFrame;
 use super::frame::Frame;

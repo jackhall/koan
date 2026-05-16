@@ -11,7 +11,7 @@ Score module-structure changes before doing them. `tools/modgraph.py` always doe
 - **feedback** = edges that go against the best topological order (`α`-weighted),
 - **per-non-leaf charge** `β` (penalises wrapper layers) and **per-file size charge** `γ · L · log(1 + L/T)` (penalises fat files).
 
-Defaults (`α=2, β=5, γ=10, T=400`) are calibrated on the koan tree — see `tools/modgraph.py` docstring for the rationale.
+Defaults are calibrated on the koan tree — see `tools/modgraph.py` docstring for the defaults and rationale.
 
 Assume `cargo modules` is on PATH.
 

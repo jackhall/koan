@@ -57,16 +57,16 @@ incrementally, each producing a usable end state.
   signature (`(MAKE T: Type elt: T)`, OCaml's
   `module Make (E : ORDERED) (S : SET with type elt = E.t)`). Reuses
   the `ReturnType` / `DeferredReturn` carrier shipped at
-  [`ExpressionSignature::return_type`](src/runtime/machine/model/types/signature.rs)
+  [`ExpressionSignature::return_type`](src/machine/model/types/signature.rs)
   and the per-call re-elaboration plumbing in
-  [`KFunction::invoke`](src/runtime/machine/core/kfunction/invoke.rs); the new
+  [`KFunction::invoke`](src/machine/core/kfunction/invoke.rs); the new
   work is staged left-to-right dispatch.
 - [VAL-slot value-carrier abstract-identity tagging](roadmap/val-slot-abstract-identity-tagging.md)
   — a value read from an `:|`-ascribed module's VAL-declared slot today
   carries the underlying value's `KType`, not the per-call abstract
   identity `:|` minted for the SIG's `Type` member; closes the
   deferred end-to-end functor-on-VAL-slot call test variant in
-  [`functor_return_module_type_of_parameter_resolves_per_call`](src/runtime/builtins/fn_def/tests/module_stage2.rs)
+  [`functor_return_module_type_of_parameter_resolves_per_call`](src/builtins/fn_def/tests/module_stage2.rs)
   and aligns dispatch keys for stage 5's implicit search over
   VAL-typed values.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
@@ -86,11 +86,11 @@ incrementally, each producing a usable end state.
   but the language treats every operator as a flat independent builtin. Generic
   dispatch over groups arrives with the module system's modular implicits.
 - [Structural KFunction admission across deferred return types](roadmap/kfunction-deferred-ret-precision.md) —
-  [`function_value_ktype`](src/runtime/machine/model/values/kobject.rs) synthesizes
+  [`function_value_ktype`](src/machine/model/values/kobject.rs) synthesizes
   `KType::KFunction { ret: KType::Any }` for deferred-return FNs because the
   structural function-type language has no surface for "per-call
   elaboration of this expression"; the symmetric coarsening in
-  [`function_compat`](src/runtime/machine/model/types/ktype_predicates.rs) admits-or-
+  [`function_compat`](src/machine/model/types/ktype_predicates.rs) admits-or-
   rejects-by-`==` so today's strict refusal stays safe but silent. A
   `debug_assert!` at the coarsening branch is the tripwire; the decision
   is forced when stage 5 implicit search or a precise FN-typed slot

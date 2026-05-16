@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::parse::quotes::{mask_quotes, QUOTE_PLACEHOLDER};
 use crate::parse::whitespace::collapse_whitespace;
-use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 use super::dict_literal::DictFrame;
 use super::frame::{close_paren_to_part, Frame};

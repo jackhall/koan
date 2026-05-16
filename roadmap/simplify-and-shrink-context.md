@@ -31,37 +31,37 @@ extractor protocols the type system could fold into single calls.
 
 - *Fold peek-then-take protocol into one extractor — open.* Six
   `unreachable!("get(X) then extract_X must succeed")` arms in
-  [fn_def.rs](../src/runtime/builtins/fn_def.rs) and
-  [newtype_def.rs](../src/runtime/builtins/newtype_def.rs) encode a
+  [fn_def.rs](../src/builtins/fn_def.rs) and
+  [newtype_def.rs](../src/builtins/newtype_def.rs) encode a
   two-step protocol the caller cannot get wrong by construction (peek
   the variant, then take it). A combined `take_X_or_error` returning
   `Result<X, KError>` directly removes all six.
-- *Split [`type_ops.rs`](../src/runtime/builtins/type_ops.rs) (1102
+- *Split [`type_ops.rs`](../src/builtins/type_ops.rs) (1102
   LOC) — open.* Six independent builtin bodies sharing one trivial
   helper; one submodule per body under `type_ops/` is the obvious
   partition. Largest file in the crate; clean isolation.
 - *Split
-  [`ktype_predicates.rs`](../src/runtime/machine/model/types/ktype_predicates.rs)
+  [`ktype_predicates.rs`](../src/machine/model/types/ktype_predicates.rs)
   (698 LOC) — open.* Three disjoint concerns under one module:
   specificity ordering, per-`ExpressionPart` admissibility, per-value
   type-tagging. Each is independent of the others.
-- *Split [`ascribe.rs`](../src/runtime/builtins/ascribe.rs) (800
+- *Split [`ascribe.rs`](../src/builtins/ascribe.rs) (800
   LOC) — open.* The two body functions (`body_opaque`,
   `body_transparent`) plus shape-checking and abstract-type-name
   sweeping; partition along those seams.
-- *Split [`bindings.rs`](../src/runtime/machine/core/bindings.rs) (855
+- *Split [`bindings.rs`](../src/machine/core/bindings.rs) (855
   LOC) — open.* Single façade `impl` with high cohesion but identifiable
   bands: data/functions write primitives, types write primitive,
   transactional nominal dual-writes, and the `PendingBinderGuard` RAII
   machinery. Lower partition return than the others above; bundle with
   a `machine` reshuffle pass rather than as a standalone PR.
-- *Split [`scope.rs`](../src/runtime/machine/core/scope.rs) (742 LOC)
+- *Split [`scope.rs`](../src/machine/core/scope.rs) (742 LOC)
   and the remaining 600+-line builtins
-  ([`fn_def.rs`](../src/runtime/builtins/fn_def.rs),
-  [`struct_def.rs`](../src/runtime/builtins/struct_def.rs),
-  [`let_binding.rs`](../src/runtime/builtins/let_binding.rs),
-  [`interpret.rs`](../src/runtime/machine/execute/interpret.rs),
-  [`kfunction.rs`](../src/runtime/machine/core/kfunction.rs)) — open.*
+  ([`fn_def.rs`](../src/builtins/fn_def.rs),
+  [`struct_def.rs`](../src/builtins/struct_def.rs),
+  [`let_binding.rs`](../src/builtins/let_binding.rs),
+  [`interpret.rs`](../src/machine/execute/interpret.rs),
+  [`kfunction.rs`](../src/machine/core/kfunction.rs)) — open.*
   Each is plausibly 2–3 focused submodules but the right seams depend
   on the structural reshuffle below. Score candidate splits in the same
   [`modgraph_rewrite.py`](../tools/modgraph_rewrite.py) pass so LOC

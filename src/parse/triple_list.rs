@@ -10,7 +10,7 @@
 //! - [`parse_keyword_triple_list`]: `<Identifier> <Keyword(sep)> <slot>` TRIPLES — used
 //!   for named-value pairs (`Point (x = 3, y = 4)`, function calls `f (a = 1, b = 2)`).
 
-use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 /// Walk `expr.parts` as repeated `<Identifier(name)> <Keyword(sep)> <slot>` triples and
 /// return an ordered list of `(name, T)` pairs.

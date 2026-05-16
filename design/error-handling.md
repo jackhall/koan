@@ -12,7 +12,7 @@ errors is open work — see the bottom.
 A builtin body returns one of `Value`, `Tail`, or `Err(KError)` (see
 [execution-model.md](execution-model.md)).
 
-[`KError`](../src/runtime/machine/core/kerror.rs) is a struct:
+[`KError`](../src/machine/core/kerror.rs) is a struct:
 
 ```rust
 struct KError {
@@ -45,19 +45,19 @@ formats them to stderr with the frame chain via `KError`'s `Display` impl.
 
 Dispatch failures (no match, ambiguous overload, arity mismatch in bind) flow
 through the same channel as builtin errors:
-[`Scope::resolve_dispatch`](../src/runtime/machine/core/scope.rs) returns a
+[`Scope::resolve_dispatch`](../src/machine/core/scope.rs) returns a
 `ResolveOutcome` whose `Ambiguous` and `Unmatched` arms the scheduler driver
 converts to `Err(KError)` with `KErrorKind::AmbiguousDispatch` /
 `DispatchFailed`, and `KFunction::bind` returns `Result<KFuture, KError>` on
 arity mismatch.
-[`Scheduler::execute`](../src/runtime/machine/execute/scheduler.rs) and
-[`interpret`](../src/runtime/machine/execute/interpret.rs) return `Result<(), KError>` to
+[`Scheduler::execute`](../src/machine/execute/scheduler.rs) and
+[`interpret`](../src/machine/execute/interpret.rs) return `Result<(), KError>` to
 complete the surfacing.
 
 ## `try_args!` macro
 
 The default form
-[`try_args!(bundle; arg: Variant, ...)`](../src/runtime/builtins.rs)
+[`try_args!(bundle; arg: Variant, ...)`](../src/builtins.rs)
 auto-constructs a structured `TypeMismatch` on failure — the common case in
 builtin bodies. The override form `try_args!(bundle, return $err; ...)` is
 preserved for the rare site that wants something custom (e.g., a `ShapeError`

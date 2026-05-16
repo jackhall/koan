@@ -1,6 +1,6 @@
 # `KType` — the runtime type system
 
-[`KType`](../../src/runtime/machine/model/types/ktype.rs) has a variant for every concrete `KObject`:
+[`KType`](../../src/machine/model/types/ktype.rs) has a variant for every concrete `KObject`:
 
 - Scalars: `Number`, `Str`, `Bool`, `Null`.
 - Containers: `List(Box<KType>)`, `Dict(Box<KType>, Box<KType>)`,
@@ -29,7 +29,7 @@
   ascription, construction primitives' return types. The surface keywords
   `Newtype` and `TypeConstructor` are pinned for diagnostic rendering but not
   registered as writable surface names (no entry in
-  [`KType::from_name`](../../src/runtime/machine/model/types/ktype_resolution.rs)).
+  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
 - Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
   Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
   / `Dict(_, _)`. Emitted by `elaborate_type_expr` when the outer name of a
@@ -44,8 +44,8 @@
   uniformly through `Scope::resolve_type`.
 - `Any` — the no-op fast-path.
 
-[`KType::matches_value`](../../src/runtime/machine/model/types/ktype_predicates.rs) plus
-[`KObject::ktype`](../../src/runtime/machine/model/values/kobject.rs) close the loop on runtime
+[`KType::matches_value`](../../src/machine/model/types/ktype_predicates.rs) plus
+[`KObject::ktype`](../../src/machine/model/values/kobject.rs) close the loop on runtime
 checking: every value has a queryable type, and any declared type can be checked
 against it.
 
@@ -58,7 +58,7 @@ types on the variant directly. `KType` is not `Copy`; structural payloads are
 **Surface syntax** is a glued-right `:` sigil opening an S-expression
 type-expression group. The parser treats `:(...)` as a type-position frame
 anchored to the `:` — `:(List Number)` is one
-[`ExpressionPart::Type`](../../src/runtime/machine/model/ast.rs) carrying a structured
+[`ExpressionPart::Type`](../../src/machine/model/ast.rs) carrying a structured
 `TypeExpr`, not four tokens. `<` and `>` flow through unencumbered as
 keyword tokens, leaving the arithmetic comparison operators available. The
 framing logic lives in
@@ -117,9 +117,9 @@ USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → DispatchFailed
 ```
 
 **Element-type inference for literals** is the join of element types via
-[`KType::join_iter`](../../src/runtime/machine/model/types/ktype_resolution.rs): `[1, 2, 3]` → `:(List Number)`,
+[`KType::join_iter`](../../src/machine/model/types/ktype_resolution.rs): `[1, 2, 3]` → `:(List Number)`,
 `[1, "x"]` → `:(List Any)`, `[]` → `:(List Any)`.
-[`KObject::ktype`](../../src/runtime/machine/model/values/kobject.rs) walks list elements and dict
+[`KObject::ktype`](../../src/machine/model/values/kobject.rs) walks list elements and dict
 keys/values on each call to project the parameterized form; functions project
 their declared signature (`KObject::KFunction(f, _)` → `KFunction { args, ret }`
 read off `f.signature`).
@@ -168,13 +168,13 @@ without `: Type` is a parse error — there is no implicit `Any` default. Use
 `: Any` to opt a slot out of type-checking. Parameter types are checked at
 dispatch via the same `Argument::matches` path as builtins, so a call whose
 arguments don't satisfy the signature surfaces as
-[`KErrorKind::DispatchFailed`](../../src/runtime/machine/core/kerror.rs); the same call shape
+[`KErrorKind::DispatchFailed`](../../src/machine/core/kerror.rs); the same call shape
 with different parameter types routes to a different overload by
 slot-specificity (see below).
 
 The return type is non-optional and runtime-enforced. The scheduler injects a
 check at user-fn slot finalization that surfaces
-[`KErrorKind::TypeMismatch`](../../src/runtime/machine/core/kerror.rs) (with a `<return>` arg
+[`KErrorKind::TypeMismatch`](../../src/machine/core/kerror.rs) (with a `<return>` arg
 name and a frame naming the called function) on mismatch. `Any` is the
 no-enforcement fast path for sites that genuinely don't care.
 

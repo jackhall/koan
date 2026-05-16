@@ -3,7 +3,7 @@
 Type elaboration runs in the same scheduler that runs value evaluation.
 A type-binding site (`LET Ty = ...`, `STRUCT Ty = ...`, `UNION Ty = ...`)
 registers a placeholder in the
-[`Bindings`](../../src/runtime/machine/core/scope.rs) façade on `Scope` — the
+[`Bindings`](../../src/machine/core/scope.rs) façade on `Scope` — the
 same `placeholders` table value bindings use, sitting alongside `data` and
 `functions` — and dispatches its body as scheduler work.
 Lookups of type names from outside the body park on the producer's NodeId
@@ -47,7 +47,7 @@ error rather than a stack overflow.
 
 **Module-qualified type names.** A TypeExpr like `Mo.Ty` or chained
 `Outer.Inner.T` resolves through the value-side ATTR walker:
-[`access_module_member`](../../src/runtime/builtins/attr.rs) tries the
+[`access_module_member`](../../src/builtins/attr.rs) tries the
 module's `type_members` table (opaque-ascription type bindings), then
 the child scope's `data` (so chained `Outer.Inner.X` reads the inner
 *module value* and the chain stays drillable), then the child scope's
@@ -68,19 +68,19 @@ the placeholder-park rail covers the source-order case.
 ## Binding home and the dual-map
 
 Type bindings live in a separate map from value bindings. The
-[`Bindings`](../../src/runtime/machine/core/bindings.rs) façade owns four maps:
+[`Bindings`](../../src/machine/core/bindings.rs) façade owns four maps:
 `data` for values, `functions` for registered overloads, `placeholders` for
 in-flight dispatch tasks, and `types` for type-name → `&KType` arena pointers.
 Token-class-driven lookup at the resolver decides which map to consult —
 Type-class tokens consult `types`, identifier tokens consult `data`. Builtin
 type names *and* `LET Ty = Number`-style aliases live in `bindings.types` as
 arena-allocated `&KType`
-([`RuntimeArena::alloc_ktype`](../../src/runtime/machine/core/arena.rs)),
+([`RuntimeArena::alloc_ktype`](../../src/machine/core/arena.rs)),
 reachable through
-[`Scope::resolve_type`](../../src/runtime/machine/core/scope.rs) on the same
+[`Scope::resolve_type`](../../src/machine/core/scope.rs) on the same
 pointer as the builtin.
 
-[LET routing in `let_binding`](../../src/runtime/builtins/let_binding.rs) detects
+[LET routing in `let_binding`](../../src/builtins/let_binding.rs) detects
 Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
 RHSes (type-valued aliases). A bind-time
 `KErrorKind::TypeClassBindingExpectsType` diagnostic rejects
@@ -99,9 +99,9 @@ body's LET wrote to `types` (Type-class LHS, `KTypeValue` RHS) or to `data`
 ## Bare-leaf type-name carrier
 
 Bare-leaf type names that aren't in
-[`KType::from_name`](../../src/runtime/machine/model/types/ktype.rs)'s builtin
+[`KType::from_name`](../../src/machine/model/types/ktype.rs)'s builtin
 table (`Point`, `IntOrd`, `MyList`) are lowered by
-[`ExpressionPart::resolve_for`](../../src/runtime/machine/model/ast.rs) into
+[`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) into
 `KObject::TypeNameRef(TypeExpr)` rather than a placeholder `KType` variant.
 The carrier preserves the parser-side `TypeExpr` for diagnostics and for
 consumers that want the user's surface identifier verbatim; it carries no
@@ -114,25 +114,25 @@ Four downstream consumers each carry a `TypeNameRef` arm beside the existing
 `KTypeValue` arm:
 
 - the shared
-  [`extract_bare_type_name`](../../src/runtime/machine/core/kfunction/argument_bundle.rs)
+  [`extract_bare_type_name`](../../src/machine/core/kfunction/argument_bundle.rs)
   helper (used by STRUCT/UNION declaration sites and `type_call`'s verb slot);
-- [ATTR's `body_type_lhs` and `read_field_name`](../../src/runtime/builtins/attr.rs);
-- [`let_binding`'s name slot](../../src/runtime/builtins/let_binding.rs), which
+- [ATTR's `body_type_lhs` and `read_field_name`](../../src/builtins/attr.rs);
+- [`let_binding`'s name slot](../../src/builtins/let_binding.rs), which
   runs the same primitive/container blocklist as the `KTypeValue` arm and
   routes to `register_type` for type-valued RHSes;
-- [`value_lookup::body_type_expr`](../../src/runtime/builtins/value_lookup.rs),
+- [`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
   which resolves through `bindings.types` and, on a nominal `UserType` /
   `SignatureBound` hit, recovers the paired value-side carrier from
   `bindings.data`.
 
 FN's deferred return-type elaboration peeks the slot to pick between
-[`extract_ktype`](../../src/runtime/machine/core/kfunction/argument_bundle.rs)
+[`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs)
 (resolved carrier) and the sibling
-[`extract_type_name_ref`](../../src/runtime/machine/core/kfunction/argument_bundle.rs)
+[`extract_type_name_ref`](../../src/machine/core/kfunction/argument_bundle.rs)
 (deferred carrier consuming the parser-preserved `TypeExpr`), then drives the
 existing park-on-placeholder machinery from there. The sole
 `KObject::KTypeValue` synthesis site for dispatch transport lives in
-[`value_lookup::body_type_expr`](../../src/runtime/builtins/value_lookup.rs),
+[`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
 which mints `KObject::KTypeValue(kt.clone())` on a `resolve_type` hit. On a
 `resolve_type` miss, the bare-leaf arm of `elaborate_type_expr` falls through
 to `Scope::resolve` for compatibility with the small set of callers that still
@@ -148,10 +148,10 @@ Two complementary caches amortize the elaboration cost rather than one cell
 on the carrier:
 
 - **Layer 1 — surface-form, scope-independent.** A `OnceCell<KType>` lives on
-  [`TypeExpr`](../../src/runtime/machine/model/ast.rs) itself
+  [`TypeExpr`](../../src/machine/model/ast.rs) itself
   (`TypeExpr.builtin_cache`, excluded from `PartialEq` / `Hash`).
   `ExpressionPart::resolve_for` reads the cell first; on miss it runs
-  [`KType::from_type_expr`](../../src/runtime/machine/model/types/ktype_resolution.rs)
+  [`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs)
   and writes the result back when the surface form resolves against the
   builtin table. `from_type_expr` failures (user-bound leaves) are
   intentionally not cached here — those flow through Layer 2. Subsequent
@@ -161,9 +161,9 @@ on the carrier:
 
 - **Layer 2 — scope-bound resolution memo.** A
   `RefCell<HashMap<TypeExpr, &'a KType>>` lives on
-  [`Bindings`](../../src/runtime/machine/core/bindings.rs) (`type_expr_memo`).
+  [`Bindings`](../../src/machine/core/bindings.rs) (`type_expr_memo`).
   Reached through
-  [`Scope::resolve_type_expr`](../../src/runtime/machine/core/scope.rs), which
+  [`Scope::resolve_type_expr`](../../src/machine/core/scope.rs), which
   returns the three-outcome
   `ResolveTypeExprOutcome::{Done(&'a KType), Park(Vec<NodeId>),
   Unbound(String)}`. Cache miss runs the elaborator against `self`, then
@@ -179,11 +179,11 @@ on the carrier:
   by the scope's source-form TypeExpr corpus, which is syntactically bounded.
 
 Consumers that need the scope-resolved identity —
-[`type_identity_for`](../../src/runtime/machine/core/kfunction/invoke.rs)
+[`type_identity_for`](../../src/machine/core/kfunction/invoke.rs)
 at the dispatch boundary's per-call parameter dual-write,
-[`val_decl::body`](../../src/runtime/builtins/val_decl.rs)'s structural
+[`val_decl::body`](../../src/builtins/val_decl.rs)'s structural
 carrier path and its post-Combine finish, and
-[`fn_def::body`](../../src/runtime/builtins/fn_def.rs)'s return-type
+[`fn_def::body`](../../src/builtins/fn_def.rs)'s return-type
 elaboration — go through `Scope::resolve_type_expr`. NEWTYPE's bare-leaf
 user-bound repr path keeps the simpler `Scope::resolve_type` lookup (it's
 intentionally non-park-aware: an unresolvable repr is a hard error, not a

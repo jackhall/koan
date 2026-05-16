@@ -1,7 +1,7 @@
 //! Operator table driving compound-atom desugaring. Each entry pairs a trigger character
 //! with an `OperatorKind` whose arity-typed builder constructs the resulting expression.
 
-use crate::runtime::machine::model::ast::ExpressionPart;
+use crate::machine::model::ast::ExpressionPart;
 
 pub type UnaryBuild  = for<'a> fn(ExpressionPart<'a>) -> ExpressionPart<'a>;
 pub type BinaryBuild = for<'a> fn(ExpressionPart<'a>, ExpressionPart<'a>) -> ExpressionPart<'a>;

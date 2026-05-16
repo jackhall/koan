@@ -23,12 +23,19 @@ constant for a given root). This is what makes nesting cost something:
 every interior level contributes its own loc to the sum, so adding a
 wrapper around a heavy subtree adds (β + cross + α·fb) · loc.
 
-`beta` is a flat per-non-leaf charge. The default of 5.0 says "one extra
-module layer costs roughly what 5 cross edges cost" — calibrated by
-sweeping β across known structures (gratuitous wrappers, useful
-wrappers, nesting refactors); above ~10 the metric starts preferring
-known-bad moves (e.g. dropping a load-bearing wrapper) over deep
-nesting, and at β=0 a passthrough wrapper is undetectable.
+`beta` is the per-non-leaf charge (default 20). `beta-children-pivot` P
+(default 3) scales it by `max(1, P/children)`, so a 2-child wrapper pays
+1.5× β while a 3+ child wrapper pays full β. The intent: punish thin
+pass-through wrappers (e.g. `runtime` hosting only `builtins` + `machine`)
+without treating cohesive groupings (e.g. `model` over ast/types/values,
+`values` over 4 leaves) as overhead. Calibrated by a joint β×P sweep on
+the koan tree to the cleanest decision boundary: dissolving a 2-child
+thin wrapper unambiguously wins, while dissolving any 3+ child cohesive
+grouping unambiguously loses. Pushing β much higher makes the layer cost
+grow linearly with subtree-loc, which falsely accepts dissolving
+medium-cohesion 3-child wrappers; pushing P higher does the same for
+4-child wrappers. Setting P=0 disables scaling for flat β. At β=0 a
+passthrough wrapper is undetectable.
 
 `gamma`/`pivot` shape the per-file size charge. Without it, a single
 3000-line leaf scores zero while any split incurs structural cost, so
@@ -315,6 +322,7 @@ def fractal_report(
     src_root: Path,
     alpha: float,
     beta: float,
+    beta_children_pivot: float,
     gamma: float,
     pivot: float,
     exact_threshold: int,
@@ -341,7 +349,8 @@ def fractal_report(
             return
         partition = {c: [f"{module}::{c}"] for c in children}
         raw_index, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
-        index = raw_index + beta
+        beta_scale = max(1.0, beta_children_pivot / len(children)) if beta_children_pivot > 0 else 1.0
+        index = raw_index + beta * beta_scale
         structure_sum += index * loc
         nonleaf_loc_sum += loc
         print(f"{'  ' * depth}{module:<60} loc {loc:>6}   "
@@ -468,9 +477,13 @@ def main() -> int:
     ap.add_argument("--src-root", type=Path, default=Path("src"),
                     help="source root for LOC lookup (default: src)")
     ap.add_argument("--alpha", type=float, default=2.0, help="feedback penalty (default 2.0)")
-    ap.add_argument("--beta", type=float, default=5.0,
+    ap.add_argument("--beta", type=float, default=20.0,
                     help="per-non-leaf charge; "
-                         "penalises passthrough wrappers and tree depth (default 5.0)")
+                         "penalises passthrough wrappers and tree depth (default 20.0)")
+    ap.add_argument("--beta-children-pivot", type=float, default=3.0,
+                    help="if >0, scale β by max(1, P/children) so wrappers with fewer "
+                         "than P direct children pay amplified β (thin pass-throughs); "
+                         "0 disables, leaving β flat (default 3)")
     ap.add_argument("--gamma", type=float, default=10.0,
                     help="per-file size charge weight; "
                          "size(m) = γ·own_loc·log(1+own_loc/T) (default 10.0)")
@@ -489,7 +502,7 @@ def main() -> int:
     edges = load_edges(args.edges)
     per_loc, structure, size = fractal_report(
         edges, args.root, args.src_root,
-        args.alpha, args.beta, args.gamma, args.size_pivot,
+        args.alpha, args.beta, args.beta_children_pivot, args.gamma, args.size_pivot,
         args.exact_threshold,
     )
     if args.baseline is not None:

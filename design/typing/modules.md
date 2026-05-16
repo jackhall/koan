@@ -49,8 +49,8 @@ the slot's declared type recorded explicitly rather than inferred from an
 example value. `VAL` is meaningful only inside a SIG body; outside it the
 declarator is unbound. The lowercase-name `(LET name = <value>)` form is
 rejected inside SIG bodies with a diagnostic directing to `VAL`. The implementation lives at
-[`val_decl.rs`](../../src/runtime/builtins/val_decl.rs); ascription's
-name-presence shape check ([`ascribe.rs`](../../src/runtime/builtins/ascribe.rs))
+[`val_decl.rs`](../../src/builtins/val_decl.rs); ascription's
+name-presence shape check ([`ascribe.rs`](../../src/builtins/ascribe.rs))
 admits any module member that supplies the named slot regardless of how
 the member was declared — full type-shape checking against the VAL slot's
 declared type is owned by
@@ -78,8 +78,8 @@ Opaque ascription is **generative**: each application mints a fresh
 type. Two distinct opaque ascriptions of the same source module yield
 distinct `scope_id`s and therefore distinct types that cannot be confused.
 The carrier lives in
-[`KType`](../../src/runtime/machine/model/types/ktype.rs); the operators are registered as
-ordinary builtins in [`ascribe.rs`](../../src/runtime/builtins/ascribe.rs).
+[`KType`](../../src/machine/model/types/ktype.rs); the operators are registered as
+ordinary builtins in [`ascribe.rs`](../../src/builtins/ascribe.rs).
 
 Opaque ascription is the type-abstraction primitive. It replaces the
 newtype-with-private-fields pattern that a trait system would need.

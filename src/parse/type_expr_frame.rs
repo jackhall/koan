@@ -9,7 +9,7 @@
 //!   one parenthesized arg group, one `->`, one return type, folded into
 //!   `TypeParams::Function`.
 
-use crate::runtime::machine::model::ast::{ExpressionPart, TypeExpr, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, TypeExpr, TypeParams};
 
 pub(super) struct TypeExprFrame<'a> {
     pub(super) parts: Vec<ExpressionPart<'a>>,

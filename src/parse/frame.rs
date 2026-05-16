@@ -4,7 +4,7 @@
 //! `ExpressionPart` it produces; `matches_closer` is the variant↔closer lookup the
 //! close-bracket arms use to decide whether the topmost frame legally ends here.
 
-use crate::runtime::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::dict_literal::DictFrame;
 use super::type_expr_frame::TypeExprFrame;
