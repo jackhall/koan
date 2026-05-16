@@ -3,7 +3,7 @@ use crate::runtime::builtins::register_builtin;
 use crate::runtime::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::runtime::machine::model::KObject;
 use crate::runtime::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
-use crate::runtime::machine::{NodeId, RuntimeArena, Scope};
+use crate::runtime::machine::{RuntimeArena, Scope};
 use crate::runtime::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::runtime::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
@@ -100,40 +100,40 @@ fn free_reclaims_owned_subtree() {
     let value: &KObject = arena.alloc_object(KObject::Number(42.0));
     // Allocate four slots by adding placeholder Dispatches.
     let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
-    let s0 = sched.add(mk_dispatch(), root).index();
-    let s1 = sched.add(mk_dispatch(), root).index();
-    let s2 = sched.add(mk_dispatch(), root).index();
-    let s3 = sched.add(mk_dispatch(), root).index();
+    let s0 = sched.add(mk_dispatch(), root);
+    let s1 = sched.add(mk_dispatch(), root);
+    let s2 = sched.add(mk_dispatch(), root);
+    let s3 = sched.add(mk_dispatch(), root);
     // Simulate post-run state and wire the ownership graph by hand.
-    for i in [s0, s1, s2, s3] {
-        sched.store.clear_node(i);
+    for id in [s0, s1, s2, s3] {
+        sched.store.clear_node(id);
     }
     sched.store.set_result(s1, NodeOutput::Value(value));
     sched.store.set_result(s2, NodeOutput::Value(value));
     sched.store.set_result(s3, NodeOutput::Value(value));
-    sched.deps.set_dep_edges(s0, vec![DepEdge::Owned(NodeId(s1))]);
-    sched.deps.set_dep_edges(s1, vec![DepEdge::Owned(NodeId(s2))]);
-    sched.deps.set_dep_edges(s2, vec![DepEdge::Owned(NodeId(s3))]);
+    sched.deps.set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
+    sched.deps.set_dep_edges(s1.index(), vec![DepEdge::Owned(s2)]);
+    sched.deps.set_dep_edges(s2.index(), vec![DepEdge::Owned(s3)]);
 
-    sched.free(s1);
+    sched.free(s1.index());
 
     // s1, s2, s3 reclaimed; s0 untouched.
     assert!(sched.store.result_is_none(s1), "s1 result cleared");
     assert!(sched.store.result_is_none(s2), "s2 result cleared");
     assert!(sched.store.result_is_none(s3), "s3 result cleared");
-    assert!(sched.deps.dep_edges_at(s1).is_empty(), "s1 deps drained");
-    assert!(sched.deps.dep_edges_at(s2).is_empty(), "s2 deps drained");
-    let s0_edges = sched.deps.dep_edges_at(s0);
+    assert!(sched.deps.dep_edges_at(s1.index()).is_empty(), "s1 deps drained");
+    assert!(sched.deps.dep_edges_at(s2.index()).is_empty(), "s2 deps drained");
+    let s0_edges = sched.deps.dep_edges_at(s0.index());
     assert_eq!(s0_edges.len(), 1, "s0 edges untouched");
     assert!(
-        matches!(s0_edges[0], DepEdge::Owned(id) if id.index() == s1),
+        matches!(s0_edges[0], DepEdge::Owned(id) if id == s1),
         "s0 still owns s1",
     );
-    let mut freed: Vec<usize> = sched.store.free_list_snapshot();
+    let mut freed = sched.store.free_list_snapshot();
     freed.sort();
     assert_eq!(freed, vec![s1, s2, s3]);
 
-    let reused = sched.add(mk_dispatch(), root).index();
+    let reused = sched.add(mk_dispatch(), root);
     assert!(sched.store.free_list_len() == 2, "one slot popped from free_list");
     assert!([s1, s2, s3].contains(&reused), "reused index came from free_list");
 }
@@ -144,18 +144,18 @@ fn free_skips_live_slot_and_is_idempotent() {
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
-    let s = sched.add(mk_dispatch(), root).index();
+    let s = sched.add(mk_dispatch(), root);
     // Live slot: free should be a no-op.
-    sched.free(s);
+    sched.free(s.index());
     assert!(sched.store.is_live(s));
     assert_eq!(sched.store.free_list_len(), 0);
 
     sched.store.clear_node(s);
     let value: &KObject = arena.alloc_object(KObject::Number(1.0));
     sched.store.set_result(s, NodeOutput::Value(value));
-    sched.free(s);
+    sched.free(s.index());
     assert_eq!(sched.store.free_list_snapshot(), vec![s]);
-    sched.free(s);
+    sched.free(s.index());
     assert_eq!(sched.store.free_list_snapshot(), vec![s], "no duplicate free");
 }
 
@@ -173,11 +173,11 @@ fn free_does_not_recurse_through_notify_edges() {
     let mut sched = Scheduler::new();
     let value: &KObject = arena.alloc_object(KObject::Number(7.0));
     let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
-    let s_owner = sched.add(mk_dispatch(), root).index();
-    let s_owned = sched.add(mk_dispatch(), root).index();
-    let s_sibling = sched.add(mk_dispatch(), root).index();
-    for i in [s_owner, s_owned, s_sibling] {
-        sched.store.clear_node(i);
+    let s_owner = sched.add(mk_dispatch(), root);
+    let s_owned = sched.add(mk_dispatch(), root);
+    let s_sibling = sched.add(mk_dispatch(), root);
+    for id in [s_owner, s_owned, s_sibling] {
+        sched.store.clear_node(id);
     }
     sched.store.set_result(s_owner, NodeOutput::Value(value));
     sched.store.set_result(s_owned, NodeOutput::Value(value));
@@ -186,14 +186,14 @@ fn free_does_not_recurse_through_notify_edges() {
     // walk into it: a self-loop would never be installed in the real scheduler,
     // but it lets us assert the walk stopped at the Notify edge by checking the
     // list is still intact after free.
-    sched.deps.set_dep_edges(s_owner, vec![
-        DepEdge::Owned(NodeId(s_owned)),
-        DepEdge::Notify(NodeId(s_sibling)),
+    sched.deps.set_dep_edges(s_owner.index(), vec![
+        DepEdge::Owned(s_owned),
+        DepEdge::Notify(s_sibling),
     ]);
-    sched.deps.set_dep_edges(s_owned, Vec::new());
-    sched.deps.set_dep_edges(s_sibling, vec![DepEdge::Owned(NodeId(s_sibling))]);
+    sched.deps.set_dep_edges(s_owned.index(), Vec::new());
+    sched.deps.set_dep_edges(s_sibling.index(), vec![DepEdge::Owned(s_sibling)]);
 
-    sched.free(s_owner);
+    sched.free(s_owner.index());
 
     let mut freed = sched.store.free_list_snapshot();
     freed.sort();
@@ -205,7 +205,7 @@ fn free_does_not_recurse_through_notify_edges() {
         "sibling's result must survive free of a slot that only parked on it",
     );
     assert_eq!(
-        sched.deps.dep_edges_at(s_sibling).len(),
+        sched.deps.dep_edges_at(s_sibling.index()).len(),
         1,
         "sibling's dep_edges must survive (the free walk stopped at the Notify edge)",
     );
@@ -235,7 +235,7 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     sched.execute().expect("program should run");
 
     let freed: std::collections::HashSet<usize> =
-        sched.store.free_list_snapshot().into_iter().collect();
+        sched.store.free_list_snapshot().into_iter().map(|id| id.index()).collect();
     for (producer_idx, consumers) in sched.deps.notify_list_iter() {
         for &consumer in consumers {
             assert!(
@@ -299,14 +299,14 @@ fn combine_short_circuits_on_dep_error() {
     let mk_dispatch = || NodeWork::Dispatch(KExpression { parts: Vec::new() });
     let dep_ok = sched.add(mk_dispatch(), scope);
     let dep_err = sched.add(mk_dispatch(), scope);
-    sched.store.clear_node(dep_ok.index());
-    sched.store.clear_node(dep_err.index());
+    sched.store.clear_node(dep_ok);
+    sched.store.clear_node(dep_err);
     // Drain the two indices add() just enqueued so execute() doesn't revisit them.
     let _ = sched.queues.pop_next();
     let _ = sched.queues.pop_next();
     let value = arena.alloc_object(KObject::Number(99.0));
-    sched.store.set_result(dep_ok.index(), NodeOutput::Value(value));
-    sched.store.set_result(dep_err.index(), NodeOutput::Err(
+    sched.store.set_result(dep_ok, NodeOutput::Value(value));
+    sched.store.set_result(dep_err, NodeOutput::Err(
         KError::new(KErrorKind::ShapeError("dep_err synthetic".into())),
     ));
 

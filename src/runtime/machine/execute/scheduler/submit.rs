@@ -69,22 +69,22 @@ impl<'a> Scheduler<'a> {
             .map(|e| e.node_id())
             .filter(|p| !self.is_result_ready(*p))
             .collect();
-        let idx = self.store.alloc_slot(Node { work, scope, frame, function: None });
-        self.deps.install_for_slot(NodeId(idx), owned_edges, &pending_producers);
+        let id = self.store.alloc_slot(Node { work, scope, frame, function: None });
+        self.deps.install_for_slot(id, owned_edges, &pending_producers);
         // Install before enqueueing: the queued slot's `run_dispatch` will idempotently
         // re-install via `Scope::install_placeholder` after `resolve_dispatch` returns the
         // binder's `placeholder_name`. A failure here (e.g. `Rebind` collision) is
         // surfaced at that later install rather than aborting `add`.
         if let Some(name) = placeholder_install {
-            let _ = scope.install_placeholder(name, NodeId(idx));
+            let _ = scope.install_placeholder(name, id);
         }
         if pending_producers.is_empty() {
             if self.active_frame.is_none() && no_deps {
-                self.queues.push_fresh(idx);
+                self.queues.push_fresh(id.index());
             } else {
-                self.queues.push_in_flight_submit(idx);
+                self.queues.push_in_flight_submit(id.index());
             }
         }
-        NodeId(idx)
+        id
     }
 }

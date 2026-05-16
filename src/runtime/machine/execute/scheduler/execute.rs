@@ -18,7 +18,8 @@ impl<'a> Scheduler<'a> {
     /// the frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
         while let Some(idx) = self.queues.pop_next() {
-            let node = self.store.take_for_run(idx);
+            let id = NodeId(idx);
+            let node = self.store.take_for_run(id);
             let scope = node.scope;
             let work = node.work;
             let prev_frame = node.frame;
@@ -106,10 +107,10 @@ impl<'a> Scheduler<'a> {
                             // `f.scope()` lives inside `reinstall_with_frame` — see its
                             // SAFETY docstring.
                             drop(prev_frame);
-                            self.store.reinstall_with_frame(idx, f, new_work, next_function);
+                            self.store.reinstall_with_frame(id, f, new_work, next_function);
                         }
                         None => {
-                            self.store.reinstall(idx, Node {
+                            self.store.reinstall(id, Node {
                                 work: new_work,
                                 scope,
                                 frame: prev_frame,
@@ -146,10 +147,11 @@ impl<'a> Scheduler<'a> {
     /// before the producer drains (see the
     /// `freed_slot_does_not_appear_in_other_notify_lists` test).
     pub(super) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
-        self.store.finalize(idx, output);
+        let id = NodeId(idx);
+        self.store.finalize(id, output);
         let woken = self.deps.drain_notify(idx);
         for consumer in &woken {
-            self.store.stamp_lift_ready(*consumer, idx);
+            self.store.stamp_lift_ready(NodeId(*consumer), id);
         }
         for consumer in woken {
             self.queues.push_woken(consumer);
@@ -170,16 +172,16 @@ impl<'a> Scheduler<'a> {
     /// `&'a KObject` references handed out by `read` survive `free` because the underlying
     /// value lives in an arena; clearing the slot's result only drops the enum wrapper.
     pub(super) fn free(&mut self, idx: usize) {
-        let mut stack = vec![idx];
-        while let Some(i) = stack.pop() {
-            if self.store.is_live(i) { continue; }
-            if self.store.is_reclaimed(i) && self.deps.is_dep_edges_empty(i) {
+        let mut stack: Vec<NodeId> = vec![NodeId(idx)];
+        while let Some(id) = stack.pop() {
+            if self.store.is_live(id) { continue; }
+            if self.store.is_reclaimed(id) && self.deps.is_dep_edges_empty(id.index()) {
                 continue;
             }
-            for child in self.deps.owned_children(i) {
-                stack.push(child.index());
+            for child in self.deps.owned_children(id.index()) {
+                stack.push(child);
             }
-            self.store.free_one(i);
+            self.store.free_one(id);
         }
     }
 

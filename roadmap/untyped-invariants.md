@@ -59,33 +59,54 @@ statically unreachable. Lower leverage than the other elements — `RefCell`
 enforces borrow contention at runtime regardless of the witness; the marker
 primarily documents intent.
 
-### Index newtypes for allocator-managed arrays
+### `KFunction::apply` argument-position lookup
 
-**Where.** [`expression_tree.rs:83`](../src/parse/expression_tree.rs),
-[`kfunction.rs:420-421`](../src/runtime/machine/core/kfunction.rs),
-[`node_store.rs:95,103,130,137,145-162`](../src/runtime/machine/execute/scheduler/node_store.rs).
+**Where.** [`kfunction.rs:417-421`](../src/runtime/machine/core/kfunction.rs).
 
-`map.get(&idx)` on the parser frame map, argument-position lookup after a
-"missing-arg check above guarantees presence" comment, direct `nodes[idx]` /
-`results[idx]` indexing relying on allocator/free-list discipline. Promote
-with index newtypes the allocator hands out and indexed-collection wrappers
-(e.g. `IndexedVec<NodeId, Node>` with typed `Index` / `IndexMut`) so the
-"presence" claim is encoded by the index's existence.
+`pairs.iter().find(|(n, _)| n == &a.name).map(...).expect("missing-arg check
+above guarantees presence")` — the `.expect` is sound because a
+`pairs.iter().any(|(n, _)| n == name)` walk earlier in the same body confirmed
+presence for every signature-side `a.name`. The invariant is presence + name-
+to-position mapping, both spelled out in caller-side code rather than in a
+type. Promote with a presence-encoded structure built during validation —
+either a `HashMap<&str, ExpressionPart>` consumed once per signature element,
+or a single sort/reorder pass that lands `pairs` in signature order so the
+lookup degenerates into a positional read. Either shape eliminates the
+`.expect` because the structure's existence is the presence claim.
+
+### `resolve_literal` quote-placeholder lookup
+
+**Where.** [`expression_tree.rs:21-35`](../src/parse/expression_tree.rs),
+[`quotes.rs`](../src/parse/quotes.rs).
+
+`mask_quotes` produces a `HashMap<usize, String>` of placeholder indices and
+embeds those indices into the masked string as `QUOTE_PLACEHOLDER`-prefixed
+digits. `resolve_literal` later parses the index back out of the masked
+string and looks it up in the map — the round-trip from "index minted by
+the masker" to "index parsed from a stringly-typed payload" leaks the
+allocator-handout shape into untyped input validation. The lookup already
+surfaces a structured error on miss (it doesn't panic), so the leverage is
+lower than the other elements; the win is encoding "every placeholder in
+the masked string was minted by `mask_quotes`" via a typed channel that
+sidesteps the `.parse::<usize>()` + `quotes.get` round-trip. Promote with a
+`QuoteId` newtype the masker hands out plus a side-channel (or a typed
+splice) that carries the resolved literal alongside the masked string, so
+the parser never re-derives the index from text.
 
 ## Priority
 
-1. **Index newtypes for allocator-managed arrays** — moderate blast radius
-   (touches `NodeId`-typed call sites across the scheduler); the
-   `IndexedVec<NodeId, Node>` shape encodes presence at index handout time
-   so the "missing-arg check above guarantees presence" comments become
-   the index's existence.
-
-Two elements are sequenced after Index newtypes:
-
+- **`KFunction::apply` argument-position lookup** — small blast radius
+  (single function body), moderate leverage (eliminates a `.expect()` and
+  collapses an O(n²) lookup); independent of the other elements. Best
+  first.
 - **`cycle_close_install_identity` / `register_nominal` phase witness** —
   low leverage; `RefCell` already enforces borrow contention at runtime, so
   the witness primarily documents intent. Tractable as a small follow-up
   whenever the surrounding code is being touched.
+- **`resolve_literal` quote-placeholder lookup** — marginal leverage (the
+  call site already returns a structured error rather than panicking) but
+  the smallest blast radius of any element here. Worth taking on whenever
+  the lexer/parser interface is being touched for another reason.
 - **Arena lifetime and heap-pinning discipline** — highest blast radius,
   deepest into `unsafe`, and load-bearing across the runtime; best taken
   on after the cheaper elements clear the surrounding noise.

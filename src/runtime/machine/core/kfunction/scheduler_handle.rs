@@ -15,7 +15,7 @@ use super::body::BodyResult;
 
 /// Stable handle to a node in the scheduler's DAG. Lives in `kfunction` so `BodyResult` and
 /// `SchedulerHandle` can name a node without `kfunction` importing from `execute`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId(pub usize);
 
 impl NodeId {

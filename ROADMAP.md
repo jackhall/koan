@@ -97,10 +97,9 @@ incrementally, each producing a usable end state.
   ascription first exercises the scenario.
 - [Promote untyped invariants into the type system](roadmap/untyped-invariants.md) —
   a survey of runtime invariants enforced by caller discipline plus runtime
-  panics rather than the type system (`CallArena`'s heap-pinning contract,
-  `Bindings`/`Scope` coherence, and allocator-managed index discipline).
-  Each element is independently shippable; the file ships a small priority
-  list rather than one cohesive design.
+  panics rather than the type system (`CallArena`'s heap-pinning contract and
+  `Bindings`/`Scope` coherence). Each element is independently shippable; the
+  file ships a small priority list rather than one cohesive design.
 
 ### Surface and ergonomics
 
