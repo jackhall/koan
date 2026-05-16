@@ -6,12 +6,14 @@ Reads a cargo-modules DOT file, recursively walks the module tree from
   index(m)   = cross_edges(m) + alpha * feedback_weight(m) + beta
   size(m)    = gamma * own_loc(m) * log(1 + own_loc(m) / pivot)
 The aggregate is reported as a single normalised number — the per-root-loc
-score, split into a structural and a size component:
-  per-loc    = (Σ index(m) · loc(m) + Σ size(m)) / loc(root)
-The split lets you see whether complexity is structural (coupling /
-nesting) or per-file (large files). The absolute totals are intentionally
-not surfaced — only the per-loc number is calibrated to compare against
-prior runs.
+score, split into three components:
+  per-loc    = (Σ (cross + α·fb)(m) · loc(m)        ← coupling
+              + Σ (β · scale)(m) · loc(m)           ← nesting
+              + Σ size(m)) / loc(root)              ← size
+The split lets you see whether complexity is coupling (cross/feedback
+edges at each wrapper), nesting (wrapper layers themselves), or per-file
+(large files). The absolute totals are intentionally not surfaced — only
+the per-loc number is calibrated to compare against prior runs.
 
 `cross_edges` and `feedback_weight` are computed at every interior node
 against the one-group-per-child partition of its children. For N ≤ 6
@@ -41,12 +43,13 @@ passthrough wrapper is undetectable.
 3000-line leaf scores zero while any split incurs structural cost, so
 the metric strictly rewards inaction. The charge `γ · L · log(1 + L/T)`
 is sub-linear in L for L ≪ T (small files are nearly free) and turns
-super-linear as L ≫ T. Defaults (γ=10, T=200) put a 200-line file at
-~1386 and a 1000-line file at ~17918, so a 1000-LOC leaf split into a
-wrapper + five 200-LOC children gives a clear net per-loc drop (~−0.66
-on koan) — the size savings exceed the wrapper's β·loc cost. Applied to
-every module's own file (leaves and parents alike), so fat `mod.rs`
-files above small children are also penalised.
+super-linear as L ≫ T. Defaults (γ=50, T=200) make 2-way splits of
+400+ LOC leaves break even against the wrapper β·loc cost, 3-way splits
+of 300+ leaves clearly win, and the size term lands at ~8% of the total
+score on the koan tree — enough signal to call out fat files without
+overriding cohesive groupings. Applied to every module's own file
+(leaves and parents alike), so fat `mod.rs` files above small children
+are also penalised.
 
 Usage:
   python3 tools/modgraph.py --edges <dot-file> --root koan
@@ -66,6 +69,7 @@ measurement is prepended. Trimmed to 5 entries.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime
 import itertools
 import math
@@ -75,6 +79,31 @@ from collections import defaultdict
 from pathlib import Path
 
 EDGE_RE = re.compile(r'\s*"([^"]+)"\s*->\s*"([^"]+)".*\[label="uses"')
+
+
+@dataclasses.dataclass(frozen=True)
+class Score:
+    """The three per-loc components: coupling (cross + α·fb at each
+    wrapper, loc-weighted), nesting (β·scale at each wrapper, loc-weighted),
+    and size (γ·L·log per file). Sums over a subtree compose by addition;
+    `per(root_loc)` produces the reported per-root-loc breakdown."""
+    coupling: float = 0.0
+    nesting: float = 0.0
+    size: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.coupling + self.nesting + self.size
+
+    def __add__(self, other: Score) -> Score:
+        return Score(self.coupling + other.coupling,
+                     self.nesting + other.nesting,
+                     self.size + other.size)
+
+    def per(self, loc: int) -> Score:
+        if not loc:
+            return Score()
+        return Score(self.coupling / loc, self.nesting / loc, self.size / loc)
 
 
 def load_edges(path: Path) -> list[tuple[str, str]]:
@@ -182,7 +211,7 @@ def direct_children(parent: str, modules: set[str]) -> list[str]:
 
 
 def module_to_file(module: str, src_root: Path) -> Path | None:
-    """`koan::dispatch::types::ktype` -> `src/dispatch/types/ktype.rs` (or `.../mod.rs`)."""
+    """`koan::machine::core::scope` -> `src/machine/core/scope.rs` (or `.../mod.rs`)."""
     parts = module.split("::")[1:]
     if not parts:
         return None
@@ -326,59 +355,50 @@ def fractal_report(
     gamma: float,
     pivot: float,
     exact_threshold: int,
-) -> tuple[float, float, float]:
-    """Walk the subtree, print the per-module report, and return
-    (per_root_loc, structure_per_loc, size_per_loc)."""
+) -> Score:
+    """Walk the subtree, print the per-module report, and return the
+    per-root-loc Score breakdown."""
     modules = discover_modules(edges)
-
-    structure_sum = 0.0
-    size_sum = 0.0
-    nonleaf_loc_sum = 0
     root_loc = subtree_loc(root, modules, src_root)
 
-    def walk(module: str, depth: int) -> None:
-        nonlocal structure_sum, size_sum, nonleaf_loc_sum
+    def walk(module: str, depth: int) -> Score:
+        indent = "  " * depth
         children = direct_children(module, modules)
         loc = subtree_loc(module, modules, src_root)
         own_loc = own_file_loc(module, src_root)
         size = size_charge(own_loc, gamma, pivot)
-        size_sum += size
-        size_str = f"   own {own_loc:>4}  size {size:>6.1f}" if own_loc else ""
-        if not children:
-            print(f"{'  ' * depth}{module:<60} loc {loc:>6}   leaf{size_str}")
-            return
-        partition = {c: [f"{module}::{c}"] for c in children}
-        raw_index, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
-        beta_scale = max(1.0, beta_children_pivot / len(children)) if beta_children_pivot > 0 else 1.0
-        index = raw_index + beta * beta_scale
-        structure_sum += index * loc
-        nonleaf_loc_sum += loc
-        print(f"{'  ' * depth}{module:<60} loc {loc:>6}   "
-              f"children {len(children)}   cross {cross}   fb {fb}   index {index:.1f}"
-              f"{size_str}")
-        for c in children:
-            walk(f"{module}::{c}", depth + 1)
+        size_tail = f"   own {own_loc:>4}  size {size:>6.1f}" if own_loc else ""
+        head = f"{indent}{module:<60} loc {loc:>6}"
 
-    walk(root, 0)
-    total = structure_sum + size_sum
-    per_root_loc = total / root_loc if root_loc else 0.0
-    structure_per_loc = structure_sum / root_loc if root_loc else 0.0
-    size_per_loc = size_sum / root_loc if root_loc else 0.0
+        if not children:
+            print(f"{head}   leaf{size_tail}")
+            return Score(size=size)
+
+        partition = {c: [f"{module}::{c}"] for c in children}
+        coupling, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
+        beta_scale = max(1.0, beta_children_pivot / len(children)) if beta_children_pivot > 0 else 1.0
+        nest = beta * beta_scale
+        print(f"{head}   children {len(children)}   cross {cross}   fb {fb}"
+              f"   nest {nest:.1f}   index {coupling + nest:.1f}{size_tail}")
+
+        here = Score(coupling=coupling * loc, nesting=nest * loc, size=size)
+        return sum((walk(f"{module}::{c}", depth + 1) for c in children), here)
+
+    totals = walk(root, 0)
+    per = totals.per(root_loc)
     print()
     if root_loc:
-        print(f"per root-loc (loc({root}) = {root_loc}, "
-              f"γ={gamma}, T={pivot:g}):  "
-              f"{per_root_loc:.2f}   "
-              f"(structure {structure_per_loc:.2f}, "
-              f"size {size_per_loc:.2f})")
+        print(f"per root-loc (loc({root}) = {root_loc}, γ={gamma}, T={pivot:g}):  "
+              f"{per.total:.2f}   "
+              f"(coupling {per.coupling:.2f}, nesting {per.nesting:.2f}, size {per.size:.2f})")
     else:
-        print(f"per root-loc: 0.00  (root loc = 0)")
-    return per_root_loc, structure_per_loc, size_per_loc
+        print("per root-loc: 0.00  (root loc = 0)")
+    return per
 
 
 BASELINE_HEADER = (
-    "# columns: date  short-sha  per-loc  structure  size\n"
-    "# (all three numeric columns are per root-loc)\n"
+    "# columns: date  short-sha  per-loc  coupling  nesting  size\n"
+    "# (all four numeric columns are per root-loc)\n"
     "# managed by tools/modgraph.py --baseline; newest first, capped to 5 entries\n"
 )
 BASELINE_LIMIT = 5
@@ -412,12 +432,7 @@ def _parse_baseline_line(line: str) -> tuple[str, str, float] | None:
         return None
 
 
-def update_baseline(
-    path: Path,
-    per_loc: float,
-    structure: float,
-    size: float,
-) -> None:
+def update_baseline(path: Path, score: Score) -> None:
     """Prune stale entries, prepend today's measurement, write the file, and
     print a one-line delta against the prior top entry.
 
@@ -432,36 +447,28 @@ def update_baseline(
     sha = _git_short_sha() or "no-git"
     sha_field = f"{sha}+" if _git_working_tree_dirty() else sha
     today = datetime.date.today().isoformat()
-
-    raw_lines: list[str] = []
-    if path.exists():
-        for line in path.read_text().splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                raw_lines.append(stripped)
+    per_loc = score.total
 
     kept: list[str] = []
-    for line in raw_lines:
-        parsed = _parse_baseline_line(line)
+    for line in (path.read_text().splitlines() if path.exists() else []):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parsed = _parse_baseline_line(stripped)
         if parsed is None:
             continue
         _, entry_sha, _ = parsed
-        if entry_sha.endswith("+"):
+        if entry_sha.endswith("+") or not _git_is_ancestor(entry_sha):
             continue
-        if not _git_is_ancestor(entry_sha):
-            continue
-        kept.append(line)
+        kept.append(stripped)
 
     prior = _parse_baseline_line(kept[0]) if kept else None
-    new_entry = f"{today} {sha_field} {per_loc:.2f} {structure:.2f} {size:.2f}"
-    kept.insert(0, new_entry)
-    kept = kept[:BASELINE_LIMIT]
-
-    path.write_text(BASELINE_HEADER + "\n".join(kept) + "\n")
+    kept.insert(0, f"{today} {sha_field} {per_loc:.2f} "
+                   f"{score.coupling:.2f} {score.nesting:.2f} {score.size:.2f}")
+    path.write_text(BASELINE_HEADER + "\n".join(kept[:BASELINE_LIMIT]) + "\n")
 
     if prior is None:
-        print(f"\nbaseline: per-loc {per_loc:.2f} — first run "
-              f"(recorded to {path}).")
+        print(f"\nbaseline: per-loc {per_loc:.2f} — first run (recorded to {path}).")
     else:
         prior_date, prior_sha, prior_per_loc = prior
         delta = per_loc - prior_per_loc
@@ -484,9 +491,9 @@ def main() -> int:
                     help="if >0, scale β by max(1, P/children) so wrappers with fewer "
                          "than P direct children pay amplified β (thin pass-throughs); "
                          "0 disables, leaving β flat (default 3)")
-    ap.add_argument("--gamma", type=float, default=10.0,
+    ap.add_argument("--gamma", type=float, default=50.0,
                     help="per-file size charge weight; "
-                         "size(m) = γ·own_loc·log(1+own_loc/T) (default 10.0)")
+                         "size(m) = γ·own_loc·log(1+own_loc/T) (default 50.0)")
     ap.add_argument("--size-pivot", type=float, default=200.0,
                     help="LOC pivot T in the size charge; files much smaller than T "
                          "are near-free, files much larger turn super-linear (default 200)")
@@ -500,13 +507,13 @@ def main() -> int:
     args = ap.parse_args()
 
     edges = load_edges(args.edges)
-    per_loc, structure, size = fractal_report(
+    score = fractal_report(
         edges, args.root, args.src_root,
         args.alpha, args.beta, args.beta_children_pivot, args.gamma, args.size_pivot,
         args.exact_threshold,
     )
     if args.baseline is not None:
-        update_baseline(args.baseline, per_loc, structure, size)
+        update_baseline(args.baseline, score)
     return 0
 
 
