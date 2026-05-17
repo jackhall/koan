@@ -243,7 +243,6 @@ mod tests {
     use crate::machine::model::KObject;
     use crate::machine::ArgumentBundle;
     use crate::machine::execute::Scheduler;
-    use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
     #[test]
     fn let_inserts_binding_into_scope() {
@@ -323,60 +322,33 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dispatch_let_expression() {
-        use crate::machine::RuntimeArena;
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("LET".into()),
-                ExpressionPart::Identifier("x".into()),
-                ExpressionPart::Keyword("=".into()),
-                ExpressionPart::Literal(KLiteral::Number(42.0)),
-            ],
-        };
-
-        let mut sched = Scheduler::new();
-        let id = sched.add_dispatch(expr, scope);
-        sched.execute().unwrap();
-
-        assert!(matches!(sched.read(id), KObject::Number(n) if *n == 42.0));
-        let data = scope.bindings().data();
-        let entry = data.get("x").expect("expected binding 'x'");
-        assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
-    }
-
-    /// Stage 1.6: `LET Foo = 1` — Type-class LHS with a non-type RHS. The bind-time
-    /// check fires before the value reaches storage, producing a structured
+    /// Stage 1.6: `LET Foo = <non-type>` — Type-class LHS with a non-type RHS. The
+    /// bind-time check fires before the value reaches storage, producing a structured
     /// `TypeClassBindingExpectsType` rather than the downstream `UnboundName` /
-    /// `ShapeError` the old "bind silently" path eventually surfaced.
+    /// `ShapeError` the old "bind silently" path eventually surfaced. Covers Number
+    /// and Str independently — the blocklist's `matches!` arm carries one variant per
+    /// primitive, so removing any single variant must surface here.
     #[test]
     fn let_type_class_with_non_type_value_errors() {
         use crate::machine::RuntimeArena;
         use crate::machine::KErrorKind;
         use crate::machine::model::KType;
         use crate::parse::parse;
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let mut sched = Scheduler::new();
-        let exprs = parse("LET Foo = 1").unwrap();
-        let mut ids = Vec::new();
-        for e in exprs {
-            ids.push(sched.add_dispatch(e, scope));
-        }
-        sched.execute().expect("execute does not surface per-slot errors");
-        let res = sched.read_result(ids[0]);
-        match res {
-            Err(e) => assert!(
-                matches!(
-                    &e.kind,
-                    KErrorKind::TypeClassBindingExpectsType { name, got }
-                        if name == "Foo" && matches!(got, KType::Number),
+        for (src, expected) in [("LET Foo = 1", KType::Number), ("LET Foo = \"hello\"", KType::Str)] {
+            let arena = RuntimeArena::new();
+            let scope = default_scope(&arena, Box::new(std::io::sink()));
+            let mut sched = Scheduler::new();
+            let exprs = parse(src).unwrap();
+            let id = sched.add_dispatch(exprs.into_iter().next().unwrap(), scope);
+            sched.execute().expect("execute does not surface per-slot errors");
+            match sched.read_result(id) {
+                Err(e) => assert!(
+                    matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
+                        if name == "Foo" && got == &expected),
+                    "expected TypeClassBindingExpectsType for {src:?}, got {e}",
                 ),
-                "expected TypeClassBindingExpectsType {{ name = \"Foo\", got :Number }}, got {e}",
-            ),
-            Ok(v) => panic!("expected bind-time error, got value {:?}", v.ktype()),
+                Ok(v) => panic!("expected bind-time error for {src:?}, got {:?}", v.ktype()),
+            }
         }
     }
 
@@ -521,37 +493,6 @@ mod tests {
             .copied()
             .expect("Point should be in bindings.types");
         assert_eq!(*pt, *point, "alias must preserve type identity field-wise");
-    }
-
-    /// Stage 1.6: `LET Foo = "hello"` — confirms the blocklist covers `Str`, not just
-    /// `Number`. Same diagnostic shape as the Number case.
-    #[test]
-    fn let_type_class_with_string_value_errors() {
-        use crate::machine::RuntimeArena;
-        use crate::machine::KErrorKind;
-        use crate::machine::model::KType;
-        use crate::parse::parse;
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let mut sched = Scheduler::new();
-        let exprs = parse("LET Foo = \"hello\"").unwrap();
-        let mut ids = Vec::new();
-        for e in exprs {
-            ids.push(sched.add_dispatch(e, scope));
-        }
-        sched.execute().expect("execute does not surface per-slot errors");
-        let res = sched.read_result(ids[0]);
-        match res {
-            Err(e) => assert!(
-                matches!(
-                    &e.kind,
-                    KErrorKind::TypeClassBindingExpectsType { name, got }
-                        if name == "Foo" && matches!(got, KType::Str),
-                ),
-                "expected TypeClassBindingExpectsType {{ name = \"Foo\", got :Str }}, got {e}",
-            ),
-            Ok(v) => panic!("expected bind-time error, got value {:?}", v.ktype()),
-        }
     }
 
     /// A lowercase-name `LET` inside a SIG body must surface a focused `ShapeError`

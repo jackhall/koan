@@ -4,4 +4,3 @@ target/
 scratch/
 main
 .markdownlint.yaml
-tools/complexity.txt

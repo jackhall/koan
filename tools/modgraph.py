@@ -66,13 +66,15 @@ Usage:
 
 Pass `--baseline <file>` to record the run in a tracked baseline file and
 print a delta against the prior top entry. The flag also prunes stale
-entries automatically: any entry whose SHA is no longer reachable from
-HEAD (branch checkout, hard reset, rebase drop) is removed, and every
-prior dirty-snapshot (`+`-suffixed) entry is removed before today's
-measurement is prepended. Trimmed to 5 entries.
+entries automatically: any entry whose SHA (with any trailing `+` dirty
+marker stripped) is no longer reachable from HEAD (branch checkout, hard
+reset, rebase drop) is removed before today's measurement is prepended.
+Trimmed to 5 entries. Dirty-snapshot entries are retained so pre-commit-
+hook runs (which see a staged-but-not-yet-committed tree) don't erase the
+trend log.
 
   python3 tools/modgraph.py --edges /tmp/koan.dot --root koan \\
-                            --baseline tools/complexity.txt
+                            --baseline observe/complexity.txt
 """
 
 from __future__ import annotations
@@ -488,13 +490,14 @@ def update_baseline(path: Path, score: Score) -> None:
     """Prune stale entries, prepend today's measurement, write the file, and
     print a one-line delta against the prior top entry.
 
-    Pruning rules:
-      - Drop any entry whose SHA carries a `+` suffix (dirty snapshots are
-        ephemeral — superseded by the next measurement or invalidated by a
-        working-tree reset).
-      - Drop any entry whose SHA is no longer an ancestor of HEAD (covers
-        `git checkout` to a different branch, `git reset --hard` past the
-        commit, and rebase drops).
+    Pruning rule:
+      - Drop any entry whose SHA (stripping a trailing `+` dirty marker) is no
+        longer an ancestor of HEAD. Covers `git checkout` to a different
+        branch, `git reset --hard` past the commit, and rebase drops.
+
+    Dirty-snapshot (`+`-suffixed) entries are kept: when modgraph runs from a
+    pre-commit hook, the staged-but-not-yet-committed tree is by definition
+    dirty, so pruning `+` entries on every run would erase the trend log.
     """
     sha = _git_short_sha() or "no-git"
     sha_field = f"{sha}+" if _git_working_tree_dirty() else sha
@@ -510,7 +513,10 @@ def update_baseline(path: Path, score: Score) -> None:
         if parsed is None:
             continue
         _, entry_sha, _ = parsed
-        if entry_sha.endswith("+") or not _git_is_ancestor(entry_sha):
+        # Strip the dirty marker before the ancestor check so dirty-tagged SHAs
+        # are still tested against HEAD-ancestry like clean ones.
+        bare_sha = entry_sha[:-1] if entry_sha.endswith("+") else entry_sha
+        if not _git_is_ancestor(bare_sha):
             continue
         kept.append(stripped)
 
@@ -552,10 +558,11 @@ def main() -> int:
     ap.add_argument("--exact-threshold", type=int, default=6,
                     help="use exact search for N <= this many groups (default 6)")
     ap.add_argument("--baseline", type=Path, metavar="FILE",
-                    help="prune stale entries (unreachable SHAs and prior dirty "
-                         "snapshots), prepend today's measurement, trim to 5, and "
-                         "write the file; prints a delta line against the prior top "
-                         "entry (e.g. --baseline tools/complexity.txt)")
+                    help="prune unreachable-SHA entries, prepend today's "
+                         "measurement, trim to 5, and write the file; prints a "
+                         "delta line against the prior top entry (e.g. --baseline "
+                         "observe/complexity.txt). Dirty-snapshot `+` entries are "
+                         "retained.")
     args = ap.parse_args()
 
     edges = load_edges(args.edges)

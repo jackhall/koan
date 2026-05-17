@@ -38,7 +38,7 @@ Per-module breakdown plus a single bottom-line number: the **per root-loc** scor
 
 Each row prints `nest N.N` next to `index N.N` (the rolled-up structural cost) and `own N (raw N) size N.N`, exposing both the production-LOC measure used for coupling/nesting weighting and the raw-LOC measure used for the size penalty. Tune size with `--gamma` / `--size-pivot`; tune coupling/nesting with `--alpha` / `--beta` / `--beta-children-pivot`.
 
-For tracked baselines (used by the `verify` skill), pass `--baseline <file>` — modgraph prunes stale entries (unreachable SHAs, prior dirty snapshots), prepends today's measurement, trims to 5, and prints a delta line. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
+For tracked baselines (used by the `verify` skill), pass `--baseline <file>` — modgraph prunes unreachable-SHA entries (branch checkout / hard reset / rebase drop), prepends today's measurement, trims to 5, and prints a delta line. Dirty-snapshot `+` entries are retained so a pre-commit hook (which always sees a staged-but-not-yet-committed tree) doesn't erase the trend log. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
 
 ### 3. Score a *refactor* (renames, not moves)
 

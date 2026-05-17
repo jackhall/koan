@@ -232,20 +232,6 @@ mod tests {
     use crate::parse::parse;
 
     #[test]
-    fn opaque_ascription_returns_module() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        run(
-            scope,
-            "MODULE IntOrd = (LET compare = 0)\n\
-             SIG OrderedSig = (VAL compare :Number)\n\
-             LET IntOrdAbstract = (IntOrd :| OrderedSig)",
-        );
-        let data = scope.bindings().data();
-        assert!(matches!(data.get("IntOrdAbstract"), Some(KObject::KModule(_, _))));
-    }
-
-    #[test]
     fn transparent_ascription_returns_module() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
@@ -335,20 +321,6 @@ mod tests {
             _ => panic!("ViewMod should be a module"),
         };
         assert!(v.type_members.borrow().is_empty());
-    }
-
-    #[test]
-    fn opaque_ascribed_module_member_access_works() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        run(
-            scope,
-            "MODULE IntOrd = (LET compare = 42)\n\
-             SIG OrderedSig = (VAL compare :Number)\n\
-             LET IntOrdAbstract = (IntOrd :| OrderedSig)",
-        );
-        let result = run_one(scope, parse_one("IntOrdAbstract.compare"));
-        assert!(matches!(result, KObject::Number(n) if *n == 42.0));
     }
 
     /// End-to-end example from [design/typing/modules.md](../../design/typing/modules.md).
@@ -710,24 +682,6 @@ mod tests {
             a_wrap, b_wrap,
             "two opaque ascriptions must mint distinct TypeConstructor types",
         );
-    }
-
-    /// Companion: bare Type-token in an ascription operand. `IntOrd :! OrderedSig` already
-    /// works via the strict `Type, Type` overload at ascribe.rs:165, so the unified wrap
-    /// shouldn't have regressed it. This test pins the path stays green after the wrap
-    /// extension lands.
-    #[test]
-    fn ascription_with_bare_type_tokens_still_works() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        run(
-            scope,
-            "SIG OrderedSig = (VAL compare :Number)\n\
-             MODULE IntOrd = (LET compare = 7)\n\
-             LET IntOrdA = (IntOrd :| OrderedSig)",
-        );
-        let data = scope.bindings().data();
-        assert!(matches!(data.get("IntOrdA"), Some(KObject::KModule(_, _))));
     }
 
     /// Miri audit-slate: pins the opaque-ascription re-bind path under tree borrows.

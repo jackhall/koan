@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Use this skill to run the standard koan build-verification slate — unit tests (`cargo test`), lints (`cargo clippy --all-targets -- -D warnings`, with auto-fix of fixable issues), and the modgraph fractal-complexity score. Records the modgraph total to [`tools/complexity.txt`](../../../tools/complexity.txt) as the baseline for the next run. Invoke before pushing, before opening a PR, or whenever the user says "verify the build", "run checks", or "is this green?". Does *not* run the Miri audit slate — that has its own dedicated skill.
+description: Use this skill to run the standard koan build-verification slate — unit tests (`cargo test`), lints (`cargo clippy --all-targets -- -D warnings`, with auto-fix of fixable issues), and the modgraph fractal-complexity score. Records the modgraph total to [`observe/complexity.txt`](../../../observe/complexity.txt) as the baseline for the next run. Invoke before pushing, before opening a PR, or whenever the user says "verify the build", "run checks", or "is this green?". Does *not* run the Miri audit slate — that has its own dedicated skill.
 ---
 
 # verify
@@ -38,10 +38,10 @@ cargo modules dependencies --package koan --lib \
     > /tmp/koan.dot
 
 python3 tools/modgraph.py --edges /tmp/koan.dot --root koan \
-    --baseline tools/complexity.txt
+    --baseline observe/complexity.txt
 ```
 
-The `--baseline tools/complexity.txt` flag handles all the housekeeping: it reads the file, prunes stale entries (unreachable SHAs from branch checkout / hard reset / rebase drops, plus all prior dirty-snapshot `+` entries), prepends today's measurement, trims to five, and prints a one-line delta against the prior top entry. Quote that delta line verbatim in the run summary — no manual file editing required.
+The `--baseline observe/complexity.txt` flag handles all the housekeeping: it reads the file, prunes stale entries (unreachable SHAs from branch checkout / hard reset / rebase drops, plus all prior dirty-snapshot `+` entries), prepends today's measurement, trims to five, and prints a one-line delta against the prior top entry. Quote that delta line verbatim in the run summary — no manual file editing required.
 
 ## End-of-run summary
 

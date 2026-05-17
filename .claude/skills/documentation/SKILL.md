@@ -74,7 +74,7 @@ The work item is no longer future work, so it leaves `roadmap/`.
 ### After a Miri run in this session
 
 If the session ran a Miri full-slate invocation, update the slate-duration log
-in [`TEST.md`](../../../TEST.md) before any other doc work:
+in [`observe/miri_slate.md`](../../../observe/miri_slate.md) ("Recent full-slate run durations" section) before any other doc work:
 
 1. Locate the `<!-- slate-durations:start -->` / `<!-- slate-durations:end -->`
    block.

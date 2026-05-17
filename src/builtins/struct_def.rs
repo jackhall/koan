@@ -432,39 +432,26 @@ mod tests {
         assert!(scope.bindings().pending_types().is_empty());
     }
 
-    /// Three-way mutual recursion: A → B → C → A. SCC closes when the third edge
-    /// is recorded; all three members' identities pre-install, then each binder's
-    /// finalize writes its carrier. Exercises the DFS depth past two members.
+    /// Three-way mutual recursion: A → B → C → A. Exercises SCC DFS past depth 2.
     #[test]
     fn three_way_mutual_recursion_struct_chain() {
         use crate::machine::model::types::UserTypeKind;
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
         use crate::machine::execute::Scheduler;
         use crate::parse::parse;
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
         let mut sched = Scheduler::new();
-        for e in parse(
-            "STRUCT Aaa = (b :Bbb)\nSTRUCT Bbb = (c :Ccc)\nSTRUCT Ccc = (a :Aaa)",
-        )
-        .unwrap()
-        {
+        for e in parse("STRUCT Aaa = (b :Bbb)\nSTRUCT Bbb = (c :Ccc)\nSTRUCT Ccc = (a :Aaa)").unwrap() {
             sched.add_dispatch(e, scope);
         }
         sched.execute().unwrap();
         let data = scope.bindings().data();
-        for n in ["Aaa", "Bbb", "Ccc"] {
-            assert!(
-                matches!(data.get(n), Some(KObject::StructType { .. })),
-                "{n} should be a StructType",
-            );
-        }
-        // Each member's only field is a UserType pointing at the next.
         for (from, expected_field, expected_target) in
             [("Aaa", "b", "Bbb"), ("Bbb", "c", "Ccc"), ("Ccc", "a", "Aaa")]
         {
             let fields = match data.get(from) {
                 Some(KObject::StructType { fields, .. }) => fields.clone(),
-                _ => panic!(),
+                other => panic!("expected {from} StructType, got {:?}", other.map(|o| o.ktype())),
             };
             assert_eq!(fields[0].0, expected_field);
             assert!(

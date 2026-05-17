@@ -31,6 +31,11 @@ without first landing something else:
   exceed 600 raw LOC; score reshuffles via `modgraph_rewrite.py`,
   split the largest files, then trim scheduler tests the sub-struct
   extractions made redundant.
+- [Close the worst test-coverage gaps](roadmap/test-coverage-gaps.md)
+  — `cargo llvm-cov` (via `tools/observe_tests.py audit`) reports an
+  overall 87% line coverage but several files fall well below — one
+  builtin (`FUNCTION_OF`) is at 0%, `kerror.rs` at 31%, `lift.rs` at
+  57%; targeted tests close each gap one file at a time.
 
 ## Open items
 

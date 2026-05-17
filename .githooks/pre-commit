@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# koan pre-commit hook.
+#
+# Refreshes observability artifacts (cargo-modules DOT, modgraph complexity
+# baseline, llvm-cov coverage, miri-slate fingerprint check) and then runs
+# the gating checks (clippy, doclinks). The audit also runs the full test
+# suite under instrumentation, so a separate `cargo test` is unnecessary.
+#
+# Refreshed tracked files are auto-staged into the commit in progress so the
+# commit reflects "code change + observability snapshot together".
+#
+# Activate once per clone:
+#     git config core.hooksPath .githooks
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+step() { printf '\n=== %s ===\n' "$*"; }
+
+step "1/6 refresh observe/coverage.lcov + miri-slate drift check"
+python3 tools/observe_tests.py audit
+
+step "2/6 clippy"
+cargo clippy --all-targets -- -D warnings
+
+step "3/6 doclinks"
+python3 tools/doclinks.py check
+
+step "4/6 refresh cargo-modules DOT → /tmp/koan.dot"
+cargo modules dependencies --package koan --lib \
+    --no-externs --no-sysroot --no-traits --no-fns --no-types \
+    > /tmp/koan.dot
+
+step "5/6 refresh observe/complexity.txt (modgraph --baseline)"
+python3 tools/modgraph.py --edges /tmp/koan.dot --root koan \
+    --baseline observe/complexity.txt
+
+step "6/6 stage refreshed observability artifacts"
+git add observe/complexity.txt observe/coverage.lcov
