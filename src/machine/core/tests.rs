@@ -429,6 +429,7 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
 // scheduler integration tests at `execute::scheduler::tests`.
 
 use crate::builtins::default_scope;
+use crate::machine::execute::Scheduler;
 
 fn body_number_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "number_any")) }
 fn body_any_number<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "any_number")) }
@@ -488,28 +489,13 @@ fn dispatch_errors_on_ambiguous_overlap() {
         matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Ambiguous(_)),
         "equally-specific overloads should produce an Ambiguous outcome",
     );
-}
 
-/// Ambiguous shape (two equally-specific overloads matching) surfaces as
-/// `ResolveOutcome::Ambiguous` — the wrap pass mustn't speculatively transform an
-/// ambiguous expression. Semantics sharpen vs. today's `shape_pick → None`: that arm
-/// collapsed ambiguity and no-match into one variant; the new surface separates them.
-#[test]
-fn resolve_returns_ambiguous_for_overlap_that_shape_pick_returned_none_for() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    register_builtin(scope, "OP_NA", two_slot_sig(KType::Number, KType::Any), body_number_any);
-    register_builtin(scope, "OP_AN", two_slot_sig(KType::Any, KType::Number), body_any_number);
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Literal(KLiteral::Number(5.0)),
-            ExpressionPart::Keyword("OP".into()),
-            ExpressionPart::Literal(KLiteral::Number(7.0)),
-        ],
-    };
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(expr, scope);
+    let err = sched.execute().expect_err("ambiguous dispatch should error end-to-end");
     assert!(
-        matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Ambiguous(_)),
-        "ambiguous overlap → Ambiguous",
+        matches!(err.kind, crate::machine::core::KErrorKind::AmbiguousDispatch { .. }),
+        "expected AmbiguousDispatch from Scheduler::execute, got {err}",
     );
 }
 
