@@ -4,6 +4,8 @@ target/
 scratch/
 main
 .markdownlint.yaml
+observe/coverage.lcov
+observe/modules.dot
 observe/test_overlap.md
 observe/test_overlap.json
 observe/test_overlap_raw.json

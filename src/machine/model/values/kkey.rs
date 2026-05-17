@@ -181,4 +181,38 @@ mod tests {
         assert_eq!(KKey::Number(3.0).summarize(), "3");
         assert_eq!(KKey::Bool(true).summarize(), "true");
     }
+
+    #[test]
+    fn ktype_reports_variant() {
+        assert_eq!(KKey::String("a".into()).ktype(), KType::Str);
+        assert_eq!(KKey::Number(1.0).ktype(), KType::Number);
+        assert_eq!(KKey::Bool(false).ktype(), KType::Bool);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip_each_variant() {
+        for original in [
+            KKey::String("hello".into()),
+            KKey::Number(3.5),
+            KKey::Bool(true),
+            KKey::Bool(false),
+        ] {
+            let bytes = original.encode();
+            let decoded = KKey::decode(&bytes);
+            assert_eq!(hash_of(&original), hash_of(&decoded));
+            assert_eq!(original.summarize(), decoded.summarize());
+        }
+    }
+
+    #[test]
+    fn nan_number_keys_with_same_bits_hash_equal() {
+        // f64::to_bits() hashing makes NaN equal to itself when the bit pattern matches —
+        // Python-like object-identity behavior for NaN dict keys.
+        let nan = KKey::Number(f64::NAN);
+        let same = KKey::Number(f64::from_bits(f64::NAN.to_bits()));
+        assert_eq!(hash_of(&nan), hash_of(&same));
+        // ...but two NaN values with different payloads hash differently.
+        let other_nan = KKey::Number(f64::from_bits(f64::NAN.to_bits() ^ 1));
+        assert_ne!(hash_of(&nan), hash_of(&other_nan));
+    }
 }
