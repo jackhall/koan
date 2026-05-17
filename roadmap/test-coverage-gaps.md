@@ -21,17 +21,6 @@ risk concentrated in code paths the suite barely exercises.
 
 **Directions.**
 
-- *`machine/execute/lift.rs` `any_descendant` nested-composite arms — open.*
-  Per-arm tests pin the slow-path composite-rebuild branches, the
-  anchor-preservation rules for KFunction / KFuture / KModule, the
-  KFuture-bundle borrow walk (`kobject_borrows_arena`), the function-captured
-  short-circuit, and the `parsed.parts` `ListLiteral` / `DictLiteral` arms.
-  Residual gaps are the `any_descendant` Dict / Tagged / Struct / KExpression
-  recursion arms (136–148) and the parallel `needs_lift` predicate arms for
-  KFuture / KModule / pre-anchored KFunction (164, 169–174) — all reachable
-  only by stacking a borrowing variant inside another composite (e.g.
-  `Dict<{KModule}>`, `List<{Tagged<{KFuture}>}>`). Add one nested fixture per
-  recursion arm; cheap once the shape is decided.
 - *`machine/model/types/signature.rs` (64%) — open.* Signature shape
   predicates — `is_*`, equality, the `Display` impl. Pair with the
   module-system stage-2-and-beyond signature work; add tests for each
