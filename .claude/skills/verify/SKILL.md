@@ -1,57 +1,25 @@
 ---
 name: verify
-description: Use this skill to run the standard koan build-verification slate — unit tests (`cargo test`), lints (`cargo clippy --all-targets -- -D warnings`, with auto-fix of fixable issues), and the modgraph fractal-complexity score. Records the modgraph total to [`observe/complexity.txt`](../../../observe/complexity.txt) as the baseline for the next run. Invoke before pushing, before opening a PR, or whenever the user says "verify the build", "run checks", or "is this green?". Does *not* run the Miri audit slate — that has its own dedicated skill.
+description: Use this skill to run the standard koan build-verification slate. Invoke before pushing, before opening a PR, or whenever the user says "verify the build", "run checks", or "is this green?". Does *not* run the Miri audit slate — that has its own dedicated skill.
 ---
 
 # verify
 
-Three checks, run in order. Stop and surface on the first hard failure; the modgraph step is the final one so a regression there doesn't block tests/clippy reporting.
-
-## 1. Unit tests
-
 ```sh
-cargo test
+tools/verify.sh
 ```
 
-Hard fail on any `FAILED`. Report `test result: ok. <N> passed; 0 failed` on success.
-
-## 2. Lints
-
-```sh
-cargo clippy --all-targets -- -D warnings
-```
-
-If clippy reports issues, attempt to auto-fix first:
-
-```sh
-cargo clippy --fix --allow-dirty --allow-staged --all-targets
-cargo clippy --all-targets -- -D warnings   # re-verify
-```
-
-If issues remain after `--fix`, fix them by hand — clippy with `-D warnings` must end clean before moving on. Per-site `#[allow(...)]` is acceptable only when the lint is genuinely wrong for the site (see [TEST.md § Linting and formatting](../../../TEST.md#linting-and-formatting) for the documented exceptions).
-
-## 3. Modgraph fractal complexity
-
-```sh
-cargo modules dependencies --package koan --lib \
-    --no-externs --no-sysroot --no-traits --no-fns --no-types \
-    > /tmp/koan.dot
-
-python3 tools/modgraph.py --edges /tmp/koan.dot --root koan \
-    --baseline observe/complexity.txt
-```
-
-The `--baseline observe/complexity.txt` flag handles all the housekeeping: it reads the file, prunes stale entries (unreachable SHAs from branch checkout / hard reset / rebase drops, plus all prior dirty-snapshot `+` entries), prepends today's measurement, trims to five, and prints a one-line delta against the prior top entry. Quote that delta line verbatim in the run summary — no manual file editing required.
+Read [`tools/verify.sh`](../../../tools/verify.sh) for what runs and in what order.
 
 ## End-of-run summary
 
-A single user-facing line covering all three checks:
+A single user-facing line:
 
 ```
-Verify: tests ok, clippy clean, modgraph per-loc <new> (Δ <signed> vs <prev>).
+Verify: tests ok, clippy clean, doclinks ok, coverage <pct>% (Δ <signed> vs <prev>), modgraph per-loc <new> (Δ <signed> vs <prev>).
 ```
 
-If any step hard-failed, replace the relevant clause with the failure (e.g. `tests FAILED (3 failed)`, `clippy: 2 issues remain after --fix`).
+If any step hard-failed, replace the relevant clause with the failure (e.g. `tests FAILED (3 failed)`, `clippy: 2 issues remain after --fix`, `doclinks: 4 broken links`). Quote the coverage and modgraph delta lines verbatim from the script's output. If the trend log was empty (first run / no prior entry), drop the `(Δ … vs …)` suffix for that clause.
 
 ## What this skill does *not* do
 

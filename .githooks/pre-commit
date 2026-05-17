@@ -1,40 +1,40 @@
 #!/usr/bin/env bash
 # koan pre-commit hook.
 #
-# Refreshes observability artifacts (cargo-modules DOT, modgraph complexity
-# baseline, llvm-cov coverage, miri-slate fingerprint check) and then runs
-# the gating checks (clippy, doclinks). The audit also runs the full test
-# suite under instrumentation, so a separate `cargo test` is unnecessary.
+# Runs the miri-slate drift check, then the verify slate (instrumented
+# tests via cargo llvm-cov, clippy, doclinks, modgraph score), then
+# rebaselines `observe/complexity.txt` against today's measurement.
 #
-# Refreshed tracked files are auto-staged into the commit in progress so the
-# commit reflects "code change + observability snapshot together".
+# The pre-commit hook owns its own copies of the regenerated DOT and lcov
+# files (prefixed with `precommit-`) so they don't clobber the canonical
+# `observe/modules.dot` / `observe/coverage.lcov` that `tools/verify.sh`
+# and `tools/observe_tests.py audit` write during manual runs.
+#
+# Refreshed tracked files (the shared baseline plus the precommit-owned
+# copies) are auto-staged into the commit so it reflects "code change +
+# observability snapshot together".
 #
 # Activate once per clone:
 #     git config core.hooksPath .githooks
+#
+# Runtime: ~3–6 minutes per commit (dominated by the instrumented build /
+# test pass plus the non-instrumented `cargo test` in verify.sh). Bypass
+# for a hotfix with `git commit --no-verify`.
 
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-step() { printf '\n=== %s ===\n' "$*"; }
+DOT=observe/precommit-modules.dot
+LCOV=observe/precommit-coverage.lcov
 
-step "1/6 refresh observe/coverage.lcov + miri-slate drift check"
-python3 tools/observe_tests.py audit
+step() { printf '\n### %s ###\n' "$*"; }
 
-step "2/6 clippy"
-cargo clippy --all-targets -- -D warnings
+step "miri-slate drift check"
+python3 tools/observe_tests.py slate-audit
 
-step "3/6 doclinks"
-python3 tools/doclinks.py check
+step "verify: llvm-cov + clippy + doclinks + coverage + modgraph (rebaseline)"
+KOAN_DOT="$DOT" KOAN_LCOV="$LCOV" KOAN_REBASELINE=1 tools/verify.sh
 
-step "4/6 refresh cargo-modules DOT → /tmp/koan.dot"
-cargo modules dependencies --package koan --lib \
-    --no-externs --no-sysroot --no-traits --no-fns --no-types \
-    > /tmp/koan.dot
-
-step "5/6 refresh observe/complexity.txt (modgraph --baseline)"
-python3 tools/modgraph.py --edges /tmp/koan.dot --root koan \
-    --baseline observe/complexity.txt
-
-step "6/6 stage refreshed observability artifacts"
-git add observe/complexity.txt observe/coverage.lcov
+step "stage refreshed observability artifacts"
+git add observe/complexity.txt observe/coverage.txt "$DOT" "$LCOV"
