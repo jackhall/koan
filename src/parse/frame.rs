@@ -34,26 +34,6 @@ impl<'a> Frame<'a> {
         }
     }
 
-    /// Returns `None` for `Dict` (its state machine doesn't expose a flat last-part).
-    pub(super) fn last_part(&self) -> Option<&ExpressionPart<'a>> {
-        match self {
-            Frame::Expression { expr, .. } => expr.parts.last(),
-            Frame::List(items) => items.last(),
-            Frame::TypeExpr(tf) => tf.parts.last(),
-            Frame::Dict(_) => None,
-        }
-    }
-
-    /// Symmetric to `last_part`: `Dict` returns `None`.
-    pub(super) fn pop_last_part(&mut self) -> Option<ExpressionPart<'a>> {
-        match self {
-            Frame::Expression { expr, .. } => expr.parts.pop(),
-            Frame::List(items) => items.pop(),
-            Frame::TypeExpr(tf) => tf.parts.pop(),
-            Frame::Dict(_) => None,
-        }
-    }
-
     /// Fold this frame's contents into the `ExpressionPart` it produces when closed by
     /// its matching closer. Expression frames with a sigil head wrap as `(QUOTE body)` /
     /// `(EVAL body)`; the dict and type-expr variants run their deferred validation

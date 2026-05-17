@@ -4,8 +4,8 @@
 (invoked via [`python3 tools/observe_tests.py audit`](../tools/observe_tests.py),
 which co-runs the miri-slate audit and writes the lcov report to
 [`observe/coverage.lcov`](../observe/coverage.lcov)) reports an overall
-88.21% region / 90.71% function / 87.15% line coverage across 11,876 lines
-on the post-types-refactor branch. The totals look healthy but mask several
+91.88% function / 88.75% line coverage across 12,522 lines on the
+post-types-refactor branch. The totals look healthy but mask several
 files where coverage is well below the suite average, leaving regression
 risk concentrated in code paths the suite barely exercises.
 
@@ -34,14 +34,18 @@ risk concentrated in code paths the suite barely exercises.
   body-translation edge cases (e.g., empty-body, single-statement-body,
   return-type-deferred body). These are pure-Rust tests, no koan source
   needed.
-- *`parse/frame.rs` (66%) — open.* Frame-builder edge cases — likely the
-  error branches the happy-path parse tests don't hit. Read the frame
-  state-machine, list its rejection conditions, and write one parse-error
-  test per condition. Cheap.
-- *`parse/type_expr_frame.rs` (65%) — open.* The type-expression
-  frame-builder's error and edge branches the happy-path parse tests
-  don't hit. Same shape as `parse/frame.rs` — read the state machine,
-  list rejection conditions, one parse-error test per condition.
+- *`machine/model/values/kkey.rs` (72%) — open.* Dict-key value type:
+  `try_from_kobject` (non-scalar rejection), `Parseable` / `Serializable`
+  impls, equality and hashing (including the NaN bit-pattern path on
+  `Number`). Test against the three scalar variants plus a non-scalar
+  rejection case; the `f64::to_bits()` hashing path needs a NaN-equals-NaN
+  check to pin the documented behavior.
+- *`machine/execute/nodes.rs` (63%) — open.* Tiny file (~8 executable
+  lines per llvm-cov, mostly enum constructor coverage on `NodeOutput` /
+  `NodeStep` / `NodeWork`). Coverage is driven by the execute layer's
+  integration tests hitting every variant; the gap is one or two unhit
+  arms. Identify the missing arms and add a focused execute-path test
+  per arm.
 
 ## Dependencies
 

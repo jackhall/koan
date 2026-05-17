@@ -1,7 +1,6 @@
 //! Folds the parts of a `:(...)` type-expression group into a structured `TypeExpr`.
 //!
-//! Mirrors [`super::type_frame::TypeFrame`] but reads from S-expression paren shape
-//! instead of `<>` shape. Three surface shapes share the frame:
+//! Three surface shapes share the frame:
 //! - Bare with no params: `:(Number)` — single Type part, builds as `TypeParams::None`.
 //! - List-style: `:(List Number)`, `:(Dict K V)` — head Type plus 1+ Type args,
 //!   folded into `TypeParams::List`.
@@ -98,24 +97,23 @@ fn build_list_params<'a>(
     }
     let params = rest
         .into_iter()
-        .map(|p| match p {
-            ExpressionPart::Type(t) => Ok(t),
-            // Inside a TypeExpr frame, nested parens are themselves type expressions
-            // without the sigil prefix: `:(Dict Str (List Number))`'s inner
-            // `(List Number)` lands as an `Expression` part with type-named contents.
-            // Recursively fold those contents through the same TypeExprFrame builder so
-            // arbitrary nesting depth is supported.
-            ExpressionPart::Expression(boxed) => {
-                let frame = TypeExprFrame { parts: boxed.parts };
-                frame.build()
-            }
-            other => Err(format!(
-                "type `:({name} ...)` parameter must be a type name, got `{}`",
-                other.summarize(),
-            )),
-        })
+        .map(lift_part)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(TypeExpr { name, params: TypeParams::List(params), builtin_cache: std::cell::OnceCell::new() })
+}
+
+/// Lift one `ExpressionPart` (from a position `find_arrow` already filtered to
+/// `Type` or parenthesized `Expression`) into a `TypeExpr`. The `Expression` arm
+/// re-enters `TypeExprFrame::build` so nested sigil-less parens fold the same way as
+/// sigiled ones — `:(Dict Str (List Number))` and `:(Dict Str :(List Number))` produce
+/// the same shape. The `unreachable!` arm asserts `find_arrow`'s filter contract; if
+/// it ever fires, `find_arrow` accepted a part it shouldn't have.
+fn lift_part(part: ExpressionPart<'_>) -> Result<TypeExpr, String> {
+    match part {
+        ExpressionPart::Type(t) => Ok(t),
+        ExpressionPart::Expression(boxed) => TypeExprFrame { parts: boxed.parts }.build(),
+        _ => unreachable!("find_arrow filters parts to Type or Expression"),
+    }
 }
 
 fn build_function_params<'a>(
@@ -180,17 +178,7 @@ fn extract_function_return<'a>(
         "type `:(Function ... -> R)` needs exactly one return type after the arrow, got {}",
         after.len()
     ))?;
-    match only {
-        ExpressionPart::Type(t) => Ok(t),
-        // The return slot can itself be a parameterized type:
-        // `:(Function (Number) -> (List Str))` wraps the return in parens.
-        ExpressionPart::Expression(boxed) => {
-            let frame = TypeExprFrame { parts: boxed.parts };
-            frame.build()
-        }
-        other => Err(format!(
-            "type `:(Function ... -> R)` return type must be a type name, got `{}`",
-            other.summarize()
-        )),
-    }
+    // The return slot can itself be a parameterized type:
+    // `:(Function (Number) -> (List Str))` wraps the return in parens.
+    lift_part(only)
 }

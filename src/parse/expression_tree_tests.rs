@@ -308,6 +308,28 @@ fn close_bracket_without_open_errors() {
 }
 
 #[test]
+fn close_paren_when_innermost_is_list_errors() {
+    // `[1 2)` opens a List frame then hits `)`, which pops unconditionally and
+    // delegates to `close_paren_to_part` — the List arm rejects with a
+    // diagnostic naming the wrong frame.
+    let err = tree("[1 2)").unwrap_err();
+    assert!(
+        err.contains("list literal"),
+        "expected diagnostic naming list-literal frame, got: {err}",
+    );
+}
+
+#[test]
+fn close_paren_when_innermost_is_dict_errors() {
+    // Symmetric to the list case for `{a: 1)`.
+    let err = tree("{a: 1)").unwrap_err();
+    assert!(
+        err.contains("dict literal"),
+        "expected diagnostic naming dict-literal frame, got: {err}",
+    );
+}
+
+#[test]
 fn open_bracket_glued_to_token_errors() {
     // List literals must stand alone — `foo[2]` is no longer valid (was compound
     // indexing). The user must write `foo [2]` if they actually want a sibling list.
@@ -708,8 +730,14 @@ fn function_arrow_in_non_function_type_errors() {
 
 #[test]
 fn double_arrow_in_function_type_errors() {
-    // Two `->`s inside one Function sigil — rejected.
-    assert!(tree(":(Function A -> B -> C)").is_err());
+    // Two `->`s inside one Function sigil — `find_arrow` rejects on the second arrow
+    // before the function-builder ever runs. Use multi-letter type names so the tokens
+    // classify as Types (single uppercase letters fail token classification first).
+    let err = tree(":(Function Num -> Str -> Bool)").unwrap_err();
+    assert!(
+        err.contains("more than one `->` arrow"),
+        "expected double-arrow diagnostic, got: {err}",
+    );
 }
 
 #[test]
@@ -800,6 +828,115 @@ fn type_sigil_lone_colon_glued_to_lowercase_errors() {
     // `:` followed by a lowercase identifier is a parse error — type sigils require
     // an uppercase head.
     assert!(tree("LET x :foo").is_err());
+}
+
+#[test]
+fn type_sigil_empty_parens_errors() {
+    // `:()` opens a TypeExpr frame with zero parts — `build` rejects with the
+    // empty-type-expression diagnostic.
+    let err = tree("LET x :()").unwrap_err();
+    assert!(
+        err.contains("empty `:(...)` type expression"),
+        "expected empty-type-expression diagnostic, got: {err}",
+    );
+}
+
+#[test]
+fn type_sigil_parameterized_head_errors() {
+    // Head must be a bare type name. `:(:(List Number) Foo)` puts a fully-parsed
+    // parameterized type in the head slot — `build` rejects via the
+    // `Type(t) if matches!(t.params, TypeParams::None)` guard.
+    let err = tree("LET x :(:(List Number) Foo)").unwrap_err();
+    assert!(
+        err.contains("type-expression head must be a bare type name"),
+        "expected bare-type-name diagnostic, got: {err}",
+    );
+}
+
+#[test]
+fn type_sigil_non_type_head_errors() {
+    // `:(Number)` is fine — a bare uppercase token classifies as a Type. To exercise
+    // the non-Type head arm we need a non-Type first part; the literal `5` is a
+    // Literal part.
+    let err = tree("LET x :(5)").unwrap_err();
+    assert!(
+        err.contains("type-expression head must be a type name"),
+        "expected type-name head diagnostic, got: {err}",
+    );
+}
+
+#[test]
+fn type_sigil_bare_type_name_in_parens() {
+    // `:(Number)` — single bare Type, no params. Exercises the `rest.is_empty()`
+    // early-return in `build_list_params` (TypeParams::None).
+    assert_eq!(tree("LET x :(Number)").unwrap(), "[t(LET) t(x) T(Number)]");
+}
+
+#[test]
+fn type_sigil_function_without_arrow_errors() {
+    // `:(Function (Number))` — no `->` arrow. `build` matches `(None, true)` and
+    // rejects with the arrow-required diagnostic.
+    let err = tree("LET f :(Function (Number))").unwrap_err();
+    assert!(
+        err.contains("requires `->`"),
+        "expected arrow-required diagnostic, got: {err}",
+    );
+}
+
+#[test]
+fn type_sigil_non_type_param_errors() {
+    // `:(List 5)` — a Literal param flows into `find_arrow`'s walk and trips the
+    // catch-all rejection (not a Type, not an Expression, not the `->` arrow).
+    let err = tree("LET x :(List 5)").unwrap_err();
+    assert!(
+        err.contains("parameter must be a type name"),
+        "expected non-type-param diagnostic, got: {err}",
+    );
+}
+
+#[test]
+fn type_sigil_function_arg_non_type_errors() {
+    // Inside the `(...)` arg group, args are walked by `extract_function_args`.
+    // A literal arg like `5` triggers the function-arg non-type diagnostic
+    // (distinct from the find_arrow rejection, which can't see inside the inner paren).
+    let err = tree("LET f :(Function (5) -> Bool)").unwrap_err();
+    assert!(
+        err.contains("arg must be a type name"),
+        "expected function-arg non-type diagnostic, got: {err}",
+    );
+}
+
+#[test]
+fn type_sigil_function_nested_arg_unparameterized() {
+    // `:(Function ((List Number)) -> Bool)` — the inner `(List Number)` is itself a
+    // parenthesized type expression without the sigil. `extract_function_args`
+    // recurses through a fresh `TypeExprFrame::build` for the Expression arm.
+    assert_eq!(
+        tree("LET f :(Function ((List Number)) -> Bool)").unwrap(),
+        "[t(LET) t(f) T(:(Function (:(List Number)) -> Bool))]",
+    );
+}
+
+#[test]
+fn type_sigil_function_return_wrong_arity_errors() {
+    // `:(Function () -> A B)` — two parts after the arrow. The `[only] = try_from`
+    // pattern in `extract_function_return` rejects with the arity diagnostic.
+    let err = tree("LET f :(Function () -> Number Bool)").unwrap_err();
+    assert!(
+        err.contains("exactly one return type"),
+        "expected return-arity diagnostic, got: {err}",
+    );
+}
+
+#[test]
+fn type_sigil_function_return_parenthesized() {
+    // `:(Function (Number) -> (List Str))` — the return slot is a parenthesized type
+    // expression. `extract_function_return` recurses through `TypeExprFrame::build`
+    // for the Expression arm.
+    assert_eq!(
+        tree("LET f :(Function (Number) -> (List Str))").unwrap(),
+        "[t(LET) t(f) T(:(Function (Number) -> :(List Str)))]",
+    );
 }
 
 // --- Sigil tests (`#(...)` quote, `$(...)` eval) ---
