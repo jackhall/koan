@@ -38,11 +38,10 @@ risk concentrated in code paths the suite barely exercises.
   error branches the happy-path parse tests don't hit. Read the frame
   state-machine, list its rejection conditions, and write one parse-error
   test per condition. Cheap.
-- *`machine/core/pending.rs` (69%) — open.* Forward-reference resolution
-  state. `tests/forward_reference_resolves.rs` covers the happy path; what's
-  missing are the failure / timeout / multi-name cycle paths. Add tests
-  alongside the existing integration suite so the forward-resolution surface
-  has one file that pins both success and failure shapes.
+- *`parse/type_expr_frame.rs` (65%) — open.* The type-expression
+  frame-builder's error and edge branches the happy-path parse tests
+  don't hit. Same shape as `parse/frame.rs` — read the state machine,
+  list rejection conditions, one parse-error test per condition.
 
 ## Dependencies
 

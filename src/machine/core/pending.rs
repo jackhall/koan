@@ -173,4 +173,17 @@ mod tests {
         let stored = *bindings.types().get("Foo").expect("Foo should be in types after drain");
         assert!(std::ptr::eq(stored, kt));
     }
+
+    /// `Default::default()` constructs an empty queue equivalent to `new()`.
+    /// Trivial, but the `Default` impl is the only PendingQueue surface no
+    /// other test exercises — without this it shows up as a 0-hit function in
+    /// the coverage report.
+    #[test]
+    fn default_yields_empty_queue() {
+        let queue: PendingQueue<'_> = PendingQueue::default();
+        let bindings: Bindings<'_> = Bindings::new();
+        queue.drain(&bindings);
+        assert!(bindings.data().is_empty());
+        assert!(bindings.types().is_empty());
+    }
 }
