@@ -65,18 +65,6 @@ fn part_references_any<'a>(
     }
 }
 
-/// Collect parameter names from a signature's `SignatureElement` list. Used by
-/// the parameter-name scan during Stage B's `Resolved` vs `Deferred` decision.
-fn collect_param_names(elements: &[SignatureElement]) -> Vec<String> {
-    elements
-        .iter()
-        .filter_map(|el| match el {
-            SignatureElement::Argument(a) => Some(a.name.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
 /// function constructor. The signature and body slots are `KType::KExpression`, so the parser's
 /// parenthesized sub-expressions match and ride through as data. Two return-type slot

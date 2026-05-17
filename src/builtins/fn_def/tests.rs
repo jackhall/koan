@@ -10,6 +10,7 @@
 
 mod arena;
 mod basic;
+mod body_routing;
 mod container_types;
 mod module_stage2;
 mod param_type;

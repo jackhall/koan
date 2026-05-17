@@ -3,11 +3,11 @@
 **Problem.** [`cargo llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov)
 (invoked via [`python3 tools/observe_tests.py audit`](../tools/observe_tests.py),
 which co-runs the miri-slate audit and writes the lcov report to
-[`observe/coverage.lcov`](../observe/coverage.lcov)) reports an overall
-91.88% function / 88.75% line coverage across 12,522 lines on the
-post-types-refactor branch. The totals look healthy but mask several
-files where coverage is well below the suite average, leaving regression
-risk concentrated in code paths the suite barely exercises.
+[`observe/coverage.lcov`](../observe/coverage.lcov)) reports overall
+93.17% function / 89.97% line coverage across the post-types-refactor
+branch. The totals look healthy but mask several files where coverage
+is well below the suite average, leaving regression risk concentrated
+in code paths the suite barely exercises.
 
 **Impact.**
 
@@ -21,14 +21,15 @@ risk concentrated in code paths the suite barely exercises.
 
 **Directions.**
 
-- *`builtins/fn_def.rs` (67%, with `body.rs` at 65% and
-  `argument_bundle.rs` at 67%) — open.* The user-fn definition path is the
-  hottest unsafe site on the slate (per-call frame transmute in
-  `kfunction/invoke.rs`), and its surrounding builtin is only two-thirds
-  covered. Audit the uncovered regions for argument-bundle error paths and
-  body-translation edge cases (e.g., empty-body, single-statement-body,
-  return-type-deferred body). These are pure-Rust tests, no koan source
-  needed.
+- *`machine/core/kfunction/body.rs` (65%) and
+  `machine/core/kfunction/argument_bundle.rs` (67%) — open.* Sibling files
+  to `fn_def.rs` (now at 88% via
+  [`src/builtins/fn_def/tests/body_routing.rs`](../src/builtins/fn_def/tests/body_routing.rs)).
+  `body.rs` hosts the `Body` enum + `KFunction::invoke` per-call frame
+  transmute — the hottest unsafe site on the miri slate; `argument_bundle.rs`
+  hosts the slot-extraction helpers. Audit the uncovered regions for the
+  argument-bundle error paths and the invoke-time frame-lift edge cases the
+  `fn_def.rs` tests don't reach.
 - *`machine/model/values/kkey.rs` (72%) — open.* Dict-key value type:
   `try_from_kobject` (non-scalar rejection), `Parseable` / `Serializable`
   impls, equality and hashing (including the NaN bit-pattern path on
