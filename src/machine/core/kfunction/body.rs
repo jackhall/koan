@@ -100,3 +100,45 @@ pub enum Body<'a> {
     Builtin(BuiltinFn),
     UserDefined(KExpression<'a>),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::core::{KError, KErrorKind};
+    use crate::machine::model::ast::KExpression;
+
+    #[test]
+    fn err_constructor_wraps_kerror() {
+        let kerr = KError::new(KErrorKind::MissingArg("x".into()));
+        let result = BodyResult::<'_>::err(kerr);
+        match result {
+            BodyResult::Err(e) => match e.kind {
+                KErrorKind::MissingArg(name) => assert_eq!(name, "x"),
+                other => panic!("expected MissingArg, got {:?}", std::mem::discriminant(&other)),
+            },
+            _ => panic!("expected BodyResult::Err"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "ctx-tail: expected Value, got Tail")]
+    fn expect_value_panics_on_tail() {
+        let tail: BodyResult<'_> = BodyResult::tail(KExpression { parts: Vec::new() });
+        let _ = tail.expect_value("ctx-tail");
+    }
+
+    #[test]
+    #[should_panic(expected = "ctx-defer: expected Value, got DeferTo")]
+    fn expect_value_panics_on_defer_to() {
+        let defer: BodyResult<'_> = BodyResult::DeferTo(NodeId(0));
+        let _ = defer.expect_value("ctx-defer");
+    }
+
+    #[test]
+    #[should_panic(expected = "ctx-err: expected Value, got Err(missing argument 'y')")]
+    fn expect_value_panics_on_err() {
+        let err: BodyResult<'_> =
+            BodyResult::err(KError::new(KErrorKind::MissingArg("y".into())));
+        let _ = err.expect_value("ctx-err");
+    }
+}
