@@ -36,12 +36,6 @@ in code paths the suite barely exercises.
   `Number`). Test against the three scalar variants plus a non-scalar
   rejection case; the `f64::to_bits()` hashing path needs a NaN-equals-NaN
   check to pin the documented behavior.
-- *`machine/execute/nodes.rs` (63%) — open.* Tiny file (~8 executable
-  lines per llvm-cov, mostly enum constructor coverage on `NodeOutput` /
-  `NodeStep` / `NodeWork`). Coverage is driven by the execute layer's
-  integration tests hitting every variant; the gap is one or two unhit
-  arms. Identify the missing arms and add a focused execute-path test
-  per arm.
 
 ## Dependencies
 

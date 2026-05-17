@@ -103,3 +103,27 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
         NodeWork::Lift(LiftState::Ready(_)) => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::core::{KError, KErrorKind};
+
+    /// `Lift(Pending(from))` is never reached via the normal `add()` path — Lift is
+    /// installed only through `NodeStep::Replace` with deps wired explicitly. The arm
+    /// exists for total coverage; this test pins it directly.
+    #[test]
+    fn work_deps_lift_pending_returns_from_node() {
+        let work = NodeWork::Lift(LiftState::Pending(NodeId(7)));
+        assert_eq!(work_deps(&work), Some(vec![NodeId(7)]));
+    }
+
+    /// `Lift(Ready)` only appears post-stamp; `work_deps` must report no remaining wait.
+    #[test]
+    fn work_deps_lift_ready_returns_none() {
+        let work = NodeWork::Lift(LiftState::Ready(NodeOutput::Err(
+            KError::new(KErrorKind::User("stamped".to_string())),
+        )));
+        assert!(work_deps(&work).is_none());
+    }
+}
