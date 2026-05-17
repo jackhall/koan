@@ -21,11 +21,6 @@ risk concentrated in code paths the suite barely exercises.
 
 **Directions.**
 
-- *`machine/model/types/signature.rs` (64%) — open.* Signature shape
-  predicates — `is_*`, equality, the `Display` impl. Pair with the
-  module-system stage-2-and-beyond signature work; add tests for each
-  predicate against the boundary shapes (empty, single-element, all-pin,
-  mixed VAL/SIG, deferred-return).
 - *`builtins/fn_def.rs` (67%, with `body.rs` at 65% and
   `argument_bundle.rs` at 67%) — open.* The user-fn definition path is the
   hottest unsafe site on the slate (per-call frame transmute in
