@@ -21,6 +21,3 @@ mod whitespace;
 
 pub use expression_tree::parse;
 pub use triple_list::{parse_keyword_triple_list, parse_pair_list};
-
-#[cfg(test)]
-mod expression_tree_tests;

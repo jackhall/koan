@@ -255,3 +255,6 @@ pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
