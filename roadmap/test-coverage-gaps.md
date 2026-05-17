@@ -21,13 +21,13 @@ risk concentrated in code paths the suite barely exercises.
 
 **Directions.**
 
-- *`machine/execute/lift.rs` (57%) — open.* Half the lift policy is uncovered
-  despite being on the per-call-arena reclamation path the miri slate pins
-  (`unanchored_kfuture_*` tests anchor the policy decision but not its
-  branches). Audit the uncovered regions against the lift-decision table in
-  [design/memory-model.md](../design/memory-model.md) and add behavior tests
-  for the branches that have no coverage line — likely the lift-recursive
-  composite-value walk and the anchored-with-borrow handoff.
+- *`machine/execute/lift.rs` `kobject_borrows_arena` + literal-parts arms — open.*
+  The slow-path per-arm tests pin the composite-rebuild and anchor-preservation
+  branches, but `kobject_borrows_arena` (the `KFuture`-bundle borrow walk) and
+  `expression_borrows_arena`'s `ListLiteral` / `DictLiteral` arms stay uncovered.
+  Both are reachable only by a `KFuture` whose `bundle.args` carry a borrowing
+  payload or whose `parsed.parts` include literal-shaped parts; add one fixture
+  per arm using the existing `dispatch_for_test` + parts-mutation pattern.
 - *`machine/model/types/signature.rs` (64%) — open.* Signature shape
   predicates — `is_*`, equality, the `Display` impl. Pair with the
   module-system stage-2-and-beyond signature work; add tests for each

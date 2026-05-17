@@ -32,9 +32,8 @@ without first landing something else:
   split the largest files, then trim scheduler tests the sub-struct
   extractions made redundant.
 - [Close the worst test-coverage gaps](roadmap/test-coverage-gaps.md)
-  — `cargo llvm-cov` (via `tools/observe_tests.py audit`) reports an
-  overall 86% line coverage but several files fall well below —
-  `lift.rs` at 56%, `kerror.rs` at 40%, `parse/frame.rs` at 64%;
+  — `cargo llvm-cov` (via `tools/observe_tests.py audit`) reports
+  healthy overall line coverage but several files fall well below;
   targeted tests close each gap one file at a time.
 
 ## Open items
