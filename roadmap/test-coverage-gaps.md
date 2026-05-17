@@ -4,7 +4,7 @@
 (invoked via [`python3 tools/observe_tests.py audit`](../tools/observe_tests.py),
 which co-runs the miri-slate audit and writes the lcov report to
 [`observe/coverage.lcov`](../observe/coverage.lcov)) reports an overall
-87.03% region / 89.74% function / 86.25% line coverage across 11,641 lines
+88.21% region / 90.71% function / 87.15% line coverage across 11,876 lines
 on the post-types-refactor branch. The totals look healthy but mask several
 files where coverage is well below the suite average, leaving regression
 risk concentrated in code paths the suite barely exercises.
@@ -21,12 +21,6 @@ risk concentrated in code paths the suite barely exercises.
 
 **Directions.**
 
-- *`machine/core/kerror.rs` (31%) — open.* Error-display / `Display`
-  formatting paths are the obvious untested surface. Add a `Display` round-
-  trip test per `KErrorKind` variant — most variants already have a
-  `kind == ...` assertion at the construction site, so the missing piece is
-  the rendered-output assertion that pins format strings against accidental
-  rewording.
 - *`machine/execute/lift.rs` (57%) — open.* Half the lift policy is uncovered
   despite being on the per-call-arena reclamation path the miri slate pins
   (`unanchored_kfuture_*` tests anchor the policy decision but not its
@@ -34,11 +28,6 @@ risk concentrated in code paths the suite barely exercises.
   [design/memory-model.md](../design/memory-model.md) and add behavior tests
   for the branches that have no coverage line — likely the lift-recursive
   composite-value walk and the anchored-with-borrow handoff.
-- *`machine/model/ast.rs` (63%) — open.* AST helpers (`KExpression`
-  pretty-print, the `ExpressionPart` accessors, `KLiteral` round-trips). The
-  parse-side tests exercise construction but not the readback helpers used
-  by error messages and dispatch. Pair with the `kerror.rs` work — the AST
-  helpers most-likely uncovered are the ones invoked by error rendering.
 - *`machine/model/types/signature.rs` (64%) — open.* Signature shape
   predicates — `is_*`, equality, the `Display` impl. Pair with the
   module-system stage-2-and-beyond signature work; add tests for each
