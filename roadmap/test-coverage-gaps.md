@@ -4,11 +4,10 @@
 (invoked via [`python3 tools/observe_tests.py audit`](../tools/observe_tests.py),
 which co-runs the miri-slate audit and writes the lcov report to
 [`observe/coverage.lcov`](../observe/coverage.lcov)) reports an overall
-87.03% region / 89.62% function / 86.06% line coverage across 11,641 lines
+87.03% region / 89.74% function / 86.25% line coverage across 11,641 lines
 on the post-types-refactor branch. The totals look healthy but mask several
-files where coverage is well below the suite average — including one
-production builtin (`FUNCTION_OF`) that has zero test exercise — meaning the
-slate is silently signing off on code paths nothing actually drives.
+files where coverage is well below the suite average, leaving regression
+risk concentrated in code paths the suite barely exercises.
 
 **Impact.**
 
@@ -18,21 +17,10 @@ slate is silently signing off on code paths nothing actually drives.
   miri-slate clean) while breaking behavior the gap file owns.
 - *Coverage trend becomes a real signal.* With the worst gaps closed,
   per-PR coverage drift in `observe/coverage.lcov` becomes a meaningful
-  review check rather than noise dominated by a handful of always-zero files.
-- *Dead vs. unfinished code surfaces.* The 0% files force a deliberate
-  decision — write the test, or delete the code — instead of leaving the
-  symbol in the public surface as ambiguous dead weight.
+  review check rather than noise dominated by a handful of always-low files.
 
 **Directions.**
 
-- *`builtins/type_ops/function_of.rs` (0% — entire file, 33 lines, 1 fn) —
-  open.* The `FUNCTION_OF` builtin compiles and binds but no test drives
-  it. Two alternatives: write the minimal-shape test that pins down its
-  result type (mirroring `LIST_OF` / `DICT_OF` siblings, which are 80%+
-  covered), or remove the binding if its role was subsumed by a sibling.
-  Recommended: write the test first — `function_of.rs` has the same shape
-  as its 80%+-covered siblings, so the unused-binding hypothesis is the
-  less-likely failure mode, and the test is the smaller artifact.
 - *`machine/core/kerror.rs` (31%) — open.* Error-display / `Display`
   formatting paths are the obvious untested surface. Add a `Display` round-
   trip test per `KErrorKind` variant — most variants already have a
