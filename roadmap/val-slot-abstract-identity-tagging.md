@@ -17,7 +17,7 @@ errors at the per-call return-type check even though the slot value is
 semantically a member of the declared abstract type.
 
 The Stage B landing test
-[`functor_return_module_type_of_parameter_resolves_per_call`](../src/builtins/fn_def/tests/module_stage2.rs)
+[`functor_return_module_type_of_parameter_resolves_per_call`](../src/builtins/fn_def/tests/functor/deferred_return.rs)
 documents this caveat. The test currently pins only the FN-def routing
 (registration as `Deferred(_)` succeeds, ascription against the SIG
 succeeds); the end-to-end `(GET_ZERO int_ord)` call returning the

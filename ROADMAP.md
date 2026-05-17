@@ -67,7 +67,7 @@ incrementally, each producing a usable end state.
   carries the underlying value's `KType`, not the per-call abstract
   identity `:|` minted for the SIG's `Type` member; closes the
   deferred end-to-end functor-on-VAL-slot call test variant in
-  [`functor_return_module_type_of_parameter_resolves_per_call`](src/builtins/fn_def/tests/module_stage2.rs)
+  [`functor_return_module_type_of_parameter_resolves_per_call`](src/builtins/fn_def/tests/functor/deferred_return.rs)
   and aligns dispatch keys for stage 5's implicit search over
   VAL-typed values.
 - [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
