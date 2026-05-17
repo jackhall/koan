@@ -11,6 +11,8 @@ mod bindings;
 mod kerror;
 pub(crate) mod kfunction;
 mod pending;
+mod resolve_dispatch;
+mod resolve_type_expr;
 mod scope;
 mod scope_id;
 
@@ -20,5 +22,7 @@ mod tests;
 pub use arena::{CallArena, RuntimeArena};
 pub use bindings::{ApplyOutcome, Bindings, PendingBinderGuard, PendingTypeEntry};
 pub use kerror::{Frame, KError, KErrorKind};
-pub use scope::{KFuture, ResolveOutcome, ResolveTypeExprOutcome, Resolution, Resolved, Scope, ScopeKind};
+pub use resolve_dispatch::{ResolveOutcome, Resolved};
+pub use resolve_type_expr::ResolveTypeExprOutcome;
+pub use scope::{KFuture, Resolution, Scope, ScopeKind};
 pub use scope_id::ScopeId;

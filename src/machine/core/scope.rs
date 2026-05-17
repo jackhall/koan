@@ -157,20 +157,30 @@ impl<'a> Scope<'a> {
         &self.bindings
     }
 
+    /// Iterate `self` and its `outer` chain. Single-source-of-truth for the lexical-
+    /// parent walk; previously open-coded as `let mut current = Some(self); while let
+    /// Some(s) = current { ...; current = s.outer; }` in five separate methods. Each
+    /// step yields a `&Scope<'a>` with the borrow's lifetime (`self.outer` items are
+    /// `&'a Scope<'a>`, reborrowed to the shorter outer borrow). Per-step `RefCell`
+    /// guards (e.g. `bindings().types()`) taken inside a `find_map` / `find` closure
+    /// drop at the closure boundary, so the release-before-recurse discipline
+    /// previously commented on `resolve_type` and `resolve_dispatch` is now structural.
+    pub fn ancestors(&self) -> impl Iterator<Item = &Scope<'a>> {
+        std::iter::once(self).chain(std::iter::successors(self.outer, |s| s.outer))
+    }
+
     /// True iff `self`'s nearest non-`Anonymous` enclosing scope is a SIG decl_scope.
     /// The walk starts at `self` — a SIG-body builtin's body runs against the SIG
     /// decl_scope directly. A non-SIG named scope (`Module`) short-circuits to `false`;
     /// `Anonymous` frames are transparent and the walk continues outward.
     pub fn is_in_sig_body(&self) -> bool {
-        let mut current: Option<&Scope<'_>> = Some(self);
-        while let Some(s) = current {
-            match &s.kind {
-                ScopeKind::Sig { .. } => return true,
-                ScopeKind::Module { .. } => return false,
-                ScopeKind::Anonymous => current = s.outer,
-            }
-        }
-        false
+        self.ancestors()
+            .find_map(|s| match &s.kind {
+                ScopeKind::Sig { .. } => Some(true),
+                ScopeKind::Module { .. } => Some(false),
+                ScopeKind::Anonymous => None,
+            })
+            .unwrap_or(false)
     }
 
     /// Bind `name` in this scope. Errors `Rebind` if `data` already holds `name`
@@ -320,16 +330,14 @@ impl<'a> Scope<'a> {
     /// go through [`Self::resolve_type`] post-stage-1.5. The brief stage-1.4 fallback
     /// arm that synthesized a `KObject::KTypeValue` on demand is gone.
     pub fn resolve(&self, name: &str) -> Resolution<'a> {
-        if let Some(obj) = self.bindings.data().get(name).copied() {
-            return Resolution::Value(obj);
-        }
-        if let Some(id) = self.bindings.placeholders().get(name).copied() {
-            return Resolution::Placeholder(id);
-        }
-        match self.outer {
-            Some(outer) => outer.resolve(name),
-            None => Resolution::Unbound,
-        }
+        self.ancestors()
+            .find_map(|scope| {
+                if let Some(obj) = scope.bindings.data().get(name).copied() {
+                    return Some(Resolution::Value(obj));
+                }
+                scope.bindings.placeholders().get(name).copied().map(Resolution::Placeholder)
+            })
+            .unwrap_or(Resolution::Unbound)
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. Thin shim
@@ -342,118 +350,21 @@ impl<'a> Scope<'a> {
 
     /// Walk the `outer` chain for the nearest `bindings.types[name]`. Type-side
     /// analogue of [`Self::lookup`] — no `Placeholder` variant (that lane is
-    /// reserved for stage 3's `pending_types` registry).
-    ///
-    /// Drops the `Ref<'_, _>` returned by [`Bindings::types`] before recursing into
-    /// `outer` so a deep chain doesn't accumulate live read borrows — same NLL-safe
-    /// release-before-recurse discipline as [`Self::resolve_dispatch`].
+    /// reserved for stage 3's `pending_types` registry). The per-step
+    /// [`Bindings::types`] `Ref` is taken inside the `find_map` closure and drops at
+    /// the closure boundary, so a deep chain never accumulates live read borrows.
     pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType> {
-        let mut current: Option<&Scope<'a>> = Some(self);
-        while let Some(scope) = current {
-            let types_guard = scope.bindings.types();
-            if let Some(kt) = types_guard.get(name).copied() {
-                return Some(kt);
-            }
-            drop(types_guard);
-            current = scope.outer;
-        }
-        None
-    }
-
-    /// Layer-2 scope-bound TypeExpr resolution memo. Tries the cache first; on miss,
-    /// runs [`crate::machine::model::types::elaborate_type_expr`] against
-    /// `self`, checks the finalize gate ([`Self::referenced_user_types`] vs
-    /// `pending_types`), and writes back into the cache when every user-type the
-    /// result references is fully finalized.
-    ///
-    /// Three outcomes:
-    /// - `Done(kt)`: elaboration succeeded and every referenced user-type is
-    ///   finalized. The result is arena-allocated and cached for subsequent calls.
-    /// - `Park(producers)`: the elaborator parked on a placeholder, OR the
-    ///   elaborated result references a still-pending user-type. The producer
-    ///   `NodeId`s identify the wake sources the caller should park on. **No
-    ///   cache write** in the Park case — caching mid-SCC-window would observe
-    ///   pre-close opaque identity.
-    /// - `Unbound(msg)`: a leaf name didn't resolve anywhere. Caller wraps in
-    ///   a structured `ShapeError`.
-    pub fn resolve_type_expr(
-        &'a self,
-        te: &crate::machine::model::ast::TypeExpr,
-    ) -> ResolveTypeExprOutcome<'a> {
-        use crate::machine::model::types::{
-            elaborate_type_expr, ElabResult, Elaborator,
-        };
-        if let Some(kt) = self.bindings.type_expr_memo_get(te) {
-            return ResolveTypeExprOutcome::Done(kt);
-        }
-        let mut elaborator = Elaborator::new(self);
-        match elaborate_type_expr(&mut elaborator, te) {
-            ElabResult::Done(kt) => {
-                let pending = self.referenced_pending_producers(&kt);
-                if pending.is_empty() {
-                    let kt_ref: &'a crate::machine::model::types::KType =
-                        self.arena.alloc_ktype(kt);
-                    self.bindings.type_expr_memo_insert(te.clone(), kt_ref);
-                    ResolveTypeExprOutcome::Done(kt_ref)
-                } else {
-                    ResolveTypeExprOutcome::Park(pending)
-                }
-            }
-            ElabResult::Park(producers) => ResolveTypeExprOutcome::Park(producers),
-            ElabResult::Unbound(msg) => ResolveTypeExprOutcome::Unbound(msg),
-        }
-    }
-
-    /// For every user-type `(scope_id, name)` reachable from the *top-level* of `kt`
-    /// (no recursion into `UserType`'s `kind` payload — SCC closure is atomic across
-    /// members, so a finalized `Foo` guarantees every user-type embedded in `Foo`'s
-    /// payload is also finalized), check whether the scope owning that id has the
-    /// name in its `pending_types`. Return the producer `NodeId`s for the pending
-    /// entries — the wake sources the caller parks on.
-    fn referenced_pending_producers(
-        &'a self,
-        kt: &crate::machine::model::types::KType,
-    ) -> Vec<crate::machine::core::kfunction::NodeId> {
-        let mut pending: Vec<crate::machine::core::kfunction::NodeId> = Vec::new();
-        for (scope_id, name) in referenced_user_types(kt) {
-            let Some(owner) = self.find_scope_by_id(scope_id) else { continue };
-            if !owner.bindings.pending_types().contains_key(&name) {
-                continue;
-            }
-            if let Some(node_id) = owner.bindings.placeholders().get(&name).copied() {
-                if !pending.contains(&node_id) {
-                    pending.push(node_id);
-                }
-            }
-        }
-        pending
-    }
-
-    /// Walk the `outer` chain to find the scope whose `id` matches `scope_id`.
-    /// Returns `None` if no such scope is on the chain.
-    fn find_scope_by_id(
-        &'a self,
-        scope_id: ScopeId,
-    ) -> Option<&'a Scope<'a>> {
-        let mut current: Option<&'a Scope<'a>> = Some(self);
-        while let Some(scope) = current {
-            if scope.id == scope_id {
-                return Some(scope);
-            }
-            current = scope.outer;
-        }
-        None
+        self.ancestors().find_map(|scope| scope.bindings.types().get(name).copied())
     }
 
     /// Walk the `outer` chain for the nearest scope holding a writer and write `bytes`.
     /// Writer errors are silently dropped.
     pub fn write_out(&self, bytes: &[u8]) {
-        if let Some(w) = self.out.borrow_mut().as_mut() {
-            let _ = w.write_all(bytes);
-            return;
-        }
-        if let Some(outer) = self.outer {
-            outer.write_out(bytes);
+        for scope in self.ancestors() {
+            if let Some(w) = scope.out.borrow_mut().as_mut() {
+                let _ = w.write_all(bytes);
+                return;
+            }
         }
     }
 
@@ -464,279 +375,5 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Single-pass overload resolution: walks `outer` performing **strict-then-tentative
-    /// per scope** (both passes consult the same scope's bucket before descending), so an
-    /// inner-scope tentative match shadows an outer-scope strict one, mirroring lexical
-    /// scoping. Ambiguity surfaces at the first scope where the strict pass ties — it does
-    /// NOT fall through to `outer` (silently shadowing an inner conflict would hide a real
-    /// author error).
-    ///
-    /// Outcomes:
-    /// - [`ResolveOutcome::Resolved`]: a unique overload was picked. The carried
-    ///   [`Resolved`] bundles the function plus the per-slot classification
-    ///   ([`KFunction::classify_for_pick`]) plus an optional `placeholder_name` extracted
-    ///   from the picked function's `pre_run` (the binder-side name to install at dispatch
-    ///   time).
-    /// - [`ResolveOutcome::Ambiguous(n)`]: the strict pass at some scope produced `n ≥ 2`
-    ///   equally-specific candidates. No further scopes consulted.
-    /// - [`ResolveOutcome::Deferred`]: nothing matched anywhere on the chain, but `expr`
-    ///   contains at least one nested `Expression` / `ListLiteral` / `DictLiteral` part —
-    ///   eagerly evaluating those subs may produce a `Future(_)` that matches a typed slot
-    ///   the bare expression couldn't. The scheduler falls through to its eager-sub loop
-    ///   on this variant. Covers shapes like `((deep_call) + 1)` where a typed `+`
-    ///   overload only matches after `deep_call` resolves.
-    /// - [`ResolveOutcome::Unmatched`]: no match anywhere, and no eager parts to wait on
-    ///   either — a real dispatch failure the caller surfaces as an error.
-    pub fn resolve_dispatch<'e>(&'a self, expr: &KExpression<'e>) -> ResolveOutcome<'a> {
-        let key = expr.untyped_key();
-        let mut current: Option<&'a Scope<'a>> = Some(self);
-        while let Some(scope) = current {
-            let functions_guard = scope.bindings().functions();
-            if let Some(bucket) = functions_guard.get(&key) {
-                // Strict pass within this scope.
-                let strict: Vec<&'a KFunction<'a>> = bucket
-                    .iter()
-                    .copied()
-                    .filter(|f| f.signature.matches(expr))
-                    .collect();
-                let strict_sigs: Vec<&crate::machine::model::types::ExpressionSignature> =
-                    strict.iter().map(|f| &f.signature).collect();
-                match crate::machine::model::types::ExpressionSignature::most_specific(&strict_sigs)
-                {
-                    Some(i) => {
-                        let picked = strict[i];
-                        return ResolveOutcome::Resolved(build_resolved(picked, expr));
-                    }
-                    None if !strict.is_empty() => {
-                        // Tie inside this scope — surface ambiguity rather than fall through.
-                        return ResolveOutcome::Ambiguous(strict.len());
-                    }
-                    None => {}
-                }
-                // Tentative (auto-wrap) pass within the same scope.
-                let tentative: Vec<&'a KFunction<'a>> = bucket
-                    .iter()
-                    .copied()
-                    .filter(|f| f.accepts_for_wrap(expr))
-                    .collect();
-                let tentative_sigs: Vec<&crate::machine::model::types::ExpressionSignature> =
-                    tentative.iter().map(|f| &f.signature).collect();
-                match crate::machine::model::types::ExpressionSignature::most_specific(
-                    &tentative_sigs,
-                ) {
-                    Some(i) => {
-                        let picked = tentative[i];
-                        return ResolveOutcome::Resolved(build_resolved(picked, expr));
-                    }
-                    None if !tentative.is_empty() => {
-                        // Tentative-pass ambiguity: the wrap pass mustn't speculatively
-                        // transform an expression with multiple equally-loose candidates.
-                        // Fall through to `outer` rather than surfacing `Ambiguous` — the
-                        // tentative pass is already a relaxation, and an outer scope's
-                        // strict pick is the stronger signal.
-                    }
-                    None => {}
-                }
-            }
-            // Drop the borrow before recursing into `outer` — the outer scope's bucket
-            // lookup also calls `bindings().functions()`, and `RefCell` borrows in a
-            // shared chain need explicit release because NLL would not drop the inner
-            // guard early enough on its own.
-            drop(functions_guard);
-            current = scope.outer;
-        }
-        // Nothing matched on the chain. Distinguish a flat-unbound shape from one whose
-        // dispatch can't pick *yet* because nested subs need to evaluate first — the
-        // scheduler's eager-sub loop will rebuild with `Future(_)` parts and re-dispatch.
-        if expr_has_eager_part(expr) {
-            ResolveOutcome::Deferred
-        } else {
-            ResolveOutcome::Unmatched
-        }
-    }
 }
 
-/// True iff `expr` carries any `Expression` / `ListLiteral` / `DictLiteral` part — the
-/// shapes the scheduler's eager loop would schedule as sub-Dispatches. Drives the
-/// [`ResolveOutcome::Deferred`] vs [`ResolveOutcome::Unmatched`] split: a nested-call shape
-/// like `((deep_call) + 1)` defers (today's behavior); a flat unbound name `nope` is
-/// unmatched.
-fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
-    expr.parts.iter().any(|p| {
-        matches!(
-            p,
-            crate::machine::model::ast::ExpressionPart::Expression(_)
-                | crate::machine::model::ast::ExpressionPart::ListLiteral(_)
-                | crate::machine::model::ast::ExpressionPart::DictLiteral(_)
-        )
-    })
-}
-
-/// Pack a picked function + classification + `pre_run`-extracted placeholder name into a
-/// [`Resolved`]. The sole producer of the embedded `slots` — disjointness lives in
-/// [`KFunction::classify_for_pick`].
-fn build_resolved<'a>(
-    picked: &'a KFunction<'a>,
-    expr: &KExpression<'_>,
-) -> Resolved<'a> {
-    Resolved {
-        function: picked,
-        placeholder_name: picked.pre_run.and_then(|extractor| extractor(expr)),
-        slots: picked.classify_for_pick(expr),
-    }
-}
-
-/// A successful resolution: which function was picked, what placeholder name (if any) to
-/// install at dispatch time, and the per-slot classification a downstream scheduler driver
-/// needs for auto-wrap, replay-park, and eager-sub scheduling. `slots` is held by value —
-/// `build_resolved` is the sole producer, so this is the single carrier for the disjoint
-/// `(eager_indices | wrap_indices | ref_name_indices)` invariant documented on
-/// [`crate::machine::core::kfunction::ClassifiedSlots`].
-pub struct Resolved<'a> {
-    pub function: &'a KFunction<'a>,
-    pub placeholder_name: Option<String>,
-    pub slots: crate::machine::core::kfunction::ClassifiedSlots,
-}
-
-/// Outcome of [`Scope::resolve_dispatch`]. See that method's docstring for the meaning of
-/// each variant. The `Resolved | Ambiguous | Deferred | Unmatched` split is the
-/// load-bearing typing — the scheduler's dispatch driver matches on it directly to choose
-/// between immediate bind, ambiguity error, eager-sub scheduling, and dispatch-failed
-/// error.
-pub enum ResolveOutcome<'a> {
-    Resolved(Resolved<'a>),
-    Ambiguous(usize),
-    Deferred,
-    Unmatched,
-}
-
-/// Outcome of [`Scope::resolve_type_expr`]. The three variants mirror
-/// [`crate::machine::model::types::ElabResult`] but `Done` carries the
-/// arena-allocated cache reference and `Park` carries scheduler `NodeId`s the
-/// caller parks on.
-pub enum ResolveTypeExprOutcome<'a> {
-    Done(&'a crate::machine::model::types::KType),
-    Park(Vec<crate::machine::core::kfunction::NodeId>),
-    Unbound(String),
-}
-
-/// Walk the *top-level* of `kt` and collect every user-type `(scope_id, name)` pair
-/// it references. Recurses through structural variants (`List`, `Dict`, `KFunction`,
-/// `Mu`, `ConstructorApply`); does NOT recurse into a `UserType`'s `kind` payload —
-/// SCC closure is atomic across members, so a finalized `Foo` guarantees every
-/// user-type embedded in `Foo`'s payload is also finalized. Skips leaves and
-/// `AnyUserType` / `RecursiveRef`.
-fn referenced_user_types(
-    kt: &crate::machine::model::types::KType,
-) -> Vec<(ScopeId, String)> {
-    use crate::machine::model::types::KType;
-    let mut out: Vec<(ScopeId, String)> = Vec::new();
-    fn walk(kt: &KType, out: &mut Vec<(ScopeId, String)>) {
-        match kt {
-            KType::UserType { scope_id, name, .. } => {
-                out.push((*scope_id, name.clone()));
-            }
-            KType::SignatureBound { sig_id, sig_path, .. } => {
-                out.push((*sig_id, sig_path.clone()));
-            }
-            KType::List(inner) => walk(inner, out),
-            KType::Dict(k, v) => {
-                walk(k, out);
-                walk(v, out);
-            }
-            KType::KFunction { args, ret } => {
-                for a in args {
-                    walk(a, out);
-                }
-                walk(ret, out);
-            }
-            KType::Mu { body, .. } => walk(body, out),
-            KType::ConstructorApply { ctor, args } => {
-                walk(ctor, out);
-                for a in args {
-                    walk(a, out);
-                }
-            }
-            // Leaves / wildcards: no nested user-type references at this level.
-            KType::Number
-            | KType::Str
-            | KType::Bool
-            | KType::Null
-            | KType::Identifier
-            | KType::KExpression
-            | KType::TypeExprRef
-            | KType::Type
-            | KType::Signature
-            | KType::Any
-            | KType::AnyUserType { .. }
-            | KType::RecursiveRef(_) => {}
-        }
-    }
-    walk(kt, &mut out);
-    out
-}
-
-#[cfg(test)]
-mod resolve_type_expr_tests {
-    use super::*;
-    use crate::builtins::test_support::run_root_silent;
-    use crate::machine::core::RuntimeArena;
-    use crate::machine::model::ast::TypeExpr;
-    use crate::machine::model::types::KType;
-
-    /// Builtin leaf resolves to `Done` and caches the result; the second call returns
-    /// the same arena pointer without re-walking.
-    #[test]
-    fn resolve_type_expr_builtin_leaf_caches() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        let te = TypeExpr::leaf("Number".into());
-        let first = match scope.resolve_type_expr(&te) {
-            ResolveTypeExprOutcome::Done(kt) => kt,
-            _ => panic!("expected Done"),
-        };
-        assert_eq!(*first, KType::Number);
-        let second = match scope.resolve_type_expr(&te) {
-            ResolveTypeExprOutcome::Done(kt) => kt,
-            _ => panic!("expected Done on second call"),
-        };
-        assert!(std::ptr::eq(first, second), "second call should hit the memo");
-    }
-
-    /// A genuinely unbound leaf surfaces as `Unbound` and is not cached.
-    #[test]
-    fn resolve_type_expr_unbound_returns_unbound() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        let te = TypeExpr::leaf("NotABuiltin".into());
-        match scope.resolve_type_expr(&te) {
-            ResolveTypeExprOutcome::Unbound(_) => {}
-            _ => panic!("expected Unbound for unknown leaf"),
-        }
-    }
-
-    /// User-bound types reached after finalize land in the memo. Build a STRUCT,
-    /// then resolve a TypeExpr for its name — should `Done` and cache.
-    #[test]
-    fn resolve_type_expr_user_struct_caches_after_finalize() {
-        use crate::builtins::test_support::{parse_one, run_one};
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
-        let te = TypeExpr::leaf("Point".into());
-        let kt = match scope.resolve_type_expr(&te) {
-            ResolveTypeExprOutcome::Done(kt) => kt,
-            _ => panic!("expected Done after STRUCT declaration"),
-        };
-        match kt {
-            KType::UserType { name, .. } => assert_eq!(name, "Point"),
-            _ => panic!("expected UserType for Point"),
-        }
-        // Second resolve hits the memo and returns the same pointer.
-        let kt2 = match scope.resolve_type_expr(&te) {
-            ResolveTypeExprOutcome::Done(kt) => kt,
-            _ => panic!("expected Done on memo hit"),
-        };
-        assert!(std::ptr::eq(kt, kt2));
-    }
-}
