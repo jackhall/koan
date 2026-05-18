@@ -1,6 +1,5 @@
 use std::hash::Hasher;
 
-use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::types::{KType, Parseable, Serializable};
 use super::kobject::KObject;
 
@@ -22,17 +21,18 @@ pub enum KKey {
 impl KKey {
     /// Try to convert a runtime `KObject` value into a dict key. The dict aggregator calls
     /// this when materializing a dict literal whose key positions were sub-expressions; a
-    /// non-scalar result (e.g. a List) becomes a structured `ShapeError` instead of silently
-    /// stringifying.
-    pub fn try_from_kobject(obj: &KObject<'_>) -> Result<KKey, KError> {
+    /// non-scalar result (e.g. a List) yields the rejection reason as a string the caller
+    /// wraps into its own structured error. Returning a plain `String` keeps this
+    /// value-type conversion free of the runtime `KError` type.
+    pub fn try_from_kobject(obj: &KObject<'_>) -> Result<KKey, String> {
         match obj {
             KObject::KString(s) => Ok(KKey::String(s.clone())),
             KObject::Number(n) => Ok(KKey::Number(*n)),
             KObject::Bool(b) => Ok(KKey::Bool(*b)),
-            other => Err(KError::new(KErrorKind::ShapeError(format!(
+            other => Err(format!(
                 "dict key must be String, Number, or Bool; got {}",
                 other.ktype().name()
-            )))),
+            )),
         }
     }
 }
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn try_from_kobject_rejects_null() {
         let err = KKey::try_from_kobject(&KObject::Null).unwrap_err();
-        assert!(matches!(err.kind, KErrorKind::ShapeError(_)));
+        assert!(err.contains("dict key must be String, Number, or Bool"));
     }
 
     #[test]

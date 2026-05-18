@@ -25,12 +25,6 @@ without first landing something else:
 
 - [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
   codebase can span more than one source file and files become modules.
-- [Reduce module-graph coupling and shrink AI context cost](roadmap/simplify-and-shrink-context.md)
-  — `koan::machine` still owns the crate's biggest cross-edge knot
-  (`machine::model` ↓ `machine::core`) and several non-test files
-  exceed 600 raw LOC; score reshuffles via `modgraph_rewrite.py`,
-  split the largest files, then trim scheduler tests the sub-struct
-  extractions made redundant.
 
 ## Open items
 

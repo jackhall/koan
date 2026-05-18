@@ -318,6 +318,49 @@ trivially-cyclic case (`LET Ty = Ty` — the value-side `Ty` sub-Dispatch is
 the LET binder's `Owned` child and is about to park on its own ancestor)
 generically rather than as a special case in the elaborator.
 
+## `KObject` and the model/core boundary
+
+[`KObject`](../src/machine/model/values/kobject.rs) is the universal
+runtime value type. Pure-data variants (`Number`, `KString`, `Bool`,
+`List`, `Dict`, `KExpression`, `*Type` schema carriers, `Tagged`,
+`Struct`, `KTypeValue`, `TypeNameRef`, `Null`) carry no references
+into [`machine::core`](../src/machine/core.rs). The runtime-reference
+variants do — `KFunction`, `KFuture`, `KModule`, `KSignature`,
+`Wrapped` embed `&'a KFunction<'a>`, `KFuture<'a>`,
+`&'a Module<'a>`, `&'a Signature<'a>`, `&'a KType`, and an
+`Option<Rc<CallArena>>` lifecycle anchor. These references are why
+`model::values::kobject` imports from `core::{arena, kfunction,
+scope, scope_id}`.
+
+The references are structural, not incidental. Three hot consumers
+read the concrete runtime shape directly:
+
+- [`lift.rs`](../src/machine/execute/lift.rs) compares
+  `f.captured_scope().arena` and `m.child_scope().arena` against the
+  dying frame to decide whether a per-call function or module needs
+  its `Rc<CallArena>` anchor cloned onto the lifted value.
+- [`KObject::ktype()`](../src/machine/model/values/kobject.rs)
+  synthesizes `KType::UserType { kind: Module, scope_id, name }` for
+  module values from `m.scope_id()` and `m.path` — the dispatcher
+  reads these fields to nominally identify the module type.
+- `Parseable::summarize` and `deep_clone` recurse into the variants
+  and read `f.summarize()`, `m.path`, `s.path`, etc. — both methods
+  are part of `KObject`'s contract with `Parseable`, which the value
+  layer already implements.
+
+Indirecting these through a trait, an opaque handle, a generic
+parameter, or a model/runtime split each fail the same way: the
+recursive composite variants (`Tagged.value: Rc<KObject>`,
+`List.items: Rc<Vec<KObject>>`, `ExpressionPart::Future(&'a KObject)`)
+re-form the union at every nesting level, and the hot consumers
+need the concrete arena/scope/path identity that the abstraction
+would have to expose anyway. The cleanest available shape is the
+present one: the model/core boundary is one-way for pure value
+types (e.g. `KKey` returns `Result<KKey, String>` rather than
+naming `KError`), and the runtime-reference variants of `KObject`
+sit on the boundary by necessity, naming the `core` types they
+genuinely need.
+
 ## Open work
 
 - **Inference and search as scheduler work**

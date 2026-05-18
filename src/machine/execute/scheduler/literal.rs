@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::{KKey, KObject, Serializable};
-use crate::machine::{BodyResult, CombineFinish, Frame, NodeId, Scope};
+use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::super::nodes::NodeWork;
@@ -90,7 +90,9 @@ impl<'a> Scheduler<'a> {
                 let value_obj = v_slot.materialize(results);
                 let kkey = match KKey::try_from_kobject(&key_obj) {
                     Ok(k) => k,
-                    Err(e) => return BodyResult::Err(e.with_frame(frame_label())),
+                    Err(msg) => return BodyResult::Err(
+                        KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label()),
+                    ),
                 };
                 map.insert(Box::new(kkey), value_obj);
             }
