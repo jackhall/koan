@@ -18,6 +18,9 @@ use crate::machine::core::{Resolution, Scope, ScopeId};
 
 use super::ktype::{KType, UserTypeKind};
 
+#[cfg(test)]
+mod tests;
+
 /// Outcome of one elaboration walk over a `TypeExpr`.
 #[derive(Debug)]
 pub enum ElabResult {
@@ -31,6 +34,36 @@ pub enum ElabResult {
     /// A bare leaf name didn't resolve anywhere in scope and isn't a builtin. Structured
     /// error for the caller to wrap in `ShapeError`.
     Unbound(String),
+}
+
+impl ElabResult {
+    /// Reduce a sequence of sub-elaboration results with precedence
+    /// **Unbound > Park > Done**. `Ok(payloads)` exactly when every input was `Done`,
+    /// preserving order; otherwise `Err` carries the first `Unbound` (if any) or the
+    /// merged `Park` producers. Centralizes the precedence so it can't drift between
+    /// the multi-slot arms (`Function`, `ConstructorApply`, `Dict`).
+    fn collect<I: IntoIterator<Item = ElabResult>>(results: I) -> Result<Vec<KType>, ElabResult> {
+        let iter = results.into_iter();
+        let (lower, _) = iter.size_hint();
+        let mut dones: Vec<KType> = Vec::with_capacity(lower);
+        let mut parks: Vec<NodeId> = Vec::new();
+        let mut unbound: Option<String> = None;
+        for r in iter {
+            match r {
+                ElabResult::Done(kt) => dones.push(kt),
+                ElabResult::Park(ps) => parks.extend(ps),
+                ElabResult::Unbound(m) if unbound.is_none() => unbound = Some(m),
+                ElabResult::Unbound(_) => {}
+            }
+        }
+        if let Some(m) = unbound {
+            Err(ElabResult::Unbound(m))
+        } else if !parks.is_empty() {
+            Err(ElabResult::Park(parks))
+        } else {
+            Ok(dones)
+        }
+    }
 }
 
 /// Per-elaboration-walk state. `threaded` carries the names of binders the walk is
@@ -182,47 +215,37 @@ pub fn elaborate_type_expr(
         (name, TypeParams::List(items)) if name == "Dict" && items.len() == 2 => {
             let k = elaborate_type_expr(el, &items[0]);
             let v = elaborate_type_expr(el, &items[1]);
-            merge_two_into_dict(k, v)
+            match ElabResult::collect([k, v]) {
+                Ok(mut kts) => {
+                    let vt = kts.pop().expect("two slots");
+                    let kt = kts.pop().expect("two slots");
+                    ElabResult::Done(KType::Dict(Box::new(kt), Box::new(vt)))
+                }
+                Err(e) => e,
+            }
         }
         (name, TypeParams::List(items)) if name == "Dict" => ElabResult::Unbound(format!(
             ":(Dict ...) expects exactly 2 type parameters, got {}",
             items.len()
         )),
         (name, TypeParams::Function { args, ret }) if name == "Function" => {
-            let mut arg_kts: Vec<KType> = Vec::with_capacity(args.len());
-            let mut parks: Vec<NodeId> = Vec::new();
-            let mut unbound: Option<String> = None;
-            for a in args {
-                match elaborate_type_expr(el, a) {
-                    ElabResult::Done(kt) => arg_kts.push(kt),
-                    ElabResult::Park(ps) => parks.extend(ps),
-                    ElabResult::Unbound(m) if unbound.is_none() => unbound = Some(m),
-                    ElabResult::Unbound(_) => {}
+            // Elaborate args + ret in one pass through `ElabResult::collect`; the
+            // return slot rides as the last entry so its result participates in the
+            // shared Unbound > Park > Done precedence.
+            let mut slots: Vec<ElabResult> = args
+                .iter()
+                .map(|a| elaborate_type_expr(el, a))
+                .collect();
+            slots.push(elaborate_type_expr(el, ret));
+            match ElabResult::collect(slots) {
+                Ok(mut kts) => {
+                    let ret_kt = kts.pop().expect("ret slot pushed above");
+                    ElabResult::Done(KType::KFunction {
+                        args: kts,
+                        ret: Box::new(ret_kt),
+                    })
                 }
-            }
-            let ret_kt = elaborate_type_expr(el, ret);
-            match ret_kt {
-                ElabResult::Done(rt) => {
-                    if let Some(msg) = unbound {
-                        ElabResult::Unbound(msg)
-                    } else if !parks.is_empty() {
-                        ElabResult::Park(parks)
-                    } else {
-                        ElabResult::Done(KType::KFunction {
-                            args: arg_kts,
-                            ret: Box::new(rt),
-                        })
-                    }
-                }
-                ElabResult::Park(ps) => {
-                    parks.extend(ps);
-                    if let Some(msg) = unbound {
-                        ElabResult::Unbound(msg)
-                    } else {
-                        ElabResult::Park(parks)
-                    }
-                }
-                ElabResult::Unbound(m) => ElabResult::Unbound(m),
+                Err(e) => e,
             }
         }
         (name, TypeParams::List(items)) => {
@@ -258,27 +281,14 @@ pub fn elaborate_type_expr(
                             items.len(),
                         ));
                     }
-                    let mut arg_kts: Vec<KType> = Vec::with_capacity(items.len());
-                    let mut parks: Vec<NodeId> = Vec::new();
-                    let mut unbound: Option<String> = None;
-                    for it in items {
-                        match elaborate_type_expr(el, it) {
-                            ElabResult::Done(kt) => arg_kts.push(kt),
-                            ElabResult::Park(ps) => parks.extend(ps),
-                            ElabResult::Unbound(m) if unbound.is_none() => unbound = Some(m),
-                            ElabResult::Unbound(_) => {}
-                        }
-                    }
-                    if let Some(msg) = unbound {
-                        return ElabResult::Unbound(msg);
-                    }
-                    if !parks.is_empty() {
-                        return ElabResult::Park(parks);
-                    }
-                    return ElabResult::Done(KType::ConstructorApply {
-                        ctor: Box::new(ctor_kt.clone()),
-                        args: arg_kts,
-                    });
+                    let item_results = items.iter().map(|it| elaborate_type_expr(el, it));
+                    return match ElabResult::collect(item_results) {
+                        Ok(arg_kts) => ElabResult::Done(KType::ConstructorApply {
+                            ctor: Box::new(ctor_kt.clone()),
+                            args: arg_kts,
+                        }),
+                        Err(e) => e,
+                    };
                 }
             }
             // Forward-reference path: `Wrap` may be an in-flight `LET Wrap = ...` whose
@@ -297,20 +307,6 @@ pub fn elaborate_type_expr(
         (name, TypeParams::Function { .. }) => ElabResult::Unbound(format!(
             "only `Function` accepts a `(args) -> ret` shape; got `{name}`"
         )),
-    }
-}
-
-fn merge_two_into_dict(k: ElabResult, v: ElabResult) -> ElabResult {
-    match (k, v) {
-        (ElabResult::Done(kt), ElabResult::Done(vt)) => {
-            ElabResult::Done(KType::Dict(Box::new(kt), Box::new(vt)))
-        }
-        (ElabResult::Unbound(m), _) | (_, ElabResult::Unbound(m)) => ElabResult::Unbound(m),
-        (ElabResult::Park(mut a), ElabResult::Park(b)) => {
-            a.extend(b);
-            ElabResult::Park(a)
-        }
-        (ElabResult::Park(p), _) | (_, ElabResult::Park(p)) => ElabResult::Park(p),
     }
 }
 
@@ -396,164 +392,5 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
             name: name.clone(),
         };
         scope.cycle_close_install_identity(name, identity);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::machine::model::ast::TypeExpr;
-    use crate::machine::RuntimeArena;
-    use crate::builtins::test_support::run_root_silent;
-
-    fn leaf(n: &str) -> TypeExpr {
-        TypeExpr::leaf(n.into())
-    }
-
-    fn list_typeexpr(name: &str, items: Vec<TypeExpr>) -> TypeExpr {
-        TypeExpr {
-            name: name.into(),
-            params: TypeParams::List(items),
-            builtin_cache: std::cell::OnceCell::new(),
-        }
-    }
-
-    /// B2: `Wrap<Number>` where `Wrap` is bound in `bindings.types` as a
-    /// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names: ["Type"] }, .. }`
-    /// elaborates to `KType::ConstructorApply { ctor: <that UserType>, args: [Number] }`.
-    /// Pins the constructor-application arm in `elaborate_type_expr`.
-    #[test]
-    fn wrap_applied_elaborates_to_constructor_apply() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        // Register a TypeConstructor under `Wrap` directly (mirrors what
-        // `ascribe.rs:body_opaque` mints at runtime).
-        let ctor = KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: ScopeId::from_raw(0, 0xC0DE),
-            name: "Wrap".into(),
-        };
-        scope.register_type("Wrap".into(), ctor.clone());
-        // Surface form: `Wrap<Number>` — a TypeExpr with name "Wrap" + List params.
-        let te = list_typeexpr("Wrap", vec![leaf("Number")]);
-        let mut el = Elaborator::new(scope);
-        match elaborate_type_expr(&mut el, &te) {
-            ElabResult::Done(kt) => match kt {
-                KType::ConstructorApply { ctor: got_ctor, args } => {
-                    assert_eq!(*got_ctor, ctor);
-                    assert_eq!(args, vec![KType::Number]);
-                }
-                other => panic!("expected ConstructorApply, got {:?}", other),
-            },
-            other => panic!("expected Done, got {:?}", other),
-        }
-    }
-
-    /// B2: two opaque ascriptions of the same SIG mint distinct `Wrap` constructors;
-    /// the `ConstructorApply`s produced by elaborating against each per-call scope
-    /// must therefore differ structurally. Pins the per-call generativity property
-    /// extending into the applied-form layer.
-    #[test]
-    fn wrap_applied_distinct_per_ascription() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        let scope_a = arena.alloc_scope(crate::machine::core::Scope::child_under(scope));
-        let scope_b = arena.alloc_scope(crate::machine::core::Scope::child_under(scope));
-        let ctor_a = KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: ScopeId::from_raw(0, 0xAAAA),
-            name: "Wrap".into(),
-        };
-        let ctor_b = KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: ScopeId::from_raw(0, 0xBBBB),
-            name: "Wrap".into(),
-        };
-        scope_a.register_type("Wrap".into(), ctor_a.clone());
-        scope_b.register_type("Wrap".into(), ctor_b.clone());
-
-        let te = list_typeexpr("Wrap", vec![leaf("Number")]);
-        let mut ela = Elaborator::new(scope_a);
-        let kt_a = match elaborate_type_expr(&mut ela, &te) {
-            ElabResult::Done(kt) => kt,
-            other => panic!("expected Done, got {:?}", other),
-        };
-        let mut elb = Elaborator::new(scope_b);
-        let kt_b = match elaborate_type_expr(&mut elb, &te) {
-            ElabResult::Done(kt) => kt,
-            other => panic!("expected Done, got {:?}", other),
-        };
-        // Structural inequality: ctor identities differ by scope_id.
-        assert_ne!(kt_a, kt_b);
-    }
-
-    /// Arity mismatch surfaces a focused error rather than building a wrong-shape
-    /// `ConstructorApply`. Pins the elaborator's arity check.
-    #[test]
-    fn wrap_applied_arity_mismatch_unbound() {
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        let ctor = KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: ScopeId::from_raw(0, 0xC0DE),
-            name: "Wrap".into(),
-        };
-        scope.register_type("Wrap".into(), ctor);
-        // Two args against a single-param constructor: arity mismatch.
-        let te = list_typeexpr("Wrap", vec![leaf("Number"), leaf("Str")]);
-        let mut el = Elaborator::new(scope);
-        match elaborate_type_expr(&mut el, &te) {
-            ElabResult::Unbound(msg) => {
-                assert!(
-                    msg.contains("expects 1") && msg.contains("got 2"),
-                    "expected arity message naming counts, got: {msg}",
-                );
-            }
-            other => panic!("expected Unbound, got {:?}", other),
-        }
-    }
-
-    /// Confirms that a parked-on placeholder for `name` (LET binding hasn't run yet)
-    /// reports `ElabResult::Park`, not `Unbound`. Pins the forward-reference path
-    /// added to the constructor-application arm so FN-defs in a SIG body whose
-    /// return type is `Wrap<...>` correctly park on the in-flight `LET Wrap = ...`.
-    #[test]
-    fn wrap_applied_parks_on_placeholder() {
-        use crate::machine::execute::Scheduler;
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        // Install a placeholder for `Wrap` (NodeId 0xDEAD won't dispatch; the test
-        // only inspects the elaborator's response).
-        let mut sched = Scheduler::new();
-        // Reserve a NodeId for the placeholder. Use `add_dispatch` on a no-op expr so
-        // the scheduler has a real node id to install.
-        let dummy = sched.add_dispatch(
-            crate::builtins::test_support::parse_one("LET _placeholder_target = 1"),
-            scope,
-        );
-        scope.install_placeholder("Wrap".into(), dummy).expect("placeholder install");
-        let te = list_typeexpr("Wrap", vec![leaf("Number")]);
-        let mut el = Elaborator::new(scope);
-        match elaborate_type_expr(&mut el, &te) {
-            ElabResult::Park(ids) => {
-                assert!(ids.contains(&dummy), "expected parked on the Wrap placeholder, got {:?}", ids);
-            }
-            other => panic!("expected Park, got {:?}", other),
-        }
-    }
-
-    /// `name()` round-trip — pin the diagnostic surface form `ctor<arg>`.
-    #[test]
-    fn constructor_apply_name_renders_surface_form() {
-        let ctor = KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
-            scope_id: ScopeId::from_raw(0, 0xC0DE),
-            name: "Wrap".into(),
-        };
-        let app = KType::ConstructorApply {
-            ctor: Box::new(ctor),
-            args: vec![KType::Number],
-        };
-        assert_eq!(app.name(), ":(Wrap Number)");
     }
 }
