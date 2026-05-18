@@ -2,13 +2,13 @@
 
 **Problem.** The structural function-type language coarsens
 deferred-return FNs. When a `KFunction`'s `signature.return_type` is
-[`ReturnType::Deferred(_)`](../src/machine/model/types/signature.rs),
+[`ReturnType::Deferred(_)`](../../src/machine/model/types/signature.rs),
 the structural `KType::KFunction { args, ret }` synthesis at
-[`function_value_ktype`](../src/machine/model/values/kobject.rs)
+[`function_value_ktype`](../../src/machine/model/values/kobject.rs)
 collapses `ret` to `KType::Any` because the structural language has
 no surface for "per-call elaboration of this expression." The
 symmetric coarsening on the admission side lives at
-[`function_compat`](../src/machine/model/types/ktype_predicates.rs) —
+[`function_compat`](../../src/machine/model/types/ktype_predicates.rs) —
 when a deferred-return candidate is admission-checked against a slot
 typed `:(Function (_) -> SpecificT)`, the comparison reads the
 candidate's `ret` as `Any` and the strict `==` refuses admission
@@ -35,7 +35,7 @@ the structural `KType` would.
   `Deferred(Expression)`-carrying FN admits-or-rejects with a real
   shape comparison, not a silent refusal.
 - *Modular-implicit search
-  ([Stage 5](module-system-5-modular-implicits.md)) over deferred-
+  ([Stage 5](modular-implicits.md)) over deferred-
   return candidates becomes decidable.* Implicit resolution searches
   by structural `KType` shape; precision-aware synthesis lets the
   search distinguish candidates that differ only in their deferred
@@ -63,7 +63,7 @@ the structural `KType` would.
     `KType` (e.g. structural slot ascription that's already lost the
     `KFunction` carrier).
 - *Admission side — open.* The
-  [`function_compat`](../src/machine/model/types/ktype_predicates.rs)
+  [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
   branch's `debug_assert!` is the tripwire — when it fires, the
   decision between (a) and (b) above is forced. Today's strict-`==`
   refusal stays safe until the first non-`Any` slot-ret comparison
@@ -71,7 +71,7 @@ the structural `KType` would.
   consumer or a precise FN-typed slot ascription test landing.
 - *Bridging today's PartialEq path — decided.* `ReturnType`'s own
   `PartialEq` (used by `signatures_exact_equal` in
-  [`bindings.rs`](../src/machine/core/bindings.rs)) stays
+  [`bindings.rs`](../../src/machine/core/bindings.rs)) stays
   structure-aware regardless of which synthesis path lands — routing
   by signature equality is independent of structural-`KType`
   comparison.
@@ -82,7 +82,7 @@ the structural `KType` would.
 
 **Unblocks:**
 
-- [Stage 5 — Modular implicits](module-system-5-modular-implicits.md)
+- [Stage 5 — Modular implicits](modular-implicits.md)
   — implicit search over functor-shaped candidates whose return
   types reference per-call parameters needs precision-aware
   structural comparison.

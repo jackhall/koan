@@ -36,7 +36,7 @@ independent of signatures.
   The engine sees quoted axioms and the module's `gen` slot — invocation
   at ascription is the integration point, not a coupling at the
   implementation level.
-- *Axiom syntax — decided per [design/typing/implicits.md § Axioms and property testing](../design/typing/implicits.md#axioms-and-property-testing).*
+- *Axiom syntax — decided per [design/typing/implicits.md § Axioms and property testing](../../design/typing/implicits.md#axioms-and-property-testing).*
   `(AXIOM #(quoted bool predicate))` inside a `SIG` body. The engine
   evaluates each quote under a scope it builds by drawing samples from the
   module's `gen` slot for every free identifier; variable types resolve
@@ -69,7 +69,7 @@ independent of signatures.
 
 **Requires:**
 
-- [Generalize `Scope::out` into monadic side-effect capture](monadic-side-effects.md)
+- [Generalize `Scope::out` into monadic side-effect capture](../libraries/monadic-side-effects.md)
   — generators thread randomness via the `Random` effect module rather than
   ambient entropy.
 - [VAL-slot value-carrier abstract-identity tagging](val-slot-abstract-identity-tagging.md)
@@ -79,7 +79,7 @@ independent of signatures.
 
 **Unblocks:**
 
-- [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
+- [Stage 6 — Equivalence-checked coherence](equivalence-checking.md)
 
 The engine is independent of implicit dispatch and could be developed in
 parallel with stage 5 — its integration point is the module language's

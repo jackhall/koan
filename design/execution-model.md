@@ -372,9 +372,9 @@ genuinely need.
   node kind. Higher-kinded slots and sharing constraints layer on top of
   the scheduler-driven elaborator (see
   [typing/](typing/README.md));
-  [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
+  [stage 5](../roadmap/predicate_typing/modular-implicits.md) layers
   implicit search.
 - **Monadic side-effect capture**
-  ([roadmap/monadic-side-effects.md](../roadmap/monadic-side-effects.md)).
+  ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.

@@ -54,7 +54,7 @@ name-presence shape check ([`ascribe.rs`](../../src/builtins/ascribe.rs))
 admits any module member that supplies the named slot regardless of how
 the member was declared — full type-shape checking against the VAL slot's
 declared type is owned by
-[Modular implicits](../../roadmap/module-system-5-modular-implicits.md).
+[Modular implicits](../../roadmap/predicate_typing/modular-implicits.md).
 
 Structures can be **ascribed** to signatures via two operators that differ
 only by a whitespace gap in the visual rendering, expressing "you can see

@@ -25,20 +25,20 @@ dispatch correctness in the user's head.
     "this type wants a paired operator" before stage 5 lands.
 - *Group laws — open.* Math groups have axioms (associativity, identity, inverse). The
   signature variant slots into the property-testing engine from
-  [stage 4](module-system-4-axioms-and-generators.md) — the laws become axioms checked
+  [stage 4](../predicate_typing/axioms-and-generators.md) — the laws become axioms checked
   at ascription. The shorthand variant has to trust the declaration, which is fine if
   violations only produce wrong answers, not crashes (the case for a dispatch-only
   mechanism). Falls out of the strategy choice above.
-- *Parser surface — open.* [operators.rs](../src/parse/operators.rs)'s registry is flat
+- *Parser surface — open.* [operators.rs](../../src/parse/operators.rs)'s registry is flat
   today. Group declarations would either feed it at runtime (slot allocation deferred
   to dispatch) or extend a compile-time table (structural, rigid). User-definable
   groups force the runtime path.
 
 ## Dependencies
 
-**Requires:**
-
-- [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
-  for the generic-over-groups payoff. The syntax-level shorthand could ship earlier
-  against stage 1's signature surface, but the most expressive variant needs implicit
-  resolution.
+The syntax-level shorthand variant has no hard prerequisites and can ship against
+the existing operator registry. The signature-based variant pairs naturally with
+[Module system stage 5 — Modular implicits](../predicate_typing/modular-implicits.md)
+for the generic-over-groups payoff, but neither item blocks the other: this work
+can land first as the shorthand and gain implicit-dispatch later, or land after
+stage 5 as the signature variant directly.

@@ -16,96 +16,70 @@ expressions and parsing, and error handling, plus the [design/typing/](design/ty
 subdirectory covering the type and module systems end-to-end (the module language and
 runtime type system shipped, implicit-search and axiom stages tracked as `module-system-*`
 roadmap items below). [design/effects.md](design/effects.md) captures the in-language
-monadic side-effects design (tracked in [roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md)).
+monadic side-effects design (tracked in [roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md)).
 
 ## Next items
 
 Items with no unresolved roadmap-level prerequisites — any of these can be picked up
 without first landing something else:
 
-- [Files and imports](roadmap/files-and-imports.md) — wire `.koan` files together so a
-  codebase can span more than one source file and files become modules.
+- [Files and imports](roadmap/libraries/files-and-imports.md) — wire `.koan` files together so
+  a codebase can span more than one source file and files become modules.
+- [Error-handling surface follow-ups](roadmap/libraries/error-handling.md) — errors-as-values,
+  source spans on `KExpression`, continue-on-error, and the user-error catch surface;
+  runs against the shipped module-system substrate.
+- [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
+  operators as a group; the syntax-level shorthand variant has no hard prerequisites.
+- [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md) —
+  parameter type slots that reference earlier parameters in the same FN signature.
+- [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
+  — per-call elaboration precision for structurally-typed FN slots.
+- [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
+  — VAL-slot reads carry the SIG's abstract identity rather than the underlying value's
+  concrete `KType`.
 
 ## Open items
 
-### Memory and runtime substrate
+Each subdirectory of [roadmap/](roadmap/) is one project — a coherent body of work
+whose items share design constraints and ship together. Per-item write-ups (problem,
+impact, directions, dependencies) live in the subdirectory; the summaries below name
+what the project buys the language and list its open items.
 
-- [Generalize `Scope::out` into monadic side-effect capture](roadmap/monadic-side-effects.md)
-  — replace the ad-hoc `Box<dyn Write>` with an in-language `Monad` signature
-  (see [design/effects.md](design/effects.md)) plus a runtime `Effectful<T>` carrier;
-  ships standard effect modules (`Random`, `IO`, `Time`). The `Wrap` slot's
-  higher-kinded surface (`(TYPE_CONSTRUCTOR Type)`) has landed via module-system
-  stage 2.
+### Predicate typing — [roadmap/predicate_typing/](roadmap/predicate_typing/)
 
-### Module system
+Finish the type and module systems. The agreed design is captured in
+[design/typing/](design/typing/README.md); stages 1 and 2 shipped (the module
+language: `MODULE`/`SIG` declarators, `:|`/`:!` ascription, per-module type identity,
+plus the scheduler-driven elaborator, `SIG_WITH` sharing constraints, and
+higher-kinded type-constructor slots). The remaining items land implicit search,
+axioms and equivalence-checked coherence, multi-parameter functor sharing, and
+the structural-FN precision the implicit-search dispatch needs:
 
-The agreed design is captured in [design/typing/](design/typing/README.md);
-stages 1 and 2 shipped (the module language: `MODULE`/`SIG` declarators,
-`:|`/`:!` ascription, per-module type identity, plus the scheduler-driven
-elaborator, `SIG_WITH` sharing constraints, higher-kinded
-type-constructor slots, and the post-stage-1 Miri audit-slate
-carry-forward), and the remaining stages below land the rest
-incrementally, each producing a usable end state.
+- [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md)
+- [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
+- [Stage 4 — Property testing and axioms](roadmap/predicate_typing/axioms-and-generators.md)
+- [Stage 5 — Modular implicits](roadmap/predicate_typing/modular-implicits.md)
+- [Stage 6 — Equivalence-checked coherence](roadmap/predicate_typing/equivalence-checking.md)
+- [Stage 7 — Syntax tuning and witness types](roadmap/predicate_typing/syntax-tuning.md)
+- [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
 
-- [Dependent parameter annotations](roadmap/module-system-dependent-param-annotations.md) —
-  parameter type slots that reference earlier parameters in the same FN
-  signature (`(MAKE T: Type elt: T)`, OCaml's
-  `module Make (E : ORDERED) (S : SET with type elt = E.t)`). Reuses
-  the `ReturnType` / `DeferredReturn` carrier shipped at
-  [`ExpressionSignature::return_type`](src/machine/model/types/signature.rs)
-  and the per-call re-elaboration plumbing in
-  [`KFunction::invoke`](src/machine/core/kfunction/invoke.rs); the new
-  work is staged left-to-right dispatch.
-- [VAL-slot value-carrier abstract-identity tagging](roadmap/val-slot-abstract-identity-tagging.md)
-  — a value read from an `:|`-ascribed module's VAL-declared slot today
-  carries the underlying value's `KType`, not the per-call abstract
-  identity `:|` minted for the SIG's `Type` member; closes the
-  deferred end-to-end functor-on-VAL-slot call test variant in
-  [`functor_return_module_type_of_parameter_resolves_per_call`](src/builtins/fn_def/tests/functor/deferred_return.rs)
-  and aligns dispatch keys for stage 5's implicit search over
-  VAL-typed values.
-- [Stage 4 — Property testing and axioms](roadmap/module-system-4-axioms-and-generators.md)
-  — Rust-side property-testing engine kept disjoint from dispatch; axiom syntax in
-  signatures with compile-time checking on ascription.
-- [Stage 5 — Modular implicits](roadmap/module-system-5-modular-implicits.md) —
-  implicit module parameters with lexical resolution and strict-on-ambiguity.
-- [Stage 6 — Equivalence-checked coherence](roadmap/module-system-6-equivalence-checking.md)
-  — cross-implicit equivalence testing; the differentiating coherence story.
-- [Stage 7 — Syntax tuning and witness types](roadmap/module-system-7-syntax-tuning.md)
-  — disambiguation sugar designed against patterns from real stage-5 code, plus opt-in
-  witness types.
+### Libraries — [roadmap/libraries/](roadmap/libraries/)
 
-### Type system
+Give Koan a multi-file source surface, an in-language effect/error story, and
+a canonical body of Koan code that exercises both. Each item is a piece of
+substrate the standard library needs to exist as Koan source rather than as
+Rust builtins:
 
-- [Group-based operators](roadmap/group-based-operators.md) — `+`/`-` form a math group
-  but the language treats every operator as a flat independent builtin. Generic
-  dispatch over groups arrives with the module system's modular implicits.
-- [Structural KFunction admission across deferred return types](roadmap/kfunction-deferred-ret-precision.md) —
-  [`function_value_ktype`](src/machine/model/values/kobject.rs) synthesizes
-  `KType::KFunction { ret: KType::Any }` for deferred-return FNs because the
-  structural function-type language has no surface for "per-call
-  elaboration of this expression"; the symmetric coarsening in
-  [`function_compat`](src/machine/model/types/ktype_predicates.rs) admits-or-
-  rejects-by-`==` so today's strict refusal stays safe but silent. A
-  `debug_assert!` at the coarsening branch is the tripwire; the decision
-  is forced when stage 5 implicit search or a precise FN-typed slot
-  ascription first exercises the scenario.
+- [Files and imports](roadmap/libraries/files-and-imports.md)
+- [Generalize `Scope::out` into monadic side-effect capture](roadmap/libraries/monadic-side-effects.md)
+- [Error-handling surface follow-ups](roadmap/libraries/error-handling.md)
+- [Group-based operators](roadmap/libraries/group-based-operators.md)
+- [Standard library](roadmap/libraries/standard-library.md)
 
-### Surface and ergonomics
+### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
-- [Files and imports](roadmap/files-and-imports.md) — a Koan codebase is one file;
-  no way for a `.koan` file to reach into another, and no story for how files become
-  modules.
-- [Error-handling surface follow-ups](roadmap/error-handling.md) — errors-as-values,
-  source spans on `KExpression`, continue-on-error (independent), plus typed
-  user errors and the catch surface (gated on module-system stage 2).
-- [Standard library](roadmap/standard-library.md) — collections (`Set`, `Map`,
-  …) and standard effect modules (`Random`, `IO`, `Time`) ship as Koan-source
-  functor FNs across multiple `.koan` files; doubles as the canonical example
-  of idiomatic module / signature / functor / import composition.
+Surface that lets external tools — editors, debuggers, build systems — see
+intermediate Koan state. The build-time / run-time scheduler split is the
+foundation:
 
-### Future-facing
-
-- [Two-phase execution: build-time with pegged inputs, run-time resume](roadmap/two-phase-execution.md) —
-  pre-run error surfacing and the performance ceiling, both falling out of
-  the same pegged-frontier scheduler run plus stalled-DAG snapshot.
+- [Two-phase execution: build-time with pegged inputs, run-time resume](roadmap/editor_tooling/two-phase-execution.md)

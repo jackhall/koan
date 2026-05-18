@@ -228,7 +228,7 @@ sections may be aspirational where a decision has landed ahead of code.
 [design/effects.md](design/effects.md) captures one further cross-cutting design ahead of
 implementation: in-language monadic side effects — a `Monad` signature in Koan with concrete
 effect modules (`Random`, `IO`, `Time`) ascribing it. Implementation is tracked in
-[roadmap/monadic-side-effects.md](roadmap/monadic-side-effects.md).
+[roadmap/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md).
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. [ROADMAP.md](ROADMAP.md) keeps the curated ordering and the

@@ -90,6 +90,6 @@ wrapper's purity, not the inner effectful body.
 
 ## Open work
 
-- [Generalize `Scope::out` into monadic side-effect capture](../roadmap/monadic-side-effects.md)
+- [Generalize `Scope::out` into monadic side-effect capture](../roadmap/libraries/monadic-side-effects.md)
   — the implementation work to ship the `Monad` signature, the standard
   effect modules, and the runtime drainage path.

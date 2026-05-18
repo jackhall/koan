@@ -1,6 +1,6 @@
 # Files and imports
 
-**Problem.** [`main.rs`](../src/main.rs) reads one source string — a file path
+**Problem.** [`main.rs`](../../src/main.rs) reads one source string — a file path
 argument or stdin — and that is the entire Koan program. There is no way for
 one Koan source file to reference definitions in another: no import, no
 qualified path, no project-level entry point. A Koan codebase is one file.
@@ -8,7 +8,7 @@ Realistic programs outgrow that long before they outgrow a few hundred lines,
 and the language cannot represent its own standard library as separate files
 because the standard library does not yet exist as Koan code at all.
 
-The [module system](../design/typing/modules.md) gives Koan an in-language
+The [module system](../../design/typing/modules.md) gives Koan an in-language
 notion of modules — structures, signatures, and ascription — but says nothing
 about how source files map onto that notion or how one file reaches into
 another. This item closes that gap.
@@ -66,7 +66,7 @@ another. This item closes that gap.
 - *Circular imports — decided.* Resolved via the existing dispatch-as-node
   scheduler by treating cross-file references as another deferred
   dependency, consistent with the
-  [dispatch-time name placeholder](../design/execution-model.md#dispatch-time-name-placeholders)
+  [dispatch-time name placeholder](../../design/execution-model.md#dispatch-time-name-placeholders)
   mechanism. Disallowing or requiring forward-declaration discipline is
   rejected — the scheduler already handles deferred resolution generically
   and forcing source order on multi-file projects is gratuitous.

@@ -252,7 +252,7 @@ impl KType {
 ///
 /// A `Deferred(_)` return collapses to `KType::Any` for this check (the structural
 /// comparison can't see the per-call resolution). See
-/// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/kfunction-deferred-ret-precision.md).
+/// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/predicate_typing/kfunction-deferred-ret-precision.md).
 pub(super) fn function_compat(
     sig: &ExpressionSignature<'_>,
     args: &[KType],

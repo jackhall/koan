@@ -152,5 +152,5 @@ documented surface — user code goes through the sigils.
 ## Open work
 
 - Source spans on `KExpression`
-  ([Error-handling surface follow-ups](../roadmap/error-handling.md)) — error
+  ([Error-handling surface follow-ups](../roadmap/libraries/error-handling.md)) — error
   frames currently can't point to a line/column in source.

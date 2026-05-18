@@ -3,7 +3,7 @@
 Surface-level error-handling work deferred while the dispatcher's structured
 `KError` plumbing landed. Several related items share this file because the
 type-system and dispatcher decisions for one constrain the others. See
-[design/error-handling.md](../design/error-handling.md) for the shipped
+[design/error-handling.md](../../design/error-handling.md) for the shipped
 substrate and the privilege-boundary principle.
 
 **Problem.** Today's `KError` channel propagates every error kind
@@ -46,10 +46,10 @@ function raise."
 - *"Type-language binder expected" diagnostic vocabulary — open.* The
   bare-leaf arm of `elaborate_type_expr` rejects identifier-class names
   in type-position slots (shipped substrate; see
-  [design/typing/elaboration.md](../design/typing/elaboration.md)). The diagnostic
+  [design/typing/elaboration.md](../../design/typing/elaboration.md)). The diagnostic
   needs vocabulary that names the surface "modules-as-types" layering
   (per
-  [design/typing/functors.md](../design/typing/functors.md))
+  [design/typing/functors.md](../../design/typing/functors.md))
   without leaking scheduler internals. Pick wording — candidates: "type-
   language binder expected", "name is value-language only", or similar —
   with a hint pointing at the Type-class spelling convention.
@@ -63,7 +63,7 @@ design choices:
   errors into them.
 - *`Result<Ty, Er>` as a functor.* A functor-produced module over the
   shipped module-system substrate
-  ([design/typing/functors.md](../design/typing/functors.md));
+  ([design/typing/functors.md](../../design/typing/functors.md));
   the typed user-error surface consumes it.
 - *Catch-builtins.* The match-form surface. Pattern arms over selected
   `KErrorKind` variants and over the user-error type's variants, with

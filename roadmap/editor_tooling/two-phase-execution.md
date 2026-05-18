@@ -1,8 +1,8 @@
 # Two-phase execution: build-time with pegged inputs, run-time resume
 
 **Problem.** The design model
-([execution-model.md § Pegged and free execution](../design/execution-model.md#pegged-and-free-execution),
-[typing/scheduler.md](../design/typing/scheduler.md)) is that build-time and
+([execution-model.md § Pegged and free execution](../../design/execution-model.md#pegged-and-free-execution),
+[typing/scheduler.md](../../design/typing/scheduler.md)) is that build-time and
 run-time are the **same scheduler engine**, differing only in which nodes
 are pegged (held without execution until external data or effects arrive).
 The intermediate representation is the **stalled DAG state** — `NodeStore`
@@ -48,7 +48,7 @@ to build first and "JIT phase" to build second.
 
 - *Peg-set scope — open.* Which categories of node count as pegged at
   build time is enumerated in
-  [execution-model.md § Pegged and free execution](../design/execution-model.md#pegged-and-free-execution)
+  [execution-model.md § Pegged and free execution](../../design/execution-model.md#pegged-and-free-execution)
   in principle — user-supplied input, plugin source files, syscalls,
   network calls. Which concrete builtins / `KObject` shapes carry the peg
   marker, and whether the marker is intrinsic to the builtin or attached
@@ -61,7 +61,7 @@ to build first and "JIT phase" to build second.
   inputs and effects, and the scheduler resumes.
 - *Permissive vs strict build-time errors — open.* The user-facing choice
   is whether the build-time phase permits unresolved type bindings — the
-  [dispatch-time name placeholder](../design/execution-model.md#dispatch-time-name-placeholders)
+  [dispatch-time name placeholder](../../design/execution-model.md#dispatch-time-name-placeholders)
   mechanism reaching across into build-time — or insists every type
   identifier resolves before the snapshot is taken. Permissive matches the
   dynamic-dispatch ergonomics today's runtime exhibits and gives a soft-
@@ -77,7 +77,7 @@ to build first and "JIT phase" to build second.
 
 **Requires:**
 
-- [Module system stage 5 — Modular implicits](module-system-5-modular-implicits.md) —
+- [Module system stage 5 — Modular implicits](../predicate_typing/modular-implicits.md) —
   the type system has to be structurally complete before build-time scheduling
   is designed against it. Stage 5 is the latest stage that introduces new
   shapes the build-time phase has to handle (modules, functors, first-class

@@ -103,7 +103,7 @@ only variant whose payload is user-extensible.
 
 ## Open work
 
-[Error-handling surface follow-ups](../roadmap/error-handling.md) tracks
+[Error-handling surface follow-ups](../roadmap/libraries/error-handling.md) tracks
 the related items:
 
 - **Errors-as-values** — promote `KError` to a `KObject` variant so user

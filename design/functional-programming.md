@@ -87,7 +87,7 @@ for how this lets users add what look like new keyword forms.
 
 The generic-function story extends through the [module
 system](typing/modules.md). Modular implicits
-([stage 5](../roadmap/module-system-5-modular-implicits.md)) add a second
+([stage 5](../roadmap/predicate_typing/modular-implicits.md)) add a second
 kind of dispatch alongside slot-specificity: a function declares an implicit
 module parameter, and the compiler infers and inserts a satisfying module at
 each call site. `sort {Mo : ORDERED} (xs :(List Mo.t))` is an ordinary `FN`
