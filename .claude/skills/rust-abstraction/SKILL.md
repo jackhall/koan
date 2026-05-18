@@ -1,63 +1,47 @@
 ---
 name: rust-abstraction
-description: Use when deciding *where* to draw a boundary in a long Rust file or function — finding seams to extract, choosing the right shape (struct, enum, iterator, classifier), and avoiding empty wrappers. Judgment-side companion to `rust-refactor` (which covers the mechanical execution of moves and rewrites). Reach for this before `rust-refactor` whenever the user asks "can this be simplified?", "are there seams here?", or "what abstraction belongs here?".
+description: Use when deciding whether a long Rust file in the koan repo has an extractable seam — and what *shape* the extraction should take. Judgment-side companion to `rust-refactor` (mechanical moves) and `modgraph` (partition scoring). Reach for it when asked "can this be simplified?", "are there seams here?", "what should come out of this file?".
 ---
 
 # rust-abstraction
 
-Companion to `rust-refactor`. That skill is about *how* to perform moves, renames, and rewrites mechanically. This one is about *what* to lift out and *how to shape* it once you've decided the file is too long or too tangled.
+Decide whether a long Rust file has a seam worth extracting, and what shape the extraction should take. "No seam, skip this file" is a valid output — don't manufacture work.
 
-Use the signals below to find candidate seams, the rules to choose the abstraction's shape, and the "what not to extract" list to resist over-engineering. When you've decided, hand off to `rust-refactor` for the actual move.
+## Check the cheap fixes first
 
-## Signals that mark a seam
+Before looking for abstractions, see if a mechanical fix handles it. If yes, do that and stop.
 
-1. **Inline types inside a long function.** An `enum` or `struct` defined inside a function body is a tell: the author already factored out the *concept* but couldn't lift the *boundary*. Promote the type to module scope first; the function shrinks naturally.
+- **Tests inline?** Measure prod vs. test lines. If tests are >20% of the file and live in `#[cfg(test)] mod ...` blocks, lift them to `foo/tests.rs` per the project convention. That alone often resolves "this file is too long."
+- **Hand-written `Clone`/`Debug` that could `derive`?** Replace and stop.
+- **Dead code from a half-done refactor?** Delete and stop.
 
-2. **"Step N" phase comments.** Numbered phases inside one function are unextracted function names the author already wrote. Each phase comment is a candidate function name.
+These aren't abstraction work; they're cleanup. The rest of the skill only kicks in if cleanup doesn't get you there.
 
-3. **Repeated loop or match shape with varying bodies.** N copies of the same `while let` / `for` / filter pipeline that differ only in the body or predicate → iterator + closure. N match arms that differ only in how they assemble a final value → classifier function returning a sum type.
+## Seam smells
 
-4. **Free functions that don't touch the host type.** Pure structural walkers (`fn walk(&Foo) -> ...`) misfiled in a high-coupling module. Often the cheapest lift in the file because they have no scope/handle/state dependency to thread through.
+Look for these. One strong signal is enough; three weak ones is not.
 
-5. **Read-only narrow access to a wide type.** A function uses one or two fields of a large struct and never the rest. That narrow slice *is* the API boundary, and justifies a separate module that consumes only what it needs.
+- **Inline `struct`/`enum` in a function body.** The author already factored the *concept* but didn't lift the *boundary*. Promote it.
+- **Repeated loop or match shape with varying bodies.** N near-identical `for/match` walks differing only in body or predicate → consolidate.
+- **Read-only narrow access to a wide type.** A method that touches one or two fields of a large struct and never the rest. That slice *is* the boundary.
+- **Load-bearing invariant living as a docstring.** A rule that must be preserved (cache-safety, ordering, "don't recurse here") is one rename away from being lost — promote it to a type name.
 
-6. **Load-bearing invariants living as comments.** A rule that must be preserved (cache-safety, ordering, atomicity, "don't recurse here") sitting in a docstring is one rename away from being lost. Promote it to a type name.
+If none of these fire after a real read of the file, the honest answer is **"no seam — skip."** Say so out loud.
 
-## Rules for choosing abstractions
+## When picking a shape
 
-1. **Data + behavior, not wrappers.** A `Foo::new(thing).do_x()` that just renames `Thing::do_x(thing)` adds zero semantic content — reject it. Extract only when the new type encapsulates an algorithm, an invariant, or a non-obvious decision. The test: can you state what the new type *guarantees* in one sentence? If not, it's a wrapper.
+- **No empty wrappers.** If `Foo::new(thing).do_x()` just renames `Thing::do_x(thing)`, reject it. The test: *can you state in one sentence what the new type guarantees?* If not, it's a wrapper.
+- **Multi-file `impl` blocks are fine.** A method that belongs in a sibling file by *concern* but reads better as `f.method()` than `pick::method(&f, ...)` — keep it as a method, lift it via `impl<'a> Foo<'a>` in the new file.
 
-2. **Name load-bearing invariants as types.** A type name is harder to ignore than a comment. Prefer a one-method struct with a meaningful name over a free fn carrying the rule in its docstring — future changes have to grapple with the name, not just notice a remark.
+## Out of scope
 
-3. **Policy-free shape types.** When several callers diverge on what the same outcome means, the outcome enum should describe *what happened*, not *what to do*. (e.g. `{ Picked | Tie | Empty }` is shape; "tie means ambiguous here, fall through there" is policy.) Policy stays at call sites; shape stays stable across them.
-
-4. **Iterators over collectors when iteration is enough.** Prefer yielding borrowed views to allocating + cloning into a `Vec`, especially when consumers have early-exit potential.
-
-5. **Bundle co-varying positional args into a struct.** If three or more parameters are always built together at every call site, they're already a value — give it a name. Functions taking 5+ positional args are often hiding a struct.
-
-## What not to extract
-
-- Patterns where each instance closes over a different signature or type. A macro or generic helper would obscure legible symmetry. Three similar lines beats a premature abstraction.
-- Thin shims (3–5 lines) that exist to give a type a clean read surface. Pushing callers through them leaks the underlying façade.
-- Speculative abstractions for hypothetical second callers. Wait for the third instance — the first two might be coincidence; the third is a pattern.
+- **Rearranging modules** - that's `modgraph`. 
+- **The mechanical move itself** — that's `rust-refactor`. This skill is judgment; that one is execution.
 
 ## Workflow
 
-1. Read the long file end to end. Don't skim — the signals above are easy to miss in a partial read.
-2. List candidate seams with one-line justifications grounded in the signals.
-3. For each seam, draft the *abstraction* (type name, method names, one-sentence invariant). Apply the four rules. Discard any that fail the "what does this guarantee?" test.
-4. Present the seams to the user ranked by leverage (largest single concern with the cleanest boundary first). Get agreement before moving.
-5. Hand off to `rust-refactor` for the mechanical work: create the new file, move items, mark `pub` what crosses boundaries, `cargo build`, `cargo clippy`, `verify`.
-6. After each extraction, re-read the host file. Earlier seams often become clearer once the first one is out.
-
-## When this skill does *not* apply
-
-- The file is long but homogeneous (e.g. a large match statement over an enum). Length alone isn't a seam — look for the signals above.
-- The user already knows what to extract and just needs the move performed. Go straight to `rust-refactor`.
-- The boundary question is about module dependency structure rather than content. Use the `modgraph` skill to score the partition.
-
-## See also
-
-- `rust-refactor` — mechanical execution of the move once a seam is chosen.
-- `modgraph` — scoring proposed module reshuffles against the live dependency graph.
-- `verify` — confirms the refactor didn't regress tests, clippy, or coverage.
+1. Read the file end to end (not skim).
+2. Run the **cheap-fixes** list. If one applies, do it and stop.
+3. Look for **seam smells**. Score honestly — weak signals are not seams.
+4. If you find a seam: name the abstraction, state its one-sentence guarantee, propose it to the user. If you don't: report "no seam, skip" and move on.
+5. Hand approved seams to `rust-refactor`.
