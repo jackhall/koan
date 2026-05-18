@@ -52,7 +52,7 @@ passthrough wrapper is undetectable.
 3000-line leaf scores zero while any split incurs structural cost, so
 the metric strictly rewards inaction. The charge `γ · L · log(1 + L/T)`
 is sub-linear in L for L ≪ T (small files are nearly free) and turns
-super-linear as L ≫ T. Defaults (γ=50, T=200) make 2-way splits of
+super-linear as L ≫ T. Defaults (γ=50, T=250) make 2-way splits of
 400+ LOC leaves break even against the wrapper β·loc cost, 3-way splits
 of 300+ leaves clearly win, and the size term lands at ~8% of the total
 score on the koan tree — enough signal to call out fat files without
@@ -552,7 +552,7 @@ def main() -> int:
     ap.add_argument("--gamma", type=float, default=50.0,
                     help="per-file size charge weight; "
                          "size(m) = γ·own_loc·log(1+own_loc/T) (default 50.0)")
-    ap.add_argument("--size-pivot", type=float, default=200.0,
+    ap.add_argument("--size-pivot", type=float, default=250.0,
                     help="LOC pivot T in the size charge; files much smaller than T "
                          "are near-free, files much larger turn super-linear (default 200)")
     ap.add_argument("--exact-threshold", type=int, default=6,
