@@ -1,7 +1,7 @@
-//! Direct unit coverage for the Stage A `type_identity_for` helper. The
-//! end-to-end coverage of the dual-write itself lives in
-//! [`crate::builtins::fn_def::tests::module_stage2`]; these tests
-//! pin the per-row mapping in isolation without the surrounding scheduler.
+//! Direct unit coverage for the `type_identity_for` helper. End-to-end coverage
+//! of the dual-write itself lives in
+//! [`crate::builtins::fn_def::tests::functor::dual_write`]; these tests pin
+//! the per-row mapping in isolation without the surrounding scheduler.
 
 use super::*;
 use crate::builtins::default_scope;

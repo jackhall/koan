@@ -29,18 +29,13 @@ pub(super) enum NodeStep<'a> {
 /// What a scheduler node will run.
 ///
 /// `Lift` exists because the push/notify model assumes a single producer slot per result.
-/// When a `Dispatch` has to defer to a `Bind`/`Combine` to wait on sub-deps, it spawns
-/// the worker into a new slot and rewrites its own slot to `Lift(Pending(worker))` so the
-/// result still surfaces under the original slot index without consumers chasing a chain.
-/// The notify-walk transitions `Pending → Ready` at wake time by stamping in the producer's
-/// terminal output; `run_lift` then consumes the stamped value with no result-table lookup.
-/// The `lift_kobject` deep-clone in `execute`'s Done arm handles the case where the lifted
-/// Value lives in a per-call arena that is about to drop.
+/// When a `Dispatch` defers to a `Bind`/`Combine` for sub-deps, it spawns the worker into
+/// a new slot and rewrites its own slot to `Lift(Pending(worker))` so the result still
+/// surfaces under the original slot index. The notify-walk stamps `Pending → Ready` with
+/// the producer's terminal output at wake time.
 ///
 /// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a fixed set
-/// of dep slots and then runs an arbitrary host closure over their resolved values. List
-/// and dict literals plan into `Combine` with their construction logic in `finish`'s
-/// capture; future MODULE/SIG bodies will reuse the same primitive.
+/// of dep slots and runs a host closure over their resolved values.
 pub(super) enum NodeWork<'a> {
     Dispatch(KExpression<'a>),
     Bind {
@@ -54,12 +49,9 @@ pub(super) enum NodeWork<'a> {
     Lift(LiftState<'a>),
 }
 
-/// Two-state Lift: `Pending(from)` parks on `from`'s terminal; `Ready(output)`
-/// holds the producer's terminal stamped in at notify-walk time. The
-/// `Pending → Ready` transition is the sole responsibility of `Scheduler::finalize`,
-/// so `run_lift`'s match needs no result-table lookup and surfaces a wake-misfire
-/// panic only on the `Pending` arm (encoding the notify-graph invariant that a
-/// queued Lift has been stamped).
+/// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped
+/// producer terminal. The `Pending → Ready` transition is the sole responsibility
+/// of `Scheduler::finalize`; a queued Lift in `Pending` indicates a wake misfire.
 pub(super) enum LiftState<'a> {
     Pending(NodeId),
     Ready(NodeOutput<'a>),
@@ -85,20 +77,14 @@ pub(super) struct Node<'a> {
 }
 
 /// `NodeId`s a node must read before running, or `None` if it has no read-deps.
-/// `Dispatch` returns `None` because it only spawns; it never reads results.
-///
-/// `DepEdge` and the `work_owned_edges` builder it feeds live in
-/// `scheduler/dep_graph.rs` alongside the tri-vector state they populate.
+/// `Dispatch` spawns rather than reads, so returns `None`.
 pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
         NodeWork::Dispatch(_) => None,
         NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
         NodeWork::Combine { deps, .. } => Some(deps.clone()),
-        // `Lift` is never submitted via `add()` — it's only installed via `NodeStep::Replace`
-        // from `defer_to_lift` and the bare-name short-circuit, both of which call
-        // `add_owned_edge` / `add_park_edge` explicitly. So `work_owned_edges` never observes
-        // a Lift; the arm exists for total coverage. `Pending` would name its `from`;
-        // `Ready` has no remaining wait (and only appears post-stamp anyway).
+        // `Lift` is only installed via `NodeStep::Replace` with deps wired explicitly;
+        // arms exist for total coverage and are exercised by tests below.
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
     }
@@ -109,16 +95,12 @@ mod tests {
     use super::*;
     use crate::machine::core::{KError, KErrorKind};
 
-    /// `Lift(Pending(from))` is never reached via the normal `add()` path — Lift is
-    /// installed only through `NodeStep::Replace` with deps wired explicitly. The arm
-    /// exists for total coverage; this test pins it directly.
     #[test]
     fn work_deps_lift_pending_returns_from_node() {
         let work = NodeWork::Lift(LiftState::Pending(NodeId(7)));
         assert_eq!(work_deps(&work), Some(vec![NodeId(7)]));
     }
 
-    /// `Lift(Ready)` only appears post-stamp; `work_deps` must report no remaining wait.
     #[test]
     fn work_deps_lift_ready_returns_none() {
         let work = NodeWork::Lift(LiftState::Ready(NodeOutput::Err(

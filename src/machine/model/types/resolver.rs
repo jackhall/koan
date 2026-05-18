@@ -4,11 +4,9 @@
 //! [`ElabResult::Park`] when a referenced type-binding placeholder hasn't finalized so
 //! the caller can install dep edges and re-run the elaboration on wake.
 //!
-//! The phase-2 transitional `TypeResolver` trait (`NoopResolver`, `ScopeResolver`) is
-//! deleted: type-name bindings live in [`Scope::bindings`]'s `types` map (stage-1 of
-//! per-type identity), and consumers go through [`elaborate_type_expr`] when
-//! scope-aware lookup is needed or [`KType::from_type_expr`] when only the builtin
-//! table matters.
+//! Type-name bindings live in [`Scope::bindings`]'s `types` map; consumers go through
+//! [`elaborate_type_expr`] when scope-aware lookup is needed or [`KType::from_type_expr`]
+//! when only the builtin table matters.
 
 use std::collections::HashSet;
 
@@ -24,24 +22,20 @@ mod tests;
 /// Outcome of one elaboration walk over a `TypeExpr`.
 #[derive(Debug)]
 pub enum ElabResult {
-    /// Fully elaborated to a concrete `KType`. The caller's `Mu`-wrap decision rides on
-    /// the elaborator's `fired_self_ref` flag.
+    /// Fully elaborated. Whether to `Mu`-wrap rides on the elaborator's
+    /// `fired_self_ref_for` set, not on this variant.
     Done(KType),
-    /// One or more referenced type-binding placeholders haven't finalized. The caller
-    /// installs park edges on every producer in `producers` and re-runs the elaboration
-    /// (via Combine finish) when all parking producers terminalize.
+    /// Referenced type-binding placeholders haven't finalized. Caller installs park
+    /// edges on every producer and re-runs the elaboration when they terminalize.
     Park(Vec<NodeId>),
-    /// A bare leaf name didn't resolve anywhere in scope and isn't a builtin. Structured
-    /// error for the caller to wrap in `ShapeError`.
+    /// Bare leaf didn't resolve and isn't a builtin.
     Unbound(String),
 }
 
 impl ElabResult {
-    /// Reduce a sequence of sub-elaboration results with precedence
-    /// **Unbound > Park > Done**. `Ok(payloads)` exactly when every input was `Done`,
-    /// preserving order; otherwise `Err` carries the first `Unbound` (if any) or the
-    /// merged `Park` producers. Centralizes the precedence so it can't drift between
-    /// the multi-slot arms (`Function`, `ConstructorApply`, `Dict`).
+    /// Reduce sub-elaboration results with precedence **Unbound > Park > Done**.
+    /// `Ok` preserves input order; `Err` carries the first `Unbound` or merged `Park`
+    /// producers.
     fn collect<I: IntoIterator<Item = ElabResult>>(results: I) -> Result<Vec<KType>, ElabResult> {
         let iter = results.into_iter();
         let (lower, _) = iter.size_hint();
@@ -66,20 +60,19 @@ impl ElabResult {
     }
 }
 
-/// Per-elaboration-walk state. `threaded` carries the names of binders the walk is
-/// currently elaborating (so a self-reference becomes `RecursiveRef` instead of parking on
-/// its own placeholder); `fired_self_ref_for` records which threaded names actually fired
-/// a back-reference so the caller knows whether to wrap the binder's `KType` in
-/// `KType::Mu`. `self_id` is the binder's own dispatch slot (when known) so a trivially
-/// cyclic alias (`LET T = T`) can be detected as "name resolves to placeholder which is
-/// myself" and surface a structured error instead of parking forever.
+/// Per-elaboration-walk state.
 ///
-/// `current_decl_*` carry the stage-3.2 SCC context: when the elaborator is running on
-/// behalf of a named nominal binder (STRUCT / named-UNION) whose entry is in
-/// `Bindings.pending_types`, the elaborator's `Resolution::Placeholder` arm records
-/// dependency edges and runs DFS cycle detection from `current_decl_name`. `None` for
-/// non-binder elaboration (FN signatures, LET RHS, ascription) so those sites never
-/// touch `pending_types`.
+/// - `threaded`: binder names currently being elaborated, so a self-reference becomes
+///   `RecursiveRef` instead of parking on its own placeholder.
+/// - `fired_self_ref_for`: which threaded names actually fired a back-reference;
+///   drives the caller's `KType::Mu` wrap decision.
+/// - `self_id`: the binder's own dispatch slot (when known). Lets `LET T = T` be
+///   detected as a self-park and surfaced as a structured cycle error instead of
+///   parking forever.
+/// - `current_decl_*`: SCC context. When set, the `Resolution::Placeholder` arm records
+///   dependency edges into `pending_types` and runs DFS cycle detection from
+///   `current_decl_name`. `None` for non-binder elaboration (FN signatures, LET RHS,
+///   ascription) so those sites never touch `pending_types`.
 pub struct Elaborator<'s, 'a> {
     pub scope: &'s Scope<'a>,
     pub threaded: HashSet<String>,
@@ -113,12 +106,9 @@ impl<'s, 'a> Elaborator<'s, 'a> {
         self
     }
 
-    /// Stage-3.2 SCC seed: mark this elaborator as running on behalf of a named
-    /// nominal binder so the `Resolution::Placeholder` arm records dependency
-    /// edges into `Bindings.pending_types` and runs cycle detection.
-    /// `Bindings.insert_pending_type` is the *writer* side this hooks into;
-    /// callers must install the matching `PendingTypeEntry` before launching
-    /// the elaborator.
+    /// Seed SCC context: the `Resolution::Placeholder` arm will record dependency
+    /// edges into `pending_types` and run cycle detection from `name`. The matching
+    /// `PendingTypeEntry` must already be installed before the walk starts.
     pub fn with_current_decl(
         mut self,
         name: String,
@@ -132,16 +122,12 @@ impl<'s, 'a> Elaborator<'s, 'a> {
     }
 }
 
-/// Walk a `TypeExpr` against the elaborator's scope. Container / function shapes recurse,
-/// accumulating any `Park` producers across inner slots into a single combined park list
-/// so the caller can register every dep at once. Bare-leaf names route through the
-/// elaborator's threaded set first (recursive back-edge), then `Scope::resolve_type` for
-/// every type-side binding (builtin type names, `LET`-bound type names, plus user-
-/// declared STRUCT / UNION / MODULE / SIG names dual-written into `bindings.types` by
-/// the finalize sites). `Resolution::Placeholder` is the dispatch-time forward
-/// reference path; `Resolution::Value` and `Resolution::Unbound` fall through to
-/// `KType::from_name` covering test fixtures that skip `default_scope`'s builtin
-/// registration. A genuinely unbound leaf surfaces as `ElabResult::Unbound`.
+/// Walk a `TypeExpr` against the elaborator's scope. Container / function shapes
+/// recurse and merge inner `Park` producers so the caller can register every dep at
+/// once. Bare leaves route through the threaded set first (recursive back-edge),
+/// then `Scope::resolve_type`, then `Scope::resolve` for the placeholder path, and
+/// finally `KType::from_name` so fixture scopes that skip builtin registration still
+/// resolve builtin names.
 pub fn elaborate_type_expr(
     el: &mut Elaborator<'_, '_>,
     t: &TypeExpr,
@@ -152,36 +138,24 @@ pub fn elaborate_type_expr(
                 el.fired_self_ref_for.insert(name.clone());
                 return ElabResult::Done(KType::RecursiveRef(name.clone()));
             }
-            // Type-side first: walk `bindings.types` via `resolve_type`. Owns every
-            // builtin type name post-stage-1.4 and will own stage-3 `KType::UserType`
-            // entries. The `Scope::resolve` fallback that previously synthesized a
-            // `KObject::KTypeValue` from this same map at lookup time is gone — the
-            // `resolve_type` call here covers that path directly.
             if let Some(kt) = el.scope.resolve_type(name) {
                 return ElabResult::Done(kt.clone());
             }
             match el.scope.resolve(name) {
                 Resolution::Placeholder(id) => {
-                    // Trivial cycle: `LET T = T` — the only producer we'd park on is
-                    // ourselves. Surface as Unbound (caller maps to a structured cycle
-                    // error) rather than queueing a self-park that can never wake.
+                    // `LET T = T`: the only producer we'd park on is ourselves. Surface
+                    // a structured error instead of queueing a self-park that can't wake.
                     if Some(id) == el.self_id {
                         return ElabResult::Unbound(format!("cycle in type alias `{name}`"));
                     }
-                    // Stage-3.2 SCC: if this elaborator runs on behalf of a named nominal
-                    // binder (`current_decl_name`), the parked-on name is itself a
-                    // potential in-flight binder. Record the edge unconditionally — the
-                    // parked-on name may not be in `pending_types` yet (its body hasn't
-                    // dispatched) but will install itself later; DFS from each newly-added
-                    // edge sees the persistent edge list and detects the closing cycle at
-                    // the moment the second binder records its reciprocal edge.
+                    // Record the edge unconditionally: the parked-on name may not be in
+                    // `pending_types` yet (its body hasn't dispatched), but DFS sees the
+                    // persistent edge list later and closes the cycle when the second
+                    // binder records its reciprocal edge.
                     if let Some(decl) = el.current_decl_name.clone() {
                         el.scope.bindings().record_pending_edge(&decl, name.clone());
                         if let Some(members) = detect_pending_cycle(el.scope, &decl) {
                             close_type_cycle(el.scope, &members);
-                            // Cycle-close synchronously installed every member's identity
-                            // into `bindings.types`; the parked-on `name` is a cycle
-                            // member, so `resolve_type` now returns Some.
                             if let Some(kt) = el.scope.resolve_type(name) {
                                 return ElabResult::Done(kt.clone());
                             }
@@ -189,13 +163,6 @@ pub fn elaborate_type_expr(
                     }
                     ElabResult::Park(vec![id])
                 }
-                // Stage 3.1: STRUCT / UNION / MODULE / SIG finalize dual-writes the
-                // nominal identity into `bindings.types`, so the `resolve_type` hit
-                // above covers every user-declared type name. The value-side
-                // `Resolution::Value` carriers (StructType, TaggedUnionType, KSignature)
-                // are no longer consulted here; fall through to `from_name` so
-                // fixture-shaped tests that skip `default_scope`'s builtin registration
-                // still resolve builtin leaf names.
                 Resolution::Value(_) | Resolution::Unbound => match KType::from_name(name) {
                     Some(kt) => ElabResult::Done(kt),
                     None => ElabResult::Unbound(name.clone()),
@@ -229,9 +196,8 @@ pub fn elaborate_type_expr(
             items.len()
         )),
         (name, TypeParams::Function { args, ret }) if name == "Function" => {
-            // Elaborate args + ret in one pass through `ElabResult::collect`; the
-            // return slot rides as the last entry so its result participates in the
-            // shared Unbound > Park > Done precedence.
+            // Return slot rides as the last `collect` entry so its result shares the
+            // Unbound > Park > Done precedence with the args.
             let mut slots: Vec<ElabResult> = args
                 .iter()
                 .map(|a| elaborate_type_expr(el, a))
@@ -249,25 +215,10 @@ pub fn elaborate_type_expr(
             }
         }
         (name, TypeParams::List(items)) => {
-            // Module-system stage 2: scope-aware constructor application. The outer
-            // name may resolve to a `KType::UserType { kind: UserTypeKind::TypeConstructor
-            // { param_names }, .. }` — a per-call-minted higher-kinded slot — in which
-            // case we arity-check args against `param_names.len()`, recurse-elaborate
-            // each arg, and emit a structural `KType::ConstructorApply`. Two outer-name
-            // lookup paths participate (mirror of the bare-leaf arm above):
-            //
-            // - `Scope::resolve_type(name)` — the type-side map (LET Type-class aliases
-            //   land here via `register_type`). The per-call-minted TypeConstructor
-            //   identity lives here once the LET completes.
-            // - `Scope::resolve` for a `Resolution::Placeholder(id)` — the LET-binding
-            //   hasn't terminalized yet. Park on the producer; the Combine wake re-runs
-            //   the elaboration against the now-final scope (mirror of the bare-leaf
-            //   arm's placeholder path).
-            //
-            // Threaded-binder self-references aren't supported here (`name == self_id`'s
-            // case is handled in the `TypeParams::None` arm above and emits
-            // `RecursiveRef`); a self-reference of the form `Wrap<T>` is rejected as a
-            // structural recursion until phase 3 introduces threaded unfold sets.
+            // Scope-aware constructor application. A self-reference of the form
+            // `Wrap<T>` is currently rejected: the threaded set only fires on bare
+            // leaves (the `TypeParams::None` arm) and emits `RecursiveRef` there;
+            // applied recursion needs threaded unfold sets that don't exist yet.
             if let Some(ctor_kt) = el.scope.resolve_type(name) {
                 if let KType::UserType {
                     kind: UserTypeKind::TypeConstructor { param_names },
@@ -291,11 +242,9 @@ pub fn elaborate_type_expr(
                     };
                 }
             }
-            // Forward-reference path: `Wrap` may be an in-flight `LET Wrap = ...` whose
-            // placeholder is registered but whose body hasn't dispatched yet. Park on
-            // the producer so the Combine wake re-runs the elaboration. Self-cycle
-            // (`LET Wrap = Wrap<Number>`) routes through the same Unbound path the bare
-            // leaf uses.
+            // Forward reference to an in-flight `LET Wrap = ...` whose placeholder is
+            // registered but whose body hasn't dispatched. Self-cycle routes through
+            // the same Unbound path the bare leaf uses.
             if let Resolution::Placeholder(id) = el.scope.resolve(name) {
                 if Some(id) == el.self_id {
                     return ElabResult::Unbound(format!("cycle in type alias `{name}`"));
@@ -310,14 +259,12 @@ pub fn elaborate_type_expr(
     }
 }
 
-/// DFS over `Bindings.pending_types`' adjacency lists from `start`. Returns the cycle's
-/// member list (in discovery order, starting from `start`) if any path leads back to
-/// `start`; `None` otherwise.
+/// DFS over `pending_types`' adjacency lists from `start`. Returns the cycle's
+/// members (discovery order, root-first) if any path leads back to `start`.
 ///
-/// The traversal walks `edges` of each visited pending-type entry. Names that are
-/// referenced via edges but not themselves in `pending_types` (a binder not yet
-/// dispatched, or a non-binder placeholder) are simply leaf-terminated — their edges
-/// aren't recorded yet, so no further out-edges to follow.
+/// Names referenced by edges but not themselves in `pending_types` (a binder not yet
+/// dispatched, or a non-binder placeholder) are leaf-terminated: their out-edges
+/// aren't recorded yet, so there's nothing further to follow.
 pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec<String>> {
     let pending = scope.bindings().pending_types();
     if !pending.contains_key(start) {
@@ -337,15 +284,12 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
         let next = edges[idx].clone();
         stack.last_mut().unwrap().1 = idx + 1;
         if next == start {
-            // Closed back to the origin: extract the cycle members from the live
-            // DFS stack (path from `start` down to `node`). Stack order is already
-            // root-first.
+            // Closed back to the origin; the live stack is the cycle, root-first.
             return Some(stack.iter().map(|(n, _)| n.clone()).collect());
         }
         if on_path.contains(&next) || !pending.contains_key(&next) {
-            // Already on-path (an inner cycle not involving `start`) or a leaf:
-            // skip without descending. The outer cycle from `start` may still
-            // exist via a different edge.
+            // Inner cycle not involving `start`, or a leaf. The outer cycle from
+            // `start` may still exist via another edge.
             continue;
         }
         on_path.insert(next.clone());
@@ -354,25 +298,18 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
     None
 }
 
-/// SCC cycle-close synchronous sweep. Pre-installs each member's per-declaration
-/// identity (`KType::UserType { kind, scope_id, name }`) into `Bindings.types` so the
-/// elaborator's `resolve_type` lookup succeeds for cross-member references on the very
-/// next call. Does NOT build carriers or write `Bindings.data` — that work is left to
-/// each member's own finalize path (`finalize_struct` / `finalize_union` /
-/// Combine-finish), which routes through the now-idempotent `try_register_nominal`
-/// arm that observes the matching types entry and writes only the carrier.
+/// Synchronous SCC cycle-close. Installs each member's identity
+/// (`KType::UserType { kind, scope_id, name }`) into `bindings.types` so cross-member
+/// `resolve_type` lookups succeed on the very next call. Does NOT build carriers or
+/// write `bindings.data` — each member's own finalize path does that via the
+/// idempotent `try_register_nominal` arm.
 ///
-/// Leaving `pending_types` entries in place is deliberate: each member's finalize is
-/// the one that removes its own entry, ensuring single-source bookkeeping. The
-/// rebuilt elaborator inside each finalize sees `bindings.types` populated and never
-/// re-enters this function (no edge recording without a placeholder hit).
+/// `pending_types` entries are left in place on purpose: each member's finalize is the
+/// sole remover of its own entry. The elaborator rebuilt inside each finalize sees
+/// `bindings.types` populated and so never re-enters this function.
 fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
-    // Snapshot kind + scope_id under a single `pending_types` read borrow; release
-    // before calling into Scope methods that take their own borrows.
-    // Stage 4: `UserTypeKind` is no longer `Copy` (the `Newtype { repr }` variant carries
-    // a `Box<KType>`). `Clone` the kind out of the borrow. STRUCT / named-UNION are the
-    // only carriers that participate in SCC cycle-close — neither produces a `Newtype`
-    // variant here, so this clone is always a cheap variant-tag copy.
+    // Snapshot under a single `pending_types` read borrow; release before calling into
+    // Scope methods that take their own borrows.
     let identities: Vec<(String, UserTypeKind, ScopeId)> = {
         let pending = scope.bindings().pending_types();
         members

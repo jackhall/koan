@@ -1,35 +1,20 @@
 //! Slot-table state pulled out of `Scheduler<'a>`. A single `slots` vector of
-//! [`SlotState`] enums encodes the per-slot lifecycle directly: every slot
-//! moves through `alloc_slot -> take_for_run -> reinstall* -> finalize ->
-//! free_one`. Each transition is encapsulated by a single atomic mutator below.
+//! [`SlotState`] enums encodes the per-slot lifecycle: every slot moves
+//! through `alloc_slot -> take_for_run -> reinstall* -> finalize -> free_one`.
 //!
-//! ## Invariants this module enforces
+//! ## Invariants
 //!
-//! **Index-space coherence.** `alloc_slot` is the only path that picks
-//! an index: it either pops `free_list` (recycle: overwrites `slots[i]`)
-//! or extends `slots` by one. A second vector that has to stay in lockstep
-//! no longer exists — the prior `nodes` / `results` pair collapsed into
-//! `SlotState`'s variants.
-//!
-//! **Type-encoded presence and lifecycle.** `slots` is wrapped in
-//! [`SlotVec<T>`], which only impls `Index<NodeId>` / `IndexMut<NodeId>` —
-//! raw `usize` indexing is unreachable. `SlotState`'s four variants
-//! (`PreRun` / `Running` / `Done` / `Free`) make the lifecycle explicit:
-//! `take_for_run` only matches `PreRun`, `finalize` only matches `Running`,
-//! `free_one` overwrites any state with `Free`. The previously-ambiguous
-//! `(nodes=None, results=None)` state — which conflated "running" with
-//! "freed" — is no longer expressible.
-//!
-//! **Terminal-write invariant.** `finalize(id, output)` is the only path
-//! that lands a `SlotState::Done(_)` in a slot. The outer
-//! `Scheduler::finalize` pairs this write with the notify-walk via
-//! `DepGraph::drain_notify`.
-//!
-//! **Reclaim invariant.** `free_one(id)` is the only path that stores
-//! `SlotState::Free` and pushes onto `free_list`. The cascade-free walk
-//! in `Scheduler::free` invokes `free_one` per slot and consults
-//! `DepGraph::owned_children` for recursion — the two sub-structs stay
-//! independent, with `Scheduler::free` orchestrating across them.
+//! - **Index-space coherence.** `alloc_slot` is the only path that picks an
+//!   index (recycle from `free_list` or extend `slots`).
+//! - **Type-encoded indexing.** `slots` is wrapped in [`SlotVec<T>`], which
+//!   only impls `Index<NodeId>` / `IndexMut<NodeId>`; raw `usize` indexing is
+//!   unreachable, so a `NodeId` always names a live slot.
+//! - **Lifecycle by variant.** `take_for_run` only matches `PreRun`,
+//!   `finalize` only produces `Done`, `free_one` only produces `Free`.
+//! - **Terminal-write / reclaim pairing.** `finalize` is the sole producer of
+//!   `Done`; `free_one` is the sole producer of `Free` and the sole pusher
+//!   onto `free_list`. Outer `Scheduler` orchestrates the notify-walk and
+//!   cascade-free across this store and `DepGraph`.
 
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
@@ -42,11 +27,10 @@ use crate::machine::KError;
 
 use super::super::nodes::{LiftState, Node, NodeOutput, NodeWork};
 
-/// `Vec`-backed slot store keyed by [`NodeId`]. Exposes `push` / `len` /
-/// `is_empty` / `get` and impls `Index<NodeId>` / `IndexMut<NodeId>` only —
-/// raw `usize` indexing is unreachable, so the "this index names a live
-/// slot" claim is carried by `NodeId`'s type. Constructors hand out
-/// `NodeId` only via [`NodeStore::alloc_slot`].
+/// `Vec`-backed slot store keyed by [`NodeId`]. Only impls
+/// `Index<NodeId>` / `IndexMut<NodeId>`, so raw `usize` indexing is
+/// unreachable and a `NodeId` always names a live slot. `NodeId`s are
+/// minted only by [`NodeStore::alloc_slot`].
 struct SlotVec<T>(Vec<T>);
 
 impl<T> SlotVec<T> {
@@ -66,35 +50,23 @@ impl<T> IndexMut<NodeId> for SlotVec<T> {
     fn index_mut(&mut self, id: NodeId) -> &mut T { &mut self.0[id.index()] }
 }
 
-/// Per-slot lifecycle state. Replaces the pre-refactor
-/// `(Option<Node>, Option<NodeOutput>)` pair whose `(None, None)` state
-/// conflated "running" with "freed". Transitions are constrained to the
+/// Per-slot lifecycle state. Transitions are constrained to the
 /// `NodeStore` mutators: only `alloc_slot` produces `PreRun`, only
 /// `take_for_run` produces `Running`, only `finalize` produces `Done`,
 /// only `free_one` produces `Free`.
 enum SlotState<'a> {
-    /// Active node payload, awaiting its first (or next) run.
     PreRun(Node<'a>),
-    /// Slot is mid-execution. The node payload was moved out by
-    /// `take_for_run`; the matching `reinstall` (Replace) or `finalize`
-    /// (Done) restores the slot to `PreRun` / `Done`.
+    /// Node payload has been moved out by `take_for_run`. A matching
+    /// `reinstall*` / `finalize` / `free_one` exits this state.
     Running,
-    /// Slot has finalized with a terminal `NodeOutput`. Parents read
-    /// through `read_result`; the cascade-free walk reclaims via
-    /// `free_one`.
     Done(NodeOutput<'a>),
-    /// Slot index is in `free_list` and available for recycling. Distinct
-    /// from `Running` so the cascade-free walk's idempotency guard can be
-    /// precise about "already freed."
+    /// Slot index is in `free_list`. Distinct from `Running` so the
+    /// cascade-free walk's idempotency guard can be precise about
+    /// "already freed".
     Free,
 }
 
-/// Slot-table state for the scheduler. A single `slots` vector and a
-/// `free_list`; all mutation goes through the named methods below so the
-/// recycle/extend choice, take/reinstall pairing, terminal-write, and
-/// reclaim are each a single atomic body.
 pub(super) struct NodeStore<'a> {
-    /// Lifecycle state per slot.
     slots: SlotVec<SlotState<'a>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
     /// extending `slots`, so transient-node reclamation gives constant
@@ -110,11 +82,10 @@ impl<'a> NodeStore<'a> {
         }
     }
 
-    /// The only path that picks an index. Pops `free_list` (recycle: overwrites
-    /// the slot's `Free` state with `PreRun(node)`) or extends `slots` by one.
-    /// Returns the chosen `NodeId`; the recycle vs. extend choice is invisible
-    /// to the caller — `DepGraph::install_for_slot` branches on
-    /// `consumer.index() < notify_list.len()` to mirror it on the dep side.
+    /// The only path that picks an index. Recycles from `free_list` if
+    /// non-empty, otherwise extends `slots`. `DepGraph::install_for_slot`
+    /// mirrors the recycle-vs.-extend choice via
+    /// `consumer.index() < notify_list.len()`.
     pub(super) fn alloc_slot(&mut self, node: Node<'a>) -> NodeId {
         match self.free_list.pop() {
             Some(id) => {
@@ -129,9 +100,7 @@ impl<'a> NodeStore<'a> {
         }
     }
 
-    /// Take the node payload for execution. Transitions `PreRun -> Running`;
-    /// the matching `reinstall` / `finalize` / `free_one` exits the
-    /// `Running` state.
+    /// `PreRun -> Running`. Panics if the slot wasn't `PreRun`.
     pub(super) fn take_for_run(&mut self, id: NodeId) -> Node<'a> {
         match std::mem::replace(&mut self.slots[id], SlotState::Running) {
             SlotState::PreRun(node) => node,
@@ -139,26 +108,23 @@ impl<'a> NodeStore<'a> {
         }
     }
 
-    /// Replace the node payload in place — the tail-call path. `NodeStep::Replace`
-    /// rewrites the slot's work + frame + function without bumping the index.
+    /// Tail-call path: rewrite the slot's payload in place without
+    /// allocating a new index.
     pub(super) fn reinstall(&mut self, id: NodeId, node: Node<'a>) {
         self.slots[id] = SlotState::PreRun(node);
     }
 
-    /// Replace the node payload **with a fresh per-call frame**, re-anchoring the frame's
-    /// per-call [`Scope`] to `'a` (the slot-storage lifetime). The owner of the
-    /// `'a`-anchored claim is therefore this module, not the caller: invokers (today,
-    /// `Scheduler::execute`'s `Replace` arm) no longer need to carry the SAFETY paragraph
-    /// for the `&Scope<'_> → &'a Scope<'_>` re-anchor.
+    /// Replace the node payload **with a fresh per-call frame**, re-anchoring
+    /// the frame's per-call [`Scope`] to `'a` (the slot-storage lifetime).
+    /// Owning the `'a`-anchored claim here means callers do not have to.
     ///
-    /// SAFETY: `frame` is about to be stored in `self.slots[id]`, whose live span equals
-    /// `'a` — the same lifetime the slot's scope reference is anchored to. So
-    /// re-anchoring `frame.scope()` from its receiver-bound borrow to `'a` is witnessed
-    /// by the store itself: the `Rc<CallArena>` stays in the same node payload as the
-    /// `&'a Scope<'a>` it produces, so the arena heap-pinning that backs `scope_ptr`
-    /// outlives every read through this `'a` reference. The previous frame held in
-    /// `self.slots[id]` (if any) must have been removed by a prior `take_for_run`;
-    /// callers are responsible for dropping it before invoking this entry point.
+    /// SAFETY: `frame` is about to be stored in `self.slots[id]`, whose live
+    /// span equals `'a`. Re-anchoring `frame.scope()` from its receiver-bound
+    /// borrow to `'a` is witnessed by the store itself: the `Rc<CallArena>`
+    /// stays in the same node payload as the `&'a Scope<'a>` it produces, so
+    /// the arena heap-pinning that backs `scope_ptr` outlives every read
+    /// through this `'a` reference. Any previous frame in `self.slots[id]`
+    /// must have been removed by a prior `take_for_run`.
     pub(super) fn reinstall_with_frame(
         &mut self,
         id: NodeId,
@@ -172,32 +138,28 @@ impl<'a> NodeStore<'a> {
         self.slots[id] = SlotState::PreRun(Node { work, scope, frame: Some(frame), function });
     }
 
-    /// Terminal write. Transitions `Running -> Done(output)` — the only
-    /// path that lands a `Done` variant. Outer `Scheduler::finalize` pairs
-    /// this with the notify-walk so consumers wake atomically with the
-    /// write.
+    /// Terminal write: the only path that produces `Done`. Callers must
+    /// pair this with the dep-graph notify-walk so consumers wake
+    /// atomically with the write.
     pub(super) fn finalize(&mut self, id: NodeId, output: NodeOutput<'a>) {
         self.slots[id] = SlotState::Done(output);
     }
 
-    /// Reclaim a single slot. Sets `slots[id] = Free` and pushes the index
-    /// onto `free_list`. Idempotent on already-`Free` slots when paired
-    /// with the cascade-free walk's `is_reclaimed` guard; `Scheduler::free`
-    /// also skips slots in `PreRun` (still scheduled) via `is_live`.
+    /// Reclaim a single slot. Idempotent on already-`Free` slots when
+    /// paired with the cascade-free walk's `is_reclaimed` guard.
     pub(super) fn free_one(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Free;
         self.free_list.push(id);
     }
 
-    /// True iff slot `id` holds a terminal result. Used by parents'
-    /// short-circuit checks in `run_bind` / `run_combine`.
+    /// True iff slot `id` holds a terminal result.
     pub(super) fn is_result_ready(&self, id: NodeId) -> bool {
         matches!(self.slots.get(id), Some(SlotState::Done(_)))
     }
 
-    /// Retrieve the resolved result for a slot. Only safe on IDs whose slot
-    /// has been finalized; internal slots may have been eagerly freed by
-    /// their parent.
+    /// Retrieve the resolved result. Only safe on IDs whose slot has been
+    /// finalized; internal slots may have been eagerly freed by their
+    /// parent.
     pub(super) fn read_result(&self, id: NodeId) -> Result<&'a KObject<'a>, &KError> {
         match &self.slots[id] {
             SlotState::Done(NodeOutput::Value(v)) => Ok(v),
@@ -206,7 +168,7 @@ impl<'a> NodeStore<'a> {
         }
     }
 
-    /// Convenience wrapper for the value-only path: panics on `Err`.
+    /// Value-only convenience wrapper; panics on `Err`.
     pub(super) fn read(&self, id: NodeId) -> &'a KObject<'a> {
         match self.read_result(id) {
             Ok(v) => v,
@@ -214,7 +176,7 @@ impl<'a> NodeStore<'a> {
         }
     }
 
-    /// Slot count (live + reclaimed). Mirrors `Vec::len`.
+    /// Slot count (live + reclaimed).
     pub(super) fn len(&self) -> usize {
         self.slots.len()
     }
@@ -223,33 +185,24 @@ impl<'a> NodeStore<'a> {
         self.slots.is_empty()
     }
 
-    /// `Scheduler::free`'s live-slot guard: skip slots that haven't been
-    /// `take`n yet (the slot is still in the work queue and runnable).
+    /// Cascade-free live-slot guard: slot is still scheduled (`PreRun`) and
+    /// must not be reclaimed yet.
     pub(super) fn is_live(&self, id: NodeId) -> bool {
         matches!(self.slots[id], SlotState::PreRun(_))
     }
 
-    /// `Scheduler::free`'s already-reclaimed guard: paired with
-    /// `DepGraph::is_dep_edges_empty` to detect a slot whose terminal was
-    /// cleared and whose edges were drained, so the iterative walk doesn't
-    /// double-push onto `free_list`. Returns true for any non-`Done`
-    /// state, preserving the prior `results[id].is_none()` semantics now
-    /// that `is_live` has already excluded `PreRun` upstream.
+    /// Cascade-free already-reclaimed guard. Returns true for any non-`Done`
+    /// state, so the iterative walk does not double-push onto `free_list`.
+    /// Assumes `is_live` has already excluded `PreRun` upstream.
     pub(super) fn is_reclaimed(&self, id: NodeId) -> bool {
         !matches!(self.slots[id], SlotState::Done(_))
     }
 
-    /// Notify-walk transition for the Lift two-state shape: if the consumer slot's
-    /// work is `Lift(Pending(from))` with `from == producer`, stamp it to
-    /// `Lift(Ready(_))` by cloning the producer's just-finalized terminal out of
-    /// `slots[producer]`. The clone matches the previous `run_lift` read-side
-    /// behavior (Value copies the `&'a KObject`; Err calls `clone_for_propagation`)
-    /// but happens once at stamp time rather than on every Lift pop.
-    ///
-    /// No-op when the consumer isn't a Lift, when its work is already `Ready`, or
-    /// when its `from` doesn't name this producer — invariants of the notify-walk
-    /// pair imply at most one of those branches fires for each woken consumer, but
-    /// the body stays defensive so a future call site can stamp speculatively.
+    /// Notify-walk transition for the Lift two-state shape: if the consumer
+    /// slot is `Lift(Pending(from))` with `from == producer`, stamp it to
+    /// `Lift(Ready(_))` by cloning the producer's terminal — Value copies
+    /// the `&'a KObject`; Err goes through `clone_for_propagation`. No-op
+    /// when the consumer isn't a Pending-Lift naming this producer.
     pub(super) fn stamp_lift_ready(&mut self, consumer: NodeId, producer: NodeId) {
         let is_lift_pending = matches!(
             &self.slots[consumer],

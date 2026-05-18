@@ -20,8 +20,7 @@ pub struct KFuture<'a> {
 }
 
 impl<'a> KFuture<'a> {
-    /// `function` is shared (arena-allocated, immutable); `parsed` and `bundle` clone deeply
-    /// so the result is independent of the original.
+    /// `function` is shared (arena-allocated, immutable); `parsed` and `bundle` clone deeply.
     pub fn deep_clone(&self) -> KFuture<'a> {
         KFuture {
             parsed: self.parsed.clone(),
@@ -54,34 +53,21 @@ pub enum Resolution<'a> {
 /// embedded [`PendingQueue`]; `drain_pending` replays them between dispatch nodes.
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,
-    /// All three binding maps live here — public so test fixtures can read them as
-    /// `scope.bindings.data()` etc., but writes only flow through the methods.
     pub bindings: Bindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
-    /// Position-independent identity. Minted from [`ScopeId::next`] at construction;
-    /// captured into `KType::UserType { scope_id, .. }` / `KType::SignatureBound {
-    /// sig_id, .. }` and the corresponding `KObject` schema variants so dispatch on
-    /// user-declared types compares ids rather than scope pointers. See
-    /// [`crate::machine::core::scope_id`].
+    /// Position-independent identity captured into `KType::UserType { scope_id, .. }` /
+    /// `KType::SignatureBound { sig_id, .. }` so dispatch on user-declared types compares
+    /// ids rather than scope pointers.
     pub id: ScopeId,
-    /// Writes that hit a borrow conflict at `bind_value` / `register_function` time.
-    /// Drained between dispatch nodes by `drain_pending`; direct writes bypass the queue.
-    /// See [`PendingQueue`] for the deferral / retry surface.
     pending: PendingQueue<'a>,
-    /// Lexical-context classification set at construction. `Anonymous` for run-root and
-    /// ordinary call frames; `Sig` / `Module` for the named decl-scope variants stamped
-    /// by `sig_def`, `module_def`, and `ascribe`. Read by `val_decl` / `let_binding`'s
-    /// SIG-body gate; the per-variant `name` field is record-only (carries the surface
-    /// label for diagnostics).
     pub kind: ScopeKind,
 }
 
 /// Lexical classification for a [`Scope`]. The SIG-body gate in `val_decl` and
-/// `let_binding` walks outward from the active scope and pivots on the first non-
-/// `Anonymous` variant: `Sig` means "value-slot declarators (VAL) are admitted,
-/// LET-by-example is rejected"; `Module` means the opposite. Extend with `Function`
-/// or other variants when a caller actually stamps them — kept minimal today.
+/// `let_binding` walks outward and pivots on the first non-`Anonymous` variant: `Sig`
+/// admits VAL declarators and rejects LET-by-example; `Module` is the opposite. The
+/// per-variant `name` field carries the surface label for diagnostics.
 #[derive(Debug, Clone)]
 pub enum ScopeKind {
     Anonymous,
@@ -120,9 +106,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Like `child_under` but stamps the scope as a SIG decl_scope. The SIG-body gate
-    /// in `val_decl` / `let_binding` returns true at the first such scope on the outer
-    /// walk.
+    /// Like `child_under` but stamps the scope as a SIG decl_scope.
     pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -136,8 +120,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Like `child_under` but stamps the scope as a MODULE body (also used for the
-    /// per-ascription view minted by `:|`). The SIG-body gate returns false at the
-    /// first such scope on the outer walk.
+    /// per-ascription view minted by `:|`).
     pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
@@ -150,29 +133,20 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Borrow the embedded [`Bindings`] façade. Internal callers that need direct access to
-    /// the unified write path (e.g. ascription's `try_bulk_install_from`) reach for this;
-    /// the shim methods below cover the common cases.
     pub fn bindings(&self) -> &Bindings<'a> {
         &self.bindings
     }
 
-    /// Iterate `self` and its `outer` chain. Single-source-of-truth for the lexical-
-    /// parent walk; previously open-coded as `let mut current = Some(self); while let
-    /// Some(s) = current { ...; current = s.outer; }` in five separate methods. Each
-    /// step yields a `&Scope<'a>` with the borrow's lifetime (`self.outer` items are
-    /// `&'a Scope<'a>`, reborrowed to the shorter outer borrow). Per-step `RefCell`
-    /// guards (e.g. `bindings().types()`) taken inside a `find_map` / `find` closure
-    /// drop at the closure boundary, so the release-before-recurse discipline
-    /// previously commented on `resolve_type` and `resolve_dispatch` is now structural.
+    /// Iterate `self` and its `outer` chain. Per-step `RefCell` guards taken inside a
+    /// `find_map` / `find` closure drop at the closure boundary, so a deep chain never
+    /// accumulates live read borrows.
     pub fn ancestors(&self) -> impl Iterator<Item = &Scope<'a>> {
         std::iter::once(self).chain(std::iter::successors(self.outer, |s| s.outer))
     }
 
     /// True iff `self`'s nearest non-`Anonymous` enclosing scope is a SIG decl_scope.
-    /// The walk starts at `self` — a SIG-body builtin's body runs against the SIG
-    /// decl_scope directly. A non-SIG named scope (`Module`) short-circuits to `false`;
-    /// `Anonymous` frames are transparent and the walk continues outward.
+    /// A non-SIG named scope (`Module`) short-circuits to `false`; `Anonymous` frames
+    /// are transparent and the walk continues outward.
     pub fn is_in_sig_body(&self) -> bool {
         self.ancestors()
             .find_map(|s| match &s.kind {
@@ -221,39 +195,30 @@ impl<'a> Scope<'a> {
     }
 
     /// Register `name` as a type-valued binding in this scope. The binding lives in
-    /// [`Bindings::types`] as an arena-allocated `&KType` — the dedicated type-side
-    /// storage introduced in stage 1.2 of per-type identity. No `KObject::KTypeValue`
-    /// wrap at the storage layer. Type-name reads go through [`Self::resolve_type`]
-    /// (post-stage-1.5), with the sole `KObject::KTypeValue` synthesis site for
-    /// dispatch transport living in
-    /// [`crate::builtins::value_lookup::body_type_expr`].
-    ///
-    /// Same conditional-defer shape as [`Self::bind_value`] and
-    /// [`Self::register_function`]: direct write first, queue through
-    /// [`PendingQueue::defer_type`] on borrow conflict. Infallible like the prior
-    /// implementation — a name collision at builtin registration is a programming
-    /// error, so the [`KError`] from `try_register_type` is dropped.
+    /// [`Bindings::types`] as an arena-allocated `&KType`; type-name reads go through
+    /// [`Self::resolve_type`]. Same conditional-defer shape as [`Self::bind_value`].
+    /// Infallible: a name collision at builtin registration is a programming error,
+    /// so the [`KError`] from `try_register_type` is dropped.
     pub fn register_type(&self, name: String, ktype: crate::machine::model::types::KType) {
         let kt_ref: &'a crate::machine::model::types::KType = self.arena.alloc_ktype(ktype);
         match self.bindings.try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref),
-            Err(_) => {} // see docstring: collisions at builtin registration are bugs.
+            Err(_) => {}
         }
     }
 
-    /// Synchronous identity install for the stage-3.2 SCC cycle-close sweep. Writes
-    /// `name` → `ktype` to [`Bindings::types`] via the same primitive
-    /// [`Self::register_type`] uses, but panics on borrow conflict instead of
-    /// deferring through the pending queue. Panics on `Rebind` too — a cycle
-    /// member's identity must not already be in `types` when cycle-close fires.
+    /// Synchronous identity install for the SCC cycle-close sweep. Writes `name` →
+    /// `ktype` to [`Bindings::types`] via the same primitive [`Self::register_type`]
+    /// uses, but panics on borrow conflict instead of deferring through the pending
+    /// queue. Panics on `Rebind` too — a cycle member's identity must not already be
+    /// in `types` when cycle-close fires.
     ///
     /// Called by [`crate::machine::model::types::resolver::close_type_cycle`] from
     /// inside the elaborator's `Resolution::Placeholder` arm. At that call site no
     /// outer `bindings` borrow is held (the placeholder lookup released its `Ref`
-    /// before returning), so a conflict here is a programming error. The
-    /// downstream finalize's
-    /// [`crate::machine::core::Bindings::try_register_nominal`] idempotent
+    /// before returning), so a conflict here is a programming error. The downstream
+    /// finalize's [`crate::machine::core::Bindings::try_register_nominal`] idempotent
     /// arm picks up the carrier write against this pre-installed identity.
     pub fn cycle_close_install_identity(
         &self,
@@ -327,8 +292,7 @@ impl<'a> Scope<'a> {
     /// finalized yet, so the consumer must park on it rather than read through to the outer).
     ///
     /// Type-side bindings (`bindings.types`) are *not* consulted here — type-name reads
-    /// go through [`Self::resolve_type`] post-stage-1.5. The brief stage-1.4 fallback
-    /// arm that synthesized a `KObject::KTypeValue` on demand is gone.
+    /// go through [`Self::resolve_type`].
     pub fn resolve(&self, name: &str) -> Resolution<'a> {
         self.ancestors()
             .find_map(|scope| {
@@ -349,10 +313,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Walk the `outer` chain for the nearest `bindings.types[name]`. Type-side
-    /// analogue of [`Self::lookup`] — no `Placeholder` variant (that lane is
-    /// reserved for stage 3's `pending_types` registry). The per-step
-    /// [`Bindings::types`] `Ref` is taken inside the `find_map` closure and drops at
-    /// the closure boundary, so a deep chain never accumulates live read borrows.
+    /// analogue of [`Self::lookup`] — no `Placeholder` variant.
     pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType> {
         self.ancestors().find_map(|scope| scope.bindings.types().get(name).copied())
     }

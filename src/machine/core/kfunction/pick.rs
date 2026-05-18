@@ -1,17 +1,8 @@
-//! Dispatch-shape classification: the read-only view of how a `KFunction`'s
-//! signature matches an `KExpression` for the purposes of late dispatch.
+//! Dispatch-shape classification: read-only view of how a `KFunction`'s
+//! signature matches a `KExpression` for late dispatch.
 //!
-//! - [`KFunction::accepts_for_wrap`] — tentative match used during the scope-chain
-//!   walk in [`crate::machine::core::resolve_dispatch`].
-//! - [`KFunction::classify_for_pick`] — post-pick per-slot bucketing into
-//!   `eager_indices` / `wrap_indices` / `ref_name_indices` (see [`ClassifiedSlots`]).
-//! - `lazy_eager_indices` — internal helper used by `classify_for_pick` to compute
-//!   the lazy-candidate flag plus eager-index list in one pass.
-//!
-//! All three functions are read-only walks over `&self.signature` × `&expr.parts`
-//! (plus `self.pre_run.is_some()` for the classifier). They share the
-//! "bare-name" predicate ([`is_bare_name`]), which is the load-bearing
-//! shape concept the auto-wrap and replay-park rails turn on.
+//! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
+//! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::machine::model::types::{Argument, KType, SignatureElement};
@@ -43,13 +34,10 @@ pub struct ClassifiedSlots {
 }
 
 impl<'a> KFunction<'a> {
-    /// Lazy-candidate shape check for this function: is `self` a viable lazy match for
-    /// `expr`, and if so what are the indices of its eager-Expression parts? Returns `None`
-    /// when this function isn't a lazy candidate (length mismatch, fixed-token mismatch, no
-    /// `KExpression` slot binding an `Expression` part, or any other arg-type mismatch).
-    /// Lazy means at least one `KType::KExpression` slot is bound by an
-    /// `ExpressionPart::Expression`; the caller schedules the eager indices as deps and
-    /// leaves the lazy ones in place for the receiving builtin to dispatch itself.
+    /// Lazy-candidate shape check. Lazy means at least one `KType::KExpression` slot is
+    /// bound by an `ExpressionPart::Expression`; the caller schedules the returned eager
+    /// indices as deps and leaves the lazy ones in place for the receiving builtin to
+    /// dispatch itself. Returns `None` when `self` isn't a lazy candidate.
     pub fn lazy_eager_indices(&self, expr: &KExpression<'_>) -> Option<Vec<usize>> {
         let sig = &self.signature;
         if sig.elements.len() != expr.parts.len() {
@@ -128,9 +116,8 @@ impl<'a> KFunction<'a> {
         if sig.elements.len() != expr.parts.len() {
             return false;
         }
-        // Pre-compute whether this function has a `KExpression+Expression` lazy slot — gates
-        // the Expression-in-non-KExpression-slot relaxation below so non-lazy candidates
-        // keep their existing `Deferred` path.
+        // Gates the Expression-in-non-KExpression-slot relaxation so non-lazy candidates
+        // keep their `Deferred` path.
         let has_lazy_kexpr_slot = sig.elements.iter().zip(expr.parts.iter()).any(|(el, part)| {
             matches!(
                 (el, part),
@@ -165,16 +152,10 @@ impl<'a> KFunction<'a> {
         true
     }
 
-    /// Per-slot classification: classify `expr`'s slots against `self`'s signature into
-    /// three disjoint index buckets — `eager_indices`, `wrap_indices`, `ref_name_indices` —
-    /// plus a `picked_has_pre_run` flag. Identifier and bare leaf Type-token
-    /// (`TypeParams::None`) parts are treated symmetrically — both name-shaped parts ride
-    /// the same wrap-or-park rails, so `LET T = Number` and `LET y = z` (and their
-    /// forward-reference variants) walk identical scheduler paths.
-    ///
-    /// Disjointness is guaranteed by construction: each slot's `(SignatureElement,
-    /// ExpressionPart)` shape lands in at most one bucket. The classifier is the sole
-    /// producer of these vectors; the downstream scheduler may rely on the invariant.
+    /// Per-slot classification of `expr` against `self`'s signature into the three index
+    /// buckets of [`ClassifiedSlots`]. Disjointness is guaranteed by construction — each
+    /// `(SignatureElement, ExpressionPart)` shape lands in at most one bucket — and the
+    /// downstream scheduler relies on it.
     pub fn classify_for_pick(&self, expr: &KExpression<'_>) -> ClassifiedSlots {
         let eager_indices = self.lazy_eager_indices(expr);
         let mut wrap_indices: Vec<usize> = Vec::new();
@@ -186,19 +167,13 @@ impl<'a> KFunction<'a> {
                 continue;
             }
             match &arg.ktype {
-                // Bare name in literal-name slot: replay-park iff the picked function isn't
-                // a binder. Binders' literal-name slots are *declarations*; the slot already
-                // owns the name and must not park on its own placeholder.
+                // Binders' literal-name slots are *declarations* — the slot already owns
+                // the name and must not park on its own placeholder.
                 KType::Identifier | KType::TypeExprRef => {
                     if !picked_has_pre_run {
                         ref_name_indices.push(i);
                     }
                 }
-                // Bare name in any other slot (including `Any`): auto-wrap. The wrap
-                // rewrites the part into a sub-Dispatch that re-enters via the bare-name
-                // short-circuit and routes through the Identifier / TypeExprRef overload of
-                // `value_lookup`. Covers both `LET y = z` and `LET T = Number` /
-                // `MAKESET IntOrd` symmetrically.
                 _ => wrap_indices.push(i),
             }
         }

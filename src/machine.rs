@@ -7,8 +7,6 @@
 //!   that any top-level split spuriously fans out.
 //! - `model` — `KType`, `KObject`, `Module`, `Signature`, signature traits.
 //! - `execute` — top-level interpret loop and scheduler driver.
-//!
-//! The `pub use` block below is the curated public surface.
 
 pub(crate) mod core;
 pub(crate) mod execute;

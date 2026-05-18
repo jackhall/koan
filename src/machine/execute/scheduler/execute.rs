@@ -5,17 +5,12 @@ use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
-    /// Drain pending work via [`WorkQueues::pop_next`]: in-flight slots feed first,
-    /// then fresh top-level dispatches in submission order.
+    /// `NodeStep::Replace` is the tail-call path: rewrite the slot's work in place and
+    /// re-enqueue.
     ///
-    /// `NodeStep::Replace` is the tail-call path: the slot's work is rewritten in place and
-    /// re-enqueued via [`WorkQueues::push_after_replace`]. `Replace { frame: Some(f) }`
-    /// installs `f` on the slot and drops the previous frame; the new frame's scope
-    /// becomes the slot's scope and its arena owns the per-call allocations.
-    ///
-    /// On `Done` with a frame: the return `Value` references memory in the per-call arena
-    /// that's about to drop, so it must be lifted into the captured scope's arena before
-    /// the frame is released. See design/memory-model.md.
+    /// On `Done` with a frame, the return `Value` references the per-call arena that's
+    /// about to drop, so it must be lifted into the captured scope's arena before the
+    /// frame is released. See design/memory-model.md.
     pub fn execute(&mut self) -> Result<(), KError> {
         while let Some(idx) = self.queues.pop_next() {
             let id = NodeId(idx);
@@ -24,8 +19,7 @@ impl<'a> Scheduler<'a> {
             let work = node.work;
             let prev_frame = node.frame;
             let prev_function = node.function;
-            // Expose the slot's frame to builtins via `SchedulerHandle::current_frame` for
-            // the duration of this slot's run; restored on exit.
+            // Expose the slot's frame to builtins via `SchedulerHandle::current_frame`.
             let prev_active = self.active_frame.take();
             self.active_frame = prev_frame.clone();
             let step = match work {
@@ -35,33 +29,26 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
             self.active_frame = prev_active;
-            // Drain pending re-entrant writes while `scope` is still guaranteed live —
-            // match arms below may drop the frame `scope` is anchored to. See
-            // design/memory-model.md § Re-entrant `Scope::add`.
+            // Drain re-entrant writes while `scope` is still live; match arms below may
+            // drop the frame it's anchored to. See design/memory-model.md.
             scope.drain_pending();
             match step {
                 NodeStep::Done(output) => {
                     match (output, prev_frame) {
                         (NodeOutput::Value(v), Some(frame)) => {
-                            // Lift into the captured arena (per-call scope's `outer` by
-                            // lexical scoping) before the frame drops. See
-                            // design/memory-model.md.
                             let dest = scope
                                 .outer
                                 .expect("per-call scope must have an outer (its captured scope)")
                                 .arena;
                             let lifted_obj = lift_kobject(v, &frame);
                             if let Some(f) = prev_function {
-                                // Module-system functor-params Stage B: only run the lift-
-                                // time slot check for `Resolved(_)` return types. `Deferred`
-                                // returns route their per-call check through the Combine
-                                // finish that joins the body's lifted value with the
-                                // per-call elaboration's `KType` — the static carrier
-                                // here can't see the per-call resolution. `ReturnType::
-                                // matches_value` returns `true` for `Deferred(_)` to keep
-                                // the structural surface consistent, but skipping the
-                                // call entirely keeps the diagnostic from misattributing
-                                // a body-internal mismatch.
+                                // Only run the lift-time return-type check for `Resolved`
+                                // types. `Deferred` returns route their per-call check
+                                // through the Combine finish that joins the lifted body
+                                // value with the per-call elaboration's `KType`; the
+                                // static carrier here can't see that resolution, and
+                                // skipping it avoids misattributing a body-internal
+                                // mismatch.
                                 let rt = &f.signature.return_type;
                                 if rt.is_resolved() && !rt.matches_value(&lifted_obj) {
                                     let err = KError::new(KErrorKind::TypeMismatch {
@@ -79,8 +66,6 @@ impl<'a> Scheduler<'a> {
                             }
                             let lifted = dest.alloc_object(lifted_obj);
                             self.finalize(idx, NodeOutput::Value(lifted));
-                            // `frame` drops here; if the lifted value cloned an Rc the
-                            // arena lives on, otherwise it frees.
                         }
                         (NodeOutput::Err(e), Some(_frame)) => {
                             let with_frame = match prev_function {
@@ -101,11 +86,9 @@ impl<'a> Scheduler<'a> {
                     let next_function = new_function.or(prev_function);
                     match new_frame {
                         Some(f) => {
-                            // Fresh per-call frame: drop the previous one. Lexical scoping
-                            // means the new frame's child scope's `outer` is the captured
-                            // scope, not the previous frame's. The `'a`-anchoring of
-                            // `f.scope()` lives inside `reinstall_with_frame` — see its
-                            // SAFETY docstring.
+                            // Drop the previous frame; the new frame's child scope's
+                            // `outer` is the captured scope, not the previous frame's.
+                            // `'a`-anchoring lives in `reinstall_with_frame`'s SAFETY.
                             drop(prev_frame);
                             self.store.reinstall_with_frame(id, f, new_work, next_function);
                         }
@@ -118,12 +101,9 @@ impl<'a> Scheduler<'a> {
                             });
                         }
                     }
-                    // Replace return sites either install their own edges via
-                    // `add_owned_edge` / `add_park_edge` before returning (run_dispatch
-                    // bare-name and replay-park branches, defer_to_lift) or have nothing
-                    // to install (BodyResult::Tail rewrites to a Dispatch whose
-                    // work_owned_edges is empty, and reclaim_deps cleared dep_edges[idx]
-                    // beforehand). So pending_count(idx) is authoritative here.
+                    // Replace return sites install their own edges before returning, or
+                    // have nothing to install (Tail rewrites clear `dep_edges[idx]`
+                    // beforehand), so `pending_count` is authoritative.
                     if self.deps.pending_count(idx) == 0 {
                         self.queues.push_after_replace(idx);
                     }
@@ -133,19 +113,12 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
-    /// Terminal write + notify-walk for slot `idx`. The single entry point for
-    /// landing a `NodeOutput` and waking parked consumers — pairs
-    /// `NodeStore::finalize` with `DepGraph::drain_notify` so the two halves
-    /// of the terminal step happen in one method body. Each woken consumer
-    /// whose work is `Lift(Pending(idx))` is stamped to
-    /// `Lift(Ready(producer_output))` before enqueue, so the matching
-    /// `run_lift` pop has the terminal in hand and never reads
-    /// `results[idx]`.
+    /// Each woken consumer whose work is `Lift(Pending(idx))` is stamped to
+    /// `Lift(Ready(producer_output))` before enqueue, so the matching `run_lift` pop
+    /// has the terminal in hand and never reads `results[idx]`.
     ///
-    /// Invariant: every consumer drained here is parked with a non-zero
-    /// counter. Freed slots are scrubbed from every producer's `notify_list`
-    /// before the producer drains (see the
-    /// `freed_slot_does_not_appear_in_other_notify_lists` test).
+    /// Invariant: every consumer drained here is parked with a non-zero counter; freed
+    /// slots are scrubbed from every producer's `notify_list` before the producer drains.
     pub(super) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
@@ -158,19 +131,14 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Reclaim slot `idx` and the sub-tree it owns. Walks `dep_edges` recursively but
-    /// recurses only into `DepEdge::Owned` entries (via `DepGraph::owned_children`),
-    /// invoking `NodeStore::free_one` per reclaimed index. `DepEdge::Notify` entries are
-    /// dropped on the floor: they point at sibling producers this slot merely parked on,
-    /// and reclaiming a consumer must not reach across a park edge into the producer's
-    /// subtree.
+    /// Recurses only into `DepEdge::Owned` entries; `Notify` entries point at sibling
+    /// producers this slot merely parked on, and reclaiming a consumer must not reach
+    /// across a park edge into the producer's subtree.
     ///
-    /// Idempotent and safe to call on a still-live slot: the guards early-continue when
-    /// the slot is still live (`NodeStore::is_live`) or was already reclaimed
-    /// (`NodeStore::is_reclaimed` paired with `DepGraph::is_dep_edges_empty`).
+    /// Idempotent and safe to call on a still-live slot.
     ///
-    /// `&'a KObject` references handed out by `read` survive `free` because the underlying
-    /// value lives in an arena; clearing the slot's result only drops the enum wrapper.
+    /// `&'a KObject` references handed out by `read` survive `free` because the value
+    /// lives in an arena; clearing the slot's result only drops the enum wrapper.
     pub(super) fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
         while let Some(id) = stack.pop() {
@@ -188,16 +156,12 @@ impl<'a> Scheduler<'a> {
     /// Frame / function are left as `None` so the slot's existing per-call frame and
     /// function label stay attached when the Lift writes its terminal.
     ///
-    /// `bind_id` was just spawned by this slot's `run_dispatch`, so it lands in
-    /// `dep_edges[idx]` as `Owned`: the Lift owns its underlying Bind/Combine and
-    /// must cascade-free it. When a Dispatch slot first parked via replay-park and
-    /// then re-dispatched here, the resulting `dep_edges[idx]` is the mixed shape
-    /// `[Notify(producer), …, Owned(bind_id)]` — exactly the case `free`'s
-    /// `Owned`-only recursion handles correctly.
+    /// `bind_id` is a fresh slot, so the producer-not-terminal precondition for
+    /// `add_owned_edge` holds, and the Owned edge ensures `free`'s Owned-only recursion
+    /// cascade-frees the underlying Bind/Combine. After a replay-park, `dep_edges[idx]`
+    /// can take the mixed shape `[Notify(producer), …, Owned(bind_id)]`, which `free`
+    /// handles correctly.
     pub(super) fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'a> {
-        // `bind_id` was just spawned by this slot — fresh slot, terminal not yet
-        // computed, so the producer-not-terminal precondition for `add_owned_edge`
-        // holds. Atomic +1 across the three vectors closes the deferred-fixup gap.
         self.deps.add_owned_edge(bind_id, NodeId(idx));
         NodeStep::Replace {
             work: NodeWork::Lift(LiftState::Pending(bind_id)),

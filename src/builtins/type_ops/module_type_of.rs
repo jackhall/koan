@@ -103,7 +103,7 @@ mod tests {
     /// arena churn — the per-call-arena reclamation + lift machinery have to keep storage
     /// live for both the module pointer and the dispatched type-op value. Mirrors the
     /// structure of
-    /// [`crate::builtins::fn_def::tests::module_stage2::functor_body_module_dispatch_does_not_dangle`]
+    /// [`crate::builtins::fn_def::tests::functor::dual_write::functor_body_module_dispatch_does_not_dangle`]
     /// but pins the type-op-in-per-call-arena path rather than the plain functor lift.
     ///
     /// Module-system functor-params Stage B: parameter migrated from the lowercase
