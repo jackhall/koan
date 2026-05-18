@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply module renames to a cargo-modules DOT graph and mirror the source
 tree to a new location, so a proposed module refactor can be scored with
-`modgraph.py --fractal` without actually moving files.
+`modgraph.py --root <module>` without actually moving files.
 
 Each `--rename OLD=NEW` rebinds every module path that equals OLD or
 starts with `OLD::`. Renames apply against the original module path only
@@ -17,7 +17,7 @@ Usage:
       --rename koan::execute=koan::dispatch::execute
 
 Then score the proposal:
-  python3 tools/modgraph.py --edges /tmp/koan_proposed.dot --fractal koan \\
+  python3 tools/modgraph.py --edges /tmp/koan_proposed.dot --root koan \\
                             --src-root /tmp/koan_proposed_src
 
 Renames may also be read from a file, one `OLD=NEW` per line (blank

@@ -1,14 +1,14 @@
 # Generalize `Scope::out` into monadic side-effect capture
 
-**Problem.** [`Scope::out`](../src/runtime/machine/core/scope.rs) is a `Box<dyn Write>` sink that
-exists solely so [`PRINT`](../src/runtime/builtins/print.rs) has somewhere to send bytes
+**Problem.** [`Scope::out`](../src/machine/core/scope.rs) is a `Box<dyn Write>` sink that
+exists solely so [`PRINT`](../src/builtins/print.rs) has somewhere to send bytes
 and tests can swap stdout for a buffer. It is the only side-effect channel the runtime
 has, and it is hard-coded to one channel and one shape (write bytes). Every additional
 effect Koan eventually wants to support — file IO, time, randomness, network,
 environment access, even error reporting — would either grow `Scope` by another ad-hoc
 `Box<dyn ...>` field or get baked into `std::io` calls inside individual builtins.
 
-Meanwhile the [`Monadic`](../src/runtime/model/types/ktraits.rs) trait already exists, with `pure` +
+Meanwhile the [`Monadic`](../src/machine/model/types/ktraits.rs) trait already exists, with `pure` +
 `bind` over a `Wrap<T>` GAT, and its doc comment says it is "intended as the abstraction
 Koan's deferred-task and error-handling combinators will share once they're fleshed out."
 Today it is implemented only for `Option` and threaded through nothing in the runtime. It
@@ -35,7 +35,7 @@ is scaffolding without a building.
   higher-kinded slot surface (`(TYPE_CONSTRUCTOR Type)` declaration form,
   `KType::ConstructorApply` application) has landed via module-system
   stage 2; see
-  [design/module-system.md § Higher-kinded type slots](../design/module-system.md#higher-kinded-type-slots).
+  [design/typing/functors.md § Higher-kinded type slots](../design/typing/functors.md#higher-kinded-type-slots).
 - *Standard effect modules — decided.* `Random`, `IO`, `Time`, plus existing
   `PRINT`-emitting builtins folded into `IO`. Each ascribes the `Monad` signature plus
   per-effect operations.
@@ -65,6 +65,6 @@ is scaffolding without a building.
 
 `BodyResult` already absorbed one revision (`Value | Tail` for TCO); the error item added
 a second (`Err` arm) and this one adds a third (`Effectful<...>`). Three churning passes
-over every builtin in [builtins/](../src/runtime/builtins) is meaningfully worse than
+over every builtin in [builtins/](../src/builtins) is meaningfully worse than
 one — but with reclamation already landed, the only remaining lever is folding effects
 into the eventual static-typing/JIT pass if their schedules align.

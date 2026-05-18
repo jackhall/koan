@@ -9,15 +9,15 @@ source ──▶ parse ──▶ dispatch ──▶ execute
 
 Dispatch and execution are deliberately separate stages. **Dispatch** does
 name-resolution and signature-matching: given a `KExpression` and a `Scope`, it
-returns a [`KFuture`](../src/runtime/machine/core/scope.rs) — the resolved `&KFunction` plus
+returns a [`KFuture`](../src/machine/core/scope.rs) — the resolved `&KFunction` plus
 its `ArgumentBundle`, ready to run but not yet executed. **Execution** is what
-the [`Scheduler`](../src/runtime/machine/execute/scheduler.rs) does: it owns a DAG of deferred
+the [`Scheduler`](../src/machine/execute/scheduler.rs) does: it owns a DAG of deferred
 work, decides when each `KFuture` runs, and hands its body the live scope.
 
 ## Dispatch as a scheduler node
 
 The scheduler models dispatch itself as a node type — `Dispatch(KExpression)`.
-[`schedule_expr`](../src/runtime/machine/execute/interpret.rs) collapses to "add a `Dispatch`
+[`schedule_expr`](../src/machine/execute/interpret.rs) collapses to "add a `Dispatch`
 node per top-level expression"; the rest is dynamic. At run time a `Dispatch`
 walks its expression's parts, spawns sub-`Dispatch`/`Bind`/`Combine` nodes for
 nested sub-expressions, and a builtin body holding `&mut dyn SchedulerHandle`
@@ -25,7 +25,7 @@ can also add `Dispatch` nodes.
 
 `Combine` is the host-side dual of `Bind`: an N→1 combinator that waits on a
 fixed set of dep slots and then runs an arbitrary host closure
-([`CombineFinish`](../src/runtime/machine/kfunction.rs)) over their resolved values.
+([`CombineFinish`](../src/machine/core/kfunction.rs)) over their resolved values.
 List- and dict-literal planners use it; the construction logic — including
 already-resolved literal scalars that don't need a dep slot — lives in the
 closure's capture rather than in fixed-shape variants. Body-finalization for
@@ -46,12 +46,14 @@ BodyResult { Value(&KObject) | Tail(KExpression) | Err(KError) }
 
 When a body cannot produce its result inline — its expression has nested
 sub-expressions whose own evaluation hasn't run yet — the slot's work is
-rewritten to `Lift { from: NodeId }` (a [`NodeWork`](../src/runtime/machine/execute/nodes.rs)
-variant). The Lift shim parks on the spawned `Bind`'s notify-list, waits
-for that slot's terminal write, and copies the result into its own slot when
-it runs. The original slot keeps its frame and notify-list across the
-rewrite, so consumers downstream see the eventual terminal as if the body
-had produced it directly.
+rewritten to `Lift(LiftState::Pending(NodeId))` (a [`NodeWork`](../src/machine/execute/nodes.rs)
+variant). The Lift shim parks on the spawned `Bind`'s notify-list; the
+notify-walk transitions `Pending → Ready(NodeOutput)` at wake time by
+stamping the producer's terminal directly into the Lift's work, so when the
+slot pops the terminal is already in hand and `run_lift` just unwraps it —
+no result-table lookup. The original slot keeps its frame and notify-list
+across the rewrite, so consumers downstream see the eventual terminal as if
+the body had produced it directly.
 
 ## Push/notify dependency edges
 
@@ -62,14 +64,14 @@ unresolved deps. When a slot writes a terminal `Value` or `Err`, the
 notify-walk drains its `notify_list`, decrements each consumer's
 `pending_deps`, and pushes any zero-counter consumer onto the run-set.
 The terminal write and notify-walk fire in a single
-[`Scheduler::finalize`](../src/runtime/machine/execute/scheduler/execute.rs)
+[`Scheduler::finalize`](../src/machine/execute/scheduler/execute.rs)
 method body that pairs `NodeStore::finalize` with `DepGraph::drain_notify`,
 so the "every terminal write fires the notify" rule is type-enforced
 rather than restated at each call site. Consumers arrive on the run-set
 only when actually ready; there is no poll-and-requeue.
 
 The run-set has two priority bands managed by
-[`WorkQueues`](../src/runtime/machine/execute/scheduler/work_queues.rs). Internal
+[`WorkQueues`](../src/machine/execute/scheduler/work_queues.rs). Internal
 work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
 nodes registered in `add()` — routes through `WorkQueues::push_internal` /
 `push_internal_front` / `push_woken`. Top-level `add_dispatch` calls route
@@ -82,7 +84,7 @@ call site.
 
 ## Tail-call optimization
 
-[`BodyResult::Tail(KExpression)`](../src/runtime/machine/kfunction.rs) makes a tail
+[`BodyResult::Tail(KExpression)`](../src/machine/core/kfunction.rs) makes a tail
 return rewrite the **current scheduler slot's work** to a fresh
 `Dispatch(expr)` and re-run in place — no new node allocated. Both deferring
 builtins (`match_case`, `KFunction::invoke` for user-fns) are tail by
@@ -119,7 +121,7 @@ result run in O(1) scheduler memory across iterations, with the per-iteration
 fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Slot-table state lives in a
-[`NodeStore`](../src/runtime/machine/execute/scheduler/node_store.rs)
+[`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
 sub-struct on `Scheduler` that owns three private vectors — `nodes:
 Vec<Option<Node<'a>>>` (active node payloads), `results:
 Vec<Option<NodeOutput<'a>>>` (terminal results), and `free_list: Vec<usize>`
@@ -130,7 +132,7 @@ the take/reinstall pairing, the terminal write, and reclamation are each
 encapsulated; no call site outside `NodeStore` can grow `nodes` without
 `results` or land a `NodeOutput` without firing the notify-walk.
 Dependency bookkeeping lives alongside it in a single
-[`DepGraph`](../src/runtime/machine/execute/scheduler/dep_graph.rs) sub-struct
+[`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
 that bundles three parallel vectors — `notify_list: Vec<Vec<NodeId>>` (each
 producer's dependent list), `pending_deps: Vec<usize>` (each consumer's
 unresolved-dep counter), and `dep_edges: Vec<Vec<DepEdge>>` (each slot's
@@ -192,7 +194,7 @@ executed parks on the producer instead of failing with `UnboundName`. The
 mechanism lives in two pieces.
 
 A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
-inside the [`Bindings`](../src/runtime/machine/core/scope.rs) façade on
+inside the [`Bindings`](../src/machine/core/scope.rs) façade on
 `Scope`, alongside `data` and `functions`. When a binder dispatches, its
 `pre_run` hook (a per-`KFunction` extractor that pulls the to-be-bound name
 structurally out of the expression's parts) installs `name → producer NodeId`
@@ -207,12 +209,12 @@ and `register_function` remove their own placeholder before inserting into
 `data` / `functions`, so the two tables are mutually exclusive at any
 moment.
 
-The execute side — [`run_dispatch`](../src/runtime/machine/execute/scheduler/dispatch.rs) — is a
+The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) — is a
 five-phase linear pipeline: a bare-name short-circuit, the chain-walked
 resolution, the placeholder install, the auto-wrap + replay-park rewrite,
 and the dep schedule. Phase 2 calls
-[`Scope::resolve_dispatch`](../src/runtime/machine/core/scope.rs) once and
-matches on its [`ResolveOutcome`](../src/runtime/machine/core/scope.rs):
+[`Scope::resolve_dispatch`](../src/machine/core/scope.rs) once and
+matches on its [`ResolveOutcome`](../src/machine/core/scope.rs):
 `Resolved(r)` continues into phase 3 with the picked function plus the
 per-slot index buckets `r.slots` carries (`wrap_indices`, `ref_name_indices`,
 `eager_indices`); `Ambiguous(n)` surfaces as an `AmbiguousDispatch` error;
@@ -221,7 +223,7 @@ on miss, surfaces as `DispatchFailed`; `Deferred` (no match against
 the bare shape but the expression carries nested `Expression` /
 `ListLiteral` / `DictLiteral` parts whose evaluation may produce typed
 `Future(_)` parts that match) jumps to phase 5's eager-fallthrough loop and
-re-dispatches via [`run_bind`](../src/runtime/machine/execute/scheduler/finish.rs)
+re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
 after subs resolve.
 
 The five rails the resolution feeds:
@@ -229,7 +231,7 @@ The five rails the resolution feeds:
 - **Bare-name short-circuit** (phase 1, runs before resolution). A
   single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
   directly: `Value` returns inline, `Placeholder` rewrites the slot's work
-  to `Lift { from: producer_id }` (the same shim `BodyResult::Tail` uses for
+  to `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail` uses for
   sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
   produces the structured error.
 - **Head-Keyword placeholder fallback** (phase 2, runs inside the
@@ -272,7 +274,7 @@ The five rails the resolution feeds:
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's
 `(SignatureElement, ExpressionPart)` shape lands in at most one bucket.
-[`KFunction::classify_for_pick`](../src/runtime/machine/kfunction.rs) is
+[`KFunction::classify_for_pick`](../src/machine/core/kfunction.rs) is
 the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
 by value), so the disjointness invariant lives in one place rather than as
 comment-enforced rules across the scheduler driver.
@@ -292,10 +294,10 @@ this placeholder mechanism: a type-binding site registers in
 `Scope::placeholders` exactly like a value binding, external lookups park
 the same way, and self-references during a binding's own elaboration
 short-circuit through the elaborator's threaded-set recognition (see
-[type-system.md § Type elaboration](type-system.md#type-elaboration)) so
+[typing/elaboration.md](typing/elaboration.md)) so
 recursive type definitions don't deadlock on their own placeholder.
 FN-signature elaboration plugs into the same mechanism: when
-[`elaborate_type_expr`](../src/runtime/model/types/resolver.rs) hits a
+[`elaborate_type_expr`](../src/machine/model/types/resolver.rs) hits a
 bare type-name leaf whose binder is in
 `Scope::placeholders` but not yet finalized, it returns
 `ElabResult::Park(producers)` and FN-def's body schedules a `Combine`
@@ -308,7 +310,7 @@ into `signature_expr.parts[slot_idx]` as `Future(KTypeValue(_))` before
 re-running the parameter-list walk against the spliced signature. STRUCT and
 UNION share the same elaborator-and-Combine shape for their field-type lists. The replay-park
 rail itself cycle-checks before installing the park edge:
-[`DepGraph::would_create_cycle`](../src/runtime/machine/execute/scheduler/dep_graph.rs)
+[`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs)
 walks the forward `notify_list` graph from the consumer and, if the
 producer is reachable, the replay-park surfaces a `ShapeError("cycle in
 type alias ...")` instead of installing the park edge. That catches the
@@ -316,17 +318,60 @@ trivially-cyclic case (`LET Ty = Ty` — the value-side `Ty` sub-Dispatch is
 the LET binder's `Owned` child and is about to park on its own ancestor)
 generically rather than as a special case in the elaborator.
 
+## `KObject` and the model/core boundary
+
+[`KObject`](../src/machine/model/values/kobject.rs) is the universal
+runtime value type. Pure-data variants (`Number`, `KString`, `Bool`,
+`List`, `Dict`, `KExpression`, `*Type` schema carriers, `Tagged`,
+`Struct`, `KTypeValue`, `TypeNameRef`, `Null`) carry no references
+into [`machine::core`](../src/machine/core.rs). The runtime-reference
+variants do — `KFunction`, `KFuture`, `KModule`, `KSignature`,
+`Wrapped` embed `&'a KFunction<'a>`, `KFuture<'a>`,
+`&'a Module<'a>`, `&'a Signature<'a>`, `&'a KType`, and an
+`Option<Rc<CallArena>>` lifecycle anchor. These references are why
+`model::values::kobject` imports from `core::{arena, kfunction,
+scope, scope_id}`.
+
+The references are structural, not incidental. Three hot consumers
+read the concrete runtime shape directly:
+
+- [`lift.rs`](../src/machine/execute/lift.rs) compares
+  `f.captured_scope().arena` and `m.child_scope().arena` against the
+  dying frame to decide whether a per-call function or module needs
+  its `Rc<CallArena>` anchor cloned onto the lifted value.
+- [`KObject::ktype()`](../src/machine/model/values/kobject.rs)
+  synthesizes `KType::UserType { kind: Module, scope_id, name }` for
+  module values from `m.scope_id()` and `m.path` — the dispatcher
+  reads these fields to nominally identify the module type.
+- `Parseable::summarize` and `deep_clone` recurse into the variants
+  and read `f.summarize()`, `m.path`, `s.path`, etc. — both methods
+  are part of `KObject`'s contract with `Parseable`, which the value
+  layer already implements.
+
+Indirecting these through a trait, an opaque handle, a generic
+parameter, or a model/runtime split each fail the same way: the
+recursive composite variants (`Tagged.value: Rc<KObject>`,
+`List.items: Rc<Vec<KObject>>`, `ExpressionPart::Future(&'a KObject)`)
+re-form the union at every nesting level, and the hot consumers
+need the concrete arena/scope/path identity that the abstraction
+would have to expose anyway. The cleanest available shape is the
+present one: the model/core boundary is one-way for pure value
+types (e.g. `KKey` returns `Result<KKey, String>` rather than
+naming `KError`), and the runtime-reference variants of `KObject`
+sit on the boundary by necessity, naming the `core` types they
+genuinely need.
+
 ## Open work
 
 - **Inference and search as scheduler work**
-  ([module-system.md § Inference and search](module-system.md#inference-and-search-as-scheduler-work)).
+  ([typing/scheduler.md](typing/scheduler.md)).
   Type inference and modular-implicit resolution reduce to the existing
   `Dispatch` and `Bind` machinery — type-returning builtins on the value
   path, `Bind` as the refinement-and-wake-up mechanism, and stage 5
   implicit search as a single `SEARCH_IMPLICIT` builtin rather than a new
   node kind. Higher-kinded slots and sharing constraints layer on top of
   the scheduler-driven elaborator (see
-  [module-system.md](module-system.md));
+  [typing/](typing/README.md));
   [stage 5](../roadmap/module-system-5-modular-implicits.md) layers
   implicit search.
 - **Monadic side-effect capture**

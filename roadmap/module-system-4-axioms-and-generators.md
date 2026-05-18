@@ -36,7 +36,7 @@ independent of signatures.
   The engine sees quoted axioms and the module's `gen` slot — invocation
   at ascription is the integration point, not a coupling at the
   implementation level.
-- *Axiom syntax — decided per [design/module-system.md § Axioms and property testing](../design/module-system.md#axioms-and-property-testing).*
+- *Axiom syntax — decided per [design/typing/implicits.md § Axioms and property testing](../design/typing/implicits.md#axioms-and-property-testing).*
   `(AXIOM #(quoted bool predicate))` inside a `SIG` body. The engine
   evaluates each quote under a scope it builds by drawing samples from the
   module's `gen` slot for every free identifier; variable types resolve
@@ -48,7 +48,7 @@ independent of signatures.
   Generators compose through functor application: a functor body builds
   the result module's `gen` from its parameter's `gen`.
 - *Built-in type generators — decided.* The engine ships `Random`-using
-  generators for `Number`, `Str`, `Bool`, `List<Ty>`, `Dict<Ke, Va>`,
+  generators for `Number`, `Str`, `Bool`, `:(List Ty)`, `:(Dict Ke Va)`,
   etc. —
   these are the leaves of the composition story.
 - *Missing-generator policy — decided.* The structural-conformance check
@@ -60,8 +60,8 @@ independent of signatures.
   exact algorithm after investigating Hypothesis's implementation.
 - *Sample size and budget — decided.* Sample count scales with the
   generator's type complexity, capped at 100. `Bool` exhausts at 2;
-  `Number` needs a handful; `List<Ty>` needs more than `Ty`;
-  `List<List<Ty>>`
+  `Number` needs a handful; `:(List Ty)` needs more than `Ty`;
+  `:(List :(List Ty))`
   more again. The engine derives the count from the generator structure
   rather than taking a single global config knob.
 

@@ -16,15 +16,15 @@ system rather than implicit in builtin internals.
 
 ```
 SIG Monad = (
-  (LET Wrap = (TYPE_CONSTRUCTOR Type))   -- type constructor: T → Wrap<T>
-  (VAL pure: Function<(Number) -> Wrap<Number>>)
-  (VAL bind: Function<(Wrap<Number>, Function<(Number) -> Wrap<Number>>) -> Wrap<Number>>)
+  (LET Wrap = (TYPE_CONSTRUCTOR Type))   -- type constructor: T → :(Wrap T)
+  (VAL pure :(Function (Number) -> :(Wrap Number)))
+  (VAL bind :(Function (:(Wrap Number), :(Function (Number) -> :(Wrap Number))) -> :(Wrap Number)))
 )
 ```
 
 The `Wrap` slot is a type-constructor slot declared with
 `(TYPE_CONSTRUCTOR <param>)` — the higher-kinded surface form lives in
-[module-system.md § Higher-kinded type slots](module-system.md#higher-kinded-type-slots).
+[typing/functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots).
 Opaque ascription mints a per-call `KType::UserType { kind:
 TypeConstructor, .. }` under the ascribed module's `type_members[Wrap]`,
 so different `Monad`-ascribed modules carry distinct `Wrap` identities.
@@ -38,7 +38,7 @@ operations:
   module-system stage 4 take `Random` as an explicit parameter (until
   stage 5 makes it implicit).
 - **`IO`** — read/write byte streams. Replaces the
-  [`Scope::out`](../src/runtime/machine/core/scope.rs) `Box<dyn Write>` channel.
+  [`Scope::out`](../src/machine/core/scope.rs) `Box<dyn Write>` channel.
 - **`Time`** — clock reads.
 - *(others as the language grows)* — file IO, network, environment.
 
@@ -54,7 +54,7 @@ the dependency at the FN's parameter list; the call site supplies the
 module:
 
 ```
-LET gen = (FN (GEN r: Random) -> Number = (... r ...))
+LET gen = (FN (GEN r :Random) -> Number = (... r ...))
 ```
 
 Stage 5's implicit dispatch elides the parameter at call sites where the
@@ -70,7 +70,7 @@ single channel: a default handler performs them; a test handler captures
 them; a replay handler feeds recorded results.
 
 The Rust-side
-[`Monadic`](../src/runtime/model/types/ktraits.rs) trait, currently scaffolding
+[`Monadic`](../src/machine/model/types/ktraits.rs) trait, currently scaffolding
 for `Option`, becomes the bridge between the in-language `Monad`
 signature and the runtime's effect drainage. It implements the carrier
 shape the runtime uses for `Effectful<T>` — a value paired with pending

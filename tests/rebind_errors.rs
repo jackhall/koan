@@ -6,9 +6,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::runtime::builtins::default_scope;
-use koan::runtime::machine::model::KObject;
-use koan::runtime::machine::{KError, KErrorKind, RuntimeArena, Scheduler, Scope};
+use koan::builtins::default_scope;
+use koan::machine::model::KObject;
+use koan::machine::{KError, KErrorKind, RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -67,7 +67,7 @@ fn let_function_collides_with_let_value() {
     let results = run_collecting_errors(
         scope,
         "LET x = 1\n\
-         LET x = (FN (DOUBLE y: Number) -> Number = (y))",
+         LET x = (FN (DOUBLE y :Number) -> Number = (y))",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {
@@ -90,8 +90,8 @@ fn exact_signature_duplicate_errors() {
     let scope = build_scope(&arena);
     let results = run_collecting_errors(
         scope,
-        "FN (DOUBLE x: Number) -> Number = (x)\n\
-         FN (DOUBLE x: Number) -> Number = (x)",
+        "FN (DOUBLE x :Number) -> Number = (x)\n\
+         FN (DOUBLE x :Number) -> Number = (x)",
     );
     assert!(results[0].is_ok());
     let err = match &results[1] {

@@ -3,7 +3,7 @@
 **Problem.** Stages 1-2 give an explicit module language: every functor
 application, every module-typed argument, every signature constraint is
 written by hand. For everyday generic code this is verbose. The
-[`KType::AnyUserType { kind: Module }`](../src/runtime/model/types/ktype.rs)
+[`KType::AnyUserType { kind: Module }`](../src/machine/model/types/ktype.rs)
 slot kind that stage 1 shipped accepts any module value regardless of which
 signature it satisfies, so even the explicit-module path lacks the
 signature-bound dispatch a generic-function call site needs. Stage 5
@@ -44,11 +44,11 @@ is the ergonomic payoff of the design.
   this stage ships a placeholder, and stage 7 designs the user-facing form
   against patterns from real code. The placeholder is intentionally ugly
   so it doesn't accidentally become the final answer.
-- *Resolution algorithm — decided per [design/module-system.md § Resolution and coherence](../design/module-system.md#resolution-and-coherence-the-design-dials).*
+- *Resolution algorithm — decided per [design/typing/implicits.md § Resolution and coherence](../design/typing/implicits.md#resolution-and-coherence-the-design-dials).*
   Lexical scope plus explicitly imported implicits; filter by signature
   unification; pick the most specific; ambiguity is an error. Specificity
   rule: most-specific-wins, with unrelated ties as errors.
-- *Inference and search interleaving — decided per [design/module-system.md § Inference and search](../design/module-system.md#inference-and-search-as-scheduler-work).*
+- *Inference and search interleaving — decided per [design/typing/scheduler.md](../design/typing/scheduler.md).*
   Implicit search lands as a single `SEARCH_IMPLICIT` builtin — no new
   node kind, no parallel substitution table. Inference produces type
   refinements that search consumes; search produces module choices that
@@ -86,7 +86,7 @@ is the ergonomic payoff of the design.
 - [Stage 6 — Equivalence-checked coherence](module-system-6-equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](module-system-7-syntax-tuning.md)
 - [Group-based operators](group-based-operators.md)
-- [Static type checking and JIT compilation](static-typing-and-jit.md)
+- [Two-phase execution](two-phase-execution.md)
 
 Stage 4 (axioms) is not a hard prerequisite — modular implicits can ship
 without axiom checking — but the cross-implicit equivalence story (stage 6)

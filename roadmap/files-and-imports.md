@@ -8,7 +8,7 @@ Realistic programs outgrow that long before they outgrow a few hundred lines,
 and the language cannot represent its own standard library as separate files
 because the standard library does not yet exist as Koan code at all.
 
-The [module system](../design/module-system.md) gives Koan an in-language
+The [module system](../design/typing/modules.md) gives Koan an in-language
 notion of modules — structures, signatures, and ascription — but says nothing
 about how source files map onto that notion or how one file reaches into
 another. This item closes that gap.

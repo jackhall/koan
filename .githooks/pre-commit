@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# koan pre-commit hook.
+#
+# Runs the miri-slate drift check, then the verify slate (instrumented
+# tests via cargo llvm-cov, clippy, doclinks, modgraph score), then
+# rebaselines `observe/complexity.txt` against today's measurement.
+#
+# The pre-commit hook owns its own copies of the regenerated DOT and lcov
+# files (prefixed with `precommit-`) so they don't clobber the canonical
+# `observe/modules.dot` / `observe/coverage.lcov` that `tools/verify.sh`
+# and `tools/observe_tests.py audit` write during manual runs.
+#
+# Refreshed tracked files (the shared baseline plus the precommit-owned
+# copies) are auto-staged into the commit so it reflects "code change +
+# observability snapshot together".
+#
+# Activate once per clone:
+#     git config core.hooksPath .githooks
+#
+# Runtime: ~3–6 minutes per commit (dominated by the instrumented build /
+# test pass plus the non-instrumented `cargo test` in verify.sh). Bypass
+# for a hotfix with `git commit --no-verify`.
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+DOT=observe/precommit-modules.dot
+LCOV=observe/precommit-coverage.lcov
+
+step() { printf '\n### %s ###\n' "$*"; }
+
+step "miri-slate drift check"
+python3 tools/observe_tests.py slate-audit
+
+step "verify: llvm-cov + clippy + doclinks + coverage + modgraph (rebaseline)"
+KOAN_DOT="$DOT" KOAN_LCOV="$LCOV" KOAN_REBASELINE=1 tools/verify.sh
+
+step "stage refreshed observability artifacts"
+git add observe/complexity.txt observe/coverage.txt "$DOT" "$LCOV"

@@ -1,52 +1,120 @@
 #!/usr/bin/env python3
-"""Measure a complexity index for a module partition.
+"""Measure a fractal complexity index for a module subtree.
 
-Reads a cargo-modules DOT file and a TOML partition spec, then reports:
-  index(m) = cross_edges(m) + alpha * feedback_weight(m) + beta
-  total    = Σ index(m) · loc(m)        (summed over non-leaf m)
-  per-loc  = total / loc(root)          (under --fractal)
+Reads a cargo-modules DOT file, recursively walks the module tree from
+`--root`, and reports per node:
+  index(m)   = cross_edges(m) + alpha * feedback_weight(m) + beta
+  size(m)    = gamma * raw_loc(m) * log(1 + raw_loc(m) / pivot)
+The aggregate is reported as a single normalised number — the per-root-loc
+score, split into three components:
+  per-loc    = (Σ (cross + α·fb)(m) · loc(m)        ← coupling
+              + Σ (β · scale)(m) · loc(m)           ← nesting
+              + Σ size(m)) / loc(root)              ← size
+The split lets you see whether complexity is coupling (cross/feedback
+edges at each wrapper), nesting (wrapper layers themselves), or per-file
+(large files). The absolute totals are intentionally not surfaced — only
+the per-loc number is calibrated to compare against prior runs.
 
-where feedback_weight is the total weight of edges that go against the
-best topological ordering of the groups. For N <= 6 groups the best order
-is found by exhaustive search; above that, the Eades-Lin-Smyth GR
-heuristic is used.
+Two LOC measures are used. Production LOC (`own_loc` / `subtree_loc`)
+filters out test files and `#[cfg(test)] mod` blocks and is what the
+structural terms (coupling, nesting) weight by — it captures the load-
+bearing code surface a refactor reshuffles. Raw LOC (`raw_loc`) counts
+every non-blank line in the file, including tests, doc comments, and
+inline comments, and is what the per-file size penalty uses — a 1000-line
+test-heavy file is 1000 lines of context for any reader (human or model),
+even if only 300 of those lines are production code.
 
-The `--fractal` per-loc number is normalised by the root subtree's LOC
-(a fixed constant for a given crate). This is what makes nesting cost
-something: every interior level contributes its own loc to the sum, so
-adding a wrapper around a heavy subtree adds (β + cross + α·fb) · loc.
+`cross_edges` and `feedback_weight` are computed at every interior node
+against the one-group-per-child partition of its children. For N ≤ 6
+children the best topological order is found by exhaustive search;
+above that, the Eades-Lin-Smyth GR heuristic is used.
 
-`beta` is a flat per-non-leaf charge. The default of 5.0 says "one extra
-module layer costs roughly what 5 cross edges cost" — calibrated by
-sweeping β across known structures (gratuitous wrappers, useful
-wrappers, nesting refactors); above ~10 the metric starts preferring
-known-bad moves (e.g. dropping a load-bearing wrapper) over deep
-nesting, and at β=0 a passthrough wrapper is undetectable.
+The per-loc number is normalised by the root subtree's LOC (a fixed
+constant for a given root). This is what makes nesting cost something:
+every interior level contributes its own loc to the sum, so adding a
+wrapper around a heavy subtree adds (β + cross + α·fb) · loc.
+
+`beta` is the per-non-leaf charge (default 20). `beta-children-pivot` P
+(default 3) scales it by `max(1, P/children)`, so a 2-child wrapper pays
+1.5× β while a 3+ child wrapper pays full β. The intent: punish thin
+pass-through wrappers (e.g. `runtime` hosting only `builtins` + `machine`)
+without treating cohesive groupings (e.g. `model` over ast/types/values,
+`values` over 4 leaves) as overhead. Calibrated by a joint β×P sweep on
+the koan tree to the cleanest decision boundary: dissolving a 2-child
+thin wrapper unambiguously wins, while dissolving any 3+ child cohesive
+grouping unambiguously loses. Pushing β much higher makes the layer cost
+grow linearly with subtree-loc, which falsely accepts dissolving
+medium-cohesion 3-child wrappers; pushing P higher does the same for
+4-child wrappers. Setting P=0 disables scaling for flat β. At β=0 a
+passthrough wrapper is undetectable.
+
+`gamma`/`pivot` shape the per-file size charge. Without it, a single
+3000-line leaf scores zero while any split incurs structural cost, so
+the metric strictly rewards inaction. The charge `γ · L · log(1 + L/T)`
+is sub-linear in L for L ≪ T (small files are nearly free) and turns
+super-linear as L ≫ T. Defaults (γ=50, T=250) make 2-way splits of
+400+ LOC leaves break even against the wrapper β·loc cost, 3-way splits
+of 300+ leaves clearly win, and the size term lands at ~8% of the total
+score on the koan tree — enough signal to call out fat files without
+overriding cohesive groupings. Applied to every module's own file
+(leaves and parents alike), so fat `mod.rs` files above small children
+are also penalised.
 
 Usage:
-  python3 tools/modgraph.py --edges <dot-file> --partition <toml-file>
-                            [--alpha 2.0] [--beta 5.0]
+  python3 tools/modgraph.py --edges <dot-file> --root koan
+  python3 tools/modgraph.py --edges <dot-file> --root koan::runtime::machine
 
-Partition TOML:
-  [groups]
-  parse    = ["koan::parse"]
-  model    = ["koan::dispatch::types", "koan::dispatch::values"]
-  machine  = ["koan::dispatch::kfunction", "koan::dispatch::runtime",
-              "koan::execute"]
-  builtins = ["koan::builtins"]
+Pass `--baseline <file>` to record the run in a tracked baseline file and
+print a delta against the prior top entry. The flag also prunes stale
+entries automatically: any entry whose SHA (with any trailing `+` dirty
+marker stripped) is no longer reachable from HEAD (branch checkout, hard
+reset, rebase drop) is removed before today's measurement is prepended.
+Trimmed to 5 entries. Dirty-snapshot entries are retained so pre-commit-
+hook runs (which see a staged-but-not-yet-committed tree) don't erase the
+trend log.
+
+  python3 tools/modgraph.py --edges /tmp/koan.dot --root koan \\
+                            --baseline observe/complexity.txt
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import datetime
 import itertools
+import math
 import re
-import sys
-import tomllib
+import subprocess
 from collections import defaultdict
 from pathlib import Path
 
 EDGE_RE = re.compile(r'\s*"([^"]+)"\s*->\s*"([^"]+)".*\[label="uses"')
+
+
+@dataclasses.dataclass(frozen=True)
+class Score:
+    """The three per-loc components: coupling (cross + α·fb at each
+    wrapper, loc-weighted), nesting (β·scale at each wrapper, loc-weighted),
+    and size (γ·L·log per file). Sums over a subtree compose by addition;
+    `per(root_loc)` produces the reported per-root-loc breakdown."""
+    coupling: float = 0.0
+    nesting: float = 0.0
+    size: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.coupling + self.nesting + self.size
+
+    def __add__(self, other: Score) -> Score:
+        return Score(self.coupling + other.coupling,
+                     self.nesting + other.nesting,
+                     self.size + other.size)
+
+    def per(self, loc: int) -> Score:
+        if not loc:
+            return Score()
+        return Score(self.coupling / loc, self.nesting / loc, self.size / loc)
 
 
 def load_edges(path: Path) -> list[tuple[str, str]]:
@@ -56,30 +124,6 @@ def load_edges(path: Path) -> list[tuple[str, str]]:
         if m:
             edges.append((m.group(1), m.group(2)))
     return edges
-
-
-def load_partition(path: Path) -> dict[str, list[str]]:
-    data = tomllib.loads(path.read_text())
-    groups = data.get("groups")
-    if not isinstance(groups, dict) or not groups:
-        sys.exit(f"{path}: missing or empty [groups] table")
-    return {name: list(prefixes) for name, prefixes in groups.items()}
-
-
-def partition_from_children(
-    edges: list[tuple[str, str]], parent: str
-) -> dict[str, list[str]]:
-    """One group per direct child of `parent`, named by the child's last segment."""
-    prefix = parent + "::"
-    children: set[str] = set()
-    for src, dst in edges:
-        for mod in (src, dst):
-            if mod.startswith(prefix):
-                tail = mod[len(prefix):].split("::", 1)[0]
-                children.add(tail)
-    if not children:
-        sys.exit(f"--children-of {parent}: no descendants found in edges")
-    return {child: [f"{parent}::{child}"] for child in sorted(children)}
 
 
 def classify(module: str, partition: dict[str, list[str]]) -> str | None:
@@ -94,9 +138,22 @@ def classify(module: str, partition: dict[str, list[str]]) -> str | None:
 def build_matrix(
     edges: list[tuple[str, str]], partition: dict[str, list[str]]
 ) -> tuple[dict[tuple[str, str], int], int, int]:
+    """Edges are deduplicated by `(source_group, dst_module)` before being
+    aggregated to `(source_group, dst_group)`. This counts the number of
+    *distinct target modules* a source group reaches in each target group,
+    not the raw cargo-modules edge sum.
+
+    Without this dedup, splitting a file into N submodules that share
+    imports multiplies coupling by N (each child redundantly points at the
+    same target), penalising the split even though the semantic dependency
+    is unchanged. After dedup, "type_ops depends on N distinct things in
+    machine" is invariant under how type_ops is internally subdivided —
+    the metric measures the subtree-level dependency surface, not the
+    number of `use` sites."""
     matrix: dict[tuple[str, str], int] = defaultdict(int)
     cross = 0
     unclassified = 0
+    seen: set[tuple[str, str]] = set()
     for src, dst in edges:
         sg = classify(src, partition)
         dg = classify(dst, partition)
@@ -104,6 +161,10 @@ def build_matrix(
             unclassified += 1
             continue
         if sg != dg:
+            key = (sg, dst)
+            if key in seen:
+                continue
+            seen.add(key)
             matrix[(sg, dg)] += 1
             cross += 1
     return matrix, cross, unclassified
@@ -143,19 +204,20 @@ def best_order_greedy(
         progress = True
         while progress:
             progress = False
-            for g in list(remaining):
+            for g in sorted(remaining):
                 if out_weight(g) == 0:
                     s2.insert(0, g)
                     remaining.remove(g)
                     progress = True
-            for g in list(remaining):
+            for g in sorted(remaining):
                 if in_weight(g) == 0:
                     s1.append(g)
                     remaining.remove(g)
                     progress = True
         if not remaining:
             break
-        pick = max(remaining, key=lambda g: out_weight(g) - in_weight(g))
+        pick = max(sorted(remaining),
+                   key=lambda g: out_weight(g) - in_weight(g))
         s1.append(pick)
         remaining.remove(pick)
 
@@ -177,7 +239,7 @@ def direct_children(parent: str, modules: set[str]) -> list[str]:
 
 
 def module_to_file(module: str, src_root: Path) -> Path | None:
-    """`koan::dispatch::types::ktype` -> `src/dispatch/types/ktype.rs` (or `.../mod.rs`)."""
+    """`koan::machine::core::scope` -> `src/machine/core/scope.rs` (or `.../mod.rs`)."""
     parts = module.split("::")[1:]
     if not parts:
         return None
@@ -266,6 +328,41 @@ def file_loc(path: Path) -> int:
     return count
 
 
+def own_file_loc(module: str, src_root: Path) -> int:
+    """LOC of just this module's own backing file (no descendants)."""
+    f = module_to_file(module, src_root)
+    return file_loc(f) if f is not None else 0
+
+
+def file_loc_raw(path: Path) -> int:
+    """Count every non-blank line in the file, including test code, doc
+    comments, and inline comments. This is the per-reader context-cost
+    measure used by `size_charge` — tests and comments are real lines a
+    reader has to load, even if the structural terms (coupling, nesting)
+    ignore them."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
+def own_file_loc_raw(module: str, src_root: Path) -> int:
+    """Raw LOC of just this module's own backing file (no descendants).
+    Counterpart to [`own_file_loc`] that does not filter tests/comments."""
+    f = module_to_file(module, src_root)
+    return file_loc_raw(f) if f is not None else 0
+
+
+def size_charge(raw_loc: int, gamma: float, pivot: float) -> float:
+    """Soft log-shaped penalty per file: γ·L·log(1 + L/T). L is raw LOC
+    (tests + comments included) — the size term measures per-file context
+    cost, where every line a reader has to load counts."""
+    if raw_loc <= 0 or gamma <= 0.0 or pivot <= 0.0:
+        return 0.0
+    return gamma * raw_loc * math.log(1.0 + raw_loc / pivot)
+
+
 def subtree_loc(module: str, modules: set[str], src_root: Path) -> int:
     prefix = module + "::"
     total = 0
@@ -304,114 +401,178 @@ def fractal_report(
     src_root: Path,
     alpha: float,
     beta: float,
+    beta_children_pivot: float,
+    gamma: float,
+    pivot: float,
     exact_threshold: int,
-) -> int:
+) -> Score:
+    """Walk the subtree, print the per-module report, and return the
+    per-root-loc Score breakdown."""
     modules = discover_modules(edges)
-
-    weighted_sum = 0.0
-    nonleaf_loc_sum = 0
     root_loc = subtree_loc(root, modules, src_root)
 
-    def walk(module: str, depth: int) -> None:
-        nonlocal weighted_sum, nonleaf_loc_sum
+    def walk(module: str, depth: int) -> Score:
+        indent = "  " * depth
         children = direct_children(module, modules)
         loc = subtree_loc(module, modules, src_root)
+        own_loc = own_file_loc(module, src_root)
+        raw_loc = own_file_loc_raw(module, src_root)
+        size = size_charge(raw_loc, gamma, pivot)
+        size_tail = (
+            f"   own {own_loc:>4} (raw {raw_loc:>4})  size {size:>6.1f}"
+            if (own_loc or raw_loc) else ""
+        )
+        head = f"{indent}{module:<60} loc {loc:>6}"
+
         if not children:
-            print(f"{'  ' * depth}{module:<60} loc {loc:>6}   leaf")
-            return
+            print(f"{head}   leaf{size_tail}")
+            return Score(size=size)
+
         partition = {c: [f"{module}::{c}"] for c in children}
-        raw_index, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
-        index = raw_index + beta
-        weighted_sum += index * loc
-        nonleaf_loc_sum += loc
-        print(f"{'  ' * depth}{module:<60} loc {loc:>6}   "
-              f"children {len(children)}   cross {cross}   fb {fb}   index {index:.1f}")
-        for c in children:
-            walk(f"{module}::{c}", depth + 1)
+        coupling, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
+        beta_scale = max(1.0, beta_children_pivot / len(children)) if beta_children_pivot > 0 else 1.0
+        nest = beta * beta_scale
+        print(f"{head}   children {len(children)}   cross {cross}   fb {fb}"
+              f"   nest {nest:.1f}   index {coupling + nest:.1f}{size_tail}")
 
-    walk(root, 0)
+        here = Score(coupling=coupling * loc, nesting=nest * loc, size=size)
+        return sum((walk(f"{module}::{c}", depth + 1) for c in children), here)
+
+    totals = walk(root, 0)
+    per = totals.per(root_loc)
     print()
-    print(f"total Σ index·loc:                          {weighted_sum:.0f}")
     if root_loc:
-        per_root_loc = weighted_sum / root_loc
-        print(f"per root-loc (Σ index·loc / loc({root})):  {per_root_loc:.2f}")
-    if nonleaf_loc_sum:
-        avg = weighted_sum / nonleaf_loc_sum
-        print(f"per nonleaf-loc (legacy avg):               {avg:.2f}")
-    return 0
+        print(f"per root-loc (loc({root}) = {root_loc}, γ={gamma}, T={pivot:g}):  "
+              f"{per.total:.2f}   "
+              f"(coupling {per.coupling:.2f}, nesting {per.nesting:.2f}, size {per.size:.2f})")
+    else:
+        print("per root-loc: 0.00  (root loc = 0)")
+    return per
 
 
-def render_matrix(order: list[str], matrix: dict[tuple[str, str], int]) -> str:
-    width = max(len(g) for g in order)
-    lines = []
-    header = " " * (width + 4) + "  ".join(f"{g:>{width}}" for g in order)
-    lines.append(header)
-    for src in order:
-        row = [f"{matrix.get((src, dst), 0):>{width}}" for dst in order]
-        lines.append(f"  {src:>{width}}  " + "  ".join(row))
-    return "\n".join(lines)
+BASELINE_HEADER = (
+    "# columns: date  short-sha  per-loc  coupling  nesting  size\n"
+    "# (all four numeric columns are per root-loc)\n"
+    "# managed by tools/modgraph.py --baseline; newest first, capped to 5 entries\n"
+)
+BASELINE_LIMIT = 5
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], capture_output=True, text=True)
+
+
+def _git_short_sha() -> str | None:
+    r = _git("rev-parse", "--short", "HEAD")
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _git_working_tree_dirty() -> bool:
+    r = _git("status", "--porcelain")
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def _git_is_ancestor(sha: str) -> bool:
+    return _git("merge-base", "--is-ancestor", sha, "HEAD").returncode == 0
+
+
+def _parse_baseline_line(line: str) -> tuple[str, str, float] | None:
+    parts = line.split()
+    if len(parts) < 3:
+        return None
+    try:
+        return parts[0], parts[1], float(parts[2])
+    except ValueError:
+        return None
+
+
+def update_baseline(path: Path, score: Score) -> None:
+    """Prune stale entries, prepend today's measurement, write the file, and
+    print a one-line delta against the prior top entry.
+
+    Pruning rule:
+      - Drop any entry whose SHA (stripping a trailing `+` dirty marker) is no
+        longer an ancestor of HEAD. Covers `git checkout` to a different
+        branch, `git reset --hard` past the commit, and rebase drops.
+
+    Dirty-snapshot (`+`-suffixed) entries are kept: when modgraph runs from a
+    pre-commit hook, the staged-but-not-yet-committed tree is by definition
+    dirty, so pruning `+` entries on every run would erase the trend log.
+    """
+    sha = _git_short_sha() or "no-git"
+    sha_field = f"{sha}+" if _git_working_tree_dirty() else sha
+    today = datetime.date.today().isoformat()
+    per_loc = score.total
+
+    kept: list[str] = []
+    for line in (path.read_text().splitlines() if path.exists() else []):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parsed = _parse_baseline_line(stripped)
+        if parsed is None:
+            continue
+        _, entry_sha, _ = parsed
+        # Strip the dirty marker before the ancestor check so dirty-tagged SHAs
+        # are still tested against HEAD-ancestry like clean ones.
+        bare_sha = entry_sha[:-1] if entry_sha.endswith("+") else entry_sha
+        if not _git_is_ancestor(bare_sha):
+            continue
+        kept.append(stripped)
+
+    prior = _parse_baseline_line(kept[0]) if kept else None
+    kept.insert(0, f"{today} {sha_field} {per_loc:.2f} "
+                   f"{score.coupling:.2f} {score.nesting:.2f} {score.size:.2f}")
+    path.write_text(BASELINE_HEADER + "\n".join(kept[:BASELINE_LIMIT]) + "\n")
+
+    if prior is None:
+        print(f"\nbaseline: per-loc {per_loc:.2f} — first run (recorded to {path}).")
+    else:
+        prior_date, prior_sha, prior_per_loc = prior
+        delta = per_loc - prior_per_loc
+        print(f"\nbaseline: per-loc {per_loc:.2f} vs prior {prior_per_loc:.2f} "
+              f"from {prior_date} {prior_sha} (Δ {delta:+.2f}, recorded to {path}).")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--edges", required=True, type=Path, help="cargo-modules DOT output")
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--partition", type=Path, help="partition TOML")
-    src.add_argument("--children-of", dest="children_of", metavar="MODULE",
-                     help="auto-partition into one group per direct sub-module of MODULE "
-                          "(e.g. --children-of koan::dispatch)")
-    src.add_argument("--fractal", metavar="MODULE",
-                     help="recursively score every parent module under MODULE; "
-                          "aggregate weighted by lines of code")
+    ap.add_argument("--root", required=True, metavar="MODULE",
+                    help="root module to score recursively (e.g. koan, koan::runtime::machine)")
     ap.add_argument("--src-root", type=Path, default=Path("src"),
                     help="source root for LOC lookup (default: src)")
     ap.add_argument("--alpha", type=float, default=2.0, help="feedback penalty (default 2.0)")
-    ap.add_argument("--beta", type=float, default=5.0,
-                    help="per-non-leaf charge under --fractal; "
-                         "penalises passthrough wrappers and tree depth (default 5.0)")
+    ap.add_argument("--beta", type=float, default=20.0,
+                    help="per-non-leaf charge; "
+                         "penalises passthrough wrappers and tree depth (default 20.0)")
+    ap.add_argument("--beta-children-pivot", type=float, default=3.0,
+                    help="if >0, scale β by max(1, P/children) so wrappers with fewer "
+                         "than P direct children pay amplified β (thin pass-throughs); "
+                         "0 disables, leaving β flat (default 3)")
+    ap.add_argument("--gamma", type=float, default=50.0,
+                    help="per-file size charge weight; "
+                         "size(m) = γ·own_loc·log(1+own_loc/T) (default 50.0)")
+    ap.add_argument("--size-pivot", type=float, default=250.0,
+                    help="LOC pivot T in the size charge; files much smaller than T "
+                         "are near-free, files much larger turn super-linear (default 200)")
     ap.add_argument("--exact-threshold", type=int, default=6,
                     help="use exact search for N <= this many groups (default 6)")
+    ap.add_argument("--baseline", type=Path, metavar="FILE",
+                    help="prune unreachable-SHA entries, prepend today's "
+                         "measurement, trim to 5, and write the file; prints a "
+                         "delta line against the prior top entry (e.g. --baseline "
+                         "observe/complexity.txt). Dirty-snapshot `+` entries are "
+                         "retained.")
     args = ap.parse_args()
 
     edges = load_edges(args.edges)
-    if args.fractal:
-        return fractal_report(edges, args.fractal, args.src_root,
-                              args.alpha, args.beta, args.exact_threshold)
-    if args.partition:
-        partition = load_partition(args.partition)
-    else:
-        partition = partition_from_children(edges, args.children_of)
-    groups = list(partition.keys())
-
-    matrix, cross, unclassified = build_matrix(edges, partition)
-
-    if len(groups) <= args.exact_threshold:
-        order, fb = best_order_exact(groups, matrix)
-        method = f"exact (N={len(groups)})"
-    else:
-        order, fb = best_order_greedy(groups, matrix)
-        method = f"greedy GR (N={len(groups)})"
-
-    index = cross + args.alpha * fb
-
-    print(f"groups: {len(groups)}   cross edges: {cross}   "
-          f"feedback: {fb}   index: {index:.1f}   alpha: {args.alpha}")
-    print(f"method: {method}")
-    print(f"best order: {' -> '.join(order)}")
-    if unclassified:
-        print(f"unclassified edges (skipped): {unclassified}")
-    print()
-
-    rank = {g: i for i, g in enumerate(order)}
-    back = [(a, b, w) for (a, b), w in matrix.items() if rank[a] > rank[b]]
-    if back:
-        print(f"back edges ({sum(w for _, _, w in back)}):")
-        for a, b, w in sorted(back, key=lambda t: -t[2]):
-            print(f"  {a} -> {b}: {w}")
-        print()
-
-    print("matrix (rows = src group, cols = dst group):")
-    print(render_matrix(order, matrix))
+    score = fractal_report(
+        edges, args.root, args.src_root,
+        args.alpha, args.beta, args.beta_children_pivot, args.gamma, args.size_pivot,
+        args.exact_threshold,
+    )
+    if args.baseline is not None:
+        update_baseline(args.baseline, score)
     return 0
 
 

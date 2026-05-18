@@ -1,0 +1,111 @@
+use std::rc::Rc;
+
+use crate::machine::model::KObject;
+use crate::machine::{CallArena, CombineFinish, KError, KFunction, NodeId, Scope};
+use crate::machine::model::ast::KExpression;
+
+/// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
+/// no further write to that slot occurs until it is freed and reused.
+pub(super) enum NodeOutput<'a> {
+    Value(&'a KObject<'a>),
+    Err(KError),
+}
+
+/// Outcome of a node's run. `Replace` is the tail-call path: rewrite the slot's work and
+/// re-enqueue the same index so it runs again with no fresh slot allocated, giving constant
+/// memory across tail-call sequences. When `frame` is `Some`, its `scope()` becomes the
+/// slot's scope and its `arena()` owns per-call allocations; `None` keeps the existing
+/// frame and scope. `function`, when set, names the user-fn whose body the replacement is
+/// entering — any error landing on this slot gets a `Frame` appended for the trace.
+pub(super) enum NodeStep<'a> {
+    Done(NodeOutput<'a>),
+    Replace {
+        work: NodeWork<'a>,
+        frame: Option<Rc<CallArena>>,
+        function: Option<&'a KFunction<'a>>,
+    },
+}
+
+/// What a scheduler node will run.
+///
+/// `Lift` exists because the push/notify model assumes a single producer slot per result.
+/// When a `Dispatch` defers to a `Bind`/`Combine` for sub-deps, it spawns the worker into
+/// a new slot and rewrites its own slot to `Lift(Pending(worker))` so the result still
+/// surfaces under the original slot index. The notify-walk stamps `Pending → Ready` with
+/// the producer's terminal output at wake time.
+///
+/// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a fixed set
+/// of dep slots and runs a host closure over their resolved values.
+pub(super) enum NodeWork<'a> {
+    Dispatch(KExpression<'a>),
+    Bind {
+        expr: KExpression<'a>,
+        subs: Vec<(usize, NodeId)>,
+    },
+    Combine {
+        deps: Vec<NodeId>,
+        finish: CombineFinish<'a>,
+    },
+    Lift(LiftState<'a>),
+}
+
+/// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped
+/// producer terminal. The `Pending → Ready` transition is the sole responsibility
+/// of `Scheduler::finalize`; a queued Lift in `Pending` indicates a wake misfire.
+pub(super) enum LiftState<'a> {
+    Pending(NodeId),
+    Ready(NodeOutput<'a>),
+}
+
+pub(super) struct Node<'a> {
+    pub(super) work: NodeWork<'a>,
+    pub(super) scope: &'a Scope<'a>,
+    /// `Some` only for user-fn body slots. The Rc drops on Done or Replace; the arena
+    /// itself drops then only if no escaped closure still holds the captured scope.
+    /// Lexical scoping (`KFunction::captured`) makes each per-call child's `outer` the
+    /// FN's captured scope, so no frame holds references a successor frame at the same
+    /// slot needs — TCO drop is immediate with no `prev` chain.
+    pub(super) frame: Option<Rc<CallArena>>,
+    /// Set in lockstep with `frame`. Read on Done to enforce the declared return type
+    /// and to append a `Frame` to errors for the call-stack trace.
+    ///
+    /// TCO limitation: when A tail-calls B, this is rewritten to B, so the runtime
+    /// return-type check only fires against the tail-most function. Sound only when
+    /// intermediate frames' types agree — to be enforced statically by the future
+    /// type-check pass.
+    pub(super) function: Option<&'a KFunction<'a>>,
+}
+
+/// `NodeId`s a node must read before running, or `None` if it has no read-deps.
+/// `Dispatch` spawns rather than reads, so returns `None`.
+pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
+    match work {
+        NodeWork::Dispatch(_) => None,
+        NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
+        NodeWork::Combine { deps, .. } => Some(deps.clone()),
+        // `Lift` is only installed via `NodeStep::Replace` with deps wired explicitly;
+        // arms exist for total coverage and are exercised by tests below.
+        NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
+        NodeWork::Lift(LiftState::Ready(_)) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::core::{KError, KErrorKind};
+
+    #[test]
+    fn work_deps_lift_pending_returns_from_node() {
+        let work = NodeWork::Lift(LiftState::Pending(NodeId(7)));
+        assert_eq!(work_deps(&work), Some(vec![NodeId(7)]));
+    }
+
+    #[test]
+    fn work_deps_lift_ready_returns_none() {
+        let work = NodeWork::Lift(LiftState::Ready(NodeOutput::Err(
+            KError::new(KErrorKind::User("stamped".to_string())),
+        )));
+        assert!(work_deps(&work).is_none());
+    }
+}

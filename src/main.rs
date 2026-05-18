@@ -3,7 +3,7 @@
 use std::io::Read;
 use std::process::ExitCode;
 
-use koan::runtime::machine::interpret;
+use koan::machine::interpret;
 
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
 /// stdin, then parse, dispatch, and execute it via `interpret`.

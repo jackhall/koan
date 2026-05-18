@@ -11,7 +11,7 @@ Standardized workflow for running Miri in the koan repo. The audit slate is the 
 
 - `cargo +nightly miri` is installed. **Never** probe with `cargo +nightly miri --version`, `which miri`, `rustup component list`, etc. — assume it works and run.
 - Tree borrows is the borrow-checker mode. All audit runs use `MIRIFLAGS="-Zmiri-tree-borrows"`.
-- The canonical audit-slate test list lives in [`TEST.md`](../../../TEST.md) under "The slate", grouped by unsafe-site shape. Read that file for the test names; do not hard-code the list elsewhere.
+- The canonical audit-slate test list lives in [`observe/miri_slate.md`](../../../observe/miri_slate.md), grouped by unsafe-site shape. Read that file for the test names; do not hard-code the list elsewhere.
 - The memory-model invariants the slate verifies are documented in [`design/memory-model.md`](../../../design/memory-model.md).
 
 ## The command of record
@@ -20,20 +20,28 @@ Standardized workflow for running Miri in the koan repo. The audit slate is the 
 MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --quiet -- <test-names>
 ```
 
-For the bulk audit slate, `<test-names>` is the list from [`TEST.md`](../../../TEST.md). For triage, it's a single test name at a time.
+For the bulk audit slate, the canonical list lives in [`observe/miri_slate.md`](../../../observe/miri_slate.md); interpolate it directly with `$(python3 tools/observe_tests.py slate)`:
+
+```
+MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test --quiet -- $(python3 tools/observe_tests.py slate)
+```
+
+For triage, `<test-names>` is a single test name at a time.
 
 ## Keeping the slate in sync
 
 Add a test to the slate when a new unsafe site lands — a transmute, raw-pointer round-trip, interior-mutation pattern under a live shared borrow, or a cycle shape that storage-side reasoning can't rule out. Slate tests are minimal-shape mirrors of the unsafe operation, not end-to-end feature tests; they fail when Miri reports UB or a leak, not on values.
 
+Run `python3 tools/observe_tests.py slate-audit` to surface drift between live `src/` unsafe sites and slate coverage. The tool reports files with `unsafe` but no slate group, files in the slate whose `unsafe` has been refactored out, and per-file `unsafe`-count drift against the cached `<!-- slate-fingerprint -->` block at the top of [`observe/miri_slate.md`](../../../observe/miri_slate.md). After confirming the slate is current, run `slate-audit --update` to refresh the fingerprint. The tool is file-granular — a slate test can legitimately pin behavior in a file other than its own, so a "stale group" finding may be a false positive. When the anchor file genuinely has no `unsafe` because the group pins a safe-code invariant (e.g. a `RefCell` discipline that tree borrows can still violate), add the path as a `` - `src/...` — <reason> `` bullet to the `## Stale-group whitelist` block at the top of [`observe/miri_slate.md`](../../../observe/miri_slate.md) (between the `<!-- slate-audit-whitelist:start -->` / `<!-- slate-audit-whitelist:end -->` sentinels). The audit then skips the stale-group check for that path while still flagging actual coverage gaps and fingerprint drift elsewhere.
+
 When a slate test is added, removed, or renamed:
 
-1. Edit [`TEST.md`](../../../TEST.md)'s slate section. New tests go under the group they pin down, or under a fresh group if the shape isn't already represented.
+1. Edit [`observe/miri_slate.md`](../../../observe/miri_slate.md). New tests go under the group they pin down, or under a fresh group if the shape isn't already represented.
 2. Update [`design/memory-model.md`](../../../design/memory-model.md)'s `## Verification` section if the test is named there.
-3. Re-run the full slate (the command of record above) and confirm the count and pass-line in `TEST.md` still hold.
+3. Re-run the full slate (the command of record above) and confirm the count still holds.
 4. `python3 tools/doclinks.py check` to catch any broken inbound links.
 
-A non-slate change to a test in `dispatch/`, `execute/`, or `parse/` does not trigger this rule — only changes that affect a test named in `TEST.md`'s slate list do.
+A non-slate change to a test in `dispatch/`, `execute/`, or `parse/` does not trigger this rule — only changes that affect a test named in `observe/miri_slate.md` do.
 
 ## Scheduling: background + wait, never poll
 
@@ -71,9 +79,9 @@ Slate: <N> tests, <leaks> leaks, <ub> UB, <duration>s — last full-slate baseli
 ```
 
 Read `<prev>` from the top entry of the `<!-- slate-durations:start -->` /
-`<!-- slate-durations:end -->` block in [`TEST.md`](../../../TEST.md) (write
-`first run` if the block is empty). Then prepend the new entry and trim the
-list to five entries so the bound holds. Entry format:
+`<!-- slate-durations:end -->` block in [`observe/miri_slate.md`](../../../observe/miri_slate.md) (the "Recent full-slate run durations" section)
+(write `first run` if the block is empty). Then prepend the new entry and trim
+the list to five entries so the bound holds. Entry format:
 
 ```
 - YYYY-MM-DD: <duration>s — <N> tests, 0 leaks, 0 UB

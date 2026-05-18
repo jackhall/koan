@@ -27,7 +27,7 @@ After a sub-agent returns and before advancing to the next step. The caller supp
    The question text itself must point users at Other, e.g. "How do you want to proceed? (Pick Other to give feedback for another iteration.)"
 
 3. **When the response comes back:**
-   - "Accept" → advance to the next step.
+   - "Accept" → advance to the next step. If the sub-agent's work touched Rust source (an implementer pass, an in-place refactor), run the `verify` skill first so the advance lands on a build that has tests + clippy green and a recorded modgraph baseline.
    - "Abort" → run the abort consequence.
    - Otherwise (the user picked "Other" with custom text — or any other variant) → treat the response text as iterate feedback and re-spawn `iterate_action` with that feedback appended.
 

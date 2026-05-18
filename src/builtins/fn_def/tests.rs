@@ -1,0 +1,29 @@
+//! Tests for the `FN` builtin, split by theme:
+//!
+//! - [`basic`] — registration, dispatch routing, param substitution, infix shapes.
+//! - [`arena`] — run-root and scheduler-slot reclamation invariants.
+//! - [`body_routing`] — selection of the body to evaluate per call.
+//! - [`return_type`] — parsing the `-> Type` slot and runtime return-type checks.
+//! - [`param_type`] — typed-parameter dispatch, overload routing, shape errors.
+//! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
+//! - [`functor`] — FN as a functor: module-typed parameters, `SIG_WITH` sharing,
+//!   per-call type-side dual write, deferred / templated return types.
+
+mod arena;
+mod basic;
+mod body_routing;
+mod container_types;
+mod functor;
+mod param_type;
+mod return_type;
+
+use crate::builtins::test_support::{run, run_root_with_buf};
+use crate::machine::RuntimeArena;
+
+pub(super) fn capture_program_output(source: &str) -> Vec<u8> {
+    let arena = RuntimeArena::new();
+    let (scope, captured) = run_root_with_buf(&arena);
+    run(scope, source);
+    let bytes = captured.borrow().clone();
+    bytes
+}

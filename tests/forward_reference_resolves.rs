@@ -8,9 +8,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koan::runtime::builtins::default_scope;
-use koan::runtime::machine::model::KObject;
-use koan::runtime::machine::{RuntimeArena, Scheduler, Scope};
+use koan::builtins::default_scope;
+use koan::machine::model::KObject;
+use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through
@@ -71,7 +71,7 @@ fn multi_name_forward_reference_resolves() {
     let scope = run(
         &arena,
         captured,
-        "FN (ADD a: Number BY b: Number) -> Number = (b)\n\
+        "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
          LET out = (ADD aa BY bb)\n\
          LET aa = 1\n\
          LET bb = 2",
@@ -90,7 +90,7 @@ fn forward_call_by_name_resolves_after_fn_definition() {
         &arena,
         captured,
         "LET out = (DOUBLE 5)\n\
-         FN (DOUBLE x: Number) -> Number = (x)",
+         FN (DOUBLE x :Number) -> Number = (x)",
     );
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 5.0));
 }
@@ -109,8 +109,8 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
         &arena,
         captured,
         "LET v = p.x\n\
-         STRUCT Pt = (x: Number, y: Number)\n\
-         LET p = (Pt (x: 7, y: 9))",
+         STRUCT Pt = (x :Number, y :Number)\n\
+         LET p = (Pt (x = 7, y = 9))",
     );
     assert!(matches!(scope.lookup("v"), Some(KObject::Number(n)) if *n == 7.0));
 }
@@ -121,7 +121,7 @@ fn forward_attr_lookup_resolves_after_struct_binding() {
 /// `bindings.types` chain.
 #[test]
 fn forward_let_type_alias_resolves_to_number() {
-    use koan::runtime::machine::model::KType;
+    use koan::machine::model::KType;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&arena, captured, "LET Ty = Un\nLET Un = Number");
@@ -140,7 +140,7 @@ fn forward_let_type_alias_resolves_to_number() {
 /// overload routes that carrier through `register_type` on the parent scope.
 #[test]
 fn let_alias_via_module_qualified_type_resolves() {
-    use koan::runtime::machine::model::KType;
+    use koan::machine::model::KType;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
@@ -173,7 +173,7 @@ fn fn_param_with_module_qualified_type_resolves() {
         &arena,
         captured,
         "MODULE Mo = ((LET Ty = Number))\n\
-         FN (ID x: Mo.Ty) -> Mo.Ty = (x)\n\
+         FN (ID x Mo.Ty) -> Mo.Ty = (x)\n\
          LET y = (ID 7)",
     );
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));
@@ -208,7 +208,7 @@ fn type_frame_with_module_qualified_element_resolves() {
 /// usable `KTypeValue` for type-position consumers across the chain.
 #[test]
 fn chained_module_qualified_type_resolves() {
-    use koan::runtime::machine::model::KType;
+    use koan::machine::model::KType;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
@@ -236,7 +236,7 @@ fn chained_module_qualified_type_resolves() {
 /// roadmap item.
 #[test]
 fn producer_error_propagates_to_parked_consumer() {
-    use koan::runtime::machine::KErrorKind;
+    use koan::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     struct SharedBuf(Rc<RefCell<Vec<u8>>>);

@@ -24,14 +24,14 @@ system.
    prefix/suffix operators). A token that starts uppercase but classifies as
    neither keyword nor type (single uppercase letter, or uppercase + digits
    only) is a parse error. See
-   [type-system.md](type-system.md#token-classes--the-parser-level-foundation)
+   [typing/tokens.md](typing/tokens.md)
    for what the three classes mean.
 5. [operators.rs](../src/parse/operators.rs) — table of compound-token
    operators (`!`, `.`, `[]`, `?`); add a row to extend.
 
 ## `KExpression` shape
 
-Output is one [`KExpression`](../src/ast.rs) per top-level line:
+Output is one [`KExpression`](../src/machine/model/ast.rs) per top-level line:
 an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
 nested `Expression`, `ListLiteral`, `DictLiteral`, or typed `Literal`.
 
@@ -40,7 +40,7 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
 - `Keyword` parts contribute fixed tokens to a signature's bucket key (the part
   that has to match exactly).
 - `Identifier`, `Type`, literals, and sub-expressions become slots that compete
-  on type specificity (see [type-system.md](type-system.md)).
+  on type specificity (see [typing/ktype.md](typing/ktype.md)).
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
 unevaluated expression as a value, pass it around, and evaluate it on demand.
@@ -68,8 +68,8 @@ A builtin can opt out of eager evaluation for specific slot positions: it
 declares the slot as lazy at registration, the scheduler hands it the
 unevaluated `KExpression` instead of a value, and the builtin emits a fresh
 `Dispatch` for the chosen branch only. Two mechanisms exist:
-[`SchedulerHandle::add_dispatch`](../src/runtime/machine/core/scope.rs) submits a child
-node directly, while [`BodyResult::Tail`](../src/runtime/machine/kfunction.rs) — used
+[`SchedulerHandle::add_dispatch`](../src/machine/core/scope.rs) submits a child
+node directly, while [`BodyResult::Tail`](../src/machine/core/kfunction.rs) — used
 by `MATCH` — tail-returns the chosen branch so the scheduler dispatches it in
 place.
 
@@ -78,7 +78,7 @@ place.
 Users add what look like new keyword forms by writing `FN` definitions.
 
 ```
-FN (LOOP body: KExpression) -> Any = (...)
+FN (LOOP body :KExpression) -> Any = (...)
 ```
 
 defines a new dispatchable signature: keyword `LOOP`, slot `body`. The parser
@@ -117,9 +117,9 @@ following `(` clears it by opening an `Expression` frame tagged with the head
 keyword. On frame-close, the body is wrapped in an inner `Expression` part and
 prepended with the head, producing the AST shape `(QUOTE <body>)` /
 `(EVAL <body>)` that the QUOTE / EVAL builtins dispatch on. The
-[QUOTE](../src/runtime/builtins/quote.rs) builtin's signature consumes a
+[QUOTE](../src/builtins/quote.rs) builtin's signature consumes a
 `KExpression`-typed slot and returns the captured AST as a value;
-[EVAL](../src/runtime/builtins/eval.rs)'s slot is `Any` so the scheduler
+[EVAL](../src/builtins/eval.rs)'s slot is `Any` so the scheduler
 eagerly evaluates the operand first, after which the body checks the result is
 a `KExpression` and tail-dispatches the inner AST in a fresh `CallArena`
 (mirroring `MATCH`'s per-call frame so free names resolve against the

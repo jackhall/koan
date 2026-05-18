@@ -4,7 +4,7 @@
 //! state inline. Multi-part keys/values collapse into a sub-expression via
 //! `single_or_wrapped`.
 
-use crate::runtime::machine::model::ast::ExpressionPart;
+use crate::machine::model::ast::ExpressionPart;
 
 /// In-progress dict literal: completed pairs plus the state of the current pair. Owns its
 /// own state machine so character handlers in `build_tree` delegate to `accept_colon`,
@@ -30,11 +30,10 @@ enum DictPairState<'a> {
 
 /// Collapse the buffered parts of one half of a dict pair: a single part is the half
 /// directly; multiple parts wrap as a sub-expression so the scheduler dispatches them.
-fn single_or_wrapped<'a>(mut parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-    if parts.len() == 1 {
-        parts.pop().unwrap()
-    } else {
-        ExpressionPart::expression(parts)
+fn single_or_wrapped<'a>(parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
+    match <[ExpressionPart<'a>; 1]>::try_from(parts) {
+        Ok([single]) => single,
+        Err(parts)   => ExpressionPart::expression(parts),
     }
 }
 
