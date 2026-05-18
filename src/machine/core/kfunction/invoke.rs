@@ -16,6 +16,24 @@ use super::body::{Body, BodyResult};
 use super::scheduler_handle::SchedulerHandle;
 use super::KFunction;
 
+#[cfg(test)]
+mod tests;
+
+/// Resolution of a `ReturnType::Deferred` carrier at dispatch time. Exactly one
+/// variant fires per call — replacing the prior `(Option<KType>, Option<NodeId>)`
+/// pair whose "exactly one Some" invariant lived only as control flow. The
+/// Combine consumes this to decide whether the per-call return type is already
+/// known or must be read from `results[1]`.
+enum PerCallReturnType {
+    /// TypeExpr arm: elaborated against the per-call scope, ready to compare
+    /// against the body value as soon as the Combine fires.
+    Ready(KType),
+    /// Expression arm: a sub-Dispatch has been spawned that will produce a
+    /// `KObject::KTypeValue` at the carried `NodeId`. The Combine reads it
+    /// from `results[1]`.
+    Pending(crate::machine::NodeId),
+}
+
 impl<'a> KFunction<'a> {
     /// Run this function's body for an already-bound call. Builtins call straight through;
     /// user-defined functions allocate a per-call child scope, bind parameters into it,
@@ -118,18 +136,15 @@ impl<'a> KFunction<'a> {
                         BodyResult::tail_with_frame(substituted, frame, self)
                     }
                     ReturnType::Deferred(d) => {
-                        // Resolve the per-call return-type carrier into either a
-                        // ready `KType` (TypeExpr arm) or a pending sub-Dispatch
-                        // (Expression arm). The closure captures only what it
-                        // needs — no live borrow of `self.signature` survives the
-                        // sub-Dispatch spawning below.
-                        let typ_id_opt: Option<crate::machine::NodeId>;
-                        let inline_typ: Option<KType>;
-                        match d {
+                        // Resolve the per-call return-type carrier. Exactly one
+                        // `PerCallReturnType` variant fires per call; the Combine
+                        // below consumes it to decide whether the per-call return
+                        // type is known eagerly or must be read from `results[1]`.
+                        let per_call_ret: PerCallReturnType = match d {
                             DeferredReturn::TypeExpr(te) => {
                                 let mut el = Elaborator::new(child);
-                                inline_typ = match elaborate_type_expr(&mut el, te) {
-                                    ElabResult::Done(kt) => Some(kt),
+                                let kt = match elaborate_type_expr(&mut el, te) {
+                                    ElabResult::Done(kt) => kt,
                                     // Park / Unbound at the dispatch boundary is a
                                     // protocol break: Stage A's dual-write installs
                                     // every parameter the carrier could reference on
@@ -147,7 +162,7 @@ impl<'a> KFunction<'a> {
                                              boundary — Stage A dual-write should have made \
                                              every parameter-leaf reference resolvable",
                                         );
-                                        Some(KType::Any)
+                                        KType::Any
                                     }
                                     ElabResult::Unbound(ref msg) => {
                                         debug_assert!(
@@ -156,21 +171,20 @@ impl<'a> KFunction<'a> {
                                              boundary: {msg} — fn_def parameter-name scan \
                                              should have prevented this carrier",
                                         );
-                                        Some(KType::Any)
+                                        KType::Any
                                     }
                                 };
-                                typ_id_opt = None;
+                                PerCallReturnType::Ready(kt)
                             }
                             DeferredReturn::Expression(e) => {
-                                inline_typ = None;
                                 let cloned = e.clone();
                                 let mut tid = None;
                                 sched.with_active_frame(frame.clone(), &mut |s| {
                                     tid = Some(s.add_dispatch(cloned.clone(), child));
                                 });
-                                typ_id_opt = tid;
+                                PerCallReturnType::Pending(tid.expect("type dispatch must spawn"))
                             }
-                        }
+                        };
                         // Spawn the body Dispatch under the per-call frame.
                         let mut bid = None;
                         sched.with_active_frame(frame.clone(), &mut |s| {
@@ -180,17 +194,17 @@ impl<'a> KFunction<'a> {
 
                         // Build the Combine's dep list: body first, then optional
                         // return-type sub-Dispatch. Closure reads `results[0]` for
-                        // the body and `results[1]` for the type when present.
+                        // the body and `results[1]` for the type when Pending.
                         let mut deps = vec![body_id];
-                        if let Some(t) = typ_id_opt {
+                        if let PerCallReturnType::Pending(t) = per_call_ret {
                             deps.push(t);
                         }
                         let function_summary = self.summarize();
                         let combine_id = sched.add_combine(deps, child, Box::new(move |_scope, _sched, results| {
                             let body_value: &KObject<'_> = results[0];
-                            let per_call_ret: KType = match inline_typ {
-                                Some(kt) => kt,
-                                None => match results.get(1).copied() {
+                            let per_call_ret: KType = match per_call_ret {
+                                PerCallReturnType::Ready(kt) => kt,
+                                PerCallReturnType::Pending(_) => match results.get(1).copied() {
                                     Some(KObject::KTypeValue(kt)) => kt.clone(),
                                     Some(other) => {
                                         return BodyResult::Err(KError::new(
@@ -394,144 +408,5 @@ fn substitute_part<'a>(
                 .collect(),
         ),
         other => other,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    //! Direct unit coverage for the Stage A `type_identity_for` helper. The
-    //! end-to-end coverage of the dual-write itself lives in
-    //! [`crate::builtins::fn_def::tests::module_stage2`]; these tests
-    //! pin the per-row mapping in isolation without the surrounding scheduler.
-
-    use super::*;
-    use crate::builtins::default_scope;
-    use crate::machine::core::{RuntimeArena, ScopeId};
-    use crate::machine::model::types::UserTypeKind;
-    use crate::machine::model::values::{Module, Signature};
-
-    /// `SignatureBound`-declared parameter bound to a `KModule` yields a
-    /// `UserType { kind: Module, scope_id, name }` identity.
-    #[test]
-    fn type_identity_for_signature_bound_yields_module_user_type() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "Foo".into(),
-        ));
-        let module = arena.alloc_module(Module::new("Foo".into(), child));
-        let obj = arena.alloc_object(KObject::KModule(module, None));
-        let declared = KType::SignatureBound {
-            sig_id: ScopeId::from_raw(0, 42),
-            sig_path: "OrderedSig".into(),
-            pinned_slots: Vec::new(),
-        };
-        let identity = type_identity_for("p", obj, &declared, scope)
-            .expect("Ok expected")
-            .expect("module identity expected");
-        assert_eq!(
-            identity,
-            KType::UserType {
-                kind: UserTypeKind::Module,
-                scope_id: module.scope_id(),
-                name: "Foo".into(),
-            },
-        );
-    }
-
-    /// `AnyUserType { kind: Module }`-declared parameter bound to a `KModule`
-    /// yields the same `UserType { kind: Module, .. }` identity. Mirrors the
-    /// `SignatureBound` arm.
-    #[test]
-    fn type_identity_for_any_module_yields_module_user_type() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
-            scope,
-            "Bar".into(),
-        ));
-        let module = arena.alloc_module(Module::new("Bar".into(), child));
-        let obj = arena.alloc_object(KObject::KModule(module, None));
-        let declared = KType::AnyUserType { kind: UserTypeKind::Module };
-        let identity = type_identity_for("p", obj, &declared, scope)
-            .expect("Ok expected")
-            .expect("module identity expected");
-        assert_eq!(
-            identity,
-            KType::UserType {
-                kind: UserTypeKind::Module,
-                scope_id: module.scope_id(),
-                name: "Bar".into(),
-            },
-        );
-    }
-
-    /// `Signature`-declared parameter bound to a `KSignature` yields a bare
-    /// `SignatureBound { sig_id, sig_path, pinned_slots: [] }` identity.
-    #[test]
-    fn type_identity_for_signature_yields_signature_bound() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-        let obj = arena.alloc_object(KObject::KSignature(sig));
-        let declared = KType::Signature;
-        let identity = type_identity_for("p", obj, &declared, scope)
-            .expect("Ok expected")
-            .expect("signature identity expected");
-        assert_eq!(
-            identity,
-            KType::SignatureBound {
-                sig_id: sig.sig_id(),
-                sig_path: "OrderedSig".into(),
-                pinned_slots: Vec::new(),
-            },
-        );
-    }
-
-    /// `Type`-declared parameter bound to a `KTypeValue(kt)` yields `kt.clone()`.
-    #[test]
-    fn type_identity_for_type_yields_inner_ktype() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let inner = KType::List(Box::new(KType::Number));
-        let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
-        let declared = KType::Type;
-        let identity = type_identity_for("p", obj, &declared, scope)
-            .expect("Ok expected")
-            .expect("type identity expected");
-        assert_eq!(identity, inner);
-    }
-
-    /// `TypeExprRef`-declared parameter bound to a `KTypeValue(kt)` yields
-    /// `kt.clone()` (the same arm as `Type`, since the carrier is the same).
-    #[test]
-    fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let inner = KType::Number;
-        let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
-        let declared = KType::TypeExprRef;
-        let identity = type_identity_for("p", obj, &declared, scope)
-            .expect("Ok expected")
-            .expect("type identity expected");
-        assert_eq!(identity, inner);
-    }
-
-    /// Mismatched carrier for a type-denoting declared `KType` returns `Ok(None)` —
-    /// the dispatcher's `matches_value` filter already gated, so this path
-    /// indicates an `is_type_denoting` / `matches_value` disagreement (skip the
-    /// dual-write rather than panic).
-    #[test]
-    fn type_identity_for_carrier_mismatch_returns_none() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let obj = arena.alloc_object(KObject::Number(1.0));
-        let declared = KType::SignatureBound {
-            sig_id: ScopeId::from_raw(0, 1),
-            sig_path: "OrderedSig".into(),
-            pinned_slots: Vec::new(),
-        };
-        assert!(type_identity_for("p", obj, &declared, scope).expect("Ok expected").is_none());
     }
 }
