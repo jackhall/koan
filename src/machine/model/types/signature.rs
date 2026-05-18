@@ -119,7 +119,8 @@ impl<'a> Clone for DeferredReturn<'a> {
 impl<'a> PartialEq for ReturnType<'a> {
     /// Variant + payload equality. Two `Resolved` are equal iff their `KType`s match;
     /// two `Deferred` are equal iff their carrier variants and payloads match
-    /// structurally. Used by `signatures_exact_equal` to flag overload duplicates — two
+    /// structurally. Used by [`ExpressionSignature::exact_equal`] to flag overload
+    /// duplicates — two
     /// FN-defs whose return-type carriers are byte-identical are interchangeable for
     /// dispatch, so the `DuplicateOverload` semantic still applies.
     fn eq(&self, other: &Self) -> bool {
@@ -303,6 +304,31 @@ impl<'a> ExpressionSignature<'a> {
                 })
             })
             .map(|(i, _)| i)
+    }
+
+    /// Structural equality on shape + per-`Argument` `KType` + return type. Independent of
+    /// `Argument::name` — two overloads with matching shape and types collide for dispatch
+    /// regardless of parameter naming. The name-insensitive sibling of the derived
+    /// `PartialEq` impl.
+    ///
+    /// Return-type equality flows through [`ReturnType`]'s `PartialEq` impl. `Resolved`
+    /// compares by inner `KType`; `Deferred` compares by carrier variant + payload (see
+    /// `ReturnType::eq`'s docstring for the equality rule on the parens-form `Expression`
+    /// variant). Two FN-defs whose deferred carriers are structurally identical surface as
+    /// `DuplicateOverload`, which matches the existing semantic — they are interchangeable
+    /// for dispatch.
+    pub fn exact_equal(&self, other: &ExpressionSignature<'a>) -> bool {
+        if self.return_type != other.return_type {
+            return false;
+        }
+        if self.elements.len() != other.elements.len() {
+            return false;
+        }
+        self.elements.iter().zip(other.elements.iter()).all(|(x, y)| match (x, y) {
+            (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => s == t,
+            (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => ax.ktype == ay.ktype,
+            _ => false,
+        })
     }
 }
 

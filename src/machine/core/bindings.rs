@@ -23,13 +23,15 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
-use crate::machine::model::ast::{KExpression, TypeExpr};
+use crate::machine::model::ast::TypeExpr;
 use crate::machine::core::kfunction::{KFunction, NodeId};
-use crate::machine::model::types::{KType, UntypedKey, UserTypeKind};
+use crate::machine::model::types::{KType, UntypedKey};
 use crate::machine::model::values::KObject;
 
 use super::kerror::{KError, KErrorKind};
-use super::scope_id::ScopeId;
+
+mod pending;
+pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
 
 /// Façade owning the four co-mutating `RefCell` maps that back every lexical binding:
 /// `types` (name → `&KType`, the dedicated type-binding home introduced in stage 1.2 of
@@ -59,14 +61,12 @@ pub struct Bindings<'a> {
     data: RefCell<HashMap<String, &'a KObject<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     placeholders: RefCell<HashMap<String, NodeId>>,
-    /// In-flight named-type binders (STRUCT / named-UNION) that have entered their
-    /// elaborator and may park on cross-references. Populated by struct_def / union
-    /// before elaboration; consulted by the elaborator's `Resolution::Placeholder`
-    /// arm to record dependency edges and run DFS cycle detection. Drained either by
-    /// the happy-path finalize or by `close_type_cycle` on cycle close. MODULE does
-    /// NOT participate — module bodies park on the outer scheduler, not on type-name
-    /// resolution inside elaboration (see roadmap stage 3.2).
-    pending_types: RefCell<HashMap<String, PendingTypeEntry<'a>>>,
+    /// In-flight named-type binders (STRUCT / named-UNION). Owns its own
+    /// `RefCell`; see [`pending`] for the surface methods and the guard's Drop
+    /// path. Populated by struct_def / union before elaboration; consulted by
+    /// the elaborator's `Resolution::Placeholder` arm to record dependency
+    /// edges and run DFS cycle detection.
+    pending: PendingTypes<'a>,
     /// Layer-2 scope-bound TypeExpr resolution cache. Maps a surface
     /// [`TypeExpr`] to the arena-allocated `&KType` `Scope::resolve_type_expr`
     /// produced in this scope. Monotonic — once an entry is written it never
@@ -79,49 +79,6 @@ pub struct Bindings<'a> {
     type_expr_memo: RefCell<HashMap<TypeExpr, &'a KType>>,
 }
 
-/// Per-binder state captured at the moment a STRUCT / named-UNION enters its
-/// elaborator. `schema_expr` is the unelaborated body the cycle-close sweep
-/// re-runs against the post-pre-registration scope; `kind` and `scope_id` are
-/// the identity fields the cycle-close writes into `bindings.types` as
-/// `KType::UserType { kind, scope_id, name }`; `edges` is the adjacency list
-/// the elaborator appends to each time this binder parks on a fellow in-flight
-/// binder's placeholder.
-pub struct PendingTypeEntry<'a> {
-    pub kind: UserTypeKind,
-    pub scope_id: ScopeId,
-    pub schema_expr: KExpression<'a>,
-    pub edges: Vec<String>,
-}
-
-/// RAII handle returned by [`Bindings::insert_pending_type`]. Dropping the guard
-/// removes the matching entry from `pending_types`. The guard is the *only*
-/// removal path — struct_def / union body sites hold it for the duration of the
-/// synchronous elaboration, and the Park path moves it into the `CombineFinish`
-/// closure so the entry survives the wait and is cleaned up regardless of the
-/// finish arm (Done, Err, second-Park).
-///
-/// `try_borrow_mut` in Drop is defensive: no caller is expected to hold
-/// `pending_types` when a guard drops (the read-borrow in `detect_pending_cycle`
-/// is released before any guard could drop, and cycle-close holds only a
-/// short-lived read borrow). Silent skip is safe — the entry persists until
-/// the next drain point, and no later code observes a stale entry once the
-/// matching binder has finalized.
-#[must_use = "PendingBinderGuard removes the pending_types entry on drop; \
-              bind it for the elaboration's lifetime, or move it into the \
-              CombineFinish closure on the Park path"]
-pub struct PendingBinderGuard<'a> {
-    bindings: &'a Bindings<'a>,
-    name: String,
-}
-
-impl<'a> Drop for PendingBinderGuard<'a> {
-    fn drop(&mut self) {
-        if let Ok(mut map) = self.bindings.pending_types.try_borrow_mut() {
-            map.remove(&self.name);
-        }
-    }
-}
-
 impl<'a> Bindings<'a> {
     pub fn new() -> Self {
         Self {
@@ -129,7 +86,7 @@ impl<'a> Bindings<'a> {
             data: RefCell::new(HashMap::new()),
             functions: RefCell::new(HashMap::new()),
             placeholders: RefCell::new(HashMap::new()),
-            pending_types: RefCell::new(HashMap::new()),
+            pending: PendingTypes::new(),
             type_expr_memo: RefCell::new(HashMap::new()),
         }
     }
@@ -208,52 +165,29 @@ impl<'a> Bindings<'a> {
     /// (returns a [`PendingBinderGuard`] whose Drop removes the entry) and
     /// [`Bindings::record_pending_edge`].
     pub fn pending_types(&self) -> Ref<'_, HashMap<String, PendingTypeEntry<'a>>> {
-        self.pending_types.borrow()
+        self.pending.get()
     }
 
-    /// Install a new in-flight binder entry and return an RAII guard whose Drop
-    /// removes the entry. Called by struct_def / union before running the
-    /// elaborator so the elaborator's placeholder arm can observe the binder's
-    /// `pending_types` presence and record cross-binder edges. The caller binds
-    /// the guard for the elaboration's lifetime; on the Park path the guard is
-    /// moved into the `CombineFinish` closure so the entry survives the wait
-    /// and is cleaned up when the closure returns.
-    ///
-    /// Panics on borrow conflict — pending-type writes happen at body-entry, outside
-    /// the re-entrant `try_apply` hot path; a conflict here is a programming error.
-    /// Panics on duplicate name — same scope cannot have two in-flight binders for
-    /// one name (placeholders block the second dispatch from progressing this far).
+    /// Delegates to [`PendingTypes::insert`]; see that method for the lifecycle
+    /// contract and panic conditions.
     pub fn insert_pending_type(
         &'a self,
         name: String,
         entry: PendingTypeEntry<'a>,
     ) -> PendingBinderGuard<'a> {
-        let mut map = self.pending_types.borrow_mut();
-        if map.contains_key(&name) {
-            panic!(
-                "insert_pending_type = `{name}` already in flight — duplicate dispatch \
-                 reached body-entry, which the placeholder install should have blocked",
-            );
-        }
-        map.insert(name.clone(), entry);
-        PendingBinderGuard { bindings: self, name }
+        self.pending.insert(name, entry)
     }
 
-    /// Append `to` to `from`'s adjacency list (no-op if `from` isn't a pending binder —
-    /// the elaborator can be running under a non-binder context). Used by the
-    /// elaborator's `Resolution::Placeholder` arm when the parked-on name is itself
-    /// an in-flight binder.
-    ///
-    /// Panics on borrow conflict for the same reason as
-    /// [`Bindings::insert_pending_type`]; deduplicates against existing edges so a
-    /// re-elaboration that re-parks on the same name doesn't grow the list.
+    /// Delegates to [`PendingTypes::record_edge`].
     pub fn record_pending_edge(&self, from: &str, to: String) {
-        let mut map = self.pending_types.borrow_mut();
-        if let Some(entry) = map.get_mut(from) {
-            if !entry.edges.iter().any(|e| e == &to) {
-                entry.edges.push(to);
-            }
-        }
+        self.pending.record_edge(from, to);
+    }
+
+    /// Test helper: explicitly remove a pending-type entry to exercise the
+    /// guard Drop's "tolerates absent entry" path.
+    #[cfg(test)]
+    pub fn pending_remove(&self, name: &str) {
+        self.pending.remove(name);
     }
 
     /// LET-style value bind. Errors `Rebind` if `data[name]` already exists. When `obj`
@@ -268,11 +202,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         obj: &'a KObject<'a>,
     ) -> Result<ApplyOutcome, KError> {
-        let fn_part = match obj {
-            KObject::KFunction(f, _) => Some(*f),
-            _ => None,
-        };
-        self.try_apply(name, obj, fn_part)
+        self.try_apply(name, obj, obj.as_function())
     }
 
     /// FN-style overload registration. Adds `fn_ref` to the `functions` bucket keyed by
@@ -364,9 +294,7 @@ impl<'a> Bindings<'a> {
         data.insert(name.to_string(), obj);
         drop(data);
         drop(types);
-        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.remove(name);
-        }
+        self.clear_placeholder_best_effort(name);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -419,11 +347,7 @@ impl<'a> Bindings<'a> {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
         for (name, obj) in snapshot {
-            let fn_part = match obj {
-                KObject::KFunction(f, _) => Some(*f),
-                _ => None,
-            };
-            match self.try_apply(&name, obj, fn_part)? {
+            match self.try_apply(&name, obj, obj.as_function())? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -458,9 +382,7 @@ impl<'a> Bindings<'a> {
         }
         types.insert(name.to_string(), kt);
         drop(types);
-        if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
-            ph.remove(name);
-        }
+        self.clear_placeholder_best_effort(name);
         Ok(ApplyOutcome::Applied)
     }
 
@@ -517,7 +439,7 @@ impl<'a> Bindings<'a> {
                     already_present = true;
                     break;
                 }
-                if signatures_exact_equal(&existing.signature, &f_ref.signature) {
+                if existing.signature.exact_equal(&f_ref.signature) {
                     return Err(KError::new(KErrorKind::DuplicateOverload {
                         name: name.to_string(),
                         signature: existing.summarize(),
@@ -531,13 +453,19 @@ impl<'a> Bindings<'a> {
         data.insert(name.to_string(), obj);
         drop(data);
         drop(functions_handle);
-        // Best-effort placeholder clear — `try_borrow_mut().ok()` tolerates a caller
-        // holding a placeholder borrow up the stack. Promoting this to `borrow_mut()`
-        // would panic for a previously-tolerated case.
+        self.clear_placeholder_best_effort(name);
+        Ok(ApplyOutcome::Applied)
+    }
+
+    /// Remove any matching placeholder. `try_borrow_mut().ok()` tolerates a
+    /// caller holding a placeholder borrow up the stack — promoting this to
+    /// `borrow_mut()` would panic for a previously-tolerated case. Shared
+    /// tail of every successful write path ([`Bindings::try_apply`],
+    /// [`Bindings::try_apply_type`], [`Bindings::try_register_nominal`]).
+    fn clear_placeholder_best_effort(&self, name: &str) {
         if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
             ph.remove(name);
         }
-        Ok(ApplyOutcome::Applied)
     }
 }
 
@@ -552,34 +480,6 @@ impl<'a> Default for Bindings<'a> {
 pub enum ApplyOutcome {
     Applied,
     Conflict,
-}
-
-/// Structural equality on shape + per-Argument `KType` + return type. Independent of
-/// `Argument::name` — two overloads with matching shape and types collide for dispatch
-/// regardless of parameter naming.
-///
-/// Return-type equality flows through [`crate::machine::model::types::ReturnType`]'s
-/// `PartialEq` impl. `Resolved` compares by inner `KType`; `Deferred` compares by
-/// carrier variant + payload (see `ReturnType::eq`'s docstring for the equality
-/// rule on the parens-form `Expression` variant). Two FN-defs whose deferred
-/// carriers are structurally identical surface as `DuplicateOverload`, which
-/// matches the existing semantic — they are interchangeable for dispatch.
-fn signatures_exact_equal<'a>(
-    a: &crate::machine::model::types::ExpressionSignature<'a>,
-    b: &crate::machine::model::types::ExpressionSignature<'a>,
-) -> bool {
-    use crate::machine::model::types::SignatureElement;
-    if a.return_type != b.return_type {
-        return false;
-    }
-    if a.elements.len() != b.elements.len() {
-        return false;
-    }
-    a.elements.iter().zip(b.elements.iter()).all(|(x, y)| match (x, y) {
-        (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => s == t,
-        (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => ax.ktype == ay.ktype,
-        _ => false,
-    })
 }
 
 #[cfg(test)]

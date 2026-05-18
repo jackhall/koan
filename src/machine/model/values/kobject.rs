@@ -282,6 +282,13 @@ impl<'a> KObject<'a> {
             _ => None,
         }
     }
+
+    pub fn as_function(&self) -> Option<&'a KFunction<'a>> {
+        match self {
+            KObject::KFunction(f, _) => Some(*f),
+            _ => None,
+        }
+    }
 }
 
 fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {

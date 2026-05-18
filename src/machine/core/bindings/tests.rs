@@ -7,7 +7,8 @@
 
 use super::*;
 use crate::machine::core::arena::RuntimeArena;
-use crate::machine::model::types::KType;
+use crate::machine::core::scope_id::ScopeId;
+use crate::machine::model::types::{KType, UserTypeKind};
 use crate::machine::model::values::KObject;
 
 #[test]
@@ -245,7 +246,7 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
     };
     let guard = bindings.insert_pending_type("Foo".into(), entry);
     // Pull the entry out from under the guard.
-    bindings.pending_types.borrow_mut().remove("Foo");
+    bindings.pending_remove("Foo");
     // Guard drop should silently succeed.
     drop(guard);
     assert!(!bindings.pending_types().contains_key("Foo"));
