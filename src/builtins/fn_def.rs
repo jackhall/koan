@@ -20,7 +20,7 @@ pub(crate) use signature::pre_run;
 /// function constructor. Signature and body are captured as raw `KExpression`s; the signature
 /// is structurally inspected (never dispatched) to derive the registered function's
 /// `ExpressionSignature`, and `KFunction::invoke` re-dispatches the body per call with
-/// parameter values substituted in.
+/// parameters bound into a per-call child scope.
 ///
 /// At least one `Keyword` is required in the signature: a signature of all-Argument slots
 /// would shadow `value_lookup`/`value_pass`, so the dispatcher needs a fixed token to key

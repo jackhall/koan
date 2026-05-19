@@ -233,7 +233,7 @@ mod tests {
         );
     }
 
-    /// Variant exercising the captured scope's substitute-and-dispatch path after escape.
+    /// Variant exercising parameter-binding via the captured scope after escape.
     #[test]
     fn escaped_closure_with_param_returns_body_value() {
         let arena = RuntimeArena::new();

@@ -62,6 +62,11 @@ pub struct Scheduler<'a> {
     /// so frame-creating builtins (MATCH) can chain it onto their new frame; see
     /// [memory-model.md § Per-call-frame chaining](../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
+    /// Count of tail-reuse opportunities accepted by
+    /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
+    /// path returns `Some`/`None` without touching this field's gate.
+    #[cfg(test)]
+    pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
 
 impl<'a> Scheduler<'a> {
@@ -71,8 +76,13 @@ impl<'a> Scheduler<'a> {
             deps: DepGraph::new(),
             store: NodeStore::new(),
             active_frame: None,
+            #[cfg(test)]
+            tail_reuse_count: 0,
         }
     }
+
+    #[cfg(test)]
+    pub fn tail_reuse_count(&self) -> usize { self.tail_reuse_count }
 
     pub fn len(&self) -> usize { self.store.len() }
     pub fn is_empty(&self) -> bool { self.store.is_empty() }
@@ -142,5 +152,21 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         self.active_frame = Some(frame);
         body(self);
         self.active_frame = prev;
+    }
+
+    /// Take the active frame iff it is uniquely owned. Because `execute` moves the
+    /// slot's frame directly into `self.active_frame` (no clone — see the
+    /// `mem::replace` pair in `execute.rs`), uniqueness here is exactly the
+    /// "no escape" condition: any cloned `Rc` would have bumped strong_count past 1.
+    fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>> {
+        let candidate = self.active_frame.take()?;
+        if Rc::strong_count(&candidate) == 1 && Rc::weak_count(&candidate) == 0 {
+            #[cfg(test)]
+            { self.tail_reuse_count += 1; }
+            Some(candidate)
+        } else {
+            self.active_frame = Some(candidate);
+            None
+        }
     }
 }

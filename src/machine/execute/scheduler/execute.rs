@@ -17,11 +17,14 @@ impl<'a> Scheduler<'a> {
             let node = self.store.take_for_run(id);
             let scope = node.scope;
             let work = node.work;
-            let prev_frame = node.frame;
             let prev_function = node.function;
-            // Expose the slot's frame to builtins via `SchedulerHandle::current_frame`.
-            let prev_active = self.active_frame.take();
-            self.active_frame = prev_frame.clone();
+            // Move the slot's frame into `active_frame` (no clone) so the Rc lives in
+            // exactly one place during the step. Builtins read it through
+            // `SchedulerHandle::current_frame`; tail-reuse takes it via
+            // `try_take_reusable_frame_for_tail`. After the step we mem::replace it
+            // back out — if the step consumed it for reuse, the slot's frame is now
+            // `None` and the new frame arrives via `NodeStep::Replace`.
+            let prev_active = std::mem::replace(&mut self.active_frame, node.frame);
             let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope, idx)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
@@ -29,7 +32,7 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Catch { from, finish } => self.run_catch(from, finish, scope, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
-            self.active_frame = prev_active;
+            let prev_frame = std::mem::replace(&mut self.active_frame, prev_active);
             // Drain re-entrant writes while `scope` is still live; match arms below may
             // drop the frame it's anchored to. See design/memory-model.md.
             scope.drain_pending();

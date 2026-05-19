@@ -96,6 +96,44 @@ sub-combine slots also see the right ancestor. Top-level FN invokes pass
 `None` (their captured chain ends in run-root, which outlives the run, so no
 chain is needed and TCO recursion stays bounded).
 
+## Tail-step frame reuse
+
+Each TCO step would otherwise drop the previous slot's `CallArena` and
+allocate a fresh one — six typed-arena pools, an `Rc<RefCell<Vec<usize>>>`,
+an alloc'd child `Scope`, and the `Rc<CallArena>` box itself per iteration.
+[`CallArena::try_reset_for_tail`](../src/machine/core/arena.rs) reuses the
+shell across iterations: swap the inner `RuntimeArena` for a fresh empty one,
+re-allocate the child `Scope` into it, re-link `outer` to the new call's
+captured scope. The `Rc`, the heap-pinned arena address, and the slot's
+`frame` field carry over unchanged.
+
+Two structural invariants make the reset sound:
+
+- **No escape.** `Rc::get_mut` succeeds iff no other `Rc` to the frame
+  exists. Any escaped value (a closure carrying `Some(Rc)`, a list element
+  holding one, a sub-Dispatch slot that cloned `active_frame`) keeps
+  `strong_count > 1` and refuses the reset, falling through to
+  `CallArena::new`. The escape gate's correctness depends on
+  [`Scheduler::execute`](../src/machine/execute/scheduler/execute.rs) moving
+  `node.frame` into `self.active_frame` (no clone) for the duration of each
+  step — so the slot's frame lives in exactly one place when the body runs,
+  and any clone visible to `Rc::strong_count` is a real escape.
+- **No live external refs into the arena's storage.** By the time TCO
+  Replace fires, every sub-Dispatch slot the previous body spawned has
+  terminalized and freed, and the slot's `dep_edges` are cleared. The only
+  remaining references into the old arena's contents live in the slot's own
+  scope, which we're about to rebind. Resetting the storage drops the old
+  contents safely.
+
+Frame reuse is what makes deep tail recursion truly constant-memory — both
+in the scheduler's slot table (the `Tail` rewrite alone) and on the heap
+(the reset turns over arena storage in place rather than allocating per
+step). Builtins that build their own frames (MATCH / TRY / EVAL) chain the
+call-site frame's `Rc` onto the new frame's `outer_frame`, which keeps
+`strong_count > 1` for the call-site frame and routes that iteration through
+fresh allocation; cross-step reuse resumes once the builtin's frame is in
+turn replaced.
+
 ## Fast path
 
 If a dying arena allocated zero `KFunction`s
@@ -204,6 +242,15 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   locks in the cycle gate: a value carrying an `Rc<CallArena>` whose `arena()`
   is the receiving arena allocates into the escape arena instead, with the
   per-call arena's storage left untouched.
+- [`call_arena_try_reset_for_tail_round_trip`](../src/machine/core/arena.rs)
+  and
+  [`call_arena_try_reset_for_tail_refuses_when_aliased`](../src/machine/core/arena.rs)
+  pin the in-place reset: a unique `Rc` resets and re-binds correctly against
+  the new outer scope; an aliased `Rc` (the escape case) refuses with the
+  frame's arena pointer unchanged.
+- [`chained_tail_calls_reuse_frames`](../src/builtins/fn_def.rs)
+  asserts that a chain of user-fn tail calls (`AA → BB → CC → DD → PRINT`)
+  bumps the scheduler's tail-reuse counter and collapses to one slot.
 - The audit slate runs cycle-free across every unsafe site in the runtime
   — closure-escape, KFuture-anchor, arena-unsafe-site, module/signature
   lifetime-erasure transmutes, opaque-ascription re-binds, and type-op

@@ -1,6 +1,6 @@
 //! Tests for the `FN` builtin, split by theme:
 //!
-//! - [`basic`] — registration, dispatch routing, param substitution, infix shapes.
+//! - [`basic`] — registration, dispatch routing, param binding, infix shapes.
 //! - [`arena`] — run-root and scheduler-slot reclamation invariants.
 //! - [`body_routing`] — selection of the body to evaluate per call.
 //! - [`return_type`] — parsing the `-> Type` slot and runtime return-type checks.

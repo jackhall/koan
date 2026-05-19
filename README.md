@@ -81,9 +81,9 @@ Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `BodyRes
 
 ### execute — run the DAG
 
-[`Scheduler`](src/machine/execute/scheduler.rs) holds a directed acyclic graph of deferred work. Callers register pre-bound `KFuture`s via `add` / `add_with_deps`, or unbound `KExpression`s with `(part_index, dep)` substitutions via `add_pending` (each returned `NodeId` points backwards in submission order, so the graph is acyclic by construction). `execute` topologically sorts via Kahn's algorithm; for pending nodes it splices each dep's runtime result into the parent's parts as an `ExpressionPart::Future`, then dispatches and binds against the live scope before running.
+[`Scheduler`](src/machine/execute/scheduler.rs) holds a slot table of in-flight work plus a push/notify dependency graph. Callers submit top-level `KExpression`s via `add_dispatch(expr, scope)`; each slot's `run_dispatch` spawns sub-Dispatches for the expression's nested parts and parks the parent as a `Bind` until its deps terminalize. When a producer writes its terminal, a single `finalize` step drains the producer's notify-list and wakes any consumer whose `pending_deps` counter hits zero — no polling, no result-table sweep. Tail returns (`BodyResult::Tail`) rewrite the slot's own work in place rather than allocating a new slot. See [design/execution-model.md](design/execution-model.md).
 
-[`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, then walk each top-level expression post-order and submit every nested `(...)` to the scheduler — leaf expressions go in pre-bound, parents go in as pending with substitutions onto their sub-expressions' nodes. The caller keeps ownership of the `Scope` so output and post-run bindings are inspectable — that's how the tests in [interpret.rs](src/machine/execute/interpret.rs) capture `PRINT` output and assert on `LET` bindings.
+[`interpret`](src/machine/execute/interpret.rs) is the glue: parse the source, `add_dispatch` each top-level expression against the root scope, then drain the scheduler. The caller keeps ownership of the `Scope` so output and post-run bindings are inspectable — that's how the tests in [interpret.rs](src/machine/execute/interpret.rs) capture `PRINT` output and assert on `LET` bindings.
 
 ## Source layout
 

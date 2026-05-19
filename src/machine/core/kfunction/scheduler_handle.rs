@@ -62,6 +62,17 @@ pub trait SchedulerHandle<'a> {
         body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
     );
 
+    /// Take the active frame for reuse on a TCO Replace iff it is uniquely owned —
+    /// i.e. no closure or sub-slot has cloned the `Rc` out. On `Some`, the caller
+    /// becomes the sole owner; calling [`CallArena::try_reset_for_tail`] on it is
+    /// guaranteed to succeed. On `None`, the active frame is left in place and the
+    /// caller must allocate a fresh frame.
+    ///
+    /// The "uniquely owned" gate is what keeps reuse semantically equivalent to
+    /// drop-and-alloc: any escaped `Rc` (returned closure, list element carrying a
+    /// `KFunction(_, Some(rc))`, ...) keeps strong_count > 1 and refuses reuse.
+    fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>>;
+
     /// Schedule each top-level statement in `body_expr` against `scope` and return their
     /// `NodeId`s.
     ///

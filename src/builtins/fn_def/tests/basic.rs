@@ -1,4 +1,4 @@
-//! Basic FN registration, dispatch, and parameter substitution.
+//! Basic FN registration, dispatch, and parameter binding.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::model::{KObject, SignatureElement};
@@ -98,7 +98,7 @@ fn calling_user_fn_repeatedly_runs_body_each_time() {
 }
 
 #[test]
-fn fn_with_single_param_substitutes_at_call_site() {
+fn fn_with_single_param_binds_at_call_site() {
     let bytes = capture_program_output(
         "FN (SAY x :Str) -> Null = (PRINT x)\n\
          SAY \"hello\"",
@@ -135,7 +135,7 @@ fn fn_param_shadows_outer_binding_at_call_site() {
 }
 
 #[test]
-fn fn_param_substitutes_inside_nested_subexpression() {
+fn fn_param_resolves_inside_nested_subexpression() {
     let bytes = capture_program_output(
         "FN (WRAP x :Str) -> Null = (PRINT (x))\n\
          WRAP \"wrapped\"",

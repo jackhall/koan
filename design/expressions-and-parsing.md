@@ -97,7 +97,8 @@ mechanism. Two consequences:
   shapes overlap.
 
 See [functional-programming.md](functional-programming.md) for how the body
-substitutes parameters and what `BodyResult::Tail` does at the slot.
+binds parameters into a per-call scope and what `BodyResult::Tail` does at
+the slot.
 
 ## Quote and eval sigils
 

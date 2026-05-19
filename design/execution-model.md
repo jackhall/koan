@@ -102,11 +102,28 @@ construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite.
 
+The slot's `Rc<CallArena>` is held in exactly one place during each step:
+[`Scheduler::execute`](../src/machine/execute/scheduler/execute.rs) moves
+`node.frame` directly into `self.active_frame` (no clone) and reverses the
+move after the step. That single-ownership discipline is what lets the
+tail-reuse path detect "nothing escaped" via `Rc::strong_count == 1`:
+[`SchedulerHandle::try_take_reusable_frame_for_tail`](../src/machine/core/kfunction/scheduler_handle.rs)
+takes the active frame, refuses to hand it out if any clone exists, and
+otherwise lets `KFunction::invoke` reset the frame in place via
+[`CallArena::try_reset_for_tail`](../src/machine/core/arena.rs) — swap the
+inner `RuntimeArena` for a fresh empty one, re-allocate the child `Scope`,
+re-link `outer` to the new call's captured scope. The shell, the heap-pinned
+arena address, and the slot's `frame` field all survive across the
+iteration; only the storage turns over. Frames carrying an escaped closure
+(or any other clone of the `Rc`) fall through to a fresh `CallArena::new`,
+preserving snapshot semantics for the escaped value.
+
 A subtle point: host-stack overflow on naïve recursion is solved by the graph
 model itself, not by `Tail`. Every "recursive call" enters the scheduler's
 run-set rather than growing the Rust call stack — that property is
 structural, not optimizing. What `Tail` adds is constant **scheduler-vec**
-memory across the tail-call chain.
+memory across the tail-call chain; frame reuse on top of it keeps **heap
+memory** constant too.
 
 ## Transient-node reclamation
 

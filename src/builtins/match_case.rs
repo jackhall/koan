@@ -130,9 +130,8 @@ mod tests {
 
     #[test]
     fn match_binds_inner_value_to_it() {
-        // `it` is substituted into Identifier-typed positions; here PRINT's `msg:Str` slot
-        // wants a Str literal or Future, and substitution rewrites the `it` Identifier into
-        // a `Future(value)` so the bind succeeds.
+        // `it` resolves to the inner value through the per-MATCH child scope; PRINT's
+        // `msg:Str` slot picks up the binding at dispatch time.
         let bytes = run_program(
             "UNION Result = (ok :Str err :Str)\n\
              LET r = (Result (ok \"all good\"))\n\

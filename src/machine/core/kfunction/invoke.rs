@@ -54,7 +54,18 @@ impl<'a> KFunction<'a> {
                 // kept alive externally via the lifted `KFunction(&fn, Some(Rc))` on
                 // the user-bound value.
                 let outer = self.captured_scope();
-                let frame: Rc<CallArena> = CallArena::new(outer, None);
+                // Tail-reuse: when this invoke is the body of a TCO Replace step and
+                // the previous slot's frame is uniquely owned (no closure / sub-slot
+                // escaped a clone), reset it in place and reuse the shell instead of
+                // allocating a new `CallArena`. Falls through to a fresh `CallArena`
+                // for the first call and for any iteration whose previous frame
+                // escaped. Re-link's the child scope's `outer` to the new FN's
+                // captured scope, so this works across mutual tail calls between
+                // user-fns whose captured scopes differ.
+                let frame: Rc<CallArena> = sched
+                    .try_take_reusable_frame_for_tail()
+                    .and_then(|mut prev| prev.try_reset_for_tail(outer).then_some(prev))
+                    .unwrap_or_else(|| CallArena::new(outer, None));
                 // SAFETY (consolidated): both re-anchors below share one witness — `frame`
                 // is moved into `BodyResult::Tail` below, whose slot-storage lifetime is
                 // `'a`. The `Rc<CallArena>` heap-pins the per-call arena (and therefore

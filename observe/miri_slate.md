@@ -3,7 +3,7 @@
 <!-- slate-fingerprint
 src/builtins/match_case.rs: 2
 src/builtins/try_with.rs: 2
-src/machine/core/arena.rs: 19
+src/machine/core/arena.rs: 21
 src/machine/core/kfunction.rs: 1
 src/machine/core/kfunction/invoke.rs: 1
 src/machine/execute/scheduler/node_store.rs: 1
@@ -35,7 +35,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-24 tests, grouped by the unsafe site each pins down. Names below are the exact
+26 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **Singleton transmutes** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the `'static`→`'a`
@@ -63,6 +63,16 @@ a value carrying a self-anchored `Rc<CallArena>` to the escape arena, breaking
 the storage cycle that closure-escape returns can otherwise produce.
 
 - `alloc_object_redirects_self_anchored_value_to_escape_arena`
+
+**`CallArena::try_reset_for_tail`** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — TCO
+frame reuse swaps the inner `RuntimeArena` for a fresh one in place and
+re-allocates the child `Scope`, with two new transmutes: `&Scope<'_> →
+&Scope<'static>` for the new outer link and a raw-ptr re-anchor for the new
+inner arena. The `Rc::get_mut` gate keeps reuse semantically equivalent to
+drop-and-alloc by refusing when any other `Rc` to the frame still exists.
+
+- `call_arena_try_reset_for_tail_round_trip`
+- `call_arena_try_reset_for_tail_refuses_when_aliased`
 
 **`KFunction` captured-scope re-borrow** ([src/machine/core/kfunction.rs](../src/machine/core/kfunction.rs)) — every
 closure invocation reads `KFunction::captured_scope`, which is `NonNull::as_ref`
@@ -165,9 +175,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-05-18: 507.72s — 27 tests, 0 leaks, 0 UB
 - 2026-05-14: 371.79s — 24 tests, 0 leaks, 0 UB
 - 2026-05-12: 283.68s — 22 tests, 0 leaks, 0 UB
 - 2026-05-10: 281.61s — 24 tests, 0 leaks, 0 UB
 - 2026-05-09: 266.18s — 23 tests, 0 leaks, 0 UB
-- 2026-05-09: 218.77s — 21 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

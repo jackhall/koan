@@ -246,7 +246,7 @@ pub fn true_singleton<'a>() -> &'a KObject<'a> { project(&TRUE_HOLDER) }
 pub fn false_singleton<'a>() -> &'a KObject<'a> { project(&FALSE_HOLDER) }
 
 /// One user-fn call's allocation frame. Owns its own `RuntimeArena` for the per-call child
-/// `Scope`, parameter clones, and substituted body rewrites. Reference-counted so an
+/// `Scope`, parameter clones, and any in-body allocations. Reference-counted so an
 /// escaping closure can extend the frame's life past slot finalize; with no extra Rc the
 /// arena drops at finalize.
 ///
@@ -324,6 +324,52 @@ impl CallArena {
     }
 
     pub fn arena(&self) -> &RuntimeArena { &self.arena }
+
+    /// Reset this frame in place for a tail-call iteration: drop the old `RuntimeArena`
+    /// storage, install a fresh empty `RuntimeArena` with `new_outer.arena` as the
+    /// escape target, re-allocate a child `Scope` linking `new_outer`, and update
+    /// `scope_ptr`. `outer_frame` is cleared (user-fn calls always use a captured
+    /// lexical outer; per-call outers route through [`CallArena::new`] instead).
+    ///
+    /// Returns `false` (and leaves the frame untouched) when `Rc::get_mut` fails —
+    /// i.e. when any other `Rc` to this frame has escaped (closure capture, live
+    /// sub-Dispatch, etc.), so a reuse would be visible to that escaped reference
+    /// and break snapshot semantics.
+    ///
+    /// SAFETY: callers must guarantee that at the moment of call, no live reference
+    /// into the old `arena` or old child `Scope` is held outside this `Rc`. The
+    /// `Rc::get_mut` gate is the structural witness for that: if any other `Rc` to
+    /// this frame still exists, reset is refused; if none does, the only references
+    /// into the arena live in slots already terminalized and freed by the time TCO
+    /// Replace runs (per `execute.rs`'s dep-edges-cleared invariant).
+    pub fn try_reset_for_tail<'p>(
+        self: &mut Rc<Self>,
+        new_outer: &'p Scope<'p>,
+    ) -> bool {
+        if Rc::get_mut(self).is_none() {
+            return false;
+        }
+        let escape: *const RuntimeArena = new_outer.arena;
+        // SAFETY: lexical-scoping invariant — `new_outer.arena` outlives this frame
+        // (it is the captured definition scope's arena, or a longer-lived ancestor).
+        let outer_static: &Scope<'static> = unsafe {
+            std::mem::transmute::<&Scope<'_>, &Scope<'static>>(new_outer)
+        };
+        let this = Rc::get_mut(self).expect("just-verified unique above");
+        this.scope_ptr = std::ptr::null();
+        this.outer_frame = None;
+        this.arena = RuntimeArena::with_escape(escape);
+        let arena_ptr: *const RuntimeArena = &this.arena;
+        // SAFETY: heap-pinned via the `Rc` we hold; pointer is stable for the Rc's lifetime.
+        let arena_ref: &'static RuntimeArena = unsafe { &*arena_ptr };
+        let mut child = Scope::child_under(outer_static);
+        child.arena = arena_ref;
+        let allocated: &Scope<'_> = arena_ref.alloc_scope(child);
+        #[allow(clippy::unnecessary_cast)]
+        let scope_ptr = allocated as *const Scope<'_> as *const Scope<'static>;
+        this.scope_ptr = scope_ptr;
+        true
+    }
 }
 
 #[cfg(test)]
@@ -469,6 +515,63 @@ mod tests {
         let t: &KType = a.alloc_ktype(KType::Number);
         assert!(matches!(t, KType::Number));
         assert_eq!(a.alloc_count(), baseline + 1);
+    }
+
+    /// `try_reset_for_tail` swaps the inner `RuntimeArena` for a fresh one and
+    /// re-allocates the child `Scope` into it. Pins the new transmute pair (the
+    /// `&Scope<'_> → &Scope<'static>` outer cast and the raw-arena-ptr
+    /// re-anchor) under tree borrows: after reset, an alloc_object via the
+    /// frame's `arena()` plus a `bind_value` on `frame.scope()` must coexist.
+    #[test]
+    fn call_arena_try_reset_for_tail_round_trip() {
+        let outer_arena = RuntimeArena::new();
+        let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
+        let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+        // Allocate something into the pre-reset arena so we know it's live.
+        let _pre = frame.arena().alloc_object(KObject::Number(1.0));
+        let pre_count = frame.arena().alloc_count();
+        assert!(pre_count >= 1);
+
+        let did_reset = frame.try_reset_for_tail(outer_scope);
+        assert!(did_reset, "Rc was unique, reset must succeed");
+
+        // Fresh arena: storage was torn down. The new scope alloc adds 1.
+        assert_eq!(
+            frame.arena().alloc_count(),
+            1,
+            "reset arena should hold only the freshly allocated child scope",
+        );
+
+        // Round-trip: bind a value into the reset scope, read it back.
+        let v = frame.arena().alloc_object(KObject::Number(42.0));
+        frame.scope().bind_value("k".to_string(), v).unwrap();
+        assert!(matches!(frame.scope().lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
+        assert!(frame.scope().outer.is_some());
+    }
+
+    /// `try_reset_for_tail` must refuse when any other `Rc` to this frame
+    /// exists (closure escape, sub-Dispatch clone, etc.). The escape-detection
+    /// gate keeps reuse semantically equivalent to drop-and-alloc; without it
+    /// a later tail step would mutate the captured arena under a live alias.
+    #[test]
+    fn call_arena_try_reset_for_tail_refuses_when_aliased() {
+        let outer_arena = RuntimeArena::new();
+        let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
+        let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
+        let pre_arena_addr = frame.arena() as *const RuntimeArena as usize;
+
+        // Simulate a closure escape: clone the Rc so strong_count > 1.
+        let _alias = Rc::clone(&frame);
+
+        let did_reset = frame.try_reset_for_tail(outer_scope);
+        assert!(!did_reset, "aliased frame must refuse reset");
+
+        // Frame untouched: same arena instance, same allocations as before.
+        assert_eq!(
+            frame.arena() as *const RuntimeArena as usize,
+            pre_arena_addr,
+            "refused reset must leave arena pointer unchanged",
+        );
     }
 
     /// Cycle gate: alloc'ing a value that anchors back at the receiving arena via an
