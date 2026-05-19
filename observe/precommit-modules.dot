@@ -33,6 +33,7 @@ digraph {
     "koan::builtins" [label="pub mod|builtins", fillcolor="#81c169"]; // "mod" node
     "koan::builtins::ascribe" [label="pub(self) mod|builtins::ascribe", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::attr" [label="pub(self) mod|builtins::attr", fillcolor="#db5367"]; // "mod" node
+    "koan::builtins::branch_walk" [label="pub(self) mod|builtins::branch_walk", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::call_by_name" [label="pub mod|builtins::call_by_name", fillcolor="#81c169"]; // "mod" node
     "koan::builtins::cons" [label="pub(self) mod|builtins::cons", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::eval" [label="pub(self) mod|builtins::eval", fillcolor="#db5367"]; // "mod" node
@@ -51,6 +52,7 @@ digraph {
     "koan::builtins::struct_def" [label="pub(self) mod|builtins::struct_def", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::struct_value" [label="pub(crate) mod|builtins::struct_value", fillcolor="#f8c04c"]; // "mod" node
     "koan::builtins::tagged_union" [label="pub(crate) mod|builtins::tagged_union", fillcolor="#f8c04c"]; // "mod" node
+    "koan::builtins::try_with" [label="pub(self) mod|builtins::try_with", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::type_call" [label="pub(self) mod|builtins::type_call", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::type_ops" [label="pub(self) mod|builtins::type_ops", fillcolor="#db5367"]; // "mod" node
     "koan::builtins::type_ops::dict_of" [label="pub(self) mod|builtins::type_ops::dict_of", fillcolor="#db5367"]; // "mod" node
@@ -125,6 +127,7 @@ digraph {
     "koan" -> "koan::parse" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::ascribe" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::attr" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
+    "koan::builtins" -> "koan::builtins::branch_walk" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::call_by_name" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::cons" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::eval" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
@@ -139,6 +142,7 @@ digraph {
     "koan::builtins" -> "koan::builtins::struct_def" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::struct_value" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::tagged_union" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
+    "koan::builtins" -> "koan::builtins::try_with" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::type_call" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::type_ops" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::builtins" -> "koan::builtins::union" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
@@ -173,6 +177,7 @@ digraph {
     "koan::builtins::attr" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::attr" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::attr" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::branch_walk" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::call_by_name" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::call_by_name" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::call_by_name" -> "koan::machine::core::kfunction::argument_bundle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -252,6 +257,7 @@ digraph {
     "koan::builtins::let_binding" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::let_binding" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::match_case" -> "koan::builtins::branch_walk" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::machine::core::arena" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::machine::core::kfunction::argument_bundle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -259,7 +265,6 @@ digraph {
     "koan::builtins::match_case" -> "koan::machine::core::kfunction::invoke" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::machine::core::kfunction::scheduler_handle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
-    "koan::builtins::match_case" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::match_case" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::module_def" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -343,6 +348,18 @@ digraph {
     "koan::builtins::tagged_union" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::tagged_union" -> "koan::machine::model::types::signature" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::tagged_union" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::builtins::branch_walk" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::core::arena" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::core::kfunction::argument_bundle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::core::kfunction::body" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::core::kfunction::invoke" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::core::kfunction::scheduler_handle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::builtins::try_with" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_call" -> "koan::builtins" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_call" -> "koan::builtins::newtype_def" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::builtins::type_call" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -497,9 +514,11 @@ digraph {
     "koan::machine::core::bindings::pending" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::bindings::pending" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kerror" -> "koan::machine::core::kfunction" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::machine::core::kerror" -> "koan::machine::core::scope_id" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kerror" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kerror" -> "koan::machine::model::types::ktraits" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kerror" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::machine::core::kerror" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kfunction" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::argument_bundle" [label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge
     "koan::machine::core::kfunction" -> "koan::machine::core::kfunction::argument_bundle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
@@ -548,6 +567,7 @@ digraph {
     "koan::machine::core::kfunction::pick" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kfunction::pick" -> "koan::machine::model::types::signature" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kfunction::scheduler_handle" -> "koan::machine::core::arena" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::machine::core::kfunction::scheduler_handle" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kfunction::scheduler_handle" -> "koan::machine::core::kfunction::body" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kfunction::scheduler_handle" -> "koan::machine::core::scope" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::core::kfunction::scheduler_handle" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge

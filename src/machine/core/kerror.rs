@@ -1,7 +1,12 @@
 use std::fmt;
+use std::rc::Rc;
+
+use indexmap::IndexMap;
 
 use crate::machine::core::kfunction::KFunction;
+use crate::machine::core::scope_id::ScopeId;
 use crate::machine::model::types::Parseable;
+use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
 use crate::machine::model::ast::KExpression;
 
@@ -82,6 +87,140 @@ impl KError {
     /// Spelled out (vs. `Clone`) so propagation sites read as intent rather than mechanism.
     pub fn clone_for_propagation(&self) -> Self {
         self.clone()
+    }
+
+    /// Lower this error into a `KObject::Tagged` for `TRY-WITH` to dispatch on. The `tag`
+    /// names the `KErrorKind` variant (e.g. `"type_mismatch"`) and the payload is a
+    /// `KObject::Struct` mirroring the variant's Rust fields plus `frames :List<Str>` (each
+    /// frame rendered as `"in <expression> (<function>)"`).
+    ///
+    /// `(scope_id, name)` on the wrapping `Tagged` uses [`ScopeId::SENTINEL`] / `"KError"`
+    /// because no user-declared union type ever names this carrier — TRY's branch walker
+    /// reads `tag` and `value` directly without going through `MATCH`. The inner payload
+    /// `Struct` has the variant name (e.g. `"TypeMismatch"`) and the same sentinel.
+    pub fn to_tagged<'a>(&self) -> KObject<'a> {
+        let (tag, struct_name, fields) = self.kind.to_struct_fields();
+        let frames_list = KObject::List(Rc::new(
+            self.frames
+                .iter()
+                .map(|f| KObject::KString(format!("in {} ({})", f.expression, f.function)))
+                .collect(),
+        ));
+        let mut map: IndexMap<String, KObject<'a>> = IndexMap::with_capacity(fields.len() + 1);
+        for (k, v) in fields {
+            map.insert(k, v);
+        }
+        map.insert("frames".to_string(), frames_list);
+        let payload = KObject::Struct {
+            name: struct_name,
+            scope_id: ScopeId::SENTINEL,
+            fields: Rc::new(map),
+        };
+        KObject::Tagged {
+            tag,
+            value: Rc::new(payload),
+            scope_id: ScopeId::SENTINEL,
+            name: "KError".to_string(),
+        }
+    }
+}
+
+impl KErrorKind {
+    /// `(tag, struct_name, fields)` for `KError::to_tagged`. The struct's field order
+    /// mirrors the variant's declaration order; `frames` is appended by the caller.
+    /// Dispatcher-internal kinds (`Rebind`, `DuplicateOverload`,
+    /// `TypeClassBindingExpectsType`, `TypeIdentityPendingAtDispatch`) flatten to a minimal
+    /// `{ kind :Str, message :Str }` shape — they're only catchable via `_` so the per-kind
+    /// fields would never be addressed.
+    fn to_struct_fields<'a>(&self) -> (String, String, Vec<(String, KObject<'a>)>) {
+        match self {
+            KErrorKind::TypeMismatch { arg, expected, got } => (
+                "type_mismatch".to_string(),
+                "TypeMismatch".to_string(),
+                vec![
+                    ("arg".to_string(), KObject::KString(arg.clone())),
+                    ("expected".to_string(), KObject::KString(expected.clone())),
+                    ("got".to_string(), KObject::KString(got.clone())),
+                ],
+            ),
+            KErrorKind::MissingArg(name) => (
+                "missing_arg".to_string(),
+                "MissingArg".to_string(),
+                vec![("name".to_string(), KObject::KString(name.clone()))],
+            ),
+            KErrorKind::UnboundName(name) => (
+                "unbound_name".to_string(),
+                "UnboundName".to_string(),
+                vec![("name".to_string(), KObject::KString(name.clone()))],
+            ),
+            KErrorKind::ArityMismatch { expected, got } => (
+                "arity_mismatch".to_string(),
+                "ArityMismatch".to_string(),
+                vec![
+                    ("expected".to_string(), KObject::Number(*expected as f64)),
+                    ("got".to_string(), KObject::Number(*got as f64)),
+                ],
+            ),
+            KErrorKind::AmbiguousDispatch { expr, candidates } => (
+                "ambiguous_dispatch".to_string(),
+                "AmbiguousDispatch".to_string(),
+                vec![
+                    ("expr".to_string(), KObject::KString(expr.clone())),
+                    ("candidates".to_string(), KObject::Number(*candidates as f64)),
+                ],
+            ),
+            KErrorKind::DispatchFailed { expr, reason } => (
+                "dispatch_failed".to_string(),
+                "DispatchFailed".to_string(),
+                vec![
+                    ("expr".to_string(), KObject::KString(expr.clone())),
+                    ("reason".to_string(), KObject::KString(reason.clone())),
+                ],
+            ),
+            KErrorKind::ShapeError(msg) => (
+                "shape_error".to_string(),
+                "ShapeError".to_string(),
+                vec![("message".to_string(), KObject::KString(msg.clone()))],
+            ),
+            KErrorKind::ParseError(msg) => (
+                "parse_error".to_string(),
+                "ParseError".to_string(),
+                vec![("message".to_string(), KObject::KString(msg.clone()))],
+            ),
+            KErrorKind::User(msg) => (
+                "user".to_string(),
+                "User".to_string(),
+                vec![("message".to_string(), KObject::KString(msg.clone()))],
+            ),
+            KErrorKind::Rebind { .. }
+            | KErrorKind::DuplicateOverload { .. }
+            | KErrorKind::TypeClassBindingExpectsType { .. }
+            | KErrorKind::TypeIdentityPendingAtDispatch { .. } => {
+                let (tag, struct_name) = match self {
+                    KErrorKind::Rebind { .. } => ("rebind", "Rebind"),
+                    KErrorKind::DuplicateOverload { .. } => {
+                        ("duplicate_overload", "DuplicateOverload")
+                    }
+                    KErrorKind::TypeClassBindingExpectsType { .. } => (
+                        "type_class_binding_expects_type",
+                        "TypeClassBindingExpectsType",
+                    ),
+                    KErrorKind::TypeIdentityPendingAtDispatch { .. } => (
+                        "type_identity_pending_at_dispatch",
+                        "TypeIdentityPendingAtDispatch",
+                    ),
+                    _ => unreachable!(),
+                };
+                (
+                    tag.to_string(),
+                    struct_name.to_string(),
+                    vec![
+                        ("kind".to_string(), KObject::KString(tag.to_string())),
+                        ("message".to_string(), KObject::KString(format!("{self}"))),
+                    ],
+                )
+            }
+        }
     }
 }
 

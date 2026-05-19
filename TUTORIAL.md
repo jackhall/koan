@@ -497,9 +497,35 @@ Variants you can hit today: `TypeMismatch`, `MissingArg`, `UnboundName`,
 `ArityMismatch`, `AmbiguousDispatch`, `DispatchFailed`, `ShapeError`,
 `ParseError`, `Rebind` (a second `LET <name>` against a name already bound
 in the same scope), `DuplicateOverload` (an `FN` whose signature exactly
-matches an already-registered overload), `User`. There's no in-language
-try/catch yet — errors short-circuit to the top level. Intentional `null`
-values (the `null` literal, `PRINT`'s return) are not errors.
+matches an already-registered overload), `User`. Uncaught errors
+short-circuit to the top level. Intentional `null` values (the `null`
+literal, `PRINT`'s return) are not errors.
+
+### Catching errors with `TRY ... WITH`
+
+`TRY (<expr>) WITH (<branches>)` evaluates `<expr>` in a catching context
+and dispatches a branch keyed on the result. Each branch is a
+`<tag> -> <body>` triple: `ok` runs on success with `it` bound to the
+value, the lowercased `KErrorKind` names (`type_mismatch`, `missing_arg`,
+`unbound_name`, `arity_mismatch`, `ambiguous_dispatch`, `dispatch_failed`,
+`shape_error`, `parse_error`, `user`) catch the matching error with `it`
+bound to a per-variant payload struct, and `_` is an optional wildcard:
+
+```
+TRY (RISKY x) WITH
+  ok            -> (PRINT it)
+  type_mismatch -> (PRINT it.expected)
+  _             -> (PRINT "something else went wrong")
+```
+
+Each error arm's `it` payload carries the variant's structured fields
+plus `it.frames :List<Str>` (one entry per call frame, rendered
+`"in <expression> (<function>)"`). The `ok` arm binds `it` to the bare
+success value, not a wrapper. No matching arm and no `_` re-raises the
+original error; a successful expression with no `ok` arm raises a
+synthetic `ShapeError`. See
+[design/error-handling.md](design/error-handling.md) for the full per-arm
+shape table.
 
 ## Putting it together
 
@@ -539,6 +565,7 @@ One line per surface form. Sources under
 | `STRUCT <Name> = (<schema>)`             | Declare a record type with ordered, typed fields. Binds `<Name>` in scope.                       | [struct_def.rs](src/builtins/struct_def.rs)          |
 | `NEWTYPE <Name> = <Repr>`                | Declare a fresh nominal identity over a transparent representation. `Name(value)` constructs.    | [newtype_def.rs](src/builtins/newtype_def.rs)        |
 | `MATCH <value:Tagged> WITH (<branches>)` | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/builtins/match_case.rs)          |
+| `TRY (<expr>) WITH (<branches>)`         | Evaluate `<expr>` in a catching context; branch on `ok` / the `KErrorKind` tags / `_`. `it` is the value (success) or per-variant payload (error). | [try_with.rs](src/builtins/try_with.rs)              |
 | `<verb:TypeExprRef> (<args>)`            | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/builtins/type_call.rs)            |
 | `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/builtins/call_by_name.rs)      |
 | `<s>.<field>` (`ATTR <s> <field>`)       | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/builtins/attr.rs)                      |
@@ -557,7 +584,6 @@ Tracked in [ROADMAP.md](ROADMAP.md):
 - **No arithmetic, comparison, or logical operators.** `1 + 1` doesn't parse
   as addition. The character-trigger registry only does syntactic desugaring.
 - **No loops.** Recursion is the iteration model; tail calls collapse cleanly.
-- **No in-language error catching.** Errors propagate to the CLI.
 
 If a snippet doesn't behave the way you expect, the most likely cause is one
 of the above.

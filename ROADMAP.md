@@ -26,8 +26,8 @@ without first landing something else:
 - [Files and imports](roadmap/libraries/files-and-imports.md) — wire `.koan` files together so
   a codebase can span more than one source file and files become modules.
 - [Error-handling surface follow-ups](roadmap/libraries/error-handling.md) — errors-as-values,
-  source spans on `KExpression`, continue-on-error, and the user-error catch surface;
-  runs against the shipped module-system substrate.
+  source spans on `KExpression`, continue-on-error, and the typed `Result`/`RAISE`
+  surface that feeds the shipped TRY-WITH `user` arm.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
 - [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md) —

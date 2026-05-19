@@ -8,6 +8,7 @@ use crate::machine::model::values::KObject;
 
 mod ascribe;
 mod attr;
+mod branch_walk;
 pub mod call_by_name;
 mod cons;
 mod eval;
@@ -22,6 +23,7 @@ mod sig_def;
 mod struct_def;
 pub(crate) mod struct_value;
 pub(crate) mod tagged_union;
+mod try_with;
 mod type_call;
 mod type_ops;
 mod union;
@@ -146,6 +148,7 @@ pub fn default_scope<'a>(
     newtype_def::register(scope);
     type_call::register(scope);
     match_case::register(scope);
+    try_with::register(scope);
     attr::register(scope);
     quote::register(scope);
     eval::register(scope);

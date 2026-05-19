@@ -4,9 +4,9 @@ use std::rc::Rc;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
 use crate::machine::substitute_params;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
 
 /// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.
@@ -59,7 +59,7 @@ pub fn body<'a>(
             )));
         }
     };
-    let branch_body = match find_branch_body(&branches_expr, &tag) {
+    let branch_body = match find_branch_body(&branches_expr, &tag, false) {
         Ok(Some(body)) => body,
         Ok(None) => {
             return err(KError::new(KErrorKind::ShapeError(format!(
@@ -95,69 +95,6 @@ pub fn body<'a>(
     // return-type enforcement and error-frame attribution; MATCH has no meaningful
     // function to attach (declared return is `Any`, so the check would be a no-op).
     BodyResult::Tail { expr: substituted, frame: Some(frame), function: None }
-}
-
-/// Walk the branches KExpression's parts as repeated `<Identifier(t)> <Keyword("->")>
-/// <Expression(body)>` triples. Return the body for the first triple whose tag matches
-/// `target_tag`, `Ok(None)` if no triple matches, or `Err` on shape mismatch.
-fn find_branch_body<'a>(
-    branches: &KExpression<'a>,
-    target_tag: &str,
-) -> Result<Option<KExpression<'a>>, String> {
-    let parts = &branches.parts;
-    if !parts.len().is_multiple_of(3) {
-        return Err(format!(
-            "MATCH branches must be `<tag> -> <body>` triples; got {} parts (not a multiple of 3)",
-            parts.len()
-        ));
-    }
-    let mut i = 0;
-    while i < parts.len() {
-        let tag_part = &parts[i];
-        let arrow_part = &parts[i + 1];
-        let body_part = &parts[i + 2];
-        let tag_name = match tag_part {
-            ExpressionPart::Identifier(s) => s.clone(),
-            // `true`/`false` are `KLiteral::Boolean` from the parser, not identifiers,
-            // but they're the natural tag form for `MATCH` on a `Bool` value. Accept
-            // them here so users can write `(true -> ... false -> ...)` directly.
-            ExpressionPart::Literal(KLiteral::Boolean(b)) => {
-                if *b { "true".to_string() } else { "false".to_string() }
-            }
-            other => {
-                return Err(format!(
-                    "MATCH branch tag must be a bare identifier or boolean literal, got {}",
-                    other.summarize()
-                ));
-            }
-        };
-        match arrow_part {
-            ExpressionPart::Keyword(k) if k == "->" => {}
-            other => {
-                return Err(format!(
-                    "MATCH branch separator must be `->`, got {}",
-                    other.summarize()
-                ));
-            }
-        }
-        let body_expr = match body_part {
-            ExpressionPart::Expression(e) => (**e).clone(),
-            other => {
-                return Err(format!(
-                    "MATCH branch body must be a parenthesized expression, got {}",
-                    other.summarize()
-                ));
-            }
-        };
-        if tag_name == target_tag {
-            // Multi-statement branch desugar: `((s1) (s2) (s3))` becomes a CONS chain so
-            // the branch dispatches as a single tail expression. Single-statement bodies
-            // pass through unchanged. See [`super::cons`] for the contract.
-            return Ok(Some(super::cons::fold_multi_statement(body_expr)));
-        }
-        i += 3;
-    }
-    Ok(None)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

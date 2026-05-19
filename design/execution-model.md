@@ -31,6 +31,16 @@ already-resolved literal scalars that don't need a dep slot — lives in the
 closure's capture rather than in fixed-shape variants. Body-finalization for
 future MODULE/SIG inner work will reuse the same primitive.
 
+`Catch` is the catching dual of a single-dep `Combine`: it waits on one
+slot and hands its terminal to a [`CatchFinish`](../src/machine/core/kfunction.rs)
+closure as a `Result<&KObject, KError>`. Unlike `Combine`, an errored dep
+does not short-circuit — the closure always runs and decides whether to
+recover or re-raise. The `TRY-WITH` builtin
+([`try_with`](../src/builtins/try_with.rs); see
+[error-handling.md](error-handling.md)) is the sole caller today: it
+spawns its watched expression as a sub-dispatch and registers a `Catch`
+that picks the matching branch by tag.
+
 ## `BodyResult` — the three return shapes
 
 A builtin body returns one of:

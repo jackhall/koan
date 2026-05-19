@@ -22,7 +22,7 @@ cargo run -- path/to/program.koan
 echo 'PRINT "hello"' | cargo run
 ```
 
-The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
+The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, `TRY (<expr>) WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
 
 User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(List T)`, `:(Dict K V)`, `:(Function (args) -> R)`, `Type`, `Tagged`, `Struct`, `Module`, `Signature`, `KExpression`, and `Any`. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -77,7 +77,7 @@ A [`Scope`](src/machine/core/scope.rs) is a lexical environment: parent link, na
 
 Runtime values are [`KObject`](src/machine/model/values/kobject.rs) (scalars, collections, expressions, futures, function references); cross-cutting traits (`Parseable`, `Executable`, `Serializable`, `Monadic`, …) live in [ktraits.rs](src/machine/model/types/ktraits.rs). Builtins are registered in [builtins.rs](src/builtins.rs) and produce the default root scope.
 
-Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. There is no in-language try/catch; errors short-circuit to the top level and the CLI formats them with frames. Future work adds in-language catch-as-builtin once the type system gains the necessary surface.
+Errors are first-class via [`KError`](src/machine/core/kerror.rs) — a `BodyResult::Err(KError)` arm propagates structured failures (type mismatches, unbound names, dispatch failures, shape errors) along the scheduler's dependency edges, accumulating call-stack frames as it walks. `TRY (<expr>) WITH (<branches>)` catches in-language; uncaught errors short-circuit to the top level and the CLI formats them with frames. See [design/error-handling.md](design/error-handling.md) for the per-arm `it` shape and the privilege boundary that keeps builtin and user errors disjoint.
 
 ### execute — run the DAG
 
@@ -151,6 +151,8 @@ src/
     │   ├── call_by_name.rs
     │   ├── cons.rs
     │   ├── match_case.rs
+    │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
+    │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
     │   ├── type_call.rs
     │   ├── type_ops.rs            LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF
     │   ├── union.rs

@@ -1,6 +1,7 @@
 use crate::machine::model::{KObject, Parseable};
 use crate::machine::{
-    BodyResult, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId, ResolveOutcome, Scope,
+    BodyResult, CatchFinish, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId,
+    ResolveOutcome, Scope,
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
@@ -104,6 +105,35 @@ impl<'a> Scheduler<'a> {
         let dep_indices: Vec<usize> = deps.iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
         self.reclaim_deps(idx, dep_indices);
+        match body {
+            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
+                work: NodeWork::Dispatch(expr),
+                frame,
+                function,
+            },
+            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
+            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        }
+    }
+
+    /// Run a `Catch` slot: read `from`'s terminal as a `Result`, hand it to `finish`, and
+    /// decode the returned `BodyResult` the same way `run_combine` does. Unlike Combine,
+    /// an errored `from` does not short-circuit; the finish closure decides whether to
+    /// recover (TRY-WITH's per-arm dispatch) or re-raise. `from` is freed on both paths.
+    pub(super) fn run_catch(
+        &mut self,
+        from: NodeId,
+        finish: CatchFinish<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.clone_for_propagation()),
+        };
+        let body = finish(scope, self, result);
+        self.reclaim_deps(idx, vec![from.index()]);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
             BodyResult::Tail { expr, frame, function } => NodeStep::Replace {

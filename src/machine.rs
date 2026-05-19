@@ -13,7 +13,8 @@ pub(crate) mod execute;
 pub mod model;
 
 pub use core::kfunction::{
-    ArgumentBundle, Body, BodyResult, CombineFinish, KFunction, NodeId, SchedulerHandle,
+    ArgumentBundle, Body, BodyResult, CatchFinish, CombineFinish, KFunction, NodeId,
+    SchedulerHandle,
 };
 pub(crate) use core::kfunction::substitute_params;
 pub use core::{

@@ -1,4 +1,4 @@
-use crate::machine::{CombineFinish, NodeId, Scope};
+use crate::machine::{CatchFinish, CombineFinish, NodeId, Scope};
 use crate::machine::model::ast::KExpression;
 
 use super::super::nodes::{Node, NodeWork};
@@ -45,6 +45,16 @@ impl<'a> Scheduler<'a> {
         finish: CombineFinish<'a>,
     ) -> NodeId {
         self.add(NodeWork::Combine { deps, finish }, scope)
+    }
+
+    /// Schedule a `Catch` slot. See `SchedulerHandle::add_catch`.
+    pub fn add_catch(
+        &mut self,
+        from: NodeId,
+        scope: &'a Scope<'a>,
+        finish: CatchFinish<'a>,
+    ) -> NodeId {
+        self.add(NodeWork::Catch { from, finish }, scope)
     }
 
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {

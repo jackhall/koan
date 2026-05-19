@@ -6,21 +6,27 @@ type-system and dispatcher decisions for one constrain the others. See
 [design/error-handling.md](../../design/error-handling.md) for the shipped
 substrate and the privilege-boundary principle.
 
-**Problem.** Today's `KError` channel propagates every error kind
-uniformly, but user code has no way to construct, hold, or handle errors.
-The `User` `KErrorKind` arm is a placeholder with no constructor and no
-matcher. There is no typed surface for "which user errors may this
-function raise."
+**Problem.** User code has no in-language error-handling surface. The
+primary user-side story — a function returns `Result<Ty, Er>` for a
+user-defined error type `Er`, callers destructure with a match-form —
+needs a stdlib `Result` module that doesn't exist yet (it depends on
+functors, which have shipped but have no library built on them). With no
+`Result`, user code can't name what it may fail with in its signature,
+can't bind an error via `LET`, and can't pass one as an arg. The shipped
+`TRY-WITH` recovers from interpreter faults but is not that surface; its
+`user` arm has no constructor on the user side, so even the bridge from
+user code into the catch machinery is open. Frames are textual summaries
+— no `file:line`. A top-level failure ends the session.
 
 **Impact.**
 
-- *In-language error handling.* User code recovers from runtime errors and
-  resumes execution.
 - *Typed user-error returns.* A function's signature carries which
   user-error values it may raise via `Result<Ty, Er>`, so callers reason
   locally and the type system enforces the discipline.
+- *Errors as first-class values.* User code holds and inspects error
+  values via `LET` and passes them as arguments.
 - *Privilege boundary.* User code cannot impersonate runtime errors; the
-  bridge from builtin to user is explicit catch-and-reraise inside a match
+  bridge from builtin to user is explicit catch-and-reraise inside a TRY
   arm.
 - *Locatable error frames.* Frames carry `file:line` rather than textual
   summaries.
@@ -38,11 +44,12 @@ function raise."
   raise user errors returns `Result<Ty, Er>` for a user-defined error type
   `Er`. `RAISE` produces a value of `Er`; the runtime carries it as
   `KErrorKind::User(KObject)` through the propagation channel above.
-- *Catch as non-exhaustive match — decided.* Arms cover whichever builtin
-  kinds and user-error variants the caller wants to handle; anything else
-  continues to propagate. A catch arm may construct a user-error value and
-  reraise — the only mechanism by which a builtin error is lifted into the
-  type system.
+- *Catch as non-exhaustive match — decided per
+  [design/error-handling.md](../../design/error-handling.md).* The shipped
+  `TRY-WITH` form covers the builtin kinds and a `user` arm; the open
+  stdlib work below extends the `user` arm to user-defined variants. A
+  catch arm may construct a user-error value and reraise — the only
+  mechanism by which a builtin error is lifted into the type system.
 - *"Type-language binder expected" diagnostic vocabulary — open.* The
   bare-leaf arm of `elaborate_type_expr` rejects identifier-class names
   in type-position slots (shipped substrate; see
@@ -61,13 +68,10 @@ design choices:
   `LET` and pass as args. Substrate for the typed surface; needs the
   dispatcher to either short-circuit through error-typed slots or splice
   errors into them.
-- *`Result<Ty, Er>` as a functor.* A functor-produced module over the
-  shipped module-system substrate
+- *stdlib `Result<Ty, Er>` module (depends on functors).* A
+  functor-produced module over the shipped module-system substrate
   ([design/typing/functors.md](../../design/typing/functors.md));
-  the typed user-error surface consumes it.
-- *Catch-builtins.* The match-form surface. Pattern arms over selected
-  `KErrorKind` variants and over the user-error type's variants, with
-  unmatched arms propagating. Requires errors-as-values and `Result<Ty, Er>`.
+  the typed user-error surface consumes it and feeds TRY's `user` arm.
 - *`RAISE expr` builtin* to construct a `KErrorKind::User(KObject)` from
   a user-error value. Requires errors-as-values and `Result<Ty, Er>` so the
   value has a typed home.
@@ -78,8 +82,10 @@ design choices:
 
 ## Dependencies
 
-**Requires:** none — `Result<Ty, Er>` runs against the shipped
-module-system substrate; errors-as-values, source spans, and
-continue-on-error are independent of the type-system work.
+**Requires:** none — `Result<Ty, Er>` and `RAISE` extend the shipped
+TRY-WITH surface (see [design/error-handling.md](../../design/error-handling.md))
+through its `user` arm and need stdlib functors;
+errors-as-values, source spans, and continue-on-error are
+independent of both.
 
 **Unblocks:** none.

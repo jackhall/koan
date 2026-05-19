@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
+use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
 use crate::machine::model::ast::KExpression;
 
 use super::nodes::NodeWork;
@@ -111,6 +111,15 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         finish: CombineFinish<'a>,
     ) -> NodeId {
         Scheduler::add_combine(self, deps, scope, finish)
+    }
+
+    fn add_catch(
+        &mut self,
+        from: NodeId,
+        scope: &'a Scope<'a>,
+        finish: CatchFinish<'a>,
+    ) -> NodeId {
+        Scheduler::add_catch(self, from, scope, finish)
     }
 
     /// Active slot's frame `Rc<CallArena>`, set by `execute` for the duration of each

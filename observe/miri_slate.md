@@ -2,6 +2,7 @@
 
 <!-- slate-fingerprint
 src/builtins/match_case.rs: 2
+src/builtins/try_with.rs: 2
 src/machine/core/arena.rs: 19
 src/machine/core/kfunction.rs: 1
 src/machine/core/kfunction/invoke.rs: 1
@@ -85,6 +86,13 @@ violation if the queue/drain discipline regresses.)
 user-fn recurses through a `Tagged` parameter via MATCH.
 
 - `recursive_tagged_match_no_uaf`
+
+**TRY-WITH inside TCO position** ([src/builtins/try_with.rs](../src/builtins/try_with.rs)) — same
+`(inner_arena, child)` re-anchor as MATCH for the per-branch frame; the
+`outer_frame` chain keeps the call-site arena alive when the branch body
+tail-calls back through the enclosing user-fn.
+
+- `try_inside_tco_position_preserves_frame_chain`
 
 **KFuture anchor decision** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the targeted anchor: a KFuture
 whose descendants don't borrow into the dying arena lifts with `frame: None`;

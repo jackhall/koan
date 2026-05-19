@@ -36,7 +36,7 @@ pub use argument_bundle::ArgumentBundle;
 pub use body::{Body, BodyResult, BuiltinFn, PreRunFn};
 pub(crate) use invoke::substitute_params;
 pub use pick::ClassifiedSlots;
-pub use scheduler_handle::{CombineFinish, NodeId, SchedulerHandle};
+pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
 /// A callable Koan function: signature, body, and the lexical environment captured at
 /// definition time (the scope that ran the `FN ...` form, or run-root for builtins).
