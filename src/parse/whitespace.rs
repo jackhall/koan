@@ -1,6 +1,13 @@
 //! Second parse pass: collapse indentation-based blocks into parenthesized form. Reads the
-//! masked output of `quotes` and produces a paren-structured string consumed by
+//! masked **byte** output of `quotes` (which is valid UTF-8 — see `quotes` for the marker
+//! encoding) and produces a paren-structured **byte** stream consumed by
 //! `expression_tree::build_tree`.
+//!
+//! Phase 2: the input/output types switch to `&[u8]` / `Vec<u8>`, but the line-collapse
+//! logic still operates over `&str` internally. The in-band LITERAL/JUMP markers from
+//! `mask_quotes` are non-whitespace ASCII C0 bytes (0x1D–0x1F), so they pass through the
+//! whitespace-aware logic untouched. Phase 3 will rewrite this to emit its own JUMP
+//! markers at line/synthetic-char boundaries.
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
@@ -18,7 +25,13 @@
 /// expression. Parens (`(`) are intentionally *not* tracked the same way — they already wrap
 /// sub-expressions inside indent-structured blocks, so suspending on them would change the
 /// meaning of existing programs. Blank lines preserve the continuation flag.
-pub fn collapse_whitespace(input: &str) -> Result<String, String> {
+pub fn collapse_whitespace(input: &[u8]) -> Result<Vec<u8>, String> {
+    let s = std::str::from_utf8(input)
+        .map_err(|_| "collapse_whitespace expected UTF-8 input".to_string())?;
+    collapse_str(s).map(String::into_bytes)
+}
+
+fn collapse_str(input: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut stack: Vec<usize> = Vec::new();
     let mut delim_depth: i32 = 0;

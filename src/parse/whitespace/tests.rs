@@ -1,4 +1,12 @@
-use super::collapse_whitespace;
+use super::collapse_whitespace as collapse_bytes;
+
+/// Test shim: keep the readable `&str` → `String` ergonomics from the pre-Phase-2 API.
+/// The pass itself now operates on `&[u8]` / `Vec<u8>`; converting through `String`
+/// here means failure to round-trip through UTF-8 surfaces as a panic on the test
+/// boundary instead of an unwrap-in-the-pass.
+fn collapse_whitespace(input: &str) -> Result<String, String> {
+    collapse_bytes(input.as_bytes()).map(|v| String::from_utf8(v).expect("UTF-8 in test"))
+}
 
 #[test]
 fn empty_input() {
