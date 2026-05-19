@@ -92,6 +92,32 @@ band a push lands in) and the priority rule (which band a pop drains first)
 are both enforced by the wrapper's method surface rather than restated at each
 call site.
 
+## Working-copy splice
+
+The scheduler dispatches each expression by mutating an **owned working
+copy** of it. `run_dispatch` extracts every nested sub-expression out of
+the parent's `parts` (replacing each with a placeholder `Identifier`),
+spawns it as a sub-Dispatch, and parks the parent as
+`NodeWork::Bind { expr: rewritten_expr, subs }`. When the subs terminalize,
+`run_bind` writes each result back into the parent: `expr.parts[part_idx]
+= ExpressionPart::Future(value)`. The assembled `Future`-laden expression
+then goes through `resolve_dispatch` as if it had been written with
+literals.
+
+Source-of-truth ASTs are never mutated. The working copy is cloned from
+its source at slot-submission time — `KFunction::invoke` clones the FN
+body, `match_case::body` and `try_with` clone their picked arm, top-level
+expressions move into the slot at `add_dispatch`. The splice mutates the
+slot-owned copy and nothing else; the next call to the same FN clones the
+body fresh.
+
+The splice gives typed-slot dispatch a uniform input shape: sub-Dispatch
+results land in the same positions as literals would, so the
+slot-specificity scoring path is unified across builtins, user-fns, and
+pre-evaluated sub-expressions. The cost — body clone per call, one slot
+per nested `(...)` — and what it buys are detailed in
+[Performance characteristics](#performance-characteristics).
+
 ## Tail-call optimization
 
 [`BodyResult::Tail(KExpression)`](../src/machine/core/kfunction.rs) makes a tail
@@ -387,6 +413,83 @@ types (e.g. `KKey` returns `Result<KKey, String>` rather than
 naming `KError`), and the runtime-reference variants of `KObject`
 sit on the boundary by necessity, naming the `core` types they
 genuinely need.
+
+## Performance characteristics
+
+The slot-based scheduler trades constant-factor speed for behaviors a
+recursive tree-walker can't get cheaply.
+
+### Where time goes
+
+- **Per AST node touched.** Each nested `(...)` becomes its own slot.
+  Cost: `NodeStore::alloc_slot` (pop a free-list index or extend three
+  parallel vectors), `DepGraph::install_for_slot` (write a `dep_edges`
+  entry + bump `pending_deps` on the parent + push into the producer's
+  `notify_list`), and a work-queue push. On the consumer side, the
+  symmetric drain: terminal write, `drain_notify`, decrement counters,
+  push the woken consumer onto the run-set. Compared to a recursive
+  function call on a `&KExpression`, this is roughly an order of
+  magnitude more bookkeeping per node.
+- **Per user-fn call.** `KFunction::invoke` clones the body
+  (`expr.clone()` over the parts vector) so the slot has its own
+  working copy for [the splice mechanism](#working-copy-splice).
+  Clone cost is O(body size). It also acquires a per-call frame —
+  either reusing the prev-step's `CallArena` shell via
+  `try_reset_for_tail` (see [memory-model.md § Tail-step frame
+  reuse](memory-model.md#tail-step-frame-reuse)) or allocating a fresh
+  one. The reuse path is allocation-free; the fresh path heap-allocates
+  one `Rc<CallArena>` plus six `typed_arena::Arena::new()` pools.
+- **Per dep-result splice.** O(1) write into `expr.parts`.
+- **Per terminal.** Single `notify_list` drain. The cost scales with
+  the producer's dependent count, which is typically 1 (the parent
+  Bind/Combine) but unbounded in principle (forward-reference parks).
+
+### What amortizes
+
+- **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
+  during `run_bind` / `run_combine` / `run_catch`, and `add()` pulls
+  from the free-list before extending the underlying vectors. A
+  steady-state recursive body reuses the same slot indices across
+  iterations; `body_subexpression_slots_recycle_across_calls` pins the
+  bound at ≤3 net slots/call.
+- **Tail-call slot rewrite.** `BodyResult::Tail` rewrites the current
+  slot's work in place rather than allocating a new one — one slot
+  for an arbitrarily deep tail-call chain.
+- **Tail-step frame reuse.** When the prev step's `CallArena` is
+  uniquely owned, `try_reset_for_tail` swaps its inner `RuntimeArena`
+  for a fresh one and re-binds — no `Rc<CallArena>` box allocation,
+  no `Scope` re-anchoring through the heap. See
+  [memory-model.md § Tail-step frame reuse](memory-model.md#tail-step-frame-reuse).
+
+### Vs a tree-walking interpreter
+
+A recursive descent on `&KExpression` would skip the slot table, edge
+bookkeeping, and body clone — probably 5-10× faster on tight numeric
+loops. What it can't do cheaply:
+
+- **TCO.** Direct recursion grows the host stack; the koan model
+  rewrites a slot in place. A tree-walker needs explicit trampolining
+  with a worklist (which is roughly the slot table reinvented).
+- **Forward references.** `LET y = (x); LET x = …` parks `y`'s
+  sub-Dispatch on `x`'s producer via `Resolution::Placeholder` and
+  wakes when `x` finalizes. A tree-walker would need a pre-pass to
+  resolve names or fail on out-of-order definitions.
+- **Replay-park on pending types.** Type-elaboration can suspend on a
+  not-yet-finalized type, rejoin when it lands, and re-run the
+  dispatch — without re-evaluating already-computed sub-expressions or
+  blocking the host thread.
+- **Reclaim semantics.** Transient sub-slots free as soon as their
+  parent has consumed them. A tree-walker's stack frames can't
+  selectively reclaim mid-call; everything dies together at function
+  return.
+- **Unified dispatch model.** Slot-specificity scoring runs through
+  one `resolve_dispatch` path for builtins, user-fns, and
+  pre-evaluated sub-expression results (`Future(&KObject)` typed-slot
+  inputs). A tree-walker would need separate evaluation rules for
+  literals, arguments, and intermediate results.
+
+The constant factor is the price; the behaviors above are what bought
+it.
 
 ## Open work
 

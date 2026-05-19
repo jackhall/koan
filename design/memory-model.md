@@ -5,6 +5,53 @@ work allocates into the **run-root arena**; each user-fn call gets its own
 **per-call `RuntimeArena`** owned by [`CallArena`](../src/machine/core/arena.rs),
 freed when the call's slot finalizes.
 
+## Storage shape: a graph of arena slots
+
+A `RuntimeArena` holds six `typed_arena`-backed sub-arenas — for `KObject`,
+`KFunction`, `Scope`, `Module`, `Signature`, and `KType`. Slots have stable
+heap addresses; the runtime carries cross-references between them rather
+than ownership trees. The structural edges:
+
+- `Scope.outer: Option<&'a Scope<'a>>` — the lexical-parent chain. Many
+  sibling scopes can share one outer, so the in-degree is unbounded.
+- `Scope.arena: &'a RuntimeArena` — back-pointer to the owning arena.
+- [`Bindings.data`](../src/machine/core/bindings.rs) maps each bound name
+  to a `&'a KObject<'a>`. The pointee may live in this scope's arena or in
+  an outer one.
+- [`KFunction.captured`](../src/machine/core/kfunction.rs) holds
+  `NonNull<Scope<'a>>` — the closure's definition scope. Multiple
+  `KFunction`s share one captured scope when they were defined in the same
+  body.
+- `KObject::KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>)` and
+  `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` carry both a value-side
+  reference to a function-arena slot and an optional `Rc<CallArena>` anchor
+  to the per-call arena that owns the function's captured scope.
+- `Module` and `Signature` cache `*const Scope<'static>` pointers to their
+  declaration scopes (heap-pinned by the surrounding arena chain).
+
+**Directionality rule.** References go inward freely — a per-call arena's
+slots may point at run-root slots, because the run-root arena outlives every
+per-call arena by the lexical-scoping invariant. References that need to
+point *outward* — a lifted value referencing a slot in a dying per-call
+arena — must carry an `Rc<CallArena>` anchor on the value (or its enclosing
+variant) so the per-call arena survives. The lift machinery (see Closure
+escape, below) enforces this at the arena boundary.
+
+**Why graph rather than tree.** Many-to-one captures and bindings, sibling
+scopes sharing an outer, mutual references between a `Scope` and its
+arena's `scopes` sub-arena, and cross-arena `Rc<CallArena>` anchors all
+break tree shape. Slots are added incrementally as the program runs;
+references can be installed before or after the pointee exists (forward
+declarations, replay-park edges). This is the structural backdrop for the
+two patterns below — the cycle gate exists because the directionality rule
+allows one specific outward cycle, and the frame-chain `Rc` exists because
+some builtin-built frames have outer pointers that aren't lexical.
+
+The graph shape is also why the runtime stores `*const T<'static>` and
+transmutes on access: a self-referential graph of incrementally added
+slots with cross-references doesn't fit the one-owner-builds-one-dependent
+shape that self-referential-struct crates model.
+
 ## Scoping: lexical
 
 Free names in a user-fn body resolve through the function's **definition**
@@ -207,13 +254,17 @@ invariant (every forward edge in `notify_list[p]` matched by a backward
 `dep_edges[c]` entry and a +1 in `pending_deps[c]`) is enforced by the
 surface rather than by convention.
 
-Transient-node reclamation runs at the end of `run_bind` / `run_combine`:
-once a Bind has spliced its dep results into `expr.parts` (or a Combine's
-finish closure has produced its result), `Scheduler::free` walks the consumer's
-edges via `DepGraph::owned_children` and invokes `NodeStore::free_one` per
-reclaimed index. The walk only yields `DepEdge::Owned` arms (`Notify` arms
-are filtered inside `DepGraph`), so reclaiming a consumer cannot reach a
-sibling producer's subtree through a park edge. It skips any still-live slot
+Transient-node reclamation runs through `Scheduler::reclaim_deps` from
+each of the three dep-consuming steps: `run_bind` (after splicing dep
+results into `expr.parts` as `ExpressionPart::Future`, *before* resolving
+and dispatching the bound expression — so the dispatched body's `add()`
+can recycle the freed indices immediately), `run_combine` (after the
+finish closure returns), and `run_catch` (after its finish handles the
+watched slot's terminal). `reclaim_deps` clears `dep_edges[idx]` and
+invokes `Scheduler::free` per dep index; the walk follows `DepGraph::owned_children`,
+which only yields `DepEdge::Owned` arms (`Notify` arms are filtered
+inside `DepGraph`), so reclaiming a consumer cannot reach a sibling
+producer's subtree through a park edge. It skips any still-live slot
 via the `NodeStore::is_live` guard, so a free that dives into another
 in-flight user-fn call leaves that subtree for that call's own reclamation.
 
