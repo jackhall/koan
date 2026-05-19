@@ -1,7 +1,5 @@
 use std::rc::Rc;
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-
 use crate::machine::core::{
     CallArena, KError, KErrorKind, ResolveTypeExprOutcome, RuntimeArena, Scope,
 };
@@ -31,13 +29,11 @@ enum PerCallReturnType {
 
 impl<'a> KFunction<'a> {
     /// Run this function's body for an already-bound call. User-defined functions
-    /// allocate a per-call child scope, bind parameters into it, substitute parameter
-    /// Identifiers in a body clone with `Future(value)`, and return a tail-call so
-    /// the caller's slot is rewritten in place.
+    /// allocate a per-call child scope, bind parameters into it, and return a tail-call
+    /// so the caller's slot is rewritten in place.
     ///
-    /// The child scope and substitution are complementary: substitution covers parameter
-    /// references in typed-slot positions, the child scope covers Identifier-slot lookups
-    /// (`(x)` parens-wrapped) and is the substrate for closure capture.
+    /// Parameter references resolve against the per-call child scope at dispatch time;
+    /// the same scope is the substrate for closure capture.
     ///
     /// Lifetime: the per-call `child` scope and `inner_arena` are re-anchored to `'a` —
     /// the outer slot-storage lifetime — by one consolidated `unsafe` block. The witness
@@ -93,7 +89,7 @@ impl<'a> KFunction<'a> {
                         }
                     }
                 }
-                let substituted = substitute_params(expr.clone(), &bundle, inner_arena);
+                let body_expr = expr.clone();
 
                 // Deferred return-type path: the per-call return type isn't known
                 // statically. `TypeExpr` is elaborated inline against `child`;
@@ -103,7 +99,7 @@ impl<'a> KFunction<'a> {
                 // per-call return-type check.
                 match &self.signature.return_type {
                     ReturnType::Resolved(_) => {
-                        BodyResult::tail_with_frame(substituted, frame, self)
+                        BodyResult::tail_with_frame(body_expr, frame, self)
                     }
                     ReturnType::Deferred(d) => {
                         let per_call_ret: PerCallReturnType = match d {
@@ -144,7 +140,7 @@ impl<'a> KFunction<'a> {
                         };
                         let mut bid = None;
                         sched.with_active_frame(frame.clone(), &mut |s| {
-                            bid = Some(s.add_dispatch(substituted.clone(), child));
+                            bid = Some(s.add_dispatch(body_expr.clone(), child));
                         });
                         let body_id = bid.expect("body dispatch must spawn");
 
@@ -290,55 +286,3 @@ pub(crate) fn type_identity_for<'a>(
     }
 }
 
-/// Replace every `Identifier(name)` in `expr` whose name is in `bundle.args` with a
-/// `Future(value)` allocated in `arena`. Recurses into nested composite parts.
-pub(crate) fn substitute_params<'a>(
-    expr: KExpression<'a>,
-    bundle: &ArgumentBundle<'a>,
-    arena: &'a RuntimeArena,
-) -> KExpression<'a> {
-    KExpression {
-        parts: expr
-            .parts
-            .into_iter()
-            .map(|p| substitute_part(p, bundle, arena))
-            .collect(),
-    }
-}
-
-fn substitute_part<'a>(
-    part: ExpressionPart<'a>,
-    bundle: &ArgumentBundle<'a>,
-    arena: &'a RuntimeArena,
-) -> ExpressionPart<'a> {
-    match part {
-        ExpressionPart::Identifier(name) => match bundle.get(&name) {
-            Some(value) => {
-                let allocated: &'a KObject<'a> = arena.alloc_object(value.deep_clone());
-                ExpressionPart::Future(allocated)
-            }
-            None => ExpressionPart::Identifier(name),
-        },
-        ExpressionPart::Expression(boxed) => {
-            ExpressionPart::Expression(Box::new(substitute_params(*boxed, bundle, arena)))
-        }
-        ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(
-            items
-                .into_iter()
-                .map(|p| substitute_part(p, bundle, arena))
-                .collect(),
-        ),
-        ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(
-            pairs
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        substitute_part(k, bundle, arena),
-                        substitute_part(v, bundle, arena),
-                    )
-                })
-                .collect(),
-        ),
-        other => other,
-    }
-}

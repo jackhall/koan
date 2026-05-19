@@ -1,9 +1,7 @@
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
-use crate::machine::substitute_params;
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::branch_walk::find_branch_body;
@@ -21,11 +19,10 @@ use super::{arg, err, kw, register_builtin, sig};
 /// matches it is the literal `true` or `false` (which the parser tokenizes as
 /// `KLiteral::Boolean`, accepted here in the same position). The body of the first
 /// branch whose tag matches `value.tag` is dispatched as a tail expression; the others
-/// are never touched. `it` is bound to the inner value in a per-MATCH child scope
-/// (and substituted into Identifier-typed positions of the body), modeled on
-/// `KFunction::invoke`'s per-call frame so the binding doesn't leak into the
-/// surrounding scope. For `Bool` matches `it` is `Null` — accurate, since there is no
-/// payload.
+/// are never touched. `it` is bound to the inner value in a per-MATCH child scope,
+/// modeled on `KFunction::invoke`'s per-call frame so the binding doesn't leak into
+/// the surrounding scope. For `Bool` matches `it` is `Null` — accurate, since there
+/// is no payload.
 ///
 /// No matching branch → `ShapeError("inexhaustive match = no branch for `X`")` — same
 /// rule for `Bool` as for `Tagged`, so `MATCH cond WITH (true -> ...)` against a
@@ -88,13 +85,10 @@ pub fn body<'a>(
     // Fresh per-call child scope: the `it` binding never collides. `bind_value`'s rebind
     // check therefore always passes; the `_` swallow is intentional.
     let _ = child.bind_value("it".to_string(), it_obj);
-    let mut it_bundle = ArgumentBundle { args: HashMap::new() };
-    it_bundle.args.insert("it".to_string(), Rc::new(value.deep_clone()));
-    let substituted = substitute_params(branch_body, &it_bundle, inner_arena);
     // Construct the Tail variant directly. `tail_with_frame` requires a `&KFunction` for
     // return-type enforcement and error-frame attribution; MATCH has no meaningful
     // function to attach (declared return is `Any`, so the check would be a no-op).
-    BodyResult::Tail { expr: substituted, frame: Some(frame), function: None }
+    BodyResult::Tail { expr: branch_body, frame: Some(frame), function: None }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

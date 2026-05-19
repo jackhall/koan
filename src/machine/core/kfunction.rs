@@ -10,8 +10,8 @@
 //!   slot-extraction helpers used by binder builtins.
 //! - [`scheduler_handle`] — `NodeId`, the `SchedulerHandle` trait, and `CombineFinish`.
 //! - [`body`] — `BodyResult`, `BuiltinFn`, `PreRunFn`, and the `Body` enum.
-//! - [`invoke`] — `KFunction::invoke` (the body-runner) and `substitute_params` (the
-//!   parameter-Identifier rewriter user-fn bodies use on entry).
+//! - [`invoke`] — `KFunction::invoke` (the body-runner) that binds parameters into a
+//!   per-call child scope and returns a tail-call.
 //! - [`pick`] — dispatch-shape classification (`accepts_for_wrap`,
 //!   `classify_for_pick`, `ClassifiedSlots`) used by `resolve_dispatch`.
 
@@ -34,7 +34,6 @@ pub mod scheduler_handle;
 
 pub use argument_bundle::ArgumentBundle;
 pub use body::{Body, BodyResult, BuiltinFn, PreRunFn};
-pub(crate) use invoke::substitute_params;
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 

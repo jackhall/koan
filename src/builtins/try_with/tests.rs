@@ -170,13 +170,13 @@ fn nested_try_catches_inner_separately_from_outer() {
 
 #[test]
 fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
-    // `substitute_params` rewrites every Identifier("it") in the branch body to a
-    // Future at branch-dispatch time, so any direct mention of `it` works without a
-    // scope-side binding. This test routes around substitution: `q` captures `(it)`
-    // at the top level (where `it` is not in scope, but QUOTE doesn't evaluate), then
-    // the branch body EVAL's `q`. EVAL resolves names against the call-site scope at
-    // run time — only the per-TRY child scope's `it` binding can satisfy the lookup.
-    // If that binding is removed, `it` is unbound when EVAL runs.
+    // `it` in the branch body resolves through the per-TRY child scope's `it`
+    // binding at dispatch time. This test routes through QUOTE/EVAL: `q` captures
+    // `(it)` at the top level (where `it` is not in scope, but QUOTE doesn't
+    // evaluate), then the branch body EVAL's `q`. EVAL resolves names against the
+    // call-site scope at run time — only the per-TRY child scope's `it` binding
+    // can satisfy the lookup. If that binding is removed, `it` is unbound when
+    // EVAL runs.
     let bytes = run_program(
         "LET q = #(it)\n\
          TRY (PRINT \"value\") WITH (\

@@ -16,7 +16,6 @@
 //! arm (per-call `CallArena` for `it`, mirrored from MATCH) or re-raises the original
 //! `KError` on no-match.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType};
@@ -24,7 +23,6 @@ use crate::machine::{
     ArgumentBundle, BodyResult, CallArena, CatchFinish, KError, KErrorKind, RuntimeArena, Scope,
     SchedulerHandle,
 };
-use crate::machine::substitute_params;
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::branch_walk::find_branch_body;
@@ -111,19 +109,14 @@ fn dispatch_branch<'a>(
     // ends before the `frame` move into `BodyResult::Tail`.
     let inner_arena: &'a RuntimeArena = unsafe { &*(arena_ptr as *const _) };
     let child: &'a Scope<'a> = unsafe { &*(scope_ptr as *const _) };
-    // Bind `it` both into the per-call child scope and into the substitution bundle.
-    // Substitution covers every direct `Identifier("it")` in the branch body; the scope-
-    // side binding covers references that route around substitution — e.g. `it` mentioned
-    // inside a top-level-`#`-quoted expression that the branch body EVAL's via `$`, where
-    // the QUOTE captured `Identifier("it")` before any TRY-time substitution could see it.
-    // Pinned by `it_resolves_via_scope_for_eval_of_top_level_quoted_reference`.
-    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(it_value.deep_clone());
+    // Bind `it` into the per-call child scope. Dispatch resolves every `Identifier("it")`
+    // in the branch body — including those reached via EVAL of a top-level-`#`-quote — by
+    // walking from the per-call child to its outer chain. Pinned by
+    // `it_resolves_via_scope_for_eval_of_top_level_quoted_reference`.
+    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(it_value);
     let _ = child.bind_value("it".to_string(), it_obj);
-    let mut it_bundle = ArgumentBundle { args: HashMap::new() };
-    it_bundle.args.insert("it".to_string(), Rc::new(it_value));
-    let substituted = substitute_params(body_expr, &it_bundle, inner_arena);
     let _ = sched;
-    BodyResult::Tail { expr: substituted, frame: Some(frame), function: None }
+    BodyResult::Tail { expr: body_expr, frame: Some(frame), function: None }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

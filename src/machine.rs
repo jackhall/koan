@@ -16,7 +16,6 @@ pub use core::kfunction::{
     ArgumentBundle, Body, BodyResult, CatchFinish, CombineFinish, KFunction, NodeId,
     SchedulerHandle,
 };
-pub(crate) use core::kfunction::substitute_params;
 pub use core::{
     Bindings, CallArena, Frame, KError, KErrorKind, KFuture, ResolveOutcome, Resolution,
     Resolved, RuntimeArena, Scope, ScopeId, ScopeKind,
