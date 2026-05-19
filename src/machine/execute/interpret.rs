@@ -1,5 +1,5 @@
 use crate::builtins::default_scope;
-use crate::machine::{KError, KErrorKind, RuntimeArena};
+use crate::machine::{KError, RuntimeArena};
 use super::scheduler::Scheduler;
 use crate::parse::parse;
 
@@ -14,7 +14,7 @@ pub fn interpret_with_writer(
     source: &str,
     out: Box<dyn std::io::Write>,
 ) -> Result<(), KError> {
-    let exprs = parse(source).map_err(|e| KError::new(KErrorKind::ParseError(e)))?;
+    let exprs = parse(source)?;
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, out);
     let mut scheduler = Scheduler::new();

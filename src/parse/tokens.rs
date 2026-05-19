@@ -22,6 +22,7 @@ use regex::Regex;
 use crate::machine::core::source::{Span, Spanned};
 use crate::machine::model::is_keyword_token;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeExpr};
+use crate::machine::KError;
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
@@ -34,15 +35,18 @@ static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
 /// stays a number rather than being parsed as `(attr 3 14)`); otherwise hands off to
 /// `parse_compound` to desugar member access, indexing, and negation into nested
 /// expressions with sub-spans for each trigger.
-pub fn classify_token<'a>(tok: &str, start: u32) -> Result<Spanned<ExpressionPart<'a>>, String> {
+pub fn classify_token<'a>(tok: &str, start: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     let token_span = Span { start, end: start + tok.len() as u32 };
     if let Some(part) = try_literal(tok) {
         return Ok(Spanned::at(part, token_span));
     }
     let mut chars = tok.char_indices().peekable();
-    let part = parse_compound(&mut chars, start)?;
+    let part = parse_compound(&mut chars, start, token_span)?;
     if let Some(&(_, c)) = chars.peek() {
-        return Err(format!("unexpected {:?} in token {:?}", c, tok));
+        return Err(KError::parse(
+            format!("unexpected {:?} in token {:?}", c, tok),
+            Some(token_span),
+        ));
     }
     Ok(part)
 }
@@ -80,7 +84,7 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
 /// letters and digits; Identifiers also accept `_`. Anything else (e.g. `Number>`, `a@b`) is
 /// rejected as a glue error so symbols can't sneak into a name. Keywords are exempt since
 /// `=`, `->`, and `+` are legitimate keyword shapes.
-fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
+fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, KError> {
     if let Some(part) = try_literal(tok) {
         return Ok(part);
     }
@@ -89,9 +93,12 @@ fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
     }
     if is_type_name(tok) {
         if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric()) {
-            return Err(format!(
-                "type name `{tok}` contains invalid character {bad:?}; \
-                 type names use only letters and digits",
+            return Err(KError::parse(
+                format!(
+                    "type name `{tok}` contains invalid character {bad:?}; \
+                     type names use only letters and digits",
+                ),
+                Some(token_span),
             ));
         }
         return Ok(ExpressionPart::Type(TypeExpr::leaf(tok.to_string())));
@@ -101,16 +108,22 @@ fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
     // or a `K9` shape can't slip in as an Identifier and silently shadow a future
     // type-position binding.
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-        return Err(format!(
-            "token `{tok}` starts with an uppercase letter but classifies as neither a \
-             keyword (needs ≥2 uppercase letters with no lowercase) nor a type name \
-             (needs ≥1 lowercase letter)",
+        return Err(KError::parse(
+            format!(
+                "token `{tok}` starts with an uppercase letter but classifies as neither a \
+                 keyword (needs ≥2 uppercase letters with no lowercase) nor a type name \
+                 (needs ≥1 lowercase letter)",
+            ),
+            Some(token_span),
         ));
     }
     if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric() && *c != '_') {
-        return Err(format!(
-            "identifier `{tok}` contains invalid character {bad:?}; \
-             identifiers use letters, digits, and `_`",
+        return Err(KError::parse(
+            format!(
+                "identifier `{tok}` contains invalid character {bad:?}; \
+                 identifiers use letters, digits, and `_`",
+            ),
+            Some(token_span),
         ));
     }
     Ok(ExpressionPart::Identifier(tok.to_string()))
@@ -138,7 +151,8 @@ fn is_type_name(tok: &str) -> bool {
 fn parse_compound<'a>(
     chars: &mut Peekable<CharIndices>,
     start: u32,
-) -> Result<Spanned<ExpressionPart<'a>>, String> {
+    token_span: Span,
+) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     let mut prefixes: Vec<(UnaryBuild, Span)> = Vec::new();
     while let Some(&(ci, c)) = chars.peek() {
         let Some(build) = find_prefix(c) else { break };
@@ -147,7 +161,7 @@ fn parse_compound<'a>(
         prefixes.push((build, trigger));
     }
 
-    let mut expr = read_atom(chars, start)?;
+    let mut expr = read_atom(chars, start, token_span)?;
 
     while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
@@ -155,7 +169,7 @@ fn parse_compound<'a>(
         let trigger = trigger_span(start, ci, c);
         expr = match op {
             SuffixOp::Infix(build) => {
-                let rhs = read_atom(chars, start)?;
+                let rhs = read_atom(chars, start, token_span)?;
                 build(expr, rhs, trigger)
             }
             SuffixOp::Suffix(build) => build(expr, trigger),
@@ -179,10 +193,16 @@ fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
 fn read_atom<'a>(
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
-) -> Result<Spanned<ExpressionPart<'a>>, String> {
+    token_span: Span,
+) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     let atom_start_ci = match chars.peek() {
         Some(&(ci, _)) => ci,
-        None => return Err("expected identifier, got end of token".to_string()),
+        None => {
+            return Err(KError::parse(
+                "expected identifier, got end of token",
+                Some(token_span),
+            ));
+        }
     };
     let mut s = String::new();
     let mut end_ci = atom_start_ci;
@@ -196,13 +216,16 @@ fn read_atom<'a>(
     }
     if s.is_empty() {
         let next = chars.peek().map(|&(_, c)| c);
-        return Err(format!("expected identifier, got {:?}", next));
+        return Err(KError::parse(
+            format!("expected identifier, got {:?}", next),
+            Some(token_span),
+        ));
     }
     let span = Span {
         start: token_start + atom_start_ci as u32,
         end: token_start + end_ci as u32,
     };
-    classify_atom(&s).map(|part| Spanned::at(part, span))
+    classify_atom(&s, token_span).map(|part| Spanned::at(part, span))
 }
 
 #[cfg(test)]
@@ -239,7 +262,9 @@ mod tests {
     }
 
     fn classify(tok: &str) -> Result<String, String> {
-        classify_token(tok, 0).map(|s| describe(&s.value))
+        classify_token(tok, 0)
+            .map(|s| describe(&s.value))
+            .map_err(|e| e.to_string())
     }
 
     #[test]

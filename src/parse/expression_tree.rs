@@ -22,6 +22,7 @@ use std::collections::HashMap;
 
 use crate::machine::core::source::{Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::KError;
 use crate::parse::quotes::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
 use crate::parse::whitespace::collapse_whitespace;
 
@@ -133,12 +134,12 @@ impl<'a> Reader<'a> {
     /// Consume a `\x1D<digits>\x1D` JUMP marker. The leading sentinel must already be
     /// at the cursor. Snaps `cursor` to the parsed offset and flags `just_jumped` so the
     /// next byte-advance doesn't double-count.
-    fn read_jump(&mut self) -> Result<u32, String> {
+    fn read_jump(&mut self) -> Result<u32, KError> {
         debug_assert_eq!(self.peek_byte(), Some(JUMP_MARK));
         self.pos += 1;
         let value = self.read_decimal(JUMP_MARK, "JUMP marker")?;
         if self.peek_byte() != Some(JUMP_MARK) {
-            return Err("JUMP marker missing closing sentinel".to_string());
+            return Err(KError::parse("JUMP marker missing closing sentinel", None));
         }
         self.pos += 1;
         self.cursor = value;
@@ -150,12 +151,12 @@ impl<'a> Reader<'a> {
     /// must already be at the cursor. Returns `(idx, orig_byte_len)`; the cursor is
     /// *not* advanced — the JUMP that mask_quotes always emits after a literal
     /// re-aligns it past the closing quote.
-    fn read_literal_marker(&mut self) -> Result<(usize, u32), String> {
+    fn read_literal_marker(&mut self) -> Result<(usize, u32), KError> {
         debug_assert_eq!(self.peek_byte(), Some(LITERAL_MARK));
         self.pos += 1;
         let idx = self.read_decimal(LEN_SEP, "LITERAL marker idx")?;
         if self.peek_byte() != Some(LEN_SEP) {
-            return Err("LITERAL marker missing length separator".to_string());
+            return Err(KError::parse("LITERAL marker missing length separator", None));
         }
         self.pos += 1;
         let len = self.read_decimal_until_non_digit("LITERAL marker length")?;
@@ -164,30 +165,33 @@ impl<'a> Reader<'a> {
 
     /// Read ASCII decimal digits up to (but not consuming) `stop`. Errors when the
     /// run is empty or when the digits don't fit in `u32`.
-    fn read_decimal(&mut self, stop: u8, label: &str) -> Result<u32, String> {
+    fn read_decimal(&mut self, stop: u8, label: &str) -> Result<u32, KError> {
         let start = self.pos;
         while let Some(b) = self.peek_byte() {
             if b == stop {
                 break;
             }
             if !b.is_ascii_digit() {
-                return Err(format!("{label}: non-digit byte {b:#x} in payload"));
+                return Err(KError::parse(
+                    format!("{label}: non-digit byte {b:#x} in payload"),
+                    None,
+                ));
             }
             self.pos += 1;
         }
         let digits = &self.bytes[start..self.pos];
         if digits.is_empty() {
-            return Err(format!("{label}: empty decimal payload"));
+            return Err(KError::parse(format!("{label}: empty decimal payload"), None));
         }
         std::str::from_utf8(digits)
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
-            .ok_or_else(|| format!("{label}: invalid decimal payload"))
+            .ok_or_else(|| KError::parse(format!("{label}: invalid decimal payload"), None))
     }
 
     /// Read ASCII decimal digits until the next non-digit byte (or EOF). Errors when
     /// the run is empty or when the digits don't fit in `u32`.
-    fn read_decimal_until_non_digit(&mut self, label: &str) -> Result<u32, String> {
+    fn read_decimal_until_non_digit(&mut self, label: &str) -> Result<u32, KError> {
         let start = self.pos;
         while let Some(b) = self.peek_byte() {
             if !b.is_ascii_digit() {
@@ -197,19 +201,19 @@ impl<'a> Reader<'a> {
         }
         let digits = &self.bytes[start..self.pos];
         if digits.is_empty() {
-            return Err(format!("{label}: empty decimal payload"));
+            return Err(KError::parse(format!("{label}: empty decimal payload"), None));
         }
         std::str::from_utf8(digits)
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
-            .ok_or_else(|| format!("{label}: invalid decimal payload"))
+            .ok_or_else(|| KError::parse(format!("{label}: invalid decimal payload"), None))
     }
 }
 
 pub fn build_tree<'a>(
     masked: &[u8],
     quotes: &HashMap<usize, String>,
-) -> Result<KExpression<'a>, String> {
+) -> Result<KExpression<'a>, KError> {
     let mut stack = ParseStack::new();
     let mut buf = String::new();
     let mut token_start: Option<u32> = None;
@@ -231,19 +235,25 @@ pub fn build_tree<'a>(
 
         let c = reader
             .peek_char()
-            .ok_or_else(|| "malformed UTF-8 in masked stream".to_string())?;
+            .ok_or_else(|| KError::parse("malformed UTF-8 in masked stream", None))?;
 
         if let Some((s, _)) = pending_sigil {
             if c != '(' {
-                return Err(format!("expected '(' after '{s}', found '{c}'"));
+                return Err(KError::parse(
+                    format!("expected '(' after '{s}', found '{c}'"),
+                    None,
+                ));
             }
         }
 
         match c {
             '#' | '$' => {
                 if !buf.is_empty() {
-                    return Err(format!(
-                        "'{c}' sigil must be preceded by whitespace or '(' (got token char {prev:?})"
+                    return Err(KError::parse(
+                        format!(
+                            "'{c}' sigil must be preceded by whitespace or '(' (got token char {prev:?})"
+                        ),
+                        None,
                     ));
                 }
                 let sigil_cursor = reader.cursor;
@@ -277,9 +287,9 @@ pub fn build_tree<'a>(
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 reader.advance_byte();
                 let end = reader.cursor;
-                let frame = stack
-                    .pop_top()
-                    .ok_or_else(|| "closed paren without matching open paren".to_string())?;
+                let frame = stack.pop_top().ok_or_else(|| {
+                    KError::parse("closed paren without matching open paren", None)
+                })?;
                 stack.push_part(close_paren_to_part(frame, end)?);
             }
             '[' => {
@@ -382,22 +392,25 @@ pub fn build_tree<'a>(
                         Some(_) => {
                             let next_char = reader.peek_char().unwrap_or('?');
                             if next_char.is_whitespace() {
-                                return Err(
+                                return Err(KError::parse(
                                     "':' must be glued to its operand at a type position; \
-                                     write `name :Type` (no space after `:`) or `:(List ...)`"
-                                        .to_string(),
-                                );
+                                     write `name :Type` (no space after `:`) or `:(List ...)`",
+                                    None,
+                                ));
                             }
-                            return Err(format!(
-                                "':' must be followed by a type name (uppercase-leading) or `(`; \
-                                 got `{next_char}`"
+                            return Err(KError::parse(
+                                format!(
+                                    "':' must be followed by a type name (uppercase-leading) or `(`; \
+                                     got `{next_char}`"
+                                ),
+                                None,
                             ));
                         }
                         None => {
-                            return Err(
-                                "trailing ':' at end of input; expected a type name or `(`"
-                                    .to_string(),
-                            );
+                            return Err(KError::parse(
+                                "trailing ':' at end of input; expected a type name or `(`",
+                                None,
+                            ));
                         }
                     }
                 }
@@ -457,13 +470,18 @@ pub fn build_tree<'a>(
                         let (idx, _orig_byte_len) = reader.read_literal_marker()?;
                         match reader.peek_byte() {
                             Some(byte) if byte == open_byte => reader.advance_byte(),
-                            _ => return Err(format!("unclosed quote: {}", open_byte as char)),
+                            _ => {
+                                return Err(KError::parse(
+                                    format!("unclosed quote: {}", open_byte as char),
+                                    None,
+                                ));
+                            }
                         }
                         if reader.peek_byte() == Some(JUMP_MARK) {
                             reader.read_jump()?;
                         }
                         let literal = quotes.get(&idx).cloned().ok_or_else(|| {
-                            format!("unknown literal placeholder index: {idx}")
+                            KError::parse(format!("unknown literal placeholder index: {idx}"), None)
                         })?;
                         let span = Span { start: literal_open_cursor, end: reader.cursor };
                         stack.push_part(Spanned::at(
@@ -471,7 +489,12 @@ pub fn build_tree<'a>(
                             span,
                         ));
                     }
-                    _ => return Err(format!("unclosed quote: {}", open_byte as char)),
+                    _ => {
+                        return Err(KError::parse(
+                            format!("unclosed quote: {}", open_byte as char),
+                            None,
+                        ));
+                    }
                 }
             }
             c if c.is_whitespace() => {
@@ -489,7 +512,10 @@ pub fn build_tree<'a>(
         prev = Some(c);
     }
     if let Some((s, _)) = pending_sigil {
-        return Err(format!("trailing '{s}' sigil at end of input; expected '('"));
+        return Err(KError::parse(
+            format!("trailing '{s}' sigil at end of input; expected '('"),
+            None,
+        ));
     }
     flush_token(&mut stack, &mut buf, &mut token_start)?;
     stack.finish()
@@ -540,7 +566,7 @@ fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
 }
 
 /// Public entry point: returns one `KExpression` per top-level line.
-pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
+pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, KError> {
     let (masked, quotes) = mask_quotes(input);
     let collapsed = collapse_whitespace(&masked)?;
     let root = build_tree(&collapsed, &quotes)?;
@@ -548,7 +574,10 @@ pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
         .into_iter()
         .map(|part| match part.value {
             ExpressionPart::Expression(e) => Ok(peel_redundant(*e)),
-            other => Err(format!("unexpected top-level part: {:?}", other)),
+            other => Err(KError::parse(
+                format!("unexpected top-level part: {:?}", other),
+                None,
+            )),
         })
         .collect()
 }

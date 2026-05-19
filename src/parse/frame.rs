@@ -11,6 +11,7 @@
 
 use crate::machine::core::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::KError;
 
 use super::dict_literal::DictFrame;
 use super::type_expr_frame::TypeExprFrame;
@@ -64,7 +65,7 @@ impl<'a> Frame<'a> {
     /// `TypeExprFrame::build`), which is the only failure path here. Closer-vs-variant
     /// mismatch is the caller's responsibility — this function trusts that the frame
     /// was matched against the right closer upstream.
-    pub(super) fn into_part(self, end: u32) -> Result<Spanned<ExpressionPart<'a>>, String> {
+    pub(super) fn into_part(self, end: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
         let file = source::current();
         match self {
             Frame::Expression { mut expr, head: None, span_start, .. } => {
@@ -125,11 +126,17 @@ impl<'a> Frame<'a> {
 pub(super) fn close_paren_to_part<'a>(
     frame: Frame<'a>,
     end: u32,
-) -> Result<Spanned<ExpressionPart<'a>>, String> {
+) -> Result<Spanned<ExpressionPart<'a>>, KError> {
     match frame {
         Frame::Expression { .. } => frame.into_part(end),
         Frame::TypeExpr { .. } => frame.into_part(end),
-        Frame::List { .. } => Err("closed paren but innermost frame is a list literal".to_string()),
-        Frame::Dict { .. } => Err("closed paren but innermost frame is a dict literal".to_string()),
+        Frame::List { .. } => Err(KError::parse(
+            "closed paren but innermost frame is a list literal",
+            None,
+        )),
+        Frame::Dict { .. } => Err(KError::parse(
+            "closed paren but innermost frame is a dict literal",
+            None,
+        )),
     }
 }

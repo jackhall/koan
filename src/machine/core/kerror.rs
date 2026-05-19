@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
+use crate::machine::core::source::Span;
 use crate::machine::model::types::Parseable;
 use crate::machine::model::values::KObject;
 use crate::machine::model::KType;
@@ -73,6 +74,15 @@ impl Frame {
 impl KError {
     pub fn new(kind: KErrorKind) -> Self {
         Self { kind, frames: Vec::new() }
+    }
+
+    /// Standard constructor for parse-pass errors. Accepts an optional `Span` so
+    /// call sites that have one in hand can pass it; Phase 5 discards it (the
+    /// `ParseError` payload is still `String`). Phase 6 will broaden the variant
+    /// to `{ message, span, file }` and the helper will start populating both,
+    /// reading `file` from `source::current()`.
+    pub fn parse(msg: impl Into<String>, _span: Option<Span>) -> Self {
+        Self::new(KErrorKind::ParseError(msg.into()))
     }
 
     pub fn with_frame(mut self, frame: Frame) -> Self {

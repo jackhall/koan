@@ -92,7 +92,7 @@ fn trailing_sigil_at_end_of_input_errors() {
 #[test]
 fn comma_continuation_with_bare_sigil_parse_errors() {
     let err = top("add 1,\n  #2").unwrap_err();
-    assert_eq!(err, "expected '(' after '#', found '2'");
+    assert_eq!(err, "parse error: expected '(' after '#', found '2'");
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn comma_continuation_with_paren_sigil_parses() {
 #[test]
 fn bracket_continuation_with_bare_sigil_parse_errors() {
     let err = top("LET xs = [\n  #3\n]").unwrap_err();
-    assert_eq!(err, "expected '(' after '#', found '3'");
+    assert_eq!(err, "parse error: expected '(' after '#', found '3'");
 }
 
 #[test]

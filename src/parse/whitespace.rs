@@ -13,6 +13,7 @@
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
+use crate::machine::KError;
 use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK};
 
 /// Each non-blank line becomes a `(...)` group; deeper indents nest, dedents close. Tabs and
@@ -36,13 +37,13 @@ use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK};
 /// whitespace. Sigil-led lines (`#3` → `#(3)`) also get a JUMP before the sigil byte so the
 /// real `#` / `$` keeps its original offset and the synthetic `(` snaps to the offset of the
 /// first byte of the rest of the line.
-pub fn collapse_whitespace(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn collapse_whitespace(input: &[u8]) -> Result<Vec<u8>, KError> {
     let s = std::str::from_utf8(input)
-        .map_err(|_| "collapse_whitespace expected UTF-8 input".to_string())?;
+        .map_err(|_| KError::parse("collapse_whitespace expected UTF-8 input", None))?;
     collapse_str(s)
 }
 
-fn collapse_str(input: &str) -> Result<Vec<u8>, String> {
+fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
     let mut out: Vec<u8> = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
     let mut delim_depth: i32 = 0;
@@ -111,12 +112,15 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, String> {
         }
 
         if raw[..indent].contains('\t') {
-            return Err(format!("tab indentation not allowed on line {}", lineno + 1));
+            return Err(KError::parse(
+                format!("tab indentation not allowed on line {}", lineno + 1),
+                None,
+            ));
         }
         if !indent.is_multiple_of(2) {
-            return Err(format!(
-                "odd-numbered space indentation on line {}",
-                lineno + 1
+            return Err(KError::parse(
+                format!("odd-numbered space indentation on line {}", lineno + 1),
+                None,
             ));
         }
 
@@ -185,7 +189,7 @@ fn emit_jump(out: &mut Vec<u8>, offset: u32) {
 /// last byte. LITERAL markers leave the cursor unchanged (the following JUMP from
 /// `mask_quotes` re-aligns it); JUMP markers snap the cursor to their payload; everything
 /// else is a verbatim byte that advances the cursor by 1.
-fn walk_content_cursor(content: &[u8], start_orig: u32) -> Result<u32, String> {
+fn walk_content_cursor(content: &[u8], start_orig: u32) -> Result<u32, KError> {
     let mut orig = start_orig;
     let mut i = 0;
     while i < content.len() {
@@ -197,15 +201,15 @@ fn walk_content_cursor(content: &[u8], start_orig: u32) -> Result<u32, String> {
                 j += 1;
             }
             if j == digits_start {
-                return Err("JUMP marker: empty payload".to_string());
+                return Err(KError::parse("JUMP marker: empty payload", None));
             }
             if j >= content.len() || content[j] != JUMP_MARK {
-                return Err("JUMP marker missing closing sentinel".to_string());
+                return Err(KError::parse("JUMP marker missing closing sentinel", None));
             }
             orig = std::str::from_utf8(&content[digits_start..j])
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .ok_or_else(|| "JUMP marker: invalid payload".to_string())?;
+                .ok_or_else(|| KError::parse("JUMP marker: invalid payload", None))?;
             i = j + 1;
         } else if b == LITERAL_MARK {
             let mut j = i + 1;
@@ -213,7 +217,7 @@ fn walk_content_cursor(content: &[u8], start_orig: u32) -> Result<u32, String> {
                 j += 1;
             }
             if j >= content.len() || content[j] != LEN_SEP {
-                return Err("LITERAL marker missing LEN_SEP".to_string());
+                return Err(KError::parse("LITERAL marker missing LEN_SEP", None));
             }
             j += 1;
             while j < content.len() && content[j].is_ascii_digit() {

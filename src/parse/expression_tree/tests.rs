@@ -54,9 +54,13 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
 
 pub(super) fn tree(input: &str) -> Result<String, String> {
     let (masked, dict) = mask_quotes(input);
-    build_tree(&masked, &dict).map(|e| describe(&e))
+    build_tree(&masked, &dict)
+        .map(|e| describe(&e))
+        .map_err(|e| e.to_string())
 }
 
 pub(super) fn top(input: &str) -> Result<Vec<String>, String> {
-    parse(input).map(|exprs| exprs.iter().map(describe).collect())
+    parse(input)
+        .map(|exprs| exprs.iter().map(describe).collect())
+        .map_err(|e| e.to_string())
 }

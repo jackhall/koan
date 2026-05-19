@@ -6,9 +6,9 @@ use crate::parse::quotes::JUMP_MARK;
 /// the high-level paren shape, so we strip the markers before comparing. Marker-aware
 /// tests at the bottom of this module assert against the raw byte stream instead.
 fn collapse_whitespace(input: &str) -> Result<String, String> {
-    collapse_bytes(input.as_bytes()).map(|v| {
-        String::from_utf8(strip_jumps(&v)).expect("UTF-8 in test")
-    })
+    collapse_bytes(input.as_bytes())
+        .map(|v| String::from_utf8(strip_jumps(&v)).expect("UTF-8 in test"))
+        .map_err(|e| e.to_string())
 }
 
 /// Strip `JUMP_MARK <digits> JUMP_MARK` runs from a masked byte stream so textual

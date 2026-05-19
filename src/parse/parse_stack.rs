@@ -6,6 +6,7 @@
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::KError;
 use crate::parse::tokens::classify_token;
 
 use super::dict_literal::DictFrame;
@@ -57,11 +58,12 @@ impl<'a> ParseStack<'a> {
         self.rest.pop()
     }
 
-    pub(super) fn finish(self) -> Result<KExpression<'a>, String> {
+    pub(super) fn finish(self) -> Result<KExpression<'a>, KError> {
         if !self.rest.is_empty() {
-            return Err(
-                "open paren, bracket, or brace without matching close".to_string(),
-            );
+            return Err(KError::parse(
+                "open paren, bracket, or brace without matching close",
+                None,
+            ));
         }
         Ok(self.root)
     }
@@ -71,7 +73,7 @@ pub(super) fn flush_token<'a>(
     stack: &mut ParseStack<'a>,
     buf: &mut String,
     token_start: &mut Option<u32>,
-) -> Result<(), String> {
+) -> Result<(), KError> {
     if !buf.is_empty() {
         let tok = std::mem::take(buf);
         let start = token_start
@@ -94,7 +96,7 @@ pub(super) fn open_collection<'a>(
     prev: Option<char>,
     frame: Frame<'a>,
     token_start: &mut Option<u32>,
-) -> Result<(), String> {
+) -> Result<(), KError> {
     check_open_adjacency(opener, prev)?;
     flush_token(stack, buf, token_start)?;
     stack.push_frame(frame);
@@ -112,12 +114,12 @@ pub(super) fn close_collection<'a>(
     mismatch_msg: &str,
     token_start: &mut Option<u32>,
     end: u32,
-) -> Result<(), String> {
+) -> Result<(), KError> {
     let top_matches = stack
         .peek_top()
         .is_some_and(|f| f.matches_closer(closer));
     if !top_matches {
-        return Err(mismatch_msg.to_string());
+        return Err(KError::parse(mismatch_msg, None));
     }
     check_close_adjacency(closer, next)?;
     flush_token(stack, buf, token_start)?;
@@ -128,23 +130,29 @@ pub(super) fn close_collection<'a>(
     Ok(())
 }
 
-fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), String> {
+fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), KError> {
     if matches!(prev, None | Some('(' | '[' | '{')) || matches!(prev, Some(c) if c.is_whitespace()) {
         return Ok(());
     }
-    Err(format!(
-        "'{opener}' must be preceded by whitespace, '(', '[', or '{{' \
-         (got {prev:?}); collection literals can't be glued to a token",
+    Err(KError::parse(
+        format!(
+            "'{opener}' must be preceded by whitespace, '(', '[', or '{{' \
+             (got {prev:?}); collection literals can't be glued to a token",
+        ),
+        None,
     ))
 }
 
 /// Symmetric to `check_open_adjacency` for closing brackets.
-fn check_close_adjacency(closer: char, next: Option<char>) -> Result<(), String> {
+fn check_close_adjacency(closer: char, next: Option<char>) -> Result<(), KError> {
     if matches!(next, None | Some(')' | ']' | '}')) || matches!(next, Some(c) if c.is_whitespace()) {
         return Ok(());
     }
-    Err(format!(
-        "'{closer}' must be followed by whitespace, ')', ']', or '}}' \
-         (got {next:?}); collection literals can't be glued to a token",
+    Err(KError::parse(
+        format!(
+            "'{closer}' must be followed by whitespace, ')', ']', or '}}' \
+             (got {next:?}); collection literals can't be glued to a token",
+        ),
+        None,
     ))
 }
