@@ -47,6 +47,31 @@ fn decode_char_at(bytes: &[u8], pos: usize) -> Option<char> {
     std::str::from_utf8(slice).ok()?.chars().next()
 }
 
+/// Like `decode_char_at`, but transparently skips over `JUMP_MARK <digits> JUMP_MARK`
+/// runs. The collapse pass plants JUMPs immediately after `]`/`}` (the close-adjacency
+/// check below has to look past them to find the real next token), and similar gaps
+/// appear at line / dedent boundaries. LITERAL markers are *not* skipped — a literal
+/// glued to a closing bracket is still an adjacency violation.
+fn peek_char_past_jumps(bytes: &[u8], pos: usize) -> Option<char> {
+    let mut p = pos;
+    while let Some(&b) = bytes.get(p) {
+        if b != JUMP_MARK {
+            return decode_char_at(bytes, p);
+        }
+        p += 1;
+        while let Some(&d) = bytes.get(p) {
+            if d == JUMP_MARK {
+                break;
+            }
+            p += 1;
+        }
+        if bytes.get(p) == Some(&JUMP_MARK) {
+            p += 1;
+        }
+    }
+    None
+}
+
 /// Hand-rolled byte cursor over the masked stream. Tracks only `pos` in Phase 2;
 /// Phase 4 will add a `cursor: u32` field for original-source byte offsets driven
 /// by the in-band JUMP / LITERAL markers.
@@ -225,7 +250,7 @@ pub fn build_tree<'a>(
                 reader.advance_byte();
             }
             ']' => {
-                let next = decode_char_at(reader.bytes, reader.pos + 1);
+                let next = peek_char_past_jumps(reader.bytes, reader.pos + 1);
                 close_collection(
                     &mut stack,
                     &mut buf,
@@ -240,7 +265,7 @@ pub fn build_tree<'a>(
                 reader.advance_byte();
             }
             '}' => {
-                let next = decode_char_at(reader.bytes, reader.pos + 1);
+                let next = peek_char_past_jumps(reader.bytes, reader.pos + 1);
                 close_collection(
                     &mut stack,
                     &mut buf,
