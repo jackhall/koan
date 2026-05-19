@@ -4,9 +4,9 @@
 //! `open_collection` / `close_collection` shape-shared close-bracket helpers live here
 //! since they bind `ParseStack` and the token-buffer flush.
 
-use crate::parse::tokens::classify_token;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::parse::tokens::classify_token;
 
 use super::dict_literal::DictFrame;
 use super::frame::Frame;
@@ -28,11 +28,13 @@ impl<'a> ParseStack<'a> {
         self.rest.push(f);
     }
 
-    /// Push a part into the current top frame (root if no nested frame is open).
-    pub(super) fn push_part(&mut self, part: ExpressionPart<'a>) {
+    /// Push a span-carrying part into the current top frame (root if no nested frame is
+    /// open). The wrapper's span is preserved at the destination when the destination's
+    /// storage is `Vec<Spanned<…>>`; List/Dict/TypeExpr frames discard it.
+    pub(super) fn push_part(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self.rest.last_mut() {
             Some(f) => f.push(part),
-            None => self.root.parts.push(Spanned::bare(part)),
+            None => self.root.parts.push(part),
         }
     }
 
@@ -44,7 +46,7 @@ impl<'a> ParseStack<'a> {
     /// when the top is any other variant (or no frame is nested).
     pub(super) fn top_dict_mut(&mut self) -> Option<&mut DictFrame<'a>> {
         match self.rest.last_mut()? {
-            Frame::Dict(d) => Some(d),
+            Frame::Dict { dict, .. } => Some(dict),
             _ => None,
         }
     }
@@ -65,11 +67,20 @@ impl<'a> ParseStack<'a> {
     }
 }
 
-pub(super) fn flush_token<'a>(stack: &mut ParseStack<'a>, buf: &mut String) -> Result<(), String> {
+pub(super) fn flush_token<'a>(
+    stack: &mut ParseStack<'a>,
+    buf: &mut String,
+    token_start: &mut Option<u32>,
+) -> Result<(), String> {
     if !buf.is_empty() {
         let tok = std::mem::take(buf);
-        let part = classify_token(tok)?;
+        let start = token_start
+            .take()
+            .expect("token_start must be set whenever buf is non-empty");
+        let part = classify_token(&tok, start)?;
         stack.push_part(part);
+    } else {
+        *token_start = None;
     }
     Ok(())
 }
@@ -82,9 +93,10 @@ pub(super) fn open_collection<'a>(
     opener: char,
     prev: Option<char>,
     frame: Frame<'a>,
+    token_start: &mut Option<u32>,
 ) -> Result<(), String> {
     check_open_adjacency(opener, prev)?;
-    flush_token(stack, buf)?;
+    flush_token(stack, buf, token_start)?;
     stack.push_frame(frame);
     Ok(())
 }
@@ -98,6 +110,8 @@ pub(super) fn close_collection<'a>(
     closer: char,
     next: Option<char>,
     mismatch_msg: &str,
+    token_start: &mut Option<u32>,
+    end: u32,
 ) -> Result<(), String> {
     let top_matches = stack
         .peek_top()
@@ -106,11 +120,11 @@ pub(super) fn close_collection<'a>(
         return Err(mismatch_msg.to_string());
     }
     check_close_adjacency(closer, next)?;
-    flush_token(stack, buf)?;
+    flush_token(stack, buf, token_start)?;
     let frame = stack
         .pop_top()
         .expect("peek_top.matches_closer checked above; flush_token preserves variant");
-    stack.push_part(frame.into_part()?);
+    stack.push_part(frame.into_part(end)?);
     Ok(())
 }
 
