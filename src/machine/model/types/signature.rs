@@ -233,10 +233,10 @@ impl<'a> ExpressionSignature<'a> {
         if self.elements.len() != expr.parts.len() {
             return false;
         }
-        self.elements.iter().zip(&expr.parts).all(|(el, part)| match (el, part) {
+        self.elements.iter().zip(&expr.parts).all(|(el, part)| match (el, &part.value) {
             (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
             (SignatureElement::Keyword(_), _) => false,
-            (SignatureElement::Argument(arg), part) => arg.matches(part),
+            (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
         })
     }
 

@@ -1,3 +1,4 @@
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use crate::machine::core::{KError, Scope};
@@ -37,7 +38,7 @@ mod value_pass;
 /// constructible carrier.
 pub(crate) fn dispatch_constructor<'a>(
     verb_obj: &'a KObject<'a>,
-    args_parts: Vec<ExpressionPart<'a>>,
+    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> Option<BodyResult<'a>> {
     match verb_obj {
         KObject::TaggedUnionType { .. } => Some(tagged_union::apply(verb_obj, args_parts)),

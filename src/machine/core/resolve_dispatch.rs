@@ -119,7 +119,7 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
     use crate::machine::model::ast::ExpressionPart;
     expr.parts.iter().any(|p| {
         matches!(
-            p,
+            &p.value,
             ExpressionPart::Expression(_)
                 | ExpressionPart::ListLiteral(_)
                 | ExpressionPart::DictLiteral(_)

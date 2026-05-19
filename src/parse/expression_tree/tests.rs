@@ -47,7 +47,7 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
             ExpressionPart::Future(_) => "future".to_string(),
         }
     }
-    let parts: Vec<String> = e.parts.iter().map(describe_part).collect();
+    let parts: Vec<String> = e.parts.iter().map(|p| describe_part(&p.value)).collect();
     format!("[{}]", parts.join(" "))
 }
 

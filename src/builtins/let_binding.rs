@@ -198,7 +198,7 @@ fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
 /// structurally without dispatching anything. Returns `None` on shape mismatch (the body
 /// will surface a structured error later).
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    match expr.parts.get(1)? {
+    match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
         ExpressionPart::Type(t) => Some(t.name.clone()),
         _ => None,

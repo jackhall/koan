@@ -178,7 +178,7 @@ mod tests {
             ExpressionPart::Identifier(s) => format!("t({})", s),
             ExpressionPart::Type(t) => format!("T({})", t.render()),
             ExpressionPart::Expression(e) => {
-                let inner: Vec<String> = e.parts.iter().map(describe).collect();
+                let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
                 format!("[{}]", inner.join(" "))
             }
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),

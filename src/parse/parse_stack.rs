@@ -5,6 +5,7 @@
 //! since they bind `ParseStack` and the token-buffer flush.
 
 use crate::parse::tokens::classify_token;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::dict_literal::DictFrame;
@@ -18,7 +19,7 @@ pub(super) struct ParseStack<'a> {
 impl<'a> ParseStack<'a> {
     pub(super) fn new() -> Self {
         Self {
-            root: KExpression { parts: Vec::new() },
+            root: KExpression::new(Vec::new()),
             rest: Vec::new(),
         }
     }
@@ -31,7 +32,7 @@ impl<'a> ParseStack<'a> {
     pub(super) fn push_part(&mut self, part: ExpressionPart<'a>) {
         match self.rest.last_mut() {
             Some(f) => f.push(part),
-            None => self.root.parts.push(part),
+            None => self.root.parts.push(Spanned::bare(part)),
         }
     }
 

@@ -35,7 +35,7 @@ pub fn parse_keyword_triple_list<'a, T>(
     let mut out: Vec<(String, T)> = Vec::with_capacity(parts.len() / 3);
     let mut i = 0;
     while i < parts.len() {
-        let name = match &parts[i] {
+        let name = match &parts[i].value {
             ExpressionPart::Identifier(s) => s.clone(),
             other => {
                 return Err(format!(
@@ -44,7 +44,7 @@ pub fn parse_keyword_triple_list<'a, T>(
                 ));
             }
         };
-        match &parts[i + 1] {
+        match &parts[i + 1].value {
             ExpressionPart::Keyword(k) if k == sep => {}
             other => {
                 return Err(format!(
@@ -56,7 +56,7 @@ pub fn parse_keyword_triple_list<'a, T>(
         if out.iter().any(|(n, _)| n == &name) {
             return Err(format!("duplicate name `{}` in {context}", name));
         }
-        let third = parse_third(&parts[i + 2], &name)?;
+        let third = parse_third(&parts[i + 2].value, &name)?;
         out.push((name, third));
         i += 3;
     }
@@ -84,7 +84,7 @@ pub fn parse_pair_list<'a, T>(
     let mut out: Vec<(String, T)> = Vec::with_capacity(parts.len() / 2);
     let mut i = 0;
     while i < parts.len() {
-        let name = match &parts[i] {
+        let name = match &parts[i].value {
             ExpressionPart::Identifier(s) => s.clone(),
             other => {
                 return Err(format!(
@@ -96,7 +96,7 @@ pub fn parse_pair_list<'a, T>(
         if out.iter().any(|(n, _)| n == &name) {
             return Err(format!("duplicate name `{}` in {context}", name));
         }
-        let slot = parse_slot(&parts[i + 1], &name)?;
+        let slot = parse_slot(&parts[i + 1].value, &name)?;
         out.push((name, slot));
         i += 2;
     }

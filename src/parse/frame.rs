@@ -4,6 +4,7 @@
 //! `ExpressionPart` it produces; `matches_closer` is the variant↔closer lookup the
 //! close-bracket arms use to decide whether the topmost frame legally ends here.
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::dict_literal::DictFrame;
@@ -27,7 +28,7 @@ pub(super) enum Frame<'a> {
 impl<'a> Frame<'a> {
     pub(super) fn push(&mut self, part: ExpressionPart<'a>) {
         match self {
-            Frame::Expression { expr, .. } => expr.parts.push(part),
+            Frame::Expression { expr, .. } => expr.parts.push(Spanned::bare(part)),
             Frame::List(items) => items.push(part),
             Frame::Dict(d) => d.push(part),
             Frame::TypeExpr(tf) => tf.parts.push(part),
@@ -44,12 +45,10 @@ impl<'a> Frame<'a> {
         match self {
             Frame::Expression { expr, head: None } => Ok(ExpressionPart::Expression(Box::new(expr))),
             Frame::Expression { expr, head: Some(head) } => {
-                let wrapped = KExpression {
-                    parts: vec![
-                        ExpressionPart::Keyword(head.to_string()),
-                        ExpressionPart::Expression(Box::new(expr)),
-                    ],
-                };
+                let wrapped = KExpression::new(vec![
+                    Spanned::bare(ExpressionPart::Keyword(head.to_string())),
+                    Spanned::bare(ExpressionPart::Expression(Box::new(expr))),
+                ]);
                 Ok(ExpressionPart::Expression(Box::new(wrapped)))
             }
             Frame::List(items) => Ok(ExpressionPart::ListLiteral(items)),

@@ -89,13 +89,13 @@ pub trait SchedulerHandle<'a> {
             && body_expr
                 .parts
                 .iter()
-                .all(|p| matches!(p, ExpressionPart::Expression(_)));
+                .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
 
         if is_multi_statement {
             body_expr
                 .parts
                 .into_iter()
-                .filter_map(|p| match p {
+                .filter_map(|p| match p.value {
                     ExpressionPart::Expression(e) => Some(self.add_dispatch(*e, scope)),
                     _ => None,
                 })

@@ -7,6 +7,7 @@ use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::core::source::{FileId, Span, Spanned};
 use crate::machine::model::types::KType;
 use crate::machine::model::{KKey, KObject, Parseable, Serializable, UntypedElement, UntypedKey};
 
@@ -140,7 +141,9 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
 
 impl<'a> ExpressionPart<'a> {
     pub fn expression(parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
-        ExpressionPart::Expression(Box::new(KExpression { parts }))
+        ExpressionPart::Expression(Box::new(KExpression::new(
+            parts.into_iter().map(Spanned::bare).collect(),
+        )))
     }
 
     /// Short textual rendering of this part, matching the per-part subset of
@@ -269,23 +272,39 @@ impl<'a> Clone for ExpressionPart<'a> {
 
 impl<'a> Clone for KExpression<'a> {
     fn clone(&self) -> Self {
-        KExpression { parts: self.parts.clone() }
+        KExpression {
+            parts: self.parts.clone(),
+            span: self.span,
+            file: self.file,
+        }
     }
 }
 
 /// A parsed Koan expression: an ordered sequence of `ExpressionPart`s.
+///
+/// `span` and `file` reference the source region the parser saw. Both are
+/// `None` for hand-built ASTs (tests, builtin-synthesized fragments before
+/// per-builtin source registration lands).
 pub struct KExpression<'a> {
-    pub parts: Vec<ExpressionPart<'a>>,
+    pub parts: Vec<Spanned<ExpressionPart<'a>>>,
+    pub span: Option<Span>,
+    pub file: Option<FileId>,
 }
 
 impl<'a> KExpression<'a> {
+    /// Spanless constructor — every parser/test caller that doesn't yet attribute
+    /// source goes through here. Span wiring populates `span`/`file` in later phases.
+    pub fn new(parts: Vec<Spanned<ExpressionPart<'a>>>) -> Self {
+        KExpression { parts, span: None, file: None }
+    }
+
     /// Bucket key: `Keyword` parts contribute `Keyword(s)`; every other variant contributes
     /// `Slot`. Must agree with `ExpressionSignature::untyped_key` for any signature that
     /// should match.
     pub fn untyped_key(&self) -> UntypedKey {
         self.parts
             .iter()
-            .map(|part| match part {
+            .map(|part| match &part.value {
                 ExpressionPart::Keyword(s) => UntypedElement::Keyword(s.clone()),
                 _ => UntypedElement::Slot,
             })
@@ -298,7 +317,7 @@ impl<'a> KExpression<'a> {
     /// on shape mismatch; the builtin body is responsible for surfacing the structured
     /// error (see [`crate::machine::core::kfunction::PreRunFn`]).
     pub fn binder_name_from_type_part(&self) -> Option<String> {
-        match self.parts.get(1)? {
+        match &self.parts.get(1)?.value {
             ExpressionPart::Type(t) => Some(t.name.clone()),
             _ => None,
         }
@@ -310,7 +329,7 @@ impl<'a> KExpression<'a> {
     pub fn borrow_inner_expressions(&self) -> Option<Vec<&KExpression<'a>>> {
         let mut out = Vec::with_capacity(self.parts.len());
         for p in &self.parts {
-            match p {
+            match &p.value {
                 ExpressionPart::Expression(b) => out.push(b.as_ref()),
                 _ => return None,
             }
@@ -329,31 +348,31 @@ impl<'a> KExpression<'a> {
     ) -> Result<(Vec<KExpression<'a>>, KExpression<'a>), Self> {
         let mut iter = self.parts.into_iter();
         let Some(first) = iter.next() else {
-            return Err(KExpression { parts: Vec::new() });
+            return Err(KExpression::new(Vec::new()));
         };
-        let mut last: KExpression<'a> = match first {
+        let mut last: KExpression<'a> = match first.value {
             ExpressionPart::Expression(b) => *b,
             other => {
-                let mut parts = vec![other];
+                let mut parts = vec![Spanned { value: other, span: first.span }];
                 parts.extend(iter);
-                return Err(KExpression { parts });
+                return Err(KExpression::new(parts));
             }
         };
         let mut preceding: Vec<KExpression<'a>> = Vec::new();
         for p in iter.by_ref() {
-            match p {
+            match p.value {
                 ExpressionPart::Expression(b) => {
                     preceding.push(std::mem::replace(&mut last, *b));
                 }
                 other => {
-                    let mut parts: Vec<ExpressionPart<'a>> = preceding
+                    let mut parts: Vec<Spanned<ExpressionPart<'a>>> = preceding
                         .into_iter()
-                        .map(|e| ExpressionPart::Expression(Box::new(e)))
+                        .map(|e| Spanned::bare(ExpressionPart::Expression(Box::new(e))))
                         .collect();
-                    parts.push(ExpressionPart::Expression(Box::new(last)));
-                    parts.push(other);
+                    parts.push(Spanned::bare(ExpressionPart::Expression(Box::new(last))));
+                    parts.push(Spanned { value: other, span: p.span });
                     parts.extend(iter);
-                    return Err(KExpression { parts });
+                    return Err(KExpression::new(parts));
                 }
             }
         }
@@ -372,7 +391,7 @@ impl<'a> Parseable for KExpression<'a> {
     fn ktype(&self) -> crate::machine::model::KType { crate::machine::model::KType::KExpression }
     fn summarize(&self) -> String {
         self.parts.iter()
-            .map(|p| p.summarize())
+            .map(|p| p.value.summarize())
             .collect::<Vec<_>>()
             .join(" ")
     }

@@ -111,7 +111,10 @@ fn build_list_params<'a>(
 fn lift_part(part: ExpressionPart<'_>) -> Result<TypeExpr, String> {
     match part {
         ExpressionPart::Type(t) => Ok(t),
-        ExpressionPart::Expression(boxed) => TypeExprFrame { parts: boxed.parts }.build(),
+        ExpressionPart::Expression(boxed) => TypeExprFrame {
+            parts: boxed.parts.into_iter().map(|s| s.value).collect(),
+        }
+        .build(),
         _ => unreachable!("find_arrow filters parts to Type or Expression"),
     }
 }
@@ -153,14 +156,16 @@ fn extract_function_args<'a>(
     };
     arg_parts
         .into_iter()
-        .map(|p| match p {
+        .map(|p| match p.value {
             ExpressionPart::Type(t) => Ok(t),
             // Args themselves can be parameterized types: `:(Function ((List Number)) -> R)`
             // wraps the args list in `(...)` and each arg may itself be a sigil-less
             // nested type expression. Recurse through TypeExprFrame to fold the nested
             // shape.
             ExpressionPart::Expression(boxed) => {
-                let frame = TypeExprFrame { parts: boxed.parts };
+                let frame = TypeExprFrame {
+                    parts: boxed.parts.into_iter().map(|s| s.value).collect(),
+                };
                 frame.build()
             }
             other => Err(format!(

@@ -123,7 +123,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "ctx-tail: expected Value, got Tail")]
     fn expect_value_panics_on_tail() {
-        let tail: BodyResult<'_> = BodyResult::tail(KExpression { parts: Vec::new() });
+        let tail: BodyResult<'_> = BodyResult::tail(KExpression::new(Vec::new()));
         let _ = tail.expect_value("ctx-tail");
     }
 

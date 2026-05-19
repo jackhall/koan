@@ -4,6 +4,7 @@ use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use super::super::ResolveOutcome;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig};
@@ -37,7 +38,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
-    let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
     match scope.resolve_dispatch(&expr) {
         ResolveOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
@@ -56,13 +57,11 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     let scope = run_root_bare(&arena);
     register_builtin(scope, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
     register_builtin(scope, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Literal(KLiteral::Number(5.0)),
-            ExpressionPart::Keyword("OP".into()),
-            ExpressionPart::Literal(KLiteral::Number(7.0)),
-        ],
-    };
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+    ]);
     match scope.resolve_dispatch(&expr) {
         ResolveOutcome::Ambiguous(n) => assert_eq!(n, 2),
         _ => panic!("expected Ambiguous(2) for tied overloads"),
@@ -77,7 +76,7 @@ fn resolve_walks_outer_chain_on_unmatched() {
     let outer = run_root_bare(&arena);
     register_builtin(outer, "ONE", one_slot_sig("v", KType::Any), body_a);
     let inner = arena.alloc_scope(outer.child_for_call());
-    let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
     assert!(matches!(inner.resolve_dispatch(&expr), ResolveOutcome::Resolved(_)));
 }
 
@@ -91,13 +90,11 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     let inner = arena.alloc_scope(outer.child_for_call());
     register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
     register_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Literal(KLiteral::Number(5.0)),
-            ExpressionPart::Keyword("OP".into()),
-            ExpressionPart::Literal(KLiteral::Number(7.0)),
-        ],
-    };
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+    ]);
     match inner.resolve_dispatch(&expr) {
         ResolveOutcome::Ambiguous(_) => {}
         _ => panic!("inner ambiguity must surface, not fall through to outer's unique overload"),
@@ -111,7 +108,7 @@ fn resolve_carries_placeholder_name_for_pre_run_function() {
     use crate::builtins::register_builtin_with_pre_run;
     fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
         // Mirror LET's shape: expression's 2nd part is the binder Identifier.
-        match expr.parts.get(1) {
+        match expr.parts.get(1).map(|p| &p.value) {
             Some(ExpressionPart::Identifier(n)) => Some(n.clone()),
             _ => None,
         }
@@ -128,14 +125,12 @@ fn resolve_carries_placeholder_name_for_pre_run_function() {
         ],
     };
     register_builtin_with_pre_run(scope, "LETLIKE", sig, body_a, Some(name_extractor));
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Keyword("LETLIKE".into()),
-            ExpressionPart::Identifier("foo".into()),
-            ExpressionPart::Keyword("=".into()),
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ],
-    };
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
+        Spanned::bare(ExpressionPart::Identifier("foo".into())),
+        Spanned::bare(ExpressionPart::Keyword("=".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+    ]);
     match scope.resolve_dispatch(&expr) {
         ResolveOutcome::Resolved(r) => {
             assert_eq!(r.placeholder_name.as_deref(), Some("foo"));
@@ -154,7 +149,7 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     register_builtin(scope, "ONE_ID", one_slot_sig("v", KType::Identifier), body_a);
-    let expr = KExpression { parts: vec![ExpressionPart::Literal(KLiteral::Number(5.0))] };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0)))]);
     assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Unmatched));
 }
 
@@ -168,16 +163,12 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     register_builtin(scope, "PLUS", two_slot_sig(KType::Number, KType::Number), body_a);
-    let inner = KExpression {
-        parts: vec![ExpressionPart::Identifier("deep_call".into())],
-    };
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Expression(Box::new(inner)),
-            ExpressionPart::Keyword("OP".into()),
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ],
-    };
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("deep_call".into()))]);
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+    ]);
     assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Deferred));
 }
 
@@ -196,14 +187,12 @@ fn resolve_walks_outer_chain_to_find_builtin() {
     let outer = default_scope(&arena, Box::new(std::io::sink()));
     let inner = arena.alloc_scope(outer.child_for_call());
 
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Keyword("LET".into()),
-            ExpressionPart::Identifier("x".into()),
-            ExpressionPart::Keyword("=".into()),
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ],
-    };
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("LET".into())),
+        Spanned::bare(ExpressionPart::Identifier("x".into())),
+        Spanned::bare(ExpressionPart::Keyword("=".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+    ]);
 
     assert!(
         matches!(inner.resolve_dispatch(&expr), ResolveOutcome::Resolved(_)),
@@ -216,9 +205,7 @@ fn resolve_walks_outer_chain_to_find_builtin() {
 fn resolve_dispatch_with_no_outer_and_no_match_is_unmatched() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let expr = KExpression {
-        parts: vec![ExpressionPart::Identifier("nope".into())],
-    };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("nope".into()))]);
     assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Unmatched));
 }
 
@@ -232,13 +219,11 @@ fn dispatch_errors_on_ambiguous_overlap() {
     register_builtin(scope, "number_any", two_slot_sig(KType::Number, KType::Any), body_number_any);
     register_builtin(scope, "any_number", two_slot_sig(KType::Any, KType::Number), body_any_number);
 
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Literal(KLiteral::Number(5.0)),
-            ExpressionPart::Keyword("OP".into()),
-            ExpressionPart::Literal(KLiteral::Number(7.0)),
-        ],
-    };
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0))),
+        Spanned::bare(ExpressionPart::Keyword("OP".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+    ]);
     assert!(
         matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Ambiguous(_)),
         "equally-specific overloads should produce an Ambiguous outcome",

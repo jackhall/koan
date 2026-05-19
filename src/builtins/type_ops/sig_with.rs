@@ -1,3 +1,4 @@
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::machine::model::{KObject, KType};
@@ -51,7 +52,7 @@ pub fn body<'a>(
     // - Every part is `Expression(...)` => each is its own pair (multi-slot case).
     // Anything else is a user error with a focused message.
     fn parse_pair<'a>(
-        parts: &[ExpressionPart<'a>],
+        parts: &[Spanned<ExpressionPart<'a>>],
         out: &mut Vec<(String, ExpressionPart<'a>, usize)>,
         idx: usize,
     ) -> Result<(), KError> {
@@ -61,7 +62,7 @@ pub fn body<'a>(
                 parts.len(),
             ))));
         }
-        let slot_name = match &parts[0] {
+        let slot_name = match &parts[0].value {
             ExpressionPart::Type(t) if matches!(t.params, crate::machine::model::ast::TypeParams::None) => {
                 t.name.clone()
             }
@@ -84,7 +85,7 @@ pub fn body<'a>(
                 ))));
             }
         };
-        out.push((slot_name, parts[1].clone(), idx));
+        out.push((slot_name, parts[1].value.clone(), idx));
         Ok(())
     }
 
@@ -109,7 +110,7 @@ pub fn body<'a>(
             }
         }
     } else {
-        let summary: Vec<String> = parts.iter().map(|p| p.summarize()).collect();
+        let summary: Vec<String> = parts.iter().map(|p| p.value.summarize()).collect();
         return err(KError::new(KErrorKind::ShapeError(format!(
             "SIG_WITH bindings must be a list of parens-wrapped `(Name :Type)` pairs, \
              got `[{}]`",

@@ -35,7 +35,7 @@ pub(crate) fn find_branch_body<'a>(
         let tag_part = &parts[i];
         let arrow_part = &parts[i + 1];
         let body_part = &parts[i + 2];
-        let tag_name = match tag_part {
+        let tag_name = match &tag_part.value {
             ExpressionPart::Identifier(s) => s.clone(),
             // `true`/`false` are `KLiteral::Boolean` from the parser, not identifiers,
             // but they're the natural tag form for `MATCH` on a `Bool` value. Accept
@@ -54,7 +54,7 @@ pub(crate) fn find_branch_body<'a>(
                 ));
             }
         };
-        match arrow_part {
+        match &arrow_part.value {
             ExpressionPart::Keyword(k) if k == "->" => {}
             other => {
                 return Err(format!(
@@ -63,7 +63,7 @@ pub(crate) fn find_branch_body<'a>(
                 ));
             }
         }
-        let body_expr = match body_part {
+        let body_expr = match &body_part.value {
             ExpressionPart::Expression(e) => (**e).clone(),
             other => {
                 return Err(format!(

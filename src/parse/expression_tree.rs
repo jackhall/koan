@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use crate::parse::quotes::{mask_quotes, QUOTE_PLACEHOLDER};
 use crate::parse::whitespace::collapse_whitespace;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 use super::dict_literal::DictFrame;
@@ -77,7 +78,7 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
                         _ => None,
                     };
                     stack.push_frame(Frame::Expression {
-                        expr: KExpression { parts: Vec::new() },
+                        expr: KExpression::new(Vec::new()),
                         head,
                     });
                 }
@@ -215,13 +216,17 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
 
 /// Collapses single-`Expression` wrappers so `((foo bar))` and `(foo bar)` dispatch the same.
 fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
-    while expr.parts.len() == 1 && matches!(expr.parts[0], ExpressionPart::Expression(_)) {
-        if let Some(ExpressionPart::Expression(inner)) = expr.parts.pop() {
+    while expr.parts.len() == 1 && matches!(expr.parts[0].value, ExpressionPart::Expression(_)) {
+        if let Some(Spanned { value: ExpressionPart::Expression(inner), .. }) = expr.parts.pop() {
             expr = *inner;
         }
     }
-    expr.parts = expr.parts.into_iter().map(peel_part).collect();
+    expr.parts = expr.parts.into_iter().map(peel_spanned).collect();
     expr
+}
+
+fn peel_spanned<'a>(part: Spanned<ExpressionPart<'a>>) -> Spanned<ExpressionPart<'a>> {
+    Spanned { value: peel_part(part.value), span: part.span }
 }
 
 fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
@@ -249,7 +254,7 @@ pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
     let root = build_tree(&collapsed, &quotes)?;
     root.parts
         .into_iter()
-        .map(|part| match part {
+        .map(|part| match part.value {
             ExpressionPart::Expression(e) => Ok(peel_redundant(*e)),
             other => Err(format!("unexpected top-level part: {:?}", other)),
         })

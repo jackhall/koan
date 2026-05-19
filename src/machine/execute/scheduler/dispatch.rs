@@ -1,3 +1,4 @@
+use crate::machine::core::source::Spanned;
 use crate::machine::model::Parseable;
 use crate::machine::{
     Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Resolved, Scope,
@@ -115,7 +116,7 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Option<NodeStep<'a>> {
-        if let [ExpressionPart::Identifier(name)] = expr.parts.as_slice() {
+        if let [Spanned { value: ExpressionPart::Identifier(name), .. }] = expr.parts.as_slice() {
             match scope.resolve(name) {
                 Resolution::Value(obj) => Some(NodeStep::Done(NodeOutput::Value(obj))),
                 Resolution::Placeholder(producer_id) => {
@@ -156,7 +157,7 @@ impl<'a> Scheduler<'a> {
     ) -> ReplayParkResult<'a> {
         let mut producers_to_wait: Vec<NodeId> = Vec::new();
         for &i in &resolved.slots.ref_name_indices {
-            let name = match expr.parts.get(i) {
+            let name = match expr.parts.get(i).map(|p| &p.value) {
                 Some(ExpressionPart::Identifier(n)) => n.as_str(),
                 // Bare leaf Type-tokens in literal-name slots park on the same placeholder
                 // rails as Identifier — `IntOrd :| OrderedSig` waits on a forward-declared
@@ -258,7 +259,7 @@ impl<'a> Scheduler<'a> {
                 let wrap_indices = &resolved.slots.wrap_indices;
                 for (i, part) in expr.parts.into_iter().enumerate() {
                     if eager_indices.contains(&i) || wrap_indices.contains(&i) {
-                        let inner = match part {
+                        let inner = match part.value {
                             ExpressionPart::Expression(boxed) => *boxed,
                             // Post-`apply_auto_wrap`, every `wrap_indices` slot is an
                             // `Expression(_)`; pre-wrap-aware `eager_indices` also only
@@ -270,7 +271,7 @@ impl<'a> Scheduler<'a> {
                         };
                         let sub_id = self.add(NodeWork::Dispatch(inner), scope);
                         subs.push((i, sub_id));
-                        new_parts.push(ExpressionPart::Identifier(String::new()));
+                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                     } else {
                         new_parts.push(part);
                     }
@@ -278,28 +279,29 @@ impl<'a> Scheduler<'a> {
             }
             None => {
                 for (i, part) in expr.parts.into_iter().enumerate() {
-                    match part {
+                    let span = part.span;
+                    match part.value {
                         ExpressionPart::Expression(boxed) => {
                             let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
                             subs.push((i, sub_id));
-                            new_parts.push(ExpressionPart::Identifier(String::new()));
+                            new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                         }
                         ExpressionPart::ListLiteral(items) => {
                             let agg_id = self.schedule_list_literal(items, scope);
                             subs.push((i, agg_id));
-                            new_parts.push(ExpressionPart::Identifier(String::new()));
+                            new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                         }
                         ExpressionPart::DictLiteral(pairs) => {
                             let agg_id = self.schedule_dict_literal(pairs, scope);
                             subs.push((i, agg_id));
-                            new_parts.push(ExpressionPart::Identifier(String::new()));
+                            new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                         }
-                        other => new_parts.push(other),
+                        other => new_parts.push(Spanned { value: other, span }),
                     }
                 }
             }
         }
-        let new_expr = KExpression { parts: new_parts };
+        let new_expr = KExpression::new(new_parts);
         if subs.is_empty() {
             // No subs: bind the picked function directly. Spliced `Future(&'a KObject)`
             // references survive `results[dep] = None` because the objects live in arenas
@@ -329,26 +331,27 @@ impl<'a> Scheduler<'a> {
         let mut new_parts = Vec::with_capacity(expr.parts.len());
         let mut subs: Vec<(usize, NodeId)> = Vec::new();
         for (i, part) in expr.parts.into_iter().enumerate() {
-            match part {
+            let span = part.span;
+            match part.value {
                 ExpressionPart::Expression(boxed) => {
                     let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
                     subs.push((i, sub_id));
-                    new_parts.push(ExpressionPart::Identifier(String::new()));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                 }
                 ExpressionPart::ListLiteral(items) => {
                     let agg_id = self.schedule_list_literal(items, scope);
                     subs.push((i, agg_id));
-                    new_parts.push(ExpressionPart::Identifier(String::new()));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                 }
                 ExpressionPart::DictLiteral(pairs) => {
                     let agg_id = self.schedule_dict_literal(pairs, scope);
                     subs.push((i, agg_id));
-                    new_parts.push(ExpressionPart::Identifier(String::new()));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                 }
-                other => new_parts.push(other),
+                other => new_parts.push(Spanned { value: other, span }),
             }
         }
-        let new_expr = KExpression { parts: new_parts };
+        let new_expr = KExpression::new(new_parts);
         // `Deferred` implies `expr_has_eager_part(&expr) == true`, so `subs` is non-empty
         // by construction.
         debug_assert!(
@@ -377,7 +380,7 @@ fn first_keyword_placeholder<'a>(
 ) -> Option<NodeId> {
     use crate::machine::Resolution;
     for part in &expr.parts {
-        if let ExpressionPart::Keyword(name) = part {
+        if let ExpressionPart::Keyword(name) = &part.value {
             if let Resolution::Placeholder(producer_id) = scope.resolve(name) {
                 return Some(producer_id);
             }
@@ -395,19 +398,25 @@ fn first_keyword_placeholder<'a>(
 fn apply_auto_wrap<'a>(expr: KExpression<'a>, wrap_indices: &[usize]) -> KExpression<'a> {
     let mut parts = expr.parts;
     for &i in wrap_indices {
-        let placeholder = ExpressionPart::Identifier(String::new());
+        let placeholder = Spanned::bare(ExpressionPart::Identifier(String::new()));
         let original = std::mem::replace(&mut parts[i], placeholder);
-        parts[i] = match original {
-            ExpressionPart::Identifier(name) => ExpressionPart::Expression(Box::new(KExpression {
-                parts: vec![ExpressionPart::Identifier(name)],
-            })),
-            ExpressionPart::Type(t) => ExpressionPart::Expression(Box::new(KExpression {
-                parts: vec![ExpressionPart::Type(t)],
-            })),
+        let span = original.span;
+        let new_value = match original.value {
+            ExpressionPart::Identifier(name) => ExpressionPart::Expression(Box::new(
+                KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(name))]),
+            )),
+            ExpressionPart::Type(t) => ExpressionPart::Expression(Box::new(KExpression::new(
+                vec![Spanned::bare(ExpressionPart::Type(t))],
+            ))),
             other => other,
         };
+        parts[i] = Spanned { value: new_value, span };
     }
-    KExpression { parts }
+    KExpression {
+        parts,
+        span: expr.span,
+        file: expr.file,
+    }
 }
 
 /// Replay-park branch result: `Done` means a park was installed or a producer-error was

@@ -31,7 +31,7 @@ impl<'a> Scheduler<'a> {
         let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
         for (part_idx, dep_id) in subs {
             let value = self.read(dep_id);
-            expr.parts[part_idx] = ExpressionPart::Future(value);
+            expr.parts[part_idx].value = ExpressionPart::Future(value);
         }
         // Spliced `Future(&'a KObject)` references survive `results[dep] = None`
         // because the objects live in arenas tied to lexical scope. Reclaim happens

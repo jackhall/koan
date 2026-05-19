@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::{KKey, KObject, Serializable};
 use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -135,9 +136,7 @@ impl<'a> Scheduler<'a> {
                 Slot::Dep(pos)
             }
             ExpressionPart::Identifier(name) if wrap_identifiers => {
-                let expr = KExpression {
-                    parts: vec![ExpressionPart::Identifier(name)],
-                };
+                let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(name))]);
                 let sub_id = self.add(NodeWork::Dispatch(expr), scope);
                 let pos = deps.len();
                 deps.push(sub_id);
@@ -150,9 +149,7 @@ impl<'a> Scheduler<'a> {
                 // Auto-wrap for bare leaf Type-tokens in value slots: `MAKESET IntOrd`
                 // sub-dispatches `(IntOrd)` through the TypeExprRef overload of
                 // `value_lookup`, which surfaces the bound `KModule`/`KSignature`.
-                let expr = KExpression {
-                    parts: vec![ExpressionPart::Type(t)],
-                };
+                let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(t))]);
                 let sub_id = self.add(NodeWork::Dispatch(expr), scope);
                 let pos = deps.len();
                 deps.push(sub_id);

@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::core::{KError, KErrorKind, Scope, ScopeId};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
@@ -47,7 +48,7 @@ use super::register_builtin;
 /// before the construction primitive runs.
 pub fn apply<'a>(
     schema_obj: &'a KObject<'a>,
-    args_parts: Vec<ExpressionPart<'a>>,
+    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> BodyResult<'a> {
     let fields = match schema_obj.as_struct_type() {
         Some((_, fields)) => Rc::clone(fields),
@@ -58,7 +59,7 @@ pub fn apply<'a>(
             )));
         }
     };
-    let tmp_expr = KExpression { parts: args_parts };
+    let tmp_expr = KExpression::new(args_parts);
     let mut pairs = match NamedPairs::parse(&tmp_expr, "struct construction") {
         Ok(p) => p,
         Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
@@ -80,10 +81,10 @@ pub fn apply<'a>(
         ))));
     }
     let parts = vec![
-        ExpressionPart::Future(schema_obj),
-        ExpressionPart::ListLiteral(wrapped),
+        Spanned::bare(ExpressionPart::Future(schema_obj)),
+        Spanned::bare(ExpressionPart::ListLiteral(wrapped)),
     ];
-    BodyResult::tail(KExpression { parts })
+    BodyResult::tail(KExpression::new(parts))
 }
 
 /// Validate `values` against `fields` (matching length and per-position types) and build

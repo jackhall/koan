@@ -20,6 +20,7 @@
 //! first depending on the queue. Use placeholder-bearing statements (`LET`) to enforce
 //! ordering when needed.
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -75,13 +76,11 @@ pub(crate) fn fold_multi_statement<'a>(body: KExpression<'a>) -> KExpression<'a>
         Err(body) => return body,
     };
     while let Some(stmt) = preceding.pop() {
-        acc = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("CONS".into()),
-                ExpressionPart::Expression(Box::new(stmt)),
-                ExpressionPart::Expression(Box::new(acc)),
-            ],
-        };
+        acc = KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Keyword("CONS".into())),
+            Spanned::bare(ExpressionPart::Expression(Box::new(stmt))),
+            Spanned::bare(ExpressionPart::Expression(Box::new(acc))),
+        ]);
     }
     acc
 }

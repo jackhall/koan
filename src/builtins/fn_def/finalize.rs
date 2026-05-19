@@ -247,9 +247,9 @@ pub(super) fn defer_via_combine<'a>(
                     obj.ktype().name(),
                 ))));
             }
-            spliced_parts[slot_idx] = ExpressionPart::Future(obj);
+            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
         }
-        let spliced_signature = KExpression { parts: spliced_parts };
+        let spliced_signature = KExpression::new(spliced_parts);
 
         // Park producers have finalized — re-elaborate against the now-stable scope.
         // The elaborator's `Park` arm cannot fire again because every parked producer

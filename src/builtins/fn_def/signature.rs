@@ -20,7 +20,7 @@ pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
     let mut names: Vec<String> = Vec::new();
     let mut i = 0;
     while i < parts.len() {
-        let param_name: Option<String> = match &parts[i] {
+        let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
             ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
                 Some(t.name.clone())
@@ -28,7 +28,7 @@ pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
             _ => None,
         };
         if let Some(name) = param_name {
-            let next = parts.get(i + 1);
+            let next = parts.get(i + 1).map(|p| &p.value);
             let next_is_type_slot = matches!(
                 next,
                 Some(ExpressionPart::Type(_))
@@ -86,20 +86,20 @@ pub(super) fn parse_fn_param_list<'a>(
         // A bare-leaf `Type` part (e.g. `Er` in `FN (LIFT Er: OrderedSig) -> ...`) parses
         // as `Type(TypeExpr { name, params: None })` per classify_atom, but in
         // parameter-name position semantically denotes a binder, not a type reference.
-        let param_name: Option<String> = match &parts[i] {
+        let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
             ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
                 Some(t.name.clone())
             }
             _ => None,
         };
-        match (param_name, &parts[i]) {
+        match (param_name, &parts[i].value) {
             (_, ExpressionPart::Keyword(s)) => {
                 elements.push(SignatureElement::Keyword(s.clone()));
                 i += 1;
             }
             (Some(name), _) => {
-                let ty = parts.get(i + 1);
+                let ty = parts.get(i + 1).map(|p| &p.value);
                 match ty {
                     Some(ExpressionPart::Type(t)) => {
                         match elaborate_type_expr(elaborator, t) {
@@ -181,12 +181,12 @@ pub(super) fn parse_fn_param_list<'a>(
 /// surfaces the real `ShapeError`.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
     let sig_part = expr.parts.get(1)?;
-    let signature_expr = match sig_part {
+    let signature_expr = match &sig_part.value {
         ExpressionPart::Expression(boxed) => boxed,
         _ => return None,
     };
     for part in &signature_expr.parts {
-        if let ExpressionPart::Keyword(s) = part {
+        if let ExpressionPart::Keyword(s) = &part.value {
             return Some(s.clone());
         }
     }

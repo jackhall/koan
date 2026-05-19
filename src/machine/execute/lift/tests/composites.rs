@@ -95,7 +95,7 @@ fn list_with_pre_anchored_variants_skips_them() {
     let m_ref: &Module = dying.arena().alloc_module(module);
 
     let future = KFuture {
-        parsed: KExpression { parts: vec![] },
+        parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle { args: HashMap::new() },
     };
@@ -130,7 +130,7 @@ fn list_with_unanchored_kfuture_anchors() {
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
-        parsed: KExpression { parts: vec![] },
+        parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle { args: HashMap::new() },
     };
@@ -188,7 +188,7 @@ fn list_with_struct_and_kexpression_descendants_clones_rc() {
         scope_id: ScopeId::next(),
         fields: Rc::new(fields),
     };
-    let e = KObject::KExpression(KExpression { parts: vec![] });
+    let e = KObject::KExpression(KExpression::new(vec![]));
     let items = Rc::new(vec![s, e]);
     let list = KObject::List(Rc::clone(&items));
     let before = Rc::strong_count(&items);

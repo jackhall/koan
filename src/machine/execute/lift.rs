@@ -138,9 +138,9 @@ where
         KObject::Struct { fields, .. } => fields
             .values()
             .any(|x| any_descendant(x, predicate)),
-        KObject::KExpression(e) => e.parts.iter().any(|p| match p {
+        KObject::KExpression(e) => e.parts.iter().any(|p| match &p.value {
             ExpressionPart::Future(obj) => any_descendant(obj, predicate),
-            ExpressionPart::Expression(inner) => inner.parts.iter().any(|p2| match p2 {
+            ExpressionPart::Expression(inner) => inner.parts.iter().any(|p2| match &p2.value {
                 ExpressionPart::Future(obj) => any_descendant(obj, predicate),
                 _ => false,
             }),
@@ -196,7 +196,7 @@ fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> boo
 }
 
 fn expression_borrows_arena<'b>(expr: &KExpression<'b>, arena: &RuntimeArena) -> bool {
-    expr.parts.iter().any(|p| part_borrows_arena(p, arena))
+    expr.parts.iter().any(|p| part_borrows_arena(&p.value, arena))
 }
 
 fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bool {

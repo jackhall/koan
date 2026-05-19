@@ -1,5 +1,6 @@
 use std::cell::OnceCell;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeExpr, TypeParams};
 use crate::machine::model::types::KType;
 use crate::machine::model::{KObject, Parseable};
@@ -8,6 +9,12 @@ fn kw(s: &str) -> ExpressionPart<'static> { ExpressionPart::Keyword(s.into()) }
 fn ident(s: &str) -> ExpressionPart<'static> { ExpressionPart::Identifier(s.into()) }
 fn expr(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
     ExpressionPart::expression(parts)
+}
+fn sp(p: ExpressionPart<'static>) -> Spanned<ExpressionPart<'static>> {
+    Spanned::bare(p)
+}
+fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'static>>> {
+    items.into_iter().map(Spanned::bare).collect()
 }
 
 // --- Layer-1 cache (`TypeExpr::builtin_cache`) exercised through `resolve_for` ---
@@ -94,15 +101,15 @@ fn summarize_nested_expression_part_threads_through() {
 #[test]
 fn kexpression_summarize_joins_parts_with_spaces() {
     // Goes through `Parseable::summarize` for `KExpression`.
-    let e = KExpression { parts: vec![kw("LET"), ident("x"), ident("=")] };
+    let e = KExpression::new(parts_of(vec![kw("LET"), ident("x"), ident("=")]));
     assert_eq!(e.summarize(), "LET x =");
 }
 
 #[test]
 fn parseable_equal_and_ktype_for_kexpression() {
-    let a = KExpression { parts: vec![kw("LET"), ident("x")] };
-    let b = KExpression { parts: vec![kw("LET"), ident("x")] };
-    let c = KExpression { parts: vec![kw("LET"), ident("y")] };
+    let a = KExpression::new(parts_of(vec![kw("LET"), ident("x")]));
+    let b = KExpression::new(parts_of(vec![kw("LET"), ident("x")]));
+    let c = KExpression::new(parts_of(vec![kw("LET"), ident("y")]));
     assert!(a.equal(&b));
     assert!(!a.equal(&c));
     assert!(matches!(a.ktype(), crate::machine::model::KType::KExpression));
@@ -110,64 +117,66 @@ fn parseable_equal_and_ktype_for_kexpression() {
 
 #[test]
 fn binder_name_from_type_part_extracts_or_none() {
-    let with_type = KExpression {
-        parts: vec![kw("STRUCT"), ExpressionPart::Type(TypeExpr::leaf("Point".into()))],
-    };
+    let with_type = KExpression::new(parts_of(vec![
+        kw("STRUCT"),
+        ExpressionPart::Type(TypeExpr::leaf("Point".into())),
+    ]));
     assert_eq!(with_type.binder_name_from_type_part(), Some("Point".into()));
 
-    let with_ident = KExpression { parts: vec![kw("STRUCT"), ident("Point")] };
+    let with_ident = KExpression::new(parts_of(vec![kw("STRUCT"), ident("Point")]));
     assert_eq!(with_ident.binder_name_from_type_part(), None);
 
-    let too_short = KExpression { parts: vec![kw("STRUCT")] };
+    let too_short = KExpression::new(parts_of(vec![kw("STRUCT")]));
     assert_eq!(too_short.binder_name_from_type_part(), None);
 }
 
 #[test]
 fn borrow_inner_expressions_success_and_mismatch() {
-    let all_exprs = KExpression {
-        parts: vec![expr(vec![ident("a")]), expr(vec![ident("b")])],
-    };
+    let all_exprs = KExpression::new(parts_of(vec![
+        expr(vec![ident("a")]),
+        expr(vec![ident("b")]),
+    ]));
     let borrowed = all_exprs.borrow_inner_expressions().expect("all parts are expressions");
     assert_eq!(borrowed.len(), 2);
     assert_eq!(borrowed[0].summarize(), "a");
     assert_eq!(borrowed[1].summarize(), "b");
 
-    let mixed = KExpression { parts: vec![expr(vec![ident("a")]), ident("b")] };
+    let mixed = KExpression::new(parts_of(vec![expr(vec![ident("a")]), ident("b")]));
     assert!(mixed.borrow_inner_expressions().is_none());
 }
 
 #[test]
 fn try_take_inner_expressions_split_empty_returns_err() {
-    let e: KExpression<'static> = KExpression { parts: vec![] };
+    let e: KExpression<'static> = KExpression::new(vec![]);
     let err = e.try_take_inner_expressions_split().expect_err("empty must Err");
     assert!(err.parts.is_empty());
 }
 
 #[test]
 fn try_take_inner_expressions_split_first_non_expression_returns_err() {
-    let e = KExpression { parts: vec![ident("a"), expr(vec![ident("b")])] };
+    let e = KExpression::new(parts_of(vec![ident("a"), expr(vec![ident("b")])]));
     let err = e.try_take_inner_expressions_split().expect_err("non-expr head must Err");
     assert_eq!(err.summarize(), "a b");
 }
 
 #[test]
 fn try_take_inner_expressions_split_middle_non_expression_returns_err() {
-    let e = KExpression {
-        parts: vec![expr(vec![ident("a")]), ident("b"), expr(vec![ident("c")])],
-    };
+    let e = KExpression::new(parts_of(vec![
+        expr(vec![ident("a")]),
+        ident("b"),
+        expr(vec![ident("c")]),
+    ]));
     let err = e.try_take_inner_expressions_split().expect_err("non-expr middle must Err");
     assert_eq!(err.summarize(), "a b c");
 }
 
 #[test]
 fn try_take_inner_expressions_split_all_expressions_returns_ok() {
-    let e = KExpression {
-        parts: vec![
-            expr(vec![ident("a")]),
-            expr(vec![ident("b")]),
-            expr(vec![ident("c")]),
-        ],
-    };
+    let e = KExpression::new(parts_of(vec![
+        expr(vec![ident("a")]),
+        expr(vec![ident("b")]),
+        expr(vec![ident("c")]),
+    ]));
     let (preceding, last) = e.try_take_inner_expressions_split().expect("all-expr is Ok");
     assert_eq!(preceding.len(), 2);
     assert_eq!(preceding[0].summarize(), "a");
@@ -212,6 +221,6 @@ fn debug_for_expression_part_and_kexpression() {
         let s = format!("{:?}", p);
         assert!(!s.is_empty());
     }
-    let e = KExpression { parts };
+    let e = KExpression::new(parts.into_iter().map(Spanned::bare).collect());
     assert!(format!("{:?}", e).starts_with("KExpression"));
 }

@@ -15,6 +15,7 @@ mod resolve_dispatch;
 mod resolve_type_expr;
 mod scope;
 mod scope_id;
+pub mod source;
 
 #[cfg(test)]
 mod tests;
