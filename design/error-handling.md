@@ -239,12 +239,11 @@ lift stays opt-in.
 
 ## Open work
 
-[Error-handling surface follow-ups](../roadmap/libraries/error-handling.md)
-tracks the related items:
-
-- **stdlib `Result` helpers** — `map`, `bind`, `unwrap_or`, etc.;
-  gated on files-and-imports and the standard library. The `Result`
-  constructor itself is builtin (above), so user code can use it
-  before these helpers ship.
+- **`Result` combinators** — `map`, `bind`, `unwrap_or`, etc.; Koan source
+  over the builtin `Result` type, tracked under the
+  [standard library](../roadmap/libraries/standard-library.md). The `Result`
+  constructor itself is builtin (above), so user code can use it before these
+  helpers ship.
 - **Continue-on-error** — top-level continuation past a single failed
-  expression, useful for the CLI's batch mode.
+  expression, useful for the CLI's batch mode, tracked under
+  [continue-on-error for the REPL and batch mode](../roadmap/editor_tooling/continue-on-error.md).

@@ -26,9 +26,6 @@ without first landing something else:
 
 - [Files and imports](roadmap/libraries/files-and-imports.md) — wire `.koan` files together so
   a codebase can span more than one source file and files become modules.
-- [Error-handling surface follow-ups](roadmap/libraries/error-handling.md) — the `Result`
-  builtin and `CATCH expr` shipped; remaining are stdlib `Result` combinators, REPL
-  continue-on-error, and clearer type-position name diagnostics.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
 - [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md) —
@@ -80,7 +77,6 @@ Rust builtins:
 
 - [Files and imports](roadmap/libraries/files-and-imports.md)
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/libraries/monadic-side-effects.md)
-- [Error-handling surface follow-ups](roadmap/libraries/error-handling.md)
 - [Group-based operators](roadmap/libraries/group-based-operators.md)
 - [Standard library](roadmap/libraries/standard-library.md)
 
@@ -91,3 +87,4 @@ intermediate Koan state. The build-time / run-time scheduler split is the
 foundation:
 
 - [Two-phase execution: build-time with pegged inputs, run-time resume](roadmap/editor_tooling/two-phase-execution.md)
+- [Continue-on-error for the REPL and batch mode](roadmap/editor_tooling/continue-on-error.md)

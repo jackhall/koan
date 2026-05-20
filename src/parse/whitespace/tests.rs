@@ -261,6 +261,87 @@ fn no_trailing_comma_keeps_sibling_boundary() {
     assert_eq!(collapse_whitespace("foo\nbar").unwrap(), "(foo) (bar)");
 }
 
+// --- Paren continuation across line breaks ---
+
+#[test]
+fn open_paren_continues_under_greater_indent() {
+    // `PRINT (` leaves a paren open; the deeper `3.14` line nests inside it as its own
+    // group, and the `)` at the opening indent closes the literal paren. Each continuation
+    // line is wrapped (nest-per-line), so the body is `((3.14))`.
+    assert_eq!(
+        collapse_whitespace("PRINT (\n  3.14\n)").unwrap(),
+        "(PRINT ( (3.14 )))",
+    );
+}
+
+#[test]
+fn open_paren_closes_at_deeper_indent() {
+    // The matching `)` may itself sit on a deeper-indent continuation line (>= the opener),
+    // and still closes the group; it never triggered an expression break.
+    assert_eq!(
+        collapse_whitespace("PRINT (\n    3.14\n    )").unwrap(),
+        "(PRINT ( (3.14 )))",
+    );
+}
+
+#[test]
+fn open_paren_nests_each_continuation_line() {
+    // Two deeper lines under an open paren each wrap as their own nested group, so the
+    // paren body is `(A) (B)` — nest-per-line, not a flattened argument list.
+    assert_eq!(
+        collapse_whitespace("FOO (\n  A\n  B\n)").unwrap(),
+        "(FOO ( (A) (B )))",
+    );
+}
+
+#[test]
+fn nested_multiline_parens_pair_correctly() {
+    // An inner `(` opened on a deeper line closes at its own indent before the outer `)`
+    // closes at the opener's. The anchor stack keeps each paren matched to its own opener.
+    assert_eq!(
+        collapse_whitespace("FOO (\n  BAR (\n    x\n  )\n)").unwrap(),
+        "(FOO ( (BAR ( (x ) ))))",
+    );
+}
+
+#[test]
+fn open_paren_same_indent_break_is_error() {
+    // The dangling-`(` case: the `(` opens at indent 0, then `3.14` breaks at the same
+    // indentation without closing it. A clear parse error, not a downstream dispatch
+    // failure on an empty `()` group.
+    let err = collapse_whitespace("PRINT (\n3.14\n)").unwrap_err();
+    assert!(err.contains("unmatched '('"), "got: {err}");
+}
+
+#[test]
+fn close_paren_below_opener_indent_is_error() {
+    // The opener sits at indent 2; the `)` dedents to indent 0, below its opener. Closing
+    // a paren shallower than where it opened is rejected (same-or-greater close rule).
+    let err = collapse_whitespace("A\n  PRINT (\n    3.14\n)").unwrap_err();
+    assert!(err.contains("less indented"), "got: {err}");
+}
+
+#[test]
+fn comma_continuation_overrides_paren_indent_guard() {
+    // A trailing comma is an explicit continuation, so a same-indent next line is allowed
+    // even with the paren still open (the motivating multi-line UNION shape). Comma lines
+    // join flat rather than nesting.
+    assert_eq!(
+        collapse_whitespace("PRINT (,\n3.14,\n)").unwrap(),
+        "(PRINT (, 3.14, ))",
+    );
+}
+
+#[test]
+fn balanced_inline_paren_does_not_perturb_indentation() {
+    // A line whose parens balance within it (`PRINT (3.14)`) leaves no paren open, so the
+    // following line becomes a sibling group as usual.
+    assert_eq!(
+        collapse_whitespace("PRINT (3.14)\nbar").unwrap(),
+        "(PRINT (3.14)) (bar)",
+    );
+}
+
 // --- Sigil-led continuation lines ---
 
 #[test]

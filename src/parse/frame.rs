@@ -120,9 +120,11 @@ impl<'a> Frame<'a> {
     }
 }
 
-/// `)`-close case-analysis. Reject the two non-paren frame variants with a diagnostic
-/// that names the actual frame that bled through to the `)`; for Expression and TypeExpr
-/// frames, delegate to `Frame::into_part`.
+/// `)`-close case-analysis. Reaching a `)` (literal or the synthetic close the whitespace
+/// pass emits at end-of-expression) while a `[`/`{` frame is still open means that bracket
+/// was never closed — report it as an unclosed `[`/`{` pointing at the opener, not as an
+/// internal "closed paren" mismatch. Expression and TypeExpr frames delegate to
+/// `Frame::into_part`.
 pub(super) fn close_paren_to_part<'a>(
     frame: Frame<'a>,
     end: u32,
@@ -130,13 +132,13 @@ pub(super) fn close_paren_to_part<'a>(
     match frame {
         Frame::Expression { .. } => frame.into_part(end),
         Frame::TypeExpr { .. } => frame.into_part(end),
-        Frame::List { .. } => Err(KError::parse(
-            "closed paren but innermost frame is a list literal",
-            None,
+        Frame::List { span_start, .. } => Err(KError::parse(
+            "unclosed '[': this list literal was never closed with a matching ']'",
+            Some(Span { start: span_start, end: span_start + 1 }),
         )),
-        Frame::Dict { .. } => Err(KError::parse(
-            "closed paren but innermost frame is a dict literal",
-            None,
+        Frame::Dict { span_start, .. } => Err(KError::parse(
+            "unclosed '{': this dict literal was never closed with a matching '}'",
+            Some(Span { start: span_start, end: span_start + 1 }),
         )),
     }
 }

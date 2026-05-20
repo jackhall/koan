@@ -28,9 +28,18 @@ use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK};
 ///
 /// **Trailing-comma continuations.** A line ending in `,` suspends indentation through the
 /// next non-blank line, so `UNION Maybe = (some: Number,\n  none: Null)` parses as one
-/// expression. Parens (`(`) are intentionally *not* tracked the same way — they already wrap
-/// sub-expressions inside indent-structured blocks, so suspending on them would change the
-/// meaning of existing programs. Blank lines preserve the continuation flag.
+/// expression. Blank lines preserve the continuation flag.
+///
+/// **Paren continuations.** An open `(` spans line breaks, but — unlike `[`/`{` and the
+/// trailing comma — indentation-sensitively. A line *deeper* than the opener nests inside
+/// the group as its own wrapped expression (nest-per-line). The matching `)` may sit at any
+/// indentation >= its opener and closes the group. A non-closing line at the opener's indent
+/// or shallower is an *expression break* while the paren is still open — the dangling-`(`
+/// error; a `)` shallower than its opener is likewise rejected. Closing lines join lazily
+/// (no synthetic frame pop): `build_tree` pairs the literal `)` with the innermost open
+/// group, and the deeper synthetic frames close outward at the next real dedent / EOF. The
+/// open-paren anchor stack (`(indent, span)` per unclosed `(`) drives all of this, which is
+/// why parens can't ride `delim_depth` (it ignores indent).
 ///
 /// **Cursor anchors (Phase 3).** Every synthetic character inserted by this pass is preceded
 /// by a `JUMP <orig_offset> JUMP` marker so `build_tree`'s downstream cursor can recover the
@@ -50,6 +59,9 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
     let mut delim_depth: i32 = 0;
     let mut continuing: bool = false;
     let mut last_content_orig_end: u32 = 0;
+    // One `(indent, span)` per still-open `(`, innermost last (see the module doc's "Paren
+    // continuations"). The span is the opener line, used for the dangling-`(` diagnostic.
+    let mut paren_anchors: Vec<(usize, Span)> = Vec::new();
 
     let bytes = input.as_bytes();
     let mut line_start: usize = 0;
@@ -93,23 +105,63 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
         let trailing_ws_len = (line_end - line_start - indent - content.len()) as u32;
         let orig_at_next_line_start = orig_at_content_end + trailing_ws_len + nl_advance;
 
+        let paren_delta = line_paren_delta(content);
+        let content_span = Span { start: orig_at_content_start, end: orig_at_content_end };
+
+        // Append `content` verbatim onto the current group (a synthetic joining space,
+        // preceded by a JUMP, then the bytes), without opening a new frame.
+        macro_rules! join_line {
+            () => {{
+                emit_jump(&mut out, orig_at_content_start);
+                out.push(b' ');
+                out.extend_from_slice(content.as_bytes());
+                delim_depth += line_delim_delta(content);
+                adjust_parens(&mut paren_anchors, paren_delta, indent, content_span);
+                continuing = content.ends_with(',');
+                last_content_orig_end = orig_at_content_end;
+                orig_at_line_start = orig_at_next_line_start;
+                line_start = if line_end < bytes.len() { line_end + 1 } else { bytes.len() + 1 };
+                lineno += 1;
+            }};
+        }
+
+        // Explicit flat continuation (trailing comma) or an open `[`/`{` span: append
+        // verbatim regardless of indentation. Parens opened/closed on the line still adjust
+        // the anchor stack so a later indentation-governed line sees the right depth.
         if delim_depth > 0 || continuing {
-            // Continuation: synthetic joining space (preceded by JUMP) + verbatim content.
-            // The trailing comma / open bracket carried us here; we don't open a new frame.
-            emit_jump(&mut out, orig_at_content_start);
-            out.push(b' ');
-            out.extend_from_slice(content.as_bytes());
-            delim_depth += line_delim_delta(content);
-            continuing = content.ends_with(',');
-            last_content_orig_end = orig_at_content_end;
-            orig_at_line_start = orig_at_next_line_start;
-            line_start = if line_end < bytes.len() {
-                line_end + 1
-            } else {
-                bytes.len() + 1
-            };
-            lineno += 1;
+            join_line!();
             continue;
+        }
+
+        // Inside an open paren, indentation decides continuation vs. break.
+        if let Some(&(anchor_indent, anchor_span)) = paren_anchors.last() {
+            if paren_delta < 0 {
+                // A closing line: join lazily (no synthetic-frame pop) so `build_tree` pairs
+                // the literal `)` with the innermost open group. The `)` can't sit below the
+                // indent its `(` opened at.
+                if indent < anchor_indent {
+                    return Err(KError::parse(
+                        "closing ')' is less indented than the '(' it closes; a paren must \
+                         close at the same or greater indentation as its opener.",
+                        Some(content_span),
+                    ));
+                }
+                join_line!();
+                continue;
+            }
+            if indent <= anchor_indent {
+                // A non-closing line at the opener's indent (or shallower) is an expression
+                // break while the paren is still open: the dangling-`(` error. Surfacing it
+                // here gives a clear span instead of a downstream "dispatch failed for :".
+                return Err(KError::parse(
+                    "unmatched '(': an open paren must close before an expression break (a \
+                     line at the same or lesser indentation). Indent the continuation deeper, \
+                     or close the paren before breaking the line.",
+                    Some(anchor_span),
+                ));
+            }
+            // indent > anchor_indent: a deeper line nests inside the open group — fall
+            // through to the normal wrapping branch below.
         }
 
         if let Some(tab_pos) = raw.as_bytes()[..indent].iter().position(|&b| b == b'\t') {
@@ -162,6 +214,7 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
 
         stack.push(indent);
         delim_depth += line_delim_delta(content);
+        adjust_parens(&mut paren_anchors, paren_delta, indent, content_span);
         continuing = content.ends_with(',');
         last_content_orig_end = orig_at_content_end;
 
@@ -242,6 +295,31 @@ fn line_delim_delta(s: &str) -> i32 {
     let opens = s.chars().filter(|&c| c == '[' || c == '{').count() as i32;
     let closes = s.chars().filter(|&c| c == ']' || c == '}').count() as i32;
     opens - closes
+}
+
+/// Net `(` − `)` on a single (post-mask, post-trim) line. Parens inside string literals
+/// are already masked to placeholder markers, so they don't reach this count. Used to
+/// decide paren continuation across line breaks (see the dangling-`(` guard).
+fn line_paren_delta(s: &str) -> i32 {
+    let opens = s.chars().filter(|&c| c == '(').count() as i32;
+    let closes = s.chars().filter(|&c| c == ')').count() as i32;
+    opens - closes
+}
+
+/// Push/pop the open-paren anchor stack for a line whose net paren delta is `delta`. A
+/// positive delta pushes one `(indent, span)` anchor per newly opened `(`; a negative
+/// delta pops the matching number of innermost anchors (clamped so a stray `)` can't
+/// underflow — `build_tree` rejects a genuinely unbalanced stream).
+fn adjust_parens(anchors: &mut Vec<(usize, Span)>, delta: i32, indent: usize, span: Span) {
+    if delta > 0 {
+        for _ in 0..delta {
+            anchors.push((indent, span));
+        }
+    } else {
+        for _ in 0..(-delta).min(anchors.len() as i32) {
+            anchors.pop();
+        }
+    }
 }
 
 #[cfg(test)]

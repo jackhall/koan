@@ -67,13 +67,12 @@ fn close_bracket_without_open_errors() {
 
 #[test]
 fn close_paren_when_innermost_is_list_errors() {
-    // `[1 2)` opens a List frame then hits `)`, which pops unconditionally and
-    // delegates to `close_paren_to_part` — the List arm rejects with a
-    // diagnostic naming the wrong frame.
+    // `[1 2)` opens a List frame then hits `)` before a `]` — the bracket was never
+    // closed. The diagnostic reports the unclosed `[`, not an internal frame mismatch.
     let err = tree("[1 2)").unwrap_err();
     assert!(
-        err.contains("list literal"),
-        "expected diagnostic naming list-literal frame, got: {err}",
+        err.contains("unclosed '['"),
+        "expected unclosed-'[' diagnostic, got: {err}",
     );
 }
 
@@ -82,8 +81,8 @@ fn close_paren_when_innermost_is_dict_errors() {
     // Symmetric to the list case for `{a: 1)`.
     let err = tree("{a: 1)").unwrap_err();
     assert!(
-        err.contains("dict literal"),
-        "expected diagnostic naming dict-literal frame, got: {err}",
+        err.contains("unclosed '{'"),
+        "expected unclosed-'{{' diagnostic, got: {err}",
     );
 }
 
