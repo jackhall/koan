@@ -1,8 +1,8 @@
 # columns: date  short-sha  per-loc  coupling  nesting  size
 # (all four numeric columns are per root-loc)
 # managed by tools/modgraph.py --baseline; newest first, capped to 5 entries
+2026-05-20 57d51ab+ 198.42 72.74 60.83 64.84
+2026-05-20 3c2c122+ 198.42 72.74 60.83 64.84
 2026-05-19 6774a47+ 197.90 72.54 60.90 64.46
 2026-05-19 b11e423+ 196.41 71.94 60.54 63.94
 2026-05-19 ce62255+ 196.41 71.94 60.54 63.94
-2026-05-19 1e139a1+ 197.29 72.25 60.73 64.31
-2026-05-19 769ef21+ 196.50 71.90 60.79 63.81

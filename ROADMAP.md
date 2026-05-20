@@ -14,8 +14,9 @@ Design rationale for what's already in the language lives in [design/](design/) 
 topical docs covering the execution model, memory model, functional programming,
 expressions and parsing, and error handling, plus the [design/typing/](design/typing/README.md)
 subdirectory covering the type and module systems end-to-end (the module language and
-runtime type system shipped, implicit-search and axiom stages tracked as `module-system-*`
-roadmap items below). [design/effects.md](design/effects.md) captures the in-language
+runtime type system shipped — including `USING … SCOPE` block-scoped module opening, which
+surfaces a module value's members as bare names for the duration of a block — with
+implicit-search and axiom stages tracked as `module-system-*` roadmap items below). [design/effects.md](design/effects.md) captures the in-language
 monadic side-effects design (tracked in [roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md)).
 
 ## Next items

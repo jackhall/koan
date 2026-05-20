@@ -30,6 +30,7 @@ mod try_with;
 mod type_call;
 mod type_ops;
 mod union;
+mod using_scope;
 mod val_decl;
 mod value_lookup;
 mod value_pass;
@@ -153,6 +154,7 @@ pub fn default_scope<'a>(
     type_call::register(scope);
     match_case::register(scope);
     try_with::register(scope);
+    using_scope::register(scope);
     catch::register(scope);
     attr::register(scope);
     quote::register(scope);

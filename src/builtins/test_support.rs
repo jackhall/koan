@@ -10,6 +10,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
+use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::machine::{KError, RuntimeArena, Scope};
 use crate::machine::execute::Scheduler;
@@ -86,6 +87,43 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
         sched.add_dispatch(expr, scope);
     }
     sched.execute().expect("scheduler should succeed");
+}
+
+/// Fetch the single bare-`FN` overload whose signature's first keyword is `keyword`,
+/// searching the `functions` dispatch buckets. Bare FN keywords no longer mirror into
+/// `data` (only `LET f = (FN …)` does), so tests that inspect a registered function's
+/// signature read it from the dispatch surface through this helper. Panics if no overload
+/// or more than one is found under `keyword`.
+pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
+    let funcs = scope.bindings().functions();
+    let mut found: Option<&'a KFunction<'a>> = None;
+    for bucket in funcs.values() {
+        for f in bucket {
+            let first_kw = f.signature.elements.iter().find_map(|e| match e {
+                SignatureElement::Keyword(s) => Some(s.as_str()),
+                _ => None,
+            });
+            if first_kw == Some(keyword) {
+                assert!(found.is_none(), "ambiguous: multiple overloads under `{keyword}`");
+                found = Some(*f);
+            }
+        }
+    }
+    found.unwrap_or_else(|| panic!("no FN overload registered under `{keyword}`"))
+}
+
+/// True iff some `functions` bucket holds an overload whose first keyword is `keyword`.
+/// Negative-path companion to [`lookup_fn`] for "this FN should not register" assertions
+/// (which can no longer be expressed as `data.get(keyword).is_none()` now that bare FN
+/// keywords never land in `data`).
+pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
+    let funcs = scope.bindings().functions();
+    funcs.values().flatten().any(|f| {
+        f.signature.elements.iter().find_map(|e| match e {
+            SignatureElement::Keyword(s) => Some(s.as_str()),
+            _ => None,
+        }) == Some(keyword)
+    })
 }
 
 /// Allocate a labeled marker object on `scope`'s arena. Dispatch tests register builtins

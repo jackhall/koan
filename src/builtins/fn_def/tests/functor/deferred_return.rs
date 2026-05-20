@@ -1,6 +1,6 @@
 //! Return-type expressions that reference earlier parameters (`MODULE_TYPE_OF p`, bare param name, `SIG_WITH p.T`), resolved per-call.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{lookup_fn, parse_one, run, run_one, run_root_silent};
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
 
@@ -26,17 +26,12 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         scope,
         "FN (USE_ID Er :OrderedSig) -> Er = (Er)",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("USE_ID") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("USE_ID should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "USE_ID");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "USE_ID's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    drop(data);
     // Invoke and verify the per-call slot check accepts the bound module.
     let result = run_one(scope, parse_one("USE_ID int_ord"));
     match result {
@@ -104,11 +99,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
         scope,
         "FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("GET_ZERO") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("GET_ZERO should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "GET_ZERO");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "GET_ZERO's return type should be Deferred, got {:?}",
@@ -139,17 +130,12 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
         "FN (MK Er :OrderedSig) -> (SIG_WITH Set ((Elt (MODULE_TYPE_OF Er Type)))) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("MK") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("MK should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "MK");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "MK's return type should be Deferred, got {:?}",
         f.signature.return_type,
     );
-    drop(data);
     // Body's `MODULE Result` isn't sig-ascribed to `Set`, so its `compatible_sigs` is
     // empty and the SignatureBound check rejects on membership before the pin check.
     // This is the same situation as `functor_return_with_mismatched_sharing_constraint_errors`,

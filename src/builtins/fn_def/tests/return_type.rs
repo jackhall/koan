@@ -1,6 +1,8 @@
 //! Parsing the `-> Type` slot, and the runtime return-type check.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{
+    fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
+};
 use crate::machine::model::{KObject, KType, ReturnType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::machine::execute::Scheduler;
@@ -14,12 +16,7 @@ fn fn_parses_declared_return_type_onto_signature() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
-    let data = scope.bindings().data();
-    let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
-    let f = match entry {
-        KObject::KFunction(f, _) => *f,
-        _ => panic!("expected DOUBLE to bind a KFunction"),
-    };
+    let f = lookup_fn(scope, "DOUBLE");
     assert_eq!(f.signature.return_type, ReturnType::Resolved(KType::Number));
 }
 
@@ -36,8 +33,7 @@ fn fn_without_return_type_annotation_does_not_register() {
         sched.add_dispatch(expr, scope);
     }
     let _ = sched.execute(); // ignore: may or may not error depending on which sub fails first
-    let data = scope.bindings().data();
-    assert!(data.get("DOUBLE").is_none(), "DOUBLE should not be registered without -> Type");
+    assert!(!fn_is_registered(scope, "DOUBLE"), "DOUBLE should not be registered without -> Type");
 }
 
 /// Unknown type name in the return slot surfaces as a `ShapeError`.

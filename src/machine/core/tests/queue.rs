@@ -67,9 +67,9 @@ fn drain_debug_asserts_on_invariant_violation() {
     scope.drain_pending();
 }
 
-/// `register_function` under a live `data` borrow defers via `defer_function`;
-/// drain replays through the `Function` arm and lands the binding in both
-/// `data` and the per-signature `functions` bucket. Pins the FN-side mirror of
+/// Bare `FN` registration under a live `functions` borrow defers via `defer_function`;
+/// drain replays through the `Function` arm and lands the binding in the per-signature
+/// `functions` bucket only (no `data` mirror). Pins the FN-side mirror of
 /// `add_during_active_data_borrow_queues_and_drains`, which only exercises the
 /// `Value` arm — without this the `defer_function` constructor and the
 /// `Function` arm's `Applied` branch never run in the suite.
@@ -81,13 +81,15 @@ fn register_function_defers_and_drains_through_function_arm() {
     let obj = arena.alloc_object(KObject::KFunction(kfn, None));
     let key = kfn.signature.untyped_key();
     {
-        let snapshot = scope.bindings().data();
+        // Bare FN registration contends on `functions` (not `data`), so hold a live
+        // `functions` borrow to force the defer.
+        let snapshot = scope.bindings().functions();
         scope.register_function("g".to_string(), kfn, obj).unwrap();
-        assert!(!snapshot.contains_key("g"));
+        assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
     }
     scope.drain_pending();
-    let data = scope.bindings().data();
-    assert!(matches!(data.get("g"), Some(KObject::KFunction(_, _))));
+    // Bare FN lands only in `functions`; nothing mirrors into `data`.
+    assert!(scope.bindings().data().get("g").is_none());
     let funcs = scope.bindings().functions();
     assert!(funcs.get(&key).map(|b| !b.is_empty()).unwrap_or(false));
 }
@@ -112,22 +114,25 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
     assert!(matches!(scope.bindings().data().get("v"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
-/// `Function`-arm `Conflict` re-queue — same shape as the `Value` variant,
-/// but the deferred write is a `register_function`.
+/// `Function`-arm `Conflict` re-queue — same shape as the `Value` variant, but the
+/// deferred write is a bare `register_function`, which contends on `functions` rather
+/// than `data`.
 #[test]
 fn drain_requeues_function_on_persistent_borrow_conflict() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let kfn = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
     let obj = arena.alloc_object(KObject::KFunction(kfn, None));
+    let key = kfn.signature.untyped_key();
 
-    let snapshot = scope.bindings().data();
+    let snapshot = scope.bindings().functions();
     scope.register_function("g".to_string(), kfn, obj).unwrap();
     scope.drain_pending();
-    assert!(!snapshot.contains_key("g"));
+    assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
     drop(snapshot);
     scope.drain_pending();
-    assert!(matches!(scope.bindings().data().get("g"), Some(KObject::KFunction(_, _))));
+    let funcs = scope.bindings().functions();
+    assert!(funcs.get(&key).map(|b| !b.is_empty()).unwrap_or(false));
 }
 
 /// `Type`-arm `Conflict` re-queue. The defer is induced by a live `types`
@@ -163,7 +168,9 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
     let kfn2 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
     let obj2 = arena.alloc_object(KObject::KFunction(kfn2, None));
 
-    let snapshot = scope.bindings().data();
+    // Bare FN registration contends on `functions`, so hold a `functions` borrow to
+    // force step "a" to defer.
+    let snapshot = scope.bindings().functions();
     scope.register_function("a".to_string(), kfn1, obj1).unwrap();
     drop(snapshot);
     scope.register_function("b".to_string(), kfn2, obj2).unwrap();

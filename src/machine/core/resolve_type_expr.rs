@@ -58,7 +58,7 @@ impl<'a> Scope<'a> {
     ///   structured `ShapeError`.
     pub fn resolve_type_expr(&'a self, te: &TypeExpr) -> ResolveTypeExprOutcome<'a> {
         use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
-        if let Some(kt) = self.bindings.type_expr_memo_get(te) {
+        if let Some(kt) = self.type_expr_memo_get(te) {
             return ResolveTypeExprOutcome::Done(kt);
         }
         let mut elaborator = Elaborator::new(self);
@@ -67,7 +67,7 @@ impl<'a> Scope<'a> {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
                     let kt_ref: &'a KType = self.arena.alloc_ktype(kt);
-                    self.bindings.type_expr_memo_insert(te.clone(), kt_ref);
+                    self.type_expr_memo_insert(te.clone(), kt_ref);
                     ResolveTypeExprOutcome::Done(kt_ref)
                 } else {
                     ResolveTypeExprOutcome::Park(pending)

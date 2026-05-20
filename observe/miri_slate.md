@@ -35,7 +35,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-26 tests, grouped by the unsafe site each pins down. Names below are the exact
+29 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **Singleton transmutes** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the `'static`→`'a`
@@ -90,6 +90,19 @@ code by typestate; pinned in the slate because tree borrows catches the
 violation if the queue/drain discipline regresses.)
 
 - `add_during_active_data_borrow_queues_and_drains`
+
+**`USING … SCOPE` transparent-window aliasing** ([src/machine/core/scope.rs](../src/machine/core/scope.rs)) — a
+`ScopeBindings::Borrowed` window reads another scope's `RefCell` maps through a
+borrowed reference, and the block (run in a transparent scope allocated in the
+call-site arena) can define a closure that escapes carrying that window. Pins
+that an escaping closure reading a surfaced member of a functor-result module —
+bound or temporary, the latter relying on the call-site-arena `Rc` rooting —
+does not dangle into the freed module/USING arena. (Safe code by construction;
+pinned because tree borrows catches a regression in the aliasing or rooting
+discipline.)
+
+- `using_functor_result_closure_escapes_soundly`
+- `using_temporary_functor_result_is_sound`
 
 **MATCH on `Tagged` recursion** ([src/builtins/match_case.rs](../src/builtins/match_case.rs)) — the
 `outer_frame` chain keeps the call-site arena alive across TCO replace when a
@@ -175,9 +188,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-05-20: 597.64s — 29 tests, 0 leaks, 0 UB
 - 2026-05-18: 507.72s — 27 tests, 0 leaks, 0 UB
 - 2026-05-14: 371.79s — 24 tests, 0 leaks, 0 UB
 - 2026-05-12: 283.68s — 22 tests, 0 leaks, 0 UB
 - 2026-05-10: 281.61s — 24 tests, 0 leaks, 0 UB
-- 2026-05-09: 266.18s — 23 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

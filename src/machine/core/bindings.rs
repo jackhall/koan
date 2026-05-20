@@ -152,20 +152,25 @@ impl<'a> Bindings<'a> {
         name: &str,
         obj: &'a KObject<'a>,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, obj.as_function())
+        self.try_apply(name, obj, obj.as_function(), true)
     }
 
-    /// FN-style overload registration. Adds `fn_ref` to the `functions` bucket keyed by
-    /// its untyped signature, then inserts `obj` into `data[name]`. Errors:
+    /// Bare-`FN` overload registration. Adds `fn_ref` to the `functions` bucket keyed by
+    /// its untyped signature *only* — it does **not** mirror `obj` into `data[name]`, so a
+    /// bare FN keyword is dispatchable but not nameable as a value (use `LET f = (FN …)`
+    /// for that). Errors:
     /// - `DuplicateOverload` if the bucket already holds an exact-signature equal function.
-    /// - `Rebind` if `data[name]` holds a non-function.
+    ///
+    /// `obj` is unused on the write side today (no `data` insert) but kept in the signature
+    /// so the call site, which has a `&KObject` carrier in hand, stays uniform with
+    /// [`Bindings::try_bind_value`].
     pub fn try_register_function(
         &self,
         name: &str,
         fn_ref: &'a KFunction<'a>,
         obj: &'a KObject<'a>,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, Some(fn_ref))
+        self.try_apply(name, obj, Some(fn_ref), false)
     }
 
     /// Register `name` → `kt` in the type-binding map. Errors `Rebind` if
@@ -286,7 +291,7 @@ impl<'a> Bindings<'a> {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
         for (name, obj) in snapshot {
-            match self.try_apply(&name, obj, obj.as_function())? {
+            match self.try_apply(&name, obj, obj.as_function(), true)? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -330,15 +335,25 @@ impl<'a> Bindings<'a> {
     /// outer `functions` borrow. `Conflict` is reserved for borrow contention;
     /// semantic errors come through `Err(KError)`.
     ///
-    /// Unified dedupe: when `fn_part.is_some()` and a same-name `data` entry
-    /// exists, walk the bucket — `ptr::eq` is silent-success short-circuit
-    /// (preserves intentional aliases like `LET g = (f)`), `exact_equal` raises
-    /// `DuplicateOverload`. Both `FN`-decl and `LET`-binds-`FN` paths see both rules.
+    /// `write_data` selects between the value-carrying paths (LET value, LET-binds-FN
+    /// capture: `true`) and the bare-`FN` dispatch-only path (`false`). When `false`,
+    /// only the `functions` bucket is touched — no `data` borrow, no rebind pre-check,
+    /// no insert — so a bare FN keyword never lands as a value binding. The
+    /// `(fn_part, write_data)` matrix that actually occurs: `(None, true)` plain LET
+    /// value, `(Some, true)` LET-fn capture, `(Some, false)` bare FN. `(None, false)`
+    /// never occurs (only `try_register_function` passes `false`, and it always has a
+    /// `fn_part`).
+    ///
+    /// Unified dedupe: when `fn_part.is_some()`, walk the bucket — `ptr::eq` is
+    /// silent-success short-circuit (preserves intentional aliases like `LET g = (f)`),
+    /// `exact_equal` raises `DuplicateOverload`. Both `FN`-decl and `LET`-binds-`FN`
+    /// paths see both rules.
     fn try_apply(
         &self,
         name: &str,
         obj: &'a KObject<'a>,
         fn_part: Option<&'a KFunction<'a>>,
+        write_data: bool,
     ) -> Result<ApplyOutcome, KError> {
         let mut functions_handle = if fn_part.is_some() {
             match self.functions.try_borrow_mut() {
@@ -348,18 +363,26 @@ impl<'a> Bindings<'a> {
         } else {
             None
         };
-        let mut data = match self.data.try_borrow_mut() {
-            Ok(d) => d,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
+        // Bare FN: skip the `data` borrow, pre-check, and insert entirely — the
+        // dispatch surface lives in `functions` only.
+        let mut data = if write_data {
+            match self.data.try_borrow_mut() {
+                Ok(d) => Some(d),
+                Err(_) => return Ok(ApplyOutcome::Conflict),
+            }
+        } else {
+            None
         };
         // `fn_part.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
-        if let Some(existing) = data.get(name) {
-            match fn_part {
-                None => return Err(KError::new(KErrorKind::Rebind { name: name.to_string() })),
-                Some(_) => {
-                    if !matches!(existing, KObject::KFunction(_, _)) {
-                        return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+        if let Some(data) = data.as_ref() {
+            if let Some(existing) = data.get(name) {
+                match fn_part {
+                    None => return Err(KError::new(KErrorKind::Rebind { name: name.to_string() })),
+                    Some(_) => {
+                        if !matches!(existing, KObject::KFunction(_, _)) {
+                            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+                        }
                     }
                 }
             }
@@ -384,7 +407,9 @@ impl<'a> Bindings<'a> {
                 bucket.push(f_ref);
             }
         }
-        data.insert(name.to_string(), obj);
+        if let Some(data) = data.as_mut() {
+            data.insert(name.to_string(), obj);
+        }
         drop(data);
         drop(functions_handle);
         self.clear_placeholder_best_effort(name);

@@ -1,6 +1,6 @@
 //! `SIG_WITH` sharing constraints on functor parameters and return types.
 
-use crate::builtins::test_support::{parse_one, run, run_root_silent};
+use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::model::KObject;
 use crate::machine::{RuntimeArena, ScopeId};
 
@@ -105,11 +105,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     // `compatible_sigs` set is empty — the return-type check would fail on the sig
     // membership before even checking the pins. Verify the FN at least *registered* with
     // the pinned signature on its stored return type.
-    let data = scope.bindings().data();
-    let f = match data.get("TWOPIN") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("TWOPIN should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
         ReturnType::Resolved(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
@@ -156,11 +152,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         "FN (MAKESETN p :OrderedSig) -> (SIG_WITH SetSig ((Elt :Number))) = \
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("MAKESETN") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("MAKESETN should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "MAKESETN");
     // Stored return type: SignatureBound { sig_path: "SetSig", pinned_slots: [("Elt", Number)] }.
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {

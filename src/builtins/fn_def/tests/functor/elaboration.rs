@@ -1,6 +1,6 @@
 //! Scope-aware type elaboration of FN signatures: signature-bound params, LET→FN ordering, type-value bindings.
 
-use crate::builtins::test_support::{run, run_root_silent};
+use crate::builtins::test_support::{fn_is_registered, lookup_fn, run, run_root_silent};
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
 
@@ -68,11 +68,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
         Some(KObject::KSignature(s)) => s.sig_id(),
         other => panic!("OrderedSig should be a signature, got {:?}", other.map(|o| o.ktype())),
     };
-    let entry = data.get("USE_ORD").expect("USE_ORD should be bound");
-    let f = match entry {
-        KObject::KFunction(f, _) => *f,
-        _ => panic!("expected USE_ORD to bind a KFunction"),
-    };
+    let f = lookup_fn(scope, "USE_ORD");
     match f.signature.elements.as_slice() {
         [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
             assert_eq!(kw, "USE_ORD");
@@ -113,13 +109,11 @@ fn let_then_fn_in_same_batch_works() {
     }
     sched.execute().unwrap();
     // Post-stage-1.7 the LET TypeExprRef overload writes `MyList` into `bindings.types`,
-    // not `data` — check the type-side map. The FN-def's `USE` binding still lives on
-    // `data` like any other function binding.
+    // not `data` — check the type-side map. The bare FN-def's `USE` binding lives in the
+    // `functions` dispatch bucket (no `data` mirror).
     assert!(
         scope.resolve_type("MyList").is_some(),
         "MyList should be bound in bindings.types after the batch executes",
     );
-    let data = scope.bindings().data();
-    let use_fn = data.get("USE").expect("USE should be bound by the FN definition");
-    assert!(matches!(use_fn, KObject::KFunction(_, _)));
+    assert!(fn_is_registered(scope, "USE"), "USE should be registered by the FN definition");
 }

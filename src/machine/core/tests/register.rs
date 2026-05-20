@@ -120,19 +120,26 @@ fn register_function_allows_overload_with_different_arg_types() {
     scope.register_function("BAR".to_string(), f2, obj2).unwrap();
 }
 
+/// A bare `FN` keyword may coexist with a same-name value binding: `register_function`
+/// touches only the `functions` bucket, never `data`, so it neither sees nor collides
+/// with a value already in `data[name]`. The two namespaces stay independent — `resolve`
+/// reads `data`, dispatch reads `functions`.
 #[test]
-fn register_function_errors_on_function_value_collision() {
+fn register_function_coexists_with_same_name_value() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let v = arena.alloc_object(KObject::Number(1.0));
     scope.bind_value("FOO".to_string(), v).unwrap();
     let f = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
     let obj = arena.alloc_object(KObject::KFunction(f, None));
-    let err = scope.register_function("FOO".to_string(), f, obj).unwrap_err();
-    assert!(
-        matches!(&err.kind, crate::machine::core::KErrorKind::Rebind { name } if name == "FOO"),
-        "expected Rebind on function/value collision, got {err}",
-    );
+    scope
+        .register_function("FOO".to_string(), f, obj)
+        .expect("bare FN registration must not collide with a same-name value");
+    // The value binding survives untouched in `data`.
+    assert!(matches!(scope.bindings().data().get("FOO").copied(), Some(KObject::Number(n)) if *n == 1.0));
+    // The function landed in the dispatch bucket.
+    let key = f.signature.untyped_key();
+    assert!(scope.bindings().functions().get(&key).map(|b| !b.is_empty()).unwrap_or(false));
 }
 
 #[test]
