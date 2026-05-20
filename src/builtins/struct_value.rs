@@ -150,7 +150,7 @@ fn primitive_body<'a>(
         }
     };
     let values = match bundle.get("values") {
-        Some(KObject::List(items)) => Rc::clone(items),
+        Some(KObject::List(items, _)) => Rc::clone(items),
         Some(other) => {
             return BodyResult::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "values".to_string(),

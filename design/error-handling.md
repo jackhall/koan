@@ -137,9 +137,17 @@ registered at prelude, a user `UNION Result = (...)` is rejected with `Rebind`:
 the binder-placeholder install refuses a name already bound to a non-function
 value.
 
-Type parameters are erased at runtime, as for `List` / `Dict`: `Result<T, KError>`
-and `Result<T, MyErr>` share one value identity, and `:(Result T E)` is not a
-runtime-checkable slot type — `:Tagged` is. Carrying type arguments at runtime is
+A `Result` value's type arguments are erased at construction — both `CATCH`
+and a `Result (ok v)` / `Result (error e)` constructor leave the carrier's
+`type_args` empty. A `:(Result T E)` slot is nonetheless runtime-checkable: the
+`matches_value(ConstructorApply, Tagged)` arm (see
+[ktype.md § Runtime type-parameter carriers](typing/ktype.md#runtime-type-parameter-carriers))
+confirms the constructor identity and then checks the *inhabited* tag's payload
+against the type argument that field maps to (`ok`→`T`, `error`→`E`). So a caught
+`Result<_, KError>` is rejected where a `Result<_, MyErr>` is declared, because
+the `error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
+annotated boundary stamps the carrier's `type_args` to the declared instantiation;
+the remaining per-call parameter-slot binding for generic value-slot functions is
 tracked under
 [runtime carriers for type parameters](../roadmap/predicate_typing/runtime-type-parameter-carriers.md).
 

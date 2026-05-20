@@ -359,7 +359,7 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let nested = KObject::List(Rc::new(vec![KObject::KFunction(kf_ref, None)]));
+    let nested = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
     future.bundle.args.insert("nested".into(), Rc::new(nested));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);

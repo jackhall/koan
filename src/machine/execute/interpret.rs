@@ -40,9 +40,22 @@ pub fn interpret_with_writer_path(
     scheduler.execute()?;
     // Top-level dispatches share the run-root scope and execute independently; surface
     // the first errored result as the program's outcome.
+    //
+    // Empty-container error rule: a bare top-level expression is an untyped resolution
+    // boundary. An unstamped empty `[]` / `{}` reaching it has no element type to infer
+    // and was never given one by an annotation — reject it rather than silently resolve to
+    // `List<Any>` / `Dict<Any, Any>`.
     for id in top_level {
-        if let Err(e) = scheduler.read_result(id) {
-            return Err(e.clone());
+        match scheduler.read_result(id) {
+            Err(e) => return Err(e.clone()),
+            Ok(value) if value.is_unstamped_empty_container() => {
+                return Err(KError::new(crate::machine::KErrorKind::ShapeError(
+                    "bare empty container has no element type to infer; annotate its \
+                     type (e.g. via a typed FN return) or use a non-empty literal"
+                        .to_string(),
+                )));
+            }
+            Ok(_) => {}
         }
     }
     Ok(())

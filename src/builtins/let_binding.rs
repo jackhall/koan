@@ -151,8 +151,23 @@ pub fn body<'a>(
         if let Err(e) = scope.register_nominal(name, identity, allocated) {
             return err(e);
         }
-    } else if let Err(e) = scope.bind_value(name, allocated) {
-        return err(e);
+    } else {
+        // Empty-container error rule: an untyped `LET` binding is an untyped resolution
+        // boundary. An empty `[]` / `{}` with no stamped element type (carrier element
+        // type `Any`) has no join to infer from and was never given a type by an
+        // annotation upstream — binding it would silently fix `List<Any>` / `Dict<Any,
+        // Any>`. Reject it; the user must annotate the producing boundary (an FN return
+        // type) or use a non-empty literal.
+        if allocated.is_unstamped_empty_container() {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "empty container bound to `{name}` has no element type to infer; \
+                 annotate the value's type (e.g. via a typed FN return) or use a \
+                 non-empty literal",
+            ))));
+        }
+        if let Err(e) = scope.bind_value(name, allocated) {
+            return err(e);
+        }
     }
     BodyResult::Value(allocated)
 }

@@ -54,7 +54,7 @@ fn mu_matches_value_via_one_unfold() {
         body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
     };
     // Empty list — element type is unconstrained anyway.
-    let v = KObject::List(vec![].into());
+    let v = KObject::list(vec![]);
     assert!(t.matches_value(&v));
     // Non-list shouldn't pass through.
     assert!(!t.matches_value(&KObject::Number(1.0)));
@@ -66,7 +66,7 @@ fn recursive_ref_accepts_anything_phase_one() {
     // tightens this by threading the enclosing `Mu`'s body through the predicate.
     let t = KType::RecursiveRef("Tree".into());
     assert!(t.matches_value(&KObject::Number(1.0)));
-    assert!(t.matches_value(&KObject::List(vec![].into())));
+    assert!(t.matches_value(&KObject::list(vec![])));
 }
 
 /// `AnyUserType { kind: Struct }` accepts `Future(KObject::Struct{..})` and rejects
@@ -94,6 +94,7 @@ fn any_user_type_struct_accepts_struct_future_only() {
         value: Rc::new(KObject::Number(1.0)),
         scope_id: ScopeId::SENTINEL,
         name: "Maybe".into(),
+        type_args: Rc::new(vec![]),
     });
     let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
     assert!(t.accepts_part(&ExpressionPart::Future(s)));
@@ -301,4 +302,200 @@ fn is_more_specific_for_pinned_signature_bound() {
     assert!(bare.is_more_specific_than(&any_module));
     assert!(pinned_number.is_more_specific_than(&any_module));
     assert!(pinned_two.is_more_specific_than(&any_module));
+}
+
+/// Build a `Result`-named `Tagged` value occupying `tag` with `payload`. `result_sid` is
+/// the declaring scope id; the inner `payload` is itself a `Tagged` carrier whose name is
+/// the error type's nominal identity.
+fn result_value<'a>(result_sid: ScopeId, tag: &str, payload: KObject<'a>) -> KObject<'a> {
+    KObject::Tagged {
+        tag: tag.into(),
+        value: std::rc::Rc::new(payload),
+        scope_id: result_sid,
+        name: "Result".into(),
+        type_args: std::rc::Rc::new(vec![]),
+    }
+}
+
+/// A bare error carrier (`Tagged` named `error_name`) standing in for a caught error
+/// value. `ktype()` reports `UserType { kind: Tagged, scope_id, name }`.
+fn error_carrier<'a>(error_sid: ScopeId, error_name: &str) -> KObject<'a> {
+    KObject::Tagged {
+        tag: "_".into(),
+        value: std::rc::Rc::new(KObject::Number(0.0)),
+        scope_id: error_sid,
+        name: error_name.into(),
+        type_args: std::rc::Rc::new(vec![]),
+    }
+}
+
+/// `:(Result T E)` slot admission: a `ConstructorApply` slot whose ctor identity matches
+/// the `Result` carrier admits an `error(...)` value iff the inhabited `error` payload
+/// (param index 1) satisfies the slot's `E`. A caught `error(KError)` is rejected where
+/// `E = MyErr` and accepted where `E = KError` / `Any`.
+#[test]
+fn constructor_apply_result_checks_inhabited_error_param() {
+    let result_sid = ScopeId::from_raw(0, 0x9001);
+    let kerror_sid = ScopeId::from_raw(0, 0x9002);
+    let myerr_sid = ScopeId::from_raw(0, 0x9003);
+
+    let ctor = Box::new(KType::UserType {
+        kind: UserTypeKind::TypeConstructor { param_names: vec!["T".into(), "E".into()] },
+        scope_id: result_sid,
+        name: "Result".into(),
+    });
+    let myerr_ty = KType::UserType {
+        kind: UserTypeKind::Tagged,
+        scope_id: myerr_sid,
+        name: "MyErr".into(),
+    };
+    let kerror_ty = KType::UserType {
+        kind: UserTypeKind::Tagged,
+        scope_id: kerror_sid,
+        name: "KError".into(),
+    };
+
+    // Slot `:(Result Any MyErr)`.
+    let slot_myerr = KType::ConstructorApply {
+        ctor: ctor.clone(),
+        args: vec![KType::Any, myerr_ty.clone()],
+    };
+    // A caught `error(KError)` value.
+    let caught = result_value(result_sid, "error", error_carrier(kerror_sid, "KError"));
+    // KError error is NOT a MyErr — rejected.
+    assert!(!slot_myerr.matches_value(&caught));
+
+    // Same value admitted where `E = KError`.
+    let slot_kerror = KType::ConstructorApply {
+        ctor: ctor.clone(),
+        args: vec![KType::Any, kerror_ty.clone()],
+    };
+    assert!(slot_kerror.matches_value(&caught));
+
+    // A `MyErr` error value satisfies `:(Result Any MyErr)`.
+    let my_error = result_value(result_sid, "error", error_carrier(myerr_sid, "MyErr"));
+    assert!(slot_myerr.matches_value(&my_error));
+}
+
+/// The `ok` field maps to param 0, so `:(Result Number E)` checks the `ok` payload
+/// against `Number` regardless of `E`: an `ok(42)` value admits any `E` (the absent
+/// `error` parameter is unconstrained at the value).
+#[test]
+fn constructor_apply_result_ok_admits_any_error_param() {
+    let result_sid = ScopeId::from_raw(0, 0x9001);
+    let myerr_sid = ScopeId::from_raw(0, 0x9003);
+    let ctor = Box::new(KType::UserType {
+        kind: UserTypeKind::TypeConstructor { param_names: vec!["T".into(), "E".into()] },
+        scope_id: result_sid,
+        name: "Result".into(),
+    });
+    let myerr_ty = KType::UserType {
+        kind: UserTypeKind::Tagged,
+        scope_id: myerr_sid,
+        name: "MyErr".into(),
+    };
+    // `ok(42)` value.
+    let ok_value = result_value(result_sid, "ok", KObject::Number(42.0));
+    // `:(Result Number MyErr)` — ok payload is Number, error side unoccupied.
+    let slot = KType::ConstructorApply {
+        ctor: ctor.clone(),
+        args: vec![KType::Number, myerr_ty],
+    };
+    assert!(slot.matches_value(&ok_value));
+    // `:(Result Str MyErr)` rejects — ok payload Number is not Str.
+    let slot_str = KType::ConstructorApply {
+        ctor,
+        args: vec![KType::Str, KType::Any],
+    };
+    assert!(!slot_str.matches_value(&ok_value));
+}
+
+/// `result_field_param_index` is the field→param linkage source of truth: `ok`→0,
+/// `error`→1, `None` for any other carrier or tag.
+#[test]
+fn result_field_param_index_table() {
+    assert_eq!(super::result_field_param_index("Result", "ok"), Some(0));
+    assert_eq!(super::result_field_param_index("Result", "error"), Some(1));
+    assert_eq!(super::result_field_param_index("Result", "other"), None);
+    assert_eq!(super::result_field_param_index("Maybe", "ok"), None);
+}
+
+/// Phase 6 covariance for `ConstructorApply` carriers: a `Result<Number, MyErr>` value is
+/// admitted by the coarser `:(Result Any Any)` slot (covariant in every arg), and the
+/// refined `:(Result Number MyErr)` slot is strictly more specific than the coarse one, so
+/// dispatch tie-breaks toward the refined overload.
+#[test]
+fn constructor_apply_covariant_admission_and_specificity() {
+    let result_sid = ScopeId::from_raw(0, 0x9001);
+    let myerr_sid = ScopeId::from_raw(0, 0x9003);
+    let ctor = Box::new(KType::UserType {
+        kind: UserTypeKind::TypeConstructor { param_names: vec!["T".into(), "E".into()] },
+        scope_id: result_sid,
+        name: "Result".into(),
+    });
+    let myerr = KType::UserType {
+        kind: UserTypeKind::Tagged,
+        scope_id: myerr_sid,
+        name: "MyErr".into(),
+    };
+    // Value stamped `Result<Number, MyErr>`.
+    let stamped = KObject::Tagged {
+        tag: "ok".into(),
+        value: std::rc::Rc::new(KObject::Number(1.0)),
+        scope_id: result_sid,
+        name: "Result".into(),
+        type_args: std::rc::Rc::new(vec![KType::Number, myerr.clone()]),
+    };
+    let coarse = KType::ConstructorApply {
+        ctor: ctor.clone(),
+        args: vec![KType::Any, KType::Any],
+    };
+    let refined = KType::ConstructorApply {
+        ctor,
+        args: vec![KType::Number, myerr],
+    };
+    // Covariant admission: the coarse slot admits the precise value.
+    assert!(coarse.matches_value(&stamped));
+    assert!(refined.matches_value(&stamped));
+    // Refined strictly more specific than coarse.
+    assert!(refined.is_more_specific_than(&coarse));
+    assert!(!coarse.is_more_specific_than(&refined));
+}
+
+/// A populated `type_args` carrier (stamped by ascription) is checked structurally against
+/// the slot args, taking precedence over the inhabited-tag path.
+#[test]
+fn constructor_apply_stamped_type_args_checked_structurally() {
+    let result_sid = ScopeId::from_raw(0, 0x9001);
+    let ctor = Box::new(KType::UserType {
+        kind: UserTypeKind::TypeConstructor { param_names: vec!["T".into(), "E".into()] },
+        scope_id: result_sid,
+        name: "Result".into(),
+    });
+    // A value stamped `Result<Number, Str>`.
+    let stamped = KObject::Tagged {
+        tag: "ok".into(),
+        value: std::rc::Rc::new(KObject::Number(1.0)),
+        scope_id: result_sid,
+        name: "Result".into(),
+        type_args: std::rc::Rc::new(vec![KType::Number, KType::Str]),
+    };
+    // Matches an identical slot.
+    let slot_ok = KType::ConstructorApply {
+        ctor: ctor.clone(),
+        args: vec![KType::Number, KType::Str],
+    };
+    assert!(slot_ok.matches_value(&stamped));
+    // `Any` args admit (covariant coarsening at the slot).
+    let slot_any = KType::ConstructorApply {
+        ctor: ctor.clone(),
+        args: vec![KType::Any, KType::Any],
+    };
+    assert!(slot_any.matches_value(&stamped));
+    // Mismatched arg rejects.
+    let slot_bad = KType::ConstructorApply {
+        ctor,
+        args: vec![KType::Bool, KType::Str],
+    };
+    assert!(!slot_bad.matches_value(&stamped));
 }

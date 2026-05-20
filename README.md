@@ -180,7 +180,8 @@ src/
         │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
         │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
         │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
-        │   │   └── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
+        │   │   ├── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
+        │   │   └── unify.rs           unify_slot — generic-destructuring unifier binding type-parameter names per call
         │   ├── values.rs
         │   └── values/
         │       ├── kobject.rs         runtime value type

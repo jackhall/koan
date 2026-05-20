@@ -1,12 +1,63 @@
 //! Parameterized container types in FN parameter and return slots:
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
-use crate::builtins::test_support::{parse_one, run, run_root_silent};
+use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::RuntimeArena;
+use crate::machine::core::KErrorKind;
 use crate::machine::execute::Scheduler;
+use crate::machine::model::types::KType;
 use crate::parse::parse;
 
 use super::capture_program_output;
+
+/// Phase 3 ascription stamping: a `List<Number>` body returned through `:(List Any)`
+/// re-tags the carrier to *exactly* the declared return type — coarsening — so the
+/// result's `ktype()` reports `List<Any>`, the contract, not the body's incidental
+/// `List<Number>` precision.
+#[test]
+fn fn_return_coarsens_list_carrier_to_declared() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (NUMS) -> :(List Any) = ([1 2 3])");
+    let result = run_one(scope, parse_one("NUMS"));
+    assert_eq!(result.ktype(), KType::List(Box::new(KType::Any)));
+}
+
+/// Without an annotation, a list keeps its precise memoized join type.
+#[test]
+fn fn_return_keeps_precise_list_carrier_when_declared_precise() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (NUMS) -> :(List Number) = ([1 2 3])");
+    let result = run_one(scope, parse_one("NUMS"));
+    assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
+}
+
+/// `[2, "hello"]` (a `List<Any>` value) returned through `:(List Number)` fails the
+/// return-type check — a heterogeneous literal carries `List<Any>` and does not satisfy
+/// the precise declared element type.
+#[test]
+fn fn_return_heterogeneous_list_rejected_by_precise_declared() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (BAD) -> :(List Number) = ([2 \"hello\"])");
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(parse_one("BAD"), scope);
+    sched.execute().expect("scheduler runs to completion");
+    assert!(sched.read_result(id).is_err());
+}
+
+/// Empty container through an annotated return boundary: the vacuous `matches_value`
+/// passes and the declared element type is stamped, so `([]) -> :(List Number)` returns a
+/// value whose `ktype()` is `List<Number>`.
+#[test]
+fn fn_return_empty_list_stamps_declared_element_type() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (EMPTY) -> :(List Number) = ([])");
+    let result = run_one(scope, parse_one("EMPTY"));
+    assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
+}
 
 /// FN with a `List<Number>` parameter accepts a homogeneous number list and runs the body.
 /// The signature parser routes `List<Number>` through `KType::List(Box::new(Number))`,
@@ -155,11 +206,43 @@ fn fn_typed_list_param_rejects_wrong_element_type_at_call() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (HEAD xs :(List Number)) -> Number = (1)");
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
-    // Dispatch-time matching is shape-only; the call binds. The error surfaces only
-    // when matches_value would be called — which today is only on return values, not
-    // arguments. So this currently SUCCEEDS at runtime, returning 1. Confirming that
-    // behavior here: argument-level element checks are deferred to a later phase.
-    assert!(sched.execute().is_ok(),
-            "phase 2 only checks element types on return values, not arguments");
+    let id = sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
+    // Dispatch-time matching is shape-only and admits the call. The full
+    // content-recursive element check now runs at the splice-time bind loop in
+    // `KFunction::invoke`, where `bundle.args` holds evaluated values — so a
+    // `List<Str>` value bound into a `:(List Number)` slot errors here, no longer
+    // deferred to a later phase. The error lands on the node result.
+    sched.execute().expect("scheduler runs to completion");
+    let error = sched.read_result(id).err().expect(
+        "List<Str> into :(List Number) slot must error at splice",
+    );
+    assert!(
+        matches!(error.kind, KErrorKind::TypeMismatch { ref arg, .. } if arg == "xs"),
+        "expected a TypeMismatch naming arg `xs`, got {error:?}",
+    );
+}
+
+/// Splice-time argument stamping (the positive companion to the rejection above): a
+/// correct-element call still succeeds, and the bound parameter is coarsened to exactly
+/// the declared slot element type. The FN body returns the param so the call result's
+/// `ktype()` reflects the stamped carrier — `[1]` is a `List<Number>` value bound into a
+/// `:(List Any)` slot, so the bound `xs` reports `List<Any>`, the contract.
+#[test]
+fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (ECHO xs :(List Any)) -> :(List Any) = (xs)");
+    let result = run_one(scope, parse_one("ECHO [1]"));
+    assert_eq!(result.ktype(), KType::List(Box::new(KType::Any)));
+}
+
+/// A correct-element call into a *precise* slot succeeds and keeps the precise element
+/// type: `[1]` (`List<Number>`) into `:(List Number)` binds and reports `List<Number>`.
+#[test]
+fn fn_typed_list_param_accepts_matching_element_at_call() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (ECHO xs :(List Number)) -> :(List Number) = (xs)");
+    let result = run_one(scope, parse_one("ECHO [1]"));
+    assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
 }

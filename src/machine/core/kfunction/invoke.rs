@@ -80,7 +80,34 @@ impl<'a> KFunction<'a> {
                     )
                 };
                 for (name, rc) in bundle.args.iter() {
-                    let cloned = rc.deep_clone();
+                    let mut cloned = rc.deep_clone();
+                    // Splice-time argument element check + stamp for parameterized
+                    // carrier slots (`:(List T)`, `:(Dict K V)`, `:(Result T E)`).
+                    // `bundle.args` holds evaluated values here — only `KExpression`
+                    // slots stay lazy by design (see `argument_bundle.rs`) — so this
+                    // bind loop is a valid value boundary, symmetric with the return
+                    // boundary in `execute.rs` / the Deferred Combine below. The
+                    // dispatch-time shape-only admission (`Argument::matches`) cannot
+                    // do the content-recursive element check, so it lands here.
+                    if let Some(arg) = signature_argument_by_name(self, name) {
+                        if is_parameterized_carrier(&arg.ktype) {
+                            if !arg.ktype.matches_value(&cloned) {
+                                return BodyResult::Err(KError::new(
+                                    KErrorKind::TypeMismatch {
+                                        arg: name.clone(),
+                                        expected: arg.ktype.name(),
+                                        got: cloned.ktype().name(),
+                                    },
+                                ).with_frame(crate::machine::Frame::bare(
+                                    self.summarize(),
+                                    self.summarize(),
+                                )));
+                            }
+                            // Coarsen the carrier to exactly the declared slot type,
+                            // mirroring the return-boundary stamp.
+                            cloned = cloned.stamp_type(&arg.ktype);
+                        }
+                    }
                     let allocated = inner_arena.alloc_object(cloned);
                     // Signature parser enforces parameter-name uniqueness; a rebind
                     // error here would mean an upstream invariant break.
@@ -194,7 +221,11 @@ impl<'a> KFunction<'a> {
                                     function_summary.clone(),
                                 )));
                             }
-                            BodyResult::Value(body_value)
+                            // Phase 3 ascription stamping at the per-call return boundary:
+                            // re-tag the parameterized carrier to exactly the resolved
+                            // per-call return type (coarsening included).
+                            let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
+                            BodyResult::Value(_scope.arena.alloc_object(stamped))
                         }));
                         // Rc clones into each `with_active_frame` call above keep the
                         // per-call arena alive across sub-slot lifetimes; the FN's slot
@@ -207,6 +238,18 @@ impl<'a> KFunction<'a> {
             }
         }
     }
+}
+
+/// True iff a declared slot type is one of the parameterized carrier types whose
+/// `matches_value` does content-recursive element/payload checking — the only slots
+/// where dispatch-time shape-only admission (`Argument::matches`) leaves an element
+/// check undone. `KExpression` (the lazy-slot type) is never one of these, so gating
+/// on this predicate also keeps the unevaluated `Expression`-slot path untouched.
+fn is_parameterized_carrier(ktype: &KType) -> bool {
+    matches!(
+        ktype,
+        KType::List(_) | KType::Dict(_, _) | KType::ConstructorApply { .. }
+    )
 }
 
 /// Indirection from a bundle iteration (keyed by `name`) back to the declared

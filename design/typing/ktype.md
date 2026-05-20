@@ -77,7 +77,7 @@ Three sites consume parameterized types, and each has its own behavior:
 
 | Site | What it does | Variance |
 | --- | --- | --- |
-| `matches_value` | Walks a runtime value against a declared type at the return-type check. | **Covariant** for `List` / `Dict`: `:(List Any)` accepts any list because `Any.matches_value(_)` is always true; `:(Dict Str Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
+| `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(List Any)` accepts any list because `Any.matches_value(_)` is always true; `:(Dict Str Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
 | `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(List Number)` ≺ `:(List Any)`, `:(Dict Str Number)` ≺ `:(Dict Str Any)`, `:(Function (Number) -> Str)` ≺ `:(Function (Any) -> Any)`. |
 | `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(Function (Number) -> Str)`, not `:(Function (Any) -> Str)`. |
 
@@ -117,21 +117,73 @@ USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → DispatchFailed
 ```
 
 **Element-type inference for literals** is the join of element types via
-[`KType::join_iter`](../../src/machine/model/types/ktype_resolution.rs): `[1, 2, 3]` → `:(List Number)`,
-`[1, "x"]` → `:(List Any)`, `[]` → `:(List Any)`.
-[`KObject::ktype`](../../src/machine/model/values/kobject.rs) walks list elements and dict
-keys/values on each call to project the parameterized form; functions project
+[`KType::join_iter`](../../src/machine/model/types/ktype_resolution.rs), computed
+**once at construction** and memoized on the value's carrier: `[1, 2, 3]` →
+`List<Number>`, `[1, "x"]` → `List<Any>`. `KObject::List` and `KObject::Dict`
+each carry their element types directly (`List(Rc<Vec<…>>, Box<KType>)`,
+`Dict(…, Box<KType>, Box<KType>)`), so
+[`KObject::ktype`](../../src/machine/model/values/kobject.rs) reads the carried
+type in O(1) rather than re-walking the contents on every call. Values are
+immutable `Rc`, so the join is sound to compute exactly once. Functions project
 their declared signature (`KObject::KFunction(f, _)` → `KFunction { args, ret }`
 read off `f.signature`).
 
-**Element validation runs on returns, not arguments.** The scheduler's
-runtime return-type check walks `matches_value` over the returned value,
-recursing into containers (a list literal `[1, "x"]` returned where
-`:(List Number)` was declared fails with a structured `TypeMismatch` naming both
-types). Argument-position element validation is shape-only at dispatch — an
-`[x, y]` literal with sub-expression elements can't be type-checked until the
-elements evaluate. See [Known limitations](#known-limitations) for the
-static-pass-driven closure of this gap.
+**Empty containers carry no element type to infer**, so an unstamped empty `[]`
+/ `{}` (element type memoized as `Any`, never stamped by an annotation) is an
+**error** at an untyped resolution boundary — an untyped value-route `LET`, a
+bare top-level expression result. The producing boundary must annotate the value
+(e.g. a typed FN return) or use a non-empty literal. A *stamped* empty container
+(an `FN -> :(List Number) = ([])` whose carrier is re-tagged to element `Number`)
+is fine; a heterogeneous non-empty literal (`[2, "hello"]` → `List<Any>`) is
+unaffected — it carries information and is legal where `:(List Any)` is declared.
+
+### Runtime type-parameter carriers
+
+`List`, `Dict`, and `Tagged` carry their runtime type arguments on the variant so
+dispatch and slot admission see the full instantiation, not just the outer shape:
+
+- `KObject::List(items, elem)` / `KObject::Dict(map, key, value)` memoize the
+  element / key+value type at construction (`KObject::list` / `KObject::dict`).
+- `KObject::Tagged { type_args, .. }` carries the applied type arguments of a
+  parameterized union (`Result<T, E>`). Empty `type_args` means erased — `ktype()`
+  reports the bare `UserType` as before; a populated carrier makes `ktype()`
+  synthesize `ConstructorApply { ctor, args: type_args }`. Construction
+  (`tagged_union::construct`, `CATCH`) erases by default; the carrier is populated
+  only by ascription stamping.
+
+A `ConstructorApply` slot (`:(Result T E)`) admits a `Tagged` value via the
+`matches_value` arm in
+[ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs): the
+declaring schema must be the same constructor, and then either the populated
+`type_args` are checked structurally against the declared args, or — for an erased
+carrier — the *inhabited* tag's payload is checked against the type argument that
+field maps to. The `Result` field→parameter linkage (`ok`→0 / `T`, `error`→1 /
+`E`) lives in the type layer as `result_field_param_index`, reading the ordering
+the builtin registration owns.
+
+**Ascription is authoritative at annotated boundaries.** A parameterized-carrier
+value crossing an annotated boundary is checked via `matches_value` and then
+re-tagged (`KObject::stamp_type`) to *exactly* the declared type, **coarsening
+included** — a `List<Number>` value returned through `:(List Any)` re-tags to
+`List<Any>`, so downstream dispatch sees the contract rather than the
+implementation's incidental precision. An unannotated value keeps its precise
+memoized type; surrendering precision is the deliberate act of writing an
+annotation. The three boundaries are:
+
+- **FN return** — the scheduler walks `matches_value` over the returned value
+  (a list literal `[1, "x"]` returned where `:(List Number)` was declared fails
+  with a structured `TypeMismatch` naming both types), then stamps the carrier to
+  the resolved per-call return type. Both the resolved and deferred-return paths
+  stamp in [`invoke.rs`](../../src/machine/core/kfunction/invoke.rs).
+- **FN argument** — the invoke bind loop runs `matches_value` on each evaluated
+  parameterized-carrier argument slot (`List` / `Dict` / `ConstructorApply`),
+  erroring with a `TypeMismatch` naming the parameter, then coarsens via
+  `stamp_type`. `bundle.args` holds evaluated values at this point (only
+  `KExpression` slots stay lazy by design), so the bind loop is a valid value
+  boundary symmetric with the return check; the content-recursive element check
+  the dispatch-time shape-only admission (`Argument::matches`) can't do lands
+  here.
+- **`LET`** ascription — same check-then-stamp on the bound value.
 
 **Arity is enforced at FN-definition time** by `KType::from_type_expr`:
 `:(List A B)` rejects with a precise error before the function is ever called.
@@ -198,10 +250,5 @@ specificity scores against.
 - **Builtins are not runtime-checked.** They return through `BodyResult::Value`
   with no slot frame, so the runtime check has nowhere to attach. Their
   declared return types are honest but unenforced.
-- **Argument-position element validation is shape-only.** Container slots
-  accept any list/dict at dispatch; element types are checked only on
-  returns. Lifting this needs literal-element peeking for fully-literal
-  collections plus a deferred check for sub-expression elements.
-
-The two-phase execution work in [open-work.md](open-work.md) closes the first
-two uniformly.
+The two-phase execution work in [open-work.md](open-work.md) closes both
+uniformly.

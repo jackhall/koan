@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::{KKey, KObject, Serializable};
@@ -57,7 +56,7 @@ impl<'a> Scheduler<'a> {
                 .map(|slot| slot.materialize(results))
                 .collect();
             let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::List(Rc::new(items)));
+                scope.arena.alloc_object(KObject::list(items));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, scope, finish)
@@ -95,7 +94,7 @@ impl<'a> Scheduler<'a> {
                 map.insert(Box::new(kkey), value_obj);
             }
             let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::Dict(Rc::new(map)));
+                scope.arena.alloc_object(KObject::dict(map));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, scope, finish)

@@ -5,29 +5,29 @@ use std::collections::HashMap;
 #[test]
 fn ktype_of_homogeneous_number_list() {
     let l: KObject<'_> =
-        KObject::List(Rc::new(vec![KObject::Number(1.0), KObject::Number(2.0)]));
+        KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
     assert_eq!(l.ktype(), KType::List(Box::new(KType::Number)));
 }
 
 #[test]
 fn ktype_of_mixed_list_is_list_any() {
-    let l: KObject<'_> = KObject::List(Rc::new(vec![
+    let l: KObject<'_> = KObject::list(vec![
         KObject::Number(1.0),
         KObject::KString("x".into()),
-    ]));
+    ]);
     assert_eq!(l.ktype(), KType::List(Box::new(KType::Any)));
 }
 
 #[test]
 fn ktype_of_empty_list_is_list_any() {
-    let l: KObject<'_> = KObject::List(Rc::new(vec![]));
+    let l: KObject<'_> = KObject::list(vec![]);
     assert_eq!(l.ktype(), KType::List(Box::new(KType::Any)));
 }
 
 #[test]
 fn ktype_of_nested_list() {
-    let inner: KObject<'_> = KObject::List(Rc::new(vec![KObject::Number(1.0)]));
-    let outer: KObject<'_> = KObject::List(Rc::new(vec![inner]));
+    let inner: KObject<'_> = KObject::list(vec![KObject::Number(1.0)]);
+    let outer: KObject<'_> = KObject::list(vec![inner]);
     assert_eq!(
         outer.ktype(),
         KType::List(Box::new(KType::List(Box::new(KType::Number))))
@@ -39,7 +39,7 @@ fn ktype_of_dict_string_number() {
     let mut map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
     map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
     map.insert(Box::new(KKey::String("b".into())), KObject::Number(2.0));
-    let d: KObject<'_> = KObject::Dict(Rc::new(map));
+    let d: KObject<'_> = KObject::dict(map);
     assert_eq!(
         d.ktype(),
         KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
@@ -49,7 +49,7 @@ fn ktype_of_dict_string_number() {
 #[test]
 fn ktype_of_empty_dict_is_dict_any_any() {
     let map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
-    let d: KObject<'_> = KObject::Dict(Rc::new(map));
+    let d: KObject<'_> = KObject::dict(map);
     assert_eq!(
         d.ktype(),
         KType::Dict(Box::new(KType::Any), Box::new(KType::Any))
@@ -59,31 +59,101 @@ fn ktype_of_empty_dict_is_dict_any_any() {
 #[test]
 fn matches_value_list_number_rejects_string_element() {
     let t = KType::List(Box::new(KType::Number));
-    let bad: KObject<'_> = KObject::List(Rc::new(vec![
+    let bad: KObject<'_> = KObject::list(vec![
         KObject::Number(1.0),
         KObject::KString("x".into()),
-    ]));
+    ]);
     assert!(!t.matches_value(&bad));
 }
 
 #[test]
 fn matches_value_list_number_accepts_all_numbers() {
     let t = KType::List(Box::new(KType::Number));
-    let good: KObject<'_> = KObject::List(Rc::new(vec![
+    let good: KObject<'_> = KObject::list(vec![
         KObject::Number(1.0),
         KObject::Number(2.0),
-    ]));
+    ]);
     assert!(t.matches_value(&good));
 }
 
 #[test]
 fn matches_value_list_any_accepts_any_list() {
     let t = KType::List(Box::new(KType::Any));
-    let mixed: KObject<'_> = KObject::List(Rc::new(vec![
+    let mixed: KObject<'_> = KObject::list(vec![
         KObject::Number(1.0),
         KObject::KString("x".into()),
-    ]));
+    ]);
     assert!(t.matches_value(&mixed));
+}
+
+/// Phase 1: `ktype()` reads the memoized carrier field rather than re-walking contents.
+/// A list built from a known element type via `list_with_type` reports that exact type,
+/// even if it disagrees with the join of the contents (the carrier is authoritative).
+#[test]
+fn list_with_type_carrier_is_authoritative_for_ktype() {
+    use std::rc::Rc;
+    // Contents join to `Number`, but the stamped carrier says `Any` — `ktype()` reports
+    // the carrier (`Any`), proving the field, not the join, is read.
+    let items = Rc::new(vec![KObject::Number(1.0), KObject::Number(2.0)]);
+    let stamped = KObject::list_with_type(items, KType::Any);
+    assert_eq!(stamped.ktype(), KType::List(Box::new(KType::Any)));
+}
+
+/// Phase 2: an erased `Tagged` (empty `type_args`) reports the bare `UserType`; a populated
+/// carrier synthesizes `ConstructorApply`.
+#[test]
+fn tagged_ktype_erased_vs_applied() {
+    use std::rc::Rc;
+    let sid = ScopeId::from_raw(0, 0x55);
+    let erased = KObject::Tagged {
+        tag: "ok".into(),
+        value: Rc::new(KObject::Number(1.0)),
+        scope_id: sid,
+        name: "Result".into(),
+        type_args: Rc::new(vec![]),
+    };
+    assert!(matches!(erased.ktype(), KType::UserType { name, .. } if name == "Result"));
+    let applied = KObject::Tagged {
+        tag: "ok".into(),
+        value: Rc::new(KObject::Number(1.0)),
+        scope_id: sid,
+        name: "Result".into(),
+        type_args: Rc::new(vec![KType::Number, KType::Str]),
+    };
+    match applied.ktype() {
+        KType::ConstructorApply { args, .. } => {
+            assert_eq!(args, vec![KType::Number, KType::Str]);
+        }
+        other => panic!("expected ConstructorApply, got {other:?}"),
+    }
+}
+
+/// Phase 3: `stamp_type` coarsens a `List<Number>` carrier to the declared `List<Any>`.
+#[test]
+fn stamp_type_coarsens_list_carrier() {
+    let value = KObject::list(vec![KObject::Number(1.0)]);
+    assert_eq!(value.ktype(), KType::List(Box::new(KType::Number)));
+    let stamped = value.stamp_type(&KType::List(Box::new(KType::Any)));
+    assert_eq!(stamped.ktype(), KType::List(Box::new(KType::Any)));
+}
+
+/// Phase 4: `is_unstamped_empty_container` flags an empty `List<Any>` / `Dict<Any, Any>`
+/// but not a stamped empty (non-`Any` element) nor a non-empty heterogeneous list.
+#[test]
+fn unstamped_empty_container_detection() {
+    use std::rc::Rc;
+    use std::collections::HashMap;
+    // Empty list, default `Any` carrier — flagged.
+    assert!(KObject::list(vec![]).is_unstamped_empty_container());
+    // Stamped empty `List<Number>` — not flagged.
+    let stamped = KObject::list_with_type(Rc::new(vec![]), KType::Number);
+    assert!(!stamped.is_unstamped_empty_container());
+    // Non-empty heterogeneous list (`List<Any>`) — not flagged (carries information).
+    let hetero = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
+    assert!(!hetero.is_unstamped_empty_container());
+    // Empty dict, default carrier — flagged.
+    let map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
+    assert!(KObject::dict(map).is_unstamped_empty_container());
 }
 
 /// `TypeNameRef` summarizes through `TypeExpr::render`, preserving the surface form

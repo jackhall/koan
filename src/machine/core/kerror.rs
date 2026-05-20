@@ -146,7 +146,7 @@ impl KError {
     /// `Struct` has the variant name (e.g. `"TypeMismatch"`) and the same sentinel.
     pub fn to_tagged<'a>(&self) -> KObject<'a> {
         let (tag, struct_name, fields) = self.kind.to_struct_fields();
-        let frames_list = KObject::List(Rc::new(
+        let frames_list = KObject::list(
             self.frames
                 .iter()
                 .map(|f| {
@@ -160,7 +160,7 @@ impl KError {
                     KObject::KString(rendered)
                 })
                 .collect(),
-        ));
+        );
         let mut map: IndexMap<String, KObject<'a>> = IndexMap::with_capacity(fields.len() + 1);
         for (k, v) in fields {
             map.insert(k, v);
@@ -176,6 +176,7 @@ impl KError {
             value: Rc::new(payload),
             scope_id: ScopeId::SENTINEL,
             name: "KError".to_string(),
+            type_args: Rc::new(vec![]),
         }
     }
 }

@@ -171,8 +171,8 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
         KObject::KFunction(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::KFuture(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::KModule(_, Some(rc)) => rc_targets(rc, arena_ptr),
-        KObject::List(items) => items.iter().any(|x| obj_anchors_to(x, arena_ptr)),
-        KObject::Dict(entries) => entries.values().any(|x| obj_anchors_to(x, arena_ptr)),
+        KObject::List(items, _) => items.iter().any(|x| obj_anchors_to(x, arena_ptr)),
+        KObject::Dict(entries, _, _) => entries.values().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Tagged { value, .. } => obj_anchors_to(value, arena_ptr),
         KObject::Struct { fields, .. } => fields.values().any(|x| obj_anchors_to(x, arena_ptr)),
         _ => false,
@@ -602,7 +602,7 @@ mod tests {
             _ => unreachable!(),
         };
         let cyclic_kfn = KObject::KFunction(f_ref, Some(Rc::clone(&frame)));
-        let list = KObject::List(std::rc::Rc::new(vec![cyclic_kfn]));
+        let list = KObject::list(vec![cyclic_kfn]);
 
         let stored = frame.arena().alloc_object(list);
         let stored_ptr = stored as *const KObject<'_>;

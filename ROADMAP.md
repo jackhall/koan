@@ -37,9 +37,9 @@ without first landing something else:
 - [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
   — VAL-slot reads carry the SIG's abstract identity rather than the underlying value's
   concrete `KType`.
-- [Runtime carriers for type parameters](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
-  — `List` / `Dict` / `Result` values carry their type arguments at runtime so dispatch and
-  slot admission can see them.
+- [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
+  — runtime type-parameter carriers shipped; remaining is wiring `unify_slot` into invoke so
+  generic value-slot FNs like `FN head (xs :(List T)) -> :T` become definable.
 
 ## Open items
 
@@ -54,9 +54,12 @@ Finish the type and module systems. The agreed design is captured in
 [design/typing/](design/typing/README.md); stages 1 and 2 shipped (the module
 language: `MODULE`/`SIG` declarators, `:|`/`:!` ascription, per-module type identity,
 plus the scheduler-driven elaborator, `SIG_WITH` sharing constraints, and
-higher-kinded type-constructor slots). The remaining items land implicit search,
-axioms and equivalence-checked coherence, multi-parameter functor sharing, and
-the structural-FN precision the implicit-search dispatch needs:
+higher-kinded type-constructor slots, plus runtime type-parameter carriers on
+`List` / `Dict` / `Result` values with ascription stamping at the FN return,
+argument, and `LET` boundaries). The remaining items land implicit search,
+axioms and equivalence-checked coherence, multi-parameter functor sharing, the
+structural-FN precision the implicit-search dispatch needs, and generic
+value-slot binding:
 
 - [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md)
 - [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
@@ -65,7 +68,7 @@ the structural-FN precision the implicit-search dispatch needs:
 - [Stage 6 — Equivalence-checked coherence](roadmap/predicate_typing/equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](roadmap/predicate_typing/syntax-tuning.md)
 - [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
-- [Runtime carriers for type parameters](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
+- [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
 
 ### Libraries — [roadmap/libraries/](roadmap/libraries/)
 

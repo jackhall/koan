@@ -105,6 +105,9 @@ pub fn construct<'a>(
         value: Rc::new(value.deep_clone()),
         scope_id: schema_scope_id,
         name: schema_name.to_string(),
+        // Erased at construction: the runtime type arguments are stamped by ascription at
+        // an annotated boundary, not synthesized here from a monomorphic schema.
+        type_args: Rc::new(vec![]),
     })
 }
 

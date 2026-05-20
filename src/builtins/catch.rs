@@ -53,6 +53,11 @@ pub fn body<'a>(
             value: Rc::new(payload),
             scope_id: result_scope_id,
             name: "Result".to_string(),
+            // Erased: CATCH knows only the inhabited side's payload type, not the absent
+            // parameter. `matches_value(ConstructorApply, Tagged)` inspects the inhabited
+            // tag's payload directly, so a `Result<_, MyErr>` slot still correctly rejects a
+            // caught `error(KError)` without a stamped carrier here.
+            type_args: Rc::new(vec![]),
         };
         BodyResult::Value(scope.arena.alloc_object(tagged))
     });

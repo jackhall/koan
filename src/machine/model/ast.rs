@@ -5,7 +5,6 @@
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::machine::core::source::{FileId, Span, Spanned};
 use crate::machine::model::types::KType;
@@ -232,7 +231,7 @@ impl<'a> ExpressionPart<'a> {
             // the scheduler; a raw `Expression` here round-trips as a `KExpression` value
             // rather than its computed result.
             ExpressionPart::ListLiteral(items) => {
-                KObject::List(Rc::new(items.iter().map(|p| p.resolve()).collect()))
+                KObject::list(items.iter().map(|p| p.resolve()).collect())
             }
             // Sub-expression and bare-identifier dict entries should already have been
             // resolved by the scheduler. Non-scalar keys reaching here are a scheduler bug
@@ -246,7 +245,7 @@ impl<'a> ExpressionPart<'a> {
                     });
                     map.insert(Box::new(kkey), v.resolve());
                 }
-                KObject::Dict(Rc::new(map))
+                KObject::dict(map)
             }
             // Deep-clone, don't stringify: a Future-borne List or KExpression must
             // materialize back to its structured form.

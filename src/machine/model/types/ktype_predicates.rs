@@ -95,11 +95,11 @@ impl KType {
         match self {
             KType::Any => true,
             KType::List(elem) => match obj {
-                KObject::List(items) => items.iter().all(|x| elem.matches_value(x)),
+                KObject::List(items, _) => items.iter().all(|x| elem.matches_value(x)),
                 _ => false,
             },
             KType::Dict(k_ty, v_ty) => match obj {
-                KObject::Dict(map) => map.iter().all(|(k_key, v_obj)| {
+                KObject::Dict(map, _, _) => map.iter().all(|(k_key, v_obj)| {
                     let k_t = k_key.ktype();
                     (matches!(k_ty.as_ref(), KType::Any) || **k_ty == k_t)
                         && v_ty.matches_value(v_obj)
@@ -137,9 +137,41 @@ impl KType {
             // recurse onto one; cycle-gating waits on a real carrier.
             KType::Mu { body, .. } => body.matches_value(obj),
             KType::RecursiveRef(_) => true,
-            // No runtime carrier synthesizes a `ConstructorApply` `ktype()`; the
-            // meta-type path goes through `accepts_part` against `Future(KTypeValue)`.
-            KType::ConstructorApply { .. } => false,
+            // A `ConstructorApply` slot (`:(Result T E)`) admits a `Tagged` value whose
+            // declaring schema is the same constructor, checking the *inhabited* tag's
+            // payload against the type argument that field maps to (Result: `ok`→arg 0,
+            // `error`→arg 1; see `result_field_param_index`). The non-inhabited parameter
+            // is unconstrained at the value — a `Result` value occupies exactly one tag, so
+            // only that side carries a payload to check. A populated `type_args` carrier
+            // (stamped by ascription) takes precedence: when present, every arg is checked
+            // structurally against the carried args.
+            KType::ConstructorApply { ctor, args } => match obj {
+                KObject::Tagged { tag, value, name, scope_id, type_args } => {
+                    let ctor_matches = matches!(
+                        ctor.as_ref(),
+                        KType::UserType { name: cn, scope_id: cs, .. }
+                            if cn == name && cs == scope_id
+                    );
+                    if !ctor_matches {
+                        return false;
+                    }
+                    // Stamped carrier: structural per-arg check against the declared args.
+                    if !type_args.is_empty() {
+                        return type_args.len() == args.len()
+                            && type_args.iter().zip(args.iter()).all(|(a, b)| {
+                                matches!(b, KType::Any) || a == b
+                            });
+                    }
+                    // Erased carrier: check the inhabited tag's payload against its arg.
+                    match result_field_param_index(name, tag).and_then(|i| args.get(i)) {
+                        Some(arg) => arg.matches_value(value),
+                        // Unknown field linkage — fall back to the inhabited payload being
+                        // unconstrained (ctor identity already matched).
+                        None => true,
+                    }
+                }
+                _ => false,
+            },
             _ => *self == obj.ktype(),
         }
     }
@@ -174,11 +206,11 @@ impl KType {
             ),
             KType::List(_) => matches!(
                 part,
-                ExpressionPart::ListLiteral(_) | ExpressionPart::Future(KObject::List(_))
+                ExpressionPart::ListLiteral(_) | ExpressionPart::Future(KObject::List(..))
             ),
             KType::Dict(_, _) => matches!(
                 part,
-                ExpressionPart::DictLiteral(_) | ExpressionPart::Future(KObject::Dict(_))
+                ExpressionPart::DictLiteral(_) | ExpressionPart::Future(KObject::Dict(..))
             ),
             KType::KFunction { args, ret } => match part {
                 ExpressionPart::Future(KObject::KFunction(f, _)) => {
@@ -242,6 +274,24 @@ impl KType {
                 _ => false,
             },
         }
+    }
+}
+
+/// Field→type-parameter linkage for the builtin `Result` parameterized union: which
+/// type-argument position a given variant's payload is checked against. `ok`→0 (`T`),
+/// `error`→1 (`E`), mirroring the `param_names: ["T", "E"]` ordering registered in
+/// [`crate::builtins::result`]. Returns `None` for any other carrier name — user UNIONs
+/// don't yet carry runtime type arguments, so their `ConstructorApply` admission falls
+/// back to a ctor-identity-only check.
+///
+/// Lives in the type layer (rather than `builtins/result.rs`) because `matches_value`
+/// consumes it and `model::types` sits below `builtins` in the dependency stack; the
+/// builtin registration is the source of the *ordering*, this is the read side.
+pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> {
+    match (carrier_name, tag) {
+        ("Result", "ok") => Some(0),
+        ("Result", "error") => Some(1),
+        _ => None,
     }
 }
 
