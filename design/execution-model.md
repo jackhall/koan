@@ -242,9 +242,16 @@ engine running before pegged inputs are unblocked.
 
 Forward references between sibling top-level expressions, members of a
 `MODULE` body, and (eventually) names imported across files all require the
-same property: a lookup whose target binder has dispatched but not yet
-executed parks on the producer instead of failing with `UnboundName`. The
-mechanism lives in two pieces.
+same property: a value- or type-position lookup whose target binder has
+dispatched but not yet executed parks on the producer instead of failing with
+`UnboundName`. The park is keyed off `Scope::resolve` consulting the
+`placeholders` table, so it covers every name reached through that path —
+bare-name value slots and type-token slots. A *keyword-headed* function call
+(`ID 7`) is the exception: it resolves through the `functions` bucket, which
+does not consult `placeholders`, so calling a function not yet registered in
+the same scope fails rather than parking (forward calls from a function body
+are unaffected — bodies re-dispatch per call, after every sibling has
+registered). The mechanism lives in two pieces.
 
 A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
 inside the [`Bindings`](../src/machine/core/scope.rs) façade on
@@ -271,15 +278,14 @@ matches on its [`ResolveOutcome`](../src/machine/core/scope.rs):
 `Resolved(r)` continues into phase 3 with the picked function plus the
 per-slot index buckets `r.slots` carries (`wrap_indices`, `ref_name_indices`,
 `eager_indices`); `Ambiguous(n)` surfaces as an `AmbiguousDispatch` error;
-`Unmatched` first tries the head-Keyword placeholder fallback (below) and,
-on miss, surfaces as `DispatchFailed`; `Deferred` (no match against
+`Unmatched` surfaces as `DispatchFailed`; `Deferred` (no match against
 the bare shape but the expression carries nested `Expression` /
 `ListLiteral` / `DictLiteral` parts whose evaluation may produce typed
 `Future(_)` parts that match) jumps to phase 5's eager-fallthrough loop and
 re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
 after subs resolve.
 
-The five rails the resolution feeds:
+The four rails the resolution feeds:
 
 - **Bare-name short-circuit** (phase 1, runs before resolution). A
   single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
@@ -287,17 +293,15 @@ The five rails the resolution feeds:
   to `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail` uses for
   sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
   produces the structured error.
-- **Head-Keyword placeholder fallback** (phase 2, runs inside the
-  `Unmatched` arm). The bucket lookup failed, but a sibling binder may be
-  in flight: `first_keyword_placeholder` walks the expression's `Keyword`
-  parts and, on the first `Resolution::Placeholder` hit, parks this slot
-  on the producer and re-dispatches the same expression. Without this,
-  `(ID 7)` submitted alongside an `FN ID (...) -> Mo.Ty = (...)` whose
-  body defers (its return-type slot routes through a Combine for sub-Dispatch)
-  would race the producer's registration and surface as `no matching
-  function`. Mirrors the bare-name short-circuit's `Placeholder` arm: the
-  consumer parks on the producer's terminal write, then the next pop
-  re-enters and hits the now-registered function.
+
+  Forward references resolve through this rail and the auto-wrap rail
+  (below), both of which route name lookups through `Scope::resolve` and so
+  consult the `placeholders` table. A *keyword-headed* call — `ID 7`, where
+  `ID` is the head Keyword — does not: function dispatch is a `functions`
+  bucket lookup with no placeholder consultation, so a call to a function
+  not yet registered in the same scope surfaces as `DispatchFailed` rather
+  than parking. Forward calls from a function *body* are unaffected: bodies
+  re-dispatch per call, by which point every sibling binder has registered.
 - **Placeholder install** (phase 3). If the picked function carries a
   `pre_run` extractor, `Resolved.placeholder_name` is its result and the
   driver installs `name → NodeId(idx)` on the dispatching scope. A
@@ -370,6 +374,18 @@ type alias ...")` instead of installing the park edge. That catches the
 trivially-cyclic case (`LET Ty = Ty` — the value-side `Ty` sub-Dispatch is
 the LET binder's `Owned` child and is about to park on its own ancestor)
 generically rather than as a special case in the elaborator.
+
+`would_create_cycle` is a proactive check on the replay-park rail; the
+bare-name short-circuit (phase 1) parks without it, so a value self-reference
+(`LET x = x`, whose RHS `x` resolves through `Scope::resolve` to the binder's
+own placeholder) still forms a cycle. A drain-end guard catches that and any
+other cycle the proactive check doesn't: after [`execute`](../src/machine/execute/scheduler/execute.rs)
+empties its work queues, it scans the slot table for nodes still parked
+(`PreRun`) — a node parked on a dependency that can no longer fire — and
+returns `KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
+the top-level result read panic on an unresolved slot. `sample` is the source
+expression of the first parked `Dispatch`/`Bind` node, so the diagnostic points
+at code the reader can act on.
 
 ## `KObject` and the model/core boundary
 

@@ -29,9 +29,13 @@ mod tests;
 /// The execute loop drains work via [`WorkQueues::pop_next`], which prioritizes in-flight
 /// slots (sub-work spawned during another slot's run, plus consumers woken by the
 /// notify-walk when a producer's terminal write decrements `pending_deps` to zero) ahead
-/// of fresh top-level dispatches (submission order). Cycles are statically prevented
-/// because every new node's `NodeId` is strictly greater than every node it can depend
-/// on.
+/// of fresh top-level dispatches (submission order). Owned edges never cycle — a new
+/// node's `NodeId` is strictly greater than every node it owns. Park (`Notify`) edges
+/// can point at an earlier producer, so a self-referential binding (`LET x = x`, whose
+/// RHS sub-dispatch parks on the binder's own placeholder) forms a cycle: the queues
+/// drain with both slots still `PreRun`. `execute` detects the leftover parked slots
+/// and returns `KErrorKind::SchedulerDeadlock` rather than letting the top-level read
+/// panic on an unresolved slot.
 ///
 /// Each node carries the scope it should run against (`Node::scope`). Sub-nodes default to
 /// the spawning node's scope; user-fn invocation installs a per-call child scope via

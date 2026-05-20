@@ -118,6 +118,12 @@ impl<'a> Scheduler<'a> {
                 }
             }
         }
+        // The queues drained. Any slot still `PreRun` is parked on a dependency that
+        // can no longer fire — a cycle. Surface it cleanly rather than letting the
+        // caller's top-level result read panic on the unresolved slot.
+        if let Some((pending, sample)) = self.store.unresolved() {
+            return Err(KError::new(KErrorKind::SchedulerDeadlock { pending, sample }));
+        }
         Ok(())
     }
 

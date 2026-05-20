@@ -52,6 +52,10 @@ pub enum KErrorKind {
         surface: String,
         pending_on: Vec<crate::machine::core::kfunction::NodeId>,
     },
+    /// The scheduler drained its work queues with one or more nodes still parked
+    /// on dependencies that can no longer fire — a dependency cycle. Surfaced
+    /// instead of letting the top-level result read panic on an unresolved slot.
+    SchedulerDeadlock { pending: usize, sample: String },
 }
 
 /// One entry in an error's call-stack trace. `function` and `expression` are
@@ -282,7 +286,8 @@ impl KErrorKind {
             KErrorKind::Rebind { .. }
             | KErrorKind::DuplicateOverload { .. }
             | KErrorKind::TypeClassBindingExpectsType { .. }
-            | KErrorKind::TypeIdentityPendingAtDispatch { .. } => {
+            | KErrorKind::TypeIdentityPendingAtDispatch { .. }
+            | KErrorKind::SchedulerDeadlock { .. } => {
                 let (tag, struct_name) = match self {
                     KErrorKind::Rebind { .. } => ("rebind", "Rebind"),
                     KErrorKind::DuplicateOverload { .. } => {
@@ -296,6 +301,9 @@ impl KErrorKind {
                         "type_identity_pending_at_dispatch",
                         "TypeIdentityPendingAtDispatch",
                     ),
+                    KErrorKind::SchedulerDeadlock { .. } => {
+                        ("scheduler_deadlock", "SchedulerDeadlock")
+                    }
                     _ => unreachable!(),
                 };
                 (
@@ -375,6 +383,11 @@ impl fmt::Display for KErrorKind {
                 f,
                 "per-call type identity for `{param}` (surface form `{surface}`) is \
                  pending finalize on producer node(s) {pending_on:?}",
+            ),
+            KErrorKind::SchedulerDeadlock { pending, sample } => write!(
+                f,
+                "scheduler deadlock: {pending} node(s) left unresolved on a dependency \
+                 cycle (e.g. `{sample}`)",
             ),
         }
     }
