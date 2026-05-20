@@ -5,7 +5,10 @@ The runtime substrate handles structured propagation along the dependency
 edges — when a slot writes an `Err`, the notify-walk wakes its dependents,
 which short-circuit and propagate (appending a `Frame` per step) — and
 surfaces errors at the top level. The in-language surface for *handling*
-errors is open work — see the bottom.
+errors has two parts: [`Result`](#result) values that user code returns and
+destructures, and [`TRY-WITH`](#try-with) / [`CATCH`](#catch) for recovering
+from interpreter faults. Remaining surface work — stdlib `Result` helpers and
+REPL continue-on-error — is tracked under [Open work](#open-work).
 
 ## `BodyResult::Err` and `KError`
 
@@ -77,36 +80,68 @@ languages with TCO behave.
 ## User-side surface
 
 A user-written function that can fail returns `Result<Ty, Er>` for a
-user-defined error type `Er` — a functor-produced module per
-[typing/functors.md](typing/functors.md). Callers destructure the `Result`
-with a match-form and handle the `Ok` and `Err` arms locally. This is the
-primary error-handling idiom in user code: errors flow through the type
-system, signatures name what can go wrong, and there is no implicit
-catch. `Result<Ty, Er>` is open stdlib work (see [Open work](#open-work))
-and depends on functors.
+user-defined error type `Er` — `Result` is a builtin parameterized type
+(like `List` / `Dict`) with `ok :T` and `error :E` variants (see
+[`Result`](#result)).
+Callers destructure the `Result` with a match-form and handle the `ok`
+and `error` arms locally. This is the primary error-handling idiom in
+user code: errors flow through the type system, signatures name what
+can go wrong, and there is no implicit catch.
 
-Two further surfaces exist alongside `Result`:
+Alongside `Result`, **interpreter faults** (every `KErrorKind` except
+`User`) are raised only by the runtime — `UnboundName`, `TypeMismatch`,
+`DispatchFailed`, and the rest. User code cannot construct them. They
+propagate ambiently along the dependency edges through the notify-walk
+and surface at the top level. `TRY-WITH` (below) lets code that needs to
+recover from them — a REPL, a sandbox, a defensive wrapper — intercept
+the propagation and dispatch on the `KErrorKind`; `CATCH expr` lifts a
+single fault into a `Result<T, KError>` so the caller can bind it via
+`LET`, MATCH on `ok` / `error`, and (inside the `error` arm) dispatch
+on the per-kind tag carried in the payload (see [`CATCH`](#catch)).
+The shared `Result` shape means a function that wraps a `CATCH` and a
+function with a typed user-error return present the same destructuring
+surface to callers.
 
-- **Interpreter faults** (every `KErrorKind` except `User`) are raised
-  only by the runtime — `UnboundName`, `TypeMismatch`, `DispatchFailed`,
-  and the rest. User code cannot construct them. They propagate
-  ambiently along the dependency edges through the notify-walk and
-  surface at the top level. `TRY-WITH` (below) lets code that needs to
-  recover from them — a REPL, a sandbox, a defensive wrapper —
-  intercept the propagation.
-- **`RAISE` as a bridge into the catch machinery.** `RAISE` produces a
-  value of a user-defined `Er` and surfaces it as
-  `KErrorKind::User(KObject)`. It is not the primary path for signaling
-  user errors — returning `Err(e)` from a `Result`-typed function is —
-  but it lets code that already catches interpreter faults via
-  `TRY-WITH` handle propagated user errors through the same form,
-  landing in the `user` arm. `RAISE` is open stdlib work.
+The two tiers don't cross: a user-typed error flows as a `Result<_, _>`
+value and never enters the interpreter-fault channel; an interpreter
+fault propagates ambiently and only becomes a value when explicitly
+caught. The asymmetry is forced by koan's dispatch model: with multiple
+dispatch plus open extension, no signature can statically guarantee the
+absence of `DispatchFailed`, so builtin errors stay ambient while user
+errors carry the type discipline. `KErrorKind` itself is a closed set.
 
-The asymmetry is forced by koan's dispatch model: with multiple dispatch
-plus open extension, no signature can statically guarantee the absence of
-`DispatchFailed`, so builtin errors stay ambient while user errors carry
-the type discipline. `KErrorKind` itself is a closed set; `User` is the
-only variant whose payload is user-extensible.
+## `Result`
+
+`Result` is a builtin parameterized type — a two-variant tagged union over two
+type parameters, `ok :T` and `error :E`. It is the shared return-type shape for
+[`CATCH`](#catch) (`Result<T, KError>`) and for user functions with typed error
+returns (`Result<T, MyErr>`). It is *not* a module-system functor: functors
+produce modules, whereas `Result` is a type constructor producing a tagged-union
+value.
+
+It is registered once in the root scope by
+[`result::register`](../src/builtins/result.rs), dual-written the way a `UNION`
+declaration is:
+
+- the **type side** (`bindings.types`) holds a `TypeConstructor` identity with
+  parameters `T` and `E`, so a slot annotated `:(Result T E)` resolves through
+  the resolver's constructor-application arm;
+- the **value side** (`bindings.data`) holds a `TaggedUnionType` carrier with
+  schema `{ok, error}` (both `Any`), so `Result (ok v)` / `Result (error e)`
+  construct values through the same path `UNION`-declared constructors use.
+
+The carrier's `(name, scope_id)` identity uses the root scope's `ScopeId` — the
+scope that owns the registration, not `ScopeId::SENTINEL` — so every `Result`
+value shares one nominal identity and MATCHes uniformly. Because the name is
+registered at prelude, a user `UNION Result = (...)` is rejected with `Rebind`:
+the binder-placeholder install refuses a name already bound to a non-function
+value.
+
+Type parameters are erased at runtime, as for `List` / `Dict`: `Result<T, KError>`
+and `Result<T, MyErr>` share one value identity, and `:(Result T E)` is not a
+runtime-checkable slot type — `:Tagged` is. Carrying type arguments at runtime is
+tracked under
+[runtime carriers for type parameters](../roadmap/predicate_typing/runtime-type-parameter-carriers.md).
 
 ## `TRY-WITH`
 
@@ -163,7 +198,6 @@ success value (no wrapper):
 | `dispatch_failed` | `{expr :Str, reason :Str, frames :List<Str>}` |
 | `shape_error` | `{message :Str, frames :List<Str>}` |
 | `parse_error` | `{message :Str, frames :List<Str>}` |
-| `user` | `{message :Str, frames :List<Str>}` |
 
 `frames` is a `List<Str>`, each entry rendered `"in <expression> (<function>)"`.
 
@@ -172,18 +206,37 @@ The four dispatcher-internal kinds (`rebind`, `duplicate_overload`,
 are only catchable via `_`; `it` is then bound to a minimal
 `{kind :Str, message :Str, frames :List<Str>}` struct.
 
+## `CATCH`
+
+`CATCH <expr>` lifts a single interpreter fault into a [`Result`](#result) value
+rather than letting it propagate. It is the opt-in, expression-position
+counterpart to [`TRY-WITH`](#try-with): where `TRY-WITH` forces the caller to
+spell out catch arms at the catch site, `CATCH` hands back a `Result<T, KError>`
+the caller binds with `LET`, passes as an argument, or returns:
+
+- `ok(v)` on success, where `v` is the bare success value;
+- `error(e)` on failure, where `e` is
+  [`KError::to_tagged`](../src/machine/core/kerror.rs)'s value — still carrying
+  the per-`KErrorKind` tag and payload struct, so per-kind dispatch is reached by
+  MATCH-ing `e` after destructuring the `Result`.
+
+The [`CATCH`](../src/builtins/catch.rs) builtin reuses the same scheduler
+primitive as `TRY-WITH` (`add_catch` / `CatchFinish`): it schedules `<expr>` as a
+catching sub-dispatch and registers a finish closure that wraps the outcome in
+the `Result` carrier. The carrier's `scope_id` is captured at registration time,
+not read from the call-site scope, so a `CATCH`-produced `Result` and a
+`Result (...)`-constructed one share nominal identity regardless of where the
+`CATCH` runs. `LET` and other eager slots still short-circuit on errors, so the
+lift stays opt-in.
+
 ## Open work
 
 [Error-handling surface follow-ups](../roadmap/libraries/error-handling.md)
 tracks the related items:
 
-- **Errors-as-values** — promote `KError` to a `KObject` variant so user
-  code can hold and inspect them.
-- **stdlib `Result<T, E>` module** — the carrier for user-typed function
-  returns; depends on functors.
-- **`RAISE`** — user-side error construction; produces a typed
-  `KErrorKind::User(KObject)` that lands in TRY's `user` arm.
-- **Source spans on `KExpression`** — frames currently can't point to a
-  line/column in source.
+- **stdlib `Result` helpers** — `map`, `bind`, `unwrap_or`, etc.;
+  gated on files-and-imports and the standard library. The `Result`
+  constructor itself is builtin (above), so user code can use it
+  before these helpers ship.
 - **Continue-on-error** — top-level continuation past a single failed
   expression, useful for the CLI's batch mode.

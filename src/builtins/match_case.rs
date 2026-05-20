@@ -133,8 +133,8 @@ mod tests {
         // `it` resolves to the inner value through the per-MATCH child scope; PRINT's
         // `msg:Str` slot picks up the binding at dispatch time.
         let bytes = run_program(
-            "UNION Result = (ok :Str err :Str)\n\
-             LET r = (Result (ok \"all good\"))\n\
+            "UNION Outcome = (ok :Str err :Str)\n\
+             LET r = (Outcome (ok \"all good\"))\n\
              MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
         );
         assert_eq!(bytes, b"all good\n");

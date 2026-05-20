@@ -298,8 +298,8 @@ Only the matching branch's body is dispatched. Inside a branch, `it` is bound
 to the inner value:
 
 ```
-UNION Result = (ok :Str err :Str)
-LET r = (Result (ok "all good"))
+UNION Outcome = (ok :Str err :Str)
+LET r = (Outcome (ok "all good"))
 MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT "failed"))
 ```
 

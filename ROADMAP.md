@@ -25,9 +25,9 @@ without first landing something else:
 
 - [Files and imports](roadmap/libraries/files-and-imports.md) — wire `.koan` files together so
   a codebase can span more than one source file and files become modules.
-- [Error-handling surface follow-ups](roadmap/libraries/error-handling.md) — errors-as-values,
-  source spans on `KExpression`, continue-on-error, and the typed `Result`/`RAISE`
-  surface that feeds the shipped TRY-WITH `user` arm.
+- [Error-handling surface follow-ups](roadmap/libraries/error-handling.md) — the `Result`
+  builtin and `CATCH expr` shipped; remaining are stdlib `Result` combinators, REPL
+  continue-on-error, and clearer type-position name diagnostics.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
 - [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md) —
@@ -37,6 +37,9 @@ without first landing something else:
 - [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
   — VAL-slot reads carry the SIG's abstract identity rather than the underlying value's
   concrete `KType`.
+- [Runtime carriers for type parameters](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
+  — `List` / `Dict` / `Result` values carry their type arguments at runtime so dispatch and
+  slot admission can see them.
 
 ## Open items
 
@@ -62,6 +65,7 @@ the structural-FN precision the implicit-search dispatch needs:
 - [Stage 6 — Equivalence-checked coherence](roadmap/predicate_typing/equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](roadmap/predicate_typing/syntax-tuning.md)
 - [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
+- [Runtime carriers for type parameters](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
 
 ### Libraries — [roadmap/libraries/](roadmap/libraries/)
 

@@ -96,6 +96,21 @@ pub fn body<'a>(
         KType::UserType { kind: UserTypeKind::Newtype { .. }, .. } => {
             newtype_construct(scope, sched, identity, args_expr.parts)
         }
+        KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. } => {
+            // A builtin parameterized type registered at prelude (`Result`) dual-writes
+            // a schema carrier into `data`, just like STRUCT/UNION — route through it.
+            // An *opaque* TypeConstructor minted per-call for SIG/functor ascription has
+            // no carrier; for those `lookup` misses and we surface the not-constructible
+            // error rather than debug-asserting a dual-write violation.
+            match scope.lookup(&verb).and_then(|c| dispatch_constructor(c, args_expr.parts)) {
+                Some(result) => result,
+                None => err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "verb".to_string(),
+                    expected: "constructible Type".to_string(),
+                    got: identity.name(),
+                })),
+            }
+        }
         // MODULE-as-constructor lands with module-system stage 2 (functor application).
         // Today the verb resolves to a Module identity but there's no construction
         // semantics to drive — surface a `TypeMismatch` until then.
