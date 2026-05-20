@@ -14,6 +14,7 @@
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
 use crate::machine::KError;
+use crate::machine::core::source::Span;
 use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK};
 
 /// Each non-blank line becomes a `(...)` group; deeper indents nest, dedents close. Tabs and
@@ -111,16 +112,18 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
             continue;
         }
 
-        if raw[..indent].contains('\t') {
+        if let Some(tab_pos) = raw.as_bytes()[..indent].iter().position(|&b| b == b'\t') {
+            let off = orig_at_line_start + tab_pos as u32;
             return Err(KError::parse(
                 format!("tab indentation not allowed on line {}", lineno + 1),
-                None,
+                Some(Span { start: off, end: off + 1 }),
             ));
         }
         if !indent.is_multiple_of(2) {
+            let off = orig_at_line_start;
             return Err(KError::parse(
                 format!("odd-numbered space indentation on line {}", lineno + 1),
-                None,
+                Some(Span { start: off, end: off + indent as u32 }),
             ));
         }
 

@@ -20,10 +20,7 @@ impl<'a> Scheduler<'a> {
         // finalize reclaims them; eager free is the success-path optimization.
         for (_, dep_id) in &subs {
             if let Err(e) = self.read_result(*dep_id) {
-                let frame = Frame {
-                    function: "<bind>".to_string(),
-                    expression: expr.summarize(),
-                };
+                let frame = Frame::from_expr("<bind>", &expr);
                 let propagated = e.clone_for_propagation().with_frame(frame);
                 return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
             }
@@ -89,10 +86,7 @@ impl<'a> Scheduler<'a> {
         // The closure carries its own framing context (e.g. "<list>", "<dict>") via its
         // capture; the Combine machinery only handles dep-error propagation, which uses
         // the generic "<combine>" frame to match `run_bind`'s "<bind>" convention.
-        let make_frame = || Frame {
-            function: "<combine>".to_string(),
-            expression: "combine".to_string(),
-        };
+        let make_frame = || Frame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
                 let propagated = e.clone_for_propagation().with_frame(make_frame());

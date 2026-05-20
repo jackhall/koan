@@ -183,10 +183,8 @@ fn defer_struct_via_combine<'a>(
                 finalize_struct(scope, name_for_finish.clone(), fields)
             }
             FieldListOutcome::Err(msg) => BodyResult::Err(
-                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
-                    function: "<struct>".to_string(),
-                    expression: format!("STRUCT {} schema", name_for_finish),
-                }),
+                KError::new(KErrorKind::ShapeError(msg))
+                    .with_frame(Frame::bare("<struct>", format!("STRUCT {} schema", name_for_finish))),
             ),
             FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
                 "STRUCT schema elaboration parked again after Combine wake".to_string(),

@@ -181,10 +181,7 @@ impl<'a> Scheduler<'a> {
                         // via `bind_value`); propagate the error rather than parking on a
                         // dead slot.
                         if let Err(e) = self.read_result(producer_id) {
-                            let frame = Frame {
-                                function: "<replay-park>".to_string(),
-                                expression: expr.summarize(),
-                            };
+                            let frame = Frame::from_expr("<replay-park>", expr);
                             let propagated = e.clone_for_propagation().with_frame(frame);
                             return ReplayParkResult::Done(NodeStep::Done(NodeOutput::Err(
                                 propagated,

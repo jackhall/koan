@@ -62,10 +62,9 @@ pub fn body<'a>(
         };
         match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj) {
             Ok(obj) => BodyResult::Value(obj),
-            Err(e) => BodyResult::Err(e.with_frame(Frame {
-                function: "<signature>".to_string(),
-                expression: format!("SIG {} body", name_for_finish),
-            })),
+            Err(e) => BodyResult::Err(
+                e.with_frame(Frame::bare("<signature>", format!("SIG {} body", name_for_finish))),
+            ),
         }
     });
     let combine_id = sched.add_combine(deps, scope, finish);

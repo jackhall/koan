@@ -189,10 +189,10 @@ impl<'a> KFunction<'a> {
                                         ),
                                         got: body_value.ktype().name(),
                                     },
-                                ).with_frame(crate::machine::Frame {
-                                    function: function_summary.clone(),
-                                    expression: function_summary.clone(),
-                                }));
+                                ).with_frame(crate::machine::Frame::bare(
+                                    function_summary.clone(),
+                                    function_summary.clone(),
+                                )));
                             }
                             BodyResult::Value(body_value)
                         }));

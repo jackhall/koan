@@ -80,10 +80,7 @@ impl<'a> Scheduler<'a> {
             let val_slot = self.classify_aggregate_part(v, scope, &mut deps, true);
             layout.push((key_slot, val_slot));
         }
-        let frame_label = || Frame {
-            function: "<dict>".to_string(),
-            expression: "dict literal".to_string(),
-        };
+        let frame_label = || Frame::bare("<dict>", "dict literal");
         let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
             let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
             for (k_slot, v_slot) in layout {

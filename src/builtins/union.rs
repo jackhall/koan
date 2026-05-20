@@ -148,10 +148,8 @@ fn defer_union_via_combine<'a>(
         ) {
             FieldListOutcome::Done(fields) => finalize_union(scope, name_for_finish.clone(), fields),
             FieldListOutcome::Err(msg) => BodyResult::Err(
-                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame {
-                    function: "<union>".to_string(),
-                    expression: format!("UNION {} schema", name_for_finish),
-                }),
+                KError::new(KErrorKind::ShapeError(msg))
+                    .with_frame(Frame::bare("<union>", format!("UNION {} schema", name_for_finish))),
             ),
             FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
                 "UNION schema elaboration parked again after Combine wake".to_string(),

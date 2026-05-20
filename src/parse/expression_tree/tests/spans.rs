@@ -4,9 +4,9 @@
 //! original source. The helper `parts_with_spans` returns a flat `(label, span)` list so
 //! assertions read like a span ledger.
 
-use crate::machine::core::source::{Span, Spanned, SourceFile};
+use crate::machine::core::source::{self, Span, Spanned, SourceFile};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::parse::expression_tree::parse;
+use crate::parse::expression_tree::{parse, parse_with_path};
 
 fn span_of(expr: &KExpression<'_>) -> Option<Span> {
     expr.span
@@ -223,6 +223,39 @@ fn span_resolves_to_line_column_via_sourcefile() {
     assert_eq!(file.resolve(span_of(&exprs[1]).unwrap().start), (2, 1));
     // `baz` token sits at byte 8.
     assert_eq!(file.resolve(exprs[1].parts[1].span.unwrap().start), (2, 5));
+}
+
+/// Phase 6: `parse_with_path` registers a `SourceFile` and stamps the resulting
+/// `KExpression.file` with the same `FileId`. Resolving the span's start against
+/// the registered file recovers the user-visible `(line, col)`. Here a nested
+/// call on line 3 column 5 — `(qux)` inside the indented continuation — lands at
+/// the documented Phase 6 test scenario.
+#[test]
+fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
+    // Line layout (with leading offsets):
+    //   line 1:  `foo (`                  byte 0..5
+    //   line 2:  `  bar`                  byte 6..11
+    //   line 3:  `    (qux))`             byte 14..23  (the inner `(qux)` starts at byte 18, col 5)
+    let src = "foo (\n  bar\n    (qux))";
+    let exprs = parse_with_path(src, "lib.koan").expect("parse");
+    // outer.parts = [Id(foo), Expression(bar (qux))]; drill into the inner
+    // Expression's last part to land on the `(qux)` call on line 3.
+    let outer = &exprs[0];
+    let inner = match &outer.parts.last().expect("outer has parts").value {
+        ExpressionPart::Expression(e) => &**e,
+        other => panic!("expected continuation Expression part, got {other:?}"),
+    };
+    let nested = match &inner.parts.last().expect("inner has parts").value {
+        ExpressionPart::Expression(e) => &**e,
+        other => panic!("expected nested Expression part, got {other:?}"),
+    };
+    let file_id = nested.file.expect("file should be populated by parse_with_path");
+    let span = nested.span.expect("span should be populated");
+    let (line, col) = source::with(file_id, |f| {
+        assert_eq!(&*f.path, "lib.koan");
+        f.resolve(span.start)
+    });
+    assert_eq!((line, col), (3, 5));
 }
 
 #[test]

@@ -20,4 +20,4 @@ pub use core::{
     Bindings, CallArena, Frame, KError, KErrorKind, KFuture, ResolveOutcome, Resolution,
     Resolved, RuntimeArena, Scope, ScopeId, ScopeKind,
 };
-pub use execute::{Scheduler, interpret, interpret_with_writer};
+pub use execute::{Scheduler, interpret, interpret_with_writer, interpret_with_writer_path};

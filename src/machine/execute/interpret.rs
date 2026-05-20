@@ -1,7 +1,7 @@
 use crate::builtins::default_scope;
 use crate::machine::{KError, RuntimeArena};
 use super::scheduler::Scheduler;
-use crate::parse::parse;
+use crate::parse::{parse, parse_with_path};
 
 /// Parse Koan source and run it on a fresh `RuntimeArena`; all values allocated by the
 /// program die when this returns.
@@ -9,12 +9,27 @@ pub fn interpret(source: &str) -> Result<(), KError> {
     interpret_with_writer(source, Box::new(std::io::stdout()))
 }
 
-/// `interpret` with a caller-supplied writer for `PRINT` output.
+/// `interpret` with a caller-supplied writer for `PRINT` output. Source is
+/// registered under the synthetic path `<input>`; use [`interpret_with_writer_path`]
+/// to surface a real filename in error frames.
 pub fn interpret_with_writer(
     source: &str,
     out: Box<dyn std::io::Write>,
 ) -> Result<(), KError> {
-    let exprs = parse(source)?;
+    interpret_with_writer_path(source, None, out)
+}
+
+/// `interpret` with both a caller-supplied writer and an optional filename for
+/// the source registry. `None` falls back to `<input>`.
+pub fn interpret_with_writer_path(
+    source: &str,
+    path: Option<&str>,
+    out: Box<dyn std::io::Write>,
+) -> Result<(), KError> {
+    let exprs = match path {
+        Some(p) => parse_with_path(source, p)?,
+        None => parse(source)?,
+    };
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, out);
     let mut scheduler = Scheduler::new();

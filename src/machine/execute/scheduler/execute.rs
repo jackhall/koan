@@ -60,10 +60,7 @@ impl<'a> Scheduler<'a> {
                                         expected: rt.name(),
                                         got: lifted_obj.ktype().name(),
                                     })
-                                    .with_frame(Frame {
-                                        function: f.summarize(),
-                                        expression: f.summarize(),
-                                    });
+                                    .with_frame(Frame::bare(f.summarize(), f.summarize()));
                                     self.finalize(idx, NodeOutput::Err(err));
                                     continue;
                                 }
@@ -73,10 +70,7 @@ impl<'a> Scheduler<'a> {
                         }
                         (NodeOutput::Err(e), Some(_frame)) => {
                             let with_frame = match prev_function {
-                                Some(f) => e.with_frame(Frame {
-                                    function: f.summarize(),
-                                    expression: f.summarize(),
-                                }),
+                                Some(f) => e.with_frame(Frame::bare(f.summarize(), f.summarize())),
                                 None => e,
                             };
                             self.finalize(idx, NodeOutput::Err(with_frame));

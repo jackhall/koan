@@ -70,6 +70,18 @@ another. This item closes that gap.
   mechanism. Disallowing or requiring forward-declaration discipline is
   rejected — the scheduler already handles deferred resolution generically
   and forcing source order on multi-file projects is gratuitous.
+- *Source registry per imported file — open, follow-on to source-spans.*
+  Each loaded file registers a `SourceFile` via
+  [`crate::machine::core::source`](../../src/machine/core/source.rs) so
+  error frames render real `path:line:col` locations across file
+  boundaries. `parse_with_path` already takes the filename; the loader
+  threads it. Separately, any builtin that synthesizes AST from a literal
+  `&str` at runtime (`tagged_union`, `union`, `sig_def`,
+  `type_constructor`, `struct_def` — not load-bearing today) should
+  register its synthetic source once via a per-builtin
+  `OnceCell<FileId>` so the thread-local `SOURCES` vector doesn't grow
+  unboundedly under repeated invocations. Only becomes load-bearing when
+  a real builtin starts source-synthesizing in production.
 
 ## Dependencies
 

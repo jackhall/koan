@@ -20,7 +20,9 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::source::{Span, Spanned};
+use std::rc::Rc;
+
+use crate::machine::core::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::machine::KError;
 use crate::parse::quotes::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
@@ -565,9 +567,30 @@ fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
     }
 }
 
-/// Public entry point: returns one `KExpression` per top-level line.
+/// Public entry point: returns one `KExpression` per top-level line. Registers the
+/// input under the synthetic path `<input>` so spans on returned `KExpression` nodes
+/// resolve into source locations via the thread-local registry. Use
+/// [`parse_with_path`] when the caller has a real filename.
 pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, KError> {
-    let (masked, quotes) = mask_quotes(input);
+    parse_with_path(input, "<input>")
+}
+
+/// Variant of [`parse`] that registers the source under a caller-supplied `path`.
+/// CLI / interpret-with-writer use this so error frames render real filenames.
+pub fn parse_with_path<'a>(
+    input: &str,
+    path: impl Into<Rc<str>>,
+) -> Result<Vec<KExpression<'a>>, KError> {
+    let id = source::register(SourceFile::new(path, input.to_string()));
+    parse_with_source(id)
+}
+
+/// Run the parse pipeline against a pre-registered `SourceFile`. Installs `id` as
+/// the active `CURRENT_FILE` for the duration of the call via [`CurrentFileGuard`]
+/// so `KError::parse` and `Frame::for_call` see the right file.
+pub fn parse_with_source<'a>(id: FileId) -> Result<Vec<KExpression<'a>>, KError> {
+    let _guard = CurrentFileGuard::push(id);
+    let (masked, quotes) = source::with(id, |f| mask_quotes(&f.text));
     let collapsed = collapse_whitespace(&masked)?;
     let root = build_tree(&collapsed, &quotes)?;
     root.parts
