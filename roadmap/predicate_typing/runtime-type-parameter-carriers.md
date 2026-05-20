@@ -30,19 +30,47 @@ is actually `MyErr`.
 
 **Directions.**
 
-- *Carrier site — open.* Where per-instance type arguments get stored:
-  candidates include extending `KObject::List` / `KObject::Dict` with an
-  element-`KType` field, and giving `ConstructorApply` a runtime carrier
-  (a `KObject` variant or an identity field on the produced `Tagged`).
-  The two may share a mechanism or be solved separately.
-- *Eager vs. deferred element checking — open.* Containers are shape-only
-  at dispatch today because lazy elements aren't evaluated yet; a runtime
-  carrier could record the *declared* element type at construction and
-  check membership post-evaluation, or force eager element typing. The
-  decision interacts with how list/dict literals are built.
-- *Variance — open.* Whether `List<Number>` is admissible where
-  `List<Any>` is declared (and the analogous question for each
-  constructor parameter) needs a variance rule per parameter position.
+- *Carrier site — decided.* Every parameterized value carries its type
+  arguments on the variant, and `ktype()` reads them rather than recomputing.
+  `KObject::List` / `KObject::Dict` gain a memoized element-type field (element
+  type for `List`; key + value for `Dict`), computed once at construction —
+  values are immutable `Rc`, so the join is computed exactly once. `KObject::Tagged`
+  gains a `type_args` field: empty means erased (today's behavior), and when
+  populated `ktype()` synthesizes `ConstructorApply { ctor, args: type_args }`
+  instead of the bare `UserType`.
+- *Type-parameter representation — decided.* No `KType::TypeParam` variant.
+  Type parameters stay what they already are — ordinary names resolved through
+  scope, with per-call deferred elaboration (the existing FN return-type
+  `Deferred` path; see
+  [elaboration.md](../../design/typing/elaboration.md) and
+  [functors.md](../../design/typing/functors.md)). A `:(List T)` or
+  `:(Result T E)` slot binds `T` / `E` per-call by unifying the slot's
+  parameterized type against the value's carried type arguments. The `Result`
+  field→parameter linkage (`ok`→`T`, `error`→`E`) is registration metadata on
+  the builtin, not a `KType` variant.
+- *Ascription is authoritative at annotated boundaries — decided.* The carrier
+  is populated by ascription, mirroring `Wrapped.type_id` and module
+  `compatible_sigs`. At an annotated boundary (FN return type, argument slot,
+  `LET` ascription) the declared type is the contract: (1) check the value
+  satisfies it via `matches_value` (covariant, content-recursive — already
+  implemented), then (2) re-tag the value to *exactly* the declared type,
+  **coarsening included** — a `List<Number>` value returned where `:(List Any)`
+  is declared is re-tagged `List<Any>`, so downstream dispatch sees the
+  contract, not the implementation's incidental precision. Unannotated, a value
+  keeps its precise memoized type (the join, for containers); surrendering
+  precision is the deliberate act of writing an annotation.
+- *Empty containers require type information — decided.* An empty `[]` / `{}`
+  has no join to infer from. In an annotated position the (vacuous) check passes
+  and the declared element type is stamped. With no annotation anywhere
+  upstream, an empty container that reaches an untyped resolution boundary (an
+  untyped `LET` binding, a bare expression result) is an **error**, not a silent
+  `List<Any>` / `Dict<Any, Any>`. A *heterogeneous non-empty* literal
+  (`[2, "hello"]`) is unaffected: it carries information (`List<Any>`), so it is
+  legal where `:(List Any)` is declared and fails — correctly — where
+  `:(List Number)` is.
+- *Variance — decided.* Covariant in every parameter position, consistent with
+  the existing `is_more_specific_than` ranking
+  ([ktype.md § Variance](../../design/typing/ktype.md#variance)).
 
 ## Dependencies
 
