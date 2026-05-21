@@ -53,6 +53,14 @@ impl<'a> Scheduler<'a> {
                     reason: "no matching function".to_string(),
                 }));
             }
+            // A bare name in the rebuilt expression is still a pending forward reference:
+            // park on its producer and re-dispatch, mirroring the `run_dispatch` path.
+            ResolveOutcome::ParkOnProducers(producers) => {
+                return Ok(self.park_pending_and_redispatch(producers, expr, idx));
+            }
+            ResolveOutcome::UnboundName(name) => {
+                return Err(KError::new(KErrorKind::UnboundName(name)));
+            }
         };
         Ok(self.invoke_to_step(future, scope, idx))
     }

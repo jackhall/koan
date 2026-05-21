@@ -68,6 +68,15 @@ impl<'a> Scheduler<'a> {
                 // through the standard eager fallthrough and rebind on completion.
                 return Ok(self.schedule_eager_fallthrough(expr, scope, idx));
             }
+            ResolveOutcome::ParkOnProducers(producers) => {
+                // A tentative tie hinged on a forward-referenced bare name. Park on its
+                // producer(s) and re-dispatch on wake, when the strict-pass peek can read
+                // the bound type.
+                return Ok(self.park_pending_and_redispatch(producers, expr, idx));
+            }
+            ResolveOutcome::UnboundName(name) => {
+                return Err(KError::new(KErrorKind::UnboundName(name)));
+            }
         };
 
         // Phase 2.5: install dispatch-time placeholder for the binder slot, if any.
@@ -88,6 +97,50 @@ impl<'a> Scheduler<'a> {
 
         // Phase 5: schedule eager subs from the resolution's indices.
         Ok(self.schedule_deps(rewritten, &resolved, scope, idx))
+    }
+
+    /// Park `idx` on each still-pending producer and rebuild it as a re-Dispatch of `expr`.
+    /// Shares the replay-park guards: a producer that already terminalized with an error
+    /// propagates (parking on a dead slot would deadlock); one that would close a cycle is
+    /// skipped; if no parkable producer remains, the call is a genuine no-match. On wake the
+    /// re-Dispatch re-runs resolution, where the now-bound name lets the strict-pass peek
+    /// pick. Drives the tentative-tie [`ResolveOutcome::ParkOnProducers`] path from both
+    /// `run_dispatch` and `run_bind`.
+    pub(super) fn park_pending_and_redispatch(
+        &mut self,
+        producers: Vec<NodeId>,
+        expr: KExpression<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        let mut to_wait: Vec<NodeId> = Vec::new();
+        for p in producers {
+            if self.is_result_ready(p) {
+                // Terminal while its placeholder is still set ⇒ the producer errored
+                // (success clears the placeholder); propagate rather than park on a dead slot.
+                if let Err(e) = self.read_result(p) {
+                    let frame = Frame::from_expr("<dispatch-park>", &expr);
+                    return NodeStep::Done(NodeOutput::Err(
+                        e.clone_for_propagation().with_frame(frame),
+                    ));
+                }
+            } else if !self.deps.would_create_cycle(p, NodeId(idx)) {
+                to_wait.push(p);
+            }
+        }
+        if to_wait.is_empty() {
+            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                expr: expr.summarize(),
+                reason: "no matching function".to_string(),
+            })));
+        }
+        for p in &to_wait {
+            self.deps.add_park_edge(*p, NodeId(idx));
+        }
+        NodeStep::Replace {
+            work: NodeWork::Dispatch(expr),
+            frame: None,
+            function: None,
+        }
     }
 
     /// Phase 1. Bare-name short-circuit. `Some(step)` only fires on `Value` (terminate with

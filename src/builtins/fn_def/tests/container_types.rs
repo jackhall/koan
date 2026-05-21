@@ -156,6 +156,133 @@ fn dispatch_picks_more_specific_list_overload() {
     assert_eq!(bytes, b"number\n");
 }
 
+/// Element-only-differing overloads (`:(List Number)` vs `:(List Str)`) no longer tie on a
+/// literal argument. The literal admits both shape-only at first dispatch, so the strict
+/// tie defers; once `[1 2 3]` evaluates to a `List<Number>`, the element-aware re-dispatch
+/// rejects `:(List Str)` (carried `List<Number>` doesn't satisfy it) and routes to
+/// `:(List Number)`. The string literal routes symmetrically.
+#[test]
+fn dispatch_disambiguates_element_only_overloads_on_literal() {
+    let numbers = capture_program_output(
+        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+         FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")\n\
+         PRINT (DESCRIBE [1 2 3])",
+    );
+    assert_eq!(numbers, b"numbers\n");
+    let strings = capture_program_output(
+        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+         FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")\n\
+         PRINT (DESCRIBE [\"a\" \"b\"])",
+    );
+    assert_eq!(strings, b"strings\n");
+}
+
+/// The same disambiguation works through an *already-evaluated* container argument: a
+/// `LET`-bound list forced through parens arrives at re-dispatch as a typed `Future` whose
+/// carried element type selects the overload — no literal-defer needed.
+#[test]
+fn dispatch_disambiguates_element_only_overloads_on_evaluated_arg() {
+    let bytes = capture_program_output(
+        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+         FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")\n\
+         LET xs = [1 2 3]\n\
+         PRINT (DESCRIBE (xs))",
+    );
+    assert_eq!(bytes, b"numbers\n");
+}
+
+/// A *bare* variable in a container slot disambiguates in the first dispatch pass via the
+/// strict-pass type peek: `xs` resolves to its bound `List<Number>` value, whose carried
+/// element type admits `:(List Number)` and rejects `:(List Str)` — no defer, no parens
+/// needed. The string-bound variable routes symmetrically.
+#[test]
+fn dispatch_disambiguates_element_only_overloads_on_bare_variable() {
+    let numbers = capture_program_output(
+        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+         FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")\n\
+         LET xs = [1 2 3]\n\
+         PRINT (DESCRIBE xs)",
+    );
+    assert_eq!(numbers, b"numbers\n");
+    let strings = capture_program_output(
+        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+         FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")\n\
+         LET xs = [\"a\" \"b\"]\n\
+         PRINT (DESCRIBE xs)",
+    );
+    assert_eq!(strings, b"strings\n");
+}
+
+/// A *forward-referenced* bare variable disambiguates too: `DESCRIBE xs` is dispatched
+/// before `LET xs = …` binds, so the strict-pass peek finds only a pending `Placeholder`
+/// and the tentative pass ties. Rather than no-matching, dispatch parks on the binder's
+/// producer (`ResolveOutcome::ParkOnProducers`) and re-dispatches once `xs` binds, where the
+/// peek reads its `List<Number>` type and routes to `:(List Number)`.
+#[test]
+fn dispatch_disambiguates_element_only_overloads_on_forward_ref_variable() {
+    let bytes = capture_program_output(
+        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+         FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")\n\
+         LET y = (DESCRIBE xs)\n\
+         LET xs = [1 2 3]\n\
+         PRINT y",
+    );
+    assert_eq!(bytes, b"numbers\n");
+}
+
+/// A genuinely *unbound* name (no binder anywhere, so no placeholder to park on) across a
+/// tentative tie surfaces as the precise `UnboundName` — the name names nothing — rather
+/// than a generic `DispatchFailed`. Mirrors what the single-overload path already reports
+/// when the auto-wrapped name evaluates.
+#[test]
+fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")");
+    run(scope, "FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")");
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("DESCRIBE nope"), scope);
+    let error = sched
+        .execute()
+        .expect_err("an unbound name across tied overloads must error");
+    assert!(
+        matches!(error.kind, KErrorKind::UnboundName(ref n) if n == "nope"),
+        "expected UnboundName(\"nope\"), got {error:?}",
+    );
+}
+
+/// A heterogeneous literal memoizes `List<Any>`, which satisfies neither `:(List Number)`
+/// nor `:(List Str)` — the post-eval re-dispatch admits neither overload, so the call finds
+/// no match (`DispatchFailed`) rather than tying as ambiguous.
+#[test]
+fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")");
+    run(scope, "FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")");
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("DESCRIBE [1 \"a\"]"), scope);
+    let error = sched
+        .execute()
+        .expect_err("heterogeneous List<Any> must match no concrete-element overload");
+    assert!(
+        matches!(error.kind, KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed, got {error:?}",
+    );
+}
+
+/// A `:(List Any)` overload catches the heterogeneous list the concrete-element overloads
+/// reject: `[1 "a"]` (`List<Any>`) satisfies only the `Any` slot.
+#[test]
+fn dispatch_list_any_overload_catches_heterogeneous_literal() {
+    let bytes = capture_program_output(
+        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+         FN (DESCRIBE xs :(List Any)) -> Str = (\"any\")\n\
+         PRINT (DESCRIBE [1 \"a\"])",
+    );
+    assert_eq!(bytes, b"any\n");
+}
+
 /// Parens-wrapped FN parameter type: `xs: (LIST_OF Number)` schedules `(LIST_OF Number)`
 /// as a sub-Dispatch from `parse_fn_param_list`, splices the resulting `KTypeValue` back
 /// into the signature, and finalizes the FN with the elaborated `KType::List(Number)`.
@@ -193,32 +320,28 @@ fn fn_with_parens_wrapped_dict_of_param_accepts_matching_dict() {
     assert_eq!(bytes, b"1\n");
 }
 
-/// Mixed list dispatches to the `List<Any>` overload (the only one that matches by
-/// post-evaluation `matches_value`); the `List<Number>` overload is filtered out.
-/// Note: dispatch-time matching is shape-only for containers (`Argument::matches`),
-/// so both overloads pass the initial filter; specificity then picks `List<Number>`,
-/// which fails at runtime element-check. Acceptable trade-off — caller gets the
-/// type-mismatch error from the more-specific overload, which is informative.
+/// A wrong-element-type call finds no matching overload. The `["a"]` literal admits the
+/// lone `:(List Number)` slot shape-only at first dispatch, but once it evaluates to a
+/// `List<Str>` value the element-aware re-dispatch (`accepts_part`) rejects it — a
+/// `List<Str>` carried type does not satisfy `:(List Number)`. With no other overload to
+/// fall through to, this surfaces as `DispatchFailed`, not a bind-time `TypeMismatch`:
+/// element type is part of what an overload matches, so a non-satisfying container is a
+/// non-match rather than a committed-then-failed bind.
 #[test]
-fn fn_typed_list_param_rejects_wrong_element_type_at_call() {
-    // Single overload typed List<Number> — wrong-element-type call must error.
+fn fn_typed_list_param_wrong_element_type_finds_no_match() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (HEAD xs :(List Number)) -> Number = (1)");
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
-    // Dispatch-time matching is shape-only and admits the call. The full
-    // content-recursive element check now runs at the splice-time bind loop in
-    // `KFunction::invoke`, where `bundle.args` holds evaluated values — so a
-    // `List<Str>` value bound into a `:(List Number)` slot errors here, no longer
-    // deferred to a later phase. The error lands on the node result.
-    sched.execute().expect("scheduler runs to completion");
-    let error = sched.read_result(id).err().expect(
-        "List<Str> into :(List Number) slot must error at splice",
+    sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
+    // `Unmatched` propagates from `execute` itself (not as a node result), matching the
+    // scheduler's `Ambiguous`/`Unmatched` → `Err` contract.
+    let error = sched.execute().expect_err(
+        "List<Str> against a :(List Number)-only overload must fail to dispatch",
     );
     assert!(
-        matches!(error.kind, KErrorKind::TypeMismatch { ref arg, .. } if arg == "xs"),
-        "expected a TypeMismatch naming arg `xs`, got {error:?}",
+        matches!(error.kind, KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed (no matching overload), got {error:?}",
     );
 }
 

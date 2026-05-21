@@ -177,12 +177,13 @@ annotation. The three boundaries are:
   stamp in [`invoke.rs`](../../src/machine/core/kfunction/invoke.rs).
 - **FN argument** — the invoke bind loop runs `matches_value` on each evaluated
   parameterized-carrier argument slot (`List` / `Dict` / `ConstructorApply`),
-  erroring with a `TypeMismatch` naming the parameter, then coarsens via
-  `stamp_type`. `bundle.args` holds evaluated values at this point (only
-  `KExpression` slots stay lazy by design), so the bind loop is a valid value
-  boundary symmetric with the return check; the content-recursive element check
-  the dispatch-time shape-only admission (`Argument::matches`) can't do lands
-  here.
+  then coarsens via `stamp_type`. `bundle.args` holds evaluated values at this
+  point (only `KExpression` slots stay lazy by design), so the bind loop is a
+  valid value boundary symmetric with the return check. This `matches_value` walk
+  is the authoritative content-recursive check; for `List` / `Dict` it confirms
+  what dispatch already gates, since an evaluated container whose carried element
+  type doesn't satisfy the slot is rejected as a dispatch non-match (see
+  [Dispatch and slot-specificity](#dispatch-and-slot-specificity)).
 - **`LET`** ascription — same check-then-stamp on the bound value.
 
 **Arity is enforced at FN-definition time** by `KType::from_type_expr`:
@@ -242,6 +243,57 @@ by slot-specificity: typed slots outrank untyped ones; literal-typed slots
 outrank `Any`. See [expressions-and-parsing.md](../expressions-and-parsing.md) for
 how the parser splits an expression into the `Keyword`/slot positions that
 specificity scores against.
+
+**Container slots admit on the carried element type, not on shape alone.** An
+*unevaluated* container literal (`ListLiteral` / `DictLiteral`) is admitted
+shape-only — its element types aren't known until it evaluates. An *evaluated*
+container (`Future(List/Dict)`) is admitted only when its memoized carried element
+type *satisfies* the slot (`KType::satisfied_by`: exact match or covariant
+refinement) — a pure type-level comparison against the value's `ktype()`, with no
+element walk. A `List<Number>` value fills `:(List Any)`; a `List<Any>` value (the
+join an empty or heterogeneous literal memoizes) fills `:(List Any)` but not
+`:(List Number)`. A container whose carried type doesn't satisfy a slot is a
+*non-match*: dispatch falls through to outer scopes and, finding nothing, surfaces
+`DispatchFailed` rather than committing to a slot that would fail at the bind
+boundary.
+
+This makes element-only-differing overloads (`:(List Number)` vs `:(List Str)`)
+dispatchable across the forms a container argument takes:
+
+- **Evaluated argument** (`DESCRIBE (xs)`, a call result) — already a typed
+  `Future`; the carried-type check picks directly.
+- **Bare variable** (`DESCRIBE xs`) — the strict pass *peeks*: a bare `Identifier`
+  in a container slot resolves in the dispatch scope, and a name bound to a value is
+  admitted on that value's carried element type (`signature_admits_strict` in
+  [resolve_dispatch.rs](../../src/machine/core/resolve_dispatch.rs)). The peek
+  reuses the `Future` arm of `accepts_part` — `ExpressionPart::Future` holds a
+  reference, so no clone. Only container slots peek; binder (`Identifier` /
+  `TypeExprRef`) and lazy (`KExpression`) slots never do.
+- **Literal** (`DESCRIBE [1 2 3]`) — carries no binding to peek, so it admits both
+  overloads shape-only and the strict pass *ties*. The dispatch driver treats a
+  strict tie whose argument carries unevaluated eager parts as `Deferred` rather
+  than `AmbiguousDispatch`; the literal evaluates and the re-dispatch on the
+  resulting typed `Future` is element-aware. A tie that survives evaluation (e.g. an
+  empty list against two concrete-element overloads, both admitted vacuously)
+  carries no eager parts on the second pass and surfaces as `AmbiguousDispatch`.
+
+The peek reads only an already-bound value. A `Placeholder` (forward reference) or
+`Unbound` name isn't peeked, so it falls to the tentative pass — and the two diverge
+there:
+
+- A `Placeholder` name *will* bind, so when the tentative pass ties on one, dispatch
+  parks on the binder's producer and re-dispatches once it binds, where the now-bound
+  type lets the strict-pass peek pick (`ResolveOutcome::ParkOnProducers`, parked
+  through the same edges as the resolved-pick replay-park). This keeps dispatch
+  order-independent — `DESCRIBE xs` resolves to the same overload whether or not
+  `LET xs = …` had landed at first dispatch.
+- An `Unbound` name names nothing (no binding *and* no forward-declared placeholder),
+  so a tentative tie over it can never resolve. It surfaces as the precise
+  `UnboundName` error (`ResolveOutcome::UnboundName`), matching what the
+  single-overload path reports once its auto-wrapped name evaluates — not a generic
+  dispatch miss. This relies on every forward-declared name having its placeholder
+  installed before a consumer dispatches, so `Unbound` is definitive rather than
+  transient.
 
 ## Known limitations
 

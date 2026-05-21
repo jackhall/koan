@@ -87,6 +87,15 @@ impl KType {
         }
     }
 
+    /// True iff a value carrying type `carried` satisfies a slot declared as `self` — exact
+    /// match or covariant refinement (`carried` is the more specific). The element-position
+    /// helper for dispatch admission of *evaluated* containers (see `accepts_part`): a
+    /// `List<Number>` value fills a `:(List Any)` slot, but a `List<Any>` value (the join an
+    /// empty or heterogeneous literal memoizes) does not fill `:(List Number)`.
+    pub fn satisfied_by(&self, carried: &KType) -> bool {
+        *self == *carried || carried.is_more_specific_than(self)
+    }
+
     /// True iff a runtime `KObject` value satisfies this declared type. `Any` matches
     /// everything; container types recurse into element/key/value positions; function types
     /// require structural signature compatibility (a `KFuture` thunk is accepted because its
@@ -177,10 +186,16 @@ impl KType {
     }
 
     /// Per-`ExpressionPart` admissibility check: can a part of this shape fill an argument
-    /// slot of this type? Container slots are shape-only at dispatch time — element-type
-    /// validation for `List<Number>` etc. happens post-evaluation in `matches_value`, since
-    /// lazy lists at dispatch time may carry unevaluated `Expression` parts. Function slots
-    /// with a structural `KFunction { args, ret }` shape DO validate the bound function's
+    /// slot of this type? An *unevaluated* container literal (`ListLiteral` / `DictLiteral`)
+    /// is shape-only — its element types aren't known until it evaluates, so it admits and
+    /// the dispatch driver defers it (a strict tie over two container slots re-dispatches
+    /// once the literal becomes a typed `Future`). An *evaluated* container
+    /// (`Future(List/Dict)`) is element-aware: it admits only when its memoized carried type
+    /// satisfies the slot's declared element/key/value type (`satisfied_by`) — pure
+    /// type-level comparison, no element walk. A `List<Any>` value (empty or heterogeneous)
+    /// thus admits `:(List Any)` but not `:(List Number)`, and a non-satisfying container
+    /// falls through the scope walk rather than committing to a bind-time mismatch. Function
+    /// slots with a structural `KFunction { args, ret }` shape validate the bound function's
     /// signature here, since `KObject::KFunction` carries the full signature.
     pub fn accepts_part(&self, part: &ExpressionPart<'_>) -> bool {
         match self {
@@ -204,14 +219,18 @@ impl KType {
                 part,
                 ExpressionPart::Literal(KLiteral::Null) | ExpressionPart::Future(KObject::Null)
             ),
-            KType::List(_) => matches!(
-                part,
-                ExpressionPart::ListLiteral(_) | ExpressionPart::Future(KObject::List(..))
-            ),
-            KType::Dict(_, _) => matches!(
-                part,
-                ExpressionPart::DictLiteral(_) | ExpressionPart::Future(KObject::Dict(..))
-            ),
+            KType::List(elem) => match part {
+                ExpressionPart::ListLiteral(_) => true,
+                ExpressionPart::Future(KObject::List(_, carried)) => elem.satisfied_by(carried),
+                _ => false,
+            },
+            KType::Dict(k_ty, v_ty) => match part {
+                ExpressionPart::DictLiteral(_) => true,
+                ExpressionPart::Future(KObject::Dict(_, carried_k, carried_v)) => {
+                    k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
+                }
+                _ => false,
+            },
             KType::KFunction { args, ret } => match part {
                 ExpressionPart::Future(KObject::KFunction(f, _)) => {
                     function_compat(&f.signature, args, ret)
