@@ -38,6 +38,9 @@ without first landing something else:
 - [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
   — runtime type-parameter carriers shipped; remaining is wiring `unify_slot` into invoke so
   generic value-slot FNs like `FN head (xs :(List T)) -> :T` become definable.
+- [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
+  function of its lexical position rather than the scheduler's queue order, so forward
+  references resolve deterministically and sibling work can be reordered or parallelized.
 
 ## Open items
 
