@@ -32,6 +32,9 @@ without first landing something else:
   parameter type slots that reference earlier parameters in the same FN signature.
 - [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
   — per-call elaboration precision for structurally-typed FN slots.
+- [FUNCTOR binder](roadmap/predicate_typing/functor-binder.md) — dedicated binder with
+  definition-time return-type validation, distinct `KType::KFunctor` with a one-way wall
+  against `KType::KFunction`, and a `:(Functor (params) -> R)` type-position sigil.
 - [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
   — VAL-slot reads carry the SIG's abstract identity rather than the underlying value's
   concrete `KType`.
@@ -69,6 +72,7 @@ value-slot binding:
 - [Stage 6 — Equivalence-checked coherence](roadmap/predicate_typing/equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](roadmap/predicate_typing/syntax-tuning.md)
 - [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
+- [FUNCTOR binder](roadmap/predicate_typing/functor-binder.md)
 - [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
 
 ### Libraries — [roadmap/libraries/](roadmap/libraries/)

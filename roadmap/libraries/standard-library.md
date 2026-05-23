@@ -61,18 +61,18 @@ boilerplate by hand for every step.
   builtin (e.g., the existing dictionary builtin if Set/Map cover its
   uses), the builtin gets removed in the same change rather than left as
   a parallel surface.
-- *Applicative functor semantics via `FUNCTOR` binder — open.* Stage 5's
-  implicit resolution makes independent `(MakeSet)` call sites resolve
-  to the same `IntOrd` without users seeing it; under the shipped
-  generative-only semantics (per
-  [design/typing/functors.md](../../design/typing/functors.md)),
-  two such applications mint distinct Set types and the resulting sets
+- *Applicative functor semantics — deferred to predicate typing.* Stage
+  5's implicit resolution makes independent `(MakeSet)` call sites
+  resolve to the same `IntOrd` without users seeing it; under the
+  generative-only semantics shipped by
+  [functor-binder](../predicate_typing/functor-binder.md) (and spec'd
+  in [design/typing/functors.md](../../design/typing/functors.md)), two
+  such applications mint distinct Set types and the resulting sets
   cannot interoperate. Applicative semantics — same-functor-applied-to-
-  same-module produces equal types — closes this. Landing form: a new
-  `FUNCTOR` binder reusing FN mechanics, distinguished from `FN` at the
-  surface so the generative/applicative choice is visible at the
-  declaration. The memoization scheme (argument-identity hashing vs.
-  structural equality on argument values) is part of this item.
+  same-module produces equal types — closes this. The decided seam is
+  the `FUNCTOR` binder's `is_functor` flag; the memoization scheme
+  (argument-identity hashing vs. structural equality on argument values)
+  is the open piece, deferred until predicate typing lands.
 
 Canonical signatures use the `VAL` declarator
 ([design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures))
@@ -105,6 +105,9 @@ concrete type.
 
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
+- [FUNCTOR binder](../predicate_typing/functor-binder.md) — collections
+  ship as FUNCTORs over their element/key types; the binder is the
+  substrate for stdlib data-structure code.
 
 **Unblocks:**
 
