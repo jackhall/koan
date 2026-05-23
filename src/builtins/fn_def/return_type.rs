@@ -99,11 +99,11 @@ pub(super) fn classify_return_type<'a>(
                 ResolveTypeExprOutcome::Park(producers) => {
                     ReturnTypeState::Pending { te, producers }
                 }
-                ResolveTypeExprOutcome::Unbound(_) => match KType::from_name(&name) {
+                ResolveTypeExprOutcome::Unbound(msg) => match KType::from_name(&name) {
                     Some(kt) => ReturnTypeState::Done(kt),
                     None => {
                         return Err(KError::new(KErrorKind::ShapeError(format!(
-                            "FN return-type slot = unknown type name `{name}`"
+                            "FN return-type slot: {msg}"
                         ))));
                     }
                 },
@@ -144,10 +144,10 @@ pub(super) fn resolve_capture_at_finish<'a>(
                 ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(
                     "FN return type parked after Combine wake".to_string(),
                 ))),
-                ResolveTypeExprOutcome::Unbound(_) => match KType::from_name(&name) {
+                ResolveTypeExprOutcome::Unbound(msg) => match KType::from_name(&name) {
                     Some(kt) => Ok(ReturnType::Resolved(kt)),
                     None => Err(KError::new(KErrorKind::ShapeError(format!(
-                        "FN return-type slot = unknown type name `{name}`"
+                        "FN return-type slot: {msg}"
                     )))),
                 },
             }
