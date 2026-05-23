@@ -65,7 +65,7 @@ boilerplate by hand for every step.
   5's implicit resolution makes independent `(MakeSet)` call sites
   resolve to the same `IntOrd` without users seeing it; under the
   generative-only semantics shipped by
-  [functor-binder](../predicate_typing/functor-binder.md) (and spec'd
+  [functor-binder](functor-binder.md) (and spec'd
   in [design/typing/functors.md](../../design/typing/functors.md)), two
   such applications mint distinct Set types and the resulting sets
   cannot interoperate. Applicative semantics — same-functor-applied-to-
@@ -105,9 +105,9 @@ concrete type.
 
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
-- [FUNCTOR binder](../predicate_typing/functor-binder.md) — collections
-  ship as FUNCTORs over their element/key types; the binder is the
-  substrate for stdlib data-structure code.
+- [FUNCTOR binder](functor-binder.md) — collections ship as FUNCTORs over
+  their element/key types; the binder is the substrate for stdlib
+  data-structure code.
 
 **Unblocks:**
 

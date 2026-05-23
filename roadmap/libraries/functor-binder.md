@@ -4,22 +4,45 @@ Bring the runtime in line with [design/typing/functors.md](../../design/typing/f
 a dedicated `FUNCTOR` binder with definition-time return-type validation, a
 distinct `KType::KFunctor` variant with a one-way admissibility wall
 against `KType::KFunction`, and a `:(Functor (params) -> R)` type-position
-sigil.
+sigil. Two known issues are folded into this work because they share its
+machinery and code path.
 
 **Problem.** Functors are not a first-class binder. An FN whose return
 slot happens to denote a module or signature is the only way to write
 one, so functor-ness must be inferred from the resolved (or deferred)
-return-type carrier at every consumer. Two consequences fall out:
+return-type carrier at every consumer. Concrete fallout in the runtime
+today:
 
 - [`function_value_ktype`](../../src/machine/model/values/kobject.rs)
   and [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
   coarsen `Deferred(_)` returns to `KType::Any` — the structural
   function-type language has no surface for "this FN is a functor and its
   return slot is module-kind," tracked under
-  [kfunction-deferred-ret-precision.md](kfunction-deferred-ret-precision.md).
+  [kfunction-deferred-ret-precision.md](../predicate_typing/kfunction-deferred-ret-precision.md).
 - No FN-def-time check forces the return slot of an intended functor to
   denote a module or signature; mistakes surface as opaque dispatch-time
   errors several frames removed from the binder.
+- *Defining a functor panics the scheduler.* Any FN with a
+  signature-typed parameter (`FN (MAKESET Er :OrderedSig) -> OrderedSig =
+  (Er)`) panics at
+  [`node_store.rs:169`](../../src/machine/execute/scheduler/node_store.rs)
+  with *"result must be ready by the time it's read"* — `read_result`
+  hits a non-`Done` slot on the per-call signature-typed-param dual-write
+  path. The panic fires regardless of the binding name's token class, so
+  it's about the signature-typed parameter, not the LHS. Surfaced
+  2026-05-21 while exploring the value-language-diagnostic fix; the
+  FUNCTOR binder cannot land without this path running clean
+  end-to-end.
+- *Type-class `LET` gate is a denylist — plain values slip into a type
+  name.* The `TypeClassBindingExpectsType` check
+  ([`let_binding.rs:51`](../../src/builtins/let_binding.rs) / `:92`) only
+  rejects `Number | Str | Bool | Null | List | Dict`; any other value
+  passes through to `bind_value` into `data` with no error, so
+  `LET Plain = (FN (PP x :Number) -> Number = (x))` silently binds a
+  plain function under a Type-class name. The discrimination needed for
+  an allowlist — separating a functor from a plain function when both
+  are `KObject::KFunction` — is exactly what the `is_functor` flag
+  provides, so the gate fix rides this work.
 
 There is also no type-position surface for "this slot is a functor of this
 shape" — only the binder keyword exists, so functor-returning functors
@@ -44,12 +67,20 @@ have no admissible return-type denotation.
   [`elaborate_type_expr`](../../src/machine/model/types/resolver.rs) as the
   structural functor type, surface-disjoint from the `FUNCTOR` binder
   keyword on the same rule that keeps `FN` and `Function` disjoint.
+- *Functor definitions stop panicking.* The signature-typed-param
+  dual-write path runs clean end-to-end; the `read_result` non-`Done`
+  slot read is fixed (or attributed to a real prerequisite) as part of
+  exercising the binder.
+- *Type-class LET gate flips to an allowlist.* The accepted RHSs become
+  `KTypeValue`, `derive_nominal_identity → Some`, or an
+  `is_functor`-flagged `KFunction`; plain functions bound to Type-class
+  names get rejected with a real diagnostic instead of silently landing
+  in `data`.
 - *FUNCTOR is the declared seam for future applicative-mode work.*
   Generative-only semantics ship now; once predicate typing lands, the
-  applicative opt-in (parked in
-  [standard-library.md](../libraries/standard-library.md)) attaches to the
-  `is_functor` flag rather than re-deriving functor-ness from the return
-  type at every consumer.
+  applicative opt-in (parked in [standard-library.md](standard-library.md))
+  attaches to the `is_functor` flag rather than re-deriving functor-ness
+  from the return type at every consumer.
 
 **Directions.**
 
@@ -74,9 +105,20 @@ have no admissible return-type denotation.
 - *Type-position sigil — decided.* `:(Functor (params) -> R)` paralleling
   `:(Function (args) -> R)`, Type-class token disjoint from the binder
   keyword.
-- *Applicative-mode opt-in — deferred to predicate typing.* Tracked under
-  [standard-library.md](../libraries/standard-library.md). Generative-only
+- *Type-class LET gate flips to allowlist — decided.* Accept iff RHS is
+  `KTypeValue`, `derive_nominal_identity → Some`, or
+  `is_functor`-flagged. The current denylist's "hard part" (functor /
+  plain-function discrimination) dissolves once the flag exists.
+- *Applicative-mode opt-in — deferred to predicate typing.* Tracked
+  under [standard-library.md](standard-library.md). Generative-only
   semantics ship under this item.
+- *Functor-definition panic root cause — open.* The non-`Done`
+  `read_result` at
+  [`node_store.rs:169`](../../src/machine/execute/scheduler/node_store.rs)
+  needs attribution: most likely an early read of the signature-typed
+  parameter's per-call binder slot before its producer terminalizes, but
+  the dual-write into `bindings.types` runs through the same path.
+  Recommended: a minimal repro test first, then attribution.
 - *Where `is_functor` is set in fn_def — open.* The natural site is the
   same return-type classification arm that already routes
   `Resolved`/`Deferred`; deciding whether validation runs before or after
@@ -96,6 +138,6 @@ have no admissible return-type denotation.
 
 **Unblocks:**
 
-- [Standard library](../libraries/standard-library.md) — collections
-  ship as FUNCTORs over their element/key types, so the FUNCTOR binder
-  is the substrate for stdlib data-structure code.
+- [Standard library](standard-library.md) — collections ship as FUNCTORs
+  over their element/key types, so the FUNCTOR binder is the substrate
+  for stdlib data-structure code.
