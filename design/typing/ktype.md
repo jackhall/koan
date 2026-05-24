@@ -38,8 +38,8 @@
   arg2>` in diagnostics. See
   [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)
   for the surface form and per-call generativity.
-- Signature carriers: `Signature` (the type of a first-class `SIG` value) and
-  `SignatureBound { sig_id, sig_path }` — the per-declaration `SIG` identity
+- Signature carriers: `MetaSignature` (the type of a first-class `SIG` value, surface name `Signature`) and
+  `SatisfiesSignature { sig_id, sig_path }` — the per-declaration `SIG` identity
   written into `bindings.types` at finalize time so signature names resolve
   uniformly through `Scope::resolve_type`.
 - `Any` — the no-op fast-path.

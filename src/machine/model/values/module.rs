@@ -33,7 +33,7 @@ pub struct Module<'a> {
     /// stays valid alongside interior mutation.
     pub type_members: RefCell<HashMap<String, KType>>,
     /// Sigs this module shape-checks against. Populated by `:|` and `:!` at ascription
-    /// time via [`Module::mark_satisfies`]. `accepts_part` for `KType::SignatureBound {
+    /// time via [`Module::mark_satisfies`]. `accepts_part` for `KType::SatisfiesSignature {
     /// sig_id }` is an O(1) membership check against this set. `RefCell` because
     /// ascription writes after the surrounding `KObject::KModule` is already alloc'd —
     /// same shape as `type_members`.
@@ -112,7 +112,7 @@ impl<'a> Signature<'a> {
         }
     }
 
-    /// Stable identity used to seed `KType::SignatureBound { sig_id, .. }`. Mirrors
+    /// Stable identity used to seed `KType::SatisfiesSignature { sig_id, .. }`. Mirrors
     /// `Module::scope_id` — each `SIG` declares its own decl_scope and therefore mints
     /// a fresh `ScopeId`; two `SIG Foo = (...)` declarations in the same lexical scope
     /// already error (`Rebind`), so distinct `Signature` values always have distinct ids.

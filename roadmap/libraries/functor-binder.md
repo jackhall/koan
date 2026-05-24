@@ -51,7 +51,7 @@ have no admissible return-type denotation.
 **Impact.**
 
 - *FUNCTOR return slots are statically validated at the binder.* The
-  admissible carriers (`Signature`, `SignatureBound`, `(SIG_WITH …)`,
+  admissible carriers (`MetaSignature`, `SatisfiesSignature`, `(SIG_WITH …)`,
   `AnyUserType { kind: Module }`, recursively `KType::KFunctor`) are
   checked when the FUNCTOR binder runs; any other denotation surfaces
   `FUNCTOR return-type slot must denote a module, signature, or functor`

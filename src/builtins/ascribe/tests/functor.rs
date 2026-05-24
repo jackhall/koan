@@ -108,7 +108,7 @@ fn functor_application_is_generative() {
 
 /// Test 4 — Dispatch admissibility filters non-conforming modules. An unascribed
 /// `MODULE Empty` has an empty `compatible_sigs` set, so `accepts_part` for the
-/// `SignatureBound { sig_id }` slot rejects it and dispatch fails. (Also: ascribing
+/// `SatisfiesSignature { sig_id }` slot rejects it and dispatch fails. (Also: ascribing
 /// `Empty :! OrderedSig` would itself fail at shape-check time since `Empty` lacks a
 /// `compare` member — verified by `ascription_missing_member_errors` above; the
 /// admissibility-only path is what's pinned here.)
@@ -127,7 +127,7 @@ fn functor_rejects_unascribed_module_argument() {
         "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
     );
     // Bind `IntOrd` (an unascribed module) under a lowercase identifier so the
-    // auto-wrap pass triggers when the identifier appears in the SignatureBound
+    // auto-wrap pass triggers when the identifier appears in the SatisfiesSignature
     // slot. The wrapped sub-Dispatch resolves to `Future(KModule(IntOrd, _))`, but
     // IntOrd's `compatible_sigs` is empty — no overload matches. Surfaces as
     // `DispatchFailed` out of `Scheduler::execute`.
@@ -183,7 +183,7 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
             "HashedSig call should pick body with tag=2, got {:?}", th.map(|o| o.ktype()));
 }
 
-/// Test 6 — Transparent ascription satisfies `SignatureBound`. Pins that `:!`
+/// Test 6 — Transparent ascription satisfies `SatisfiesSignature`. Pins that `:!`
 /// (transparent) populates `compatible_sigs` the same way `:|` (opaque) does — the
 /// functor's sig-typed slot accepts a `:!`-ascribed module, and the body still reads
 /// the underlying member through the view.

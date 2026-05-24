@@ -185,22 +185,22 @@ fn user_type_specificity_lattice() {
 /// gate in [`crate::machine::core::kfunction::KFunction::invoke`].
 #[test]
 fn is_type_denoting_table() {
-    // SignatureBound — module ascribed to a signature.
-    let sb = KType::SignatureBound {
+    // SatisfiesSignature — module ascribed to a signature.
+    let sb = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: Vec::new(),
     };
     assert!(sb.is_type_denoting());
-    // SignatureBound with pins — still type-denoting.
-    let sb_pinned = KType::SignatureBound {
+    // SatisfiesSignature with pins — still type-denoting.
+    let sb_pinned = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     assert!(sb_pinned.is_type_denoting());
     // Signature — first-class signature value.
-    assert!(KType::Signature.is_type_denoting());
+    assert!(KType::MetaSignature.is_type_denoting());
     // Type — schema meta-type.
     assert!(KType::Type.is_type_denoting());
     // TypeExprRef — TypeExpr carrier.
@@ -241,41 +241,41 @@ fn is_type_denoting_table() {
     .is_type_denoting());
 }
 
-/// `SignatureBound { pinned_slots }` specificity rules:
+/// `SatisfiesSignature { pinned_slots }` specificity rules:
 /// - A non-empty `pinned_slots` strictly refines an empty same-`sig_id` form when
 ///   every pin in the empty side appears (with equal `KType`) in the non-empty side.
 /// - Different `sig_id`s are incomparable.
 /// - Same `sig_id` with disjoint constraint keys is incomparable.
 /// - Same-key-different-`KType` is incomparable.
-/// - A `SignatureBound` (pinned or not) strictly refines `AnyUserType { kind: Module }`.
+/// - A `SatisfiesSignature` (pinned or not) strictly refines `AnyUserType { kind: Module }`.
 #[test]
 fn is_more_specific_for_pinned_signature_bound() {
-    let bare = KType::SignatureBound {
+    let bare = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: Vec::new(),
     };
-    let pinned_number = KType::SignatureBound {
+    let pinned_number = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
-    let pinned_str = KType::SignatureBound {
+    let pinned_str = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Type".into(), KType::Str)],
     };
-    let pinned_two = KType::SignatureBound {
+    let pinned_two = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
     };
-    let other_sig = KType::SignatureBound {
+    let other_sig = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 2),
         sig_path: "HashedSig".into(),
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
-    let pinned_elt = KType::SignatureBound {
+    let pinned_elt = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Elt".into(), KType::Number)],
@@ -298,7 +298,7 @@ fn is_more_specific_for_pinned_signature_bound() {
     // the AnyUserType { kind: Module } wildcard.
     assert!(!pinned_number.is_more_specific_than(&other_sig));
     assert!(!other_sig.is_more_specific_than(&pinned_number));
-    // Any SignatureBound (pinned or not) refines `AnyUserType { kind: Module }`.
+    // Any SatisfiesSignature (pinned or not) refines `AnyUserType { kind: Module }`.
     assert!(bare.is_more_specific_than(&any_module));
     assert!(pinned_number.is_more_specific_than(&any_module));
     assert!(pinned_two.is_more_specific_than(&any_module));

@@ -137,7 +137,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
         f.signature.return_type,
     );
     // Body's `MODULE Result` isn't sig-ascribed to `Set`, so its `compatible_sigs` is
-    // empty and the SignatureBound check rejects on membership before the pin check.
+    // empty and the SatisfiesSignature check rejects on membership before the pin check.
     // This is the same situation as `functor_return_with_mismatched_sharing_constraint_errors`,
     // but the relevant Stage B invariant is that the FN registered with Deferred at all
     // (without erroring `Unbound` at FN-def time, which was the pre-Stage-B failure mode).

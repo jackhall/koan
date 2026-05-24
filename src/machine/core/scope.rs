@@ -57,7 +57,7 @@ pub struct Scope<'a> {
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
     /// Position-independent identity captured into `KType::UserType { scope_id, .. }` /
-    /// `KType::SignatureBound { sig_id, .. }` so dispatch on user-declared types compares
+    /// `KType::SatisfiesSignature { sig_id, .. }` so dispatch on user-declared types compares
     /// ids rather than scope pointers.
     pub id: ScopeId,
     pending: PendingQueue<'a>,
@@ -362,7 +362,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Transactional dual-write for nominal declarations (STRUCT, named UNION, MODULE,
-    /// SIG). Identity `kt` (a `KType::UserType` or `KType::SignatureBound`) is inserted
+    /// SIG). Identity `kt` (a `KType::UserType` or `KType::SatisfiesSignature`) is inserted
     /// into [`Bindings::types`] and the runtime carrier `obj` (`StructType`,
     /// `TaggedUnionType`, `KModule`, `KSignature`) into [`Bindings::data`] atomically
     /// via [`Bindings::try_register_nominal`]. Returns the carrier on success so the

@@ -52,7 +52,7 @@ a functor; the binder makes that knowledge legible to the engine.
 ## Definition-time validation
 
 FUNCTOR's return-type slot must denote a module, signature, or functor
-kind. The admissible carriers are `Signature`, `SignatureBound`,
+kind. The admissible carriers are `MetaSignature`, `SatisfiesSignature`,
 `(SIG_WITH …)`, `AnyUserType { kind: Module }`, and `KType::KFunctor { … }`
 (recursively — the inner `ret` is validated the same way, so curried
 multi-module functors and any deeper nesting flow through one rule). Any
@@ -122,7 +122,7 @@ a type-language binder at the call site: at each call,
 dual-writes the per-call argument into the child scope's `bindings.types`
 alongside the existing value-side `bind_value`. The
 [`KType::is_type_denoting`](../../src/machine/model/types/ktype_predicates.rs)
-predicate gates the dual-write — `SignatureBound`, `Signature`, `Type`,
+predicate gates the dual-write — `SatisfiesSignature`, `MetaSignature`, `Type`,
 `TypeExprRef`, and `AnyUserType { kind: Module }` carry meaningful
 type-language identity at the binder. Body-position references to the
 parameter (`(MODULE_TYPE_OF Er Type)` inside the body) resolve through

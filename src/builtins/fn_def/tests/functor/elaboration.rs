@@ -41,7 +41,7 @@ fn elaborator_lowers_ktype_value_binding() {
 }
 
 /// FN-def integration: a parameter typed `Er: OrderedSig` lowers via the scope-aware
-/// `elaborate_type_expr` into `KType::SignatureBound { sig_id, sig_path: "OrderedSig" }`,
+/// `elaborate_type_expr` into `KType::SatisfiesSignature { sig_id, sig_path: "OrderedSig" }`,
 /// with `sig_id` equal to the declaring `Signature::sig_id()`. Pins the elaborator-to-
 /// FN-signature path that drives functor dispatch.
 ///
@@ -74,15 +74,15 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             assert_eq!(kw, "USE_ORD");
             assert_eq!(name, "Er");
             match ktype {
-                KType::SignatureBound { sig_id: id, sig_path, pinned_slots } => {
+                KType::SatisfiesSignature { sig_id: id, sig_path, pinned_slots } => {
                     assert_eq!(*id, sig_id, "sig_id must match Signature::sig_id()");
                     assert_eq!(sig_path, "OrderedSig");
                     assert!(pinned_slots.is_empty(), "bare OrderedSig has no pinned slots");
                 }
-                other => panic!("expected SignatureBound, got {:?}", other),
+                other => panic!("expected SatisfiesSignature, got {:?}", other),
             }
         }
-        _ => panic!("expected [Keyword(USE_ORD), Argument(Er :SignatureBound)]"),
+        _ => panic!("expected [Keyword(USE_ORD), Argument(Er :SatisfiesSignature)]"),
     }
 }
 

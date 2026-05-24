@@ -270,9 +270,9 @@ fn signature_argument_by_name<'a>(
 ///
 /// | Declared `KType`               | Bound `KObject`        | Identity                                              |
 /// | ------------------------------ | ---------------------- | ----------------------------------------------------- |
-/// | `SignatureBound { .. }`        | `KModule(m, _)`        | `m.ktype()` — `UserType { kind: Module, .. }`         |
+/// | `SatisfiesSignature { .. }`        | `KModule(m, _)`        | `m.ktype()` — `UserType { kind: Module, .. }`         |
 /// | `AnyUserType { kind: Module }` | `KModule(m, _)`        | same                                                  |
-/// | `Signature`                    | `KSignature(s)`        | `SignatureBound { sig_id: s.sig_id(), sig_path, .. }` |
+/// | `Signature`                    | `KSignature(s)`        | `SatisfiesSignature { sig_id: s.sig_id(), sig_path, .. }` |
 /// | `Type`                         | `KTypeValue(kt)`       | `kt.clone()`                                          |
 /// | `TypeExprRef`                  | `KTypeValue(kt)`       | `kt.clone()`                                          |
 /// | `TypeExprRef`                  | `TypeNameRef(t)`       | elaborated via `definition_scope.resolve_type_expr`   |
@@ -290,7 +290,7 @@ pub(crate) fn type_identity_for<'a>(
     definition_scope: &'a Scope<'a>,
 ) -> Result<Option<KType>, KError> {
     match declared {
-        KType::SignatureBound { .. } => Ok(match obj {
+        KType::SatisfiesSignature { .. } => Ok(match obj {
             KObject::KModule(m, _) => Some(KType::UserType {
                 kind: UserTypeKind::Module,
                 scope_id: m.scope_id(),
@@ -306,8 +306,8 @@ pub(crate) fn type_identity_for<'a>(
             }),
             _ => None,
         }),
-        KType::Signature => Ok(match obj {
-            KObject::KSignature(s) => Some(KType::SignatureBound {
+        KType::MetaSignature => Ok(match obj {
+            KObject::KSignature(s) => Some(KType::SatisfiesSignature {
                 sig_id: s.sig_id(),
                 sig_path: s.path.clone(),
                 pinned_slots: Vec::new(),

@@ -5,7 +5,7 @@ use crate::machine::model::KObject;
 use crate::machine::{RuntimeArena, ScopeId};
 
 /// Stage-2 phase-A1 sharing constraint: `matches_value` / `accepts_part` on a
-/// `SignatureBound { pinned_slots: [(Type, Number)] }` slot reject a module whose
+/// `SatisfiesSignature { pinned_slots: [(Type, Number)] }` slot reject a module whose
 /// `type_members["Type"]` does not pin to `Number`. Phase A2 will land the functor
 /// surface that mints `type_members` entries with the pinned `KType`; A1 only ships
 /// the predicate, so this test directly populates `type_members` to pin the
@@ -44,7 +44,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     m_none.mark_satisfies(ScopeId::from_raw(0, 42));
     let m_none_obj = arena.alloc_object(KObject::KModule(m_none, None));
 
-    let slot = KType::SignatureBound {
+    let slot = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 42),
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Type".into(), KType::Number)],
@@ -75,11 +75,11 @@ fn sharing_constraint_rejects_mismatched_module_type() {
 
 /// Two pinned slots `(Elt: Number) (Ord: IntOrd)` as a FN return type. Pure types only —
 /// no parameter references in the pin values — so the parens sub-dispatches synchronously
-/// at FN-construction and the resulting `SignatureBound` lands on the FN's stored
+/// at FN-construction and the resulting `SatisfiesSignature` lands on the FN's stored
 /// signature. Body returns a module pinning both slots to the same concrete types; the
 /// MODULE-finalize mirror writes `type_members["Elt"]` and `type_members["Ord"]` from the
 /// child scope's `bindings.types`. The functor call succeeds and the dispatcher's return-
-/// type check accepts the body's module against the pinned `SignatureBound`.
+/// type check accepts the body's module against the pinned `SatisfiesSignature`.
 #[test]
 fn functor_with_two_pinned_slots_round_trips() {
     use crate::machine::model::KType;
@@ -92,7 +92,7 @@ fn functor_with_two_pinned_slots_round_trips() {
          MODULE IntOrd = (LET compare = 7)\n\
          LET int_ord = (IntOrd :! OrderedSig)",
     );
-    // Functor returns a SignatureBound with two pins; body produces a module that pins
+    // Functor returns a SatisfiesSignature with two pins; body produces a module that pins
     // both. Use the same SIG (`Set`) on both sides so the body's MODULE Result can
     // satisfy the pin via its mirrored `type_members`.
     run(
@@ -108,7 +108,7 @@ fn functor_with_two_pinned_slots_round_trips() {
     let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
-        ReturnType::Resolved(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
+        ReturnType::Resolved(KType::SatisfiesSignature { sig_path, pinned_slots, .. }) => {
             assert_eq!(sig_path, "Set");
             assert_eq!(pinned_slots.len(), 2);
             assert_eq!(pinned_slots[0].0, "Elt");
@@ -117,7 +117,7 @@ fn functor_with_two_pinned_slots_round_trips() {
             assert_eq!(pinned_slots[1].1, KType::Number);
         }
         other => panic!(
-            "expected Resolved(SignatureBound) on TWOPIN's return type, got {:?}",
+            "expected Resolved(SatisfiesSignature) on TWOPIN's return type, got {:?}",
             other,
         ),
     }
@@ -153,15 +153,15 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
          (MODULE Result = ((LET Elt = Number) (LET insert = 0)))",
     );
     let f = lookup_fn(scope, "MAKESETN");
-    // Stored return type: SignatureBound { sig_path: "SetSig", pinned_slots: [("Elt", Number)] }.
+    // Stored return type: SatisfiesSignature { sig_path: "SetSig", pinned_slots: [("Elt", Number)] }.
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
-        ReturnType::Resolved(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
+        ReturnType::Resolved(KType::SatisfiesSignature { sig_path, pinned_slots, .. }) => {
             assert_eq!(sig_path, "SetSig");
             assert_eq!(pinned_slots, &vec![("Elt".to_string(), KType::Number)]);
         }
         other => panic!(
-            "expected Resolved(SignatureBound) on MAKESETN's return type, got {:?}",
+            "expected Resolved(SatisfiesSignature) on MAKESETN's return type, got {:?}",
             other,
         ),
     }
@@ -172,7 +172,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
 /// declared return type, a body that produces `(LET Elt = Str)` populates the wrong
 /// pin and the lift-time `matches_value` check rejects.
 ///
-/// Note: today the FN's return-type check (`matches_value` for `SignatureBound`) first
+/// Note: today the FN's return-type check (`matches_value` for `SatisfiesSignature`) first
 /// gates on `compatible_sigs.contains(sig_id)`. A bare `MODULE Result = ...` body whose
 /// module is never ascribed has an empty `compatible_sigs` set, so the check fails on
 /// sig-membership before reaching the pin comparison. That's still a return-type

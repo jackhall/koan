@@ -305,7 +305,7 @@ impl<'a> KObject<'a> {
                 scope_id: m.scope_id(),
                 name: m.path.clone(),
             },
-            KObject::KSignature(_) => KType::Signature,
+            KObject::KSignature(_) => KType::MetaSignature,
             // Stage 4: a `Wrapped` reports its cached NEWTYPE identity directly. The cell
             // is the arena ref the declaration site minted; cloning preserves the
             // `(kind, scope_id, name)` triple the dispatcher reads.

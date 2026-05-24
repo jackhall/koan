@@ -57,7 +57,7 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
             | KType::Bool
             | KType::Null
             | KType::Type
-            | KType::Signature
+            | KType::MetaSignature
             | KType::Any
             | KType::Identifier
             | KType::KExpression

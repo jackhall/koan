@@ -14,8 +14,8 @@ impl KType {
     pub fn is_type_denoting(&self) -> bool {
         matches!(
             self,
-            KType::SignatureBound { .. }
-                | KType::Signature
+            KType::SatisfiesSignature { .. }
+                | KType::MetaSignature
                 | KType::Type
                 | KType::TypeExprRef
                 | KType::AnyUserType { kind: UserTypeKind::Module }
@@ -49,13 +49,13 @@ impl KType {
                 let ret_eq = ar == br;
                 (args_more && (ret_more || ret_eq)) || (args_eq && ret_more)
             }
-            (SignatureBound { .. }, AnyUserType { kind: UserTypeKind::Module }) => true,
+            (SatisfiesSignature { .. }, AnyUserType { kind: UserTypeKind::Module }) => true,
             // Same-sig: strict refinement iff `pa` covers every `(name, kt)` in `pb`
             // with equal `KType` AND carries at least one constraint `pb` lacks.
             // Disjoint or same-key-different-`KType` pin sets are incomparable.
             (
-                SignatureBound { sig_id: ia, pinned_slots: pa, .. },
-                SignatureBound { sig_id: ib, pinned_slots: pb, .. },
+                SatisfiesSignature { sig_id: ia, pinned_slots: pa, .. },
+                SatisfiesSignature { sig_id: ib, pinned_slots: pb, .. },
             ) if ia == ib => {
                 if pa.len() <= pb.len() {
                     return false;
@@ -120,7 +120,7 @@ impl KType {
                 KObject::KFuture(_, _) => true,
                 _ => false,
             },
-            KType::SignatureBound { sig_id, pinned_slots, .. } => match obj {
+            KType::SatisfiesSignature { sig_id, pinned_slots, .. } => match obj {
                 KObject::KModule(m, _) => {
                     if !m.compatible_sigs.borrow().contains(sig_id) {
                         return false;
@@ -267,7 +267,7 @@ impl KType {
             // A `Future(KModule)` fills a sig-typed slot iff its ascription-populated
             // `compatible_sigs` set carries `sig_id`. Unascribed source modules never
             // match (their compat set is empty) — pass them through `:|` / `:!` first.
-            KType::SignatureBound { sig_id, pinned_slots, .. } => match part {
+            KType::SatisfiesSignature { sig_id, pinned_slots, .. } => match part {
                 ExpressionPart::Future(KObject::KModule(m, _)) => {
                     if !m.compatible_sigs.borrow().contains(sig_id) {
                         return false;
@@ -282,7 +282,7 @@ impl KType {
                 }
                 _ => false,
             },
-            KType::Signature => matches!(part, ExpressionPart::Future(KObject::KSignature(_))),
+            KType::MetaSignature => matches!(part, ExpressionPart::Future(KObject::KSignature(_))),
             KType::Mu { body, .. } => body.accepts_part(part),
             KType::RecursiveRef(_) => true,
             // Meta-type path: no runtime carrier synthesizes a `ConstructorApply`

@@ -136,7 +136,7 @@ pub fn default_scope<'a>(
     scope.register_type("Tagged".into(), KType::AnyUserType { kind: UserTypeKind::Tagged });
     scope.register_type("Struct".into(), KType::AnyUserType { kind: UserTypeKind::Struct });
     scope.register_type("Module".into(), KType::AnyUserType { kind: UserTypeKind::Module });
-    scope.register_type("Signature".into(), KType::Signature);
+    scope.register_type("Signature".into(), KType::MetaSignature);
     scope.register_type("Any".into(), KType::Any);
 
     let_binding::register(scope);

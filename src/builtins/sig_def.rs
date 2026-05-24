@@ -51,10 +51,10 @@ pub fn body<'a>(
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
         let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KSignature(sig));
-        // SIG is not a `UserTypeKind`; the identity carrier stays `SignatureBound`.
+        // SIG is not a `UserTypeKind`; the identity carrier stays `SatisfiesSignature`.
         // Dual-write so type-name resolution finds the signature by name without
         // consulting `bindings.data` for the value-side carrier.
-        let identity = KType::SignatureBound {
+        let identity = KType::SatisfiesSignature {
             sig_id: sig.sig_id(),
             sig_path: name_for_finish.clone(),
             // Unconstrained at the SIG-declaration site; `SIG_WITH` pins slots later.
@@ -81,7 +81,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "SIG",
-        sig(KType::Signature, vec![
+        sig(KType::MetaSignature, vec![
             kw("SIG"),
             arg("name", KType::TypeExprRef),
             kw("="),
@@ -171,7 +171,7 @@ mod tests {
         );
     }
 
-    /// Stage 3.1: SIG finalize dual-writes a `KType::SignatureBound` into
+    /// Stage 3.1: SIG finalize dual-writes a `KType::SatisfiesSignature` into
     /// `bindings.types` next to the `KObject::KSignature` carrier in `bindings.data`.
     /// Without this, deleting `body_type_expr`'s `scope.lookup` fall-through would
     /// break every SIG-typed name lookup.
@@ -187,7 +187,7 @@ mod tests {
             .expect("OrderedSig should be in bindings.types");
         assert!(matches!(
             **kt,
-            KType::SignatureBound { ref sig_path, .. } if sig_path == "OrderedSig"
+            KType::SatisfiesSignature { ref sig_path, .. } if sig_path == "OrderedSig"
         ));
         drop(types);
         let data = scope.bindings().data();

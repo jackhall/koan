@@ -144,7 +144,7 @@ impl<'k> Iterator for KTypeUserRefs<'k> {
                 KType::UserType { scope_id, name, .. } => {
                     return Some((*scope_id, name.as_str()));
                 }
-                KType::SignatureBound { sig_id, sig_path, .. } => {
+                KType::SatisfiesSignature { sig_id, sig_path, .. } => {
                     return Some((*sig_id, sig_path.as_str()));
                 }
                 KType::List(inner) => self.stack.push(inner),
@@ -174,7 +174,7 @@ impl<'k> Iterator for KTypeUserRefs<'k> {
                 | KType::KExpression
                 | KType::TypeExprRef
                 | KType::Type
-                | KType::Signature
+                | KType::MetaSignature
                 | KType::Any
                 | KType::AnyUserType { .. }
                 | KType::RecursiveRef(_) => {}

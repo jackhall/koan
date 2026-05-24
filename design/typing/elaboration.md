@@ -87,7 +87,7 @@ RHSes (type-valued aliases). A bind-time
 `LET <Type-class> = <non-type>` at the binder using a primitive/container
 blocklist (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so type-language
 carriers (`KModule`, `KSignature`, `StructType`, `TaggedUnionType`), whose
-runtime `KType` is `Module` / `Signature` / `Type` rather than `TypeExprRef`,
+runtime `KType` is `Module` / `MetaSignature` / `Type` rather than `TypeExprRef`,
 continue to bind through the existing `bind_value` path.
 
 The value-side ATTR walker and ascription's abstract-type member sweep both
@@ -122,7 +122,7 @@ Four downstream consumers each carry a `TypeNameRef` arm beside the existing
   routes to `register_type` for type-valued RHSes;
 - [`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
   which resolves through `bindings.types` and, on a nominal `UserType` /
-  `SignatureBound` hit, recovers the paired value-side carrier from
+  `SatisfiesSignature` hit, recovers the paired value-side carrier from
   `bindings.data`.
 
 FN's deferred return-type elaboration peeks the slot to pick between
