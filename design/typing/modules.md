@@ -74,10 +74,13 @@ definition. Type checking forbids passing an `IntOrdAbstract.Type` value to
 anything expecting a `Number` — the abstraction barrier is enforced.
 
 Opaque ascription is **generative**: each application mints a fresh
-`KType::UserType { kind: Module, scope_id, name }` per declared abstract
-type. Two distinct opaque ascriptions of the same source module yield
-distinct `scope_id`s and therefore distinct types that cannot be confused.
-The carrier lives in
+`KType::AbstractType { source_module, name }` per declared abstract type.
+The `source_module` field is an `&'a Module<'a>` pointer to the freshly
+allocated child module the ascription introduces; manual `PartialEq`
+compares `(source_module.scope_id(), name)`, so two opaque ascriptions of
+the same source module yield distinct `scope_id`s and therefore distinct
+types that cannot be confused, while two `KType::AbstractType` carriers
+minted from the same ascription compare equal. The carrier lives in
 [`KType`](../../src/machine/model/types/ktype.rs); the operators are registered as
 ordinary builtins in [`ascribe.rs`](../../src/builtins/ascribe.rs).
 
@@ -86,11 +89,29 @@ newtype-with-private-fields pattern that a trait system would need.
 
 ## First-class modules
 
-Modules are values: `KObject::KModule` flows through `LET`, ATTR, and
-function calls like any other value. There is no separate pack/unpack form,
-no `(module M)` construction syntax, and no `(val m)` projection. A module
+The type language is first-class; modules and signatures live there. A
+module value rides
+[`KObject::KTypeValue(KType::Module { module, frame })`](../../src/machine/model/values/kobject.rs)
+and a signature value rides `KObject::KTypeValue(KType::Signature(s))` —
+the same `KTypeValue` carrier that holds `Number`, `Str`, and builtin
+type values, with the identity-bearing module/signature variants living
+inside `KType` itself. A module value flows through `LET`, ATTR, and function
+calls like any other value: there is no separate pack/unpack form, no
+`(module M)` construction syntax, and no `(val m)` projection. A module
 named in expression position evaluates to its value, and `m.compare` is
-ordinary attribute access.
+ordinary attribute access — ATTR projects through `KType::Module { module,
+.. }` to reach `module.access_module_member(field)`.
+
+`KType::Module` carries the live `&Module` pointer (plus the per-call
+frame anchor for functor-built modules); `KType::Signature(s)` carries the
+arena-pinned `&Signature`; `KType::AbstractType { source_module, name }`
+carries the abstract-type member of an opaquely-ascribed module. Module
+identity is by `module.scope_id()`; signature identity by `s.sig_id()`;
+abstract-type identity by `(source_module.scope_id(), name)`. The
+type-position wildcards `KType::AnyModule` and `KType::AnySignature`
+admit any first-class module or signature value — the surface keywords
+`Module` and `Signature` lower to them in
+[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs).
 
 Module-typed bindings reuse the existing ascription operators:
 

@@ -8,7 +8,9 @@ use crate::machine::core::scope_id::ScopeId;
 use crate::machine::core::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::types::Parseable;
 use crate::machine::model::values::KObject;
-use crate::machine::model::KType;
+// `KType` import retired with the `TypeClassBindingExpectsType.got` flip to a
+// pre-rendered `String` — kept the kerror module lifetime-free across the
+// type-language collapse.
 use crate::machine::model::ast::KExpression;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
@@ -39,7 +41,9 @@ pub enum KErrorKind {
     DuplicateOverload { name: String, signature: String },
     /// LET on a Type-class binder with a non-type RHS — caught at bind time
     /// rather than at downstream elaboration. Pairs with stage 1.7's routing flip.
-    TypeClassBindingExpectsType { name: String, got: KType },
+    /// `got` is the rendered name of the offending value's type (e.g. `"Number"`),
+    /// pre-stringified so `KError` doesn't need a `KType<'a>` lifetime parameter.
+    TypeClassBindingExpectsType { name: String, got: String },
     /// A `TypeNameRef` carrier landed at the dispatch boundary's per-call
     /// parameter dual-write (`type_identity_for`) but its `TypeExpr` couldn't
     /// be elaborated in the FN's captured definition scope because some
@@ -376,8 +380,7 @@ impl fmt::Display for KErrorKind {
             ),
             KErrorKind::TypeClassBindingExpectsType { name, got } => write!(
                 f,
-                "type-class binding `{name}` expects a type value, got `{}`",
-                got.name(),
+                "type-class binding `{name}` expects a type value, got `{got}`",
             ),
             KErrorKind::TypeIdentityPendingAtDispatch { param, surface, pending_on } => write!(
                 f,
@@ -501,7 +504,7 @@ mod tests {
     fn display_type_class_binding_expects_type() {
         let s = render(KErrorKind::TypeClassBindingExpectsType {
             name: "T".into(),
-            got: KType::Number,
+            got: "Number".into(),
         });
         assert_eq!(s, "type-class binding `T` expects a type value, got `Number`");
     }

@@ -10,9 +10,9 @@ use crate::parse::parse_pair_list;
 use crate::machine::NodeId;
 
 /// Result of one walk over a schema's field list.
-pub enum FieldListOutcome {
+pub enum FieldListOutcome<'a> {
     /// Every field type elaborated against the captured scope.
-    Done(Vec<(String, KType)>),
+    Done(Vec<(String, KType<'a>)>),
     /// One or more field-type leaf names parked on outstanding type-binding placeholders.
     /// The caller schedules a Combine over `producers` and re-runs `parse_typed_field_list_via_elaborator`
     /// in the finish closure.
@@ -24,11 +24,11 @@ pub enum FieldListOutcome {
 /// Phase-3 entry point used by STRUCT / UNION. Routes each field type through the
 /// scheduler-aware [`elaborate_type_expr`], accumulating any parking producers across the
 /// whole field-list walk so the caller can install one Combine for the merged list.
-pub fn parse_typed_field_list_via_elaborator(
+pub fn parse_typed_field_list_via_elaborator<'a>(
     expr: &KExpression<'_>,
     context: &str,
-    elaborator: &mut Elaborator<'_, '_>,
-) -> FieldListOutcome {
+    elaborator: &mut Elaborator<'_, 'a>,
+) -> FieldListOutcome<'a> {
     let mut parks: Vec<NodeId> = Vec::new();
     let parsed = parse_pair_list(expr, context, |part, name| match part {
         ExpressionPart::Type(t) => match elaborate_type_expr(elaborator, t) {

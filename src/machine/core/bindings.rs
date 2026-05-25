@@ -40,7 +40,7 @@ pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
 ///
 /// Lifetime `'a` matches the arena lifetime of the stored references.
 pub struct Bindings<'a> {
-    types: RefCell<HashMap<String, &'a KType>>,
+    types: RefCell<HashMap<String, &'a KType<'a>>>,
     data: RefCell<HashMap<String, &'a KObject<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     placeholders: RefCell<HashMap<String, NodeId>>,
@@ -53,7 +53,7 @@ pub struct Bindings<'a> {
     /// are written only when the elaborated `KType` and every user-type it
     /// references are fully finalized; the finalize gate prevents caching
     /// mid-SCC pre-close identities. `Scope::resolve_type_expr` owns the writer.
-    type_expr_memo: RefCell<HashMap<TypeExpr, &'a KType>>,
+    type_expr_memo: RefCell<HashMap<TypeExpr, &'a KType<'a>>>,
 }
 
 impl<'a> Bindings<'a> {
@@ -68,7 +68,7 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    pub fn type_expr_memo_get(&self, te: &TypeExpr) -> Option<&'a KType> {
+    pub fn type_expr_memo_get(&self, te: &TypeExpr) -> Option<&'a KType<'a>> {
         self.type_expr_memo.borrow().get(te).copied()
     }
 
@@ -77,7 +77,7 @@ impl<'a> Bindings<'a> {
     /// Monotonic: overwrites would indicate a violation of the immutable-binding
     /// invariant; we silently keep the existing entry rather than panic since
     /// the value would be equal by definition.
-    pub fn type_expr_memo_insert(&self, te: TypeExpr, kt: &'a KType) {
+    pub fn type_expr_memo_insert(&self, te: TypeExpr, kt: &'a KType<'a>) {
         let mut memo = self.type_expr_memo.borrow_mut();
         memo.entry(te).or_insert(kt);
     }
@@ -94,7 +94,7 @@ impl<'a> Bindings<'a> {
         self.placeholders.borrow()
     }
 
-    pub fn types(&self) -> Ref<'_, HashMap<String, &'a KType>> {
+    pub fn types(&self) -> Ref<'_, HashMap<String, &'a KType<'a>>> {
         self.types.borrow()
     }
 
@@ -108,7 +108,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn expect_type(&self, name: &str) -> &'a KType {
+    pub fn expect_type(&self, name: &str) -> &'a KType<'a> {
         self.types
             .borrow()
             .get(name)
@@ -180,7 +180,7 @@ impl<'a> Bindings<'a> {
     pub fn try_register_type(
         &self,
         name: &str,
-        kt: &'a KType,
+        kt: &'a KType<'a>,
     ) -> Result<ApplyOutcome, KError> {
         self.try_apply_type(name, kt)
     }
@@ -207,7 +207,7 @@ impl<'a> Bindings<'a> {
     pub fn try_register_nominal(
         &self,
         name: &str,
-        kt: &'a KType,
+        kt: &'a KType<'a>,
         obj: &'a KObject<'a>,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
@@ -314,7 +314,7 @@ impl<'a> Bindings<'a> {
     fn try_apply_type(
         &self,
         name: &str,
-        kt: &'a KType,
+        kt: &'a KType<'a>,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,

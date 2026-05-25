@@ -21,10 +21,10 @@ mod tests;
 
 /// Outcome of one elaboration walk over a `TypeExpr`.
 #[derive(Debug)]
-pub enum ElabResult {
+pub enum ElabResult<'a> {
     /// Fully elaborated. Whether to `Mu`-wrap rides on the elaborator's
     /// `fired_self_ref_for` set, not on this variant.
-    Done(KType),
+    Done(KType<'a>),
     /// Referenced type-binding placeholders haven't finalized. Caller installs park
     /// edges on every producer and re-runs the elaboration when they terminalize.
     Park(Vec<NodeId>),
@@ -32,14 +32,16 @@ pub enum ElabResult {
     Unbound(String),
 }
 
-impl ElabResult {
+impl<'a> ElabResult<'a> {
     /// Reduce sub-elaboration results with precedence **Unbound > Park > Done**.
     /// `Ok` preserves input order; `Err` carries the first `Unbound` or merged `Park`
     /// producers.
-    fn collect<I: IntoIterator<Item = ElabResult>>(results: I) -> Result<Vec<KType>, ElabResult> {
+    fn collect<I: IntoIterator<Item = ElabResult<'a>>>(
+        results: I,
+    ) -> Result<Vec<KType<'a>>, ElabResult<'a>> {
         let iter = results.into_iter();
         let (lower, _) = iter.size_hint();
-        let mut dones: Vec<KType> = Vec::with_capacity(lower);
+        let mut dones: Vec<KType<'a>> = Vec::with_capacity(lower);
         let mut parks: Vec<NodeId> = Vec::new();
         let mut unbound: Option<String> = None;
         for r in iter {
@@ -79,7 +81,7 @@ pub struct Elaborator<'s, 'a> {
     pub fired_self_ref_for: HashSet<String>,
     pub self_id: Option<NodeId>,
     pub current_decl_name: Option<String>,
-    pub current_decl_kind: Option<UserTypeKind>,
+    pub current_decl_kind: Option<UserTypeKind<'a>>,
     pub current_decl_scope_id: Option<ScopeId>,
 }
 
@@ -112,7 +114,7 @@ impl<'s, 'a> Elaborator<'s, 'a> {
     pub fn with_current_decl(
         mut self,
         name: String,
-        kind: UserTypeKind,
+        kind: UserTypeKind<'a>,
         scope_id: ScopeId,
     ) -> Self {
         self.current_decl_name = Some(name);
@@ -128,10 +130,10 @@ impl<'s, 'a> Elaborator<'s, 'a> {
 /// then `Scope::resolve_type`, then `Scope::resolve` for the placeholder path, and
 /// finally `KType::from_name` so fixture scopes that skip builtin registration still
 /// resolve builtin names.
-pub fn elaborate_type_expr(
-    el: &mut Elaborator<'_, '_>,
+pub fn elaborate_type_expr<'a>(
+    el: &mut Elaborator<'_, 'a>,
     t: &TypeExpr,
-) -> ElabResult {
+) -> ElabResult<'a> {
     match (&t.name, &t.params) {
         (name, TypeParams::None) => {
             if el.threaded.contains(name) {
@@ -169,14 +171,14 @@ pub fn elaborate_type_expr(
                 // bound, just in the value language, so the diagnostic must name the
                 // type-language / value-language layering rather than read as an
                 // unknown-name failure (see design/typing/functors.md).
-                Resolution::Value(_) => match KType::from_name(name) {
+                Resolution::Value(_) => match KType::<'a>::from_name(name) {
                     Some(kt) => ElabResult::Done(kt),
                     None => ElabResult::Unbound(format!(
                         "`{name}` is value-language only — a type slot needs a type-language \
                          binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
                     )),
                 },
-                Resolution::Unbound => match KType::from_name(name) {
+                Resolution::Unbound => match KType::<'a>::from_name(name) {
                     Some(kt) => ElabResult::Done(kt),
                     None => ElabResult::Unbound(format!("unknown type name `{name}`")),
                 },

@@ -79,7 +79,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))");
         let s = match scope.bindings().data().get("Monad") {
-            Some(KObject::KSignature(s)) => *s,
+            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             _ => panic!("Monad must bind a KSignature"),
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
@@ -181,7 +181,7 @@ mod tests {
         }
         // The SIG must have bound — pull it out of scope and walk its decl_scope.
         let s = match scope.bindings().data().get("Monad") {
-            Some(KObject::KSignature(s)) => *s,
+            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             other => panic!("Monad must bind a KSignature, got {:?}", other.map(|o| o.ktype())),
         };
         // `Wrap` lives in the SIG's `bindings.types` as a TypeConstructor template.
@@ -237,7 +237,7 @@ mod tests {
         );
         // Mo's type_members must carry a TypeConstructor slot under `Wrap`.
         let mo = match scope.bindings().data().get("Mo") {
-            Some(KObject::KModule(m, _)) => *m,
+            Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
             other => panic!("Mo should be a module, got {:?}", other.map(|o| o.ktype())),
         };
         let wrap_t = mo.type_members.borrow().get("Wrap").cloned();

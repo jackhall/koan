@@ -1,7 +1,7 @@
 //! Return-type expressions that reference earlier parameters (`MODULE_TYPE_OF p`, bare param name, `SIG_WITH p.T`), resolved per-call.
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_one, run_root_silent};
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
 
 /// Landing test 1: bare parameter-name return type. `FN (USE_ID Er: OrderedSig) -> Er = ...`
@@ -35,7 +35,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     // Invoke and verify the per-call slot check accepts the bound module.
     let result = run_one(scope, parse_one("USE_ID int_ord"));
     match result {
-        KObject::KModule(_, _) => {}
+        KObject::KTypeValue(KType::Module { module: _, frame: _ }) => {}
         other => panic!("expected KModule from USE_ID, got {:?}", other.ktype()),
     }
 }
@@ -85,7 +85,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
     // pairing this item exists to enable.
     let data = scope.bindings().data();
     assert!(
-        matches!(data.get("int_ord"), Some(KObject::KModule(_, _))),
+        matches!(data.get("int_ord"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
         "int_ord should be an opaquely-ascribed module satisfying WithZero's VAL zero slot",
     );
     drop(data);

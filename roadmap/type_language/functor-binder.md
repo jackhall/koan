@@ -22,17 +22,19 @@ today:
 - No FN-def-time check forces the return slot of an intended functor to
   denote a module or signature; mistakes surface as opaque dispatch-time
   errors several frames removed from the binder.
-- *Defining a functor panics the scheduler.* Any FN with a
-  signature-typed parameter (`FN (MAKESET Er :OrderedSig) -> OrderedSig =
-  (Er)`) panics at
-  [`node_store.rs:169`](../../src/machine/execute/scheduler/node_store.rs)
-  with *"result must be ready by the time it's read"* — `read_result`
-  hits a non-`Done` slot on the per-call signature-typed-param dual-write
-  path. The panic fires regardless of the binding name's token class, so
-  it's about the signature-typed parameter, not the LHS. Surfaced
-  2026-05-21 while exploring the value-language-diagnostic fix; the
-  FUNCTOR binder cannot land without this path running clean
-  end-to-end.
+- *Defining a functor panics the scheduler at the CLI seam.* The
+  `cargo run` smoke
+  `SIG OrderedSig = (VAL compare :Number)\nFN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)`
+  panics at
+  [`node_store.rs:169`](../../src/machine/execute/scheduler/node_store.rs)'s
+  `read_result` during interpret's per-top-level result print. The
+  scheduler's eager-free policy in `reclaim_deps` frees the SIG
+  dispatch's slot when the FN-def's Combine succeeds, and interpret's
+  subsequent `read_result(top_level_id)` hits a `Free` slot. Tracked
+  separately under
+  [Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md);
+  the FUNCTOR binder cannot land its end-to-end smoke until that path
+  runs clean.
 - *Type-class `LET` gate is a denylist — plain values slip into a type
   name.* The `TypeClassBindingExpectsType` check
   ([`let_binding.rs:51`](../../src/builtins/let_binding.rs) / `:92`) only
@@ -51,9 +53,10 @@ have no admissible return-type denotation.
 **Impact.**
 
 - *FUNCTOR return slots are statically validated at the binder.* The
-  admissible carriers (`MetaSignature`, `SatisfiesSignature`, `(SIG_WITH …)`,
-  `AnyUserType { kind: Module }`, recursively `KType::KFunctor`) are
-  checked when the FUNCTOR binder runs; any other denotation surfaces
+  admissible carriers (`KType::AnySignature`, `SatisfiesSignature`,
+  `(SIG_WITH …)`, `KType::AnyModule`, `KType::Module { .. }`,
+  `KType::Signature(_)`, recursively `KType::KFunctor`) are checked
+  when the FUNCTOR binder runs; any other denotation surfaces
   `FUNCTOR return-type slot must denote a module, signature, or functor`
   at the FUNCTOR site, not several Dispatch frames downstream.
 - *Functors and ordinary functions are type-disjoint.* `KType::KFunctor`
@@ -67,10 +70,11 @@ have no admissible return-type denotation.
   [`elaborate_type_expr`](../../src/machine/model/types/resolver.rs) as the
   structural functor type, surface-disjoint from the `FUNCTOR` binder
   keyword on the same rule that keeps `FN` and `Function` disjoint.
-- *Functor definitions stop panicking.* The signature-typed-param
-  dual-write path runs clean end-to-end; the `read_result` non-`Done`
-  slot read is fixed (or attributed to a real prerequisite) as part of
-  exercising the binder.
+- *Functor definitions stop panicking at the CLI seam.* Riding on the
+  scheduler-reclaim fix
+  ([Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md)),
+  the FUNCTOR end-to-end smoke runs through `cargo run` without the
+  `read_result` panic on the interpret seam.
 - *Type-class LET gate flips to an allowlist.* The accepted RHSs become
   `KTypeValue`, `derive_nominal_identity → Some`, or an
   `is_functor`-flagged `KFunction`; plain functions bound to Type-class
@@ -112,13 +116,11 @@ have no admissible return-type denotation.
 - *Applicative-mode opt-in — deferred to predicate typing.* Tracked
   under [standard-library.md](../libraries/standard-library.md). Generative-only
   semantics ship under this item.
-- *Functor-definition panic root cause — open.* The non-`Done`
-  `read_result` at
-  [`node_store.rs:169`](../../src/machine/execute/scheduler/node_store.rs)
-  needs attribution: most likely an early read of the signature-typed
-  parameter's per-call binder slot before its producer terminalizes, but
-  the dual-write into `bindings.types` runs through the same path.
-  Recommended: a minimal repro test first, then attribution.
+- *Functor-definition panic root cause — decided.* Attributed to the
+  scheduler's eager-free policy in `reclaim_deps` (not the type-language
+  layer), and tracked separately under
+  [Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md).
+  The FUNCTOR binder work picks up after that fix lands.
 - *Where `is_functor` is set in fn_def — open.* The natural site is the
   same return-type classification arm that already routes
   `Resolved`/`Deferred`; deciding whether validation runs before or after
@@ -136,10 +138,10 @@ have no admissible return-type denotation.
 
 **Requires:**
 
-- [Module and signature carriers move from KObject to KType](module-signature-as-ktype.md)
-  — FUNCTOR's signature-typed-parameter handling rides single-store
-  type-language machinery; doing the substrate cleanup first means
-  FUNCTOR never inherits the dual-write to inherit and then dismantle.
+- [Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md)
+  — the CLI smoke for a signature-typed FUNCTOR parameter trips the
+  interpret seam's `read_result` panic; that fix unblocks the FUNCTOR
+  binder's end-to-end test.
 
 **Unblocks:**
 

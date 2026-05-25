@@ -27,7 +27,7 @@ enum PendingWrite<'a> {
     /// argument shape; the variant tag preserves the `types`-map collision check on
     /// retry (a single shared retry path would collapse with `Value` and lose the
     /// `data`-vs-`types` storage distinction).
-    Type { name: String, kt: &'a crate::machine::model::types::KType },
+    Type { name: String, kt: &'a crate::machine::model::types::KType<'a> },
 }
 
 /// Queue of writes deferred when their `try_borrow_mut` collided. Owned by [`super::scope::Scope`]
@@ -58,7 +58,7 @@ impl<'a> PendingQueue<'a> {
 
     /// Queue a `Scope::register_type` retry. Mirrors [`Bindings::try_register_type`]'s
     /// argument shape so the caller's try-then-defer site is symmetric.
-    pub fn defer_type(&self, name: String, kt: &'a crate::machine::model::types::KType) {
+    pub fn defer_type(&self, name: String, kt: &'a crate::machine::model::types::KType<'a>) {
         self.pending.borrow_mut().push(PendingWrite::Type { name, kt });
     }
 

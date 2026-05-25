@@ -19,7 +19,6 @@
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::Module;
 
 use crate::machine::model::ast::KExpression;
@@ -111,17 +110,16 @@ pub fn body<'a>(
                 tm.insert(k.clone(), (**v).clone());
             }
         }
-        let module_obj: &'a KObject<'a> =
-            arena.alloc_object(KObject::KModule(module, active_frame.clone()));
-        // Dual-write the module's per-declaration identity into `bindings.types`
-        // alongside the value-side carrier so a type-class slot typed by `name_for_finish`
-        // resolves to the same `KType::UserType { kind: Module, scope_id, name }` the
-        // carrier's `ktype()` synthesizes.
-        let identity = KType::UserType {
-            kind: UserTypeKind::Module,
-            scope_id: module.scope_id(),
-            name: name_for_finish.clone(),
+        // Post-collapse: the module value rides `KTypeValue(KType::Module { module, frame })`.
+        // The carrier's `ktype()` reports the carried `KType::Module` directly, so the
+        // dual-write into `bindings.types` uses that same shape — no
+        // `UserType { kind: Module, .. }` synthesis.
+        let identity = KType::Module {
+            module,
+            frame: active_frame.clone(),
         };
+        let module_obj: &'a KObject<'a> =
+            arena.alloc_object(KObject::KTypeValue(identity.clone()));
         match parent_scope.register_nominal(name_for_finish.clone(), identity, module_obj) {
             Ok(obj) => BodyResult::Value(obj),
             Err(e) => BodyResult::Err(
@@ -143,7 +141,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "MODULE",
-        sig(KType::AnyUserType { kind: UserTypeKind::Module }, vec![
+        sig(KType::AnyModule, vec![
             kw("MODULE"),
             arg("name", KType::TypeExprRef),
             kw("="),
@@ -157,7 +155,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
-    use crate::machine::model::KObject;
+    use crate::machine::model::{KObject, KType};
     use crate::machine::{KErrorKind, RuntimeArena};
 
     /// Smoke test for MODULE's pre_run extractor: structural extraction of the `Type(_)`
@@ -175,7 +173,10 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "MODULE Foo = (LET x = 1)");
         let data = scope.bindings().data();
-        assert!(matches!(data.get("Foo"), Some(KObject::KModule(_, _))));
+        assert!(matches!(
+            data.get("Foo"),
+            Some(KObject::KTypeValue(KType::Module { .. }))
+        ));
     }
 
     #[test]
@@ -217,7 +218,7 @@ mod tests {
         );
         let data = scope.bindings().data();
         let foo = match data.get("Foo") {
-            Some(KObject::KModule(m, _)) => *m,
+            Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
             _ => panic!("Foo should be a module"),
         };
         assert!(foo.child_scope().bindings().data().contains_key("double"));
@@ -289,7 +290,7 @@ mod tests {
     /// `try_register_nominal_*` tests plus the idempotent register_nominal arm.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
-        use crate::machine::model::types::{KType, UserTypeKind};
+        use crate::machine::model::types::KType;
         use crate::machine::model::values::Module;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
@@ -298,12 +299,8 @@ mod tests {
             "Foo".into(),
         ));
         let module: &Module<'_> = arena.alloc_module(Module::new("Foo".into(), child));
-        let module_obj = arena.alloc_object(KObject::KModule(module, None));
-        let identity = KType::UserType {
-            kind: UserTypeKind::Module,
-            scope_id: module.scope_id(),
-            name: "Foo".into(),
-        };
+        let identity = KType::Module { module, frame: None };
+        let module_obj = arena.alloc_object(KObject::KTypeValue(identity.clone()));
         scope
             .register_nominal("Foo".into(), identity, module_obj)
             .unwrap();
@@ -332,7 +329,7 @@ mod tests {
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
         let data = scope.bindings().data();
         let foo = match data.get("Foo") {
-            Some(KObject::KModule(m, _)) => *m,
+            Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
             _ => panic!("Foo should be a module"),
         };
         let inner = foo.child_scope().bindings().data();

@@ -392,14 +392,15 @@ at code the reader can act on.
 [`KObject`](../src/machine/model/values/kobject.rs) is the universal
 runtime value type. Pure-data variants (`Number`, `KString`, `Bool`,
 `List`, `Dict`, `KExpression`, `*Type` schema carriers, `Tagged`,
-`Struct`, `KTypeValue`, `TypeNameRef`, `Null`) carry no references
-into [`machine::core`](../src/machine/core.rs). The runtime-reference
-variants do — `KFunction`, `KFuture`, `KModule`, `KSignature`,
-`Wrapped` embed `&'a KFunction<'a>`, `KFuture<'a>`,
-`&'a Module<'a>`, `&'a Signature<'a>`, `&'a KType`, and an
-`Option<Rc<CallArena>>` lifecycle anchor. These references are why
-`model::values::kobject` imports from `core::{arena, kfunction,
-scope, scope_id}`.
+`Struct`, `TypeNameRef`, `Null`) carry no references into
+[`machine::core`](../src/machine/core.rs). The runtime-reference
+variants do — `KFunction`, `KFuture`, `Wrapped`, and `KTypeValue`
+(when it carries `KType::Module { &Module, Option<Rc<CallArena>> }`,
+`KType::Signature(&Signature)`, or `KType::AbstractType { &Module,
+.. }`) embed `&'a KFunction<'a>`, `KFuture<'a>`, `&'a Module<'a>`,
+`&'a Signature<'a>`, `&'a KType`, and an `Option<Rc<CallArena>>`
+lifecycle anchor. These references are why `model::values::kobject`
+imports from `core::{arena, kfunction, scope, scope_id}`.
 
 The references are structural, not incidental. Three hot consumers
 read the concrete runtime shape directly:
@@ -409,9 +410,11 @@ read the concrete runtime shape directly:
   dying frame to decide whether a per-call function or module needs
   its `Rc<CallArena>` anchor cloned onto the lifted value.
 - [`KObject::ktype()`](../src/machine/model/values/kobject.rs)
-  synthesizes `KType::UserType { kind: Module, scope_id, name }` for
-  module values from `m.scope_id()` and `m.path` — the dispatcher
-  reads these fields to nominally identify the module type.
+  projects the carried `KType` directly out of a `KTypeValue`
+  carrier — a module value reports `KType::Module { module, .. }`,
+  a signature value reports `KType::Signature(s)` — so the
+  dispatcher reads the same identity the carrier holds rather than
+  a synthesized shadow.
 - `Parseable::summarize` and `deep_clone` recurse into the variants
   and read `f.summarize()`, `m.path`, `s.path`, etc. — both methods
   are part of `KObject`'s contract with `Parseable`, which the value

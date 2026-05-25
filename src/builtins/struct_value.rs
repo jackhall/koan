@@ -93,7 +93,7 @@ pub fn apply<'a>(
 pub fn construct<'a>(
     type_name: &str,
     scope_id: ScopeId,
-    fields: &[(String, KType)],
+    fields: &[(String, KType<'a>)],
     values: &[KObject<'a>],
 ) -> Result<KObject<'a>, KError> {
     if values.len() != fields.len() {

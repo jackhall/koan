@@ -53,7 +53,7 @@ impl<'a> Scope<'a> {
     /// - [`ResolveOutcome::Deferred`] covers shapes like `((deep_call) + 1)` where a
     ///   typed `+` overload only matches after `deep_call` resolves; the scheduler's
     ///   eager-sub loop rebuilds with `Future(_)` parts and re-dispatches.
-    pub fn resolve_dispatch<'e>(&'a self, expr: &KExpression<'e>) -> ResolveOutcome<'a> {
+    pub fn resolve_dispatch(&'a self, expr: &KExpression<'a>) -> ResolveOutcome<'a> {
         let key = expr.untyped_key();
         // Bare-name peeks resolve in the *dispatch* scope, not the ancestor whose bucket is
         // under test — a name bound in an inner scope must still be found when the matching
@@ -131,18 +131,18 @@ struct OverloadBucket<'a, 's> {
 }
 
 impl<'a> OverloadBucket<'a, '_> {
-    fn pick_strict(&self, expr: &KExpression<'_>, dispatch_scope: &'a Scope<'a>) -> PickPass<'a> {
+    fn pick_strict(&self, expr: &KExpression<'a>, dispatch_scope: &'a Scope<'a>) -> PickPass<'a> {
         self.pick(expr, move |f, e| signature_admits_strict(&f.signature, e, dispatch_scope))
     }
 
-    fn pick_tentative(&self, expr: &KExpression<'_>) -> PickPass<'a> {
+    fn pick_tentative(&self, expr: &KExpression<'a>) -> PickPass<'a> {
         self.pick(expr, |f, e| f.accepts_for_wrap(e))
     }
 
     fn pick(
         &self,
-        expr: &KExpression<'_>,
-        admit: impl Fn(&'a KFunction<'a>, &KExpression<'_>) -> bool,
+        expr: &KExpression<'a>,
+        admit: impl Fn(&'a KFunction<'a>, &KExpression<'a>) -> bool,
     ) -> PickPass<'a> {
         use crate::machine::model::types::ExpressionSignature;
         let survivors: Vec<&'a KFunction<'a>> =
@@ -177,10 +177,10 @@ enum PickPass<'a> {
 /// park path unchanged — which is what keeps dispatch order-independent: a not-yet-bound name
 /// parks and re-dispatches onto the same pick once its binding exists, rather than peeking a
 /// transiently-absent type. Non-container slots are left to the pure `Argument::matches`.
-fn signature_admits_strict(
-    sig: &ExpressionSignature<'_>,
-    expr: &KExpression<'_>,
-    dispatch_scope: &Scope<'_>,
+fn signature_admits_strict<'a>(
+    sig: &ExpressionSignature<'a>,
+    expr: &KExpression<'a>,
+    dispatch_scope: &Scope<'a>,
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
         return false;
@@ -241,7 +241,7 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 
 /// Sole producer of the embedded `slots` — disjointness lives in
 /// [`KFunction::classify_for_pick`].
-fn build_resolved<'a>(picked: &'a KFunction<'a>, expr: &KExpression<'_>) -> Resolved<'a> {
+fn build_resolved<'a>(picked: &'a KFunction<'a>, expr: &KExpression<'a>) -> Resolved<'a> {
     Resolved {
         function: picked,
         placeholder_name: picked.pre_run.and_then(|extractor| extractor(expr)),

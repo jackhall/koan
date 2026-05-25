@@ -48,7 +48,7 @@ impl<'a> ArgumentBundle<'a> {
 
     /// Borrow `name`'s slot as a `&KType`. `MissingArg` / `TypeMismatch` shaped the same
     /// way as [`require_kexpression`](Self::require_kexpression).
-    pub fn require_ktype(&self, name: &str) -> Result<&KType, KError> {
+    pub fn require_ktype(&self, name: &str) -> Result<&KType<'a>, KError> {
         let obj = self.get_or_missing(name)?;
         obj.as_ktype().ok_or_else(|| mismatch(name, "TypeExprRef", obj))
     }
@@ -116,7 +116,7 @@ pub(crate) fn extract_kexpression<'a>(
 pub(crate) fn extract_ktype<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,
-) -> Option<KType> {
+) -> Option<KType<'a>> {
     let rc = bundle.args.remove(name)?;
     match Rc::try_unwrap(rc) {
         Ok(KObject::KTypeValue(t)) => Some(t),
@@ -175,11 +175,15 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::KExpression
             | KType::TypeExprRef
             | KType::Type
-            | KType::MetaSignature
+            | KType::AnyModule
+            | KType::AnySignature
             | KType::Any
             | KType::UserType { .. }
             | KType::AnyUserType { .. }
-            | KType::SatisfiesSignature { .. } => Ok(t.name()),
+            | KType::SatisfiesSignature { .. }
+            | KType::Module { .. }
+            | KType::Signature(_)
+            | KType::AbstractType { .. } => Ok(t.name()),
             // Structural / recursive shapes are not valid binder names — the caller wants
             // a leaf identifier, not a parameterized container. `ConstructorApply` joins
             // this group: an applied higher-kinded type is structural, not a leaf.

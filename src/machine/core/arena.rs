@@ -25,10 +25,12 @@ pub struct RuntimeArena {
     scopes: Arena<Scope<'static>>,
     modules: Arena<Module<'static>>,
     signatures: Arena<Signature<'static>>,
-    /// `KType` has no lifetime parameter, so storage is direct — no `<'static>` erasure,
-    /// no transmute apparatus in `alloc_ktype`. Backs the per-type identity binding storage
-    /// (`Bindings::types` map) introduced in stage 1.2.
-    ktypes: Arena<KType>,
+    /// `KType<'a>` carries arena-pinned references for the module/signature variants;
+    /// storage uses the `<'static>` erasure pattern shared with `objects` / `functions` /
+    /// `scopes` / `modules` / `signatures`. SAFETY follows the same argument: zero-sized
+    /// lifetimes, returned `&'a` tied to the caller's borrow, no `'static` reference
+    /// escapes. Backs the per-type identity binding storage (`Bindings::types` map).
+    ktypes: Arena<KType<'static>>,
     /// Stable addresses of every `KObject` allocated here. Backs `owns_object` membership
     /// queries via a linear scan (no deref, no borrow). `usize` rather than `*const _` keeps
     /// the field lifetime-erased and `Send`/`Sync`-neutral.
@@ -144,11 +146,18 @@ impl RuntimeArena {
         unsafe { std::mem::transmute::<&'a mut Signature<'static>, &'a Signature<'a>>(stored) }
     }
 
-    /// Allocate a `KType` into the run-lifetime store. No lifetime erasure: `KType` carries
-    /// no lifetime parameter, so storage is direct and the returned `&'a KType` is a plain
-    /// coerce of `typed_arena::Arena::alloc`'s `&'a mut KType`. No `unsafe` is required.
-    pub fn alloc_ktype(&self, t: KType) -> &KType {
-        self.ktypes.alloc(t)
+    /// Allocate a `KType<'a>` into the run-lifetime store. SAFETY: same shape as the
+    /// other sub-arenas — `KType<'a>` and `KType<'static>` have identical layout because
+    /// lifetimes are zero-sized; the returned `&'a` is tied to the input borrow, so no
+    /// `'static` reference is observable. The carried `Module` / `Signature` references
+    /// inside the module/signature variants are themselves arena-allocated and outlive
+    /// every `&'a KType<'a>` borrow.
+    pub fn alloc_ktype<'a>(&'a self, t: KType<'a>) -> &'a KType<'a> {
+        let static_t: KType<'static> = unsafe {
+            std::mem::transmute::<KType<'a>, KType<'static>>(t)
+        };
+        let stored: &'a mut KType<'static> = self.ktypes.alloc(static_t);
+        unsafe { std::mem::transmute::<&'a mut KType<'static>, &'a KType<'a>>(stored) }
     }
 
     /// Whether the functions sub-arena holds zero `KFunction`s. When true, no value can hold
@@ -170,7 +179,9 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
     match obj {
         KObject::KFunction(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::KFuture(_, Some(rc)) => rc_targets(rc, arena_ptr),
-        KObject::KModule(_, Some(rc)) => rc_targets(rc, arena_ptr),
+        // Post-collapse: a module value rides `KTypeValue(KType::Module { frame, .. })`.
+        // The arena-anchor check projects through that carrier.
+        KObject::KTypeValue(KType::Module { frame: Some(rc), .. }) => rc_targets(rc, arena_ptr),
         KObject::List(items, _) => items.iter().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Dict(entries, _, _) => entries.values().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Tagged { value, .. } => obj_anchors_to(value, arena_ptr),
@@ -183,9 +194,9 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
 impl RuntimeArena {
     /// Total number of values stored across all six sub-arenas (test-only). Each `alloc_*`
     /// method writes to exactly one sub-arena, so this is the precise allocation count
-    /// without double-counting — a `KObject::KModule(&Module, _)` value, for example, occupies
-    /// one slot in `objects` and the referenced `&Module` occupies an independent slot in
-    /// `modules`.
+    /// without double-counting — a `KObject::KTypeValue(KType::Module { module, frame })`
+    /// value, for example, occupies one slot in `objects` and the referenced `&Module`
+    /// occupies an independent slot in `modules`.
     pub fn alloc_count(&self) -> usize {
         self.objects.len()
             + self.functions.len()

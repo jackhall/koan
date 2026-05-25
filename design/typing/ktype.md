@@ -13,23 +13,43 @@
   reported by `KObject::StructType` and `KObject::TaggedUnionType`).
 - User-declared nominal types: `UserType { kind: UserTypeKind, scope_id: usize,
   name: String }` — the per-declaration identity tag synthesized by
-  `KObject::ktype()` for `Struct`, `Tagged`, and `KModule` carriers and minted
-  by `:|` opaque ascription with `kind: Module`. Two distinct STRUCTs (or two
-  distinct opaque ascriptions of the same source module) produce different
-  `scope_id`s, giving the abstraction-barrier and per-declaration-distinctness
-  identity property the [module system](modules.md) rests on.
-  `UserTypeKind` is `Struct | Tagged | Module | Newtype { repr } |
+  `KObject::ktype()` for `Struct` and `Tagged` carriers. Two distinct STRUCTs
+  produce different `scope_id`s, giving the per-declaration-distinctness
+  identity property dispatch keys on.
+  `UserTypeKind` is `Struct | Tagged | Newtype { repr } |
   TypeConstructor { param_names }`. The two payload-carrying variants
   (`Newtype`, `TypeConstructor`) have a manual `PartialEq` that ignores their
   payloads — identity equality is by variant tag plus the carrier's
   `(scope_id, name)`, so wildcard / concrete pairs compare equal.
   The companion `AnyUserType { kind }` wildcard accepts any `UserType` of the
   matching kind, used for slot types that admit "any user-declared X" — ATTR's
-  `body_struct` / `body_module` slots, `MODULE`'s declaration slot, `:|` / `:!`
-  ascription, construction primitives' return types. The surface keywords
-  `Newtype` and `TypeConstructor` are pinned for diagnostic rendering but not
-  registered as writable surface names (no entry in
+  `body_struct` slot, construction primitives' return types. The surface
+  keywords `Newtype` and `TypeConstructor` are pinned for diagnostic rendering
+  but not registered as writable surface names (no entry in
   [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)).
+- Module / signature carriers (the [module system](modules.md) rests on
+  these): `Module { module: &'a Module<'a>, frame: Option<Rc<CallArena>> }`
+  is the first-class module value's type — the arena-pinned `&Module`
+  pointer plus the per-call frame anchor for functor-built modules;
+  `Signature(&'a Signature<'a>)` is the first-class signature value's
+  type; `AbstractType { source_module: &'a Module<'a>, name: String }`
+  is the per-abstract-type-member tag minted by `:|` opaque ascription.
+  Manual `PartialEq` keys identity on `module.scope_id()` for
+  `KType::Module`, `s.sig_id()` for `KType::Signature`, and
+  `(source_module.scope_id(), name)` for `KType::AbstractType` — so two
+  opaque ascriptions of the same source module produce distinct
+  `KType::Module` identities (the abstraction barrier) but their
+  `AbstractType` minting for the same slot name compares equal.
+  Companion wildcards `AnyModule` and `AnySignature` admit any module
+  or signature value respectively; the surface keywords `Module` and
+  `Signature` lower to them in
+  [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs).
+  `SatisfiesSignature { sig_id, sig_path, pinned_slots }` is the
+  slot-annotation form ("any module satisfying this signature"): it's
+  what `Er :OrderedSig` lowers to in a FUNCTOR parameter slot. The
+  identity-bearing `Signature(_)` variant carries the value, while
+  `SatisfiesSignature` constrains a slot — both reach the same
+  `sig_id()` for the dispatch key.
 - Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
   Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
   / `Dict(_, _)`. Emitted by `elaborate_type_expr` when the outer name of a
@@ -38,10 +58,6 @@
   arg2>` in diagnostics. See
   [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)
   for the surface form and per-call generativity.
-- Signature carriers: `MetaSignature` (the type of a first-class `SIG` value, surface name `Signature`) and
-  `SatisfiesSignature { sig_id, sig_path }` — the per-declaration `SIG` identity
-  written into `bindings.types` at finalize time so signature names resolve
-  uniformly through `Scope::resolve_type`.
 - `Any` — the no-op fast-path.
 
 [`KType::matches_value`](../../src/machine/model/types/ktype_predicates.rs) plus

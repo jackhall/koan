@@ -48,7 +48,7 @@ pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 
 /// Result of one walk over an FN signature's part list.
 pub(super) enum ParamListOutcome<'a> {
-    Done(Vec<SignatureElement>),
+    Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules
     /// a `Combine` over `park_producers` and any sub-Dispatches spawned from
     /// `sub_dispatches`; when every dep terminalizes, the closure splices each
@@ -74,10 +74,10 @@ pub(super) enum ParamListOutcome<'a> {
 /// whole signature walk so the caller can register every blocker in one Combine.
 pub(super) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
-    elaborator: &mut Elaborator<'_, '_>,
+    elaborator: &mut Elaborator<'_, 'a>,
 ) -> ParamListOutcome<'a> {
     let parts = &signature.parts;
-    let mut elements: Vec<SignatureElement> = Vec::with_capacity(parts.len());
+    let mut elements: Vec<SignatureElement<'a>> = Vec::with_capacity(parts.len());
     let mut parks: Vec<NodeId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     let mut first_err: Option<String> = None;

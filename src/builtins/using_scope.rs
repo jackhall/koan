@@ -37,7 +37,6 @@
 //! and thus the rooted module `Rc` — alive. Top-level modules carry no `Rc` and need no
 //! rooting.
 
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
@@ -51,8 +50,11 @@ pub fn body<'a>(
 ) -> BodyResult<'a> {
     // `m` is eager — a resolved module value, carrying a per-call frame anchor when it is
     // a functor result living in a `CallArena` (top-level modules carry `None`).
+    // Post-collapse: module values ride `KTypeValue(KType::Module { module, frame })`.
     let (module, module_frame) = match bundle.get("m") {
-        Some(KObject::KModule(m, anchor)) => (*m, anchor.clone()),
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: anchor })) => {
+            (*m, anchor.clone())
+        }
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "m".to_string(),
@@ -73,9 +75,13 @@ pub fn body<'a>(
 
     // Root a functor-result module's frame `Rc` in the call-site arena so the borrowed
     // window outlives the eager `m` arg and any escaping closure. No-op for top-level
-    // modules (`module_frame` is `None`).
+    // modules (`module_frame` is `None`). Post-collapse the carrier is
+    // `KTypeValue(KType::Module { .. })`.
     if module_frame.is_some() {
-        scope.arena.alloc_object(KObject::KModule(module, module_frame));
+        scope.arena.alloc_object(KObject::KTypeValue(KType::Module {
+            module,
+            frame: module_frame,
+        }));
     }
 
     // Transparent window onto the module's whole façade, allocated in the call-site arena
@@ -88,13 +94,12 @@ pub fn body<'a>(
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let module_ty = KType::AnyUserType { kind: UserTypeKind::Module };
     register_builtin(
         scope,
         "USING",
         sig(KType::Any, vec![
             kw("USING"),
-            arg("m", module_ty),
+            arg("m", KType::AnyModule),
             kw("SCOPE"),
             arg("body", KType::KExpression),
         ]),

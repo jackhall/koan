@@ -27,7 +27,7 @@ fn functor_returns_a_module() {
 
     let data = scope.bindings().data();
     let m = match data.get("set_value") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
     };
     let inner = m.child_scope().bindings().data().get("inner").copied();
@@ -55,7 +55,7 @@ fn functor_body_reads_signature_typed_parameter() {
 
     let data = scope.bindings().data();
     let m = match data.get("set_value") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
     };
     let sample = m.child_scope().bindings().data().get("sample").copied();
@@ -88,11 +88,11 @@ fn functor_application_is_generative() {
 
     let data = scope.bindings().data();
     let m1 = match data.get("set_one") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("set_one should be a module, got ktype={:?}", other.map(|o| o.ktype())),
     };
     let m2 = match data.get("set_two") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("set_two should be a module"),
     };
     // Per-call generativity: each invocation allocates a fresh `child_scope` in its
@@ -173,8 +173,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     run(scope, "LET hash_set = (MAKESET (int_hash_a))");
 
     let data = scope.bindings().data();
-    let mo = match data.get("ord_set") { Some(KObject::KModule(m, _)) => *m, _ => panic!("ord_set not module") };
-    let mh = match data.get("hash_set") { Some(KObject::KModule(m, _)) => *m, _ => panic!("hash_set not module") };
+    let mo = match data.get("ord_set") { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("ord_set not module") };
+    let mh = match data.get("hash_set") { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("hash_set not module") };
     let to = mo.child_scope().bindings().data().get("tag").copied();
     let th = mh.child_scope().bindings().data().get("tag").copied();
     assert!(matches!(to, Some(KObject::Number(n)) if *n == 1.0),
@@ -205,7 +205,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
 
     let data = scope.bindings().data();
     let m = match data.get("set_value") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
     };
     let sample = m.child_scope().bindings().data().get("sample").copied();
@@ -235,7 +235,7 @@ fn functor_argument_bare_type_token_auto_wraps() {
 
     let data = scope.bindings().data();
     let m = match data.get("set_value") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("set_value should be a module, got {:?}", other.map(|o| o.ktype())),
     };
     let sample = m.child_scope().bindings().data().get("sample").copied();
@@ -271,11 +271,11 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     }
     let data = scope.bindings().data();
     let a = match data.get("First") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("First should be a module"),
     };
     let b = match data.get("Second") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("Second should be a module"),
     };
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
@@ -343,7 +343,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let held = {
         let data = scope.bindings().data();
         match data.get("Held") {
-            Some(KObject::KModule(m, _)) => *m,
+            Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
             other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
         }
     };

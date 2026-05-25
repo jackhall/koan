@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::KObject;
+use koan::machine::model::{KObject, KType};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -53,7 +53,7 @@ fn module_body_forward_reference_resolves() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&arena, captured, "MODULE Mod = ((LET y = x) (LET x = 1))");
     let m = match scope.lookup("Mod") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("Mod should be a module"),
     };
     let data = m.child_scope().bindings().data();

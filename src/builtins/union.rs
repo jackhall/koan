@@ -87,7 +87,7 @@ pub fn body<'a>(
 fn finalize_union<'a>(
     scope: &'a Scope<'a>,
     name: String,
-    fields: Vec<(String, KType)>,
+    fields: Vec<(String, KType<'a>)>,
 ) -> BodyResult<'a> {
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`. See
     // `finalize_struct` for the symmetric rationale.
@@ -105,7 +105,7 @@ fn finalize_union<'a>(
     // UNION addresses by tag name and doesn't care about declaration order; flatten the
     // ordered field list (which `parse_typed_field_list_via_elaborator` shares with
     // `STRUCT`) into a HashMap. Duplicate detection has already happened in the helper.
-    let schema: HashMap<String, KType> = fields.into_iter().collect();
+    let schema: HashMap<String, KType<'a>> = fields.into_iter().collect();
     let arena = scope.arena;
     // Per-declaration identity: same `*const _ as usize` scheme `finalize_struct` and
     // `Module::scope_id()` use. Dual-write the identity into `bindings.types` next to

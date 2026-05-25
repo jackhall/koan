@@ -394,7 +394,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     future
         .bundle
         .args
-        .insert("m".into(), Rc::new(KObject::KModule(m_ref, None)));
+        .insert("m".into(), Rc::new(KObject::KTypeValue(KType::Module { module: m_ref, frame: None })));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
 

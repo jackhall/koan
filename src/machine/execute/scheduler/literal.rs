@@ -81,7 +81,7 @@ impl<'a> Scheduler<'a> {
         }
         let frame_label = || Frame::bare("<dict>", "dict literal");
         let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-            let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
+            let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>> = HashMap::new();
             for (k_slot, v_slot) in layout {
                 let key_obj = k_slot.materialize(results);
                 let value_obj = v_slot.materialize(results);

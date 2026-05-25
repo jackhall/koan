@@ -15,7 +15,10 @@ topical docs covering the execution model, memory model, functional programming,
 expressions and parsing, and error handling, plus the [design/typing/](design/typing/README.md)
 subdirectory covering the type and module systems end-to-end (the module language and
 runtime type system shipped — including `USING … SCOPE` block-scoped module opening, which
-surfaces a module value's members as bare names for the duration of a block — with
+surfaces a module value's members as bare names for the duration of a block, and the
+type-language collapse that puts modules and signatures in `KType` directly via
+`KType::Module { .. }` / `KType::Signature(_)` / `KType::AbstractType { .. }` carriers,
+retiring the `KObject::KModule` / `KObject::KSignature` duality — with
 implicit-search and axiom stages tracked as `module-system-*` roadmap items below). [design/effects.md](design/effects.md) captures the in-language
 monadic side-effects design (tracked in [roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md)).
 
@@ -31,12 +34,13 @@ without first landing something else:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
   — free type-parameter names in parameter slots bind per call, from either an
   argument's carried type structure or an earlier parameter's value.
-- [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
-  — collapse the KObject/KType duality for modules and signatures, retiring the dual-write
-  in `KFunction::invoke` for signature-typed FN parameters.
 - [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
   function of its lexical position rather than the scheduler's queue order, so forward
   references resolve deterministically and sibling work can be reordered or parallelized.
+- [Scheduler eager-free policy vs. interpret top-level read-back](roadmap/scheduler-reclaim-vs-interpret-readback.md)
+  — top-level `SIG ... \n FN (... :SigName) -> ...` programs panic at the
+  CLI's `read_result` when the scheduler eagerly frees the SIG dispatch's
+  slot before interpret prints its result.
 
 ## Open items
 
@@ -82,7 +86,6 @@ binding, and VAL-slot identity are represented in `KType` and routed through
 dispatch. The substrate the predicate-typing stages and the stdlib's
 functor-heavy collections both build on:
 
-- [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
 - [FUNCTOR binder](roadmap/type_language/functor-binder.md)
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)

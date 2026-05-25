@@ -50,16 +50,19 @@ pub fn body<'a>(
         let arena = parent_scope.arena;
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
-        let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KSignature(sig));
-        // SIG is not a `UserTypeKind`; the identity carrier stays `SatisfiesSignature`.
-        // Dual-write so type-name resolution finds the signature by name without
-        // consulting `bindings.data` for the value-side carrier.
+        // Post-collapse: the signature value rides `KTypeValue(KType::Signature(s))`.
+        // The dual-write into `bindings.types` carries the *constraint* form
+        // `KType::SatisfiesSignature { sig_id, sig_path, .. }` rather than the
+        // identity-bearing `KType::Signature(_)` — slot annotations `:OrderedSig` mean
+        // "any module satisfying OrderedSig", not "this signature value itself."
+        // Splitting the two storage roles keeps the slot-vs-value semantic distinction
+        // the pre-collapse SatisfiesSignature/Signature split already encoded.
         let identity = KType::SatisfiesSignature {
             sig_id: sig.sig_id(),
             sig_path: name_for_finish.clone(),
-            // Unconstrained at the SIG-declaration site; `SIG_WITH` pins slots later.
             pinned_slots: Vec::new(),
         };
+        let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(KType::Signature(sig)));
         match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj) {
             Ok(obj) => BodyResult::Value(obj),
             Err(e) => BodyResult::Err(
@@ -81,7 +84,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_pre_run(
         scope,
         "SIG",
-        sig(KType::MetaSignature, vec![
+        sig(KType::AnySignature, vec![
             kw("SIG"),
             arg("name", KType::TypeExprRef),
             kw("="),
@@ -111,21 +114,26 @@ mod tests {
 
     #[test]
     fn sig_binds_under_name_in_scope() {
+        use crate::machine::model::types::KType;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let data = scope.bindings().data();
-        assert!(matches!(data.get("OrderedSig"), Some(KObject::KSignature(_))));
+        assert!(matches!(
+            data.get("OrderedSig"),
+            Some(KObject::KTypeValue(KType::Signature(_)))
+        ));
     }
 
     #[test]
     fn sig_path_records_name() {
+        use crate::machine::model::types::KType;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let data = scope.bindings().data();
         let sig = match data.get("OrderedSig") {
-            Some(KObject::KSignature(s)) => *s,
+            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             _ => panic!("OrderedSig should be a signature"),
         };
         assert_eq!(sig.path, "OrderedSig");
@@ -143,8 +151,9 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         let data = scope.bindings().data();
+        use crate::machine::model::types::KType;
         let sig = match data.get("Foo") {
-            Some(KObject::KSignature(s)) => *s,
+            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             _ => panic!("Foo should be a signature"),
         };
         let inner = sig.decl_scope().bindings().data();
@@ -171,10 +180,12 @@ mod tests {
         );
     }
 
-    /// Stage 3.1: SIG finalize dual-writes a `KType::SatisfiesSignature` into
-    /// `bindings.types` next to the `KObject::KSignature` carrier in `bindings.data`.
-    /// Without this, deleting `body_type_expr`'s `scope.lookup` fall-through would
-    /// break every SIG-typed name lookup.
+    /// Post-collapse: SIG finalize dual-writes the *constraint* form
+    /// `KType::SatisfiesSignature { sig_id, .. }` into `bindings.types` next to the
+    /// *value* form `KTypeValue(KType::Signature(_))` in `bindings.data`. The split
+    /// keeps slot annotation (`:OrderedSig` meaning "any module satisfying OrderedSig")
+    /// distinct from the value-side carrier (the signature itself as a first-class value),
+    /// which the pre-collapse SatisfiesSignature/MetaSignature split also encoded.
     #[test]
     fn sig_dual_writes_to_types_and_data() {
         use crate::machine::model::types::KType;
@@ -194,6 +205,6 @@ mod tests {
         let obj = data
             .get("OrderedSig")
             .expect("OrderedSig should be in bindings.data");
-        assert!(matches!(obj, KObject::KSignature(_)));
+        assert!(matches!(obj, KObject::KTypeValue(KType::Signature(_))));
     }
 }

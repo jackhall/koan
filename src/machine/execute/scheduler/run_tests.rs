@@ -2,7 +2,7 @@
 //! replay-park routing in `run_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
 use crate::builtins::default_scope;
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use super::Scheduler;
 use crate::parse::parse;
@@ -211,7 +211,7 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     }
     sched.execute().unwrap();
     assert!(
-        matches!(scope.lookup("aResult"), Some(KObject::KModule(_, _))),
+        matches!(scope.lookup("aResult"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
         "aResult should bind to a KModule after replay-park on forward-declared MODULE / SIG",
     );
 }

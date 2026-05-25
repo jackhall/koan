@@ -24,7 +24,9 @@ mod module_type_of;
 mod sig_with;
 mod type_constructor;
 
-use crate::machine::model::types::UserTypeKind;
+// `UserTypeKind` no longer referenced here — `:Module` lowers to `KType::AnyModule`,
+// `:Signature` to `KType::AnySignature` (the `UserTypeKind::Module` arm retired with
+// the type-language collapse).
 use crate::machine::model::KType;
 use crate::machine::Scope;
 
@@ -68,7 +70,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "MODULE_TYPE_OF",
         sig(KType::TypeExprRef, vec![
             kw("MODULE_TYPE_OF"),
-            arg("m", KType::AnyUserType { kind: UserTypeKind::Module }),
+            arg("m", KType::AnyModule),
             arg("name", KType::TypeExprRef),
         ]),
         module_type_of::body,
@@ -97,7 +99,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "SIG_WITH",
         sig(KType::TypeExprRef, vec![
             kw("SIG_WITH"),
-            arg("sig", KType::MetaSignature),
+            arg("sig", KType::AnySignature),
             arg("bindings", KType::KExpression),
         ]),
         sig_with::body,

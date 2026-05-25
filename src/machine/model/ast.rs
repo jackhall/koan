@@ -31,11 +31,16 @@ pub enum KLiteral {
 /// `resolve_for` calls skip the recursive walk. Scope-independent — the result depends
 /// only on the surface form. `from_type_expr` failures (user-bound names) are not
 /// cached here; those route through the scope-owned Layer-2 memo on `Scope`.
+///
+/// Storage is `KType<'static>` because the builtin-only path never carries arena-pinned
+/// `Module` / `Signature` references — `from_type_expr` only ever produces `Number`,
+/// `List<Any>`, `Function<...>`-shaped values whose `'a` is purely phantom. The cached
+/// value coerces to any `&'a KType<'a>` via the standard sub-typing path.
 #[derive(Debug)]
 pub struct TypeExpr {
     pub name: String,
     pub params: TypeParams,
-    pub builtin_cache: OnceCell<KType>,
+    pub builtin_cache: OnceCell<KType<'static>>,
 }
 
 impl Clone for TypeExpr {
@@ -198,17 +203,39 @@ impl<'a> ExpressionPart<'a> {
     /// (deleted in stage 2) routed the surface name through the elaborated-type
     /// language; `TypeNameRef` keeps it on the value side where the rest of the
     /// bind-time surface-name plumbing lives.
-    pub fn resolve_for(&self, slot: &crate::machine::model::KType) -> KObject<'a> {
+    pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> KObject<'a> {
         use crate::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
             // Layer-1 cache: builtin-only resolution is surface-form-only, so the
             // result is invariant across dispatches against this same `TypeExpr`.
+            //
+            // Cache storage is `KType<'static>` because the builtin-only path never
+            // carries arena-pinned `Module` / `Signature` references. The cached value
+            // contains no references; only the no-op `'a` parameter differs from the
+            // outer `KType<'a>` the caller needs. Cloning under a lifetime transmute
+            // is sound because the clone is independent owned data (no aliasing into
+            // the cache).
             if let Some(kt) = t.builtin_cache.get() {
-                return KObject::KTypeValue(kt.clone());
+                // SAFETY: `KType<'static>` and `KType<'a>` have identical layout
+                // (lifetimes are zero-sized); the cache's `KType<'static>` carries
+                // only owned-data variants — `Number`, `List<Any>`, `Function<...>`,
+                // wildcards. None of those reach a `Module` / `Signature` arena ref
+                // through cloning, so the transmute is sound.
+                let cloned: KType<'static> = kt.clone();
+                let lifted: KType<'a> = unsafe {
+                    std::mem::transmute::<KType<'static>, KType<'a>>(cloned)
+                };
+                return KObject::KTypeValue(lifted);
             }
-            return match KType::from_type_expr(t) {
+            // Rebuild at the caller's lifetime, then stash a `'static` copy for the
+            // next resolve_for hit. Re-running `from_type_expr` for storage is cheap
+            // (the slow path is the recursive walk we just did) — keeps the cache
+            // soundness contract local to this function.
+            return match KType::<'a>::from_type_expr(t) {
                 Ok(kt) => {
-                    let _ = t.builtin_cache.set(kt.clone());
+                    if let Ok(static_kt) = KType::<'static>::from_type_expr(t) {
+                        let _ = t.builtin_cache.set(static_kt);
+                    }
                     KObject::KTypeValue(kt)
                 }
                 Err(_) => KObject::TypeNameRef(t.clone()),
@@ -237,7 +264,7 @@ impl<'a> ExpressionPart<'a> {
             // resolved by the scheduler. Non-scalar keys reaching here are a scheduler bug
             // — it's responsible for surfacing them as a structured `ShapeError` earlier.
             ExpressionPart::DictLiteral(pairs) => {
-                let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
+                let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>> = HashMap::new();
                 for (k, v) in pairs {
                     let key_obj = k.resolve();
                     let kkey = KKey::try_from_kobject(&key_obj).unwrap_or_else(|e| {
@@ -385,9 +412,9 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
     }
 }
 
-impl<'a> Parseable for KExpression<'a> {
-    fn equal(&self, other: &dyn Parseable) -> bool { self.summarize() == other.summarize() }
-    fn ktype(&self) -> crate::machine::model::KType { crate::machine::model::KType::KExpression }
+impl<'a> Parseable<'a> for KExpression<'a> {
+    fn equal(&self, other: &dyn Parseable<'a>) -> bool { self.summarize() == other.summarize() }
+    fn ktype(&self) -> crate::machine::model::KType<'a> { crate::machine::model::KType::KExpression }
     fn summarize(&self) -> String {
         self.parts.iter()
             .map(|p| p.value.summarize())

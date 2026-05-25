@@ -26,12 +26,12 @@ pub fn body<'a>(
     // `type_for_types_map` is `Some(kt)` iff this call should route storage through
     // `register_type` (a Type-class LHS with an actual `KTypeValue(kt)` RHS).
     // `nominal_identity` is `Some(kt)` iff the RHS is a type-language carrier with a
-    // recoverable nominal identity (`KModule` / `KSignature` / `StructType` /
+    // recoverable nominal identity (`KTypeValue(Module/Signature)` / `StructType` /
     // `TaggedUnionType`); those route through `register_nominal` so the alias name
     // resolves both type-side (via `resolve_type`) and value-side (via `lookup`).
     // Only one of the two is `Some` at any time — they're mutually exclusive RHS shapes.
-    let mut type_for_types_map: Option<KType> = None;
-    let mut nominal_identity: Option<KType> = None;
+    let mut type_for_types_map: Option<KType<'a>> = None;
+    let mut nominal_identity: Option<KType<'a>> = None;
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => s.clone(),
         // Stage-2 carrier: a Type-classed binder name not in `KType::from_name`'s
@@ -55,13 +55,24 @@ pub fn body<'a>(
                 ) {
                     return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
-                        got: value.ktype(),
+                        got: value.ktype().name(),
                     }));
                 }
-                if let KObject::KTypeValue(kt) = value {
-                    type_for_types_map = Some(kt.clone());
-                } else {
-                    nominal_identity = derive_nominal_identity(value);
+                // Same routing rule as the `KTypeValue`-binder arm below: module /
+                // signature carriers dual-write through `nominal_identity`; pure-type
+                // `KTypeValue(kt)` carriers (Number, etc.) take the `register_type`
+                // path; other carrier shapes (`StructType` / `TaggedUnionType`) fall
+                // through `derive_nominal_identity`.
+                match value {
+                    KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
+                    KObject::KTypeValue(kt) => {
+                        type_for_types_map = Some(kt.clone());
+                    }
+                    _ => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
                 }
                 resolved_name
             }
@@ -96,17 +107,27 @@ pub fn body<'a>(
                 ) {
                     return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
-                        got: value.ktype(),
+                        got: value.ktype().name(),
                     }));
                 }
-                // Stage-1.7 storage flip: Type-class LHS + `KTypeValue(kt)` RHS routes
-                // through `register_type` so the bound name lives in `bindings.types`
-                // alongside builtin type names. The dispatch carrier returned below
-                // stays a `KObject::KTypeValue(kt)` — only the storage location moves.
-                if let KObject::KTypeValue(kt) = value {
-                    type_for_types_map = Some(kt.clone());
-                } else {
-                    nominal_identity = derive_nominal_identity(value);
+                // Type-class LHS + value-routing. Module / signature carriers
+                // (`KTypeValue(KType::Module/Signature)`) take the `nominal_identity`
+                // path via `derive_nominal_identity` so they dual-write both
+                // `bindings.types` (for type-position lookups) AND `bindings.data`
+                // (for value-position lookups like `IntOrdView.compare`). Pure-type
+                // `KTypeValue(kt)` carriers (Number, List<Any>, etc.) take the
+                // `register_type` path — there's no useful value-side binding to
+                // alias against. Stage-1.7 storage flip preserved for the latter.
+                match value {
+                    KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
+                    KObject::KTypeValue(kt) => {
+                        type_for_types_map = Some(kt.clone());
+                    }
+                    _ => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
                 }
                 resolved_name
             }
@@ -172,26 +193,29 @@ pub fn body<'a>(
     BodyResult::Value(allocated)
 }
 
-/// Recover the nominal identity (a `KType::UserType` or `KType::SatisfiesSignature`) carried
-/// by a type-language value `obj`. Returns `Some(identity)` for the four shapes that came
-/// from a STRUCT / UNION / MODULE / SIG declaration (or an alias of one); `None` for
-/// every other carrier shape — those keep flowing through `Scope::bind_value` and never
-/// dual-write to `bindings.types`.
+/// Recover the nominal identity carried by a type-language value `obj`. Returns
+/// `Some(identity)` for the four shapes that came from a STRUCT / UNION / MODULE / SIG
+/// declaration (or an alias of one); `None` for every other carrier shape — those keep
+/// flowing through `Scope::bind_value` and never dual-write to `bindings.types`.
 ///
-/// The identity preserves the ORIGINAL declaration's `name` / `scope_id` rather than the
-/// alias's binder name, so `LET P2 = Point` makes `P2` resolve to the same `UserType`
-/// that `Point` carries.
-fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
+/// Post-collapse: MODULE/SIG carriers ride `KTypeValue(KType::Module/Signature)`; their
+/// identity IS the carried KType, so the alias preserves the original `&Module` /
+/// `&Signature` reference (which preserves `scope_id` / `sig_id` for downstream lookups,
+/// the property `LET P2 = Point` already had for `Point`).
+fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
     match obj {
-        KObject::KModule(m, _) => Some(KType::UserType {
-            kind: UserTypeKind::Module,
-            scope_id: m.scope_id(),
-            name: m.path.clone(),
-        }),
-        KObject::KSignature(s) => Some(KType::SatisfiesSignature {
+        // Module carrier: the slot-annotation form IS the carrier itself
+        // (`KType::Module { module, frame }`). `(PICK m: AliasName)` should dispatch
+        // identically to `(PICK m: OriginalName)`.
+        KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
+        // Signature carrier: slot-annotation form is the CONSTRAINT shape
+        // `SatisfiesSignature { sig_id: s.sig_id(), .. }`. `(PICK m: S2)` and
+        // `(PICK m: OrderedSig)` dispatch identically — both lower to the same
+        // sig_id constraint. The value-side data binding still wraps the carrier
+        // `KTypeValue(Signature(s))` so value-position uses see the signature value.
+        KObject::KTypeValue(KType::Signature(s)) => Some(KType::SatisfiesSignature {
             sig_id: s.sig_id(),
             sig_path: s.path.clone(),
-            // A bare SIG alias (`LET S2 = OrderedSig`) carries no sharing constraints.
             pinned_slots: Vec::new(),
         }),
         KObject::StructType { name, scope_id, .. } => Some(KType::UserType {

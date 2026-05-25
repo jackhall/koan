@@ -17,7 +17,10 @@ fn transparent_ascription_returns_module() {
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     let data = scope.bindings().data();
-    assert!(matches!(data.get("IntOrdView"), Some(KObject::KModule(_, _))));
+    assert!(matches!(
+        data.get("IntOrdView"),
+        Some(KObject::KTypeValue(KType::Module { module: _, frame: _ })),
+    ));
 }
 
 #[test]
@@ -59,23 +62,24 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
     }
     let data = scope.bindings().data();
     let a = match data.get("FirstAbstract") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("FirstAbstract should be a module"),
     };
     let b = match data.get("SecondAbstract") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("SecondAbstract should be a module"),
     };
     let a_t = a.type_members.borrow().get("Type").cloned();
     let b_t = b.type_members.borrow().get("Type").cloned();
-    use crate::machine::model::types::UserTypeKind;
+    // Post-collapse: opaque-ascription abstract-type members are minted as
+    // `KType::AbstractType { source_module, name }`.
     assert!(matches!(
         &a_t,
-        Some(KType::UserType { kind: UserTypeKind::Module, .. })
+        Some(KType::AbstractType { name, .. }) if name == "Type"
     ));
     assert!(matches!(
         &b_t,
-        Some(KType::UserType { kind: UserTypeKind::Module, .. })
+        Some(KType::AbstractType { name, .. }) if name == "Type"
     ));
     assert_ne!(a_t, b_t, "two opaque ascriptions must mint distinct module abstract types");
 }
@@ -92,7 +96,7 @@ fn transparent_ascription_does_not_mint_module_types() {
     );
     let data = scope.bindings().data();
     let v = match data.get("ViewMod") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("ViewMod should be a module"),
     };
     assert!(v.type_members.borrow().is_empty());
@@ -112,7 +116,7 @@ fn roadmap_example_int_ord_with_ordered_sig() {
 
     let data = scope.bindings().data();
     let abstract_mod = match data.get("IntOrdAbstract") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("IntOrdAbstract should be a module, got {:?}", other.map(|o| o.ktype())),
     };
     let minted = abstract_mod
@@ -121,10 +125,9 @@ fn roadmap_example_int_ord_with_ordered_sig() {
         .get("Type")
         .cloned()
         .expect("opaque ascription should mint a Type member");
-    use crate::machine::model::types::UserTypeKind;
     match &minted {
-        KType::UserType { kind: UserTypeKind::Module, name, .. } => assert_eq!(name, "Type"),
-        other => panic!("minted abstract type must be UserType(Module), got {:?}", other),
+        KType::AbstractType { name, .. } => assert_eq!(name, "Type"),
+        other => panic!("minted abstract type must be AbstractType, got {:?}", other),
     }
     assert_ne!(minted, KType::Number, "opaque IntOrdAbstract.Type must not equal Number");
     let compare = abstract_mod

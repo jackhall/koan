@@ -219,7 +219,7 @@ mod tests {
     /// without re-invoking the full resolution outcome.
     fn find_match<'a>(
         scope: &'a Scope<'a>,
-        expr: &KExpression<'_>,
+        expr: &KExpression<'a>,
     ) -> Option<&'a KFunction<'a>> {
         let key = expr.untyped_key();
         let mut current: Option<&Scope<'a>> = Some(scope);

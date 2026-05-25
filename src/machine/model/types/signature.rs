@@ -56,7 +56,7 @@ pub enum Specificity {
 
 pub struct ExpressionSignature<'a> {
     pub return_type: ReturnType<'a>,
-    pub elements: Vec<SignatureElement>,
+    pub elements: Vec<SignatureElement<'a>>,
 }
 
 /// Carrier for an FN's declared return type. The shipped surface admits parameter-name
@@ -76,7 +76,7 @@ pub struct ExpressionSignature<'a> {
 ///
 /// [1]: ../../../design/module-system.md#functors
 pub enum ReturnType<'a> {
-    Resolved(KType),
+    Resolved(KType<'a>),
     Deferred(DeferredReturn<'a>),
 }
 
@@ -213,7 +213,7 @@ impl<'a> ReturnType<'a> {
     /// [`crate::machine::execute::scheduler::execute::Scheduler::execute`]
     /// skips the per-slot check for `Deferred(_)` to avoid a redundant (and
     /// always-passing) `Any`-style accept here.
-    pub fn matches_value(&self, obj: &crate::machine::model::values::KObject<'_>) -> bool {
+    pub fn matches_value(&self, obj: &crate::machine::model::values::KObject<'a>) -> bool {
         match self {
             ReturnType::Resolved(kt) => kt.matches_value(obj),
             ReturnType::Deferred(_) => true,
@@ -229,7 +229,7 @@ impl<'a> ReturnType<'a> {
 }
 
 impl<'a> ExpressionSignature<'a> {
-    pub fn matches(&self, expr: &KExpression<'_>) -> bool {
+    pub fn matches(&self, expr: &KExpression<'a>) -> bool {
         if self.elements.len() != expr.parts.len() {
             return false;
         }
@@ -268,7 +268,7 @@ impl<'a> ExpressionSignature<'a> {
 
     /// Assumes `self` and `other` share an `UntypedKey` (caller's responsibility) — only
     /// argument slots contribute, since fixed-token positions are equal by construction.
-    pub fn specificity_vs(&self, other: &ExpressionSignature<'_>) -> Specificity {
+    pub fn specificity_vs(&self, other: &ExpressionSignature<'a>) -> Specificity {
         let mut any_more = false;
         let mut any_less = false;
         for (a, b) in self.elements.iter().zip(other.elements.iter()) {
@@ -294,7 +294,7 @@ impl<'a> ExpressionSignature<'a> {
     /// peer means there's a same-arg-type duplicate, which must surface as ambiguity rather
     /// than silently win). `None` for an empty slice or any no-clear-winner case; callers
     /// distinguish via `candidates.is_empty()`.
-    pub fn most_specific(candidates: &[&ExpressionSignature<'_>]) -> Option<usize> {
+    pub fn most_specific(candidates: &[&ExpressionSignature<'a>]) -> Option<usize> {
         candidates
             .iter()
             .enumerate()
@@ -332,20 +332,21 @@ impl<'a> ExpressionSignature<'a> {
     }
 }
 
-pub enum SignatureElement {
+pub enum SignatureElement<'a> {
     Keyword(String),
-    Argument(Argument),
+    Argument(Argument<'a>),
 }
 
 /// `name` keys the slot in the `ArgumentBundle`; `ktype` gates what `ExpressionPart`s it
-/// accepts.
-pub struct Argument {
+/// accepts. Carries `'a` because the slot's declared `KType` may reference arena-pinned
+/// `Module` / `Signature` carriers after the type-language collapse.
+pub struct Argument<'a> {
     pub name: String,
-    pub ktype: KType,
+    pub ktype: KType<'a>,
 }
 
-impl Argument {
-    pub fn matches(&self, part: &ExpressionPart<'_>) -> bool {
+impl<'a> Argument<'a> {
+    pub fn matches(&self, part: &ExpressionPart<'a>) -> bool {
         self.ktype.accepts_part(part)
     }
 }

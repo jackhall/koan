@@ -161,7 +161,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 pub fn newtype_construct<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
-    identity: &'a KType,
+    identity: &'a KType<'a>,
     parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> BodyResult<'a> {
     if parts.is_empty() {

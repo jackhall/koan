@@ -199,23 +199,23 @@ fn is_type_denoting_table() {
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     assert!(sb_pinned.is_type_denoting());
-    // Signature — first-class signature value.
-    assert!(KType::MetaSignature.is_type_denoting());
+    // `:Signature` slot wildcard — admits first-class signature values.
+    assert!(KType::AnySignature.is_type_denoting());
     // Type — schema meta-type.
     assert!(KType::Type.is_type_denoting());
     // TypeExprRef — TypeExpr carrier.
     assert!(KType::TypeExprRef.is_type_denoting());
-    // AnyUserType { kind: Module } — unascribed module wildcard.
-    assert!(KType::AnyUserType { kind: UserTypeKind::Module }.is_type_denoting());
+    // `:Module` slot wildcard — admits any first-class module value.
+    assert!(KType::AnyModule.is_type_denoting());
     // Sibling AnyUserType kinds are NOT type-denoting at the parameter level —
     // a STRUCT-typed parameter doesn't make its name a type-language binder.
     assert!(!KType::AnyUserType { kind: UserTypeKind::Struct }.is_type_denoting());
     assert!(!KType::AnyUserType { kind: UserTypeKind::Tagged }.is_type_denoting());
-    // Per-declaration UserType is NOT type-denoting — the nominal identity already
-    // lives in the declaring scope's `bindings.types`; rebinding per-call would
-    // be a no-op (or worse, a shadow).
+    // Per-declaration UserType (Struct / Tagged / Newtype / TypeConstructor) is NOT
+    // type-denoting — the nominal identity already lives in the declaring scope's
+    // `bindings.types`; rebinding per-call would be a no-op (or worse, a shadow).
     let ut = KType::UserType {
-        kind: UserTypeKind::Module,
+        kind: UserTypeKind::Struct,
         scope_id: ScopeId::from_raw(0, 1),
         name: "Foo".into(),
     };
@@ -280,7 +280,7 @@ fn is_more_specific_for_pinned_signature_bound() {
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Elt".into(), KType::Number)],
     };
-    let any_module = KType::AnyUserType { kind: UserTypeKind::Module };
+    let any_module = KType::AnyModule;
 
     // Pinned strictly more specific than bare same-sig.
     assert!(pinned_number.is_more_specific_than(&bare));

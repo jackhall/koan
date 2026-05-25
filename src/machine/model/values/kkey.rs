@@ -37,12 +37,12 @@ impl KKey {
     }
 }
 
-impl Parseable for KKey {
-    fn equal(&self, other: &dyn Parseable) -> bool {
+impl<'a> Parseable<'a> for KKey {
+    fn equal(&self, other: &dyn Parseable<'a>) -> bool {
         self.summarize() == other.summarize()
     }
 
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> KType<'a> {
         match self {
             KKey::String(_) => KType::Str,
             KKey::Number(_) => KType::Number,
@@ -61,7 +61,7 @@ impl Parseable for KKey {
     }
 }
 
-impl Serializable for KKey {
+impl<'a> Serializable<'a> for KKey {
     fn hash(&self, state: &mut dyn Hasher) {
         match self {
             KKey::String(s) => {
@@ -114,7 +114,7 @@ impl Serializable for KKey {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn Serializable> {
+    fn clone_box(&self) -> Box<dyn Serializable<'a>> {
         Box::new(self.clone())
     }
 }

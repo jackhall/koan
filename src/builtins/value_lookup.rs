@@ -103,7 +103,17 @@ pub fn body_type_expr<'a>(
             // ATTR-Module/Struct, `struct_construct`, `MODULE_TYPE_OF`) receive the
             // expected `KSignature` / `KModule` / `StructType` / `TaggedUnionType`
             // part rather than a synthesized `KTypeValue`.
-            if matches!(kt, KType::UserType { .. } | KType::SatisfiesSignature { .. }) {
+            // Post-collapse: MODULE / SIG declarators dual-write `KType::Module { .. }`
+            // / `KType::Signature(_)` directly (no `UserType { kind: Module, .. }`
+            // indirection). Both still pair with a value-side carrier in `data`, so the
+            // recovery shape is unchanged.
+            if matches!(
+                kt,
+                KType::UserType { .. }
+                    | KType::SatisfiesSignature { .. }
+                    | KType::Module { .. }
+                    | KType::Signature(_)
+            ) {
                 if let Some(obj) = scope.lookup(&name) {
                     return BodyResult::Value(obj);
                 }

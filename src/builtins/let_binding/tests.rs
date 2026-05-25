@@ -4,7 +4,7 @@ use std::rc::Rc;
 use super::body;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, KType};
 use crate::machine::ArgumentBundle;
 use crate::machine::execute::Scheduler;
 
@@ -96,9 +96,10 @@ fn let_t_cycle_errors() {
 fn let_type_class_with_non_type_value_errors() {
     use crate::machine::RuntimeArena;
     use crate::machine::KErrorKind;
-    use crate::machine::model::KType;
     use crate::parse::parse;
-    for (src, expected) in [("LET Foo = 1", KType::Number), ("LET Foo = \"hello\"", KType::Str)] {
+    // Post-collapse: `TypeClassBindingExpectsType.got` is the pre-rendered type name
+    // (e.g. `"Number"`) rather than a `KType` value — keeps `KError` lifetime-free.
+    for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();
@@ -108,7 +109,7 @@ fn let_type_class_with_non_type_value_errors() {
         match sched.read_result(id) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
-                    if name == "Foo" && got == &expected),
+                    if name == "Foo" && got == expected),
                 "expected TypeClassBindingExpectsType for {src:?}, got {e}",
             ),
             Ok(v) => panic!("expected bind-time error for {src:?}, got {:?}", v.ktype()),
@@ -202,7 +203,6 @@ fn let_parameterized_type_lhs_still_shape_errors() {
 #[test]
 fn let_type_class_with_module_carrier_dual_writes() {
     use crate::machine::RuntimeArena;
-    use crate::machine::model::types::UserTypeKind;
     use crate::machine::model::KType;
     use crate::builtins::test_support::run;
     let arena = RuntimeArena::new();
@@ -217,16 +217,15 @@ fn let_type_class_with_module_carrier_dual_writes() {
     let kt = types
         .get("IntOrdA")
         .expect("IntOrdA should be in bindings.types");
-    assert!(matches!(
-        **kt,
-        KType::UserType { kind: UserTypeKind::Module, .. }
-    ));
+    // Post-collapse: MODULE aliases dual-write `KType::Module { .. }` rather than
+    // the old `UserType { kind: Module, .. }` indirection.
+    assert!(matches!(**kt, KType::Module { .. }));
     drop(types);
     let data = scope.bindings().data();
     let obj = data
         .get("IntOrdA")
         .expect("IntOrdA should be in bindings.data");
-    assert!(matches!(obj, KObject::KModule(_, _)));
+    assert!(matches!(obj, KObject::KTypeValue(KType::Module { module: _, frame: _ })));
 }
 
 /// Stage 3.1 aliasing-preserves-identity: `LET Pt = Point` writes a `types[Pt]`
@@ -314,7 +313,7 @@ fn let_type_class_in_sig_body_still_works() {
     let scope = run_root_silent(&arena);
     run(scope, "SIG WithType = ((LET Type = Number) (VAL zero :Number))");
     let s = match scope.bindings().data().get("WithType") {
-        Some(KObject::KSignature(s)) => *s,
+        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         other => panic!("WithType should be a signature, got {:?}", other.map(|o| o.ktype())),
     };
     let types = s.decl_scope().bindings().types();

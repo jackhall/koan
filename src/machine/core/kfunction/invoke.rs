@@ -5,7 +5,7 @@ use crate::machine::core::{
 };
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
-    SignatureElement, UserTypeKind,
+    SignatureElement,
 };
 use crate::machine::model::values::KObject;
 
@@ -20,8 +20,8 @@ mod tests;
 /// Resolution of a `ReturnType::Deferred` carrier at dispatch time. Exactly one
 /// variant fires per call; the Combine consumes this to decide whether the
 /// per-call return type is already known or must be read from `results[1]`.
-enum PerCallReturnType {
-    Ready(KType),
+enum PerCallReturnType<'a> {
+    Ready(KType<'a>),
     /// Sub-Dispatch spawned that will produce a `KObject::KTypeValue` at the
     /// carried `NodeId`.
     Pending(crate::machine::NodeId),
@@ -109,12 +109,24 @@ impl<'a> KFunction<'a> {
                         }
                     }
                     let allocated = inner_arena.alloc_object(cloned);
-                    // Signature parser enforces parameter-name uniqueness; a rebind
-                    // error here would mean an upstream invariant break.
-                    let _ = child.bind_value(name.clone(), allocated);
-                    // For type-denoting parameters, dual-write the per-call binding
-                    // into `bindings.types` so the FN body's type-position references
-                    // to the parameter resolve through `resolve_type`'s outer-chain walk.
+                    // Post-collapse: for type-denoting parameters, write ONLY into
+                    // `bindings.types`. ATTR-on-type (the `KTypeValue(KType::Module
+                    // { .. })` / `KType::Signature(_)` arms in `attr.rs`) projects
+                    // through the type-side carrier for `Er.pure(x)`-style references,
+                    // dissolving the previous dual-write into `bindings.data` that
+                    // forced the `read_result` race at scheduler/node_store.rs:165-171.
+                    //
+                    // Value-typed parameters (Number, List<T>, struct types, ...)
+                    // continue to write `bindings.data` via `bind_value` — they are
+                    // not type-denoting and have no `bindings.types` storage to use.
+                    let is_type_denoting = signature_argument_by_name(self, name)
+                        .map(|a| a.ktype.is_type_denoting())
+                        .unwrap_or(false);
+                    if !is_type_denoting {
+                        // Signature parser enforces parameter-name uniqueness; a
+                        // rebind error here would mean an upstream invariant break.
+                        let _ = child.bind_value(name.clone(), allocated);
+                    }
                     if let Some(arg) = signature_argument_by_name(self, name) {
                         if arg.ktype.is_type_denoting() {
                             match type_identity_for(name, allocated, &arg.ktype, outer) {
@@ -140,7 +152,7 @@ impl<'a> KFunction<'a> {
                         BodyResult::tail_with_frame(body_expr, frame, self)
                     }
                     ReturnType::Deferred(d) => {
-                        let per_call_ret: PerCallReturnType = match d {
+                        let per_call_ret: PerCallReturnType<'a> = match d {
                             DeferredReturn::TypeExpr(te) => {
                                 let mut el = Elaborator::new(child);
                                 let kt = match elaborate_type_expr(&mut el, te) {
@@ -190,7 +202,7 @@ impl<'a> KFunction<'a> {
                         let function_summary = self.summarize();
                         let combine_id = sched.add_combine(deps, child, Box::new(move |_scope, _sched, results| {
                             let body_value: &KObject<'_> = results[0];
-                            let per_call_ret: KType = match per_call_ret {
+                            let per_call_ret: KType<'_> = match per_call_ret {
                                 PerCallReturnType::Ready(kt) => kt,
                                 PerCallReturnType::Pending(_) => match results.get(1).copied() {
                                     Some(KObject::KTypeValue(kt)) => kt.clone(),
@@ -257,7 +269,7 @@ fn is_parameterized_carrier(ktype: &KType) -> bool {
 fn signature_argument_by_name<'a>(
     f: &'a KFunction<'a>,
     param_name: &str,
-) -> Option<&'a crate::machine::model::types::Argument> {
+) -> Option<&'a crate::machine::model::types::Argument<'a>> {
     f.signature.elements.iter().find_map(|el| match el {
         SignatureElement::Argument(a) if a.name == param_name => Some(a),
         _ => None,
@@ -268,14 +280,19 @@ fn signature_argument_by_name<'a>(
 /// is type-denoting (caller gates on `KType::is_type_denoting`). Returns the `KType`
 /// to register in the per-call scope's `bindings.types`.
 ///
-/// | Declared `KType`               | Bound `KObject`        | Identity                                              |
-/// | ------------------------------ | ---------------------- | ----------------------------------------------------- |
-/// | `SatisfiesSignature { .. }`        | `KModule(m, _)`        | `m.ktype()` — `UserType { kind: Module, .. }`         |
-/// | `AnyUserType { kind: Module }` | `KModule(m, _)`        | same                                                  |
-/// | `Signature`                    | `KSignature(s)`        | `SatisfiesSignature { sig_id: s.sig_id(), sig_path, .. }` |
-/// | `Type`                         | `KTypeValue(kt)`       | `kt.clone()`                                          |
-/// | `TypeExprRef`                  | `KTypeValue(kt)`       | `kt.clone()`                                          |
-/// | `TypeExprRef`                  | `TypeNameRef(t)`       | elaborated via `definition_scope.resolve_type_expr`   |
+/// Post-collapse the identity-bearing module/signature variants live in `KType` itself,
+/// so a signature-typed parameter mints `KType::Module { module: m, frame }` (carrying
+/// the per-call frame anchor the argument arrived with) — and `ATTR`'s `KTypeValue
+/// (KType::Module { .. })` arm projects from it for `Er.pure(x)`-style references.
+///
+/// | Declared `KType`               | Bound `KObject`                                  | Identity                                              |
+/// | ------------------------------ | ------------------------------------------------ | ----------------------------------------------------- |
+/// | `SatisfiesSignature { .. }`    | `KTypeValue(KType::Module { module, frame })`    | `KType::Module { module, frame }` (same carrier)      |
+/// | `AnyModule`                    | `KTypeValue(KType::Module { module, frame })`    | same                                                  |
+/// | `AnySignature`                 | `KTypeValue(KType::Signature(s))`                | `KType::Signature(s)` (same carrier)                  |
+/// | `Type`                         | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
+/// | `TypeExprRef`                  | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
+/// | `TypeExprRef`                  | `TypeNameRef(t)`                                 | elaborated via `definition_scope.resolve_type_expr`   |
 ///
 /// `Ok(None)` means the carrier shape didn't match any row (programming error
 /// downstream of an `is_type_denoting`/`matches` disagreement; skip the dual-write).
@@ -286,32 +303,24 @@ fn signature_argument_by_name<'a>(
 pub(crate) fn type_identity_for<'a>(
     param_name: &str,
     obj: &KObject<'a>,
-    declared: &KType,
+    declared: &KType<'a>,
     definition_scope: &'a Scope<'a>,
-) -> Result<Option<KType>, KError> {
+) -> Result<Option<KType<'a>>, KError> {
     match declared {
+        // Signature-typed parameter: mint the module identity directly so ATTR-on-type
+        // projects `Er.pure(x)` against the carried `&Module`.
         KType::SatisfiesSignature { .. } => Ok(match obj {
-            KObject::KModule(m, _) => Some(KType::UserType {
-                kind: UserTypeKind::Module,
-                scope_id: m.scope_id(),
-                name: m.path.clone(),
-            }),
+            KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
             _ => None,
         }),
-        KType::AnyUserType { kind: UserTypeKind::Module } => Ok(match obj {
-            KObject::KModule(m, _) => Some(KType::UserType {
-                kind: UserTypeKind::Module,
-                scope_id: m.scope_id(),
-                name: m.path.clone(),
-            }),
+        // `:Module` slot wildcard: same as `SatisfiesSignature` for the carrier-extract.
+        KType::AnyModule => Ok(match obj {
+            KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
             _ => None,
         }),
-        KType::MetaSignature => Ok(match obj {
-            KObject::KSignature(s) => Some(KType::SatisfiesSignature {
-                sig_id: s.sig_id(),
-                sig_path: s.path.clone(),
-                pinned_slots: Vec::new(),
-            }),
+        // `:Signature` slot wildcard: pass the carried signature carrier through.
+        KType::AnySignature => Ok(match obj {
+            KObject::KTypeValue(kt @ KType::Signature(_)) => Some(kt.clone()),
             _ => None,
         }),
         KType::Type => Ok(match obj {

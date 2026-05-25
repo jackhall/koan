@@ -85,10 +85,16 @@ Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
 RHSes (type-valued aliases). A bind-time
 `KErrorKind::TypeClassBindingExpectsType` diagnostic rejects
 `LET <Type-class> = <non-type>` at the binder using a primitive/container
-blocklist (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so type-language
-carriers (`KModule`, `KSignature`, `StructType`, `TaggedUnionType`), whose
-runtime `KType` is `Module` / `MetaSignature` / `Type` rather than `TypeExprRef`,
-continue to bind through the existing `bind_value` path.
+blocklist (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so
+type-language carriers (`StructType`, `TaggedUnionType`,
+`KTypeValue(KType::Module { .. })`, `KTypeValue(KType::Signature(_))`),
+whose runtime `KType` is `Type` / `Module` / `Signature` rather than a
+blocklist scalar, continue to bind through the existing `bind_value`
+path. Module and signature LET aliases additionally dual-write the
+identity carrier into `bindings.types` via `register_nominal` (modules
+preserve their `KType::Module` carrier verbatim; signatures lower to
+the `KType::SatisfiesSignature` constraint form so a slot typed by the
+alias dispatches identically to the original).
 
 The value-side ATTR walker and ascription's abstract-type member sweep both
 walk `bindings.types` and `bindings.data` via the `abstract_type_names_of`

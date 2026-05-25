@@ -24,6 +24,7 @@
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::values::Module;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::{arg, err, kw, register_builtin, sig};
@@ -49,11 +50,27 @@ pub fn body_identifier<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    let target = match scope.lookup(&s_name) {
-        Some(obj) => obj,
-        None => return err(KError::new(KErrorKind::UnboundName(s_name))),
-    };
-    access_field(scope, target, &field_name)
+    // Value-side lookup first (the `p.x` shipping path). On a miss, fall back to the
+    // type-side: a FUNCTOR's signature-typed parameter is bound *only* into
+    // `bindings.types` post-collapse (the dual-write into `bindings.data` was
+    // dropped — see `KFunction::invoke`'s per-call binding loop), so `Er.pure(x)`
+    // inside the functor body must reach the carried `&Module` through `resolve_type`.
+    if let Some(target) = scope.lookup(&s_name) {
+        return access_field(scope, target, &field_name);
+    }
+    if let Some(kt) = scope.resolve_type(&s_name) {
+        match kt {
+            KType::Module { module: m, .. } => return access_module_member(m, &field_name),
+            KType::AbstractType { source_module, .. } => {
+                return access_module_member(source_module, &field_name);
+            }
+            // Other type-side bindings (`KType::Number`, etc.) have no members; fall through
+            // to UnboundName so the diagnostic stays attributed to the lhs identifier
+            // rather than a synthesized rejection that points at the type-language side.
+            _ => {}
+        }
+    }
+    err(KError::new(KErrorKind::UnboundName(s_name)))
 }
 
 /// `ATTR <s:TypeExprRef> <field:_>` — module-system entry point. Module names are
@@ -123,8 +140,9 @@ pub fn body_struct<'a>(
     access_field(scope, target, &field_name)
 }
 
-/// Module-member access. The lhs already resolved to a `KObject::KModule`; look `field` up
-/// in the module's child scope's `data` map. Module-system stage 1.
+/// Module-member access. The lhs already resolved to a `KTypeValue(KType::Module { .. })`
+/// after the type-language collapse; look `field` up in the module's child scope's `data`
+/// map.
 pub fn body_module<'a>(
     _scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -138,7 +156,15 @@ pub fn body_module<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    access_module_member(target, &field_name)
+    let m = match target.as_module() {
+        Some(m) => m,
+        None => return err(KError::new(KErrorKind::TypeMismatch {
+            arg: "s".to_string(),
+            expected: "Module".to_string(),
+            got: target.ktype().name(),
+        })),
+    };
+    access_module_member(m, &field_name)
 }
 
 fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
@@ -174,17 +200,38 @@ fn access_field<'a>(
                 type_name, field
             )))),
         },
-        // The identifier resolved to a module — `IntOrd.compare`, `OrderedSig.Type`, etc.
-        // Module-system stage 1.
-        KObject::KModule(_, _) => access_module_member(target, field),
+        // Post-collapse: module values ride `KTypeValue(KType::Module { .. })`. Project
+        // the `&Module` directly so the access pipeline stays the same shape.
+        KObject::KTypeValue(KType::Module { module: m, .. }) => access_module_member(m, field),
+        // ATTR over a first-class signature value — reverse-lookup against the decl scope.
+        KObject::KTypeValue(KType::Signature(s)) => {
+            let scope = s.decl_scope();
+            if let Some(obj) = scope.bindings().data().get(field).copied() {
+                return BodyResult::Value(obj);
+            }
+            if let Some(kt) = scope.resolve_type(field) {
+                return BodyResult::Value(
+                    scope.arena.alloc_object(KObject::KTypeValue(kt.clone())),
+                );
+            }
+            err(KError::new(KErrorKind::ShapeError(format!(
+                "signature `{}` has no member `{}`",
+                s.path, field
+            ))))
+        }
+        // ATTR over an opaque-ascription abstract type — project against the source module.
+        KObject::KTypeValue(KType::AbstractType { source_module, .. }) => {
+            access_module_member(source_module, field)
+        }
         // Stage 4.C NEWTYPE fall-through. `Wrapped.inner` is invariantly *not* a `Wrapped`
         // (the construction-time collapse rule in [`super::newtype_def::newtype_construct`]'s
         // finish closure peels any `Wrapped` value before re-wrapping), so the recursion
         // descends exactly one level into a non-`Wrapped` target. Whatever the inner is —
-        // `Struct` (the shipping path: `b.x` on `LET b: Boxed = Point(...)`), `KModule`
-        // (allowed by the type system though no shipping NEWTYPE-over-module exists today),
-        // or a scalar like `Number` (rejected by the `other` arm below) — the existing arms
-        // handle it without a redo at every accessor.
+        // `Struct` (the shipping path: `b.x` on `LET b: Boxed = Point(...)`),
+        // `KTypeValue(Module)` (allowed by the type system though no shipping
+        // NEWTYPE-over-module exists today), or a scalar like `Number` (rejected by the
+        // `other` arm below) — the existing arms handle it without a redo at every
+        // accessor.
         KObject::Wrapped { inner, .. } => access_field(scope, inner.get(), field),
         other => err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
@@ -194,11 +241,11 @@ fn access_field<'a>(
     }
 }
 
-/// Look `field` up inside a [`KObject::KModule`]'s child scope. Tries, in order:
+/// Look `field` up inside a [`Module`]'s child scope. Tries, in order:
 ///
 /// 1. The module's `type_members` table (opaque-ascription type binding: `IntOrd.Type`
-///    resolves to a `KType::UserType { kind: Module, .. }` minted with the new module's
-///    `scope_id`). Stored as a `KType` directly — return it as a `KTypeValue`.
+///    resolves to a `KType::AbstractType { source_module, name }` minted at ascription
+///    time). Stored as a `KType` directly — return it as a `KTypeValue`.
 /// 2. The child scope's `data` (`LET`/`FN`/`MODULE`/`STRUCT`/... value bindings under
 ///    the module body). Nominal binders like `MODULE Sub = (...)` and `STRUCT P = (...)`
 ///    dual-write into both `data` and `bindings.types`; preferring `data` here means
@@ -212,15 +259,10 @@ fn access_field<'a>(
 ///    Combine) see a first-class `KType` value.
 ///
 /// Returns a clean `ShapeError` naming the module's path and the missing member when
-/// none find anything.
-fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a> {
-    let Some(m) = target.as_module() else {
-        return err(KError::new(KErrorKind::TypeMismatch {
-            arg: "s".to_string(),
-            expected: "Module".to_string(),
-            got: target.ktype().name().to_string(),
-        }));
-    };
+/// none find anything. Takes `&'a Module<'a>` directly (rather than projecting from a
+/// `KObject` lhs) so call sites that already hold the `&Module` — including the
+/// `AbstractType` and `Module` arms of `access_field` — skip the indirection.
+fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
         return BodyResult::Value(
             m.child_scope().arena.alloc_object(KObject::KTypeValue(kt)),
@@ -243,7 +285,7 @@ fn access_module_member<'a>(target: &KObject<'a>, field: &str) -> BodyResult<'a>
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     let struct_ty = KType::AnyUserType { kind: UserTypeKind::Struct };
-    let module_ty = KType::AnyUserType { kind: UserTypeKind::Module };
+    let module_ty = KType::AnyModule;
     let newtype_ty = KType::AnyUserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
     };

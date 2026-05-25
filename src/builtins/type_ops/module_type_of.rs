@@ -66,14 +66,10 @@ mod tests {
         let result = run_one(scope, parse_one("MODULE_TYPE_OF Mod Type"));
         match result {
             KObject::KTypeValue(kt) => {
-                // The abstract type member is recorded as `KType::UserType { kind:
-                // Module, .. }` by the ascription path; surface name is `Type`.
+                // Post-collapse: opaque-ascription abstract-type members live as
+                // `KType::AbstractType { source_module, name }`. Surface name is `Type`.
                 assert_eq!(kt.name(), "Type");
-                use crate::machine::model::types::UserTypeKind;
-                assert!(matches!(
-                    kt,
-                    KType::UserType { kind: UserTypeKind::Module, .. }
-                ));
+                assert!(matches!(kt, KType::AbstractType { .. }));
             }
             other => panic!("expected KTypeValue, got {:?}", other.ktype()),
         }
@@ -148,7 +144,7 @@ mod tests {
         // `type_members` (the RefCell on the Module).
         let data = scope.bindings().data();
         let m = match data.get("held") {
-            Some(KObject::KModule(m, _)) => *m,
+            Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
             other => panic!("held should be a module, got {:?}", other.map(|o| o.ktype())),
         };
         let probe = m.child_scope().bindings().data().get("probe").copied();

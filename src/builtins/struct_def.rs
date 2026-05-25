@@ -102,7 +102,7 @@ pub fn body<'a>(
 fn finalize_struct<'a>(
     scope: &'a Scope<'a>,
     name: String,
-    fields: Vec<(String, KType)>,
+    fields: Vec<(String, KType<'a>)>,
 ) -> BodyResult<'a> {
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`; the
     // guard drops on body / Combine-finish return and removes the entry. Cycle-close

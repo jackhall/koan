@@ -30,7 +30,7 @@ use super::signature::{parse_fn_param_list, ParamListOutcome};
 /// (short‑circuited in `body` before [`classify`] runs) and with `Pending`'s
 /// payload kept by‑value so the planning `match` stays readable.
 pub(super) enum ParamListResult<'a> {
-    Done(Vec<SignatureElement>),
+    Done(Vec<SignatureElement<'a>>),
     Pending {
         park_producers: Vec<NodeId>,
         sub_dispatches: Vec<(usize, KExpression<'a>)>,
@@ -42,7 +42,7 @@ pub(super) enum ParamListResult<'a> {
 /// that [`defer_via_combine`] schedules.
 pub(super) enum FnPlan<'a> {
     Synchronous {
-        elements: Vec<SignatureElement>,
+        elements: Vec<SignatureElement<'a>>,
         return_type: ReturnType<'a>,
     },
     Combine(CombineInputs<'a>),
@@ -150,7 +150,7 @@ pub(super) fn classify<'a>(
 /// synchronous (no‑park) path and the Combine‑finish path.
 pub(super) fn finalize_fn<'a>(
     scope: &'a Scope<'a>,
-    elements: Vec<SignatureElement>,
+    elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
 ) -> BodyResult<'a> {

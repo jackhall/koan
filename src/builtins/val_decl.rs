@@ -49,7 +49,7 @@ fn schedule_type_resolve<'a>(
     sched.add_dispatch(expr, decl_scope)
 }
 
-fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
+fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm<'a>, KError> {
     match obj {
         KObject::KTypeValue(kt) => match kt {
             KType::Number
@@ -57,7 +57,8 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
             | KType::Bool
             | KType::Null
             | KType::Type
-            | KType::MetaSignature
+            | KType::AnySignature
+            | KType::AnyModule
             | KType::Any
             | KType::Identifier
             | KType::KExpression
@@ -73,14 +74,14 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
     }
 }
 
-enum CarrierForm {
+enum CarrierForm<'a> {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
     Leaf(TypeExpr),
     /// Parser-preserved `TypeExpr` from a `TypeNameRef` carrier.
     Raw(TypeExpr),
     /// Structural carrier accepted as-is; inner names are not re-bound.
-    Direct(KType),
+    Direct(KType<'a>),
 }
 
 pub fn body<'a>(
@@ -196,7 +197,7 @@ fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
 }
 
 /// Bind `name` to `KObject::KTypeValue(declared_kt)` under `scope.bindings.data`.
-fn finalize_val<'a>(scope: &'a Scope<'a>, name: String, declared_kt: KType) -> BodyResult<'a> {
+fn finalize_val<'a>(scope: &'a Scope<'a>, name: String, declared_kt: KType<'a>) -> BodyResult<'a> {
     let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(declared_kt));
     if let Err(e) = scope.bind_value(name, allocated) {

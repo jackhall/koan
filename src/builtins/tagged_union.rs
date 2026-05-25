@@ -75,7 +75,7 @@ pub fn apply<'a>(
 /// tag, then build the `KObject::Tagged`. Pure logic — no scope, no scheduler. The
 /// construction-primitive builtin's body is a thin shim around this.
 pub fn construct<'a>(
-    schema: &HashMap<String, KType>,
+    schema: &HashMap<String, KType<'a>>,
     schema_name: &str,
     schema_scope_id: ScopeId,
     tag: String,

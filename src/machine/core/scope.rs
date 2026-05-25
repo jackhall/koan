@@ -202,7 +202,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn type_expr_memo_get(
         &self,
         te: &crate::machine::model::ast::TypeExpr,
-    ) -> Option<&'a crate::machine::model::types::KType> {
+    ) -> Option<&'a crate::machine::model::types::KType<'a>> {
         if self.bindings.is_borrowed() {
             return None;
         }
@@ -214,7 +214,7 @@ impl<'a> Scope<'a> {
     pub(crate) fn type_expr_memo_insert(
         &self,
         te: crate::machine::model::ast::TypeExpr,
-        kt: &'a crate::machine::model::types::KType,
+        kt: &'a crate::machine::model::types::KType<'a>,
     ) {
         if self.bindings.is_borrowed() {
             return;
@@ -313,12 +313,12 @@ impl<'a> Scope<'a> {
     /// [`Self::resolve_type`]. Same conditional-defer shape as [`Self::bind_value`].
     /// Infallible: a name collision at builtin registration is a programming error,
     /// so the [`KError`] from `try_register_type` is dropped.
-    pub fn register_type(&self, name: String, ktype: crate::machine::model::types::KType) {
+    pub fn register_type(&self, name: String, ktype: crate::machine::model::types::KType<'a>) {
         if self.bindings.is_borrowed() {
             self.write_target().register_type(name, ktype);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref),
@@ -341,13 +341,13 @@ impl<'a> Scope<'a> {
     pub fn cycle_close_install_identity(
         &self,
         name: String,
-        ktype: crate::machine::model::types::KType,
+        ktype: crate::machine::model::types::KType<'a>,
     ) {
         if self.bindings.is_borrowed() {
             self.write_target().cycle_close_install_identity(name, ktype);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
@@ -374,13 +374,13 @@ impl<'a> Scope<'a> {
     pub fn register_nominal(
         &self,
         name: String,
-        kt: crate::machine::model::types::KType,
+        kt: crate::machine::model::types::KType<'a>,
         obj: &'a KObject<'a>,
     ) -> Result<&'a KObject<'a>, KError> {
         if self.bindings.is_borrowed() {
             return self.write_target().register_nominal(name, kt, obj);
         }
-        let kt_ref: &'a crate::machine::model::types::KType = self.arena.alloc_ktype(kt);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(kt);
         match self.bindings.get().try_register_nominal(&name, kt_ref, obj)? {
             ApplyOutcome::Applied => Ok(obj),
             ApplyOutcome::Conflict => {
@@ -450,7 +450,7 @@ impl<'a> Scope<'a> {
 
     /// Walk the `outer` chain for the nearest `bindings.types[name]`. Type-side
     /// analogue of [`Self::lookup`] — no `Placeholder` variant.
-    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType> {
+    pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType<'a>> {
         self.ancestors().find_map(|scope| scope.bindings().types().get(name).copied())
     }
 

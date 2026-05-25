@@ -58,19 +58,19 @@ pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
 }
 
 /// Signature-element constructor for a keyword slot.
-pub(crate) fn kw(s: &str) -> SignatureElement {
+pub(crate) fn kw<'a>(s: &str) -> SignatureElement<'a> {
     SignatureElement::Keyword(s.into())
 }
 
 /// Signature-element constructor for an argument slot.
-pub(crate) fn arg(name: &str, ktype: KType) -> SignatureElement {
+pub(crate) fn arg<'a>(name: &str, ktype: KType<'a>) -> SignatureElement<'a> {
     SignatureElement::Argument(Argument { name: name.into(), ktype })
 }
 
 /// Assemble an `ExpressionSignature` whose return type is `Resolved(return_type)`.
 /// All shipped builtins resolve their return type at registration time; FN-bodies that
 /// need `Deferred(...)` build the `ExpressionSignature` directly.
-pub(crate) fn sig<'a>(return_type: KType, elements: Vec<SignatureElement>) -> ExpressionSignature<'a> {
+pub(crate) fn sig<'a>(return_type: KType<'a>, elements: Vec<SignatureElement<'a>>) -> ExpressionSignature<'a> {
     ExpressionSignature { return_type: ReturnType::Resolved(return_type), elements }
 }
 
@@ -135,8 +135,10 @@ pub fn default_scope<'a>(
     // live as `KType::UserType` in `bindings.types`, dual-written by the finalize sites.
     scope.register_type("Tagged".into(), KType::AnyUserType { kind: UserTypeKind::Tagged });
     scope.register_type("Struct".into(), KType::AnyUserType { kind: UserTypeKind::Struct });
-    scope.register_type("Module".into(), KType::AnyUserType { kind: UserTypeKind::Module });
-    scope.register_type("Signature".into(), KType::MetaSignature);
+    // Post-collapse: `:Module` / `:Signature` slot wildcards have dedicated KType variants
+    // (no more `UserTypeKind::Module` arm; `MetaSignature` retired in favor of `AnySignature`).
+    scope.register_type("Module".into(), KType::AnyModule);
+    scope.register_type("Signature".into(), KType::AnySignature);
     scope.register_type("Any".into(), KType::Any);
 
     let_binding::register(scope);

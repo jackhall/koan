@@ -273,7 +273,7 @@ mod tests {
         run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
         // Pull the SIG's sig_id out of the scope so we can compare.
         let sig_id = match scope.bindings().data().get("OrderedSig") {
-            Some(KObject::KSignature(s)) => s.sig_id(),
+            Some(KObject::KTypeValue(KType::Signature(s))) => s.sig_id(),
             _ => panic!("OrderedSig must bind a KSignature"),
         };
         let result = run_one(scope, parse_one("SIG_WITH OrderedSig ((Type :Number))"));
@@ -322,7 +322,8 @@ mod tests {
     /// by ascription. Exercises the body's Combine-on-sub-dispatches path.
     #[test]
     fn sig_with_inner_module_attr_path_elaborates() {
-        use crate::machine::model::types::UserTypeKind;
+        // UserTypeKind import retired with the type-language collapse — abstract-type
+        // members are now `KType::AbstractType { source_module, name }` directly.
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         // Use a multi-letter Type-token name for the ascribed module so it classifies as
@@ -345,11 +346,11 @@ mod tests {
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Elt");
                 match &pinned_slots[0].1 {
-                    KType::UserType { kind: UserTypeKind::Module, name, .. } => {
+                    KType::AbstractType { name, .. } => {
                         assert_eq!(name, "Type");
                     }
                     other => panic!(
-                        "expected pinned Elt to be UserType(Module, Type), got {:?}",
+                        "expected pinned Elt to be AbstractType(Type), got {:?}",
                         other,
                     ),
                 }

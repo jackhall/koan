@@ -22,7 +22,7 @@ use super::param_refs::{kexpression_references_any, type_expr_references_any};
 /// because overload 2's expression may reference a parameter that is by
 /// construction unbound there.
 pub(super) enum ReturnTypeRaw<'a> {
-    Resolved(KType),
+    Resolved(KType<'a>),
     TypeExprCarrier(TypeExpr),
     ExprCarrier(KExpression<'a>),
 }
@@ -34,7 +34,7 @@ pub(super) enum ReturnTypeRaw<'a> {
 /// not in the FN's lexical scope. Per‑call elaboration runs at the dispatch
 /// boundary instead.
 pub(super) enum ReturnTypeState<'a> {
-    Done(KType),
+    Done(KType<'a>),
     Pending { te: TypeExpr, producers: Vec<NodeId> },
     Deferred(DeferredReturn<'a>),
     ExprSubDispatched(NodeId),
@@ -46,7 +46,7 @@ pub(super) enum ReturnTypeState<'a> {
 /// that `TypeParams::List` / `TypeParams::Function` survive verbatim — rendering
 /// and re‑parsing would round‑trip through a string and strip the structure.
 pub(super) enum ReturnTypeCapture<'a> {
-    Resolved(KType),
+    Resolved(KType<'a>),
     Unresolved(String),
     TypeExpr(TypeExpr),
     Deferred(DeferredReturn<'a>),

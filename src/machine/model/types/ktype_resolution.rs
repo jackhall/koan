@@ -6,12 +6,18 @@
 use super::ktype::{KType, UserTypeKind};
 use crate::machine::model::ast::{TypeExpr, TypeParams};
 
-impl KType {
+impl<'a> KType<'a> {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
     /// `List`). Returns `None` for unknown names. `Identifier`, `TypeExprRef` are
     /// dispatch-time meta-types — not surface-declarable. `KFunction` is no longer a surface
     /// name; users write `Function<(...)-> R>` for typed functions or `Any` for unconstrained.
-    pub fn from_name(name: &str) -> Option<KType> {
+    ///
+    /// Returns `KType<'a>` parameterized over the caller's lifetime. Every produced shape
+    /// is owned-data — no arena pointers, no `Module` / `Signature` carriers — but
+    /// `KType<'a>` is invariant in `'a` (the `Module.type_members: RefCell<HashMap<_,
+    /// KType<'a>>>` field puts `'a` in invariant position), so we must build at the
+    /// caller's `'a` directly rather than rely on covariant coercion from `'static`.
+    pub fn from_name(name: &str) -> Option<KType<'a>> {
         match name {
             "Number" => Some(KType::Number),
             "Str" => Some(KType::Str),
@@ -22,14 +28,14 @@ impl KType {
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::Type),
             // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
-            // carrier — a slot typed `Struct` admits any struct carrier regardless of
-            // declaring schema, `Tagged` any tagged-union carrier, `Module` any module
-            // value. Per-declaration identity comes from `KType::UserType` minted by
-            // STRUCT / UNION / MODULE finalize and stored in `bindings.types`.
+            // carrier for the struct/tagged families; module / signature surface names
+            // lower to dedicated `AnyModule` / `AnySignature` wildcards after the
+            // type-language collapse (`UserTypeKind::Module` no longer exists, so the
+            // surface keyword has its own variant in KType).
             "Tagged" => Some(KType::AnyUserType { kind: UserTypeKind::Tagged }),
             "Struct" => Some(KType::AnyUserType { kind: UserTypeKind::Struct }),
-            "Module" => Some(KType::AnyUserType { kind: UserTypeKind::Module }),
-            "Signature" => Some(KType::MetaSignature),
+            "Module" => Some(KType::AnyModule),
+            "Signature" => Some(KType::AnySignature),
             "Any" => Some(KType::Any),
             _ => None,
         }
@@ -46,7 +52,9 @@ impl KType {
     /// route through the scheduler-aware
     /// [`crate::machine::model::types::elaborate_type_expr`] (the FN / LET / STRUCT body
     /// path that consults `Scope` for placeholder + value lookups).
-    pub fn from_type_expr(t: &TypeExpr) -> Result<KType, String> {
+    ///
+    /// Returns `KType<'a>` parameterized over the caller's lifetime, same as `from_name`.
+    pub fn from_type_expr(t: &TypeExpr) -> Result<KType<'a>, String> {
         match (t.name.as_str(), &t.params) {
             (_, TypeParams::None) => KType::from_name(&t.name)
                 .ok_or_else(|| format!("unknown type name `{}`", t.name)),
@@ -86,7 +94,7 @@ impl KType {
     /// Least-upper-bound of two types. Used by `KObject::ktype` to infer container element
     /// types from heterogeneous values: `[1, 2]` → `List<Number>`, `[1, "x"]` → `List<Any>`,
     /// nested containers join element-wise.
-    pub fn join(a: &KType, b: &KType) -> KType {
+    pub fn join(a: &KType<'a>, b: &KType<'a>) -> KType<'a> {
         if a == b {
             return a.clone();
         }
@@ -108,7 +116,7 @@ impl KType {
     }
 
     /// Reduce an iterator of types to their least upper bound. Empty iterator → `Any`.
-    pub fn join_iter<I: IntoIterator<Item = KType>>(iter: I) -> KType {
+    pub fn join_iter<I: IntoIterator<Item = KType<'a>>>(iter: I) -> KType<'a> {
         iter.into_iter().reduce(|a, b| KType::join(&a, &b)).unwrap_or(KType::Any)
     }
 }
