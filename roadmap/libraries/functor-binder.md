@@ -141,3 +141,6 @@ have no admissible return-type denotation.
 - [Standard library](standard-library.md) — collections ship as FUNCTORs
   over their element/key types, so the FUNCTOR binder is the substrate
   for stdlib data-structure code.
+- [Module and signature carriers move from KObject to KType](../predicate_typing/module-signature-as-ktype.md)
+  — the `is_functor` flag and FUNCTOR's dispatch path are the substrate
+  the duality collapse builds on.

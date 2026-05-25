@@ -72,6 +72,7 @@ value-slot binding:
 - [Stage 6 — Equivalence-checked coherence](roadmap/predicate_typing/equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](roadmap/predicate_typing/syntax-tuning.md)
 - [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
+- [Module and signature carriers move from KObject to KType](roadmap/predicate_typing/module-signature-as-ktype.md)
 - [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
 
 ### Libraries — [roadmap/libraries/](roadmap/libraries/)
