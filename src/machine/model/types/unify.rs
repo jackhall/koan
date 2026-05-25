@@ -8,7 +8,7 @@
 //! `FN head (xs :(List T)) -> :T = ...` and `FN unwrap (r :(Result T E)) -> :T = ...`.
 //!
 //! There is no `KType::TypeParam` variant (decided in
-//! [runtime-type-parameter-carriers](../../../../roadmap/type_language/runtime-type-parameter-carriers.md)):
+//! [runtime-type-parameter-carriers](../../../../roadmap/type_language/type-parameter-binding.md)):
 //! type parameters stay ordinary scope-resolved names. The unifier identifies a leaf as a
 //! parameter by membership in the caller-supplied `params` set rather than by a KType tag.
 

@@ -28,19 +28,12 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
-- [Dependent parameter annotations](roadmap/type_language/dependent-param-annotations.md) —
-  parameter type slots that reference earlier parameters in the same FN signature.
-- [Structural KFunction admission across deferred return types](roadmap/type_language/kfunction-deferred-ret-precision.md)
-  — per-call elaboration precision for structurally-typed FN slots.
+- [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
+  — free type-parameter names in parameter slots bind per call, from either an
+  argument's carried type structure or an earlier parameter's value.
 - [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
   — collapse the KObject/KType duality for modules and signatures, retiring the dual-write
   in `KFunction::invoke` for signature-typed FN parameters.
-- [VAL-slot value-carrier abstract-identity tagging](roadmap/type_language/val-slot-abstract-identity-tagging.md)
-  — VAL-slot reads carry the SIG's abstract identity rather than the underlying value's
-  concrete `KType`.
-- [Generic value-slot binding via the destructuring unifier](roadmap/type_language/runtime-type-parameter-carriers.md)
-  — runtime type-parameter carriers shipped; remaining is wiring `unify_slot` into invoke so
-  generic value-slot FNs like `FN head (xs :(List T)) -> :T` become definable.
 - [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
   function of its lexical position rather than the scheduler's queue order, so forward
   references resolve deterministically and sibling work can be reordered or parallelized.
@@ -91,10 +84,9 @@ functor-heavy collections both build on:
 
 - [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
 - [FUNCTOR binder](roadmap/type_language/functor-binder.md)
-- [Dependent parameter annotations](roadmap/type_language/dependent-param-annotations.md)
-- [VAL-slot value-carrier abstract-identity tagging](roadmap/type_language/val-slot-abstract-identity-tagging.md)
-- [Structural KFunction admission across deferred return types](roadmap/type_language/kfunction-deferred-ret-precision.md)
-- [Generic value-slot binding via the destructuring unifier](roadmap/type_language/runtime-type-parameter-carriers.md)
+- [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
+- [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
+- [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

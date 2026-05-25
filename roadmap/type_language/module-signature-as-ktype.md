@@ -115,6 +115,11 @@ duality it's reading.
 
 **Unblocks:**
 
+- [VAL-slot ATTR re-tagging](val-slot-attr-retagging.md) — ATTR-on-type
+  is the projection path the re-tagging lives inside; once the substrate
+  move puts the per-call frame and `&Module` pointer both in hand at the
+  ATTR call site, re-tagging VAL-slot reads with the abstract identity is
+  a local edit to `access_module_member`.
 - [FUNCTOR binder](functor-binder.md) — landing the
   substrate move first lets FUNCTOR's signature-typed-parameter handling
   ride the single-store machinery from day one. The functor-definition

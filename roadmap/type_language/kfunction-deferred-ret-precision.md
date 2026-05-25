@@ -1,17 +1,21 @@
-# Structural KFunction admission across deferred return types
+# Structural KFunction admission across deferred parameter and return slots
 
-**Problem.** The structural function-type language coarsens
-deferred-return FNs. When a `KFunction`'s `signature.return_type` is
+**Problem.** The structural function-type language coarsens deferred
+parameter and return slots on FNs. When a `KFunction`'s
+`signature.return_type` is
 [`ReturnType::Deferred(_)`](../../src/machine/model/types/signature.rs),
 the structural `KType::KFunction { args, ret }` synthesis at
 [`function_value_ktype`](../../src/machine/model/values/kobject.rs)
 collapses `ret` to `KType::Any` because the structural language has
-no surface for "per-call elaboration of this expression." The
-symmetric coarsening on the admission side lives at
+no surface for "per-call elaboration of this expression." Once
+[type-parameter-binding](type-parameter-binding.md) widens parameter
+type slots to the same `ReturnType { Resolved, Deferred }` carrier, the
+synthesis Anys out *parameter* slots on the same rule. The symmetric
+coarsening on the admission side lives at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs) —
-when a deferred-return candidate is admission-checked against a slot
-typed `:(Function (_) -> SpecificT)`, the comparison reads the
-candidate's `ret` as `Any` and the strict `==` refuses admission
+when a deferred candidate is admission-checked against a slot typed
+`:(Function (SpecificArgs) -> SpecificT)`, the comparison reads the
+deferred position as `Any` and the strict `==` refuses admission
 silently.
 
 Today's behavior is safe: Stage B never lifts a deferred-return FN
@@ -79,6 +83,12 @@ the structural `KType` would.
 ## Dependencies
 
 **Requires:**
+
+- [Per-call type-parameter binding in parameter signatures](type-parameter-binding.md)
+  — that item widens parameter slots to the `Deferred(_)` carrier and
+  extends the existing `debug_assert!` tripwire over parameter-slot
+  deferreds. This item covers parameter and return slots in one pass
+  once the tripwire fires.
 
 **Unblocks:**
 
