@@ -38,7 +38,7 @@ fn combine_waits_on_deps_then_runs_finish() {
         let allocated = scope.arena.alloc_object(KObject::KString(format!("{a}+{b}")));
         BodyResult::Value(allocated)
     });
-    let combine_id = sched.add_combine(vec![dep_a, dep_b], scope, finish);
+    let combine_id = sched.add_combine(vec![dep_a, dep_b], vec![], scope, finish);
     sched.execute().unwrap();
     assert!(matches!(sched.read(combine_id), KObject::KString(s) if s == "7+11"));
 }
@@ -79,7 +79,7 @@ fn combine_short_circuits_on_dep_error() {
         invoked_clone.set(true);
         BodyResult::Value(value)
     });
-    let combine_id = sched.add_combine(vec![dep_ok, dep_err], scope, finish);
+    let combine_id = sched.add_combine(vec![dep_ok, dep_err], vec![], scope, finish);
     sched.execute().unwrap();
 
     assert!(!invoked.get(), "finish must not run when a dep errored");
@@ -116,7 +116,7 @@ fn defer_to_lifts_slot_terminal_off_combine_id() {
             let v = scope.arena.alloc_object(KObject::KString("from-combine".into()));
             BodyResult::Value(v)
         });
-        let combine_id = sched.add_combine(Vec::new(), scope, finish);
+        let combine_id = sched.add_combine(Vec::new(), Vec::new(), scope, finish);
         BodyResult::DeferTo(combine_id)
     }
 

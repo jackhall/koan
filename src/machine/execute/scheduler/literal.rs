@@ -59,7 +59,7 @@ impl<'a> Scheduler<'a> {
                 scope.arena.alloc_object(KObject::list(items));
             BodyResult::Value(allocated)
         });
-        self.add_combine(deps, scope, finish)
+        self.add_combine(deps, vec![], scope, finish)
     }
 
     /// Schedule a dict literal as a `Combine`. Bare identifiers on either side are
@@ -97,7 +97,7 @@ impl<'a> Scheduler<'a> {
                 scope.arena.alloc_object(KObject::dict(map));
             BodyResult::Value(allocated)
         });
-        self.add_combine(deps, scope, finish)
+        self.add_combine(deps, vec![], scope, finish)
     }
 
     /// Plan one slot of a list / dict literal: nested literals recurse via their own

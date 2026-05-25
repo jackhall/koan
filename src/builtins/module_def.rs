@@ -127,7 +127,7 @@ pub fn body<'a>(
             ),
         }
     });
-    let combine_id = sched.add_combine(deps, scope, finish);
+    let combine_id = sched.add_combine(deps, vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 

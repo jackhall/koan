@@ -37,10 +37,6 @@ without first landing something else:
 - [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
   function of its lexical position rather than the scheduler's queue order, so forward
   references resolve deterministically and sibling work can be reordered or parallelized.
-- [Scheduler eager-free policy vs. interpret top-level read-back](roadmap/scheduler-reclaim-vs-interpret-readback.md)
-  — top-level `SIG ... \n FN (... :SigName) -> ...` programs panic at the
-  CLI's `read_result` when the scheduler eagerly frees the SIG dispatch's
-  slot before interpret prints its result.
 
 ## Open items
 

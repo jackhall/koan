@@ -120,11 +120,12 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
 
     fn add_combine(
         &mut self,
-        deps: Vec<NodeId>,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
         scope: &'a Scope<'a>,
         finish: CombineFinish<'a>,
     ) -> NodeId {
-        Scheduler::add_combine(self, deps, scope, finish)
+        Scheduler::add_combine(self, owned_subs, park_producers, scope, finish)
     }
 
     fn add_catch(

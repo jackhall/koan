@@ -25,12 +25,20 @@ impl NodeId {
 /// Side-channel a builtin body uses to spawn additional `Dispatch` nodes.
 pub trait SchedulerHandle<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId;
-    /// Schedule a `Combine` slot: wait on `deps` to terminalize, then run `finish` over
-    /// their resolved values. `deps` order is the order `finish` sees in its
-    /// `&[&'a KObject<'a>]` slice.
+    /// Schedule a `Combine` slot: wait on `owned_subs` ++ `park_producers` to
+    /// terminalize, then run `finish` over their resolved values. `owned_subs`
+    /// are sub-Dispatches this Combine allocated itself (cascade-freed at
+    /// success); `park_producers` are existing sibling slots whose values it
+    /// reads but does NOT own (kept alive past the Combine's success). The
+    /// `finish` closure sees results in `[park_producers..., owned_subs...]`
+    /// order — the `Notify` (park) prefix first, the `Owned` (sub) suffix
+    /// after. Misclassifying an existing sibling slot as `owned_subs`
+    /// cascade-frees it on success and leaves later top-level reads pointing
+    /// at a freed slot.
     fn add_combine(
         &mut self,
-        deps: Vec<NodeId>,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
         scope: &'a Scope<'a>,
         finish: CombineFinish<'a>,
     ) -> NodeId;

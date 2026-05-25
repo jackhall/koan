@@ -202,7 +202,7 @@ pub fn newtype_construct<'a>(
         };
         BodyResult::Value(scope.arena.alloc_object(wrapped))
     });
-    let combine_id = sched.add_combine(vec![value_id], scope, finish);
+    let combine_id = sched.add_combine(vec![value_id], vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 

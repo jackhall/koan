@@ -234,7 +234,7 @@ fn defer_val_via_combine<'a>(
         };
         finalize_val(scope, name_for_finish.clone(), kt)
     });
-    let combine_id = sched.add_combine(vec![resolve_id], scope, finish);
+    let combine_id = sched.add_combine(vec![resolve_id], vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 
@@ -263,7 +263,7 @@ fn defer_val_structural_via_combine<'a>(
             }
         }
     });
-    let combine_id = sched.add_combine(dep_ids, scope, finish);
+    let combine_id = sched.add_combine(dep_ids, vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 

@@ -22,19 +22,6 @@ today:
 - No FN-def-time check forces the return slot of an intended functor to
   denote a module or signature; mistakes surface as opaque dispatch-time
   errors several frames removed from the binder.
-- *Defining a functor panics the scheduler at the CLI seam.* The
-  `cargo run` smoke
-  `SIG OrderedSig = (VAL compare :Number)\nFN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)`
-  panics at
-  [`node_store.rs:169`](../../src/machine/execute/scheduler/node_store.rs)'s
-  `read_result` during interpret's per-top-level result print. The
-  scheduler's eager-free policy in `reclaim_deps` frees the SIG
-  dispatch's slot when the FN-def's Combine succeeds, and interpret's
-  subsequent `read_result(top_level_id)` hits a `Free` slot. Tracked
-  separately under
-  [Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md);
-  the FUNCTOR binder cannot land its end-to-end smoke until that path
-  runs clean.
 - *Type-class `LET` gate is a denylist — plain values slip into a type
   name.* The `TypeClassBindingExpectsType` check
   ([`let_binding.rs:51`](../../src/builtins/let_binding.rs) / `:92`) only
@@ -70,11 +57,6 @@ have no admissible return-type denotation.
   [`elaborate_type_expr`](../../src/machine/model/types/resolver.rs) as the
   structural functor type, surface-disjoint from the `FUNCTOR` binder
   keyword on the same rule that keeps `FN` and `Function` disjoint.
-- *Functor definitions stop panicking at the CLI seam.* Riding on the
-  scheduler-reclaim fix
-  ([Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md)),
-  the FUNCTOR end-to-end smoke runs through `cargo run` without the
-  `read_result` panic on the interpret seam.
 - *Type-class LET gate flips to an allowlist.* The accepted RHSs become
   `KTypeValue`, `derive_nominal_identity → Some`, or an
   `is_functor`-flagged `KFunction`; plain functions bound to Type-class
@@ -116,11 +98,6 @@ have no admissible return-type denotation.
 - *Applicative-mode opt-in — deferred to predicate typing.* Tracked
   under [standard-library.md](../libraries/standard-library.md). Generative-only
   semantics ship under this item.
-- *Functor-definition panic root cause — decided.* Attributed to the
-  scheduler's eager-free policy in `reclaim_deps` (not the type-language
-  layer), and tracked separately under
-  [Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md).
-  The FUNCTOR binder work picks up after that fix lands.
 - *Where `is_functor` is set in fn_def — open.* The natural site is the
   same return-type classification arm that already routes
   `Resolved`/`Deferred`; deciding whether validation runs before or after
@@ -135,13 +112,6 @@ have no admissible return-type denotation.
   points at programmer intent rather than coincidence.
 
 ## Dependencies
-
-**Requires:**
-
-- [Scheduler eager-free policy vs. interpret top-level read-back](../scheduler-reclaim-vs-interpret-readback.md)
-  — the CLI smoke for a signature-typed FUNCTOR parameter trips the
-  interpret seam's `read_result` panic; that fix unblocks the FUNCTOR
-  binder's end-to-end test.
 
 **Unblocks:**
 

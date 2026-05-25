@@ -42,8 +42,14 @@ pub(super) enum NodeWork<'a> {
         expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
     },
+    /// `deps` layout is `[park_producers..., owned_subs...]`. `park_count` is the
+    /// size of the park-producer prefix — those slots are sibling producers this
+    /// Combine merely reads at finish-time and does NOT own. Only the
+    /// `deps[park_count..]` suffix gets installed as `DepEdge::Owned` and
+    /// cascade-freed at success; the prefix installs as `Notify` (park) edges.
     Combine {
         deps: Vec<NodeId>,
+        park_count: usize,
         finish: CombineFinish<'a>,
     },
     /// Catching dual of a single-dep `Combine`: waits on `from` and hands its terminal
@@ -84,18 +90,30 @@ pub(super) struct Node<'a> {
     pub(super) function: Option<&'a KFunction<'a>>,
 }
 
-/// `NodeId`s a node must read before running, or `None` if it has no read-deps.
-/// `Dispatch` spawns rather than reads, so returns `None`.
+/// Owned `NodeId`s a node must read before running, or `None` if it has no
+/// owned read-deps. `Dispatch` spawns rather than reads, so returns `None`. For
+/// `Combine`, only the `deps[park_count..]` suffix is owned; the park-producer
+/// prefix is installed separately as `Notify` edges by `Scheduler::add`.
 pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
         NodeWork::Dispatch(_) => None,
         NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
-        NodeWork::Combine { deps, .. } => Some(deps.clone()),
+        NodeWork::Combine { deps, park_count, .. } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),
         // `Lift` is only installed via `NodeStep::Replace` with deps wired explicitly;
         // arms exist for total coverage and are exercised by tests below.
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
+    }
+}
+
+/// Park-producer prefix for a `Combine` (sibling slots whose values it splices
+/// but does not own). Empty for every other work shape. The caller installs
+/// each entry as a `Notify` edge separately from the Owned-edge install path.
+pub(super) fn work_park_producers<'a, 'b>(work: &'b NodeWork<'a>) -> &'b [NodeId] {
+    match work {
+        NodeWork::Combine { deps, park_count, .. } => &deps[..*park_count],
+        _ => &[],
     }
 }
 

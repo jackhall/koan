@@ -215,18 +215,21 @@ pub(super) fn defer_via_combine<'a>(
     body_expr: KExpression<'a>,
 ) -> BodyResult<'a> {
     let CombineInputs { capture, park_producers, sub_dispatches } = inputs;
-    // Schedule sub-Dispatches up front. `splice_layout[k] = (slot_idx, results_pos)`
+    // Combine result layout: `[park_producers..., owned_subs...]`. The Combine
+    // owns the sub-Dispatches it allocates here, but `park_producers` are
+    // sibling slots (typically top-level SIG / LET dispatches) it merely reads
+    // — they must NOT be cascade-freed at success, or a later top-level
+    // read-back hits a freed slot. `splice_layout[k] = (slot_idx, results_pos)`
     // says "splice results[results_pos] into signature.parts[slot_idx] as
-    // `Future(_)`". `results_pos` is captured as `deps.len()` immediately before
-    // the new dep is pushed, so the offset over `park_producers` falls out
-    // naturally — Combine's `results` slice mirrors `deps` order, park producers
-    // first.
-    let mut deps: Vec<NodeId> = park_producers;
+    // `Future(_)`". `results_pos` for an owned sub is captured as
+    // `park_count + k` so the layout matches `add_combine`'s split.
+    let park_count = park_producers.len();
+    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
         let id = sched.add_dispatch(sub_expr, scope);
-        splice_layout.push((slot_idx, deps.len()));
-        deps.push(id);
+        splice_layout.push((slot_idx, park_count + owned_subs.len()));
+        owned_subs.push(id);
     }
 
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
@@ -274,6 +277,6 @@ pub(super) fn defer_via_combine<'a>(
         };
         finalize_fn(scope, elements, return_type, body_expr.clone())
     });
-    let combine_id = sched.add_combine(deps, scope, finish);
+    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
     BodyResult::DeferTo(combine_id)
 }

@@ -81,12 +81,15 @@ impl<'a> Scheduler<'a> {
     /// Run a `Combine` slot: short-circuit on the first errored dep using the same
     /// frame-attached propagation as `run_bind`, then call `finish` over the dep values
     /// and decode the returned `BodyResult` (Value, Tail, or Err) into a `NodeStep`
-    /// using the same dispatch as `invoke_to_step`. Deps are eagerly freed on the
-    /// success path; the error path leaves them in `dep_edges[idx]` for
-    /// chain-free at slot drop.
+    /// using the same dispatch as `invoke_to_step`. Only the `deps[park_count..]`
+    /// owned-sub suffix is eagerly freed on the success path; the `[..park_count]`
+    /// park-producer prefix is kept alive (those slots are sibling producers the
+    /// Combine merely read at finish-time). The error path leaves the Combine's
+    /// edges in `dep_edges[idx]` for chain-free at slot drop.
     pub(super) fn run_combine(
         &mut self,
         deps: Vec<NodeId>,
+        park_count: usize,
         finish: CombineFinish<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
@@ -104,9 +107,10 @@ impl<'a> Scheduler<'a> {
         // Pre-collect refs so `finish` (which holds `&mut self` via the trait object)
         // doesn't reborrow `self` for reads.
         let values: Vec<&'a KObject<'a>> = deps.iter().map(|d| self.read(*d)).collect();
-        let dep_indices: Vec<usize> = deps.iter().map(|d| d.index()).collect();
+        let owned_indices: Vec<usize> =
+            deps[park_count..].iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
-        self.reclaim_deps(idx, dep_indices);
+        self.reclaim_deps(idx, owned_indices);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
             BodyResult::Tail { expr, frame, function } => NodeStep::Replace {

@@ -200,7 +200,7 @@ impl<'a> KFunction<'a> {
                             deps.push(t);
                         }
                         let function_summary = self.summarize();
-                        let combine_id = sched.add_combine(deps, child, Box::new(move |_scope, _sched, results| {
+                        let combine_id = sched.add_combine(deps, vec![], child, Box::new(move |_scope, _sched, results| {
                             let body_value: &KObject<'_> = results[0];
                             let per_call_ret: KType<'_> = match per_call_ret {
                                 PerCallReturnType::Ready(kt) => kt,

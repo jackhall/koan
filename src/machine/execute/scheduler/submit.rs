@@ -1,7 +1,7 @@
 use crate::machine::{CatchFinish, CombineFinish, NodeId, Scope};
 use crate::machine::model::ast::KExpression;
 
-use super::super::nodes::{Node, NodeWork};
+use super::super::nodes::{Node, NodeWork, work_park_producers};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
@@ -37,14 +37,23 @@ impl<'a> Scheduler<'a> {
         self.add(NodeWork::Dispatch(expr), scope)
     }
 
-    /// Schedule a `Combine` slot. See `SchedulerHandle::add_combine`.
+    /// Schedule a `Combine` slot. `owned_subs` are sub-Dispatches this Combine
+    /// allocated itself (cascade-freed on success); `park_producers` are
+    /// existing sibling slots whose values it splices but does not own (kept
+    /// alive past the Combine's success via `Notify` edges). The Combine's
+    /// finish closure sees results in `[park_producers..., owned_subs...]`
+    /// order. See `SchedulerHandle::add_combine`.
     pub fn add_combine(
         &mut self,
-        deps: Vec<NodeId>,
+        owned_subs: Vec<NodeId>,
+        park_producers: Vec<NodeId>,
         scope: &'a Scope<'a>,
         finish: CombineFinish<'a>,
     ) -> NodeId {
-        self.add(NodeWork::Combine { deps, finish }, scope)
+        let park_count = park_producers.len();
+        let mut deps = park_producers;
+        deps.extend(owned_subs);
+        self.add(NodeWork::Combine { deps, park_count, finish }, scope)
     }
 
     /// Schedule a `Catch` slot. See `SchedulerHandle::add_catch`.
@@ -59,7 +68,7 @@ impl<'a> Scheduler<'a> {
 
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         let owned_edges = work_owned_edges(&work);
-        let no_deps = owned_edges.is_empty();
+        let no_owned = owned_edges.is_empty();
         // Submission-time install lets a later sibling park on the placeholder before the
         // producer slot is popped from the FIFO. No-op for non-Dispatch work and for
         // Dispatch shapes whose picked function has no `pre_run`.
@@ -74,13 +83,25 @@ impl<'a> Scheduler<'a> {
         // need a wake installed. Already-terminal producers are skipped because
         // their notify-walk has already happened. `DepGraph` stays oblivious to
         // results storage; the filter lives at the call site.
-        let pending_producers: Vec<NodeId> = owned_edges
+        let pending_owned: Vec<NodeId> = owned_edges
             .iter()
             .map(|e| e.node_id())
             .filter(|p| !self.is_result_ready(*p))
             .collect();
+        // Park-producer prefix for `Combine`: sibling slots this work reads at
+        // finish-time but does not own. Pre-filter to non-terminal producers
+        // for the same reason as `pending_owned`.
+        let pending_park: Vec<NodeId> = work_park_producers(&work)
+            .iter()
+            .copied()
+            .filter(|p| !self.is_result_ready(*p))
+            .collect();
+        let no_park = work_park_producers(&work).is_empty();
         let id = self.store.alloc_slot(Node { work, scope, frame, function: None });
-        self.deps.install_for_slot(id, owned_edges, &pending_producers);
+        self.deps.install_for_slot(id, owned_edges, &pending_owned);
+        for p in &pending_park {
+            self.deps.add_park_edge(*p, id);
+        }
         // Install before enqueueing: the queued slot's `run_dispatch` will idempotently
         // re-install via `Scope::install_placeholder` after `resolve_dispatch` returns the
         // binder's `placeholder_name`. A failure here (e.g. `Rebind` collision) is
@@ -88,8 +109,8 @@ impl<'a> Scheduler<'a> {
         if let Some(name) = placeholder_install {
             let _ = scope.install_placeholder(name, id);
         }
-        if pending_producers.is_empty() {
-            if self.active_frame.is_none() && no_deps {
+        if pending_owned.is_empty() && pending_park.is_empty() {
+            if self.active_frame.is_none() && no_owned && no_park {
                 self.queues.push_fresh(id.index());
             } else {
                 self.queues.push_in_flight_submit(id.index());

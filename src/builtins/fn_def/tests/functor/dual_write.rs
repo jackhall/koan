@@ -122,23 +122,9 @@ fn functor_closure_escape_pins_type_class_dual_write() {
 /// per-call type-side binding (the data-side write was retired with the
 /// type-language collapse — see [`crate::machine::core::kfunction::invoke`]'s
 /// per-call binding loop). Pins that body resolution works end-to-end without
-/// surfacing `UnboundName`.
-///
-/// **Caveat (residual `node_store.rs:169` panic at the interpret seam).** The
-/// roadmap item promised this collapse would also dissolve the historical
-/// `read_result` panic at [`crate::machine::execute::scheduler::node_store::NodeStore::read_result`]
-/// — but only the *body-dispatch* shape did. The interpret seam in
-/// [`crate::machine::execute::interpret::interpret_with_writer_path`] still
-/// panics for top-level `SIG ...\nFN (... :SigName) -> ...` programs: the
-/// FN-def's Combine (parked on `SigName`'s placeholder) calls `reclaim_deps`
-/// on success, which eagerly frees the SIG dispatch's slot, after which
-/// interpret's `read_result(top_level_id)` hits the freed slot and panics. The
-/// fix is in the scheduler's eager-free policy, not the type-language layer
-/// this item touches — see the residual-race note in the doc-shepherd
-/// handoff. The unit-test path (`test_support::run` → `Scheduler::execute`)
-/// does NOT call `read_result` per top-level id, so this regression remains
-/// invisible to `cargo test` and the smoke must surface through the
-/// `cargo run` integration path.
+/// surfacing `UnboundName`. The companion interpret-seam regression (top-level
+/// `SIG` followed by an FN whose signature references it) is pinned by
+/// `tests/sig_fn_top_level_no_panic.rs`.
 #[test]
 fn functor_returning_bare_signature_typed_param_does_not_panic() {
     let arena = RuntimeArena::new();
