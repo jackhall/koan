@@ -72,7 +72,7 @@ duality it's reading.
   Module<'a>, frame: Option<Rc<CallArena>> }` carries the existing
   `KModule` payload verbatim. `KType::Signature { scope_id, name, slots,
   ... }` is the identity-bearing successor — the bare name `Signature`
-  was freed by the `MetaSignature` rename (see roadmap/libraries/[functor-binder.md](../libraries/functor-binder.md)
+  was freed by the `MetaSignature` rename (see roadmap/libraries/[functor-binder.md](functor-binder.md)
   for the rename rationale).
 - *MetaSignature retirement — decided.* `KType::MetaSignature` goes
   away. A `:Signature` slot annotation lowers to `KType::AnyUserType
@@ -115,7 +115,7 @@ duality it's reading.
 
 **Unblocks:**
 
-- [FUNCTOR binder](../libraries/functor-binder.md) — landing the
+- [FUNCTOR binder](functor-binder.md) — landing the
   substrate move first lets FUNCTOR's signature-typed-parameter handling
   ride the single-store machinery from day one. The functor-definition
   panic on the dual-write path

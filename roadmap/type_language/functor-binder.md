@@ -78,7 +78,7 @@ have no admissible return-type denotation.
   in `data`.
 - *FUNCTOR is the declared seam for future applicative-mode work.*
   Generative-only semantics ship now; once predicate typing lands, the
-  applicative opt-in (parked in [standard-library.md](standard-library.md))
+  applicative opt-in (parked in [standard-library.md](../libraries/standard-library.md))
   attaches to the `is_functor` flag rather than re-deriving functor-ness
   from the return type at every consumer.
 
@@ -110,7 +110,7 @@ have no admissible return-type denotation.
   `is_functor`-flagged. The current denylist's "hard part" (functor /
   plain-function discrimination) dissolves once the flag exists.
 - *Applicative-mode opt-in — deferred to predicate typing.* Tracked
-  under [standard-library.md](standard-library.md). Generative-only
+  under [standard-library.md](../libraries/standard-library.md). Generative-only
   semantics ship under this item.
 - *Functor-definition panic root cause — open.* The non-`Done`
   `read_result` at
@@ -136,13 +136,13 @@ have no admissible return-type denotation.
 
 **Requires:**
 
-- [Module and signature carriers move from KObject to KType](../predicate_typing/module-signature-as-ktype.md)
+- [Module and signature carriers move from KObject to KType](module-signature-as-ktype.md)
   — FUNCTOR's signature-typed-parameter handling rides single-store
   type-language machinery; doing the substrate cleanup first means
   FUNCTOR never inherits the dual-write to inherit and then dismantle.
 
 **Unblocks:**
 
-- [Standard library](standard-library.md) — collections ship as FUNCTORs
+- [Standard library](../libraries/standard-library.md) — collections ship as FUNCTORs
   over their element/key types, so the FUNCTOR binder is the substrate
   for stdlib data-structure code.

@@ -32,7 +32,7 @@ without first landing something else:
   parameter type slots that reference earlier parameters in the same FN signature.
 - [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
   — per-call elaboration precision for structurally-typed FN slots.
-- [Module and signature carriers move from KObject to KType](roadmap/predicate_typing/module-signature-as-ktype.md)
+- [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
   — collapse the KObject/KType duality for modules and signatures, retiring the dual-write
   in `KFunction::invoke` for signature-typed FN parameters.
 - [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
@@ -72,7 +72,6 @@ value-slot binding:
 - [Stage 6 — Equivalence-checked coherence](roadmap/predicate_typing/equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](roadmap/predicate_typing/syntax-tuning.md)
 - [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
-- [Module and signature carriers move from KObject to KType](roadmap/predicate_typing/module-signature-as-ktype.md)
 - [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
 
 ### Libraries — [roadmap/libraries/](roadmap/libraries/)
@@ -85,8 +84,16 @@ Rust builtins:
 - [Files and imports](roadmap/libraries/files-and-imports.md)
 - [Generalize `Scope::out` into monadic side-effect capture](roadmap/libraries/monadic-side-effects.md)
 - [Group-based operators](roadmap/libraries/group-based-operators.md)
-- [FUNCTOR binder](roadmap/libraries/functor-binder.md)
 - [Standard library](roadmap/libraries/standard-library.md)
+
+### Type language — [roadmap/type_language/](roadmap/type_language/)
+
+Engine-level work on how modules, signatures, and functors are represented in
+the type language. The substrate that the predicate-typing work and the
+stdlib's functor-heavy collections both build on:
+
+- [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
+- [FUNCTOR binder](roadmap/type_language/functor-binder.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
