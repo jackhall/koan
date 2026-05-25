@@ -1,7 +1,5 @@
 use std::rc::Rc;
 
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-
 use crate::machine::core::{
     CallArena, KError, KErrorKind, ResolveTypeExprOutcome, RuntimeArena, Scope,
 };
@@ -31,13 +29,11 @@ enum PerCallReturnType {
 
 impl<'a> KFunction<'a> {
     /// Run this function's body for an already-bound call. User-defined functions
-    /// allocate a per-call child scope, bind parameters into it, substitute parameter
-    /// Identifiers in a body clone with `Future(value)`, and return a tail-call so
-    /// the caller's slot is rewritten in place.
+    /// allocate a per-call child scope, bind parameters into it, and return a tail-call
+    /// so the caller's slot is rewritten in place.
     ///
-    /// The child scope and substitution are complementary: substitution covers parameter
-    /// references in typed-slot positions, the child scope covers Identifier-slot lookups
-    /// (`(x)` parens-wrapped) and is the substrate for closure capture.
+    /// Parameter references resolve against the per-call child scope at dispatch time;
+    /// the same scope is the substrate for closure capture.
     ///
     /// Lifetime: the per-call `child` scope and `inner_arena` are re-anchored to `'a` —
     /// the outer slot-storage lifetime — by one consolidated `unsafe` block. The witness
@@ -58,7 +54,18 @@ impl<'a> KFunction<'a> {
                 // kept alive externally via the lifted `KFunction(&fn, Some(Rc))` on
                 // the user-bound value.
                 let outer = self.captured_scope();
-                let frame: Rc<CallArena> = CallArena::new(outer, None);
+                // Tail-reuse: when this invoke is the body of a TCO Replace step and
+                // the previous slot's frame is uniquely owned (no closure / sub-slot
+                // escaped a clone), reset it in place and reuse the shell instead of
+                // allocating a new `CallArena`. Falls through to a fresh `CallArena`
+                // for the first call and for any iteration whose previous frame
+                // escaped. Re-link's the child scope's `outer` to the new FN's
+                // captured scope, so this works across mutual tail calls between
+                // user-fns whose captured scopes differ.
+                let frame: Rc<CallArena> = sched
+                    .try_take_reusable_frame_for_tail()
+                    .and_then(|mut prev| prev.try_reset_for_tail(outer).then_some(prev))
+                    .unwrap_or_else(|| CallArena::new(outer, None));
                 // SAFETY (consolidated): both re-anchors below share one witness — `frame`
                 // is moved into `BodyResult::Tail` below, whose slot-storage lifetime is
                 // `'a`. The `Rc<CallArena>` heap-pins the per-call arena (and therefore
@@ -73,7 +80,34 @@ impl<'a> KFunction<'a> {
                     )
                 };
                 for (name, rc) in bundle.args.iter() {
-                    let cloned = rc.deep_clone();
+                    let mut cloned = rc.deep_clone();
+                    // Splice-time argument element check + stamp for parameterized
+                    // carrier slots (`:(List T)`, `:(Dict K V)`, `:(Result T E)`).
+                    // `bundle.args` holds evaluated values here — only `KExpression`
+                    // slots stay lazy by design (see `argument_bundle.rs`) — so this
+                    // bind loop is a valid value boundary, symmetric with the return
+                    // boundary in `execute.rs` / the Deferred Combine below. The
+                    // dispatch-time shape-only admission (`Argument::matches`) cannot
+                    // do the content-recursive element check, so it lands here.
+                    if let Some(arg) = signature_argument_by_name(self, name) {
+                        if is_parameterized_carrier(&arg.ktype) {
+                            if !arg.ktype.matches_value(&cloned) {
+                                return BodyResult::Err(KError::new(
+                                    KErrorKind::TypeMismatch {
+                                        arg: name.clone(),
+                                        expected: arg.ktype.name(),
+                                        got: cloned.ktype().name(),
+                                    },
+                                ).with_frame(crate::machine::Frame::bare(
+                                    self.summarize(),
+                                    self.summarize(),
+                                )));
+                            }
+                            // Coarsen the carrier to exactly the declared slot type,
+                            // mirroring the return-boundary stamp.
+                            cloned = cloned.stamp_type(&arg.ktype);
+                        }
+                    }
                     let allocated = inner_arena.alloc_object(cloned);
                     // Signature parser enforces parameter-name uniqueness; a rebind
                     // error here would mean an upstream invariant break.
@@ -93,7 +127,7 @@ impl<'a> KFunction<'a> {
                         }
                     }
                 }
-                let substituted = substitute_params(expr.clone(), &bundle, inner_arena);
+                let body_expr = expr.clone();
 
                 // Deferred return-type path: the per-call return type isn't known
                 // statically. `TypeExpr` is elaborated inline against `child`;
@@ -103,7 +137,7 @@ impl<'a> KFunction<'a> {
                 // per-call return-type check.
                 match &self.signature.return_type {
                     ReturnType::Resolved(_) => {
-                        BodyResult::tail_with_frame(substituted, frame, self)
+                        BodyResult::tail_with_frame(body_expr, frame, self)
                     }
                     ReturnType::Deferred(d) => {
                         let per_call_ret: PerCallReturnType = match d {
@@ -144,7 +178,7 @@ impl<'a> KFunction<'a> {
                         };
                         let mut bid = None;
                         sched.with_active_frame(frame.clone(), &mut |s| {
-                            bid = Some(s.add_dispatch(substituted.clone(), child));
+                            bid = Some(s.add_dispatch(body_expr.clone(), child));
                         });
                         let body_id = bid.expect("body dispatch must spawn");
 
@@ -182,12 +216,16 @@ impl<'a> KFunction<'a> {
                                         ),
                                         got: body_value.ktype().name(),
                                     },
-                                ).with_frame(crate::machine::Frame {
-                                    function: function_summary.clone(),
-                                    expression: function_summary.clone(),
-                                }));
+                                ).with_frame(crate::machine::Frame::bare(
+                                    function_summary.clone(),
+                                    function_summary.clone(),
+                                )));
                             }
-                            BodyResult::Value(body_value)
+                            // Phase 3 ascription stamping at the per-call return boundary:
+                            // re-tag the parameterized carrier to exactly the resolved
+                            // per-call return type (coarsening included).
+                            let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
+                            BodyResult::Value(_scope.arena.alloc_object(stamped))
                         }));
                         // Rc clones into each `with_active_frame` call above keep the
                         // per-call arena alive across sub-slot lifetimes; the FN's slot
@@ -200,6 +238,18 @@ impl<'a> KFunction<'a> {
             }
         }
     }
+}
+
+/// True iff a declared slot type is one of the parameterized carrier types whose
+/// `matches_value` does content-recursive element/payload checking — the only slots
+/// where dispatch-time shape-only admission (`Argument::matches`) leaves an element
+/// check undone. `KExpression` (the lazy-slot type) is never one of these, so gating
+/// on this predicate also keeps the unevaluated `Expression`-slot path untouched.
+fn is_parameterized_carrier(ktype: &KType) -> bool {
+    matches!(
+        ktype,
+        KType::List(_) | KType::Dict(_, _) | KType::ConstructorApply { .. }
+    )
 }
 
 /// Indirection from a bundle iteration (keyed by `name`) back to the declared
@@ -220,9 +270,9 @@ fn signature_argument_by_name<'a>(
 ///
 /// | Declared `KType`               | Bound `KObject`        | Identity                                              |
 /// | ------------------------------ | ---------------------- | ----------------------------------------------------- |
-/// | `SignatureBound { .. }`        | `KModule(m, _)`        | `m.ktype()` — `UserType { kind: Module, .. }`         |
+/// | `SatisfiesSignature { .. }`        | `KModule(m, _)`        | `m.ktype()` — `UserType { kind: Module, .. }`         |
 /// | `AnyUserType { kind: Module }` | `KModule(m, _)`        | same                                                  |
-/// | `Signature`                    | `KSignature(s)`        | `SignatureBound { sig_id: s.sig_id(), sig_path, .. }` |
+/// | `Signature`                    | `KSignature(s)`        | `SatisfiesSignature { sig_id: s.sig_id(), sig_path, .. }` |
 /// | `Type`                         | `KTypeValue(kt)`       | `kt.clone()`                                          |
 /// | `TypeExprRef`                  | `KTypeValue(kt)`       | `kt.clone()`                                          |
 /// | `TypeExprRef`                  | `TypeNameRef(t)`       | elaborated via `definition_scope.resolve_type_expr`   |
@@ -240,7 +290,7 @@ pub(crate) fn type_identity_for<'a>(
     definition_scope: &'a Scope<'a>,
 ) -> Result<Option<KType>, KError> {
     match declared {
-        KType::SignatureBound { .. } => Ok(match obj {
+        KType::SatisfiesSignature { .. } => Ok(match obj {
             KObject::KModule(m, _) => Some(KType::UserType {
                 kind: UserTypeKind::Module,
                 scope_id: m.scope_id(),
@@ -256,8 +306,8 @@ pub(crate) fn type_identity_for<'a>(
             }),
             _ => None,
         }),
-        KType::Signature => Ok(match obj {
-            KObject::KSignature(s) => Some(KType::SignatureBound {
+        KType::MetaSignature => Ok(match obj {
+            KObject::KSignature(s) => Some(KType::SatisfiesSignature {
                 sig_id: s.sig_id(),
                 sig_path: s.path.clone(),
                 pinned_slots: Vec::new(),
@@ -290,55 +340,3 @@ pub(crate) fn type_identity_for<'a>(
     }
 }
 
-/// Replace every `Identifier(name)` in `expr` whose name is in `bundle.args` with a
-/// `Future(value)` allocated in `arena`. Recurses into nested composite parts.
-pub(crate) fn substitute_params<'a>(
-    expr: KExpression<'a>,
-    bundle: &ArgumentBundle<'a>,
-    arena: &'a RuntimeArena,
-) -> KExpression<'a> {
-    KExpression {
-        parts: expr
-            .parts
-            .into_iter()
-            .map(|p| substitute_part(p, bundle, arena))
-            .collect(),
-    }
-}
-
-fn substitute_part<'a>(
-    part: ExpressionPart<'a>,
-    bundle: &ArgumentBundle<'a>,
-    arena: &'a RuntimeArena,
-) -> ExpressionPart<'a> {
-    match part {
-        ExpressionPart::Identifier(name) => match bundle.get(&name) {
-            Some(value) => {
-                let allocated: &'a KObject<'a> = arena.alloc_object(value.deep_clone());
-                ExpressionPart::Future(allocated)
-            }
-            None => ExpressionPart::Identifier(name),
-        },
-        ExpressionPart::Expression(boxed) => {
-            ExpressionPart::Expression(Box::new(substitute_params(*boxed, bundle, arena)))
-        }
-        ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(
-            items
-                .into_iter()
-                .map(|p| substitute_part(p, bundle, arena))
-                .collect(),
-        ),
-        ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(
-            pairs
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        substitute_part(k, bundle, arena),
-                        substitute_part(v, bundle, arena),
-                    )
-                })
-                .collect(),
-        ),
-        other => other,
-    }
-}

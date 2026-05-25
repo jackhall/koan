@@ -1,3 +1,4 @@
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
 use crate::machine::core::{KError, Scope};
@@ -8,7 +9,9 @@ use crate::machine::model::values::KObject;
 
 mod ascribe;
 mod attr;
+mod branch_walk;
 pub mod call_by_name;
+mod catch;
 mod cons;
 mod eval;
 mod fn_def;
@@ -18,13 +21,16 @@ mod module_def;
 mod newtype_def;
 mod print;
 mod quote;
+mod result;
 mod sig_def;
 mod struct_def;
 pub(crate) mod struct_value;
 pub(crate) mod tagged_union;
+mod try_with;
 mod type_call;
 mod type_ops;
 mod union;
+mod using_scope;
 mod val_decl;
 mod value_lookup;
 mod value_pass;
@@ -35,7 +41,7 @@ mod value_pass;
 /// constructible carrier.
 pub(crate) fn dispatch_constructor<'a>(
     verb_obj: &'a KObject<'a>,
-    args_parts: Vec<ExpressionPart<'a>>,
+    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> Option<BodyResult<'a>> {
     match verb_obj {
         KObject::TaggedUnionType { .. } => Some(tagged_union::apply(verb_obj, args_parts)),
@@ -130,7 +136,7 @@ pub fn default_scope<'a>(
     scope.register_type("Tagged".into(), KType::AnyUserType { kind: UserTypeKind::Tagged });
     scope.register_type("Struct".into(), KType::AnyUserType { kind: UserTypeKind::Struct });
     scope.register_type("Module".into(), KType::AnyUserType { kind: UserTypeKind::Module });
-    scope.register_type("Signature".into(), KType::Signature);
+    scope.register_type("Signature".into(), KType::MetaSignature);
     scope.register_type("Any".into(), KType::Any);
 
     let_binding::register(scope);
@@ -140,12 +146,16 @@ pub fn default_scope<'a>(
     fn_def::register(scope);
     call_by_name::register(scope);
     union::register(scope);
+    result::register(scope);
     tagged_union::register(scope);
     struct_def::register(scope);
     struct_value::register(scope);
     newtype_def::register(scope);
     type_call::register(scope);
     match_case::register(scope);
+    try_with::register(scope);
+    using_scope::register(scope);
+    catch::register(scope);
     attr::register(scope);
     quote::register(scope);
     eval::register(scope);

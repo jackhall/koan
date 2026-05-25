@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::machine::KErrorKind;
+use crate::machine::execute::interpret_with_writer_path;
 
 
 /// A bare unbound name at the top level surfaces as `KError::UnboundName` rather than
@@ -96,6 +97,35 @@ fn type_mismatch_at_dispatch_surfaces_as_dispatch_failed() {
             "expected DispatchFailed for unmatchable MATCH call, got {e}",
         ),
         Ok(()) => panic!("expected dispatch failure on MATCH with non-KExpression branches"),
+    }
+}
+
+/// Parse errors carry a span + file when source is registered via `parse_with_path`.
+/// `Display` then renders the `parse error at <path>:<line>:<col>: <message>` shape.
+/// Tab-indented continuation hits `collapse_whitespace`'s tab rejection.
+#[test]
+fn parse_error_carries_span_and_renders_location() {
+    let result = interpret_with_writer_path(
+        "(foo)\n\t(bar)",
+        Some("script.koan"),
+        Box::new(std::io::sink()),
+    );
+    match result {
+        Err(e) => {
+            match &e.kind {
+                KErrorKind::ParseError { span, file, .. } => {
+                    assert!(span.is_some(), "expected span on parse error: {e}");
+                    assert!(file.is_some(), "expected file on parse error: {e}");
+                }
+                _ => panic!("expected ParseError, got {e}"),
+            }
+            let rendered = e.to_string();
+            assert!(
+                rendered.contains(" at script.koan:"),
+                "expected ' at script.koan:' in rendered output, got {rendered}",
+            );
+        }
+        Ok(()) => panic!("expected parse error on tab-indented source"),
     }
 }
 

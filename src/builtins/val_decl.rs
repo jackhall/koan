@@ -22,6 +22,7 @@
 //!   re-elaborate in the Combine finish.
 
 use crate::machine::core::ResolveTypeExprOutcome;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::machine::{
     ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
@@ -44,9 +45,7 @@ fn schedule_type_resolve<'a>(
     decl_scope: &'a Scope<'a>,
     te: &TypeExpr,
 ) -> crate::machine::NodeId {
-    let expr = KExpression {
-        parts: vec![ExpressionPart::Type(te.clone())],
-    };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te.clone()))]);
     sched.add_dispatch(expr, decl_scope)
 }
 
@@ -58,7 +57,7 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
             | KType::Bool
             | KType::Null
             | KType::Type
-            | KType::Signature
+            | KType::MetaSignature
             | KType::Any
             | KType::Identifier
             | KType::KExpression
@@ -269,7 +268,7 @@ fn defer_val_structural_via_combine<'a>(
 
 /// Dispatch-time placeholder extractor: `parts[1]` is the bound name's `Identifier`.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    match expr.parts.get(1)? {
+    match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
         _ => None,
     }

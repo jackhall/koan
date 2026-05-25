@@ -35,15 +35,18 @@ fn lookup_bool_key<'a, 'b>(
     d.get(&probe)
 }
 
+/// Empty-container error rule: binding a bare `{}` through an untyped `LET` is an error,
+/// mirroring the empty-list rule — no key/value types to infer, no annotation upstream.
 #[test]
-fn let_binds_an_empty_dict_literal() {
-    let arena = RuntimeArena::new();
-    let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run("LET d = {}\n", &arena, captured);
-    let data = scope.bindings().data();
-    match data.get("d") {
-        Some(KObject::Dict(entries)) => assert!(entries.is_empty()),
-        _ => panic!("expected `d` bound to an empty Dict"),
+fn let_binds_an_empty_dict_literal_errors() {
+    use crate::machine::execute::interpret_with_writer;
+    let result = interpret_with_writer("LET d = {}\n", Box::new(std::io::sink()));
+    match result {
+        Err(e) => assert!(
+            matches!(&e.kind, KErrorKind::ShapeError(msg) if msg.contains("empty container")),
+            "expected empty-container ShapeError, got {e}",
+        ),
+        Ok(()) => panic!("expected empty-container error binding `{{}}`"),
     }
 }
 
@@ -54,7 +57,7 @@ fn let_binds_a_dict_with_string_keys() {
     let scope = run(r#"LET d = {"a": 1, "b": 2}"#, &arena, captured);
     let data = scope.bindings().data();
     match data.get("d") {
-        Some(KObject::Dict(entries)) => {
+        Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0));
             assert!(matches!(lookup_string_key(entries, "b"), Some(KObject::Number(n)) if *n == 2.0));
@@ -70,7 +73,7 @@ fn let_binds_a_dict_with_number_keys() {
     let scope = run(r#"LET d = {1: "a", 2: "b"}"#, &arena, captured);
     let data = scope.bindings().data();
     match data.get("d") {
-        Some(KObject::Dict(entries)) => {
+        Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if s == "a"));
             assert!(matches!(lookup_number_key(entries, 2.0), Some(KObject::KString(s)) if s == "b"));
@@ -86,7 +89,7 @@ fn let_binds_a_dict_with_bool_keys() {
     let scope = run("LET d = {true: 1, false: 0}\n", &arena, captured);
     let data = scope.bindings().data();
     match data.get("d") {
-        Some(KObject::Dict(entries)) => {
+        Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_bool_key(entries, true), Some(KObject::Number(n)) if *n == 1.0));
             assert!(matches!(lookup_bool_key(entries, false), Some(KObject::Number(n)) if *n == 0.0));
@@ -106,7 +109,7 @@ fn bare_identifier_key_is_looked_up() {
     );
     let data = scope.bindings().data();
     match data.get("d") {
-        Some(KObject::Dict(entries)) => {
+        Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 1);
             // The key should be the looked-up value of `name`, not the literal "name".
             assert!(matches!(lookup_string_key(entries, "alice"), Some(KObject::Number(n)) if *n == 1.0));
@@ -123,7 +126,7 @@ fn sub_expression_as_value_evaluates_eagerly() {
     let scope = run(r#"LET d = {"a": (LET y = 7)}"#, &arena, captured);
     let data = scope.bindings().data();
     match data.get("d") {
-        Some(KObject::Dict(entries)) => {
+        Some(KObject::Dict(entries, _, _)) => {
             assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 7.0));
         }
         _ => panic!("expected `d` bound to a Dict"),
@@ -142,7 +145,7 @@ fn sub_expression_as_key_evaluates() {
     );
     let data = scope.bindings().data();
     match data.get("d") {
-        Some(KObject::Dict(entries)) => {
+        Some(KObject::Dict(entries, _, _)) => {
             assert!(matches!(lookup_string_key(entries, "x"), Some(KObject::Number(n)) if *n == 1.0));
         }
         _ => panic!("expected `d` bound to a Dict"),
@@ -160,7 +163,7 @@ fn multiline_dict_binds_correctly() {
     );
     let data = scope.bindings().data();
     match data.get("d") {
-        Some(KObject::Dict(entries)) => {
+        Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0));
             assert!(matches!(lookup_string_key(entries, "b"), Some(KObject::Number(n)) if *n == 2.0));
@@ -176,10 +179,10 @@ fn nested_dict_in_list_binds_correctly() {
     let scope = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &arena, captured);
     let data = scope.bindings().data();
     match data.get("xs") {
-        Some(KObject::List(outer)) => {
+        Some(KObject::List(outer, _)) => {
             assert_eq!(outer.len(), 2);
             match &outer[0] {
-                KObject::Dict(d) => assert!(matches!(
+                KObject::Dict(d, _, _) => assert!(matches!(
                     lookup_string_key(d, "a"),
                     Some(KObject::Number(n)) if *n == 1.0,
                 )),

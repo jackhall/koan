@@ -24,12 +24,13 @@ pub(super) fn dispatch_for_test<'a>(
             expr: expr.summarize(),
             candidates: n,
         })),
-        ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
-            Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(),
-                reason: "no matching function".to_string(),
-            }))
-        }
+        ResolveOutcome::UnboundName(name) => Err(KError::new(KErrorKind::UnboundName(name))),
+        ResolveOutcome::Deferred
+        | ResolveOutcome::Unmatched
+        | ResolveOutcome::ParkOnProducers(_) => Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: "no matching function".to_string(),
+        })),
     }
 }
 

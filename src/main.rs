@@ -3,14 +3,15 @@
 use std::io::Read;
 use std::process::ExitCode;
 
-use koan::machine::interpret;
+use koan::machine::interpret_with_writer_path;
 
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
-/// stdin, then parse, dispatch, and execute it via `interpret`.
+/// stdin, then parse, dispatch, and execute it via `interpret_with_writer_path` so error
+/// frames can render real `path:line:col` locations.
 fn main() -> ExitCode {
-    let source = match std::env::args().nth(1) {
+    let (source, path): (String, Option<String>) = match std::env::args().nth(1) {
         Some(path) => match std::fs::read_to_string(&path) {
-            Ok(s) => s,
+            Ok(s) => (s, Some(path)),
             Err(e) => {
                 eprintln!("could not read {}: {}", path, e);
                 return ExitCode::FAILURE;
@@ -22,15 +23,14 @@ fn main() -> ExitCode {
                 eprintln!("could not read stdin: {}", e);
                 return ExitCode::FAILURE;
             }
-            buf
+            (buf, None)
         }
     };
 
-    match interpret(&source) {
+    let out: Box<dyn std::io::Write> = Box::new(std::io::stdout());
+    match interpret_with_writer_path(&source, path.as_deref(), out) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            // KError's Display formats `kind` followed by frames in `(expression) (function)`
-            // form, one per line. The "error:" prefix matches the previous CLI shape.
             eprintln!("error: {}", e);
             ExitCode::FAILURE
         }

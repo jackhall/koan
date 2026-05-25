@@ -3,6 +3,7 @@
 use crate::builtins::default_scope;
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use super::super::Scheduler;
 
@@ -34,16 +35,14 @@ fn later_expression_sees_earlier_binding_via_lookup() {
     let mut sched = Scheduler::new();
     sched.add_dispatch(let_expr("a", 10.0), root);
 
-    let lookup_a = KExpression {
-        parts: vec![
-            ExpressionPart::Keyword("LET".into()),
-            ExpressionPart::Identifier("b".into()),
-            ExpressionPart::Keyword("=".into()),
-            ExpressionPart::Expression(Box::new(KExpression {
-                parts: vec![ExpressionPart::Identifier("a".into())],
-            })),
-        ],
-    };
+    let lookup_a = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("LET".into())),
+        Spanned::bare(ExpressionPart::Identifier("b".into())),
+        Spanned::bare(ExpressionPart::Keyword("=".into())),
+        Spanned::bare(ExpressionPart::Expression(Box::new(KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Identifier("a".into())),
+        ])))),
+    ]);
     sched.add_dispatch(lookup_a, root);
 
     sched.execute().unwrap();

@@ -1,10 +1,18 @@
 //! Operator table driving compound-atom desugaring. Each entry pairs a trigger character
 //! with an `OperatorKind` whose arity-typed builder constructs the resulting expression.
+//!
+//! Builders receive their operand(s) as `Spanned<ExpressionPart>` plus the trigger char's
+//! span and return a `Spanned<ExpressionPart>`. The returned wrapper's span covers
+//! `start_of_first_operand` through `end_of_last_operand_or_trigger`; the inner synthetic
+//! `Keyword("ATTR"|"NOT"|"TRY")` carries the 1-codepoint trigger span so diagnostics can
+//! point at the exact operator character.
 
-use crate::machine::model::ast::ExpressionPart;
+use crate::machine::core::source::{self, Span, Spanned};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-pub type UnaryBuild  = for<'a> fn(ExpressionPart<'a>) -> ExpressionPart<'a>;
-pub type BinaryBuild = for<'a> fn(ExpressionPart<'a>, ExpressionPart<'a>) -> ExpressionPart<'a>;
+pub type UnaryBuild = for<'a> fn(Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
+pub type BinaryBuild =
+    for<'a> fn(Spanned<ExpressionPart<'a>>, Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
 
 pub enum OperatorKind {
     /// `<trigger> compound` — builder takes the single operand.
@@ -28,16 +36,59 @@ const OPERATORS: &[Operator] = &[
     Operator { trigger: '?', kind: OperatorKind::Suffix(build_try)  },
 ];
 
-fn build_not<'a>(expr: ExpressionPart<'a>) -> ExpressionPart<'a> {
-    ExpressionPart::expression(vec![ExpressionPart::Keyword("NOT".to_string()), expr])
+fn build_prefix<'a>(
+    keyword: &'static str,
+    operand: Spanned<ExpressionPart<'a>>,
+    trigger: Span,
+) -> Spanned<ExpressionPart<'a>> {
+    let operand_end = operand.span.map(|s| s.end).unwrap_or(trigger.end);
+    let outer = Span { start: trigger.start, end: operand_end };
+    let kw = Spanned::at(ExpressionPart::Keyword(keyword.to_string()), trigger);
+    let kexp = KExpression {
+        parts: vec![kw, operand],
+        span: Some(outer),
+        file: source::current(),
+    };
+    Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 
-fn build_attr<'a>(lhs: ExpressionPart<'a>, rhs: ExpressionPart<'a>) -> ExpressionPart<'a> {
-    ExpressionPart::expression(vec![ExpressionPart::Keyword("ATTR".to_string()), lhs, rhs])
+fn build_not<'a>(
+    expr: Spanned<ExpressionPart<'a>>,
+    trigger: Span,
+) -> Spanned<ExpressionPart<'a>> {
+    build_prefix("NOT", expr, trigger)
 }
 
-fn build_try<'a>(lhs: ExpressionPart<'a>) -> ExpressionPart<'a> {
-    ExpressionPart::expression(vec![ExpressionPart::Keyword("TRY".to_string()), lhs])
+fn build_attr<'a>(
+    lhs: Spanned<ExpressionPart<'a>>,
+    rhs: Spanned<ExpressionPart<'a>>,
+    trigger: Span,
+) -> Spanned<ExpressionPart<'a>> {
+    let start = lhs.span.map(|s| s.start).unwrap_or(trigger.start);
+    let end = rhs.span.map(|s| s.end).unwrap_or(trigger.end);
+    let outer = Span { start, end };
+    let kw = Spanned::at(ExpressionPart::Keyword("ATTR".to_string()), trigger);
+    let kexp = KExpression {
+        parts: vec![kw, lhs, rhs],
+        span: Some(outer),
+        file: source::current(),
+    };
+    Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
+}
+
+fn build_try<'a>(
+    lhs: Spanned<ExpressionPart<'a>>,
+    trigger: Span,
+) -> Spanned<ExpressionPart<'a>> {
+    let start = lhs.span.map(|s| s.start).unwrap_or(trigger.start);
+    let outer = Span { start, end: trigger.end };
+    let kw = Spanned::at(ExpressionPart::Keyword("TRY".to_string()), trigger);
+    let kexp = KExpression {
+        parts: vec![kw, lhs],
+        span: Some(outer),
+        file: source::current(),
+    };
+    Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 
 /// Variant view returned by `find_suffix`: restricted to the two kinds that can appear

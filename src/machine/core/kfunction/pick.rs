@@ -46,10 +46,10 @@ impl<'a> KFunction<'a> {
         let mut eager_indices: Vec<usize> = Vec::new();
         let mut has_lazy_slot = false;
         for (i, (el, part)) in sig.elements.iter().zip(expr.parts.iter()).enumerate() {
-            match (el, part) {
+            match (el, &part.value) {
                 (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
                 (SignatureElement::Keyword(_), _) => return None,
-                (SignatureElement::Argument(arg), part) => match (&arg.ktype, part) {
+                (SignatureElement::Argument(arg), part_value) => match (&arg.ktype, part_value) {
                     (KType::KExpression, ExpressionPart::Expression(_)) => {
                         has_lazy_slot = true;
                     }
@@ -120,7 +120,7 @@ impl<'a> KFunction<'a> {
         // keep their `Deferred` path.
         let has_lazy_kexpr_slot = sig.elements.iter().zip(expr.parts.iter()).any(|(el, part)| {
             matches!(
-                (el, part),
+                (el, &part.value),
                 (
                     SignatureElement::Argument(Argument { ktype: KType::KExpression, .. }),
                     ExpressionPart::Expression(_),
@@ -128,22 +128,23 @@ impl<'a> KFunction<'a> {
             )
         });
         for (el, part) in sig.elements.iter().zip(expr.parts.iter()) {
-            match (el, part) {
+            let part_value = &part.value;
+            match (el, part_value) {
                 (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
                 (SignatureElement::Keyword(_), _) => return false,
-                (SignatureElement::Argument(arg), part) => {
-                    if is_bare_name(part)
+                (SignatureElement::Argument(arg), part_value) => {
+                    if is_bare_name(part_value)
                         && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
                     {
                         continue;
                     }
                     if has_lazy_kexpr_slot
-                        && matches!(part, ExpressionPart::Expression(_))
+                        && matches!(part_value, ExpressionPart::Expression(_))
                         && !matches!(arg.ktype, KType::KExpression)
                     {
                         continue;
                     }
-                    if !arg.matches(part) {
+                    if !arg.matches(part_value) {
                         return false;
                     }
                 }
@@ -163,7 +164,7 @@ impl<'a> KFunction<'a> {
         let picked_has_pre_run = self.pre_run.is_some();
         for (i, (el, part)) in self.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
             let SignatureElement::Argument(arg) = el else { continue };
-            if !is_bare_name(part) {
+            if !is_bare_name(&part.value) {
                 continue;
             }
             match &arg.ktype {

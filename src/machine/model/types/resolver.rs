@@ -163,9 +163,22 @@ pub fn elaborate_type_expr(
                     }
                     ElabResult::Park(vec![id])
                 }
-                Resolution::Value(_) | Resolution::Unbound => match KType::from_name(name) {
+                // `from_name` is tried first in both arms so fixture scopes that skip
+                // builtin registration still resolve builtin names. The split only
+                // affects the miss message: a `Value` resolution means the name *is*
+                // bound, just in the value language, so the diagnostic must name the
+                // type-language / value-language layering rather than read as an
+                // unknown-name failure (see design/typing/functors.md).
+                Resolution::Value(_) => match KType::from_name(name) {
                     Some(kt) => ElabResult::Done(kt),
-                    None => ElabResult::Unbound(name.clone()),
+                    None => ElabResult::Unbound(format!(
+                        "`{name}` is value-language only — a type slot needs a type-language \
+                         binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
+                    )),
+                },
+                Resolution::Unbound => match KType::from_name(name) {
+                    Some(kt) => ElabResult::Done(kt),
+                    None => ElabResult::Unbound(format!("unknown type name `{name}`")),
                 },
             }
         }

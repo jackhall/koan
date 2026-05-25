@@ -29,6 +29,33 @@ system.
 5. [operators.rs](../src/parse/operators.rs) — table of compound-token
    operators (`!`, `.`, `[]`, `?`); add a row to extend.
 
+## Line continuation
+
+The whitespace pass turns each non-blank line into a `(...)` group, with deeper
+indentation nesting and dedents closing. Three things let a single expression
+span multiple physical lines:
+
+- **Trailing comma.** A line ending in `,` continues onto the next non-blank
+  line regardless of indentation; the joined lines flatten into one group.
+- **Open `[` / `{`.** A collection literal whose match is on a later line carries
+  the intervening lines as part of its span, indentation-insensitively — content
+  and the closing `]` / `}` may sit at any column (the same implicit-line-joining
+  model Python uses inside brackets). This leniency is deliberate. Unlike `(`,
+  brackets are unambiguously terminated, so indentation can't change meaning; the
+  same-or-greater-indent rule that `(` carries is intentionally *not* imposed here.
+  Enforcing it would buy only visual hygiene — at the cost of breaking flush-left
+  data layouts and adding parser machinery to a path that is correct today — so it
+  is set aside; a linter is the better home for that style nudge if it is ever
+  wanted.
+- **Open `(`.** A paren left open at a line break is *indentation-sensitive*: a
+  deeper line nests inside the group as its own wrapped sub-expression
+  (nest-per-line), and the matching `)` may sit at any indentation greater than
+  or equal to its opener. A non-closing line at the opener's indentation or
+  shallower is an expression break while the paren is still open — rejected as a
+  dangling `(`; a `)` shallower than its opener is rejected for the same reason.
+  So `PRINT (\n  3.14\n)` parses (the `)` returns to `PRINT`'s column), but
+  `PRINT (\n3.14\n)` is a syntax error.
+
 ## `KExpression` shape
 
 Output is one [`KExpression`](../src/machine/model/ast.rs) per top-level line:
@@ -97,7 +124,8 @@ mechanism. Two consequences:
   shapes overlap.
 
 See [functional-programming.md](functional-programming.md) for how the body
-substitutes parameters and what `BodyResult::Tail` does at the slot.
+binds parameters into a per-call scope and what `BodyResult::Tail` does at
+the slot.
 
 ## Quote and eval sigils
 
@@ -148,9 +176,3 @@ bare-line surface possible. The bare `QUOTE` and `EVAL` keyword forms that
 the desugaring produces happen to dispatch (the parser classifies all-caps
 tokens as keywords, and the dispatch table matches), but they are not
 documented surface — user code goes through the sigils.
-
-## Open work
-
-- Source spans on `KExpression`
-  ([Error-handling surface follow-ups](../roadmap/libraries/error-handling.md)) — error
-  frames currently can't point to a line/column in source.

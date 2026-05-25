@@ -39,11 +39,13 @@ introspect the body — TCO needs to recognize the tail position; error frames
 need to know which function the trace step belongs to. A boxed closure would
 have hidden both.
 
-## Calling convention: parameter substitution
+## Calling convention: per-call scope
 
-`KFunction::invoke` clones the body, rewrites parameter `Identifier`s to
-`Future(call-site value)`, and returns it as `BodyResult::Tail` for the
-scheduler to dispatch in the same slot. Two consequences:
+`KFunction::invoke` allocates a per-call [`CallArena`](../src/machine/core/arena.rs),
+binds each parameter into a fresh child `Scope` whose `outer` is the function's
+captured definition scope, and returns the body unmodified as
+`BodyResult::Tail` for the scheduler to dispatch in the same slot.
+Two consequences:
 
 - User-fns inherit TCO automatically — every call rewrites the slot in place.
   No special TCO handling for user-fn vs builtin tail returns.
@@ -53,12 +55,12 @@ scheduler to dispatch in the same slot. Two consequences:
 
 ## Closures
 
-Per-call arenas back the substituted body, the child scope, parameter clones,
-and any in-body `LET`/`value_pass` allocations. When a closure escapes (e.g., a
-fn defined inside a body and returned as the body's value), `Rc<CallArena>`
-keeps the captured arena alive for as long as the closure is reachable. The
-mechanics — `lift_kobject`, the `Option<Rc<CallArena>>` carried by
-`KObject::KFunction`, the fast path when no functions were allocated — live in
+Per-call arenas back the child scope, parameter clones, and any in-body
+`LET`/`value_pass` allocations. When a closure escapes (e.g., a fn defined
+inside a body and returned as the body's value), `Rc<CallArena>` keeps the
+captured arena alive for as long as the closure is reachable. The mechanics —
+`lift_kobject`, the `Option<Rc<CallArena>>` carried by `KObject::KFunction`,
+the fast path when no functions were allocated — live in
 [memory-model.md](memory-model.md).
 
 End-to-end verification:
@@ -66,7 +68,7 @@ End-to-end verification:
 - [`closure_escapes_outer_call_and_remains_invocable`](../src/builtins/call_by_name.rs)
   — return a closure from a body, call it after the outer frame has finalized.
 - [`escaped_closure_with_param_returns_body_value`](../src/builtins/call_by_name.rs)
-  — escaped closure with a parameter still substitutes correctly.
+  — escaped closure with a parameter resolves the captured binding correctly.
 
 ## Composition with the language extension story
 

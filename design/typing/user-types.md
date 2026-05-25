@@ -45,7 +45,7 @@ STRUCT / UNION-named / MODULE / SIG finalize each route through the
 which transactionally writes `bindings.types[name] = &KType` and
 `bindings.data[name] = &KObject` together so the single-home invariant —
 Type-classed name lookups go through `Scope::resolve_type` only — holds. SIG
-declarations write `KType::SignatureBound { sig_id, sig_path }` on the type
+declarations write `KType::SatisfiesSignature { sig_id, sig_path }` on the type
 side.
 
 `LET <Type-class> = <module/sig/struct-value>` (e.g.

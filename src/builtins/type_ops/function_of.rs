@@ -25,7 +25,7 @@ pub fn body<'a>(
     };
     let mut args: Vec<KType> = Vec::with_capacity(args_expr.parts.len());
     for part in &args_expr.parts {
-        match part {
+        match &part.value {
             ExpressionPart::Type(t) => match KType::from_type_expr(t) {
                 Ok(kt) => args.push(kt),
                 Err(msg) => {

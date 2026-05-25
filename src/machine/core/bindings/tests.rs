@@ -217,7 +217,7 @@ fn pending_binder_guard_drop_removes_entry() {
     let entry = PendingTypeEntry {
         kind: UserTypeKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
-        schema_expr: KExpression { parts: Vec::new() },
+        schema_expr: KExpression::new(Vec::new()),
         edges: Vec::new(),
     };
     {
@@ -241,7 +241,7 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
     let entry = PendingTypeEntry {
         kind: UserTypeKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xBEEF),
-        schema_expr: KExpression { parts: Vec::new() },
+        schema_expr: KExpression::new(Vec::new()),
         edges: Vec::new(),
     };
     let guard = bindings.insert_pending_type("Foo".into(), entry);

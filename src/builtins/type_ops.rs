@@ -97,7 +97,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         "SIG_WITH",
         sig(KType::TypeExprRef, vec![
             kw("SIG_WITH"),
-            arg("sig", KType::Signature),
+            arg("sig", KType::MetaSignature),
             arg("bindings", KType::KExpression),
         ]),
         sig_with::body,

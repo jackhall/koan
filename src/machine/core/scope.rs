@@ -7,7 +7,7 @@ use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::machine::model::values::KObject;
 use super::arena::RuntimeArena;
 use super::bindings::{ApplyOutcome, Bindings};
-use super::kerror::KError;
+use super::kerror::{KError, KErrorKind};
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 
@@ -53,15 +53,53 @@ pub enum Resolution<'a> {
 /// embedded [`PendingQueue`]; `drain_pending` replays them between dispatch nodes.
 pub struct Scope<'a> {
     pub outer: Option<&'a Scope<'a>>,
-    pub bindings: Bindings<'a>,
+    bindings: ScopeBindings<'a>,
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
     /// Position-independent identity captured into `KType::UserType { scope_id, .. }` /
-    /// `KType::SignatureBound { sig_id, .. }` so dispatch on user-declared types compares
+    /// `KType::SatisfiesSignature { sig_id, .. }` so dispatch on user-declared types compares
     /// ids rather than scope pointers.
     pub id: ScopeId,
     pending: PendingQueue<'a>,
     pub kind: ScopeKind,
+}
+
+/// A scope's binding storage. `Owned` is the default — the scope holds its own
+/// [`Bindings`] façade. `Borrowed` is the `USING … SCOPE` transparent window: a
+/// read-only view onto another scope's façade (the opened module's child-scope
+/// bindings). Reads through [`Scope::bindings`] are identical for both arms, so the
+/// resolver walk is unchanged; the difference is on the *write* side — a `Borrowed`
+/// window has no storage of its own, so [`Scope::bind_value`] /
+/// [`Scope::register_function`] / [`Scope::register_type`] forward to `outer` (the
+/// call site), which is why block-local binds persist in the enclosing scope after the
+/// block ends.
+// `Owned` (the common case — every non-`USING` scope) is large and `Borrowed` is a thin
+// pointer, but boxing `Owned` would add a heap allocation and an indirection to the hot
+// `bindings()` read path that every dispatch walks; `Scope` embedded `Bindings` by value
+// regardless, so inlining the large variant is the deliberate trade.
+#[allow(clippy::large_enum_variant)]
+enum ScopeBindings<'a> {
+    Owned(Bindings<'a>),
+    /// `&'a Bindings<'a>` (not a shorter borrow) keeps `Scope<'a>` invariant in `'a`,
+    /// matching the existing `KFunction`/`Module` lifetime-erasure story. The borrowed
+    /// façade lives in the opened module's child-scope arena; the `USING` builtin keeps
+    /// that arena alive past the block by rooting the module value (and its frame `Rc`) in
+    /// the call-site arena (see [`crate::builtins`]'s `using_scope`).
+    Borrowed(&'a Bindings<'a>),
+}
+
+impl<'a> ScopeBindings<'a> {
+    /// The underlying façade for both arms — the single read path.
+    fn get(&self) -> &Bindings<'a> {
+        match self {
+            ScopeBindings::Owned(b) => b,
+            ScopeBindings::Borrowed(b) => b,
+        }
+    }
+
+    fn is_borrowed(&self) -> bool {
+        matches!(self, ScopeBindings::Borrowed(_))
+    }
 }
 
 /// Lexical classification for a [`Scope`]. The SIG-body gate in `val_decl` and
@@ -79,7 +117,7 @@ impl<'a> Scope<'a> {
     pub fn run_root(arena: &'a RuntimeArena, outer: Option<&'a Scope<'a>>, out: Box<dyn Write + 'a>) -> Self {
         Self {
             outer,
-            bindings: Bindings::new(),
+            bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(Some(out)),
             arena,
             id: ScopeId::next(),
@@ -97,7 +135,7 @@ impl<'a> Scope<'a> {
     pub fn child_under(outer: &'a Scope<'a>) -> Scope<'a> {
         Scope {
             outer: Some(outer),
-            bindings: Bindings::new(),
+            bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
             id: ScopeId::next(),
@@ -110,7 +148,7 @@ impl<'a> Scope<'a> {
     pub fn child_under_sig(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
-            bindings: Bindings::new(),
+            bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
             id: ScopeId::next(),
@@ -124,7 +162,7 @@ impl<'a> Scope<'a> {
     pub fn child_under_module(outer: &'a Scope<'a>, name: String) -> Scope<'a> {
         Scope {
             outer: Some(outer),
-            bindings: Bindings::new(),
+            bindings: ScopeBindings::Owned(Bindings::new()),
             out: RefCell::new(None),
             arena: outer.arena,
             id: ScopeId::next(),
@@ -133,8 +171,66 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Build a transparent `USING … SCOPE` child scope: `outer` is the call site (the
+    /// lexical parent, *not* the opened module's def site), and the bindings are a
+    /// read-only [`ScopeBindings::Borrowed`] window onto `module_bindings` (the opened
+    /// module's child-scope façade). Reads consult the window first, then walk `outer`;
+    /// writes forward to `outer`. `arena` is `outer.arena` (the call-site arena), so the
+    /// `USING` builtin can allocate this scope — and every block-body allocation made
+    /// through it — in the call site's arena, which is what makes forwarded binds sound
+    /// (they outlive the block).
+    pub fn child_transparent(outer: &'a Scope<'a>, module_bindings: &'a Bindings<'a>) -> Scope<'a> {
+        Scope {
+            outer: Some(outer),
+            bindings: ScopeBindings::Borrowed(module_bindings),
+            out: RefCell::new(None),
+            arena: outer.arena,
+            id: ScopeId::next(),
+            pending: PendingQueue::new(),
+            kind: ScopeKind::Anonymous,
+        }
+    }
+
     pub fn bindings(&self) -> &Bindings<'a> {
-        &self.bindings
+        self.bindings.get()
+    }
+
+    /// Scope-bound `TypeExpr → &KType` memo read. A transparent `USING` window skips the
+    /// cache entirely (returns `None`): its resolutions are influenced by the call-site
+    /// chain, so caching them into the *module's* shared memo would poison it for the
+    /// module's own def-site resolution.
+    pub(crate) fn type_expr_memo_get(
+        &self,
+        te: &crate::machine::model::ast::TypeExpr,
+    ) -> Option<&'a crate::machine::model::types::KType> {
+        if self.bindings.is_borrowed() {
+            return None;
+        }
+        self.bindings.get().type_expr_memo_get(te)
+    }
+
+    /// Scope-bound memo write — no-op on a transparent `USING` window (see
+    /// [`Self::type_expr_memo_get`]).
+    pub(crate) fn type_expr_memo_insert(
+        &self,
+        te: crate::machine::model::ast::TypeExpr,
+        kt: &'a crate::machine::model::types::KType,
+    ) {
+        if self.bindings.is_borrowed() {
+            return;
+        }
+        self.bindings.get().type_expr_memo_insert(te, kt);
+    }
+
+    /// The call-site scope a `Borrowed` (transparent `USING`) window forwards its writes
+    /// to. Panics if `self` is `Borrowed` but rootless — the transparent constructor
+    /// always sets `outer` to the call site, so a `Borrowed` scope without an `outer` is
+    /// a construction bug.
+    fn write_target(&self) -> &Scope<'a> {
+        self.outer.expect(
+            "a Borrowed (USING transparent) scope must have an outer call-site to forward \
+             writes to",
+        )
     }
 
     /// Iterate `self` and its `outer` chain. Per-step `RefCell` guards taken inside a
@@ -164,7 +260,22 @@ impl<'a> Scope<'a> {
     /// Conditional-defer: direct mutation first, falls back to the `pending` queue iff a
     /// borrow conflict would otherwise panic (caller up the stack iterating `data`).
     pub fn bind_value(&self, name: String, obj: &'a KObject<'a>) -> Result<(), KError> {
-        match self.bindings.try_bind_value(&name, obj)? {
+        if self.bindings.is_borrowed() {
+            // Transparent `USING` window: reads consult the window before the call site,
+            // so a local bind whose name is already a surfaced module member would be
+            // silently shadowed by the window. Reject it (the block is unconditional, so
+            // there is no divergent-binding hazard the way TRY/MATCH branches have — the
+            // only failure mode is this shadowing one). The bind otherwise belongs to the
+            // call site, not the read-only module view, so forward it there.
+            if self.bindings.get().data().contains_key(&name) {
+                return Err(KError::new(KErrorKind::ShapeError(format!(
+                    "USING: local bind `{name}` collides with a surfaced module member; \
+                     rename it to avoid silently shadowing the module's `{name}`",
+                ))));
+            }
+            return self.write_target().bind_value(name, obj);
+        }
+        match self.bindings.get().try_bind_value(&name, obj)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
                 self.pending.defer_value(name, obj);
@@ -185,7 +296,10 @@ impl<'a> Scope<'a> {
         fn_ref: &'a KFunction<'a>,
         obj: &'a KObject<'a>,
     ) -> Result<(), KError> {
-        match self.bindings.try_register_function(&name, fn_ref, obj)? {
+        if self.bindings.is_borrowed() {
+            return self.write_target().register_function(name, fn_ref, obj);
+        }
+        match self.bindings.get().try_register_function(&name, fn_ref, obj)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
                 self.pending.defer_function(name, fn_ref, obj);
@@ -200,8 +314,12 @@ impl<'a> Scope<'a> {
     /// Infallible: a name collision at builtin registration is a programming error,
     /// so the [`KError`] from `try_register_type` is dropped.
     pub fn register_type(&self, name: String, ktype: crate::machine::model::types::KType) {
+        if self.bindings.is_borrowed() {
+            self.write_target().register_type(name, ktype);
+            return;
+        }
         let kt_ref: &'a crate::machine::model::types::KType = self.arena.alloc_ktype(ktype);
-        match self.bindings.try_register_type(&name, kt_ref) {
+        match self.bindings.get().try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref),
             Err(_) => {}
@@ -225,8 +343,12 @@ impl<'a> Scope<'a> {
         name: String,
         ktype: crate::machine::model::types::KType,
     ) {
+        if self.bindings.is_borrowed() {
+            self.write_target().cycle_close_install_identity(name, ktype);
+            return;
+        }
         let kt_ref: &'a crate::machine::model::types::KType = self.arena.alloc_ktype(ktype);
-        match self.bindings.try_register_type(&name, kt_ref) {
+        match self.bindings.get().try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
                 "cycle_close_install_identity borrow conflict on `{name}` — cycle-close \
@@ -240,7 +362,7 @@ impl<'a> Scope<'a> {
     }
 
     /// Transactional dual-write for nominal declarations (STRUCT, named UNION, MODULE,
-    /// SIG). Identity `kt` (a `KType::UserType` or `KType::SignatureBound`) is inserted
+    /// SIG). Identity `kt` (a `KType::UserType` or `KType::SatisfiesSignature`) is inserted
     /// into [`Bindings::types`] and the runtime carrier `obj` (`StructType`,
     /// `TaggedUnionType`, `KModule`, `KSignature`) into [`Bindings::data`] atomically
     /// via [`Bindings::try_register_nominal`]. Returns the carrier on success so the
@@ -255,8 +377,11 @@ impl<'a> Scope<'a> {
         kt: crate::machine::model::types::KType,
         obj: &'a KObject<'a>,
     ) -> Result<&'a KObject<'a>, KError> {
+        if self.bindings.is_borrowed() {
+            return self.write_target().register_nominal(name, kt, obj);
+        }
         let kt_ref: &'a crate::machine::model::types::KType = self.arena.alloc_ktype(kt);
-        match self.bindings.try_register_nominal(&name, kt_ref, obj)? {
+        match self.bindings.get().try_register_nominal(&name, kt_ref, obj)? {
             ApplyOutcome::Applied => Ok(obj),
             ApplyOutcome::Conflict => {
                 panic!(
@@ -274,7 +399,15 @@ impl<'a> Scope<'a> {
     /// `Err`s are debug-asserted (production drops them silently, since dispatch nodes
     /// have no caller frame to surface them to).
     pub fn drain_pending(&self) {
-        self.pending.drain(&self.bindings);
+        // A transparent `USING` window never queues into its own `pending` (writes
+        // forward to the call site, which queues into *its* pending), so flush the call
+        // site instead. Forwarding keeps the call site's deferred binds eventually
+        // applied when the block's node finishes a step.
+        if self.bindings.is_borrowed() {
+            self.write_target().drain_pending();
+            return;
+        }
+        self.pending.drain(self.bindings.get());
     }
 
     /// Walk the `outer` chain for the nearest value binding of `name`. Wrapper over
@@ -296,10 +429,10 @@ impl<'a> Scope<'a> {
     pub fn resolve(&self, name: &str) -> Resolution<'a> {
         self.ancestors()
             .find_map(|scope| {
-                if let Some(obj) = scope.bindings.data().get(name).copied() {
+                if let Some(obj) = scope.bindings().data().get(name).copied() {
                     return Some(Resolution::Value(obj));
                 }
-                scope.bindings.placeholders().get(name).copied().map(Resolution::Placeholder)
+                scope.bindings().placeholders().get(name).copied().map(Resolution::Placeholder)
             })
             .unwrap_or(Resolution::Unbound)
     }
@@ -309,13 +442,16 @@ impl<'a> Scope<'a> {
     /// `Rebind` rules and the asymmetry with `try_bind_*` (panics on borrow conflict
     /// rather than queueing).
     pub fn install_placeholder(&self, name: String, idx: NodeId) -> Result<(), KError> {
-        self.bindings.try_install_placeholder(name, idx)
+        if self.bindings.is_borrowed() {
+            return self.write_target().install_placeholder(name, idx);
+        }
+        self.bindings.get().try_install_placeholder(name, idx)
     }
 
     /// Walk the `outer` chain for the nearest `bindings.types[name]`. Type-side
     /// analogue of [`Self::lookup`] — no `Placeholder` variant.
     pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType> {
-        self.ancestors().find_map(|scope| scope.bindings.types().get(name).copied())
+        self.ancestors().find_map(|scope| scope.bindings().types().get(name).copied())
     }
 
     /// Walk the `outer` chain for the nearest scope holding a writer and write `bytes`.

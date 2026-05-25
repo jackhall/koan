@@ -111,13 +111,17 @@ pub enum KType {
     /// pinned to specific concrete `KType`s. Empty for the unconstrained `OrderedSig`
     /// form. The vec is order-preserving (rather than a `HashMap`) so structural equality
     /// is deterministic and the diagnostic surface stays stable.
-    SignatureBound {
+    SatisfiesSignature {
         sig_id: ScopeId,
         sig_path: String,
         pinned_slots: Vec<(String, KType)>,
     },
-    /// Meta-type for first-class module signatures (`KObject::KSignature`).
-    Signature,
+    /// Meta-type for first-class module signatures (`KObject::KSignature`). The user-facing
+    /// surface name is `Signature`; the `Meta` prefix on the variant disambiguates it from
+    /// the satisfies-the-named-SIG constraint carrier above. The bare `Signature` identifier
+    /// is reserved for the future identity-bearing variant when `KObject::KSignature`
+    /// collapses into `KType` (see roadmap/libraries/functor-binder.md).
+    MetaSignature,
     /// Recursive type binder. `body` describes the unfolded shape with `binder` in scope as a
     /// `RecursiveRef` for self-references. `name()` renders as the binder name so diagnostics
     /// stay readable (e.g. `Tree` rather than `Mu Tree. List<Tree>`).
@@ -157,7 +161,7 @@ impl KType {
             KType::Type => "Type".into(),
             KType::UserType { name, .. } => name.clone(),
             KType::AnyUserType { kind } => kind.surface_keyword().into(),
-            KType::SignatureBound { sig_path, pinned_slots, .. } => {
+            KType::SatisfiesSignature { sig_path, pinned_slots, .. } => {
                 if pinned_slots.is_empty() {
                     sig_path.clone()
                 } else {
@@ -169,7 +173,7 @@ impl KType {
                     format!("(SIG_WITH {} ({}))", sig_path, inner.join(" "))
                 }
             }
-            KType::Signature => "Signature".into(),
+            KType::MetaSignature => "Signature".into(),
             KType::Mu { binder, .. } => binder.clone(),
             KType::RecursiveRef(name) => name.clone(),
             KType::ConstructorApply { ctor, args } => {

@@ -5,6 +5,53 @@ work allocates into the **run-root arena**; each user-fn call gets its own
 **per-call `RuntimeArena`** owned by [`CallArena`](../src/machine/core/arena.rs),
 freed when the call's slot finalizes.
 
+## Storage shape: a graph of arena slots
+
+A `RuntimeArena` holds six `typed_arena`-backed sub-arenas — for `KObject`,
+`KFunction`, `Scope`, `Module`, `Signature`, and `KType`. Slots have stable
+heap addresses; the runtime carries cross-references between them rather
+than ownership trees. The structural edges:
+
+- `Scope.outer: Option<&'a Scope<'a>>` — the lexical-parent chain. Many
+  sibling scopes can share one outer, so the in-degree is unbounded.
+- `Scope.arena: &'a RuntimeArena` — back-pointer to the owning arena.
+- [`Bindings.data`](../src/machine/core/bindings.rs) maps each bound name
+  to a `&'a KObject<'a>`. The pointee may live in this scope's arena or in
+  an outer one.
+- [`KFunction.captured`](../src/machine/core/kfunction.rs) holds
+  `NonNull<Scope<'a>>` — the closure's definition scope. Multiple
+  `KFunction`s share one captured scope when they were defined in the same
+  body.
+- `KObject::KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>)` and
+  `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` carry both a value-side
+  reference to a function-arena slot and an optional `Rc<CallArena>` anchor
+  to the per-call arena that owns the function's captured scope.
+- `Module` and `Signature` cache `*const Scope<'static>` pointers to their
+  declaration scopes (heap-pinned by the surrounding arena chain).
+
+**Directionality rule.** References go inward freely — a per-call arena's
+slots may point at run-root slots, because the run-root arena outlives every
+per-call arena by the lexical-scoping invariant. References that need to
+point *outward* — a lifted value referencing a slot in a dying per-call
+arena — must carry an `Rc<CallArena>` anchor on the value (or its enclosing
+variant) so the per-call arena survives. The lift machinery (see Closure
+escape, below) enforces this at the arena boundary.
+
+**Why graph rather than tree.** Many-to-one captures and bindings, sibling
+scopes sharing an outer, mutual references between a `Scope` and its
+arena's `scopes` sub-arena, and cross-arena `Rc<CallArena>` anchors all
+break tree shape. Slots are added incrementally as the program runs;
+references can be installed before or after the pointee exists (forward
+declarations, replay-park edges). This is the structural backdrop for the
+two patterns below — the cycle gate exists because the directionality rule
+allows one specific outward cycle, and the frame-chain `Rc` exists because
+some builtin-built frames have outer pointers that aren't lexical.
+
+The graph shape is also why the runtime stores `*const T<'static>` and
+transmutes on access: a self-referential graph of incrementally added
+slots with cross-references doesn't fit the one-owner-builds-one-dependent
+shape that self-referential-struct crates model.
+
 ## Scoping: lexical
 
 Free names in a user-fn body resolve through the function's **definition**
@@ -96,6 +143,44 @@ sub-combine slots also see the right ancestor. Top-level FN invokes pass
 `None` (their captured chain ends in run-root, which outlives the run, so no
 chain is needed and TCO recursion stays bounded).
 
+## Tail-step frame reuse
+
+Each TCO step would otherwise drop the previous slot's `CallArena` and
+allocate a fresh one — six typed-arena pools, an `Rc<RefCell<Vec<usize>>>`,
+an alloc'd child `Scope`, and the `Rc<CallArena>` box itself per iteration.
+[`CallArena::try_reset_for_tail`](../src/machine/core/arena.rs) reuses the
+shell across iterations: swap the inner `RuntimeArena` for a fresh empty one,
+re-allocate the child `Scope` into it, re-link `outer` to the new call's
+captured scope. The `Rc`, the heap-pinned arena address, and the slot's
+`frame` field carry over unchanged.
+
+Two structural invariants make the reset sound:
+
+- **No escape.** `Rc::get_mut` succeeds iff no other `Rc` to the frame
+  exists. Any escaped value (a closure carrying `Some(Rc)`, a list element
+  holding one, a sub-Dispatch slot that cloned `active_frame`) keeps
+  `strong_count > 1` and refuses the reset, falling through to
+  `CallArena::new`. The escape gate's correctness depends on
+  [`Scheduler::execute`](../src/machine/execute/scheduler/execute.rs) moving
+  `node.frame` into `self.active_frame` (no clone) for the duration of each
+  step — so the slot's frame lives in exactly one place when the body runs,
+  and any clone visible to `Rc::strong_count` is a real escape.
+- **No live external refs into the arena's storage.** By the time TCO
+  Replace fires, every sub-Dispatch slot the previous body spawned has
+  terminalized and freed, and the slot's `dep_edges` are cleared. The only
+  remaining references into the old arena's contents live in the slot's own
+  scope, which we're about to rebind. Resetting the storage drops the old
+  contents safely.
+
+Frame reuse is what makes deep tail recursion truly constant-memory — both
+in the scheduler's slot table (the `Tail` rewrite alone) and on the heap
+(the reset turns over arena storage in place rather than allocating per
+step). Builtins that build their own frames (MATCH / TRY / EVAL) chain the
+call-site frame's `Rc` onto the new frame's `outer_frame`, which keeps
+`strong_count > 1` for the call-site frame and routes that iteration through
+fresh allocation; cross-step reuse resumes once the builtin's frame is in
+turn replaced.
+
 ## Fast path
 
 If a dying arena allocated zero `KFunction`s
@@ -169,13 +254,17 @@ invariant (every forward edge in `notify_list[p]` matched by a backward
 `dep_edges[c]` entry and a +1 in `pending_deps[c]`) is enforced by the
 surface rather than by convention.
 
-Transient-node reclamation runs at the end of `run_bind` / `run_combine`:
-once a Bind has spliced its dep results into `expr.parts` (or a Combine's
-finish closure has produced its result), `Scheduler::free` walks the consumer's
-edges via `DepGraph::owned_children` and invokes `NodeStore::free_one` per
-reclaimed index. The walk only yields `DepEdge::Owned` arms (`Notify` arms
-are filtered inside `DepGraph`), so reclaiming a consumer cannot reach a
-sibling producer's subtree through a park edge. It skips any still-live slot
+Transient-node reclamation runs through `Scheduler::reclaim_deps` from
+each of the three dep-consuming steps: `run_bind` (after splicing dep
+results into `expr.parts` as `ExpressionPart::Future`, *before* resolving
+and dispatching the bound expression — so the dispatched body's `add()`
+can recycle the freed indices immediately), `run_combine` (after the
+finish closure returns), and `run_catch` (after its finish handles the
+watched slot's terminal). `reclaim_deps` clears `dep_edges[idx]` and
+invokes `Scheduler::free` per dep index; the walk follows `DepGraph::owned_children`,
+which only yields `DepEdge::Owned` arms (`Notify` arms are filtered
+inside `DepGraph`), so reclaiming a consumer cannot reach a sibling
+producer's subtree through a park edge. It skips any still-live slot
 via the `NodeStore::is_live` guard, so a free that dives into another
 in-flight user-fn call leaves that subtree for that call's own reclamation.
 
@@ -204,6 +293,15 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   locks in the cycle gate: a value carrying an `Rc<CallArena>` whose `arena()`
   is the receiving arena allocates into the escape arena instead, with the
   per-call arena's storage left untouched.
+- [`call_arena_try_reset_for_tail_round_trip`](../src/machine/core/arena.rs)
+  and
+  [`call_arena_try_reset_for_tail_refuses_when_aliased`](../src/machine/core/arena.rs)
+  pin the in-place reset: a unique `Rc` resets and re-binds correctly against
+  the new outer scope; an aliased `Rc` (the escape case) refuses with the
+  frame's arena pointer unchanged.
+- [`chained_tail_calls_reuse_frames`](../src/builtins/fn_def.rs)
+  asserts that a chain of user-fn tail calls (`AA → BB → CC → DD → PRINT`)
+  bumps the scheduler's tail-reuse counter and collapses to one slot.
 - The audit slate runs cycle-free across every unsafe site in the runtime
   — closure-escape, KFuture-anchor, arena-unsafe-site, module/signature
   lifetime-erasure transmutes, opaque-ascription re-binds, and type-op

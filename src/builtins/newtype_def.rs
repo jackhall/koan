@@ -20,6 +20,7 @@
 //! `struct_def::defer_struct_via_combine`. No second registered builtin → no
 //! bucket-collision infinite loop with `type_call`.
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 use crate::machine::core::ApplyOutcome;
 use crate::machine::core::kfunction::argument_bundle::{
@@ -161,7 +162,7 @@ pub fn newtype_construct<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     identity: &'a KType,
-    parts: Vec<ExpressionPart<'a>>,
+    parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> BodyResult<'a> {
     if parts.is_empty() {
         return err(KError::new(KErrorKind::ArityMismatch { expected: 1, got: 0 }));
@@ -170,7 +171,7 @@ pub fn newtype_construct<'a>(
     // operator resolution, or nested type-call inside the parts resolves through the
     // standard dispatch loop — the Combine's finish closure sees only the terminalized
     // inner value, already arena-resident.
-    let value_expr = KExpression { parts };
+    let value_expr = KExpression::new(parts);
     let value_id = sched.add_dispatch(value_expr, scope);
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
         debug_assert_eq!(results.len(), 1, "newtype_construct registered exactly one dep");

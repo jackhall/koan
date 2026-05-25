@@ -1,4 +1,5 @@
 use super::*;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::TypeParams;
 use std::cell::OnceCell;
 
@@ -29,7 +30,7 @@ fn fn_te(args: Vec<TypeExpr>, ret: TypeExpr) -> TypeExpr {
 }
 
 fn expr_with_keyword<'a>(kw: &str) -> KExpression<'a> {
-    KExpression { parts: vec![ExpressionPart::Keyword(kw.into())] }
+    KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword(kw.into()))])
 }
 
 #[test]
@@ -162,21 +163,17 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Keyword("FOO".into())],
     };
-    let empty: KExpression<'_> = KExpression { parts: vec![] };
+    let empty: KExpression<'_> = KExpression::new(vec![]);
     assert!(!sig.matches(&empty));
 
     // Keyword-slot vs non-Keyword part arm: sig expects keyword, expr supplies a literal.
-    let mismatched = KExpression {
-        parts: vec![ExpressionPart::Literal(
-            crate::machine::model::ast::KLiteral::Number(1.0),
-        )],
-    };
+    let mismatched = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
+        crate::machine::model::ast::KLiteral::Number(1.0),
+    ))]);
     assert!(!sig.matches(&mismatched));
 
     // Sanity: matching keyword at the right position still accepts.
-    let matching = KExpression {
-        parts: vec![ExpressionPart::Keyword("FOO".into())],
-    };
+    let matching = KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword("FOO".into()))]);
     assert!(sig.matches(&matching));
 }
 

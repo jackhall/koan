@@ -1,37 +1,52 @@
-//! Token classification: turn each whitespace-delimited word into an `ExpressionPart`.
-//! Recognizes literals (numbers, strings, booleans, `null`), classifies non-literal atoms
-//! into keywords / types / identifiers, and desugars compound atoms — member access
-//! (`a.b`), indexing (`a[i]`), and prefix negation — into nested `ExpressionPart`s using
-//! the `operators` table. Consumed by `expression_tree::build_tree`.
+//! Token classification: turn each whitespace-delimited word into a
+//! `Spanned<ExpressionPart>`. Recognizes literals (numbers, strings, booleans, `null`),
+//! classifies non-literal atoms into keywords / types / identifiers, and desugars
+//! compound atoms — member access (`a.b`), indexing (`a[i]`), and prefix negation — into
+//! nested `ExpressionPart`s using the `operators` table. Consumed by
+//! `expression_tree::build_tree`.
+//!
+//! Phase 4: each call carries the token's original-source start offset; sub-atoms walk
+//! `char_indices` so they get sub-spans within the token, and synthetic operator
+//! keywords (ATTR / NOT / TRY) take 1-codepoint trigger spans inside a token-wide
+//! wrapping `Expression`. Mid-token errors attach the enclosing token's span — the
+//! message names the offending char, the span pinpoints the token.
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
 use std::iter::Peekable;
-use std::str::Chars;
+use std::str::CharIndices;
 use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::machine::core::source::{Span, Spanned};
 use crate::machine::model::is_keyword_token;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeExpr};
+use crate::machine::KError;
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
 
 static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap()
 });
 
-/// Convert a single whitespace-delimited token into an `ExpressionPart`. First tries `try_literal`
-/// on the whole token (so e.g. `3.14` stays a number rather than being parsed as `(attr 3 14)`);
-/// otherwise hands off to `parse_compound` to desugar member access, indexing, and negation into
-/// nested expressions.
-pub fn classify_token<'a>(tok: String) -> Result<ExpressionPart<'a>, String> {
-    if let Some(part) = try_literal(&tok) {
-        return Ok(part);
+/// Convert a single whitespace-delimited token into a `Spanned<ExpressionPart>`. `start`
+/// is the token's original-source byte offset, used to compute absolute spans for atoms
+/// and operator triggers. First tries `try_literal` on the whole token (so e.g. `3.14`
+/// stays a number rather than being parsed as `(attr 3 14)`); otherwise hands off to
+/// `parse_compound` to desugar member access, indexing, and negation into nested
+/// expressions with sub-spans for each trigger.
+pub fn classify_token<'a>(tok: &str, start: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+    let token_span = Span { start, end: start + tok.len() as u32 };
+    if let Some(part) = try_literal(tok) {
+        return Ok(Spanned::at(part, token_span));
     }
-    let mut chars = tok.chars().peekable();
-    let part = parse_compound(&mut chars)?;
-    if let Some(&c) = chars.peek() {
-        return Err(format!("unexpected {:?} in token {:?}", c, tok));
+    let mut chars = tok.char_indices().peekable();
+    let part = parse_compound(&mut chars, start, token_span)?;
+    if let Some(&(_, c)) = chars.peek() {
+        return Err(KError::parse(
+            format!("unexpected {:?} in token {:?}", c, tok),
+            Some(token_span),
+        ));
     }
     Ok(part)
 }
@@ -69,7 +84,7 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
 /// letters and digits; Identifiers also accept `_`. Anything else (e.g. `Number>`, `a@b`) is
 /// rejected as a glue error so symbols can't sneak into a name. Keywords are exempt since
 /// `=`, `->`, and `+` are legitimate keyword shapes.
-fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
+fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, KError> {
     if let Some(part) = try_literal(tok) {
         return Ok(part);
     }
@@ -78,9 +93,12 @@ fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
     }
     if is_type_name(tok) {
         if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric()) {
-            return Err(format!(
-                "type name `{tok}` contains invalid character {bad:?}; \
-                 type names use only letters and digits",
+            return Err(KError::parse(
+                format!(
+                    "type name `{tok}` contains invalid character {bad:?}; \
+                     type names use only letters and digits",
+                ),
+                Some(token_span),
             ));
         }
         return Ok(ExpressionPart::Type(TypeExpr::leaf(tok.to_string())));
@@ -90,16 +108,22 @@ fn classify_atom<'a>(tok: &str) -> Result<ExpressionPart<'a>, String> {
     // or a `K9` shape can't slip in as an Identifier and silently shadow a future
     // type-position binding.
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-        return Err(format!(
-            "token `{tok}` starts with an uppercase letter but classifies as neither a \
-             keyword (needs ≥2 uppercase letters with no lowercase) nor a type name \
-             (needs ≥1 lowercase letter)",
+        return Err(KError::parse(
+            format!(
+                "token `{tok}` starts with an uppercase letter but classifies as neither a \
+                 keyword (needs ≥2 uppercase letters with no lowercase) nor a type name \
+                 (needs ≥1 lowercase letter)",
+            ),
+            Some(token_span),
         ));
     }
     if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric() && *c != '_') {
-        return Err(format!(
-            "identifier `{tok}` contains invalid character {bad:?}; \
-             identifiers use letters, digits, and `_`",
+        return Err(KError::parse(
+            format!(
+                "identifier `{tok}` contains invalid character {bad:?}; \
+                 identifiers use letters, digits, and `_`",
+            ),
+            Some(token_span),
         ));
     }
     Ok(ExpressionPart::Identifier(tok.to_string()))
@@ -121,50 +145,87 @@ fn is_type_name(tok: &str) -> bool {
 /// Recursive-descent parser for compound tokens. Strips leading prefix operators, reads an
 /// atom, then folds in any infix/postfix suffix operators. Each matched operator's builder
 /// constructs the resulting expression — the dispatcher knows operand arity and source per
-/// kind, the builder knows the output shape per operator.
-fn parse_compound<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, String> {
-    let mut prefixes: Vec<UnaryBuild> = Vec::new();
-    while let Some(&c) = chars.peek() {
+/// kind, the builder knows the output shape per operator. Sub-atoms walk
+/// `char_indices` so each one knows its byte offset within the token; operator triggers
+/// take a 1-codepoint span at their position.
+fn parse_compound<'a>(
+    chars: &mut Peekable<CharIndices>,
+    start: u32,
+    token_span: Span,
+) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+    let mut prefixes: Vec<(UnaryBuild, Span)> = Vec::new();
+    while let Some(&(ci, c)) = chars.peek() {
         let Some(build) = find_prefix(c) else { break };
         chars.next();
-        prefixes.push(build);
+        let trigger = trigger_span(start, ci, c);
+        prefixes.push((build, trigger));
     }
 
-    let mut expr = read_atom(chars)?;
+    let mut expr = read_atom(chars, start, token_span)?;
 
-    while let Some(&c) = chars.peek() {
+    while let Some(&(ci, c)) = chars.peek() {
         let Some(op) = find_suffix(c) else { break };
         chars.next();
+        let trigger = trigger_span(start, ci, c);
         expr = match op {
             SuffixOp::Infix(build) => {
-                let rhs = read_atom(chars)?;
-                build(expr, rhs)
+                let rhs = read_atom(chars, start, token_span)?;
+                build(expr, rhs, trigger)
             }
-            SuffixOp::Suffix(build) => build(expr),
+            SuffixOp::Suffix(build) => build(expr, trigger),
         };
     }
 
-    for build in prefixes.into_iter().rev() {
-        expr = build(expr);
+    for (build, trigger) in prefixes.into_iter().rev() {
+        expr = build(expr, trigger);
     }
     Ok(expr)
 }
 
+fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
+    let start = token_start + ci as u32;
+    Span { start, end: start + c.len_utf8() as u32 }
+}
+
 /// Consume characters from `chars` until the next operator trigger or postfix close char
-/// (driven by `OPERATORS`) and classify the run via `classify_atom`. Errors on an empty atom.
-fn read_atom<'a>(chars: &mut Peekable<Chars>) -> Result<ExpressionPart<'a>, String> {
+/// (driven by `OPERATORS`) and classify the run via `classify_atom`. Returns the classified
+/// atom wrapped in a `Spanned` with its absolute span. Errors on an empty atom.
+fn read_atom<'a>(
+    chars: &mut Peekable<CharIndices>,
+    token_start: u32,
+    token_span: Span,
+) -> Result<Spanned<ExpressionPart<'a>>, KError> {
+    let atom_start_ci = match chars.peek() {
+        Some(&(ci, _)) => ci,
+        None => {
+            return Err(KError::parse(
+                "expected identifier, got end of token",
+                Some(token_span),
+            ));
+        }
+    };
     let mut s = String::new();
-    while let Some(&c) = chars.peek() {
+    let mut end_ci = atom_start_ci;
+    while let Some(&(ci, c)) = chars.peek() {
         if is_atom_terminator(c) {
             break;
         }
         s.push(c);
         chars.next();
+        end_ci = ci + c.len_utf8();
     }
     if s.is_empty() {
-        return Err(format!("expected identifier, got {:?}", chars.peek()));
+        let next = chars.peek().map(|&(_, c)| c);
+        return Err(KError::parse(
+            format!("expected identifier, got {:?}", next),
+            Some(token_span),
+        ));
     }
-    classify_atom(&s)
+    let span = Span {
+        start: token_start + atom_start_ci as u32,
+        end: token_start + end_ci as u32,
+    };
+    classify_atom(&s, token_span).map(|part| Spanned::at(part, span))
 }
 
 #[cfg(test)]
@@ -178,7 +239,7 @@ mod tests {
             ExpressionPart::Identifier(s) => format!("t({})", s),
             ExpressionPart::Type(t) => format!("T({})", t.render()),
             ExpressionPart::Expression(e) => {
-                let inner: Vec<String> = e.parts.iter().map(describe).collect();
+                let inner: Vec<String> = e.parts.iter().map(|p| describe(&p.value)).collect();
                 format!("[{}]", inner.join(" "))
             }
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),
@@ -201,7 +262,9 @@ mod tests {
     }
 
     fn classify(tok: &str) -> Result<String, String> {
-        classify_token(tok.to_string()).map(|p| describe(&p))
+        classify_token(tok, 0)
+            .map(|s| describe(&s.value))
+            .map_err(|e| e.to_string())
     }
 
     #[test]

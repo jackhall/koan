@@ -23,6 +23,7 @@ use crate::machine::core::{CallArena, Scope};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::NodeId;
 use crate::machine::model::KObject;
+use crate::machine::model::Parseable;
 use crate::machine::KError;
 
 use super::super::nodes::{LiftState, Node, NodeOutput, NodeWork};
@@ -39,6 +40,7 @@ impl<T> SlotVec<T> {
     fn len(&self) -> usize { self.0.len() }
     fn is_empty(&self) -> bool { self.0.is_empty() }
     fn get(&self, id: NodeId) -> Option<&T> { self.0.get(id.index()) }
+    fn iter(&self) -> impl Iterator<Item = &T> { self.0.iter() }
 }
 
 impl<T> Index<NodeId> for SlotVec<T> {
@@ -174,6 +176,45 @@ impl<'a> NodeStore<'a> {
             Ok(v) => v,
             Err(e) => panic!("read called on errored node: {e}"),
         }
+    }
+
+    /// Scan for slots still parked (`PreRun`) after the work queues drained — each
+    /// is a node waiting on a dependency that can no longer fire (a dependency
+    /// cycle). Returns `(count, sample)` where `sample` summarizes the first such
+    /// node, or `None` when every slot is terminal (`Done`) or reclaimed (`Free`).
+    pub(super) fn unresolved(&self) -> Option<(usize, String)> {
+        let mut count = 0usize;
+        // Prefer a `Dispatch`/`Bind` sample — it carries the source expression a
+        // reader can act on. Fall back to a generic label only if every parked node
+        // is scaffolding (Combine/Catch/Lift).
+        let mut expr_sample: Option<String> = None;
+        let mut fallback_sample: Option<String> = None;
+        for slot in self.slots.iter() {
+            if let SlotState::PreRun(node) = slot {
+                count += 1;
+                match &node.work {
+                    NodeWork::Dispatch(expr) | NodeWork::Bind { expr, .. }
+                        if expr_sample.is_none() =>
+                    {
+                        expr_sample = Some(expr.summarize());
+                    }
+                    NodeWork::Combine { .. } if fallback_sample.is_none() => {
+                        fallback_sample = Some("<combine>".to_string());
+                    }
+                    NodeWork::Catch { .. } if fallback_sample.is_none() => {
+                        fallback_sample = Some("<catch>".to_string());
+                    }
+                    NodeWork::Lift(_) if fallback_sample.is_none() => {
+                        fallback_sample = Some("<lift>".to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if count == 0 {
+            return None;
+        }
+        Some((count, expr_sample.or(fallback_sample).unwrap_or_default()))
     }
 
     /// Slot count (live + reclaimed).

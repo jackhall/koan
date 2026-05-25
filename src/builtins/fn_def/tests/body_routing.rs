@@ -5,9 +5,9 @@
 //! (`type_expr_references_any` Function-arrow recursion, `part_references_any`
 //! Identifier / ListLiteral / DictLiteral arms).
 
-use crate::builtins::test_support::{parse_one, run, run_root_silent};
+use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::execute::Scheduler;
-use crate::machine::model::{KObject, KType, ReturnType};
+use crate::machine::model::{KType, ReturnType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
 // ---------- Stage B param-name scan: utility arms in `type_expr_references_any` /
@@ -28,11 +28,7 @@ fn fn_def_function_arrow_return_type_with_param_ref_defers() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          FN (USE Er :OrderedSig) -> :(Function (Number) -> Er) = (1)",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("USE") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("USE should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "USE return type should be Deferred (Function-arrow referencing param `Er`)",
@@ -52,11 +48,7 @@ fn fn_def_parens_return_type_with_identifier_param_ref_defers() {
         scope,
         "FN (USE xs :Number) -> (somefn xs) = (xs)",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("USE") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("USE should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "USE return type should be Deferred (parens-form Identifier referencing param)",
@@ -74,11 +66,7 @@ fn fn_def_parens_return_type_with_list_literal_param_ref_defers() {
         scope,
         "FN (USE xs :Number) -> ([xs]) = (xs)",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("USE") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("USE should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "USE return type should be Deferred (ListLiteral referencing param)",
@@ -96,11 +84,7 @@ fn fn_def_parens_return_type_with_dict_literal_param_ref_defers() {
         scope,
         "FN (USE xs :Number) -> ({\"k\": xs}) = (xs)",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("USE") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("USE should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "USE return type should be Deferred (DictLiteral value referencing param)",
@@ -127,11 +111,7 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          FN (USE_ORD Er :OrderedSig) -> Er = (Er)",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("USE_ORD") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("USE_ORD should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "USE_ORD");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
         "USE_ORD return type should be Deferred after Combine wake, got {:?}",
@@ -156,11 +136,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
         "FN (USE xs :MyT) -> (LIST_OF Number) = ([1])\n\
          LET MyT = Number",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("USE") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("USE should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "USE");
     assert_eq!(
         f.signature.return_type,
         ReturnType::Resolved(KType::List(Box::new(KType::Number))),
@@ -183,11 +159,7 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
         "FN (NOP) -> MyT = (1)\n\
          LET MyT = Number",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("NOP") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("NOP should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "NOP");
     assert_eq!(
         f.signature.return_type,
         ReturnType::Resolved(KType::Number),
@@ -207,11 +179,7 @@ fn fn_def_forward_let_parameterized_return_type_resolves_after_wake() {
         "FN (NUMS) -> :(List MyT) = ([1])\n\
          LET MyT = Number",
     );
-    let data = scope.bindings().data();
-    let f = match data.get("NUMS") {
-        Some(KObject::KFunction(f, _)) => *f,
-        other => panic!("NUMS should be a function, got {:?}", other.map(|o| o.ktype())),
-    };
+    let f = lookup_fn(scope, "NUMS");
     assert_eq!(
         f.signature.return_type,
         ReturnType::Resolved(KType::List(Box::new(KType::Number))),
@@ -242,8 +210,7 @@ fn fn_def_parens_param_type_non_type_value_errors() {
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("expected a type expression")),
         "expected ShapeError mentioning 'expected a type expression', got {err}",
     );
-    let data = scope.bindings().data();
-    assert!(data.get("USE").is_none(), "USE should not register");
+    assert!(!fn_is_registered(scope, "USE"), "USE should not register");
 }
 
 /// Combine-finish return-type splice check: a parens-form return type that
@@ -265,6 +232,5 @@ fn fn_def_parens_return_type_non_type_value_errors() {
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("return-type slot sub-Dispatch")),
         "expected ShapeError mentioning 'return-type slot sub-Dispatch', got {err}",
     );
-    let data = scope.bindings().data();
-    assert!(data.get("NOP").is_none(), "NOP should not register");
+    assert!(!fn_is_registered(scope, "NOP"), "NOP should not register");
 }

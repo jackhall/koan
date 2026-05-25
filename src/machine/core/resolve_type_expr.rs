@@ -58,7 +58,7 @@ impl<'a> Scope<'a> {
     ///   structured `ShapeError`.
     pub fn resolve_type_expr(&'a self, te: &TypeExpr) -> ResolveTypeExprOutcome<'a> {
         use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
-        if let Some(kt) = self.bindings.type_expr_memo_get(te) {
+        if let Some(kt) = self.type_expr_memo_get(te) {
             return ResolveTypeExprOutcome::Done(kt);
         }
         let mut elaborator = Elaborator::new(self);
@@ -67,7 +67,7 @@ impl<'a> Scope<'a> {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
                     let kt_ref: &'a KType = self.arena.alloc_ktype(kt);
-                    self.bindings.type_expr_memo_insert(te.clone(), kt_ref);
+                    self.type_expr_memo_insert(te.clone(), kt_ref);
                     ResolveTypeExprOutcome::Done(kt_ref)
                 } else {
                     ResolveTypeExprOutcome::Park(pending)
@@ -144,7 +144,7 @@ impl<'k> Iterator for KTypeUserRefs<'k> {
                 KType::UserType { scope_id, name, .. } => {
                     return Some((*scope_id, name.as_str()));
                 }
-                KType::SignatureBound { sig_id, sig_path, .. } => {
+                KType::SatisfiesSignature { sig_id, sig_path, .. } => {
                     return Some((*sig_id, sig_path.as_str()));
                 }
                 KType::List(inner) => self.stack.push(inner),
@@ -174,7 +174,7 @@ impl<'k> Iterator for KTypeUserRefs<'k> {
                 | KType::KExpression
                 | KType::TypeExprRef
                 | KType::Type
-                | KType::Signature
+                | KType::MetaSignature
                 | KType::Any
                 | KType::AnyUserType { .. }
                 | KType::RecursiveRef(_) => {}

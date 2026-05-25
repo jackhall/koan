@@ -5,106 +5,347 @@
 //! folding lives on [`super::type_expr_frame::TypeExprFrame`] so framing arms here stay
 //! one-liners.
 //!
+//! Phase 4: `Reader` now tracks an original-source `cursor: u32` alongside its byte
+//! position in the masked stream. JUMP markers snap the cursor; LITERAL markers leave it
+//! untouched (the JUMP that follows every literal re-aligns it). Verbatim bytes advance
+//! the cursor by their UTF-8 width unless the byte is synthetic — i.e. immediately
+//! preceded by a JUMP — in which case the JUMP already set the cursor and the synthetic
+//! byte is shadow-positioned at the same offset. Frame open/close and token-start arms
+//! record cursor snapshots so spans land on `KExpression`, the wrapping `Spanned`, and
+//! the structural keyword pushes. `classify_token` carries the token-start offset down to
+//! atom-level so sub-atoms (ATTR, NOT, TRY triggers) get 1-codepoint trigger spans inside
+//! a token-wide wrapper.
+//!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
 use std::collections::HashMap;
 
-use crate::parse::quotes::{mask_quotes, QUOTE_PLACEHOLDER};
-use crate::parse::whitespace::collapse_whitespace;
+use std::rc::Rc;
+
+use crate::machine::core::source::{self, CurrentFileGuard, FileId, SourceFile, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
+use crate::machine::KError;
+use crate::parse::quotes::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
+use crate::parse::whitespace::collapse_whitespace;
 
 use super::dict_literal::DictFrame;
 use super::frame::{close_paren_to_part, Frame};
 use super::parse_stack::{close_collection, flush_token, open_collection, ParseStack};
 use super::type_expr_frame::TypeExprFrame;
 
-fn resolve_literal(inner: &str, quotes: &HashMap<usize, String>) -> Result<String, String> {
-    if inner.is_empty() {
-        return Ok(String::new());
+/// Width of the UTF-8 codepoint whose leading byte is `b`. Defaults to 1 on malformed
+/// continuation bytes so a corrupt input still terminates rather than spinning.
+fn utf8_width(b: u8) -> usize {
+    match b {
+        _ if b < 0x80 => 1,
+        _ if b & 0xE0 == 0xC0 => 2,
+        _ if b & 0xF0 == 0xE0 => 3,
+        _ if b & 0xF8 == 0xF0 => 4,
+        _ => 1,
     }
-    let rest = inner
-        .strip_prefix(QUOTE_PLACEHOLDER)
-        .ok_or_else(|| format!("unexpected content between quotes: {:?}", inner))?;
-    let idx: usize = rest
-        .parse()
-        .map_err(|_| format!("bad placeholder index in: {:?}", inner))?;
-    quotes
-        .get(&idx)
-        .cloned()
-        .ok_or_else(|| format!("unknown placeholder index: {}", idx))
 }
 
-pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<KExpression<'a>, String> {
+/// Decode the codepoint at `bytes[pos]` without advancing. Returns `None` past EOF or
+/// on malformed UTF-8 (the masked stream is always valid UTF-8 in practice).
+fn decode_char_at(bytes: &[u8], pos: usize) -> Option<char> {
+    let b = *bytes.get(pos)?;
+    let width = utf8_width(b);
+    let slice = bytes.get(pos..pos + width)?;
+    std::str::from_utf8(slice).ok()?.chars().next()
+}
+
+/// Like `decode_char_at`, but transparently skips over `JUMP_MARK <digits> JUMP_MARK`
+/// runs. The collapse pass plants JUMPs immediately after `]`/`}` (the close-adjacency
+/// check below has to look past them to find the real next token), and similar gaps
+/// appear at line / dedent boundaries. LITERAL markers are *not* skipped — a literal
+/// glued to a closing bracket is still an adjacency violation.
+fn peek_char_past_jumps(bytes: &[u8], pos: usize) -> Option<char> {
+    let mut p = pos;
+    while let Some(&b) = bytes.get(p) {
+        if b != JUMP_MARK {
+            return decode_char_at(bytes, p);
+        }
+        p += 1;
+        while let Some(&d) = bytes.get(p) {
+            if d == JUMP_MARK {
+                break;
+            }
+            p += 1;
+        }
+        if bytes.get(p) == Some(&JUMP_MARK) {
+            p += 1;
+        }
+    }
+    None
+}
+
+/// Hand-rolled byte cursor over the masked stream. Maintains both stream `pos` and
+/// original-source `cursor: u32`. The `just_jumped` flag flips on every JUMP and is
+/// consumed by the next byte-advance: that next byte is "synthetic" (collapse-inserted
+/// or post-mask alignment), so it shouldn't advance the cursor — the JUMP already set
+/// it to the next real-content offset. Subsequent verbatim bytes advance the cursor
+/// normally.
+struct Reader<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    cursor: u32,
+    just_jumped: bool,
+}
+
+impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0, cursor: 0, just_jumped: false }
+    }
+
+    fn peek_byte(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        decode_char_at(self.bytes, self.pos)
+    }
+
+    /// Consume one byte. The cursor advances by 1 for verbatim bytes; for the byte
+    /// immediately after a JUMP the advance is suppressed (the byte is synthetic and
+    /// the JUMP already snapped cursor to the next real offset).
+    fn advance_byte(&mut self) {
+        self.pos += 1;
+        if self.just_jumped {
+            self.just_jumped = false;
+        } else {
+            self.cursor += 1;
+        }
+    }
+
+    /// Decode the codepoint at `pos` and advance `pos` by its UTF-8 width. The cursor
+    /// advances by the same width unless this is the byte immediately after a JUMP.
+    fn advance_codepoint(&mut self) -> char {
+        let b = self.bytes[self.pos];
+        let width = utf8_width(b);
+        let c = decode_char_at(self.bytes, self.pos)
+            .expect("masked stream must be valid UTF-8");
+        self.pos += width;
+        if self.just_jumped {
+            self.just_jumped = false;
+        } else {
+            self.cursor += width as u32;
+        }
+        c
+    }
+
+    /// Consume a `\x1D<digits>\x1D` JUMP marker. The leading sentinel must already be
+    /// at the cursor. Snaps `cursor` to the parsed offset and flags `just_jumped` so the
+    /// next byte-advance doesn't double-count.
+    fn read_jump(&mut self) -> Result<u32, KError> {
+        debug_assert_eq!(self.peek_byte(), Some(JUMP_MARK));
+        self.pos += 1;
+        let value = self.read_decimal(JUMP_MARK, "JUMP marker")?;
+        if self.peek_byte() != Some(JUMP_MARK) {
+            return Err(KError::parse("JUMP marker missing closing sentinel", None));
+        }
+        self.pos += 1;
+        self.cursor = value;
+        self.just_jumped = true;
+        Ok(value)
+    }
+
+    /// Consume a `\x1F<idx>\x1E<orig_byte_len>` LITERAL marker. The leading sentinel
+    /// must already be at the cursor. Returns `(idx, orig_byte_len)`; the cursor is
+    /// *not* advanced — the JUMP that mask_quotes always emits after a literal
+    /// re-aligns it past the closing quote.
+    fn read_literal_marker(&mut self) -> Result<(usize, u32), KError> {
+        debug_assert_eq!(self.peek_byte(), Some(LITERAL_MARK));
+        self.pos += 1;
+        let idx = self.read_decimal(LEN_SEP, "LITERAL marker idx")?;
+        if self.peek_byte() != Some(LEN_SEP) {
+            return Err(KError::parse("LITERAL marker missing length separator", None));
+        }
+        self.pos += 1;
+        let len = self.read_decimal_until_non_digit("LITERAL marker length")?;
+        Ok((idx as usize, len))
+    }
+
+    /// Read ASCII decimal digits up to (but not consuming) `stop`. Errors when the
+    /// run is empty or when the digits don't fit in `u32`.
+    fn read_decimal(&mut self, stop: u8, label: &str) -> Result<u32, KError> {
+        let start = self.pos;
+        while let Some(b) = self.peek_byte() {
+            if b == stop {
+                break;
+            }
+            if !b.is_ascii_digit() {
+                return Err(KError::parse(
+                    format!("{label}: non-digit byte {b:#x} in payload"),
+                    None,
+                ));
+            }
+            self.pos += 1;
+        }
+        let digits = &self.bytes[start..self.pos];
+        if digits.is_empty() {
+            return Err(KError::parse(format!("{label}: empty decimal payload"), None));
+        }
+        std::str::from_utf8(digits)
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .ok_or_else(|| KError::parse(format!("{label}: invalid decimal payload"), None))
+    }
+
+    /// Read ASCII decimal digits until the next non-digit byte (or EOF). Errors when
+    /// the run is empty or when the digits don't fit in `u32`.
+    fn read_decimal_until_non_digit(&mut self, label: &str) -> Result<u32, KError> {
+        let start = self.pos;
+        while let Some(b) = self.peek_byte() {
+            if !b.is_ascii_digit() {
+                break;
+            }
+            self.pos += 1;
+        }
+        let digits = &self.bytes[start..self.pos];
+        if digits.is_empty() {
+            return Err(KError::parse(format!("{label}: empty decimal payload"), None));
+        }
+        std::str::from_utf8(digits)
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .ok_or_else(|| KError::parse(format!("{label}: invalid decimal payload"), None))
+    }
+}
+
+pub fn build_tree<'a>(
+    masked: &[u8],
+    quotes: &HashMap<usize, String>,
+) -> Result<KExpression<'a>, KError> {
     let mut stack = ParseStack::new();
     let mut buf = String::new();
-    let mut chars = masked.chars().peekable();
-    // Used by adjacency checks for `[`, `{`, `<`, `>`.
+    let mut token_start: Option<u32> = None;
+    let mut reader = Reader::new(masked);
     let mut prev: Option<char> = None;
-    // `Some(c)` after consuming a `#`/`$` while waiting for the mandatory `(`. Sigils are
-    // paren-only (`#foo`, `# (foo)`, `#42` are parse errors); enforced by the top-of-loop
-    // guard below, so individual arms don't repeat the check.
-    let mut pending_sigil: Option<char> = None;
-    // `true` after consuming a `:(` glued type-expression sigil. The next `(` arm opens a
-    // `TypeExpr` frame instead of an `Expression` frame.
-    let mut pending_type_paren = false;
+    // (sigil char, cursor of the sigil byte).
+    let mut pending_sigil: Option<(char, u32)> = None;
+    // Cursor of the leading `:` that opened a `:(` type-expression group.
+    let mut pending_type_paren_cursor: Option<u32> = None;
 
-    while let Some(c) = chars.next() {
-        if let Some(s) = pending_sigil {
+    loop {
+        // Drain JUMP markers at the top of the loop so the dispatch never has to
+        // think about them. Each JUMP snaps `reader.cursor` to the payload offset
+        // and flips `just_jumped` so the next byte-advance doesn't double-count.
+        while reader.peek_byte() == Some(JUMP_MARK) {
+            reader.read_jump()?;
+        }
+        let Some(b) = reader.peek_byte() else { break };
+
+        let c = reader
+            .peek_char()
+            .ok_or_else(|| KError::parse("malformed UTF-8 in masked stream", None))?;
+
+        if let Some((s, _)) = pending_sigil {
             if c != '(' {
-                return Err(format!("expected '(' after '{s}', found '{c}'"));
+                return Err(KError::parse(
+                    format!("expected '(' after '{s}', found '{c}'"),
+                    None,
+                ));
             }
         }
+
         match c {
             '#' | '$' => {
-                // Reject `foo#(...)` here so the diagnostic points at the sigil; otherwise it
-                // would surface on the following char as "expected '(' after sigil".
                 if !buf.is_empty() {
-                    return Err(format!(
-                        "'{c}' sigil must be preceded by whitespace or '(' (got token char {prev:?})"
+                    return Err(KError::parse(
+                        format!(
+                            "'{c}' sigil must be preceded by whitespace or '(' (got token char {prev:?})"
+                        ),
+                        None,
                     ));
                 }
-                pending_sigil = Some(c);
+                let sigil_cursor = reader.cursor;
+                reader.advance_byte();
+                pending_sigil = Some((c, sigil_cursor));
             }
             '(' => {
-                flush_token(&mut stack, &mut buf)?;
-                if pending_type_paren {
-                    pending_type_paren = false;
-                    stack.push_frame(Frame::TypeExpr(TypeExprFrame::new()));
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                let span_start = reader.cursor;
+                reader.advance_byte();
+                if let Some(type_start) = pending_type_paren_cursor.take() {
+                    stack.push_frame(Frame::TypeExpr {
+                        tef: TypeExprFrame::new(),
+                        span_start: type_start,
+                    });
                 } else {
-                    let head = match pending_sigil.take() {
-                        Some('#') => Some("QUOTE"),
-                        Some('$') => Some("EVAL"),
-                        _ => None,
+                    let (head, sigil_cursor) = match pending_sigil.take() {
+                        Some(('#', sc)) => (Some("QUOTE"), Some(sc)),
+                        Some(('$', sc)) => (Some("EVAL"), Some(sc)),
+                        _ => (None, None),
                     };
                     stack.push_frame(Frame::Expression {
-                        expr: KExpression { parts: Vec::new() },
+                        expr: KExpression::new(Vec::new()),
                         head,
+                        span_start,
+                        sigil_cursor,
                     });
                 }
             }
             ')' => {
-                flush_token(&mut stack, &mut buf)?;
-                let frame = stack
-                    .pop_top()
-                    .ok_or_else(|| "closed paren without matching open paren".to_string())?;
-                stack.push_part(close_paren_to_part(frame)?);
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                reader.advance_byte();
+                let end = reader.cursor;
+                let frame = stack.pop_top().ok_or_else(|| {
+                    KError::parse("closed paren without matching open paren", None)
+                })?;
+                stack.push_part(close_paren_to_part(frame, end)?);
             }
-            '[' => open_collection(&mut stack, &mut buf, '[', prev, Frame::List(Vec::new()))?,
-            ']' => close_collection(
-                &mut stack,
-                &mut buf,
-                ']',
-                chars.peek().copied(),
-                "closed bracket without matching open bracket",
-            )?,
-            '{' => open_collection(&mut stack, &mut buf, '{', prev, Frame::Dict(DictFrame::new()))?,
-            '}' => close_collection(
-                &mut stack,
-                &mut buf,
-                '}',
-                chars.peek().copied(),
-                "closed brace without matching open brace",
-            )?,
+            '[' => {
+                let span_start = reader.cursor;
+                open_collection(
+                    &mut stack,
+                    &mut buf,
+                    '[',
+                    prev,
+                    Frame::List { items: Vec::new(), span_start },
+                    &mut token_start,
+                )?;
+                reader.advance_byte();
+            }
+            ']' => {
+                reader.advance_byte();
+                let end = reader.cursor;
+                let next = peek_char_past_jumps(reader.bytes, reader.pos);
+                close_collection(
+                    &mut stack,
+                    &mut buf,
+                    ']',
+                    next,
+                    "closed bracket without matching open bracket",
+                    &mut token_start,
+                    end,
+                )?;
+            }
+            '{' => {
+                let span_start = reader.cursor;
+                open_collection(
+                    &mut stack,
+                    &mut buf,
+                    '{',
+                    prev,
+                    Frame::Dict { dict: DictFrame::new(), span_start },
+                    &mut token_start,
+                )?;
+                reader.advance_byte();
+            }
+            '}' => {
+                reader.advance_byte();
+                let end = reader.cursor;
+                let next = peek_char_past_jumps(reader.bytes, reader.pos);
+                close_collection(
+                    &mut stack,
+                    &mut buf,
+                    '}',
+                    next,
+                    "closed brace without matching open brace",
+                    &mut token_start,
+                    end,
+                )?;
+            }
             // Dispatch order: dict-pair separator first (state-machine has its own rules),
             // then `:|` / `:!` ascription operators (assembled here because `!` is itself a
             // prefix operator and would never reach keyword classification), then the
@@ -112,52 +353,65 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
             // whitespace after or at EOF) is a parse error — type-position annotation must
             // glue the sigil to its operand.
             ':' => {
-                flush_token(&mut stack, &mut buf)?;
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                let colon_cursor = reader.cursor;
+                reader.advance_byte();
                 if let Some(d) = stack.top_dict_mut() {
                     d.accept_colon()?;
                 } else {
-                    match chars.peek().copied() {
-                        Some('|') => {
-                            chars.next();
-                            stack.push_part(ExpressionPart::Keyword(":|".to_string()));
+                    match reader.peek_byte() {
+                        Some(b'|') => {
+                            reader.advance_byte();
+                            let span = Span { start: colon_cursor, end: reader.cursor };
+                            stack.push_part(Spanned::at(
+                                ExpressionPart::Keyword(":|".to_string()),
+                                span,
+                            ));
                             prev = Some('|');
                             continue;
                         }
-                        Some('!') => {
-                            chars.next();
-                            stack.push_part(ExpressionPart::Keyword(":!".to_string()));
+                        Some(b'!') => {
+                            reader.advance_byte();
+                            let span = Span { start: colon_cursor, end: reader.cursor };
+                            stack.push_part(Spanned::at(
+                                ExpressionPart::Keyword(":!".to_string()),
+                                span,
+                            ));
                             prev = Some('!');
                             continue;
                         }
-                        Some('(') => {
-                            pending_type_paren = true;
+                        Some(b'(') => {
+                            pending_type_paren_cursor = Some(colon_cursor);
                             // Don't consume the '(' — let the next loop iteration's '(' arm
-                            // see it and open the TypeExpr frame because pending_type_paren
-                            // is set.
+                            // see it and open the TypeExpr frame because the cursor is set.
                         }
-                        Some(ch) if ch.is_ascii_uppercase() => {
+                        Some(byte) if byte.is_ascii_uppercase() => {
                             // Glued type sigil: the next token starts with an uppercase
-                            // letter and will classify as a `Type` per `classify_atom`. We
-                            // consume the `:` here and let the regular tokenizer produce
-                            // the `ExpressionPart::Type`.
+                            // letter and will classify as a `Type` per `classify_atom`.
+                            // The `:` is already consumed; the regular tokenizer produces
+                            // the `ExpressionPart::Type` from the following identifier.
                         }
-                        Some(ch) if ch.is_whitespace() => {
-                            return Err(
-                                "':' must be glued to its operand at a type position; \
-                                 write `name :Type` (no space after `:`) or `:(List ...)`"
-                                    .to_string(),
-                            );
+                        Some(_) => {
+                            let next_char = reader.peek_char().unwrap_or('?');
+                            if next_char.is_whitespace() {
+                                return Err(KError::parse(
+                                    "':' must be glued to its operand at a type position; \
+                                     write `name :Type` (no space after `:`) or `:(List ...)`",
+                                    None,
+                                ));
+                            }
+                            return Err(KError::parse(
+                                format!(
+                                    "':' must be followed by a type name (uppercase-leading) or `(`; \
+                                     got `{next_char}`"
+                                ),
+                                None,
+                            ));
                         }
                         None => {
-                            return Err(
-                                "trailing ':' at end of input; expected a type name or `(`"
-                                    .to_string(),
-                            );
-                        }
-                        Some(ch) => {
-                            return Err(format!(
-                                "':' must be followed by a type name (uppercase-leading) or `(`; \
-                                 got `{ch}`"
+                            return Err(KError::parse(
+                                "trailing ':' at end of input; expected a type name or `(`",
+                                None,
                             ));
                         }
                     }
@@ -166,7 +420,8 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
             // Pair separator in a dict; whitespace-equivalent (no-op) everywhere else, so
             // type-annotation triples like `a: Number, b: Str` parse without altering shape.
             ',' => {
-                flush_token(&mut stack, &mut buf)?;
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                reader.advance_byte();
                 if let Some(d) = stack.top_dict_mut() {
                     d.accept_comma()?;
                 }
@@ -178,50 +433,120 @@ pub fn build_tree<'a>(masked: &str, quotes: &HashMap<usize, String>) -> Result<K
             // `prev == Some('-')` carve-out keeps `>` glued to the leading `-`.
             '>' if prev == Some('-') => {
                 buf.push('>');
+                reader.advance_byte();
             }
             '<' | '>' => {
-                flush_token(&mut stack, &mut buf)?;
-                stack.push_part(ExpressionPart::Keyword(c.to_string()));
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                let start = reader.cursor;
+                reader.advance_byte();
+                let span = Span { start, end: reader.cursor };
+                stack.push_part(Spanned::at(
+                    ExpressionPart::Keyword(c.to_string()),
+                    span,
+                ));
             }
+            // Quote literals: `mask_quotes` has rewritten the content into either an
+            // empty pair (no marker) or a `LITERAL_MARK <idx> LEN_SEP <len>` placeholder
+            // followed by the closing quote and a `JUMP_MARK <past_close> JUMP_MARK`
+            // anchor. The literal-open cursor is captured before any advance; the
+            // closing JUMP snaps cursor to one past the original closing quote, which is
+            // the correct exclusive end of the span.
             '\'' | '"' => {
-                flush_token(&mut stack, &mut buf)?;
-                let open = c;
-                let mut inner = String::new();
-                loop {
-                    match chars.next() {
-                        None => return Err(format!("unclosed quote: {}", open)),
-                        Some(ch) if ch == open => break,
-                        Some(ch) => inner.push(ch),
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                let open_byte = b;
+                let literal_open_cursor = reader.cursor;
+                reader.advance_byte();
+                match reader.peek_byte() {
+                    Some(byte) if byte == open_byte => {
+                        // Empty literal `''` / `""`. No marker, no JUMP — both quotes
+                        // advance cursor verbatim, so reader.cursor is already past the
+                        // closing quote.
+                        reader.advance_byte();
+                        let span = Span { start: literal_open_cursor, end: reader.cursor };
+                        stack.push_part(Spanned::at(
+                            ExpressionPart::Literal(KLiteral::String(String::new())),
+                            span,
+                        ));
+                    }
+                    Some(LITERAL_MARK) => {
+                        let (idx, _orig_byte_len) = reader.read_literal_marker()?;
+                        match reader.peek_byte() {
+                            Some(byte) if byte == open_byte => reader.advance_byte(),
+                            _ => {
+                                return Err(KError::parse(
+                                    format!("unclosed quote: {}", open_byte as char),
+                                    None,
+                                ));
+                            }
+                        }
+                        if reader.peek_byte() == Some(JUMP_MARK) {
+                            reader.read_jump()?;
+                        }
+                        let literal = quotes.get(&idx).cloned().ok_or_else(|| {
+                            KError::parse(format!("unknown literal placeholder index: {idx}"), None)
+                        })?;
+                        let span = Span { start: literal_open_cursor, end: reader.cursor };
+                        stack.push_part(Spanned::at(
+                            ExpressionPart::Literal(KLiteral::String(literal)),
+                            span,
+                        ));
+                    }
+                    _ => {
+                        return Err(KError::parse(
+                            format!("unclosed quote: {}", open_byte as char),
+                            None,
+                        ));
                     }
                 }
-                let literal = resolve_literal(&inner, quotes)?;
-                stack.push_part(ExpressionPart::Literal(KLiteral::String(literal)));
             }
             c if c.is_whitespace() => {
-                flush_token(&mut stack, &mut buf)?;
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                reader.advance_codepoint();
             }
             _ => {
-                buf.push(c);
+                if buf.is_empty() {
+                    token_start = Some(reader.cursor);
+                }
+                let consumed = reader.advance_codepoint();
+                buf.push(consumed);
             }
         }
         prev = Some(c);
     }
-    if let Some(s) = pending_sigil {
-        return Err(format!("trailing '{s}' sigil at end of input; expected '('"));
+    if let Some((s, _)) = pending_sigil {
+        return Err(KError::parse(
+            format!("trailing '{s}' sigil at end of input; expected '('"),
+            None,
+        ));
     }
-    flush_token(&mut stack, &mut buf)?;
+    flush_token(&mut stack, &mut buf, &mut token_start)?;
     stack.finish()
 }
 
-/// Collapses single-`Expression` wrappers so `((foo bar))` and `(foo bar)` dispatch the same.
+/// Collapses single-`Expression` wrappers so `((foo bar))` and `(foo bar)` dispatch the
+/// same. Captures the outermost `(span, file)` before the collapse loop and stamps them
+/// back onto the final survivor — peeling otherwise leaks the innermost wrapper's span,
+/// but users see the outermost region in diagnostics.
 fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
-    while expr.parts.len() == 1 && matches!(expr.parts[0], ExpressionPart::Expression(_)) {
-        if let Some(ExpressionPart::Expression(inner)) = expr.parts.pop() {
+    let outer_span = expr.span;
+    let outer_file = expr.file;
+    while expr.parts.len() == 1 && matches!(expr.parts[0].value, ExpressionPart::Expression(_)) {
+        if let Some(Spanned { value: ExpressionPart::Expression(inner), .. }) = expr.parts.pop() {
             expr = *inner;
         }
     }
-    expr.parts = expr.parts.into_iter().map(peel_part).collect();
+    expr.parts = expr.parts.into_iter().map(peel_spanned).collect();
+    if outer_span.is_some() {
+        expr.span = outer_span;
+    }
+    if outer_file.is_some() {
+        expr.file = outer_file;
+    }
     expr
+}
+
+fn peel_spanned<'a>(part: Spanned<ExpressionPart<'a>>) -> Spanned<ExpressionPart<'a>> {
+    Spanned { value: peel_part(part.value), span: part.span }
 }
 
 fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
@@ -242,16 +567,40 @@ fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
     }
 }
 
-/// Public entry point: returns one `KExpression` per top-level line.
-pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, String> {
-    let (masked, quotes) = mask_quotes(input);
+/// Public entry point: returns one `KExpression` per top-level line. Registers the
+/// input under the synthetic path `<input>` so spans on returned `KExpression` nodes
+/// resolve into source locations via the thread-local registry. Use
+/// [`parse_with_path`] when the caller has a real filename.
+pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, KError> {
+    parse_with_path(input, "<input>")
+}
+
+/// Variant of [`parse`] that registers the source under a caller-supplied `path`.
+/// CLI / interpret-with-writer use this so error frames render real filenames.
+pub fn parse_with_path<'a>(
+    input: &str,
+    path: impl Into<Rc<str>>,
+) -> Result<Vec<KExpression<'a>>, KError> {
+    let id = source::register(SourceFile::new(path, input.to_string()));
+    parse_with_source(id)
+}
+
+/// Run the parse pipeline against a pre-registered `SourceFile`. Installs `id` as
+/// the active `CURRENT_FILE` for the duration of the call via [`CurrentFileGuard`]
+/// so `KError::parse` and `Frame::for_call` see the right file.
+pub fn parse_with_source<'a>(id: FileId) -> Result<Vec<KExpression<'a>>, KError> {
+    let _guard = CurrentFileGuard::push(id);
+    let (masked, quotes) = source::with(id, |f| mask_quotes(&f.text));
     let collapsed = collapse_whitespace(&masked)?;
     let root = build_tree(&collapsed, &quotes)?;
     root.parts
         .into_iter()
-        .map(|part| match part {
+        .map(|part| match part.value {
             ExpressionPart::Expression(e) => Ok(peel_redundant(*e)),
-            other => Err(format!("unexpected top-level part: {:?}", other)),
+            other => Err(KError::parse(
+                format!("unexpected top-level part: {:?}", other),
+                None,
+            )),
         })
         .collect()
 }

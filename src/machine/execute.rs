@@ -11,7 +11,7 @@ mod lift;
 mod nodes;
 mod scheduler;
 
-pub use interpret::{interpret, interpret_with_writer};
+pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 pub use scheduler::Scheduler;
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ Future work on the type and module system. Each entry points at a
 
 ## Module-system stages
 
-- [Dependent parameter annotations](../../roadmap/predicate_typing/dependent-param-annotations.md)
+- [Dependent parameter annotations](../../roadmap/type_language/type-parameter-binding.md)
   — parameter types that reference earlier parameters in the same FN
   signature; required for OCaml-style multi-parameter functor signatures
   with cross-parameter sharing constraints. Refines the `Deferred(_)`
@@ -34,13 +34,14 @@ Future work on the type and module system. Each entry points at a
 ## Cross-cutting
 
 - [Standard library](../../roadmap/libraries/standard-library.md) — collections built
-  as functor FNs over their element/key types. Parks the **applicative
-  functor semantics** open question: today's `FN`-based functor surface
-  is generative-only, so independent call sites resolving (via stage 5
-  implicit search) to the same module still mint distinct output types
-  and can't interoperate. Landing form: a separate `FUNCTOR` binder
-  reusing FN mechanics, distinguished at the surface so the
-  generative/applicative choice is visible at the declaration.
+  as FUNCTORs over their element/key types. Parks the **applicative
+  functor semantics** open question: the FUNCTOR binder
+  ([functors.md](functors.md)) is the decided seam, but applicative
+  semantics are deferred behind the predicate-typing work — the language
+  stays generative-only until then. Once predicate typing lands, opt-in
+  syntax and the identity-by-(functor, arguments) machinery let
+  independent call sites resolving (via stage 5 implicit search) to the
+  same module interoperate.
 - [Group-based operators](../../roadmap/libraries/group-based-operators.md) — paired
   operators like `+`/`-` as a single algebraic declaration. Lands on top of
   the module-system substrate.

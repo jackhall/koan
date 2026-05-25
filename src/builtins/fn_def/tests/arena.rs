@@ -28,12 +28,63 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     );
 }
 
-/// A parameterized user-fn called many times must not grow the run-root arena per
-/// call: per-call allocations (child scope, param clones, body rewrites, value_pass
-/// clones) belong in the per-call arena, leaving only the lifted return value in
-/// run-root — one `KObject::Number` per call here. The bound (~3 allocations/call)
-/// tolerates the lift while catching any future regression that re-introduces a
-/// per-call leak into run-root.
+/// A chain of user-fn tail calls (`AA` → `BB` → `CC` → `DD` → `PRINT`)
+/// exercises the per-call frame reuse path. After the first invocation
+/// allocates a fresh frame for `AA`, each subsequent invoke reuses the
+/// previous step's frame — `tail_reuse_count` bumps once per reuse.
+#[test]
+fn chained_tail_calls_reuse_frames() {
+    let arena = RuntimeArena::new();
+    let (scope, captured) = run_root_with_buf(&arena);
+
+    run(
+        scope,
+        "FN (DD) -> Null = (PRINT \"ok\")\n\
+         FN (CC) -> Null = (DD)\n\
+         FN (BB) -> Null = (CC)\n\
+         FN (AA) -> Null = (BB)",
+    );
+
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("AA"), scope);
+    sched.execute().expect("AA should run");
+
+    assert_eq!(captured.borrow().as_slice(), b"ok\n");
+    assert_eq!(sched.len(), 1, "tail chain should collapse to one slot");
+    assert!(
+        sched.tail_reuse_count() >= 3,
+        "expected at least 3 reuses across AA -> BB -> CC -> DD, got {}",
+        sched.tail_reuse_count(),
+    );
+}
+
+/// Recursive tail-call through a `MATCH` arm: the user-fn `HOP` tail-calls
+/// itself by way of `match_case::body` returning a `Tail`. The user-fn's frame
+/// gets cloned onto the MATCH-built frame's `outer_frame`, so its
+/// `strong_count` is > 1 at the moment the MATCH-arm body redispatches — reuse
+/// must correctly refuse for the user-fn-on-match-tail step. The cross-step
+/// reuse still happens once the MATCH frame is dropped at the next tail
+/// rewrite.
+#[test]
+fn match_driven_tail_recursion_completes() {
+    let arena = RuntimeArena::new();
+    let (scope, captured) = run_root_with_buf(&arena);
+
+    run(
+        scope,
+        "UNION Bit = (one :Null zero :Null)\n\
+         FN (HOP b :Tagged) -> Any = (MATCH (b) WITH (\
+             one -> (HOP (Bit (zero null)))\
+             zero -> (PRINT \"done\")\
+         ))",
+    );
+
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(parse_one("HOP (Bit (one null))"), scope);
+    sched.execute().expect("HOP should run");
+
+    assert_eq!(captured.borrow().as_slice(), b"done\n");
+}
 #[test]
 fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     let arena = RuntimeArena::new();

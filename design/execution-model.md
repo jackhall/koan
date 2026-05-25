@@ -31,6 +31,16 @@ already-resolved literal scalars that don't need a dep slot — lives in the
 closure's capture rather than in fixed-shape variants. Body-finalization for
 future MODULE/SIG inner work will reuse the same primitive.
 
+`Catch` is the catching dual of a single-dep `Combine`: it waits on one
+slot and hands its terminal to a [`CatchFinish`](../src/machine/core/kfunction.rs)
+closure as a `Result<&KObject, KError>`. Unlike `Combine`, an errored dep
+does not short-circuit — the closure always runs and decides whether to
+recover or re-raise. The `TRY-WITH` builtin
+([`try_with`](../src/builtins/try_with.rs); see
+[error-handling.md](error-handling.md)) is the sole caller today: it
+spawns its watched expression as a sub-dispatch and registers a `Catch`
+that picks the matching branch by tag.
+
 ## `BodyResult` — the three return shapes
 
 A builtin body returns one of:
@@ -82,6 +92,32 @@ band a push lands in) and the priority rule (which band a pop drains first)
 are both enforced by the wrapper's method surface rather than restated at each
 call site.
 
+## Working-copy splice
+
+The scheduler dispatches each expression by mutating an **owned working
+copy** of it. `run_dispatch` extracts every nested sub-expression out of
+the parent's `parts` (replacing each with a placeholder `Identifier`),
+spawns it as a sub-Dispatch, and parks the parent as
+`NodeWork::Bind { expr: rewritten_expr, subs }`. When the subs terminalize,
+`run_bind` writes each result back into the parent: `expr.parts[part_idx]
+= ExpressionPart::Future(value)`. The assembled `Future`-laden expression
+then goes through `resolve_dispatch` as if it had been written with
+literals.
+
+Source-of-truth ASTs are never mutated. The working copy is cloned from
+its source at slot-submission time — `KFunction::invoke` clones the FN
+body, `match_case::body` and `try_with` clone their picked arm, top-level
+expressions move into the slot at `add_dispatch`. The splice mutates the
+slot-owned copy and nothing else; the next call to the same FN clones the
+body fresh.
+
+The splice gives typed-slot dispatch a uniform input shape: sub-Dispatch
+results land in the same positions as literals would, so the
+slot-specificity scoring path is unified across builtins, user-fns, and
+pre-evaluated sub-expressions. The cost — body clone per call, one slot
+per nested `(...)` — and what it buys are detailed in
+[Performance characteristics](#performance-characteristics).
+
 ## Tail-call optimization
 
 [`BodyResult::Tail(KExpression)`](../src/machine/core/kfunction.rs) makes a tail
@@ -92,11 +128,28 @@ construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite.
 
+The slot's `Rc<CallArena>` is held in exactly one place during each step:
+[`Scheduler::execute`](../src/machine/execute/scheduler/execute.rs) moves
+`node.frame` directly into `self.active_frame` (no clone) and reverses the
+move after the step. That single-ownership discipline is what lets the
+tail-reuse path detect "nothing escaped" via `Rc::strong_count == 1`:
+[`SchedulerHandle::try_take_reusable_frame_for_tail`](../src/machine/core/kfunction/scheduler_handle.rs)
+takes the active frame, refuses to hand it out if any clone exists, and
+otherwise lets `KFunction::invoke` reset the frame in place via
+[`CallArena::try_reset_for_tail`](../src/machine/core/arena.rs) — swap the
+inner `RuntimeArena` for a fresh empty one, re-allocate the child `Scope`,
+re-link `outer` to the new call's captured scope. The shell, the heap-pinned
+arena address, and the slot's `frame` field all survive across the
+iteration; only the storage turns over. Frames carrying an escaped closure
+(or any other clone of the `Rc`) fall through to a fresh `CallArena::new`,
+preserving snapshot semantics for the escaped value.
+
 A subtle point: host-stack overflow on naïve recursion is solved by the graph
 model itself, not by `Tail`. Every "recursive call" enters the scheduler's
 run-set rather than growing the Rust call stack — that property is
 structural, not optimizing. What `Tail` adds is constant **scheduler-vec**
-memory across the tail-call chain.
+memory across the tail-call chain; frame reuse on top of it keeps **heap
+memory** constant too.
 
 ## Transient-node reclamation
 
@@ -189,9 +242,16 @@ engine running before pegged inputs are unblocked.
 
 Forward references between sibling top-level expressions, members of a
 `MODULE` body, and (eventually) names imported across files all require the
-same property: a lookup whose target binder has dispatched but not yet
-executed parks on the producer instead of failing with `UnboundName`. The
-mechanism lives in two pieces.
+same property: a value- or type-position lookup whose target binder has
+dispatched but not yet executed parks on the producer instead of failing with
+`UnboundName`. The park is keyed off `Scope::resolve` consulting the
+`placeholders` table, so it covers every name reached through that path —
+bare-name value slots and type-token slots. A *keyword-headed* function call
+(`ID 7`) is the exception: it resolves through the `functions` bucket, which
+does not consult `placeholders`, so calling a function not yet registered in
+the same scope fails rather than parking (forward calls from a function body
+are unaffected — bodies re-dispatch per call, after every sibling has
+registered). The mechanism lives in two pieces.
 
 A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
 inside the [`Bindings`](../src/machine/core/scope.rs) façade on
@@ -218,15 +278,14 @@ matches on its [`ResolveOutcome`](../src/machine/core/scope.rs):
 `Resolved(r)` continues into phase 3 with the picked function plus the
 per-slot index buckets `r.slots` carries (`wrap_indices`, `ref_name_indices`,
 `eager_indices`); `Ambiguous(n)` surfaces as an `AmbiguousDispatch` error;
-`Unmatched` first tries the head-Keyword placeholder fallback (below) and,
-on miss, surfaces as `DispatchFailed`; `Deferred` (no match against
+`Unmatched` surfaces as `DispatchFailed`; `Deferred` (no match against
 the bare shape but the expression carries nested `Expression` /
 `ListLiteral` / `DictLiteral` parts whose evaluation may produce typed
 `Future(_)` parts that match) jumps to phase 5's eager-fallthrough loop and
 re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
 after subs resolve.
 
-The five rails the resolution feeds:
+The four rails the resolution feeds:
 
 - **Bare-name short-circuit** (phase 1, runs before resolution). A
   single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
@@ -234,17 +293,15 @@ The five rails the resolution feeds:
   to `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail` uses for
   sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
   produces the structured error.
-- **Head-Keyword placeholder fallback** (phase 2, runs inside the
-  `Unmatched` arm). The bucket lookup failed, but a sibling binder may be
-  in flight: `first_keyword_placeholder` walks the expression's `Keyword`
-  parts and, on the first `Resolution::Placeholder` hit, parks this slot
-  on the producer and re-dispatches the same expression. Without this,
-  `(ID 7)` submitted alongside an `FN ID (...) -> Mo.Ty = (...)` whose
-  body defers (its return-type slot routes through a Combine for sub-Dispatch)
-  would race the producer's registration and surface as `no matching
-  function`. Mirrors the bare-name short-circuit's `Placeholder` arm: the
-  consumer parks on the producer's terminal write, then the next pop
-  re-enters and hits the now-registered function.
+
+  Forward references resolve through this rail and the auto-wrap rail
+  (below), both of which route name lookups through `Scope::resolve` and so
+  consult the `placeholders` table. A *keyword-headed* call — `ID 7`, where
+  `ID` is the head Keyword — does not: function dispatch is a `functions`
+  bucket lookup with no placeholder consultation, so a call to a function
+  not yet registered in the same scope surfaces as `DispatchFailed` rather
+  than parking. Forward calls from a function *body* are unaffected: bodies
+  re-dispatch per call, by which point every sibling binder has registered.
 - **Placeholder install** (phase 3). If the picked function carries a
   `pre_run` extractor, `Resolved.placeholder_name` is its result and the
   driver installs `name → NodeId(idx)` on the dispatching scope. A
@@ -318,6 +375,18 @@ trivially-cyclic case (`LET Ty = Ty` — the value-side `Ty` sub-Dispatch is
 the LET binder's `Owned` child and is about to park on its own ancestor)
 generically rather than as a special case in the elaborator.
 
+`would_create_cycle` is a proactive check on the replay-park rail; the
+bare-name short-circuit (phase 1) parks without it, so a value self-reference
+(`LET x = x`, whose RHS `x` resolves through `Scope::resolve` to the binder's
+own placeholder) still forms a cycle. A drain-end guard catches that and any
+other cycle the proactive check doesn't: after [`execute`](../src/machine/execute/scheduler/execute.rs)
+empties its work queues, it scans the slot table for nodes still parked
+(`PreRun`) — a node parked on a dependency that can no longer fire — and
+returns `KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
+the top-level result read panic on an unresolved slot. `sample` is the source
+expression of the first parked `Dispatch`/`Bind` node, so the diagnostic points
+at code the reader can act on.
+
 ## `KObject` and the model/core boundary
 
 [`KObject`](../src/machine/model/values/kobject.rs) is the universal
@@ -360,6 +429,83 @@ types (e.g. `KKey` returns `Result<KKey, String>` rather than
 naming `KError`), and the runtime-reference variants of `KObject`
 sit on the boundary by necessity, naming the `core` types they
 genuinely need.
+
+## Performance characteristics
+
+The slot-based scheduler trades constant-factor speed for behaviors a
+recursive tree-walker can't get cheaply.
+
+### Where time goes
+
+- **Per AST node touched.** Each nested `(...)` becomes its own slot.
+  Cost: `NodeStore::alloc_slot` (pop a free-list index or extend three
+  parallel vectors), `DepGraph::install_for_slot` (write a `dep_edges`
+  entry + bump `pending_deps` on the parent + push into the producer's
+  `notify_list`), and a work-queue push. On the consumer side, the
+  symmetric drain: terminal write, `drain_notify`, decrement counters,
+  push the woken consumer onto the run-set. Compared to a recursive
+  function call on a `&KExpression`, this is roughly an order of
+  magnitude more bookkeeping per node.
+- **Per user-fn call.** `KFunction::invoke` clones the body
+  (`expr.clone()` over the parts vector) so the slot has its own
+  working copy for [the splice mechanism](#working-copy-splice).
+  Clone cost is O(body size). It also acquires a per-call frame —
+  either reusing the prev-step's `CallArena` shell via
+  `try_reset_for_tail` (see [memory-model.md § Tail-step frame
+  reuse](memory-model.md#tail-step-frame-reuse)) or allocating a fresh
+  one. The reuse path is allocation-free; the fresh path heap-allocates
+  one `Rc<CallArena>` plus six `typed_arena::Arena::new()` pools.
+- **Per dep-result splice.** O(1) write into `expr.parts`.
+- **Per terminal.** Single `notify_list` drain. The cost scales with
+  the producer's dependent count, which is typically 1 (the parent
+  Bind/Combine) but unbounded in principle (forward-reference parks).
+
+### What amortizes
+
+- **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
+  during `run_bind` / `run_combine` / `run_catch`, and `add()` pulls
+  from the free-list before extending the underlying vectors. A
+  steady-state recursive body reuses the same slot indices across
+  iterations; `body_subexpression_slots_recycle_across_calls` pins the
+  bound at ≤3 net slots/call.
+- **Tail-call slot rewrite.** `BodyResult::Tail` rewrites the current
+  slot's work in place rather than allocating a new one — one slot
+  for an arbitrarily deep tail-call chain.
+- **Tail-step frame reuse.** When the prev step's `CallArena` is
+  uniquely owned, `try_reset_for_tail` swaps its inner `RuntimeArena`
+  for a fresh one and re-binds — no `Rc<CallArena>` box allocation,
+  no `Scope` re-anchoring through the heap. See
+  [memory-model.md § Tail-step frame reuse](memory-model.md#tail-step-frame-reuse).
+
+### Vs a tree-walking interpreter
+
+A recursive descent on `&KExpression` would skip the slot table, edge
+bookkeeping, and body clone — probably 5-10× faster on tight numeric
+loops. What it can't do cheaply:
+
+- **TCO.** Direct recursion grows the host stack; the koan model
+  rewrites a slot in place. A tree-walker needs explicit trampolining
+  with a worklist (which is roughly the slot table reinvented).
+- **Forward references.** `LET y = (x); LET x = …` parks `y`'s
+  sub-Dispatch on `x`'s producer via `Resolution::Placeholder` and
+  wakes when `x` finalizes. A tree-walker would need a pre-pass to
+  resolve names or fail on out-of-order definitions.
+- **Replay-park on pending types.** Type-elaboration can suspend on a
+  not-yet-finalized type, rejoin when it lands, and re-run the
+  dispatch — without re-evaluating already-computed sub-expressions or
+  blocking the host thread.
+- **Reclaim semantics.** Transient sub-slots free as soon as their
+  parent has consumed them. A tree-walker's stack frames can't
+  selectively reclaim mid-call; everything dies together at function
+  return.
+- **Unified dispatch model.** Slot-specificity scoring runs through
+  one `resolve_dispatch` path for builtins, user-fns, and
+  pre-evaluated sub-expression results (`Future(&KObject)` typed-slot
+  inputs). A tree-walker would need separate evaluation rules for
+  literals, arguments, and intermediate results.
+
+The constant factor is the price; the behaviors above are what bought
+it.
 
 ## Open work
 

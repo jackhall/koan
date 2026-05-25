@@ -9,6 +9,7 @@
 //!   `TypeParams::Function`.
 
 use crate::machine::model::ast::{ExpressionPart, TypeExpr, TypeParams};
+use crate::machine::KError;
 
 pub(super) struct TypeExprFrame<'a> {
     pub(super) parts: Vec<ExpressionPart<'a>>,
@@ -19,26 +20,32 @@ impl<'a> TypeExprFrame<'a> {
         Self { parts: Vec::new() }
     }
 
-    pub(super) fn build(self) -> Result<TypeExpr, String> {
+    pub(super) fn build(self) -> Result<TypeExpr, KError> {
         let TypeExprFrame { parts } = self;
         if parts.is_empty() {
-            return Err(
-                "empty `:(...)` type expression — write `:(<TypeName>)` or `:(<TypeName> <args...>)`"
-                    .to_string(),
-            );
+            return Err(KError::parse(
+                "empty `:(...)` type expression — write `:(<TypeName>)` or `:(<TypeName> <args...>)`",
+                None,
+            ));
         }
         let head_name = match &parts[0] {
             ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => t.name.clone(),
             ExpressionPart::Type(t) => {
-                return Err(format!(
-                    "type-expression head must be a bare type name, got `{}`",
-                    t.render(),
+                return Err(KError::parse(
+                    format!(
+                        "type-expression head must be a bare type name, got `{}`",
+                        t.render(),
+                    ),
+                    None,
                 ));
             }
             other => {
-                return Err(format!(
-                    "type-expression head must be a type name, got `{}`",
-                    other.summarize(),
+                return Err(KError::parse(
+                    format!(
+                        "type-expression head must be a type name, got `{}`",
+                        other.summarize(),
+                    ),
+                    None,
                 ));
             }
         };
@@ -47,15 +54,18 @@ impl<'a> TypeExprFrame<'a> {
         let is_function = head_name == "Function";
 
         match (arrow_idx, is_function) {
-            (Some(_), false) => Err(format!(
-                "type `:({head_name} ...)` cannot contain `->` — \
-                 the arrow is reserved for `:(Function (args) -> return)`",
+            (Some(_), false) => Err(KError::parse(
+                format!(
+                    "type `:({head_name} ...)` cannot contain `->` — \
+                     the arrow is reserved for `:(Function (args) -> return)`",
+                ),
+                None,
             )),
-            (None, true) => Err(
+            (None, true) => Err(KError::parse(
                 "type `:(Function ...)` requires `->` to separate args from the return type \
-                 (e.g. `:(Function (Number) -> Str)`, or `:(Function () -> Str)` for nullary)"
-                    .to_string(),
-            ),
+                 (e.g. `:(Function (Number) -> Str)`, or `:(Function () -> Str)` for nullary)",
+                None,
+            )),
             (None, false) => build_list_params(head_name, rest.to_vec()),
             (Some(idx), true) => build_function_params(head_name, rest.to_vec(), idx),
         }
@@ -64,23 +74,27 @@ impl<'a> TypeExprFrame<'a> {
 
 /// Locate the single `Keyword("->")` and reject any non-type, non-paren parts up front so
 /// the builder paths don't have to re-walk.
-fn find_arrow(head: &str, rest: &[ExpressionPart<'_>]) -> Result<Option<usize>, String> {
+fn find_arrow(head: &str, rest: &[ExpressionPart<'_>]) -> Result<Option<usize>, KError> {
     let mut idx: Option<usize> = None;
     for (i, p) in rest.iter().enumerate() {
         match p {
             ExpressionPart::Type(_) | ExpressionPart::Expression(_) => {}
             ExpressionPart::Keyword(s) if s == "->" => {
                 if idx.is_some() {
-                    return Err(format!(
-                        "type `:({head} ...)` has more than one `->` arrow",
+                    return Err(KError::parse(
+                        format!("type `:({head} ...)` has more than one `->` arrow"),
+                        None,
                     ));
                 }
                 idx = Some(i);
             }
             other => {
-                return Err(format!(
-                    "type `:({head} ...)` parameter must be a type name, got `{}`",
-                    other.summarize(),
+                return Err(KError::parse(
+                    format!(
+                        "type `:({head} ...)` parameter must be a type name, got `{}`",
+                        other.summarize(),
+                    ),
+                    None,
                 ));
             }
         }
@@ -91,7 +105,7 @@ fn find_arrow(head: &str, rest: &[ExpressionPart<'_>]) -> Result<Option<usize>, 
 fn build_list_params<'a>(
     name: String,
     rest: Vec<ExpressionPart<'a>>,
-) -> Result<TypeExpr, String> {
+) -> Result<TypeExpr, KError> {
     if rest.is_empty() {
         return Ok(TypeExpr { name, params: TypeParams::None, builtin_cache: std::cell::OnceCell::new() });
     }
@@ -108,10 +122,13 @@ fn build_list_params<'a>(
 /// sigiled ones — `:(Dict Str (List Number))` and `:(Dict Str :(List Number))` produce
 /// the same shape. The `unreachable!` arm asserts `find_arrow`'s filter contract; if
 /// it ever fires, `find_arrow` accepted a part it shouldn't have.
-fn lift_part(part: ExpressionPart<'_>) -> Result<TypeExpr, String> {
+fn lift_part(part: ExpressionPart<'_>) -> Result<TypeExpr, KError> {
     match part {
         ExpressionPart::Type(t) => Ok(t),
-        ExpressionPart::Expression(boxed) => TypeExprFrame { parts: boxed.parts }.build(),
+        ExpressionPart::Expression(boxed) => TypeExprFrame {
+            parts: boxed.parts.into_iter().map(|s| s.value).collect(),
+        }
+        .build(),
         _ => unreachable!("find_arrow filters parts to Type or Expression"),
     }
 }
@@ -120,7 +137,7 @@ fn build_function_params<'a>(
     name: String,
     rest: Vec<ExpressionPart<'a>>,
     arrow_idx: usize,
-) -> Result<TypeExpr, String> {
+) -> Result<TypeExpr, KError> {
     let mut iter = rest.into_iter();
     let before: Vec<ExpressionPart<'a>> = (&mut iter).take(arrow_idx).collect();
     iter.next();
@@ -140,32 +157,37 @@ fn build_function_params<'a>(
 
 fn extract_function_args<'a>(
     before: Vec<ExpressionPart<'a>>,
-) -> Result<Vec<TypeExpr>, String> {
+) -> Result<Vec<TypeExpr>, KError> {
     const MISSING_PARENS: &str =
         "type `:(Function ...)` args must be parenthesized = \
          `:(Function (arg1 arg2 ...) -> R)` (use `:(Function () -> R)` for nullary)";
 
     let [only] = <[ExpressionPart<'a>; 1]>::try_from(before)
-        .map_err(|_| MISSING_PARENS.to_string())?;
+        .map_err(|_| KError::parse(MISSING_PARENS, None))?;
     let arg_parts = match only {
         ExpressionPart::Expression(boxed) => boxed.parts,
-        _ => return Err(MISSING_PARENS.to_string()),
+        _ => return Err(KError::parse(MISSING_PARENS, None)),
     };
     arg_parts
         .into_iter()
-        .map(|p| match p {
+        .map(|p| match p.value {
             ExpressionPart::Type(t) => Ok(t),
             // Args themselves can be parameterized types: `:(Function ((List Number)) -> R)`
             // wraps the args list in `(...)` and each arg may itself be a sigil-less
             // nested type expression. Recurse through TypeExprFrame to fold the nested
             // shape.
             ExpressionPart::Expression(boxed) => {
-                let frame = TypeExprFrame { parts: boxed.parts };
+                let frame = TypeExprFrame {
+                    parts: boxed.parts.into_iter().map(|s| s.value).collect(),
+                };
                 frame.build()
             }
-            other => Err(format!(
-                "type `:(Function (...))` arg must be a type name, got `{}`",
-                other.summarize()
+            other => Err(KError::parse(
+                format!(
+                    "type `:(Function (...))` arg must be a type name, got `{}`",
+                    other.summarize()
+                ),
+                None,
             )),
         })
         .collect()
@@ -173,11 +195,16 @@ fn extract_function_args<'a>(
 
 fn extract_function_return<'a>(
     after: Vec<ExpressionPart<'a>>,
-) -> Result<TypeExpr, String> {
-    let [only] = <[ExpressionPart<'a>; 1]>::try_from(after).map_err(|after| format!(
-        "type `:(Function ... -> R)` needs exactly one return type after the arrow, got {}",
-        after.len()
-    ))?;
+) -> Result<TypeExpr, KError> {
+    let [only] = <[ExpressionPart<'a>; 1]>::try_from(after).map_err(|after| {
+        KError::parse(
+            format!(
+                "type `:(Function ... -> R)` needs exactly one return type after the arrow, got {}",
+                after.len()
+            ),
+            None,
+        )
+    })?;
     // The return slot can itself be a parameterized type:
     // `:(Function (Number) -> (List Str))` wraps the return in parens.
     lift_part(only)

@@ -108,3 +108,48 @@ FN parameters and return types accept signature names directly. The
 constrained-signature case (`(SIG_WITH OrderedSig ((Type: Number)))`)
 uses the `SIG_WITH` builtin in
 [functors.md § Type expressions and constraints](functors.md#type-expressions-and-constraints).
+
+## Block-scoped opening (`USING … SCOPE`)
+
+`(USING Module SCOPE (exprs))` evaluates the block with `Module`'s members in
+scope as bare names and returns the value of the last expression. `Module` is
+any module-valued expression, including a functor result opened inline. This is
+a value-level namespace open in expression position — distinct from a file-level
+import — so a region working against one instantiation writes `insert x s`
+instead of `IntOrd.insert x s`, stating the qualifier once.
+
+The block runs in a single *transparent* scope
+([`Scope::child_transparent`](../../src/machine/core/scope.rs)) whose `outer` is
+the call site and whose bindings are a read-only window onto the module's
+child-scope façade (`ScopeBindings::Borrowed`). Reads consult the window first,
+then the call-site chain, so module names win inside the block; the resolver walk
+is unchanged. Only the module's `data` (values) and `functions` (dispatch
+overloads) are surfaced — the whole `Bindings` façade is borrowed, while a
+module's abstract type ascriptions live in `Module::type_members`, *not* in
+`Bindings`, so opacity is preserved inside the block.
+
+Binds made inside the block forward to the call site and persist after it; a bind
+whose name collides with a surfaced member is rejected
+([`Scope::bind_value`](../../src/machine/core/scope.rs)'s borrowed-window arm), so
+a forwarded bind can never be silently shadowed by the window. Forwarding outward
+is safe because the block is unconditional — unlike `TRY`/`MATCH` branches it
+always runs, so there is no divergent-binding hazard. A module function dispatched
+inside the block resolves its own internal names in the module's lexical scope:
+a `KFunction` carries its definition scope and evaluates its body under it, so
+`USING` is purely a lookup/dispatch surface, not a re-capture.
+
+The transparent scope is allocated in the **call-site arena**, and the block is
+run as a deferred sub-dispatch whose result the `USING` node lifts. Allocating in
+the call-site arena (rather than a per-call frame that drops at block end) is what
+makes forwarding sound: a forwarded bind — or a function defined in the block and
+forward-registered into the call site — references values and a captured scope
+that all live in the call-site arena. For a functor-result module whose child
+scope lives in a per-call [`CallArena`](../../src/machine/core/arena.rs), the
+opened module's value (carrying that arena's `Rc`) is rooted in the call-site
+arena so the borrowed window survives both the block and any closure that escapes
+it reading a surfaced member.
+
+A bare `FN` registration writes only the `functions` dispatch bucket, never
+`data`; only the `LET f = (FN …)` capture form also writes `data`. The surfaced
+window therefore carries captured values in `data` and the dispatch surface in
+`functions`, cleanly separated rather than conflated.

@@ -51,8 +51,21 @@ pub enum KObject<'a> {
     Number(f64),
     KString(String),
     Bool(bool),
-    List(Rc<Vec<KObject<'a>>>),
-    Dict(Rc<HashMap<Box<dyn Serializable + 'a>, KObject<'a>>>),
+    /// List value. The second field is the memoized/ascribed element type: at fresh
+    /// construction (`KObject::list`) it is the join (LUB) of the contents, computed once
+    /// under the immutable-`Rc` contract; at an annotated boundary it is re-stamped to the
+    /// declared element type (coarsening included). `ktype()` reads this field directly
+    /// rather than re-walking the contents. Construct via [`KObject::list`] /
+    /// [`KObject::list_with_type`]; never the tuple directly outside this module.
+    List(Rc<Vec<KObject<'a>>>, Box<KType>),
+    /// Dict value. The second/third fields are the memoized/ascribed key + value types,
+    /// computed once at construction (`KObject::dict`) as the join of the keys / values, or
+    /// re-stamped at an annotated boundary. `ktype()` reads them directly.
+    Dict(
+        Rc<HashMap<Box<dyn Serializable + 'a>, KObject<'a>>>,
+        Box<KType>,
+        Box<KType>,
+    ),
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
@@ -81,11 +94,18 @@ pub enum KObject<'a> {
     /// through to the value, populated by `crate::builtins::tagged_union::construct` from the schema
     /// in the bundle. `ktype()` synthesizes `KType::UserType { kind: Tagged, .. }`
     /// from these fields so dispatch on type identity sees the declared union.
+    ///
+    /// `type_args` carries the value's runtime type arguments for a parameterized union
+    /// (`Result<T, E>`): empty (`Rc::new(vec![])`) means erased — `ktype()` reports the
+    /// bare `UserType` as before — and when populated `ktype()` synthesizes
+    /// `KType::ConstructorApply { ctor, args: type_args }` so dispatch and slot admission
+    /// see the full instantiation. Populated by ascription stamping at annotated boundaries.
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
         scope_id: ScopeId,
         name: String,
+        type_args: Rc<Vec<KType>>,
     },
     /// Struct value. `(name, scope_id)` carries the declaring schema's identity through
     /// to the value, populated by `crate::builtins::struct_value::construct`. `ktype()` synthesizes
@@ -138,6 +158,98 @@ pub enum KObject<'a> {
 }
 
 impl<'a> KObject<'a> {
+    /// Fresh `List` carrier: computes the element type once as the join (LUB) of the
+    /// contents under the immutable-`Rc` contract. Empty list memoizes `Any` (the join's
+    /// identity); the empty-container *error* rule lives at the untyped-resolution boundary,
+    /// not here.
+    pub fn list(items: Vec<KObject<'a>>) -> KObject<'a> {
+        let elem = KType::join_iter(items.iter().map(|i| i.ktype()));
+        KObject::List(Rc::new(items), Box::new(elem))
+    }
+
+    /// `List` carrier with an explicitly supplied element type. Used by lift (preserve the
+    /// already-memoized type across an arena-anchor rebuild) and by ascription stamping
+    /// (re-tag to the declared element type, coarsening included).
+    pub fn list_with_type(items: Rc<Vec<KObject<'a>>>, elem: KType) -> KObject<'a> {
+        KObject::List(items, Box::new(elem))
+    }
+
+    /// Fresh `Dict` carrier: computes key + value types once as the join of the keys /
+    /// values.
+    pub fn dict(map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>>) -> KObject<'a> {
+        let k = KType::join_iter(map.keys().map(|k| k.ktype()));
+        let v = KType::join_iter(map.values().map(|v| v.ktype()));
+        KObject::Dict(Rc::new(map), Box::new(k), Box::new(v))
+    }
+
+    /// `Dict` carrier with explicitly supplied key + value types. See [`Self::list_with_type`].
+    pub fn dict_with_type(
+        map: Rc<HashMap<Box<dyn Serializable + 'a>, KObject<'a>>>,
+        key: KType,
+        value: KType,
+    ) -> KObject<'a> {
+        KObject::Dict(map, Box::new(key), Box::new(value))
+    }
+
+    /// Ascription stamping at an annotated boundary (FN return type, argument slot, LET
+    /// ascription). The declared type is the contract: callers have already checked the
+    /// value satisfies `declared` via `matches_value`; this re-tags the carrier to
+    /// *exactly* the declared parameter types, coarsening included — a `List<Number>` value
+    /// returned through `:(List Any)` re-tags to `List<Any>`, so downstream dispatch sees
+    /// the contract rather than the implementation's incidental precision.
+    ///
+    /// Only the three parameterized carriers are re-tagged; every other shape passes
+    /// through unchanged (its `ktype()` is already its nominal identity). For a `Tagged`
+    /// stamped against a `ConstructorApply`, the constructor identity must already match
+    /// (the caller's `matches_value` guaranteed it); the `type_args` are replaced with the
+    /// declared args. Empty containers stamp vacuously (the declared element type wins).
+    pub fn stamp_type(self, declared: &KType) -> KObject<'a> {
+        match (self, declared) {
+            (KObject::List(items, _), KType::List(elem)) => {
+                KObject::List(items, elem.clone())
+            }
+            (KObject::Dict(map, _, _), KType::Dict(k, v)) => {
+                KObject::Dict(map, k.clone(), v.clone())
+            }
+            (
+                KObject::Tagged { tag, value, scope_id, name, .. },
+                KType::ConstructorApply { args, .. },
+            ) => KObject::Tagged {
+                tag,
+                value,
+                scope_id,
+                name,
+                type_args: Rc::new(args.clone()),
+            },
+            (other, _) => other,
+        }
+    }
+
+    /// True iff this is an empty container carrying no usable element-type information —
+    /// an empty `List` whose memoized element type is `Any`, or an empty `Dict` whose key
+    /// and value types are both `Any`. Such a value has no join to infer from and was never
+    /// stamped by an annotation; reaching an *untyped* resolution boundary (an untyped `LET`
+    /// binding, a bare top-level expression result) with this shape is an error
+    /// (see [runtime-type-parameter-carriers](../../../../roadmap/type_language/type-parameter-binding.md)).
+    ///
+    /// A stamped empty container (e.g. `FN -> :(List Number) = ([])` re-tags to element
+    /// `Number`) is *not* flagged: its carrier carries a non-`Any` element type. A
+    /// non-empty heterogeneous literal (`[2, "hello"]` → `List<Any>`) is *not* flagged: it
+    /// carries information and is legal where `:(List Any)` is declared.
+    pub fn is_unstamped_empty_container(&self) -> bool {
+        match self {
+            KObject::List(items, elem) => {
+                items.is_empty() && matches!(elem.as_ref(), KType::Any)
+            }
+            KObject::Dict(map, k, v) => {
+                map.is_empty()
+                    && matches!(k.as_ref(), KType::Any)
+                    && matches!(v.as_ref(), KType::Any)
+            }
+            _ => false,
+        }
+    }
+
     /// Runtime type tag. `KFuture` reports as `KFunction` since a bound-but-unrun call is
     /// functionally a thunk and KFutures don't escape as user-visible values today.
     pub fn ktype(&self) -> KType {
@@ -146,15 +258,9 @@ impl<'a> KObject<'a> {
             KObject::KString(_) => KType::Str,
             KObject::Bool(_) => KType::Bool,
             KObject::Null => KType::Null,
-            KObject::List(items) => {
-                let elem = KType::join_iter(items.iter().map(|i| i.ktype()));
-                KType::List(Box::new(elem))
-            }
-            KObject::Dict(map) => {
-                let k = KType::join_iter(map.keys().map(|k| k.ktype()));
-                let v = KType::join_iter(map.values().map(|v| v.ktype()));
-                KType::Dict(Box::new(k), Box::new(v))
-            }
+            // O(1) field read of the memoized/ascribed element type — no contents re-walk.
+            KObject::List(_, elem) => KType::List(elem.clone()),
+            KObject::Dict(_, k, v) => KType::Dict(k.clone(), v.clone()),
             KObject::KFunction(f, _) => function_value_ktype(f),
             KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
@@ -165,11 +271,24 @@ impl<'a> KObject<'a> {
             // distinct types per declaration.
             KObject::TaggedUnionType { .. } => KType::Type,
             KObject::StructType { .. } => KType::Type,
-            KObject::Tagged { name, scope_id, .. } => KType::UserType {
-                kind: UserTypeKind::Tagged,
-                scope_id: *scope_id,
-                name: name.clone(),
-            },
+            // Erased `type_args` reports the bare `UserType` identity (today's behavior);
+            // a populated carrier synthesizes the applied form so dispatch / slot admission
+            // see the full instantiation (`Result<Number, MyErr>`).
+            KObject::Tagged { name, scope_id, type_args, .. } => {
+                let bare = KType::UserType {
+                    kind: UserTypeKind::Tagged,
+                    scope_id: *scope_id,
+                    name: name.clone(),
+                };
+                if type_args.is_empty() {
+                    bare
+                } else {
+                    KType::ConstructorApply {
+                        ctor: Box::new(bare),
+                        args: type_args.as_ref().clone(),
+                    }
+                }
+            }
             KObject::Struct { name, scope_id, .. } => KType::UserType {
                 kind: UserTypeKind::Struct,
                 scope_id: *scope_id,
@@ -186,7 +305,7 @@ impl<'a> KObject<'a> {
                 scope_id: m.scope_id(),
                 name: m.path.clone(),
             },
-            KObject::KSignature(_) => KType::Signature,
+            KObject::KSignature(_) => KType::MetaSignature,
             // Stage 4: a `Wrapped` reports its cached NEWTYPE identity directly. The cell
             // is the arena ref the declaration site minted; cloning preserves the
             // `(kind, scope_id, name)` triple the dispatcher reads.
@@ -202,8 +321,10 @@ impl<'a> KObject<'a> {
             KObject::KString(s) => KObject::KString(s.clone()),
             KObject::Bool(b) => KObject::Bool(*b),
             KObject::Null => KObject::Null,
-            KObject::List(items) => KObject::List(Rc::clone(items)),
-            KObject::Dict(entries) => KObject::Dict(Rc::clone(entries)),
+            KObject::List(items, elem) => KObject::List(Rc::clone(items), elem.clone()),
+            KObject::Dict(entries, k, v) => {
+                KObject::Dict(Rc::clone(entries), k.clone(), v.clone())
+            }
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
             KObject::KFunction(f, frame) => KObject::KFunction(f, frame.clone()),
@@ -217,11 +338,12 @@ impl<'a> KObject<'a> {
                 scope_id: *scope_id,
                 fields: Rc::clone(fields),
             },
-            KObject::Tagged { tag, value, scope_id, name } => KObject::Tagged {
+            KObject::Tagged { tag, value, scope_id, name, type_args } => KObject::Tagged {
                 tag: tag.clone(),
                 value: Rc::clone(value),
                 scope_id: *scope_id,
                 name: name.clone(),
+                type_args: Rc::clone(type_args),
             },
             KObject::Struct { name, scope_id, fields } => KObject::Struct {
                 name: name.clone(),
@@ -329,11 +451,11 @@ impl<'a> Parseable for KObject<'a> {
             KObject::Number(n) => n.to_string(),
             KObject::KString(s) => s.clone(),
             KObject::Bool(b) => b.to_string(),
-            KObject::List(items) => {
+            KObject::List(items, _) => {
                 let parts: Vec<String> = items.iter().map(|i| i.summarize()).collect();
                 format!("[{}]", parts.join(", "))
             }
-            KObject::Dict(entries) => {
+            KObject::Dict(entries, _, _) => {
                 let parts: Vec<String> = entries
                     .iter()
                     .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize()))

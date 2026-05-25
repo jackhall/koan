@@ -1,3 +1,4 @@
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::machine::model::{KObject, KType};
@@ -9,7 +10,7 @@ use crate::builtins::ascribe::{abstract_type_names_of, is_abstract_type_name};
 use crate::builtins::err;
 
 /// `SIG_WITH <sig:Signature> <bindings:KExpression>` → `TypeExprRef` carrying
-/// `KType::SignatureBound { sig_id, sig_path, pinned_slots }`. The `bindings` slot is a
+/// `KType::SatisfiesSignature { sig_id, sig_path, pinned_slots }`. The `bindings` slot is a
 /// `KExpression` whose parts are themselves `Expression(...)` groups, one per inner
 /// `(slot_name :value)` pair. Each inner expression must match `[Type(slot_name),
 /// <value>]` — bare Type-token slot names only (`Type`, `Elt`); lowercase identifiers
@@ -51,7 +52,7 @@ pub fn body<'a>(
     // - Every part is `Expression(...)` => each is its own pair (multi-slot case).
     // Anything else is a user error with a focused message.
     fn parse_pair<'a>(
-        parts: &[ExpressionPart<'a>],
+        parts: &[Spanned<ExpressionPart<'a>>],
         out: &mut Vec<(String, ExpressionPart<'a>, usize)>,
         idx: usize,
     ) -> Result<(), KError> {
@@ -61,7 +62,7 @@ pub fn body<'a>(
                 parts.len(),
             ))));
         }
-        let slot_name = match &parts[0] {
+        let slot_name = match &parts[0].value {
             ExpressionPart::Type(t) if matches!(t.params, crate::machine::model::ast::TypeParams::None) => {
                 t.name.clone()
             }
@@ -84,7 +85,7 @@ pub fn body<'a>(
                 ))));
             }
         };
-        out.push((slot_name, parts[1].clone(), idx));
+        out.push((slot_name, parts[1].value.clone(), idx));
         Ok(())
     }
 
@@ -109,7 +110,7 @@ pub fn body<'a>(
             }
         }
     } else {
-        let summary: Vec<String> = parts.iter().map(|p| p.summarize()).collect();
+        let summary: Vec<String> = parts.iter().map(|p| p.value.summarize()).collect();
         return err(KError::new(KErrorKind::ShapeError(format!(
             "SIG_WITH bindings must be a list of parens-wrapped `(Name :Type)` pairs, \
              got `[{}]`",
@@ -205,9 +206,9 @@ pub fn body<'a>(
     let sig_path = s.path.clone();
 
     if sub_dispatches.is_empty() {
-        // Fully synchronous path — alloc the SignatureBound carrier directly.
+        // Fully synchronous path — alloc the SatisfiesSignature carrier directly.
         return BodyResult::Value(
-            scope.arena.alloc_object(KObject::KTypeValue(KType::SignatureBound {
+            scope.arena.alloc_object(KObject::KTypeValue(KType::SatisfiesSignature {
                 sig_id,
                 sig_path,
                 pinned_slots: pinned,
@@ -244,7 +245,7 @@ pub fn body<'a>(
             }
         }
         BodyResult::Value(
-            scope.arena.alloc_object(KObject::KTypeValue(KType::SignatureBound {
+            scope.arena.alloc_object(KObject::KTypeValue(KType::SatisfiesSignature {
                 sig_id,
                 sig_path,
                 pinned_slots: pinned,
@@ -263,7 +264,7 @@ mod tests {
     use crate::machine::RuntimeArena;
 
     /// `(SIG_WITH OrderedSig ((Type: Number)))` dispatches and returns a `KTypeValue`
-    /// whose `SignatureBound` carries the matching `sig_id` and a one-entry
+    /// whose `SatisfiesSignature` carries the matching `sig_id` and a one-entry
     /// `pinned_slots` vec pinning `Type` to `Number`.
     #[test]
     fn sig_with_one_slot_returns_signature_bound_with_pinned_slot() {
@@ -278,14 +279,14 @@ mod tests {
         let result = run_one(scope, parse_one("SIG_WITH OrderedSig ((Type :Number))"));
         match result {
             KObject::KTypeValue(kt) => match kt {
-                KType::SignatureBound { sig_id: id, sig_path, pinned_slots } => {
+                KType::SatisfiesSignature { sig_id: id, sig_path, pinned_slots } => {
                     assert_eq!(*id, sig_id);
                     assert_eq!(sig_path, "OrderedSig");
                     assert_eq!(pinned_slots.len(), 1);
                     assert_eq!(pinned_slots[0].0, "Type");
                     assert_eq!(pinned_slots[0].1, KType::Number);
                 }
-                other => panic!("expected SignatureBound, got {:?}", other),
+                other => panic!("expected SatisfiesSignature, got {:?}", other),
             },
             other => panic!("expected KTypeValue, got {:?}", other.ktype()),
         }
@@ -305,14 +306,14 @@ mod tests {
         );
         let result = run_one(scope, parse_one("SIG_WITH Set ((Elt :Number) (Ord :Str))"));
         match result {
-            KObject::KTypeValue(KType::SignatureBound { pinned_slots, .. }) => {
+            KObject::KTypeValue(KType::SatisfiesSignature { pinned_slots, .. }) => {
                 assert_eq!(pinned_slots.len(), 2);
                 assert_eq!(pinned_slots[0].0, "Elt");
                 assert_eq!(pinned_slots[0].1, KType::Number);
                 assert_eq!(pinned_slots[1].0, "Ord");
                 assert_eq!(pinned_slots[1].1, KType::Str);
             }
-            other => panic!("expected SignatureBound KTypeValue, got {:?}", other.ktype()),
+            other => panic!("expected SatisfiesSignature KTypeValue, got {:?}", other.ktype()),
         }
     }
 
@@ -339,7 +340,7 @@ mod tests {
             parse_one("SIG_WITH SetSig ((Elt (MODULE_TYPE_OF Elem Type)))"),
         );
         match result {
-            KObject::KTypeValue(KType::SignatureBound { sig_path, pinned_slots, .. }) => {
+            KObject::KTypeValue(KType::SatisfiesSignature { sig_path, pinned_slots, .. }) => {
                 assert_eq!(sig_path, "SetSig");
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Elt");
@@ -353,7 +354,7 @@ mod tests {
                     ),
                 }
             }
-            other => panic!("expected SignatureBound KTypeValue, got {:?}", other.ktype()),
+            other => panic!("expected SatisfiesSignature KTypeValue, got {:?}", other.ktype()),
         }
     }
 

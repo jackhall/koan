@@ -10,8 +10,8 @@
 //!
 //! Two surface forms feed in: a `TypeExpr` (overload 1's `TypeExprRef` carrier)
 //! and a `KExpression` (overload 2's `KExpression` carrier). The `KExpression`
-//! walker mirrors the recursive descent in `kfunction::invoke::substitute_part`
-//! so the scan sees exactly the leaves the substituter would substitute.
+//! walker descends into `Expression`, `ListLiteral`, and `DictLiteral` parts so
+//! the scan sees every parameter-named leaf the body could reference.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
@@ -38,7 +38,7 @@ pub(super) fn kexpression_references_any(
     expr: &KExpression<'_>,
     param_names: &[String],
 ) -> bool {
-    expr.parts.iter().any(|p| part_references_any(p, param_names))
+    expr.parts.iter().any(|p| part_references_any(&p.value, param_names))
 }
 
 fn part_references_any(part: &ExpressionPart<'_>, param_names: &[String]) -> bool {

@@ -85,7 +85,7 @@ pub fn body_opaque<'a>(
         return BodyResult::Err(e);
     }
 
-    // Record the sig in the new module's compat set so a `KType::SignatureBound { sig_id }`
+    // Record the sig in the new module's compat set so a `KType::SatisfiesSignature { sig_id }`
     // slot accepts this module. Every ascription path must do this — see
     // `Module::mark_satisfies` for the bookkeeping discipline.
     new_module.mark_satisfies(s.sig_id());
@@ -207,7 +207,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         sig(module_ty.clone(), vec![
             arg("m", module_ty.clone()),
             kw(":|"),
-            arg("s", KType::Signature),
+            arg("s", KType::MetaSignature),
         ]),
         body_opaque,
     );
@@ -217,7 +217,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         sig(module_ty.clone(), vec![
             arg("m", module_ty),
             kw(":!"),
-            arg("s", KType::Signature),
+            arg("s", KType::MetaSignature),
         ]),
         body_transparent,
     );

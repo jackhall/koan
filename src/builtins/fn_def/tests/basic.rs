@@ -1,6 +1,8 @@
-//! Basic FN registration, dispatch, and parameter substitution.
+//! Basic FN registration, dispatch, and parameter binding.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{
+    fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
+};
 use crate::machine::model::{KObject, SignatureElement};
 use crate::machine::RuntimeArena;
 
@@ -22,12 +24,7 @@ fn fn_registers_user_function_under_keyword_signature() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (GREET) -> Null = (PRINT \"hi\")");
 
-    let data = scope.bindings().data();
-    let entry = data.get("GREET").expect("GREET should be bound");
-    let f = match entry {
-        KObject::KFunction(f, _) => *f,
-        _ => panic!("expected GREET to bind a KFunction"),
-    };
+    let f = lookup_fn(scope, "GREET");
     match f.signature.elements.as_slice() {
         [SignatureElement::Keyword(s)] => assert_eq!(s, "GREET"),
         _ => panic!("expected single-Keyword signature [Keyword(\"GREET\")]"),
@@ -50,9 +47,8 @@ fn fn_rejects_non_keyword_name() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (greet) -> Null = (PRINT \"hi\")");
-    let data = scope.bindings().data();
-    assert!(data.get("greet").is_none());
-    assert!(data.get("GREET").is_none());
+    assert!(!fn_is_registered(scope, "greet"));
+    assert!(!fn_is_registered(scope, "GREET"));
 }
 
 #[test]
@@ -98,7 +94,7 @@ fn calling_user_fn_repeatedly_runs_body_each_time() {
 }
 
 #[test]
-fn fn_with_single_param_substitutes_at_call_site() {
+fn fn_with_single_param_binds_at_call_site() {
     let bytes = capture_program_output(
         "FN (SAY x :Str) -> Null = (PRINT x)\n\
          SAY \"hello\"",
@@ -135,7 +131,7 @@ fn fn_param_shadows_outer_binding_at_call_site() {
 }
 
 #[test]
-fn fn_param_substitutes_inside_nested_subexpression() {
+fn fn_param_resolves_inside_nested_subexpression() {
     let bytes = capture_program_output(
         "FN (WRAP x :Str) -> Null = (PRINT (x))\n\
          WRAP \"wrapped\"",
@@ -158,8 +154,7 @@ fn fn_signature_with_no_keyword_is_rejected() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "FN (x :Number) -> Null = (PRINT \"oops\")");
-    let data = scope.bindings().data();
-    assert!(data.get("x").is_none());
+    assert!(!fn_is_registered(scope, "x"));
 }
 
 /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a

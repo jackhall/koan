@@ -9,7 +9,7 @@ use crate::machine::core::{RuntimeArena, ScopeId};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::{Module, Signature};
 
-/// `SignatureBound`-declared parameter bound to a `KModule` yields a
+/// `SatisfiesSignature`-declared parameter bound to a `KModule` yields a
 /// `UserType { kind: Module, scope_id, name }` identity.
 #[test]
 fn type_identity_for_signature_bound_yields_module_user_type() {
@@ -21,7 +21,7 @@ fn type_identity_for_signature_bound_yields_module_user_type() {
     ));
     let module = arena.alloc_module(Module::new("Foo".into(), child));
     let obj = arena.alloc_object(KObject::KModule(module, None));
-    let declared = KType::SignatureBound {
+    let declared = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 42),
         sig_path: "OrderedSig".into(),
         pinned_slots: Vec::new(),
@@ -41,7 +41,7 @@ fn type_identity_for_signature_bound_yields_module_user_type() {
 
 /// `AnyUserType { kind: Module }`-declared parameter bound to a `KModule`
 /// yields the same `UserType { kind: Module, .. }` identity. Mirrors the
-/// `SignatureBound` arm.
+/// `SatisfiesSignature` arm.
 #[test]
 fn type_identity_for_any_module_yields_module_user_type() {
     let arena = RuntimeArena::new();
@@ -67,20 +67,20 @@ fn type_identity_for_any_module_yields_module_user_type() {
 }
 
 /// `Signature`-declared parameter bound to a `KSignature` yields a bare
-/// `SignatureBound { sig_id, sig_path, pinned_slots: [] }` identity.
+/// `SatisfiesSignature { sig_id, sig_path, pinned_slots: [] }` identity.
 #[test]
 fn type_identity_for_signature_yields_signature_bound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
     let obj = arena.alloc_object(KObject::KSignature(sig));
-    let declared = KType::Signature;
+    let declared = KType::MetaSignature;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("signature identity expected");
     assert_eq!(
         identity,
-        KType::SignatureBound {
+        KType::SatisfiesSignature {
             sig_id: sig.sig_id(),
             sig_path: "OrderedSig".into(),
             pinned_slots: Vec::new(),
@@ -126,7 +126,7 @@ fn type_identity_for_carrier_mismatch_returns_none() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let obj = arena.alloc_object(KObject::Number(1.0));
-    let declared = KType::SignatureBound {
+    let declared = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),
         pinned_slots: Vec::new(),

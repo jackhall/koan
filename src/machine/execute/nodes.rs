@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, CombineFinish, KError, KFunction, NodeId, Scope};
+use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, KFunction, NodeId, Scope};
 use crate::machine::model::ast::KExpression;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
@@ -46,6 +46,14 @@ pub(super) enum NodeWork<'a> {
         deps: Vec<NodeId>,
         finish: CombineFinish<'a>,
     },
+    /// Catching dual of a single-dep `Combine`: waits on `from` and hands its terminal
+    /// (Value or Err) to `finish`. The catching variant exists because `Combine` short-
+    /// circuits on dep-error before its finish runs; `Catch`'s finish always runs so the
+    /// closure can decide to recover. Backs `TRY-WITH`.
+    Catch {
+        from: NodeId,
+        finish: CatchFinish<'a>,
+    },
     Lift(LiftState<'a>),
 }
 
@@ -83,6 +91,7 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
         NodeWork::Dispatch(_) => None,
         NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
         NodeWork::Combine { deps, .. } => Some(deps.clone()),
+        NodeWork::Catch { from, .. } => Some(vec![*from]),
         // `Lift` is only installed via `NodeStep::Replace` with deps wired explicitly;
         // arms exist for total coverage and are exercised by tests below.
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),

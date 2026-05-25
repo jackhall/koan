@@ -151,13 +151,28 @@ pub fn body<'a>(
         if let Err(e) = scope.register_nominal(name, identity, allocated) {
             return err(e);
         }
-    } else if let Err(e) = scope.bind_value(name, allocated) {
-        return err(e);
+    } else {
+        // Empty-container error rule: an untyped `LET` binding is an untyped resolution
+        // boundary. An empty `[]` / `{}` with no stamped element type (carrier element
+        // type `Any`) has no join to infer from and was never given a type by an
+        // annotation upstream — binding it would silently fix `List<Any>` / `Dict<Any,
+        // Any>`. Reject it; the user must annotate the producing boundary (an FN return
+        // type) or use a non-empty literal.
+        if allocated.is_unstamped_empty_container() {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "empty container bound to `{name}` has no element type to infer; \
+                 annotate the value's type (e.g. via a typed FN return) or use a \
+                 non-empty literal",
+            ))));
+        }
+        if let Err(e) = scope.bind_value(name, allocated) {
+            return err(e);
+        }
     }
     BodyResult::Value(allocated)
 }
 
-/// Recover the nominal identity (a `KType::UserType` or `KType::SignatureBound`) carried
+/// Recover the nominal identity (a `KType::UserType` or `KType::SatisfiesSignature`) carried
 /// by a type-language value `obj`. Returns `Some(identity)` for the four shapes that came
 /// from a STRUCT / UNION / MODULE / SIG declaration (or an alias of one); `None` for
 /// every other carrier shape — those keep flowing through `Scope::bind_value` and never
@@ -173,7 +188,7 @@ fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
             scope_id: m.scope_id(),
             name: m.path.clone(),
         }),
-        KObject::KSignature(s) => Some(KType::SignatureBound {
+        KObject::KSignature(s) => Some(KType::SatisfiesSignature {
             sig_id: s.sig_id(),
             sig_path: s.path.clone(),
             // A bare SIG alias (`LET S2 = OrderedSig`) carries no sharing constraints.
@@ -198,7 +213,7 @@ fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
 /// structurally without dispatching anything. Returns `None` on shape mismatch (the body
 /// will surface a structured error later).
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    match expr.parts.get(1)? {
+    match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
         ExpressionPart::Type(t) => Some(t.name.clone()),
         _ => None,

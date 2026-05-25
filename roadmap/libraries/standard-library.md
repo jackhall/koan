@@ -7,7 +7,9 @@ builtins, and once functors and a multi-file source surface are in place
 there is no canonical body of Koan code that demonstrates how to *use*
 them. Users learn the language without a worked example of idiomatic
 module / signature / functor / import composition because that example
-doesn't exist yet.
+doesn't exist yet. The builtin `Result` type also ships with no
+combinators, so user code chaining fallible computations writes MATCH
+boilerplate by hand for every step.
 
 **Impact.**
 
@@ -29,6 +31,10 @@ doesn't exist yet.
   code that exercises modules, signatures, functors, imports, and
   effects together — so the answer to "how do I structure a real Koan
   program?" is a directory they can read.
+- *`Result` combinators ship as stdlib code.* `map` / `bind` /
+  `unwrap_or` and friends over the builtin `Result` type let user code
+  thread a value through fallible steps without a hand-written MATCH at
+  each one, so typed-error returns become ergonomic rather than verbose.
 
 **Directions.**
 
@@ -45,22 +51,28 @@ doesn't exist yet.
   pass to functor applications. The shapes are constrained by the
   signature names in the stdlib's collection functors; the surface form
   needs a deliberate convention.
+- *`Result` combinator set — open.* `map`, `bind`, `unwrap_or`, and
+  friends are Koan source over the builtin `Result` type, not Rust
+  builtins. The `Result` constructor itself shipped (see
+  [design/error-handling.md](../../design/error-handling.md)), so user
+  code can construct and MATCH on `Result` before these land. Which
+  combinators ship in v1 is open.
 - *Builtin retirement — decided.* Where the stdlib supersedes a Rust-side
   builtin (e.g., the existing dictionary builtin if Set/Map cover its
   uses), the builtin gets removed in the same change rather than left as
   a parallel surface.
-- *Applicative functor semantics via `FUNCTOR` binder — open.* Stage 5's
-  implicit resolution makes independent `(MakeSet)` call sites resolve
-  to the same `IntOrd` without users seeing it; under the shipped
-  generative-only semantics (per
-  [design/typing/functors.md](../../design/typing/functors.md)),
-  two such applications mint distinct Set types and the resulting sets
+- *Applicative functor semantics — deferred to predicate typing.* Stage
+  5's implicit resolution makes independent `(MakeSet)` call sites
+  resolve to the same `IntOrd` without users seeing it; under the
+  generative-only semantics shipped by
+  [functor-binder](../type_language/functor-binder.md) (and spec'd
+  in [design/typing/functors.md](../../design/typing/functors.md)), two
+  such applications mint distinct Set types and the resulting sets
   cannot interoperate. Applicative semantics — same-functor-applied-to-
-  same-module produces equal types — closes this. Landing form: a new
-  `FUNCTOR` binder reusing FN mechanics, distinguished from `FN` at the
-  surface so the generative/applicative choice is visible at the
-  declaration. The memoization scheme (argument-identity hashing vs.
-  structural equality on argument values) is part of this item.
+  same-module produces equal types — closes this. The decided seam is
+  the `FUNCTOR` binder's `is_functor` flag; the memoization scheme
+  (argument-identity hashing vs. structural equality on argument values)
+  is the open piece, deferred until predicate typing lands.
 
 Canonical signatures use the `VAL` declarator
 ([design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures))
@@ -93,6 +105,9 @@ concrete type.
 
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
+- [FUNCTOR binder](../type_language/functor-binder.md) — collections ship as FUNCTORs over
+  their element/key types; the binder is the substrate for stdlib
+  data-structure code.
 
 **Unblocks:**
 

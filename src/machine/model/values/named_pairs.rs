@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::parse_keyword_triple_list;
 
@@ -35,7 +36,7 @@ pub fn parse_named_value_pairs<'a>(
     expr: &KExpression<'a>,
     context: &str,
 ) -> Result<Vec<(String, ExpressionPart<'a>)>, String> {
-    if let [ExpressionPart::DictLiteral(pairs)] = expr.parts.as_slice() {
+    if let [Spanned { value: ExpressionPart::DictLiteral(pairs), .. }] = expr.parts.as_slice() {
         let mut out: Vec<(String, ExpressionPart<'a>)> = Vec::with_capacity(pairs.len());
         for (key, value) in pairs {
             let name = match key {
@@ -104,19 +105,20 @@ mod tests {
     fn num(n: f64) -> ExpressionPart<'static> {
         ExpressionPart::Literal(KLiteral::Number(n))
     }
+    fn sp(p: ExpressionPart<'static>) -> Spanned<ExpressionPart<'static>> {
+        Spanned::bare(p)
+    }
 
     #[test]
     fn empty_parts_returns_empty_vec() {
-        let expr = KExpression { parts: vec![] };
+        let expr = KExpression::new(vec![]);
         let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
         assert!(pairs.is_empty());
     }
 
     #[test]
     fn single_eq_pair_round_trips() {
-        let expr = KExpression {
-            parts: vec![ident("x"), eq_kw(), num(3.0)],
-        };
+        let expr = KExpression::new(vec![sp(ident("x")), sp(eq_kw()), sp(num(3.0))]);
         let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].0, "x");
@@ -125,12 +127,10 @@ mod tests {
 
     #[test]
     fn multiple_eq_pairs_preserve_order() {
-        let expr = KExpression {
-            parts: vec![
-                ident("y"), eq_kw(), num(4.0),
-                ident("x"), eq_kw(), num(3.0),
-            ],
-        };
+        let expr = KExpression::new(vec![
+            sp(ident("y")), sp(eq_kw()), sp(num(4.0)),
+            sp(ident("x")), sp(eq_kw()), sp(num(3.0)),
+        ]);
         let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
         assert_eq!(pairs.len(), 2);
         assert_eq!(pairs[0].0, "y");
@@ -139,12 +139,10 @@ mod tests {
 
     #[test]
     fn duplicate_name_errors() {
-        let expr = KExpression {
-            parts: vec![
-                ident("x"), eq_kw(), num(1.0),
-                ident("x"), eq_kw(), num(2.0),
-            ],
-        };
+        let expr = KExpression::new(vec![
+            sp(ident("x")), sp(eq_kw()), sp(num(1.0)),
+            sp(ident("x")), sp(eq_kw()), sp(num(2.0)),
+        ]);
         let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
         assert!(err.contains("duplicate name"), "got: {err}");
         assert!(err.contains("`x`"), "got: {err}");
@@ -152,39 +150,31 @@ mod tests {
 
     #[test]
     fn missing_eq_separator_errors() {
-        let expr = KExpression {
-            parts: vec![ident("x"), num(3.0), ident("y")],
-        };
+        let expr = KExpression::new(vec![sp(ident("x")), sp(num(3.0)), sp(ident("y"))]);
         let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
         assert!(err.contains("`=`") || err.contains("separator"), "got: {err}");
     }
 
     #[test]
     fn non_identifier_name_errors() {
-        let expr = KExpression {
-            parts: vec![num(7.0), eq_kw(), num(3.0)],
-        };
+        let expr = KExpression::new(vec![sp(num(7.0)), sp(eq_kw()), sp(num(3.0))]);
         let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
         assert!(err.contains("bare identifier"), "got: {err}");
     }
 
     #[test]
     fn non_multiple_of_three_errors() {
-        let expr = KExpression {
-            parts: vec![ident("x"), eq_kw()],
-        };
+        let expr = KExpression::new(vec![sp(ident("x")), sp(eq_kw())]);
         let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
         assert!(err.contains("triples"), "got: {err}");
     }
 
     #[test]
     fn named_pairs_take_consumes_by_name() {
-        let expr = KExpression {
-            parts: vec![
-                ident("x"), eq_kw(), num(3.0),
-                ident("y"), eq_kw(), num(4.0),
-            ],
-        };
+        let expr = KExpression::new(vec![
+            sp(ident("x")), sp(eq_kw()), sp(num(3.0)),
+            sp(ident("y")), sp(eq_kw()), sp(num(4.0)),
+        ]);
         let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
         assert!(matches!(pairs.take("y"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 4.0));
         assert!(matches!(pairs.take("x"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 3.0));
@@ -194,9 +184,10 @@ mod tests {
 
     #[test]
     fn named_pairs_into_unknown_reports_residual() {
-        let expr = KExpression {
-            parts: vec![ident("x"), eq_kw(), num(3.0), ident("z"), eq_kw(), num(9.0)],
-        };
+        let expr = KExpression::new(vec![
+            sp(ident("x")), sp(eq_kw()), sp(num(3.0)),
+            sp(ident("z")), sp(eq_kw()), sp(num(9.0)),
+        ]);
         let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
         let _ = pairs.take("x");
         assert_eq!(pairs.into_unknown().as_deref(), Some("z"));
@@ -204,12 +195,10 @@ mod tests {
 
     #[test]
     fn dict_literal_form_round_trips() {
-        let expr = KExpression {
-            parts: vec![ExpressionPart::DictLiteral(vec![
-                (ident("x"), num(3.0)),
-                (ident("y"), num(4.0)),
-            ])],
-        };
+        let expr = KExpression::new(vec![sp(ExpressionPart::DictLiteral(vec![
+            (ident("x"), num(3.0)),
+            (ident("y"), num(4.0)),
+        ]))]);
         let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
         assert_eq!(pairs.len(), 2);
         assert_eq!(pairs[0].0, "x");

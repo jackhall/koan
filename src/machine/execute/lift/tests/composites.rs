@@ -3,6 +3,7 @@
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::model::KObject;
+use crate::machine::model::types::KType;
 use crate::machine::CallArena;
 
 use super::{alloc_local_kf, defeat_fast_path};
@@ -26,14 +27,14 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
         Box::new(KKey::String("f".into())),
         KObject::KFunction(kf_ref, None),
     );
-    let outer = KObject::List(Rc::new(vec![KObject::Dict(Rc::new(inner_map))]));
+    let outer = KObject::list(vec![KObject::dict(inner_map)]);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&outer, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::List(items) => match &items[0] {
-            KObject::Dict(entries) => match entries.values().next().unwrap() {
+        KObject::List(items, _) => match &items[0] {
+            KObject::Dict(entries, _, _) => match entries.values().next().unwrap() {
                 KObject::KFunction(_, frame) => assert!(frame.is_some()),
                 other => panic!("expected nested KFunction, got {:?}", other.ktype()),
             },
@@ -59,14 +60,15 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
         value: Rc::new(KObject::KFunction(kf_ref, None)),
         scope_id: ScopeId::next(),
         name: "Carrier".into(),
+        type_args: std::rc::Rc::new(vec![]),
     };
-    let outer = KObject::List(Rc::new(vec![tagged]));
+    let outer = KObject::list(vec![tagged]);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&outer, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::List(items) => match &items[0] {
+        KObject::List(items, _) => match &items[0] {
             KObject::Tagged { value, .. } => match &**value {
                 KObject::KFunction(_, frame) => assert!(frame.is_some()),
                 other => panic!("expected nested KFunction, got {:?}", other.ktype()),
@@ -95,7 +97,7 @@ fn list_with_pre_anchored_variants_skips_them() {
     let m_ref: &Module = dying.arena().alloc_module(module);
 
     let future = KFuture {
-        parsed: KExpression { parts: vec![] },
+        parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle { args: HashMap::new() },
     };
@@ -104,13 +106,13 @@ fn list_with_pre_anchored_variants_skips_them() {
         KObject::KFuture(future, Some(Rc::clone(&other))),
         KObject::KModule(m_ref, Some(Rc::clone(&other))),
     ]);
-    let list = KObject::List(Rc::clone(&items));
+    let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&list, &dying);
     let dying_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::List(out) => assert!(
+        KObject::List(out, _) => assert!(
             Rc::ptr_eq(out, &items),
             "all pre-anchored ⇒ no needs_lift descendant ⇒ Rc reuse",
         ),
@@ -130,17 +132,17 @@ fn list_with_unanchored_kfuture_anchors() {
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
-        parsed: KExpression { parts: vec![] },
+        parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle { args: HashMap::new() },
     };
-    let list = KObject::List(Rc::new(vec![KObject::KFuture(future, None)]));
+    let list = KObject::list(vec![KObject::KFuture(future, None)]);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&list, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::List(out) => assert!(matches!(&out[0], KObject::KFuture(_, Some(_)))),
+        KObject::List(out, _) => assert!(matches!(&out[0], KObject::KFuture(_, Some(_)))),
         other => panic!("expected List, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
@@ -158,13 +160,13 @@ fn list_with_unanchored_kmodule_anchors() {
     let module = Module::new("LocalM".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
 
-    let list = KObject::List(Rc::new(vec![KObject::KModule(m_ref, None)]));
+    let list = KObject::list(vec![KObject::KModule(m_ref, None)]);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&list, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::List(out) => assert!(matches!(&out[0], KObject::KModule(_, Some(_)))),
+        KObject::List(out, _) => assert!(matches!(&out[0], KObject::KModule(_, Some(_)))),
         other => panic!("expected List, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
@@ -188,15 +190,15 @@ fn list_with_struct_and_kexpression_descendants_clones_rc() {
         scope_id: ScopeId::next(),
         fields: Rc::new(fields),
     };
-    let e = KObject::KExpression(KExpression { parts: vec![] });
+    let e = KObject::KExpression(KExpression::new(vec![]));
     let items = Rc::new(vec![s, e]);
-    let list = KObject::List(Rc::clone(&items));
+    let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&items);
 
     let lifted = lift_kobject(&list, &dying);
     let count_after = Rc::strong_count(&items);
     match &lifted {
-        KObject::List(out) => assert!(Rc::ptr_eq(out, &items)),
+        KObject::List(out, _) => assert!(Rc::ptr_eq(out, &items)),
         other => panic!("expected List, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
@@ -212,13 +214,13 @@ fn list_no_descendants_clones_rc() {
     defeat_fast_path(&dying);
 
     let items = Rc::new(vec![KObject::Number(1.0), KObject::Number(2.0)]);
-    let list = KObject::List(Rc::clone(&items));
+    let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&items);
 
     let lifted = lift_kobject(&list, &dying);
     let count_after = Rc::strong_count(&items);
     match lifted {
-        KObject::List(out) => assert!(
+        KObject::List(out, _) => assert!(
             Rc::ptr_eq(&out, &items),
             "non-borrowing list must reuse the inner Rc"
         ),
@@ -236,13 +238,13 @@ fn list_with_local_kfunction_rebuilds_and_anchors() {
     let dying = CallArena::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
-    let list = KObject::List(Rc::new(vec![KObject::KFunction(kf_ref, None)]));
+    let list = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&list, &dying);
     let count_after = Rc::strong_count(&dying);
     match lifted {
-        KObject::List(out) => match &out[0] {
+        KObject::List(out, _) => match &out[0] {
             KObject::KFunction(_, frame) => assert!(
                 frame.is_some(),
                 "nested KFunction must anchor on dying frame's Rc",
@@ -267,13 +269,13 @@ fn dict_no_descendants_clones_rc() {
     let mut map: HashMap<Box<dyn Serializable>, KObject> = HashMap::new();
     map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
     let entries = Rc::new(map);
-    let dict = KObject::Dict(Rc::clone(&entries));
+    let dict = KObject::dict_with_type(Rc::clone(&entries), KType::Any, KType::Any);
     let before = Rc::strong_count(&entries);
 
     let lifted = lift_kobject(&dict, &dying);
     let count_after = Rc::strong_count(&entries);
     match lifted {
-        KObject::Dict(out) => assert!(
+        KObject::Dict(out, _, _) => assert!(
             Rc::ptr_eq(&out, &entries),
             "non-borrowing dict must reuse the inner Rc",
         ),
@@ -297,13 +299,13 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
         Box::new(KKey::String("f".into())),
         KObject::KFunction(kf_ref, None),
     );
-    let dict = KObject::Dict(Rc::new(map));
+    let dict = KObject::dict(map);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&dict, &dying);
     let count_after = Rc::strong_count(&dying);
     match lifted {
-        KObject::Dict(out) => {
+        KObject::Dict(out, _, _) => {
             let v = out.values().next().expect("one entry");
             match v {
                 KObject::KFunction(_, frame) => assert!(frame.is_some()),
@@ -332,13 +334,14 @@ fn tagged_no_borrow_clones_inner_rc() {
         value: Rc::clone(&inner),
         scope_id: sid,
         name: "Maybe".into(),
+        type_args: std::rc::Rc::new(vec![]),
     };
     let before = Rc::strong_count(&inner);
 
     let lifted = lift_kobject(&tagged, &dying);
     let count_after = Rc::strong_count(&inner);
     match lifted {
-        KObject::Tagged { tag, value, scope_id, name } => {
+        KObject::Tagged { tag, value, scope_id, name, .. } => {
             assert!(Rc::ptr_eq(&value, &inner), "no-borrow Tagged must reuse inner Rc");
             assert_eq!(tag, "Just");
             assert_eq!(name, "Maybe");
@@ -365,13 +368,14 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
         value: Rc::new(KObject::KFunction(kf_ref, None)),
         scope_id: sid,
         name: "Carrier".into(),
+        type_args: std::rc::Rc::new(vec![]),
     };
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&tagged, &dying);
     let count_after = Rc::strong_count(&dying);
     match lifted {
-        KObject::Tagged { tag, value, scope_id, name } => {
+        KObject::Tagged { tag, value, scope_id, name, .. } => {
             assert_eq!(tag, "Wrap");
             assert_eq!(name, "Carrier");
             assert_eq!(scope_id, sid);

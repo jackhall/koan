@@ -10,8 +10,8 @@
 //!   slot-extraction helpers used by binder builtins.
 //! - [`scheduler_handle`] — `NodeId`, the `SchedulerHandle` trait, and `CombineFinish`.
 //! - [`body`] — `BodyResult`, `BuiltinFn`, `PreRunFn`, and the `Body` enum.
-//! - [`invoke`] — `KFunction::invoke` (the body-runner) and `substitute_params` (the
-//!   parameter-Identifier rewriter user-fn bodies use on entry).
+//! - [`invoke`] — `KFunction::invoke` (the body-runner) that binds parameters into a
+//!   per-call child scope and returns a tail-call.
 //! - [`pick`] — dispatch-shape classification (`accepts_for_wrap`,
 //!   `classify_for_pick`, `ClassifiedSlots`) used by `resolve_dispatch`.
 
@@ -20,6 +20,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
@@ -34,9 +35,8 @@ pub mod scheduler_handle;
 
 pub use argument_bundle::ArgumentBundle;
 pub use body::{Body, BodyResult, BuiltinFn, PreRunFn};
-pub(crate) use invoke::substitute_params;
 pub use pick::ClassifiedSlots;
-pub use scheduler_handle::{CombineFinish, NodeId, SchedulerHandle};
+pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
 /// A callable Koan function: signature, body, and the lexical environment captured at
 /// definition time (the scope that ran the `FN ...` form, or run-root for builtins).
@@ -123,8 +123,9 @@ impl<'a> KFunction<'a> {
         }
         let mut args: HashMap<String, Rc<KObject<'a>>> = HashMap::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
+            let part_value = &part.value;
             match el {
-                SignatureElement::Keyword(s) => match part {
+                SignatureElement::Keyword(s) => match part_value {
                     ExpressionPart::Keyword(t) if s == t => {}
                     ExpressionPart::Keyword(t) => {
                         return Err(KError::new(KErrorKind::DispatchFailed {
@@ -140,14 +141,14 @@ impl<'a> KFunction<'a> {
                     }
                 },
                 SignatureElement::Argument(arg) => {
-                    if !arg.matches(part) {
+                    if !arg.matches(part_value) {
                         return Err(KError::new(KErrorKind::TypeMismatch {
                             arg: arg.name.clone(),
                             expected: arg.ktype.name(),
-                            got: part.summarize(),
+                            got: part_value.summarize(),
                         }));
                     }
-                    args.insert(arg.name.clone(), Rc::new(part.resolve_for(&arg.ktype)));
+                    args.insert(arg.name.clone(), Rc::new(part_value.resolve_for(&arg.ktype)));
                 }
             }
         }
@@ -165,18 +166,21 @@ impl<'a> KFunction<'a> {
     /// Validation precedence (first wins): missing arg → unknown arg. Arity is implicit —
     /// [`NamedPairs`] rejects duplicate names at parse time, so consuming every declared
     /// argument and finding the residual empty witnesses an exact match.
-    pub fn apply<'b>(&self, args: Vec<ExpressionPart<'b>>) -> BodyResult<'b> {
-        let tmp_expr = KExpression { parts: args };
+    pub fn apply<'b>(&self, args: Vec<Spanned<ExpressionPart<'b>>>) -> BodyResult<'b> {
+        let tmp_expr = KExpression::new(args);
         let mut pairs = match NamedPairs::parse(&tmp_expr, "function call") {
             Ok(p) => p,
             Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
         };
-        let mut parts = Vec::with_capacity(self.signature.elements.len());
+        let mut parts: Vec<Spanned<ExpressionPart<'b>>> =
+            Vec::with_capacity(self.signature.elements.len());
         for el in &self.signature.elements {
             match el {
-                SignatureElement::Keyword(s) => parts.push(ExpressionPart::Keyword(s.clone())),
+                SignatureElement::Keyword(s) => {
+                    parts.push(Spanned::bare(ExpressionPart::Keyword(s.clone())))
+                }
                 SignatureElement::Argument(a) => match pairs.take(&a.name) {
-                    Some(v) => parts.push(v),
+                    Some(v) => parts.push(Spanned::bare(v)),
                     None => {
                         return BodyResult::Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
                     }
@@ -188,7 +192,7 @@ impl<'a> KFunction<'a> {
                 "unknown name `{unknown}` in function call",
             ))));
         }
-        BodyResult::tail(KExpression { parts })
+        BodyResult::tail(KExpression::new(parts))
     }
 }
 
@@ -255,12 +259,10 @@ mod tests {
             ],
         };
         register_builtin(scope, "OP", sig, body_any);
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("OP".into()),
-                ExpressionPart::Identifier("someName".into()),
-            ],
-        };
+        let expr = KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Keyword("OP".into())),
+            Spanned::bare(ExpressionPart::Identifier("someName".into())),
+        ]);
         let f = find_match(scope, &expr).expect("OP <Number> should match");
         let pick = f.classify_for_pick(&expr);
         assert_eq!(pick.wrap_indices, vec![1]);
@@ -276,19 +278,15 @@ mod tests {
     fn classify_returns_ref_name_indices_for_non_pre_run_function() {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let inner = KExpression {
-            parts: vec![
-                ExpressionPart::Identifier("x".into()),
-                ExpressionPart::Keyword(":".into()),
-                ExpressionPart::Literal(KLiteral::Number(1.0)),
-            ],
-        };
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Identifier("myFn".into()),
-                ExpressionPart::Expression(Box::new(inner)),
-            ],
-        };
+        let inner = KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Identifier("x".into())),
+            Spanned::bare(ExpressionPart::Keyword(":".into())),
+            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+        ]);
+        let expr = KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Identifier("myFn".into())),
+            Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
+        ]);
         let f = find_match(scope, &expr)
             .expect("call_by_name should match Identifier-leading expression");
         let pick = f.classify_for_pick(&expr);
@@ -304,14 +302,12 @@ mod tests {
     fn classify_skips_ref_name_indices_for_pre_run_function() {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("LET".into()),
-                ExpressionPart::Identifier("x".into()),
-                ExpressionPart::Keyword("=".into()),
-                ExpressionPart::Literal(KLiteral::Number(1.0)),
-            ],
-        };
+        let expr = KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Keyword("LET".into())),
+            Spanned::bare(ExpressionPart::Identifier("x".into())),
+            Spanned::bare(ExpressionPart::Keyword("=".into())),
+            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+        ]);
         let f = find_match(scope, &expr).expect("LET should match");
         let pick = f.classify_for_pick(&expr);
         assert!(pick.picked_has_pre_run);
@@ -343,12 +339,10 @@ mod tests {
             ],
         };
         register_builtin(scope, "OP", sig, body_any);
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("OP".into()),
-                ExpressionPart::Type(TypeExpr::leaf("IntOrd".into())),
-            ],
-        };
+        let expr = KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Keyword("OP".into())),
+            Spanned::bare(ExpressionPart::Type(TypeExpr::leaf("IntOrd".into()))),
+        ]);
         let f = find_match(scope, &expr).expect("OP <TypeExprRef> should match");
         let pick = f.classify_for_pick(&expr);
         assert_eq!(pick.ref_name_indices, vec![1]);
@@ -372,12 +366,10 @@ mod tests {
             ],
         };
         register_builtin(scope, "OP", sig, body_any);
-        let expr = KExpression {
-            parts: vec![
-                ExpressionPart::Keyword("OP".into()),
-                ExpressionPart::Type(TypeExpr::leaf("Number".into())),
-            ],
-        };
+        let expr = KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Keyword("OP".into())),
+            Spanned::bare(ExpressionPart::Type(TypeExpr::leaf("Number".into()))),
+        ]);
         let f = find_match(scope, &expr).expect("OP <Any> should match");
         let pick = f.classify_for_pick(&expr);
         assert_eq!(pick.wrap_indices, vec![1]);

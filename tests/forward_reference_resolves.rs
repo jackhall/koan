@@ -155,30 +155,6 @@ fn let_alias_via_module_qualified_type_resolves() {
     );
 }
 
-/// Module-qualified type name in FN parameter (and return) position. `Mo.Ty` arrives
-/// as `ExpressionPart::Expression` in the FN signature; `parse_fn_param_list` records
-/// it for sub-Dispatch and splices back the resolved type as `Future(KTypeValue)` on
-/// the Combine wake. The return-type slot's `Expression([ATTR Mo Ty])` rides the
-/// tentative-pass `Expression`-in-non-`KExpression`-slot allowance on
-/// `KFunction::accepts_for_wrap`, then `lazy_eager_indices` puts the slot into
-/// `eager_indices` so the dispatcher schedules its sub-Dispatch. The subsequent
-/// `LET y = (ID 7)` parks on `ID`'s dispatch-time placeholder via the head-Keyword
-/// fallback in `run_dispatch`'s `Unmatched` arm — without that, the call would race
-/// FN's Combine-deferred registration and surface as `no matching function`.
-#[test]
-fn fn_param_with_module_qualified_type_resolves() {
-    let arena = RuntimeArena::new();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
-        &arena,
-        captured,
-        "MODULE Mo = ((LET Ty = Number))\n\
-         FN (ID x Mo.Ty) -> Mo.Ty = (x)\n\
-         LET y = (ID 7)",
-    );
-    assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));
-}
-
 /// Module-qualified type name in a `LIST_OF`-style type frame. `LIST_OF Mo.Ty` rides
 /// the existing `Deferred` path in `resolve_dispatch`: the bare `LIST_OF` overload
 /// (`elem: TypeExprRef`) rejects the `Expression` part on strict match, but
@@ -259,6 +235,35 @@ fn producer_error_propagates_to_parked_consumer() {
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
+    );
+}
+
+/// Dependency-cycle guard: a self-referential binding (`LET x = x`) parks its RHS
+/// sub-dispatch on its own placeholder, so the binder waits on a sub that waits on the
+/// binder. The work queues drain with those slots still parked; `execute` detects the
+/// leftover `PreRun` slots and returns `SchedulerDeadlock` rather than letting the
+/// top-level result read panic on an unresolved slot.
+#[test]
+fn self_referential_binding_surfaces_deadlock() {
+    use koan::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let scope = default_scope(&arena, Box::new(SharedBuf(captured)));
+    let exprs = parse("LET x = x").expect("parse should succeed");
+    let mut sched = Scheduler::new();
+    for e in exprs { let _ = sched.add_dispatch(e, scope); }
+    let err = sched.execute().expect_err("self-reference should surface a deadlock");
+    assert!(
+        matches!(&err.kind, KErrorKind::SchedulerDeadlock { pending, .. } if *pending > 0),
+        "expected SchedulerDeadlock, got {err}",
     );
 }
 

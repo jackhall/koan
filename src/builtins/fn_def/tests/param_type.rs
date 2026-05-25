@@ -1,6 +1,8 @@
 //! Typed parameters: dispatch routing on parameter types, overloads, shape errors.
 
-use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
+use crate::builtins::test_support::{
+    fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
+};
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::machine::execute::Scheduler;
@@ -15,12 +17,7 @@ fn fn_typed_param_records_ktype_on_signature() {
     let scope = run_root_silent(&arena);
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
 
-    let data = scope.bindings().data();
-    let entry = data.get("DOUBLE").expect("DOUBLE should be bound");
-    let f = match entry {
-        KObject::KFunction(f, _) => *f,
-        _ => panic!("expected DOUBLE to bind a KFunction"),
-    };
+    let f = lookup_fn(scope, "DOUBLE");
     match f.signature.elements.as_slice() {
         [SignatureElement::Keyword(kw), SignatureElement::Argument(Argument { name, ktype })] => {
             assert_eq!(kw, "DOUBLE");
@@ -92,8 +89,7 @@ fn fn_param_without_annotation_is_rejected() {
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`x`")),
         "expected ShapeError mentioning `x`, got {err}",
     );
-    let data = scope.bindings().data();
-    assert!(data.get("DOUBLE").is_none(), "DOUBLE should not register");
+    assert!(!fn_is_registered(scope, "DOUBLE"), "DOUBLE should not register");
 }
 
 /// An unknown type name in a parameter slot surfaces as a `ShapeError` mentioning the

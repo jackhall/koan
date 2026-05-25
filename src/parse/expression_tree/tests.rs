@@ -15,6 +15,7 @@
 mod basics;
 mod list_dict;
 mod literals;
+mod spans;
 mod type_sigil;
 mod value_sigil;
 
@@ -47,15 +48,19 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
             ExpressionPart::Future(_) => "future".to_string(),
         }
     }
-    let parts: Vec<String> = e.parts.iter().map(describe_part).collect();
+    let parts: Vec<String> = e.parts.iter().map(|p| describe_part(&p.value)).collect();
     format!("[{}]", parts.join(" "))
 }
 
 pub(super) fn tree(input: &str) -> Result<String, String> {
     let (masked, dict) = mask_quotes(input);
-    build_tree(&masked, &dict).map(|e| describe(&e))
+    build_tree(&masked, &dict)
+        .map(|e| describe(&e))
+        .map_err(|e| e.to_string())
 }
 
 pub(super) fn top(input: &str) -> Result<Vec<String>, String> {
-    parse(input).map(|exprs| exprs.iter().map(describe).collect())
+    parse(input)
+        .map(|exprs| exprs.iter().map(describe).collect())
+        .map_err(|e| e.to_string())
 }

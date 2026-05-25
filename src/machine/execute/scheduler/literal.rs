@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::{KKey, KObject, Serializable};
 use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -56,7 +56,7 @@ impl<'a> Scheduler<'a> {
                 .map(|slot| slot.materialize(results))
                 .collect();
             let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::List(Rc::new(items)));
+                scope.arena.alloc_object(KObject::list(items));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, scope, finish)
@@ -79,10 +79,7 @@ impl<'a> Scheduler<'a> {
             let val_slot = self.classify_aggregate_part(v, scope, &mut deps, true);
             layout.push((key_slot, val_slot));
         }
-        let frame_label = || Frame {
-            function: "<dict>".to_string(),
-            expression: "dict literal".to_string(),
-        };
+        let frame_label = || Frame::bare("<dict>", "dict literal");
         let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
             let mut map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>> = HashMap::new();
             for (k_slot, v_slot) in layout {
@@ -97,7 +94,7 @@ impl<'a> Scheduler<'a> {
                 map.insert(Box::new(kkey), value_obj);
             }
             let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::Dict(Rc::new(map)));
+                scope.arena.alloc_object(KObject::dict(map));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, scope, finish)
@@ -135,9 +132,7 @@ impl<'a> Scheduler<'a> {
                 Slot::Dep(pos)
             }
             ExpressionPart::Identifier(name) if wrap_identifiers => {
-                let expr = KExpression {
-                    parts: vec![ExpressionPart::Identifier(name)],
-                };
+                let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(name))]);
                 let sub_id = self.add(NodeWork::Dispatch(expr), scope);
                 let pos = deps.len();
                 deps.push(sub_id);
@@ -150,9 +145,7 @@ impl<'a> Scheduler<'a> {
                 // Auto-wrap for bare leaf Type-tokens in value slots: `MAKESET IntOrd`
                 // sub-dispatches `(IntOrd)` through the TypeExprRef overload of
                 // `value_lookup`, which surfaces the bound `KModule`/`KSignature`.
-                let expr = KExpression {
-                    parts: vec![ExpressionPart::Type(t)],
-                };
+                let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(t))]);
                 let sub_id = self.add(NodeWork::Dispatch(expr), scope);
                 let pos = deps.len();
                 deps.push(sub_id);

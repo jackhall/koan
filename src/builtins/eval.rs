@@ -40,9 +40,9 @@ pub fn body<'a>(
     // Per-EVAL frame, modeled on MATCH: the child scope's `outer` is the call site, so free
     // names in the captured body resolve against the surrounding scope. Chain the call-
     // site's frame Rc onto the new frame so the parent's per-call arena stays alive while
-    // the new frame's outer-scope pointer is in use. EVAL doesn't substitute parameters
-    // into the captured body (no formal `it`-style binding the way MATCH has), so there's
-    // no per-call arena re-borrow to set up.
+    // the new frame's outer-scope pointer is in use. EVAL has no formal `it`-style binding
+    // (MATCH binds `it` for its branch body); the captured body's free names resolve
+    // straight through the outer chain.
     let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
     BodyResult::Tail { expr: inner, frame: Some(frame), function: None }
 }

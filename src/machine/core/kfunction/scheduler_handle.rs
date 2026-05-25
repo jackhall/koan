@@ -9,6 +9,7 @@ use std::rc::Rc;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::{CallArena, Scope};
+use crate::machine::core::kerror::KError;
 use crate::machine::model::values::KObject;
 
 use super::body::BodyResult;
@@ -33,6 +34,17 @@ pub trait SchedulerHandle<'a> {
         scope: &'a Scope<'a>,
         finish: CombineFinish<'a>,
     ) -> NodeId;
+    /// Schedule a `Catch` slot: wait on `from` to terminalize, then run `finish` with its
+    /// `Result`. Unlike `Combine`, an errored `from` does not short-circuit — the closure
+    /// receives `Err(KError)` and can choose to recover (build a `Tagged` carrier via
+    /// `KError::to_tagged` for TRY's branch dispatcher) or re-raise. The primitive backs
+    /// the `TRY-WITH` builtin; no other caller today.
+    fn add_catch(
+        &mut self,
+        from: NodeId,
+        scope: &'a Scope<'a>,
+        finish: CatchFinish<'a>,
+    ) -> NodeId;
     /// Active slot's `Rc<CallArena>`, so a builtin building a new per-call frame whose
     /// child scope's `outer` points into the call site can chain that Rc onto the new
     /// frame. Without this, builtins whose new frame's outer is a per-call scope (rather
@@ -50,6 +62,17 @@ pub trait SchedulerHandle<'a> {
         body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
     );
 
+    /// Take the active frame for reuse on a TCO Replace iff it is uniquely owned —
+    /// i.e. no closure or sub-slot has cloned the `Rc` out. On `Some`, the caller
+    /// becomes the sole owner; calling [`CallArena::try_reset_for_tail`] on it is
+    /// guaranteed to succeed. On `None`, the active frame is left in place and the
+    /// caller must allocate a fresh frame.
+    ///
+    /// The "uniquely owned" gate is what keeps reuse semantically equivalent to
+    /// drop-and-alloc: any escaped `Rc` (returned closure, list element carrying a
+    /// `KFunction(_, Some(rc))`, ...) keeps strong_count > 1 and refuses reuse.
+    fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>>;
+
     /// Schedule each top-level statement in `body_expr` against `scope` and return their
     /// `NodeId`s.
     ///
@@ -66,13 +89,13 @@ pub trait SchedulerHandle<'a> {
             && body_expr
                 .parts
                 .iter()
-                .all(|p| matches!(p, ExpressionPart::Expression(_)));
+                .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
 
         if is_multi_statement {
             body_expr
                 .parts
                 .into_iter()
-                .filter_map(|p| match p {
+                .filter_map(|p| match p.value {
                     ExpressionPart::Expression(e) => Some(self.add_dispatch(*e, scope)),
                     _ => None,
                 })
@@ -89,4 +112,16 @@ pub trait SchedulerHandle<'a> {
 pub type CombineFinish<'a> = Box<
     dyn FnOnce(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, &[&'a KObject<'a>]) -> BodyResult<'a>
         + 'a,
+>;
+
+/// Host-side closure for `Catch` slots. Receives the watched slot's terminal as a
+/// `Result` — `Ok(&KObject)` on success, `Err(KError)` on failure — so the closure can
+/// branch on either outcome (TRY's per-arm dispatch).
+pub type CatchFinish<'a> = Box<
+    dyn FnOnce(
+        &'a Scope<'a>,
+        &mut dyn SchedulerHandle<'a>,
+        Result<&'a KObject<'a>, KError>,
+    ) -> BodyResult<'a>
+    + 'a,
 >;

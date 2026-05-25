@@ -1,4 +1,5 @@
 use super::*;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 fn one_slot_bundle<'a>(name: &str, obj: KObject<'a>) -> ArgumentBundle<'a> {
@@ -22,15 +23,13 @@ fn type_name_ref<'a>(name: &str, params: TypeParams) -> KObject<'a> {
 /// to cloning the inner `KExpression`.
 #[test]
 fn extract_kexpression_clones_when_rc_is_shared() {
-    let expr = KExpression {
-        parts: vec![ExpressionPart::Identifier("k".into())],
-    };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("k".into()))]);
     let shared = Rc::new(KObject::KExpression(expr));
     let _outside = Rc::clone(&shared);
     let mut bundle = ArgumentBundle { args: HashMap::new() };
     bundle.args.insert("e".into(), shared);
     let got = extract_kexpression(&mut bundle, "e").expect("clone path should return Some");
-    assert!(matches!(got.parts.as_slice(), [ExpressionPart::Identifier(n)] if n == "k"));
+    assert!(matches!(got.parts.as_slice(), [Spanned { value: ExpressionPart::Identifier(n), .. }] if n == "k"));
 }
 
 /// `extract_kexpression`'s `Err(rc) => _` arm: shared `Rc` holding a non-`KExpression`

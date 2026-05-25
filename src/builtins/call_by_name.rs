@@ -233,7 +233,7 @@ mod tests {
         );
     }
 
-    /// Variant exercising the captured scope's substitute-and-dispatch path after escape.
+    /// Variant exercising parameter-binding via the captured scope after escape.
     #[test]
     fn escaped_closure_with_param_returns_body_value() {
         let arena = RuntimeArena::new();
@@ -258,7 +258,7 @@ mod tests {
         run(scope, "FN (MAKE) -> List = ([(FN (ECHO x :Number) -> Number = (x))])");
         let result = run_one(scope, parse_one("(MAKE)"));
         let items = match result {
-            KObject::List(items) => items,
+            KObject::List(items, _) => items,
             other => panic!("expected MAKE to return a List, got {}", other.summarize()),
         };
         assert_eq!(items.len(), 1, "list should hold the single inner closure");

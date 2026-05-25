@@ -1,4 +1,38 @@
-use super::collapse_whitespace;
+use super::collapse_whitespace as collapse_bytes;
+use crate::parse::quotes::JUMP_MARK;
+
+/// Test shim: keep the readable `&str` → `String` ergonomics from the pre-Phase-2 API.
+/// Phase 3 added JUMP markers around every synthetic char; the existing assertions check
+/// the high-level paren shape, so we strip the markers before comparing. Marker-aware
+/// tests at the bottom of this module assert against the raw byte stream instead.
+fn collapse_whitespace(input: &str) -> Result<String, String> {
+    collapse_bytes(input.as_bytes())
+        .map(|v| String::from_utf8(strip_jumps(&v)).expect("UTF-8 in test"))
+        .map_err(|e| e.to_string())
+}
+
+/// Strip `JUMP_MARK <digits> JUMP_MARK` runs from a masked byte stream so textual
+/// assertions don't have to encode the cursor anchors. LITERAL markers pass through
+/// untouched — they survive into `build_tree` regardless of phase.
+fn strip_jumps(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == JUMP_MARK {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == JUMP_MARK && j > i + 1 {
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
 
 #[test]
 fn empty_input() {
@@ -227,6 +261,87 @@ fn no_trailing_comma_keeps_sibling_boundary() {
     assert_eq!(collapse_whitespace("foo\nbar").unwrap(), "(foo) (bar)");
 }
 
+// --- Paren continuation across line breaks ---
+
+#[test]
+fn open_paren_continues_under_greater_indent() {
+    // `PRINT (` leaves a paren open; the deeper `3.14` line nests inside it as its own
+    // group, and the `)` at the opening indent closes the literal paren. Each continuation
+    // line is wrapped (nest-per-line), so the body is `((3.14))`.
+    assert_eq!(
+        collapse_whitespace("PRINT (\n  3.14\n)").unwrap(),
+        "(PRINT ( (3.14 )))",
+    );
+}
+
+#[test]
+fn open_paren_closes_at_deeper_indent() {
+    // The matching `)` may itself sit on a deeper-indent continuation line (>= the opener),
+    // and still closes the group; it never triggered an expression break.
+    assert_eq!(
+        collapse_whitespace("PRINT (\n    3.14\n    )").unwrap(),
+        "(PRINT ( (3.14 )))",
+    );
+}
+
+#[test]
+fn open_paren_nests_each_continuation_line() {
+    // Two deeper lines under an open paren each wrap as their own nested group, so the
+    // paren body is `(A) (B)` — nest-per-line, not a flattened argument list.
+    assert_eq!(
+        collapse_whitespace("FOO (\n  A\n  B\n)").unwrap(),
+        "(FOO ( (A) (B )))",
+    );
+}
+
+#[test]
+fn nested_multiline_parens_pair_correctly() {
+    // An inner `(` opened on a deeper line closes at its own indent before the outer `)`
+    // closes at the opener's. The anchor stack keeps each paren matched to its own opener.
+    assert_eq!(
+        collapse_whitespace("FOO (\n  BAR (\n    x\n  )\n)").unwrap(),
+        "(FOO ( (BAR ( (x ) ))))",
+    );
+}
+
+#[test]
+fn open_paren_same_indent_break_is_error() {
+    // The dangling-`(` case: the `(` opens at indent 0, then `3.14` breaks at the same
+    // indentation without closing it. A clear parse error, not a downstream dispatch
+    // failure on an empty `()` group.
+    let err = collapse_whitespace("PRINT (\n3.14\n)").unwrap_err();
+    assert!(err.contains("unmatched '('"), "got: {err}");
+}
+
+#[test]
+fn close_paren_below_opener_indent_is_error() {
+    // The opener sits at indent 2; the `)` dedents to indent 0, below its opener. Closing
+    // a paren shallower than where it opened is rejected (same-or-greater close rule).
+    let err = collapse_whitespace("A\n  PRINT (\n    3.14\n)").unwrap_err();
+    assert!(err.contains("less indented"), "got: {err}");
+}
+
+#[test]
+fn comma_continuation_overrides_paren_indent_guard() {
+    // A trailing comma is an explicit continuation, so a same-indent next line is allowed
+    // even with the paren still open (the motivating multi-line UNION shape). Comma lines
+    // join flat rather than nesting.
+    assert_eq!(
+        collapse_whitespace("PRINT (,\n3.14,\n)").unwrap(),
+        "(PRINT (, 3.14, ))",
+    );
+}
+
+#[test]
+fn balanced_inline_paren_does_not_perturb_indentation() {
+    // A line whose parens balance within it (`PRINT (3.14)`) leaves no paren open, so the
+    // following line becomes a sibling group as usual.
+    assert_eq!(
+        collapse_whitespace("PRINT (3.14)\nbar").unwrap(),
+        "(PRINT (3.14)) (bar)",
+    );
+}
+
 // --- Sigil-led continuation lines ---
 
 #[test]
@@ -325,5 +440,188 @@ fn dict_continuation_with_paren_sigils_passes_through() {
     assert_eq!(
         collapse_whitespace("LET d = {\n  x = #(foo)\n  y = #(bar)\n}").unwrap(),
         "(LET d = { x = #(foo) y = #(bar) })",
+    );
+}
+
+// --- Phase 3: JUMP marker placement ---
+//
+// These tests assert against the *raw* byte stream emitted by `collapse_whitespace`,
+// including the `JUMP_MARK <offset> JUMP_MARK` cursor anchors that the pass inserts
+// around every synthetic char. `build_tree` consumes-and-ignores the payloads today
+// (Phase 2 behaviour, unchanged in Phase 3) but Phase 4 will read them to populate
+// `KExpression::span`, so locking the offsets in now catches regressions early.
+
+use crate::parse::quotes::{LEN_SEP, LITERAL_MARK};
+
+/// Build a `\x1D<offset>\x1D` JUMP marker.
+fn jmp(offset: u32) -> Vec<u8> {
+    let mut v = vec![JUMP_MARK];
+    v.extend_from_slice(offset.to_string().as_bytes());
+    v.push(JUMP_MARK);
+    v
+}
+
+/// Build a `\x1F<idx>\x1E<orig_byte_len>` LITERAL marker (matches the form emitted by
+/// `mask_quotes`; used to construct synthetic post-mask inputs for round-trip tests).
+fn lit(idx: usize, len: usize) -> Vec<u8> {
+    let mut v = vec![LITERAL_MARK];
+    v.extend_from_slice(idx.to_string().as_bytes());
+    v.push(LEN_SEP);
+    v.extend_from_slice(len.to_string().as_bytes());
+    v
+}
+
+fn cat(parts: &[&[u8]]) -> Vec<u8> {
+    parts.iter().flat_map(|p| p.iter().copied()).collect()
+}
+
+fn raw(input: &str) -> Vec<u8> {
+    collapse_bytes(input.as_bytes()).expect("collapse")
+}
+
+fn raw_bytes(input: &[u8]) -> Vec<u8> {
+    collapse_bytes(input).expect("collapse")
+}
+
+#[test]
+fn single_line_anchors_line_open_and_close() {
+    // `foo` (3 bytes, no trailing newline). Cursor: 0 at line open, 3 one past `o`.
+    assert_eq!(raw("foo"), cat(&[&jmp(0), b"(foo", &jmp(3), b")"]));
+}
+
+#[test]
+fn sibling_lines_anchor_each_paren() {
+    // `foo\nbar` (7 bytes). Line 1 spans 0..3, line 2 spans 4..7. Each `(` snaps
+    // to the next content byte; each `)` snaps to one past the previous content.
+    assert_eq!(
+        raw("foo\nbar"),
+        cat(&[
+            &jmp(0), b"(foo",
+            &jmp(3), b") ",
+            &jmp(4), b"(bar",
+            &jmp(7), b")",
+        ]),
+    );
+}
+
+#[test]
+fn nested_block_anchors_per_frame() {
+    // `a\n  b` (5 bytes). Line 2 sits below line 1; closing chars at EOF snap to 5.
+    assert_eq!(
+        raw("a\n  b"),
+        cat(&[
+            &jmp(0), b"(a ",
+            &jmp(4), b"(b",
+            &jmp(5), b")",
+            &jmp(5), b")",
+        ]),
+    );
+}
+
+#[test]
+fn dedent_then_sibling_anchors_correctly() {
+    // `foo\n    bar\nbaz` (15 bytes). Indent on line 2 nests it; line 3 is a sibling
+    // of line 1. Two `)`s fire on line-3 dedent, both anchored to 11 (one past `r`).
+    assert_eq!(
+        raw("foo\n    bar\nbaz"),
+        cat(&[
+            &jmp(0), b"(foo ",
+            &jmp(8), b"(bar",
+            &jmp(11), b")",
+            &jmp(11), b") ",
+            &jmp(12), b"(baz",
+            &jmp(15), b")",
+        ]),
+    );
+}
+
+#[test]
+fn continuation_join_space_carries_anchor() {
+    // `add 1,\n  2` (10 bytes). Trailing comma carries the second line into the same
+    // frame; the synthetic joining space is preceded by a JUMP at orig of `2`.
+    assert_eq!(
+        raw("add 1,\n  2"),
+        cat(&[
+            &jmp(0), b"(add 1,",
+            &jmp(9), b" 2",
+            &jmp(10), b")",
+        ]),
+    );
+}
+
+#[test]
+fn sigil_led_top_level_emits_two_jumps_around_sigil() {
+    // `#3` (2 bytes). The `#` is real content (JUMP 0 before it); the synthetic `(`
+    // gets its own JUMP at offset 1 (orig of `3`).
+    assert_eq!(
+        raw("#3"),
+        cat(&[
+            &jmp(0), b"#",
+            &jmp(1), b"(3",
+            &jmp(2), b")",
+        ]),
+    );
+}
+
+#[test]
+fn sigil_led_continuation_anchors_at_real_sigil_offset() {
+    // `foo\n  #3` (8 bytes). The continuation `#` sits at orig 6; the rest of the
+    // sigil-wrapped paren spans orig 7..8.
+    assert_eq!(
+        raw("foo\n  #3"),
+        cat(&[
+            &jmp(0), b"(foo ",
+            &jmp(6), b"#",
+            &jmp(7), b"(3",
+            &jmp(8), b")",
+            &jmp(8), b")",
+        ]),
+    );
+}
+
+#[test]
+fn literal_passthrough_keeps_mask_jump_then_emits_close_jump() {
+    // Synthetic post-mask input for `'hello'` (orig 7 bytes). `mask_quotes` would emit
+    // the opening quote + LITERAL marker + closing quote + JUMP-past-close; we feed
+    // that shape to `collapse_whitespace` directly to confirm it passes the literal
+    // sequence through verbatim and lands the closing `)` JUMP at orig 7.
+    let masked = cat(&[b"'", &lit(0, 5), b"'", &jmp(7)]);
+    let expected = cat(&[
+        &jmp(0), b"('",
+        &lit(0, 5),
+        b"'",
+        &jmp(7),
+        &jmp(7), b")",
+    ]);
+    assert_eq!(raw_bytes(&masked), expected);
+}
+
+#[test]
+fn blank_lines_advance_cursor_for_following_anchors() {
+    // `foo\n\nbar` (8 bytes). Blank line 2 has length 0 + the `\n` between it and
+    // line 3; the JUMP before line 3's `(` must reflect orig 5 (start of `bar`).
+    assert_eq!(
+        raw("foo\n\nbar"),
+        cat(&[
+            &jmp(0), b"(foo",
+            &jmp(3), b") ",
+            &jmp(5), b"(bar",
+            &jmp(8), b")",
+        ]),
+    );
+}
+
+#[test]
+fn list_continuation_anchors_each_joined_line() {
+    // `[1\n 2]` (6 bytes). Open `[` carries delim_depth, so line 2 enters via the
+    // continuation branch; each joining space carries an anchor at the line's
+    // content start.
+    assert_eq!(
+        raw("[1\n 2]"),
+        cat(&[
+            &jmp(0), b"([1",
+            &jmp(4), b" 2]",
+            &jmp(6), b")",
+        ]),
     );
 }

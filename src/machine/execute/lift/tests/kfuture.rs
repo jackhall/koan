@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
+use crate::machine::core::source::Spanned;
 use crate::machine::model::KObject;
 use crate::machine::CallArena;
 use crate::parse::parse;
@@ -83,7 +84,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let inside: &KObject = dying.arena().alloc_object(KObject::Number(7.0));
-    future.parsed.parts.push(ExpressionPart::Future(inside));
+    future.parsed.parts.push(Spanned::bare(ExpressionPart::Future(inside)));
     let kf_obj = KObject::KFuture(future, None);
 
     let strong_before = Rc::strong_count(&dying);
@@ -117,7 +118,7 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
     let kf_ref = alloc_local_kf(&dying);
 
     let inner_future = KFuture {
-        parsed: KExpression { parts: vec![] },
+        parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle { args: HashMap::new() },
     };
@@ -196,11 +197,11 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let inside: &KObject = dying.arena().alloc_object(KObject::Number(17.0));
-    let inner = KExpression { parts: vec![ExpressionPart::Future(inside)] };
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(inside))]);
     future
         .parsed
         .parts
-        .push(ExpressionPart::Expression(Box::new(inner)));
+        .push(Spanned::bare(ExpressionPart::Expression(Box::new(inner))));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
 
@@ -229,7 +230,7 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let inside: &KObject = dying.arena().alloc_object(KObject::Number(19.0));
-    let inner = KExpression { parts: vec![ExpressionPart::Future(inside)] };
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(inside))]);
     future
         .bundle
         .args
@@ -324,7 +325,7 @@ fn kfuture_with_local_function_anchors() {
     let kf_ref = alloc_local_kf(&dying);
 
     let future = KFuture {
-        parsed: KExpression { parts: vec![] },
+        parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle { args: HashMap::new() },
     };
@@ -358,7 +359,7 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let nested = KObject::List(Rc::new(vec![KObject::KFunction(kf_ref, None)]));
+    let nested = KObject::list(vec![KObject::KFunction(kf_ref, None)]);
     future.bundle.args.insert("nested".into(), Rc::new(nested));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
@@ -424,7 +425,7 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
     future
         .parsed
         .parts
-        .push(ExpressionPart::ListLiteral(vec![ExpressionPart::Future(inside)]));
+        .push(Spanned::bare(ExpressionPart::ListLiteral(vec![ExpressionPart::Future(inside)])));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
 
@@ -452,10 +453,10 @@ fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
     let inside: &KObject = dying.arena().alloc_object(KObject::Number(13.0));
-    future.parsed.parts.push(ExpressionPart::DictLiteral(vec![(
+    future.parsed.parts.push(Spanned::bare(ExpressionPart::DictLiteral(vec![(
         ExpressionPart::Keyword("k".into()),
         ExpressionPart::Future(inside),
-    )]));
+    )])));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
 

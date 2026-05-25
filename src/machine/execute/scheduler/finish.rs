@@ -1,6 +1,7 @@
 use crate::machine::model::{KObject, Parseable};
 use crate::machine::{
-    BodyResult, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId, ResolveOutcome, Scope,
+    BodyResult, CatchFinish, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId,
+    ResolveOutcome, Scope,
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
@@ -19,10 +20,7 @@ impl<'a> Scheduler<'a> {
         // finalize reclaims them; eager free is the success-path optimization.
         for (_, dep_id) in &subs {
             if let Err(e) = self.read_result(*dep_id) {
-                let frame = Frame {
-                    function: "<bind>".to_string(),
-                    expression: expr.summarize(),
-                };
+                let frame = Frame::from_expr("<bind>", &expr);
                 let propagated = e.clone_for_propagation().with_frame(frame);
                 return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
             }
@@ -30,7 +28,7 @@ impl<'a> Scheduler<'a> {
         let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
         for (part_idx, dep_id) in subs {
             let value = self.read(dep_id);
-            expr.parts[part_idx] = ExpressionPart::Future(value);
+            expr.parts[part_idx].value = ExpressionPart::Future(value);
         }
         // Spliced `Future(&'a KObject)` references survive `results[dep] = None`
         // because the objects live in arenas tied to lexical scope. Reclaim happens
@@ -54,6 +52,14 @@ impl<'a> Scheduler<'a> {
                     expr: expr.summarize(),
                     reason: "no matching function".to_string(),
                 }));
+            }
+            // A bare name in the rebuilt expression is still a pending forward reference:
+            // park on its producer and re-dispatch, mirroring the `run_dispatch` path.
+            ResolveOutcome::ParkOnProducers(producers) => {
+                return Ok(self.park_pending_and_redispatch(producers, expr, idx));
+            }
+            ResolveOutcome::UnboundName(name) => {
+                return Err(KError::new(KErrorKind::UnboundName(name)));
             }
         };
         Ok(self.invoke_to_step(future, scope, idx))
@@ -88,10 +94,7 @@ impl<'a> Scheduler<'a> {
         // The closure carries its own framing context (e.g. "<list>", "<dict>") via its
         // capture; the Combine machinery only handles dep-error propagation, which uses
         // the generic "<combine>" frame to match `run_bind`'s "<bind>" convention.
-        let make_frame = || Frame {
-            function: "<combine>".to_string(),
-            expression: "combine".to_string(),
-        };
+        let make_frame = || Frame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
                 let propagated = e.clone_for_propagation().with_frame(make_frame());
@@ -104,6 +107,35 @@ impl<'a> Scheduler<'a> {
         let dep_indices: Vec<usize> = deps.iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
         self.reclaim_deps(idx, dep_indices);
+        match body {
+            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
+                work: NodeWork::Dispatch(expr),
+                frame,
+                function,
+            },
+            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
+            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        }
+    }
+
+    /// Run a `Catch` slot: read `from`'s terminal as a `Result`, hand it to `finish`, and
+    /// decode the returned `BodyResult` the same way `run_combine` does. Unlike Combine,
+    /// an errored `from` does not short-circuit; the finish closure decides whether to
+    /// recover (TRY-WITH's per-arm dispatch) or re-raise. `from` is freed on both paths.
+    pub(super) fn run_catch(
+        &mut self,
+        from: NodeId,
+        finish: CatchFinish<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.clone_for_propagation()),
+        };
+        let body = finish(scope, self, result);
+        self.reclaim_deps(idx, vec![from.index()]);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
             BodyResult::Tail { expr, frame, function } => NodeStep::Replace {

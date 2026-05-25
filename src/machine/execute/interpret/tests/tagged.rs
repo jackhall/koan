@@ -12,8 +12,8 @@ fn tagged_union_full_program_via_type_token() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
-        "UNION Result = (ok :Str err :Str)\n\
-         LET r = (Result (ok \"all good\"))\n\
+        "UNION Outcome = (ok :Str err :Str)\n\
+         LET r = (Outcome (ok \"all good\"))\n\
          MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
         &arena,
         captured.clone(),
@@ -26,9 +26,9 @@ fn tagged_union_full_program_via_let_bound_type() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
-        "UNION Result = (ok :Str err :Str)\n\
-         LET result = Result\n\
-         LET r = (result (err \"oops\"))\n\
+        "UNION Outcome = (ok :Str err :Str)\n\
+         LET outcome = Outcome\n\
+         LET r = (outcome (err \"oops\"))\n\
          MATCH (r) WITH (ok -> (PRINT \"good\") err -> (PRINT it))",
         &arena,
         captured.clone(),

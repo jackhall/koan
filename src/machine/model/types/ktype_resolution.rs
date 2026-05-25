@@ -29,7 +29,7 @@ impl KType {
             "Tagged" => Some(KType::AnyUserType { kind: UserTypeKind::Tagged }),
             "Struct" => Some(KType::AnyUserType { kind: UserTypeKind::Struct }),
             "Module" => Some(KType::AnyUserType { kind: UserTypeKind::Module }),
-            "Signature" => Some(KType::Signature),
+            "Signature" => Some(KType::MetaSignature),
             "Any" => Some(KType::Any),
             _ => None,
         }

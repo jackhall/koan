@@ -5,6 +5,7 @@
 //! `single_or_wrapped`.
 
 use crate::machine::model::ast::ExpressionPart;
+use crate::machine::KError;
 
 /// In-progress dict literal: completed pairs plus the state of the current pair. Owns its
 /// own state machine so character handlers in `build_tree` delegate to `accept_colon`,
@@ -84,13 +85,13 @@ impl<'a> DictFrame<'a> {
     /// Handle a `:` — promote the buffered key parts into a finalized key and switch to
     /// accumulating the value side. Errors if no key was buffered or if a `:` arrives
     /// while a value is already being built (one `:` per pair).
-    pub(super) fn accept_colon(&mut self) -> Result<(), String> {
+    pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
             DictPairState::Empty => {
-                Err("missing key before ':' in dict literal".to_string())
+                Err(KError::parse("missing key before ':' in dict literal", None))
             }
             DictPairState::Key(parts) if parts.is_empty() => {
-                Err("missing key before ':' in dict literal".to_string())
+                Err(KError::parse("missing key before ':' in dict literal", None))
             }
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Value {
@@ -102,7 +103,7 @@ impl<'a> DictFrame<'a> {
             DictPairState::Value { key, value } => {
                 // Restore for diagnostic context, then error.
                 self.state = DictPairState::Value { key, value };
-                Err("unexpected ':' inside dict value".to_string())
+                Err(KError::parse("unexpected ':' inside dict value", None))
             }
         }
     }
@@ -110,16 +111,16 @@ impl<'a> DictFrame<'a> {
     /// Handle a `,` — commit the in-progress pair if a value has been collected. Trailing
     /// or repeated commas no-op (`{a: 1,}` and `{a: 1,, b: 2}` both legal); a comma after
     /// a key without a value, or after `:` with no value, errors.
-    pub(super) fn accept_comma(&mut self) -> Result<(), String> {
+    pub(super) fn accept_comma(&mut self) -> Result<(), KError> {
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
             DictPairState::Empty => Ok(()),
             DictPairState::Key(parts) if parts.is_empty() => Ok(()),
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Key(parts);
-                Err("key without value in dict literal".to_string())
+                Err(KError::parse("key without value in dict literal", None))
             }
             DictPairState::Value { value, .. } if value.is_empty() => {
-                Err("missing value after ':' in dict literal".to_string())
+                Err(KError::parse("missing value after ':' in dict literal", None))
             }
             DictPairState::Value { key, value } => {
                 self.pairs.push((key, single_or_wrapped(value)));
@@ -130,15 +131,23 @@ impl<'a> DictFrame<'a> {
 
     /// Handle `}` — commit any in-progress pair and yield the completed pair list. Errors
     /// for a key without `:` or a `:` without a value.
-    pub(super) fn finish(mut self) -> Result<Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>, String> {
+    pub(super) fn finish(
+        mut self,
+    ) -> Result<Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>, KError> {
         match self.state {
             DictPairState::Empty => {}
             DictPairState::Key(parts) if parts.is_empty() => {}
             DictPairState::Key(_) => {
-                return Err("unterminated key in dict literal (missing ':')".to_string());
+                return Err(KError::parse(
+                    "unterminated key in dict literal (missing ':')",
+                    None,
+                ));
             }
             DictPairState::Value { value, .. } if value.is_empty() => {
-                return Err("missing value after ':' in dict literal".to_string());
+                return Err(KError::parse(
+                    "missing value after ':' in dict literal",
+                    None,
+                ));
             }
             DictPairState::Value { key, value } => {
                 self.pairs.push((key, single_or_wrapped(value)));

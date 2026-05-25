@@ -10,15 +10,14 @@ mod dispatch;
 mod execute;
 mod reclaim;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 pub(super) fn let_expr<'a>(name: &str, value: f64) -> KExpression<'a> {
-    KExpression {
-        parts: vec![
-            ExpressionPart::Keyword("LET".into()),
-            ExpressionPart::Identifier(name.into()),
-            ExpressionPart::Keyword("=".into()),
-            ExpressionPart::Literal(KLiteral::Number(value)),
-        ],
-    }
+    KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("LET".into())),
+        Spanned::bare(ExpressionPart::Identifier(name.into())),
+        Spanned::bare(ExpressionPart::Keyword("=".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(value))),
+    ])
 }

@@ -36,7 +36,7 @@ pub fn body_identifier<'a>(
 /// Resolves the name through `Scope::resolve_type` exclusively (the type-side binding
 /// home). Two outcomes:
 ///
-/// - Hit reports a nominal identity (`KType::UserType` / `KType::SignatureBound`) —
+/// - Hit reports a nominal identity (`KType::UserType` / `KType::SatisfiesSignature`) —
 ///   the binding was dual-written by STRUCT / UNION / MODULE / SIG finalize (or a
 ///   `LET <Type-class> = <carrier>` alias). Recover the paired value-side carrier via
 ///   `scope.lookup` so downstream operators (`:|`, `:!`, ATTR-Struct/Module,
@@ -98,12 +98,12 @@ pub fn body_type_expr<'a>(
     match scope.resolve_type(&name) {
         Some(kt) => {
             // Dual-write invariant: nominal identity types (`UserType`,
-            // `SignatureBound`) are paired with a value-side carrier at the same
+            // `SatisfiesSignature`) are paired with a value-side carrier at the same
             // scope. Recover the carrier so downstream operators (`:|`, `:!`,
             // ATTR-Module/Struct, `struct_construct`, `MODULE_TYPE_OF`) receive the
             // expected `KSignature` / `KModule` / `StructType` / `TaggedUnionType`
             // part rather than a synthesized `KTypeValue`.
-            if matches!(kt, KType::UserType { .. } | KType::SignatureBound { .. }) {
+            if matches!(kt, KType::UserType { .. } | KType::SatisfiesSignature { .. }) {
                 if let Some(obj) = scope.lookup(&name) {
                     return BodyResult::Value(obj);
                 }

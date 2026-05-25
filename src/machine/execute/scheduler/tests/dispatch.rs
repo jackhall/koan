@@ -11,6 +11,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::machine::{RuntimeArena, Scope};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use super::super::Scheduler;
 
@@ -39,7 +40,7 @@ fn dispatch_picks_identifier_over_any_regardless_of_registration_order() {
     register_builtin(scope, "any_first", one_slot_sig("v", KType::Any), body_marker_any);
     register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
 
-    let expr = KExpression { parts: vec![ExpressionPart::Identifier("foo".into())] };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().unwrap();
@@ -63,7 +64,7 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     let inner = arena.alloc_scope(outer.child_for_call());
     register_builtin(inner, "inner_loose", one_slot_sig("v", KType::Any), body_inner_any);
 
-    let expr = KExpression { parts: vec![ExpressionPart::Literal(KLiteral::Number(7.0))] };
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0)))]);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, inner);
     sched.execute().unwrap();
@@ -96,12 +97,10 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
 
     // The source-side caller writes `FOO 1` (uppercase), which must match the coerced
     // `FOO <v>` registration.
-    let expr = KExpression {
-        parts: vec![
-            ExpressionPart::Keyword("FOO".into()),
-            ExpressionPart::Literal(KLiteral::Number(1.0)),
-        ],
-    };
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("FOO".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
+    ]);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().unwrap();

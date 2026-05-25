@@ -72,37 +72,41 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
             };
             KObject::KModule(m, new_frame)
         }
-        KObject::List(items) => {
+        // Lifting only attaches arena anchors to descendants; it never changes an element's
+        // `ktype()`, so the memoized carrier type is preserved verbatim across the rebuild.
+        KObject::List(items, elem) => {
             if items.iter().any(|x| needs_lift(x, dying_frame)) {
                 let lifted: Vec<KObject<'b>> = items
                     .iter()
                     .map(|x| lift_kobject(x, dying_frame))
                     .collect();
-                KObject::List(Rc::new(lifted))
+                KObject::list_with_type(Rc::new(lifted), (**elem).clone())
             } else {
-                KObject::List(Rc::clone(items))
+                KObject::list_with_type(Rc::clone(items), (**elem).clone())
             }
         }
-        KObject::Dict(entries) => {
+        KObject::Dict(entries, k, v) => {
             if entries.values().any(|x| needs_lift(x, dying_frame)) {
                 let lifted: HashMap<_, _> = entries
                     .iter()
-                    .map(|(k, v)| (k.clone_box(), lift_kobject(v, dying_frame)))
+                    .map(|(k, val)| (k.clone_box(), lift_kobject(val, dying_frame)))
                     .collect();
-                KObject::Dict(Rc::new(lifted))
+                KObject::dict_with_type(Rc::new(lifted), (**k).clone(), (**v).clone())
             } else {
-                KObject::Dict(Rc::clone(entries))
+                KObject::dict_with_type(Rc::clone(entries), (**k).clone(), (**v).clone())
             }
         }
-        KObject::Tagged { tag, value, scope_id, name } => {
-            // Stage 3.0c: propagate `(scope_id, name)` identity through the lifted
-            // carrier. Pure passthrough — lifting doesn't change the declaring schema.
+        KObject::Tagged { tag, value, scope_id, name, type_args } => {
+            // Stage 3.0c: propagate `(scope_id, name)` identity and `type_args` through the
+            // lifted carrier. Pure passthrough — lifting doesn't change the declaring schema
+            // or the value's type arguments.
             if needs_lift(value, dying_frame) {
                 KObject::Tagged {
                     tag: tag.clone(),
                     value: Rc::new(lift_kobject(value, dying_frame)),
                     scope_id: *scope_id,
                     name: name.clone(),
+                    type_args: Rc::clone(type_args),
                 }
             } else {
                 KObject::Tagged {
@@ -110,6 +114,7 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                     value: Rc::clone(value),
                     scope_id: *scope_id,
                     name: name.clone(),
+                    type_args: Rc::clone(type_args),
                 }
             }
         }
@@ -132,15 +137,15 @@ where
         return decision;
     }
     match v {
-        KObject::List(items) => items.iter().any(|x| any_descendant(x, predicate)),
-        KObject::Dict(entries) => entries.values().any(|x| any_descendant(x, predicate)),
+        KObject::List(items, _) => items.iter().any(|x| any_descendant(x, predicate)),
+        KObject::Dict(entries, _, _) => entries.values().any(|x| any_descendant(x, predicate)),
         KObject::Tagged { value, .. } => any_descendant(value, predicate),
         KObject::Struct { fields, .. } => fields
             .values()
             .any(|x| any_descendant(x, predicate)),
-        KObject::KExpression(e) => e.parts.iter().any(|p| match p {
+        KObject::KExpression(e) => e.parts.iter().any(|p| match &p.value {
             ExpressionPart::Future(obj) => any_descendant(obj, predicate),
-            ExpressionPart::Expression(inner) => inner.parts.iter().any(|p2| match p2 {
+            ExpressionPart::Expression(inner) => inner.parts.iter().any(|p2| match &p2.value {
                 ExpressionPart::Future(obj) => any_descendant(obj, predicate),
                 _ => false,
             }),
@@ -174,7 +179,7 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
             Some(std::ptr::eq(module_runtime, dying_runtime))
         }
         KObject::Struct { .. } | KObject::KExpression(_) => Some(false),
-        KObject::List(_) | KObject::Dict(_) | KObject::Tagged { .. } => None,
+        KObject::List(..) | KObject::Dict(..) | KObject::Tagged { .. } => None,
         _ => Some(false),
     })
 }
@@ -196,7 +201,7 @@ fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> boo
 }
 
 fn expression_borrows_arena<'b>(expr: &KExpression<'b>, arena: &RuntimeArena) -> bool {
-    expr.parts.iter().any(|p| part_borrows_arena(p, arena))
+    expr.parts.iter().any(|p| part_borrows_arena(&p.value, arena))
 }
 
 fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bool {
@@ -227,8 +232,8 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
             m.child_scope().arena,
             arena as *const RuntimeArena,
         )),
-        KObject::List(_)
-        | KObject::Dict(_)
+        KObject::List(..)
+        | KObject::Dict(..)
         | KObject::Tagged { .. }
         | KObject::Struct { .. } => None,
         _ => Some(false),

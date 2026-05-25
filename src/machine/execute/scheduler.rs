@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
+use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
 use crate::machine::model::ast::KExpression;
 
 use super::nodes::NodeWork;
@@ -29,9 +29,13 @@ mod tests;
 /// The execute loop drains work via [`WorkQueues::pop_next`], which prioritizes in-flight
 /// slots (sub-work spawned during another slot's run, plus consumers woken by the
 /// notify-walk when a producer's terminal write decrements `pending_deps` to zero) ahead
-/// of fresh top-level dispatches (submission order). Cycles are statically prevented
-/// because every new node's `NodeId` is strictly greater than every node it can depend
-/// on.
+/// of fresh top-level dispatches (submission order). Owned edges never cycle — a new
+/// node's `NodeId` is strictly greater than every node it owns. Park (`Notify`) edges
+/// can point at an earlier producer, so a self-referential binding (`LET x = x`, whose
+/// RHS sub-dispatch parks on the binder's own placeholder) forms a cycle: the queues
+/// drain with both slots still `PreRun`. `execute` detects the leftover parked slots
+/// and returns `KErrorKind::SchedulerDeadlock` rather than letting the top-level read
+/// panic on an unresolved slot.
 ///
 /// Each node carries the scope it should run against (`Node::scope`). Sub-nodes default to
 /// the spawning node's scope; user-fn invocation installs a per-call child scope via
@@ -62,6 +66,11 @@ pub struct Scheduler<'a> {
     /// so frame-creating builtins (MATCH) can chain it onto their new frame; see
     /// [memory-model.md § Per-call-frame chaining](../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
+    /// Count of tail-reuse opportunities accepted by
+    /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
+    /// path returns `Some`/`None` without touching this field's gate.
+    #[cfg(test)]
+    pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
 
 impl<'a> Scheduler<'a> {
@@ -71,8 +80,13 @@ impl<'a> Scheduler<'a> {
             deps: DepGraph::new(),
             store: NodeStore::new(),
             active_frame: None,
+            #[cfg(test)]
+            tail_reuse_count: 0,
         }
     }
+
+    #[cfg(test)]
+    pub fn tail_reuse_count(&self) -> usize { self.tail_reuse_count }
 
     pub fn len(&self) -> usize { self.store.len() }
     pub fn is_empty(&self) -> bool { self.store.is_empty() }
@@ -113,6 +127,15 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         Scheduler::add_combine(self, deps, scope, finish)
     }
 
+    fn add_catch(
+        &mut self,
+        from: NodeId,
+        scope: &'a Scope<'a>,
+        finish: CatchFinish<'a>,
+    ) -> NodeId {
+        Scheduler::add_catch(self, from, scope, finish)
+    }
+
     /// Active slot's frame `Rc<CallArena>`, set by `execute` for the duration of each
     /// slot's run. Frame-creating builtins (MATCH) clone this Rc into the new frame so the
     /// call-site arena stays alive while the new frame is in use.
@@ -133,5 +156,21 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         self.active_frame = Some(frame);
         body(self);
         self.active_frame = prev;
+    }
+
+    /// Take the active frame iff it is uniquely owned. Because `execute` moves the
+    /// slot's frame directly into `self.active_frame` (no clone — see the
+    /// `mem::replace` pair in `execute.rs`), uniqueness here is exactly the
+    /// "no escape" condition: any cloned `Rc` would have bumped strong_count past 1.
+    fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>> {
+        let candidate = self.active_frame.take()?;
+        if Rc::strong_count(&candidate) == 1 && Rc::weak_count(&candidate) == 0 {
+            #[cfg(test)]
+            { self.tail_reuse_count += 1; }
+            Some(candidate)
+        } else {
+            self.active_frame = Some(candidate);
+            None
+        }
     }
 }

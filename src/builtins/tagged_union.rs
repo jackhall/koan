@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::core::{KError, KErrorKind, Scope, ScopeId};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
@@ -41,7 +42,7 @@ use super::register_builtin;
 /// (`(foo)`, list literals, etc.) before construction sees the value.
 pub fn apply<'a>(
     schema_obj: &'a KObject<'a>,
-    args_parts: Vec<ExpressionPart<'a>>,
+    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> BodyResult<'a> {
     debug_assert!(
         schema_obj.as_tagged_union_type().is_some(),
@@ -56,18 +57,18 @@ pub fn apply<'a>(
     let mut iter = args_parts.into_iter();
     let tag_part = iter.next().unwrap();
     let value_part = iter.next().unwrap();
-    if !matches!(tag_part, ExpressionPart::Identifier(_)) {
+    if !matches!(tag_part.value, ExpressionPart::Identifier(_)) {
         return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
             "tagged-union construction = first arg must be a bare-identifier tag, got {}",
-            tag_part.summarize()
+            tag_part.value.summarize()
         ))));
     }
     let parts = vec![
-        ExpressionPart::Future(schema_obj),
+        Spanned::bare(ExpressionPart::Future(schema_obj)),
         tag_part,
         value_part,
     ];
-    BodyResult::tail(KExpression { parts })
+    BodyResult::tail(KExpression::new(parts))
 }
 
 /// Validate `tag` against `schema` and `value` against the schema's expected type for that
@@ -104,6 +105,9 @@ pub fn construct<'a>(
         value: Rc::new(value.deep_clone()),
         scope_id: schema_scope_id,
         name: schema_name.to_string(),
+        // Erased at construction: the runtime type arguments are stamped by ascription at
+        // an annotated boundary, not synthesized here from a monomorphic schema.
+        type_args: Rc::new(vec![]),
     })
 }
 

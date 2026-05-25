@@ -1,12 +1,10 @@
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
-use crate::machine::substitute_params;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
 
 /// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.
@@ -21,11 +19,10 @@ use super::{arg, err, kw, register_builtin, sig};
 /// matches it is the literal `true` or `false` (which the parser tokenizes as
 /// `KLiteral::Boolean`, accepted here in the same position). The body of the first
 /// branch whose tag matches `value.tag` is dispatched as a tail expression; the others
-/// are never touched. `it` is bound to the inner value in a per-MATCH child scope
-/// (and substituted into Identifier-typed positions of the body), modeled on
-/// `KFunction::invoke`'s per-call frame so the binding doesn't leak into the
-/// surrounding scope. For `Bool` matches `it` is `Null` — accurate, since there is no
-/// payload.
+/// are never touched. `it` is bound to the inner value in a per-MATCH child scope,
+/// modeled on `KFunction::invoke`'s per-call frame so the binding doesn't leak into
+/// the surrounding scope. For `Bool` matches `it` is `Null` — accurate, since there
+/// is no payload.
 ///
 /// No matching branch → `ShapeError("inexhaustive match = no branch for `X`")` — same
 /// rule for `Bool` as for `Tagged`, so `MATCH cond WITH (true -> ...)` against a
@@ -59,7 +56,7 @@ pub fn body<'a>(
             )));
         }
     };
-    let branch_body = match find_branch_body(&branches_expr, &tag) {
+    let branch_body = match find_branch_body(&branches_expr, &tag, false) {
         Ok(Some(body)) => body,
         Ok(None) => {
             return err(KError::new(KErrorKind::ShapeError(format!(
@@ -88,76 +85,10 @@ pub fn body<'a>(
     // Fresh per-call child scope: the `it` binding never collides. `bind_value`'s rebind
     // check therefore always passes; the `_` swallow is intentional.
     let _ = child.bind_value("it".to_string(), it_obj);
-    let mut it_bundle = ArgumentBundle { args: HashMap::new() };
-    it_bundle.args.insert("it".to_string(), Rc::new(value.deep_clone()));
-    let substituted = substitute_params(branch_body, &it_bundle, inner_arena);
     // Construct the Tail variant directly. `tail_with_frame` requires a `&KFunction` for
     // return-type enforcement and error-frame attribution; MATCH has no meaningful
     // function to attach (declared return is `Any`, so the check would be a no-op).
-    BodyResult::Tail { expr: substituted, frame: Some(frame), function: None }
-}
-
-/// Walk the branches KExpression's parts as repeated `<Identifier(t)> <Keyword("->")>
-/// <Expression(body)>` triples. Return the body for the first triple whose tag matches
-/// `target_tag`, `Ok(None)` if no triple matches, or `Err` on shape mismatch.
-fn find_branch_body<'a>(
-    branches: &KExpression<'a>,
-    target_tag: &str,
-) -> Result<Option<KExpression<'a>>, String> {
-    let parts = &branches.parts;
-    if !parts.len().is_multiple_of(3) {
-        return Err(format!(
-            "MATCH branches must be `<tag> -> <body>` triples; got {} parts (not a multiple of 3)",
-            parts.len()
-        ));
-    }
-    let mut i = 0;
-    while i < parts.len() {
-        let tag_part = &parts[i];
-        let arrow_part = &parts[i + 1];
-        let body_part = &parts[i + 2];
-        let tag_name = match tag_part {
-            ExpressionPart::Identifier(s) => s.clone(),
-            // `true`/`false` are `KLiteral::Boolean` from the parser, not identifiers,
-            // but they're the natural tag form for `MATCH` on a `Bool` value. Accept
-            // them here so users can write `(true -> ... false -> ...)` directly.
-            ExpressionPart::Literal(KLiteral::Boolean(b)) => {
-                if *b { "true".to_string() } else { "false".to_string() }
-            }
-            other => {
-                return Err(format!(
-                    "MATCH branch tag must be a bare identifier or boolean literal, got {}",
-                    other.summarize()
-                ));
-            }
-        };
-        match arrow_part {
-            ExpressionPart::Keyword(k) if k == "->" => {}
-            other => {
-                return Err(format!(
-                    "MATCH branch separator must be `->`, got {}",
-                    other.summarize()
-                ));
-            }
-        }
-        let body_expr = match body_part {
-            ExpressionPart::Expression(e) => (**e).clone(),
-            other => {
-                return Err(format!(
-                    "MATCH branch body must be a parenthesized expression, got {}",
-                    other.summarize()
-                ));
-            }
-        };
-        if tag_name == target_tag {
-            // Multi-statement branch desugar: `((s1) (s2) (s3))` becomes a CONS chain so
-            // the branch dispatches as a single tail expression. Single-statement bodies
-            // pass through unchanged. See [`super::cons`] for the contract.
-            return Ok(Some(super::cons::fold_multi_statement(body_expr)));
-        }
-        i += 3;
-    }
-    Ok(None)
+    BodyResult::Tail { expr: branch_body, frame: Some(frame), function: None }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -199,12 +130,11 @@ mod tests {
 
     #[test]
     fn match_binds_inner_value_to_it() {
-        // `it` is substituted into Identifier-typed positions; here PRINT's `msg:Str` slot
-        // wants a Str literal or Future, and substitution rewrites the `it` Identifier into
-        // a `Future(value)` so the bind succeeds.
+        // `it` resolves to the inner value through the per-MATCH child scope; PRINT's
+        // `msg:Str` slot picks up the binding at dispatch time.
         let bytes = run_program(
-            "UNION Result = (ok :Str err :Str)\n\
-             LET r = (Result (ok \"all good\"))\n\
+            "UNION Outcome = (ok :Str err :Str)\n\
+             LET r = (Outcome (ok \"all good\"))\n\
              MATCH (r) WITH (ok -> (PRINT it) err -> (PRINT \"failed\"))",
         );
         assert_eq!(bytes, b"all good\n");
