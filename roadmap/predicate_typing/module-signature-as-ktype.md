@@ -113,9 +113,12 @@ duality it's reading.
 
 **Requires:**
 
-- [FUNCTOR binder](../libraries/functor-binder.md) — the `is_functor`
-  flag and the FUNCTOR binder's dispatch path are the substrate this
-  builds on; without FUNCTOR, the dual-write story has no clean
-  alternative shape to replace it with.
-
 **Unblocks:**
+
+- [FUNCTOR binder](../libraries/functor-binder.md) — landing the
+  substrate move first lets FUNCTOR's signature-typed-parameter handling
+  ride the single-store machinery from day one. The functor-definition
+  panic on the dual-write path
+  ([node_store.rs:169](../../src/machine/execute/scheduler/node_store.rs),
+  folded into functor-binder.md as a known blocker) is likely dissolved
+  or relocated as a side effect of this work.
