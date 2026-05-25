@@ -62,7 +62,7 @@ pub fn body<'a>(
             sig_path: name_for_finish.clone(),
             pinned_slots: Vec::new(),
         };
-        let sig_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(KType::Signature(sig)));
+        let sig_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Signature(sig)));
         match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj) {
             Ok(obj) => BodyResult::Value(obj),
             Err(e) => BodyResult::Err(

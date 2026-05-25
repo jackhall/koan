@@ -163,7 +163,7 @@ fn primitive_body<'a>(
         }
     };
     match construct(&type_name, scope_id, &fields, &values) {
-        Ok(struct_value) => BodyResult::Value(scope.arena.alloc_object(struct_value)),
+        Ok(struct_value) => BodyResult::Value(scope.arena.alloc(struct_value)),
         Err(e) => BodyResult::Err(e),
     }
 }

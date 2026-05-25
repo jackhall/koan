@@ -134,7 +134,7 @@ fn finalize_struct<'a>(
     // fields so dispatch on the carrier (via its `ktype()`) and dispatch through a
     // slot typed by the identity reach the same `UserType` value.
     let scope_id = scope.id;
-    let struct_obj: &'a KObject<'a> = arena.alloc_object(KObject::StructType {
+    let struct_obj: &'a KObject<'a> = arena.alloc(KObject::StructType {
         name: name.clone(),
         scope_id,
         fields: Rc::new(fields),

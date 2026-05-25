@@ -16,7 +16,7 @@ fn finalize_struct_is_idempotent_when_both_maps_populated() {
     let scope = run_root_silent(&arena);
     // Pre-seed both maps to mimic the cycle-close-then-finalize state.
     let scope_id = scope.id;
-    let pre_carrier: &KObject<'_> = arena.alloc_object(KObject::StructType {
+    let pre_carrier: &KObject<'_> = arena.alloc(KObject::StructType {
         name: "Foo".into(),
         scope_id,
         fields: Rc::new(vec![("x".into(), KType::Number)]),

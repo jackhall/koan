@@ -108,7 +108,7 @@ impl<'a> KFunction<'a> {
                             cloned = cloned.stamp_type(&arg.ktype);
                         }
                     }
-                    let allocated = inner_arena.alloc_object(cloned);
+                    let allocated = inner_arena.alloc(cloned);
                     // Post-collapse: for type-denoting parameters, write ONLY into
                     // `bindings.types`. ATTR-on-type (the `KTypeValue(KType::Module
                     // { .. })` / `KType::Signature(_)` arms in `attr.rs`) projects
@@ -237,7 +237,7 @@ impl<'a> KFunction<'a> {
                             // re-tag the parameterized carrier to exactly the resolved
                             // per-call return type (coarsening included).
                             let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
-                            BodyResult::Value(_scope.arena.alloc_object(stamped))
+                            BodyResult::Value(_scope.arena.alloc(stamped))
                         }));
                         // Rc clones into each `with_active_frame` call above keep the
                         // per-call arena alive across sub-slot lifetimes; the FN's slot

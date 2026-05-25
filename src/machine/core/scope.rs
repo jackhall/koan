@@ -318,7 +318,7 @@ impl<'a> Scope<'a> {
             self.write_target().register_type(name, ktype);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref),
@@ -347,7 +347,7 @@ impl<'a> Scope<'a> {
             self.write_target().cycle_close_install_identity(name, ktype);
             return;
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(ktype);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(ktype);
         match self.bindings.get().try_register_type(&name, kt_ref) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
@@ -380,7 +380,7 @@ impl<'a> Scope<'a> {
         if self.bindings.is_borrowed() {
             return self.write_target().register_nominal(name, kt, obj);
         }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc_ktype(kt);
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(kt);
         match self.bindings.get().try_register_nominal(&name, kt_ref, obj)? {
             ApplyOutcome::Applied => Ok(obj),
             ApplyOutcome::Conflict => {

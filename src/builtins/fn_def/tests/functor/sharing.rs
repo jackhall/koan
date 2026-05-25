@@ -24,7 +24,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_num: &Module<'_> = arena.alloc_module(Module::new("NumPinned".into(), child_a));
     m_num.type_members.borrow_mut().insert("Type".into(), KType::Number);
     m_num.mark_satisfies(ScopeId::from_raw(0, 42)); // arbitrary sig_id matching the slot below
-    let m_num_obj = arena.alloc_object(KObject::KTypeValue(KType::Module { module: m_num, frame: None }));
+    let m_num_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_num, frame: None }));
 
     let child_b = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -33,7 +33,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_str: &Module<'_> = arena.alloc_module(Module::new("StrPinned".into(), child_b));
     m_str.type_members.borrow_mut().insert("Type".into(), KType::Str);
     m_str.mark_satisfies(ScopeId::from_raw(0, 42));
-    let m_str_obj = arena.alloc_object(KObject::KTypeValue(KType::Module { module: m_str, frame: None }));
+    let m_str_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_str, frame: None }));
 
     // A module that satisfies the sig but doesn't even have a `Type` pin — also rejected.
     let child_c = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -42,7 +42,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(ScopeId::from_raw(0, 42));
-    let m_none_obj = arena.alloc_object(KObject::KTypeValue(KType::Module { module: m_none, frame: None }));
+    let m_none_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_none, frame: None }));
 
     let slot = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 42),
@@ -68,7 +68,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_unascribed: &Module<'_> = arena.alloc_module(Module::new("Unascribed".into(), child_d));
     m_unascribed.type_members.borrow_mut().insert("Type".into(), KType::Number);
     // Note: NO mark_satisfies — compatible_sigs is empty.
-    let m_unascribed_obj = arena.alloc_object(KObject::KTypeValue(KType::Module { module: m_unascribed, frame: None }));
+    let m_unascribed_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_unascribed, frame: None }));
     assert!(!slot.matches_value(m_unascribed_obj));
     assert!(!slot.accepts_part(&ExpressionPart::Future(m_unascribed_obj)));
 }

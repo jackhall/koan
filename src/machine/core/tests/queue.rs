@@ -14,10 +14,10 @@ use super::{unit_signature, body_no_op};
 fn add_during_active_data_borrow_queues_and_drains() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let pre = arena.alloc_object(KObject::Number(1.0));
+    let pre = arena.alloc(KObject::Number(1.0));
     scope.bind_value("pre".to_string(), pre).unwrap();
 
-    let new_entry = arena.alloc_object(KObject::Number(2.0));
+    let new_entry = arena.alloc(KObject::Number(2.0));
     {
         let snapshot = scope.bindings().data();
         assert!(snapshot.contains_key("pre"));
@@ -49,9 +49,9 @@ fn drain_debug_asserts_on_invariant_violation() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let kfn1 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
-    let obj1 = arena.alloc_object(KObject::KFunction(kfn1, None));
+    let obj1 = arena.alloc(KObject::KFunction(kfn1, None));
     let kfn2 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
-    let obj2 = arena.alloc_object(KObject::KFunction(kfn2, None));
+    let obj2 = arena.alloc(KObject::KFunction(kfn2, None));
 
     // 1. Hold an outer `data` borrow open so the bind in step 2 must defer.
     let snapshot = scope.bindings().data();
@@ -78,7 +78,7 @@ fn register_function_defers_and_drains_through_function_arm() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let kfn = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
-    let obj = arena.alloc_object(KObject::KFunction(kfn, None));
+    let obj = arena.alloc(KObject::KFunction(kfn, None));
     let key = kfn.signature.untyped_key();
     {
         // Bare FN registration contends on `functions` (not `data`), so hold a live
@@ -103,7 +103,7 @@ fn register_function_defers_and_drains_through_function_arm() {
 fn drain_requeues_value_on_persistent_borrow_conflict() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let obj = arena.alloc_object(KObject::Number(7.0));
+    let obj = arena.alloc(KObject::Number(7.0));
 
     let snapshot = scope.bindings().data();
     scope.bind_value("v".to_string(), obj).unwrap();
@@ -122,7 +122,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let kfn = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
-    let obj = arena.alloc_object(KObject::KFunction(kfn, None));
+    let obj = arena.alloc(KObject::KFunction(kfn, None));
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
@@ -164,9 +164,9 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let kfn1 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
-    let obj1 = arena.alloc_object(KObject::KFunction(kfn1, None));
+    let obj1 = arena.alloc(KObject::KFunction(kfn1, None));
     let kfn2 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
-    let obj2 = arena.alloc_object(KObject::KFunction(kfn2, None));
+    let obj2 = arena.alloc(KObject::KFunction(kfn2, None));
 
     // Bare FN registration contends on `functions`, so hold a `functions` borrow to
     // force step "a" to defer.

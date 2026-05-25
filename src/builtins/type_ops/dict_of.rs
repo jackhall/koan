@@ -21,7 +21,7 @@ pub fn body<'a>(
     BodyResult::Value(
         scope
             .arena
-            .alloc_object(KObject::KTypeValue(KType::Dict(Box::new(key), Box::new(value)))),
+            .alloc(KObject::KTypeValue(KType::Dict(Box::new(key), Box::new(value)))),
     )
 }
 

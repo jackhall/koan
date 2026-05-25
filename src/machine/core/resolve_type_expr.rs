@@ -66,7 +66,7 @@ impl<'a> Scope<'a> {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
-                    let kt_ref: &'a KType<'a> = self.arena.alloc_ktype(kt);
+                    let kt_ref: &'a KType<'a> = self.arena.alloc(kt);
                     self.type_expr_memo_insert(te.clone(), kt_ref);
                     ResolveTypeExprOutcome::Done(kt_ref)
                 } else {

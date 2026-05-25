@@ -39,7 +39,7 @@ pub fn body<'a>(
             ))));
         }
     };
-    BodyResult::Value(scope.arena.alloc_object(KObject::KTypeValue(kt)))
+    BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt)))
 }
 
 #[cfg(test)]

@@ -84,19 +84,19 @@ fn any_user_type_struct_accepts_struct_future_only() {
     // lifetime is tied to the arena's, dodging the false-positive.
     let arena = RuntimeArena::new();
     let t = KType::AnyUserType { kind: UserTypeKind::Struct };
-    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
+    let s: &KObject<'_> = arena.alloc(KObject::Struct {
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
         fields: Rc::new(IndexMap::new()),
     });
-    let tagged: &KObject<'_> = arena.alloc_object(KObject::Tagged {
+    let tagged: &KObject<'_> = arena.alloc(KObject::Tagged {
         tag: "some".into(),
         value: Rc::new(KObject::Number(1.0)),
         scope_id: ScopeId::SENTINEL,
         name: "Maybe".into(),
         type_args: Rc::new(vec![]),
     });
-    let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+    let n: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     assert!(t.accepts_part(&ExpressionPart::Future(s)));
     assert!(!t.accepts_part(&ExpressionPart::Future(tagged)));
     assert!(!t.accepts_part(&ExpressionPart::Future(n)));
@@ -113,17 +113,17 @@ fn any_user_type_newtype_accepts_wrapped_only() {
     let t = KType::AnyUserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
     };
-    let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc_ktype(KType::UserType {
+    let inner: &KObject<'_> = arena.alloc(KObject::Number(3.0));
+    let type_id: &KType = arena.alloc(KType::UserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     });
-    let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped {
+    let w: &KObject<'_> = arena.alloc(KObject::Wrapped {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
-    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
+    let s: &KObject<'_> = arena.alloc(KObject::Struct {
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
         fields: std::rc::Rc::new(indexmap::IndexMap::new()),

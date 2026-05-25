@@ -29,7 +29,7 @@ pub fn body<'a>(
     // be meaningless as a quantifier symbol.
     let param = param_kt.name();
     BodyResult::Value(
-        scope.arena.alloc_object(KObject::KTypeValue(KType::UserType {
+        scope.arena.alloc(KObject::KTypeValue(KType::UserType {
             kind: UserTypeKind::TypeConstructor { param_names: vec![param] },
             scope_id: ScopeId::SENTINEL,
             name: "_typeconstructor".into(),

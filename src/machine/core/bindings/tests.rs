@@ -15,7 +15,7 @@ use crate::machine::model::values::KObject;
 fn try_register_type_inserts_into_types_map() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = arena.alloc(KType::Number);
     let outcome = bindings
         .try_register_type("Foo", kt)
         .expect("try_register_type should succeed on fresh bindings");
@@ -30,8 +30,8 @@ fn try_register_type_inserts_into_types_map() {
 fn try_register_type_rejects_collision_with_rebind() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt1: &KType = arena.alloc_ktype(KType::Number);
-    let kt2: &KType = arena.alloc_ktype(KType::Str);
+    let kt1: &KType = arena.alloc(KType::Number);
+    let kt2: &KType = arena.alloc(KType::Str);
     bindings.try_register_type("Foo", kt1).expect("first register should succeed");
     let err = match bindings.try_register_type("Foo", kt2) {
         Err(e) => e,
@@ -47,7 +47,7 @@ fn try_register_type_rejects_collision_with_rebind() {
 fn try_register_type_yields_conflict_on_live_types_borrow() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = arena.alloc(KType::Number);
     let _r = bindings.types();
     let outcome = bindings
         .try_register_type("Foo", kt)
@@ -61,7 +61,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
 fn try_register_type_clears_matching_placeholder() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = arena.alloc(KType::Number);
     bindings
         .try_install_placeholder("Bar".to_string(), NodeId(7))
         .expect("placeholder install should succeed on fresh bindings");
@@ -76,7 +76,7 @@ fn try_register_type_clears_matching_placeholder() {
 fn try_register_type_does_not_touch_data_or_functions() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
+    let kt: &KType = arena.alloc(KType::Number);
     bindings.try_register_type("Foo", kt).expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
@@ -86,8 +86,8 @@ fn try_register_type_does_not_touch_data_or_functions() {
 fn try_register_nominal_inserts_into_both_maps() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
-    let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+    let kt: &KType = arena.alloc(KType::Number);
+    let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     let outcome = bindings
         .try_register_nominal("Foo", kt, obj)
         .expect("try_register_nominal should succeed on fresh bindings");
@@ -103,9 +103,9 @@ fn try_register_nominal_inserts_into_both_maps() {
 fn try_register_nominal_rejects_collision_in_types_with_rebind() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt_existing: &KType = arena.alloc_ktype(KType::Number);
-    let kt_new: &KType = arena.alloc_ktype(KType::Str);
-    let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+    let kt_existing: &KType = arena.alloc(KType::Number);
+    let kt_new: &KType = arena.alloc(KType::Str);
+    let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     bindings
         .try_register_type("Foo", kt_existing)
         .expect("pre-seed types[Foo] should succeed");
@@ -125,9 +125,9 @@ fn try_register_nominal_rejects_collision_in_types_with_rebind() {
 fn try_register_nominal_rejects_collision_in_data_with_rebind() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
-    let obj_existing: &KObject<'_> = arena.alloc_object(KObject::Number(42.0));
-    let obj_new: &KObject<'_> = arena.alloc_object(KObject::Number(7.0));
+    let kt: &KType = arena.alloc(KType::Number);
+    let obj_existing: &KObject<'_> = arena.alloc(KObject::Number(42.0));
+    let obj_new: &KObject<'_> = arena.alloc(KObject::Number(7.0));
     bindings
         .try_bind_value("Foo", obj_existing)
         .expect("pre-seed data[Foo] should succeed");
@@ -147,8 +147,8 @@ fn try_register_nominal_rejects_collision_in_data_with_rebind() {
 fn try_register_nominal_yields_conflict_on_live_types_borrow() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
-    let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+    let kt: &KType = arena.alloc(KType::Number);
+    let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     let _r = bindings.types();
     let outcome = bindings
         .try_register_nominal("Foo", kt, obj)
@@ -178,19 +178,19 @@ fn try_register_nominal_is_idempotent_against_matching_pre_installed_types() {
     let bindings: Bindings<'_> = Bindings::new();
     // Build two pointer-distinct but value-equal KTypes — cycle-close and finalize
     // each alloc their own.
-    let kt_pre: &KType = arena.alloc_ktype(KType::UserType {
+    let kt_pre: &KType = arena.alloc(KType::UserType {
         kind: UserTypeKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xDEAD_BEEF),
         name: "Foo".into(),
     });
-    let kt_finalize: &KType = arena.alloc_ktype(KType::UserType {
+    let kt_finalize: &KType = arena.alloc(KType::UserType {
         kind: UserTypeKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xDEAD_BEEF),
         name: "Foo".into(),
     });
     assert!(!std::ptr::eq(kt_pre, kt_finalize), "alloc should produce distinct pointers");
     assert_eq!(*kt_pre, *kt_finalize, "values must be equal");
-    let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+    let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     bindings.try_register_type("Foo", kt_pre).unwrap();
     // try_register_nominal: types[Foo] already populated with matching identity,
     // data[Foo] empty → idempotent path, write only data.
@@ -256,8 +256,8 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
 fn try_register_nominal_clears_matching_placeholder() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    let kt: &KType = arena.alloc_ktype(KType::Number);
-    let obj: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+    let kt: &KType = arena.alloc(KType::Number);
+    let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     bindings
         .try_install_placeholder("Bar".to_string(), NodeId(7))
         .expect("placeholder install should succeed on fresh bindings");

@@ -113,7 +113,7 @@ fn finalize_union<'a>(
     // name and dispatch on `(PICK x: Maybe)` lowers to the same `KType::UserType` the
     // carrier's `ktype()` reports.
     let scope_id = scope.id;
-    let union_obj: &'a KObject<'a> = arena.alloc_object(KObject::TaggedUnionType {
+    let union_obj: &'a KObject<'a> = arena.alloc(KObject::TaggedUnionType {
         schema: Rc::new(schema),
         name: name.clone(),
         scope_id,
@@ -281,7 +281,7 @@ mod tests {
         let scope_id = scope.id;
         let mut schema: HashMap<String, KType> = HashMap::new();
         schema.insert("some".into(), KType::Number);
-        let pre_carrier: &KObject<'_> = arena.alloc_object(KObject::TaggedUnionType {
+        let pre_carrier: &KObject<'_> = arena.alloc(KObject::TaggedUnionType {
             name: "Maybe".into(),
             scope_id,
             schema: Rc::new(schema),

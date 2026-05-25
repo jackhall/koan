@@ -37,6 +37,10 @@ without first landing something else:
 - [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
   function of its lexical position rather than the scheduler's queue order, so forward
   references resolve deterministically and sibling work can be reordered or parallelized.
+- [Eager wrap-slot resolution + scheduler duplication cleanup](roadmap/scheduler-eager-wrap-resolve.md)
+  — collapse `apply_auto_wrap`'s sub-Dispatch detour, the open-coded scope-resolve / park
+  pattern across three sites, the `schedule_deps` / `schedule_eager_fallthrough` near-twins,
+  and the error-propagation framing repeated across five sites.
 
 ## Open items
 

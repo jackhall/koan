@@ -53,7 +53,19 @@ pub(super) enum FnPlan<'a> {
 /// sub‑Dispatches). Held by value; consumed by the deferred path.
 pub(super) struct CombineInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
+    /// Existing sibling slots whose values this Combine reads at finish-time
+    /// but does NOT own. Install as `Notify` (park) edges.
     pub park_producers: Vec<NodeId>,
+    /// Return-type expression to sub-Dispatch when this Combine is scheduled.
+    /// `Some` only when the return-type slot is an `Expression(_)` carrier that
+    /// doesn't reference any FN parameter (resolves once at FN-def time, not
+    /// per call). Scheduled by [`defer_via_combine`] into the owned-sub region
+    /// of the Combine layout, ahead of `sub_dispatches`.
+    pub return_type_sub: Option<KExpression<'a>>,
+    /// Param-type expressions to sub-Dispatch when this Combine is scheduled.
+    /// Each `(slot_idx, sub_expr)` becomes an owned sub; the slot_idx tells the
+    /// finish closure which `signature_expr.parts` slot to splice the result
+    /// into.
     pub sub_dispatches: Vec<(usize, KExpression<'a>)>,
 }
 
@@ -76,12 +88,14 @@ pub(super) fn classify<'a>(
             elements,
             return_type: ReturnType::Deferred(d),
         },
-        (ReturnTypeState::ExprSubDispatched(id), ParamListResult::Done(_)) => {
-            // Return-type sub-dispatched, params synchronous. The Combine's only
-            // dep is the return-type sub-Dispatch; the closure reads `results[0]`.
+        (ReturnTypeState::ExprToSubDispatch(e), ParamListResult::Done(_)) => {
+            // Return-type sub-Dispatch (owned by this Combine), params synchronous.
+            // Combine layout: `[park ++ return_type_sub? ++ sub_dispatches...]`.
+            // With park empty and only the return-type sub, results[0] is its value.
             FnPlan::Combine(CombineInputs {
                 capture: ReturnTypeCapture::ReturnTypeExpr { results_pos: 0 },
-                park_producers: vec![id],
+                park_producers: Vec::new(),
+                return_type_sub: Some(e),
                 sub_dispatches: Vec::new(),
             })
         }
@@ -91,6 +105,7 @@ pub(super) fn classify<'a>(
         ) => FnPlan::Combine(CombineInputs {
             capture: ReturnTypeCapture::Resolved(kt),
             park_producers,
+            return_type_sub: None,
             sub_dispatches,
         }),
         (
@@ -102,22 +117,22 @@ pub(super) fn classify<'a>(
             // Carry the carrier verbatim through to `finalize_fn` once params land.
             capture: ReturnTypeCapture::Deferred(d),
             park_producers,
+            return_type_sub: None,
             sub_dispatches,
         }),
         (
-            ReturnTypeState::ExprSubDispatched(id),
-            ParamListResult::Pending { mut park_producers, sub_dispatches },
+            ReturnTypeState::ExprToSubDispatch(e),
+            ParamListResult::Pending { park_producers, sub_dispatches },
         ) => {
-            // Mixed shape: return-type sub-dispatch joins the Combine alongside any
-            // parking parameter-types and parameter-type sub-Dispatches. Append the
-            // return-type id to `park_producers` first; its `results_pos` is the
-            // pre-push length (i.e. the next slot). The closure reads
-            // `results[results_pos]` exactly there.
+            // Mixed shape: return-type sub-Dispatch (owned) joins the Combine alongside
+            // parking parameter-types (park) and parameter-type sub-Dispatches (owned).
+            // Combine layout `[park ++ return_type_sub ++ sub_dispatches...]` puts the
+            // return-type result at `results[park_producers.len()]`.
             let results_pos = park_producers.len();
-            park_producers.push(id);
             FnPlan::Combine(CombineInputs {
                 capture: ReturnTypeCapture::ReturnTypeExpr { results_pos },
                 park_producers,
+                return_type_sub: Some(e),
                 sub_dispatches,
             })
         }
@@ -129,6 +144,7 @@ pub(super) fn classify<'a>(
             FnPlan::Combine(CombineInputs {
                 capture: make_capture(te),
                 park_producers: producers,
+                return_type_sub: None,
                 sub_dispatches: Vec::new(),
             })
         }
@@ -140,6 +156,7 @@ pub(super) fn classify<'a>(
             FnPlan::Combine(CombineInputs {
                 capture: make_capture(te),
                 park_producers,
+                return_type_sub: None,
                 sub_dispatches,
             })
         }
@@ -184,7 +201,7 @@ pub(super) fn finalize_fn<'a>(
     // `frame: None` here — the lift-on-return logic in the scheduler will populate
     // the Rc when this KFunction value escapes out of a per-call body. For top-level
     // FNs, there's no per-call frame to clone, so None stays.
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
     if let Err(e) = scope.register_function(name, f, obj) {
         return BodyResult::Err(e);
     }
@@ -214,17 +231,24 @@ pub(super) fn defer_via_combine<'a>(
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,
 ) -> BodyResult<'a> {
-    let CombineInputs { capture, park_producers, sub_dispatches } = inputs;
-    // Combine result layout: `[park_producers..., owned_subs...]`. The Combine
-    // owns the sub-Dispatches it allocates here, but `park_producers` are
-    // sibling slots (typically top-level SIG / LET dispatches) it merely reads
-    // — they must NOT be cascade-freed at success, or a later top-level
-    // read-back hits a freed slot. `splice_layout[k] = (slot_idx, results_pos)`
+    let CombineInputs { capture, park_producers, return_type_sub, sub_dispatches } = inputs;
+    // Combine result layout: `[park_producers ++ return_type_sub? ++ sub_dispatches...]`.
+    // `park_producers` are existing sibling slots (typically top-level SIG /
+    // LET dispatches) the Combine reads but does NOT own — they must NOT be
+    // cascade-freed at success. `return_type_sub` (when Some) and
+    // `sub_dispatches` both become owned sub-Dispatches scheduled here and
+    // cascade-freed at success. `splice_layout[k] = (slot_idx, results_pos)`
     // says "splice results[results_pos] into signature.parts[slot_idx] as
-    // `Future(_)`". `results_pos` for an owned sub is captured as
-    // `park_count + k` so the layout matches `add_combine`'s split.
+    // `Future(_)`"; `results_pos` indexes the combined `[park ++ owned ...]`
+    // slice. The return-type result has no signature slot to splice into —
+    // `ReturnTypeCapture::ReturnTypeExpr { results_pos }` carries its index
+    // separately (set in `classify` to match this layout).
     let park_count = park_producers.len();
-    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
+    let mut owned_subs: Vec<NodeId> =
+        Vec::with_capacity(return_type_sub.is_some() as usize + sub_dispatches.len());
+    if let Some(rt_expr) = return_type_sub {
+        owned_subs.push(sched.add_dispatch(rt_expr, scope));
+    }
     let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
     for (slot_idx, sub_expr) in sub_dispatches {
         let id = sched.add_dispatch(sub_expr, scope);

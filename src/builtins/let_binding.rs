@@ -154,7 +154,7 @@ pub fn body<'a>(
     }
     let cloned = value.deep_clone();
     let arena = scope.arena;
-    let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
+    let allocated: &'a KObject<'a> = arena.alloc(cloned);
     if let Some(kt) = type_for_types_map {
         // Infallible `register_type` matches the prior `bind_value` shape for shipped
         // call sites (placeholder-resolution catches name conflicts upstream before

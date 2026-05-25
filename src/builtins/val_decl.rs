@@ -199,7 +199,7 @@ fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
 /// Bind `name` to `KObject::KTypeValue(declared_kt)` under `scope.bindings.data`.
 fn finalize_val<'a>(scope: &'a Scope<'a>, name: String, declared_kt: KType<'a>) -> BodyResult<'a> {
     let arena = scope.arena;
-    let allocated: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(declared_kt));
+    let allocated: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(declared_kt));
     if let Err(e) = scope.bind_value(name, allocated) {
         return err(e);
     }

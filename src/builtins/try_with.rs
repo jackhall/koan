@@ -113,7 +113,7 @@ fn dispatch_branch<'a>(
     // in the branch body — including those reached via EVAL of a top-level-`#`-quote — by
     // walking from the per-call child to its outer chain. Pinned by
     // `it_resolves_via_scope_for_eval_of_top_level_quoted_reference`.
-    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(it_value);
+    let it_obj: &'a KObject<'a> = inner_arena.alloc(it_value);
     let _ = child.bind_value("it".to_string(), it_obj);
     let _ = sched;
     BodyResult::Tail { expr: body_expr, frame: Some(frame), function: None }

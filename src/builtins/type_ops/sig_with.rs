@@ -208,7 +208,7 @@ pub fn body<'a>(
     if sub_dispatches.is_empty() {
         // Fully synchronous path — alloc the SatisfiesSignature carrier directly.
         return BodyResult::Value(
-            scope.arena.alloc_object(KObject::KTypeValue(KType::SatisfiesSignature {
+            scope.arena.alloc(KObject::KTypeValue(KType::SatisfiesSignature {
                 sig_id,
                 sig_path,
                 pinned_slots: pinned,
@@ -245,7 +245,7 @@ pub fn body<'a>(
             }
         }
         BodyResult::Value(
-            scope.arena.alloc_object(KObject::KTypeValue(KType::SatisfiesSignature {
+            scope.arena.alloc(KObject::KTypeValue(KType::SatisfiesSignature {
                 sig_id,
                 sig_path,
                 pinned_slots: pinned,

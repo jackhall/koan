@@ -150,7 +150,7 @@ fn value_language_leaf_names_layering() {
     let scope = run_root_silent(&arena);
     // `Gee` is a Type-class token, but bound in the value language.
     scope
-        .bind_value("Gee".into(), arena.alloc_object(KObject::Number(7.0)))
+        .bind_value("Gee".into(), arena.alloc(KObject::Number(7.0)))
         .expect("bind_value");
     let mut el = Elaborator::new(scope);
     match elaborate_type_expr(&mut el, &leaf("Gee")) {

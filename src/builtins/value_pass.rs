@@ -17,7 +17,7 @@ pub fn body<'a>(
         Err(e) => return err(e),
     };
     let arena = scope.arena;
-    BodyResult::Value(arena.alloc_object(cloned))
+    BodyResult::Value(arena.alloc(cloned))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

@@ -97,7 +97,7 @@ pub(crate) fn register_builtin_with_pre_run<'a>(
     // `lift_kobject`'s arena-pointer comparison identifies builtins as never-in-a-dying-frame.
     let f: &'a KFunction<'a> =
         arena.alloc_function(KFunction::with_pre_run(signature, Body::Builtin(body), scope, pre_run));
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj);
 }
 

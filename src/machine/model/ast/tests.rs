@@ -87,7 +87,7 @@ fn builtin_cache_lifetime_lift_does_not_dangle() {
         }
         // Defeat any single-arena optimization tree borrows could mistake for
         // a stable address: a sibling alloc on arena_a between the two calls.
-        let _other = arena_a.alloc_object(KObject::Number(1.0));
+        let _other = arena_a.alloc(KObject::Number(1.0));
         let _ = arena_a;
     }
 

@@ -12,7 +12,7 @@ use crate::machine::core::kfunction::argument_bundle::{
 use crate::machine::model::ast::{KExpression, TypeExpr, TypeParams};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, KError, KErrorKind, NodeId, Scope, SchedulerHandle};
+use crate::machine::{ArgumentBundle, KError, KErrorKind, NodeId, Scope};
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
 
@@ -37,7 +37,14 @@ pub(super) enum ReturnTypeState<'a> {
     Done(KType<'a>),
     Pending { te: TypeExpr, producers: Vec<NodeId> },
     Deferred(DeferredReturn<'a>),
-    ExprSubDispatched(NodeId),
+    /// The return-type slot is an `Expression(_)` carrier (e.g. `-> (Mo.Ty)`)
+    /// that doesn't reference any FN parameter, so it's safe to resolve once at
+    /// FN-def time. The actual `add_dispatch` is deferred to
+    /// [`super::finalize::defer_via_combine`] so all owned-sub scheduling
+    /// happens at one site; param-type sub-dispatches in
+    /// [`super::signature::ParamListOutcome::Pending::sub_dispatches`] follow
+    /// the same defer-and-schedule pattern.
+    ExprToSubDispatch(KExpression<'a>),
 }
 
 /// Carrier for the return type across the Combine boundary.
@@ -85,7 +92,6 @@ pub(super) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
     scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
 ) -> Result<ReturnTypeState<'a>, KError> {
     match raw {
         ReturnTypeRaw::Resolved(kt) => Ok(ReturnTypeState::Done(kt)),
@@ -113,8 +119,7 @@ pub(super) fn classify_return_type<'a>(
             if kexpression_references_any(&e, param_names) {
                 Ok(ReturnTypeState::Deferred(DeferredReturn::Expression(e)))
             } else {
-                let id = sched.add_dispatch(e, scope);
-                Ok(ReturnTypeState::ExprSubDispatched(id))
+                Ok(ReturnTypeState::ExprToSubDispatch(e))
             }
         }
     }

@@ -194,7 +194,7 @@ fn access_field<'a>(
 ) -> BodyResult<'a> {
     match target {
         KObject::Struct { name: type_name, fields, .. } => match fields.get(field) {
-            Some(value) => BodyResult::Value(scope.arena.alloc_object(value.deep_clone())),
+            Some(value) => BodyResult::Value(scope.arena.alloc(value.deep_clone())),
             None => err(KError::new(KErrorKind::ShapeError(format!(
                 "struct `{}` has no field `{}`",
                 type_name, field
@@ -211,7 +211,7 @@ fn access_field<'a>(
             }
             if let Some(kt) = scope.resolve_type(field) {
                 return BodyResult::Value(
-                    scope.arena.alloc_object(KObject::KTypeValue(kt.clone())),
+                    scope.arena.alloc(KObject::KTypeValue(kt.clone())),
                 );
             }
             err(KError::new(KErrorKind::ShapeError(format!(
@@ -265,7 +265,7 @@ fn access_field<'a>(
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
         return BodyResult::Value(
-            m.child_scope().arena.alloc_object(KObject::KTypeValue(kt)),
+            m.child_scope().arena.alloc(KObject::KTypeValue(kt)),
         );
     }
     let scope = m.child_scope();
@@ -274,7 +274,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
     }
     if let Some(kt) = scope.resolve_type(field) {
         return BodyResult::Value(
-            scope.arena.alloc_object(KObject::KTypeValue(kt.clone())),
+            scope.arena.alloc(KObject::KTypeValue(kt.clone())),
         );
     }
     err(KError::new(KErrorKind::ShapeError(format!(

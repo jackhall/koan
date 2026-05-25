@@ -78,7 +78,7 @@ pub fn body<'a>(
     // modules (`module_frame` is `None`). Post-collapse the carrier is
     // `KTypeValue(KType::Module { .. })`.
     if module_frame.is_some() {
-        scope.arena.alloc_object(KObject::KTypeValue(KType::Module {
+        scope.arena.alloc(KObject::KTypeValue(KType::Module {
             module,
             frame: module_frame,
         }));

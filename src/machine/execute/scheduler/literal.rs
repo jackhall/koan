@@ -56,7 +56,7 @@ impl<'a> Scheduler<'a> {
                 .map(|slot| slot.materialize(results))
                 .collect();
             let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::list(items));
+                scope.arena.alloc(KObject::list(items));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, vec![], scope, finish)
@@ -94,7 +94,7 @@ impl<'a> Scheduler<'a> {
                 map.insert(Box::new(kkey), value_obj);
             }
             let allocated: &'a KObject<'a> =
-                scope.arena.alloc_object(KObject::dict(map));
+                scope.arena.alloc(KObject::dict(map));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, vec![], scope, finish)

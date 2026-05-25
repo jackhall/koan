@@ -64,7 +64,7 @@ pub fn body<'a>(
 
     let mut elaborator = Elaborator::new(scope);
 
-    let return_type_state = match classify_return_type(return_type_raw, &param_names, scope, sched) {
+    let return_type_state = match classify_return_type(return_type_raw, &param_names, scope) {
         Ok(s) => s,
         Err(e) => return err(e),
     };

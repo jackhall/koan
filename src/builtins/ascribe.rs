@@ -90,7 +90,7 @@ pub fn body_opaque<'a>(
 
     // Ascription paths run on the outer scheduler; the resulting `Module` lives in `arena`
     // (the calling scope's arena), not in any per-call frame. `frame: None` is correct.
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(
+    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(
         KType::Module { module: new_module, frame: None },
     ));
     BodyResult::Value(module_obj)
@@ -118,7 +118,7 @@ pub fn body_transparent<'a>(
     // Same compat-set bookkeeping as `body_opaque`. `:!` makes the module appear as the
     // sig at the type level too — sig-typed slots accept it.
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(
+    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(
         KType::Module { module: new_module, frame: None },
     ));
     BodyResult::Value(module_obj)

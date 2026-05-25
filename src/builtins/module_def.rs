@@ -119,7 +119,7 @@ pub fn body<'a>(
             frame: active_frame.clone(),
         };
         let module_obj: &'a KObject<'a> =
-            arena.alloc_object(KObject::KTypeValue(identity.clone()));
+            arena.alloc(KObject::KTypeValue(identity.clone()));
         match parent_scope.register_nominal(name_for_finish.clone(), identity, module_obj) {
             Ok(obj) => BodyResult::Value(obj),
             Err(e) => BodyResult::Err(
@@ -300,7 +300,7 @@ mod tests {
         ));
         let module: &Module<'_> = arena.alloc_module(Module::new("Foo".into(), child));
         let identity = KType::Module { module, frame: None };
-        let module_obj = arena.alloc_object(KObject::KTypeValue(identity.clone()));
+        let module_obj = arena.alloc(KObject::KTypeValue(identity.clone()));
         scope
             .register_nominal("Foo".into(), identity, module_obj)
             .unwrap();
