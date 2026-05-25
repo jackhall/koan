@@ -2,11 +2,14 @@
 
 Collapse `KObject::KModule` into a new `KType::Module { module, frame }`
 variant and `KObject::KSignature` into a new identity-bearing
-`KType::Signature { scope_id, name, slots, ... }` variant. The
+`KType::Signature(&'a Signature<'a>)` variant. Split abstract-type
+members of modules into a dedicated `KType::AbstractType { source_module,
+name }` carrier, and give the type-position wildcards
+`KType::AnyModule` / `KType::AnySignature` their own variants. The
 KObject/KType boundary contracts: KObject holds strictly value-side
-carriers (`Number`, `Str`, `List`, `Dict`, `KFunction`, `KTypeValue`, struct
-and tagged values); KType absorbs every type-language entity, including
-the ones that mint nominal identity.
+carriers (`Number`, `Str`, `List`, `Dict`, `KFunction`, `KTypeValue`,
+struct and tagged values); KType absorbs every type-language entity,
+including the ones that mint nominal identity.
 
 **Problem.** Modules and signatures live as both KObject *and* KType today,
 and the duality forces every consumer to pick a side:
@@ -40,11 +43,12 @@ duality it's reading.
 **Impact.**
 
 - *One representation per entity.* A module is `KType::Module { module,
-  frame }`, full stop. A signature is `KType::Signature { ... }`, full
-  stop. The `KObject::K{Module,Signature}` variants and the
-  `MetaSignature` meta-type all go away; surface "Signature" in
-  `from_name` lowers to the identity-bearing `KType::Signature` (the name
-  freed up by the prior MetaSignature rename).
+  frame }`, full stop. A signature is `KType::Signature(&'a
+  Signature<'a>)`, full stop. The `KObject::K{Module,Signature}`
+  variants, the `KType::MetaSignature` meta-type, and the
+  `UserTypeKind::Module` arm all go away; surface "Signature" in
+  `from_name` lowers to `KType::AnySignature` (the name freed by the
+  MetaSignature retirement).
 - *Dual-write disappears.* FUNCTOR param binding writes to
   `bindings.types` only. `Scope::resolve_value("Er")` for a module-typed
   parameter no longer finds the name; ATTR-on-type carries the projection
@@ -53,7 +57,7 @@ duality it's reading.
 - *Scheduler still carries modules and signatures as results.* `MODULE
   Mo = (...)` and `SIG Foo = (...)` evaluate to type values that ride the
   existing `KObject::KTypeValue(KType)` carrier through the scheduler.
-  No new KObject variant; the carrier already handles `Number` /`Str`/
+  No new KObject variant; the carrier already handles `Number`/`Str`/
   builtin types and now carries the identity-bearing Module/Signature
   variants too.
 - *The conceptual claim sharpens.* "Modules are first-class values"
@@ -65,49 +69,75 @@ duality it's reading.
   value-side carriers; KType absorbs all type-language entities including
   the identity-bearing ones. The duality maintenance burden — every
   consumer choosing which side to read from — disappears.
+- *Abstract type members get their own variant.* `KType::AbstractType
+  { source_module, name }` carries the arena-pinned source pointer
+  directly, so ATTR projection and diagnostics on an opaque-ascription
+  abstract type read from the same pointer as `KType::Module` rather
+  than walking back through a `UserType { kind: Module, .. }` lookup.
 
 **Directions.**
 
 - *KType variant shapes — decided.* `KType::Module { module: &'a
   Module<'a>, frame: Option<Rc<CallArena>> }` carries the existing
-  `KModule` payload verbatim. `KType::Signature { scope_id, name, slots,
-  ... }` is the identity-bearing successor — the bare name `Signature`
-  was freed by the `MetaSignature` rename (see roadmap/libraries/[functor-binder.md](functor-binder.md)
-  for the rename rationale).
-- *MetaSignature retirement — decided.* `KType::MetaSignature` goes
-  away. A `:Signature` slot annotation lowers to `KType::AnyUserType
-  { kind: Signature }`, mirroring how `:Module` lowers to `AnyUserType
-  { kind: Module }`. `UserTypeKind` gains a `Signature` arm.
-- *ATTR-on-type — decided prerequisite, decision-point open.*
-  `Er.pure(x)` after the move requires ATTR to project members from a
-  type-language entity. New ATTR arms: `KType::Module` and `KType::Signature`
-  (reverse-lookup or direct via the carried `&Module` / `&Signature`
-  pointer); `KType::SatisfiesSignature` (reverse-lookup through the
-  module identity carried alongside, see open bullet below);
-  `KType::Number`/`Str`/etc. (clean rejection — no members).
-  Whether ATTR-on-type ships as a separate roadmap item *before* this
-  collapse or as the first commit of this item is open — splitting lets
-  the FUNCTOR binder shed its dual-write earlier, but ships ATTR-on-type
-  without the full coherence benefit.
-- *`SatisfiesSignature` carrier — open.* For ATTR-on-type to project
-  members through a `:OrderedSig` parameter binding, the
-  `SatisfiesSignature` carrier needs to identify the *underlying source
-  module*, not just the SIG. Today it carries `sig_id` (the SIG
-  identity) and `pinned_slots` but no module identity. Options: add
-  `source_module_id` to the carrier, or replace `SatisfiesSignature`
-  with `KType::Module { ... }` at the binding site once the module's
-  identity is known (the variant collapse pulls the latter into reach).
+  `KModule` payload verbatim. `KType::Signature(&'a Signature<'a>)` is
+  the identity-bearing successor, paralleling `KType::Module`'s
+  arena-pointer shape. `KType::AbstractType { source_module: &'a
+  Module<'a>, name: String }` replaces `UserType { kind: Module, .. }`
+  for opaque-ascription abstract type members — named for what it
+  actually is in OCaml terms (an abstract type *member* of a module,
+  like `M.t`, not "an abstract module" per se). Manual `PartialEq` on
+  `AbstractType` compares `(source_module.scope_id(), name)` rather than
+  pointer equality, so two opaque-ascriptions of the same source module
+  with the same abstract name compare equal.
+- *KType lifetime parameterization — decided.* `KType` becomes
+  `KType<'a>`, aligning with `KObject<'a>`, `KFunction<'a>`,
+  `Module<'a>`. The exception that "KType happens to be all owned data"
+  ends as soon as a type-language entity closes over an arena-pinned
+  scope. Blast radius: ~60 struct fields and ~16 fn signatures need the
+  annotation; the ~900 `KType::Number`/`Any`/`List(...)` constructor sites
+  are untouched (Rust infers the parameter).
+- *Type-position wildcards — decided.* `:Module` lowers to
+  `KType::AnyModule` and `:Signature` lowers to `KType::AnySignature`.
+  Dedicated wildcard variants rather than reusing `AnyUserType { kind:
+  Module | Signature }`; with `UserTypeKind::Module` dropped entirely,
+  the `:Module` slot's semantics sharpen to "admits first-class
+  modules," not "admits abstract-types-from-some-module."
+- *ATTR-on-type — decided.* Ships as the **first commit** of this
+  item — without it, dropping the dual-write breaks `Er.pure(x)` after
+  per-call binding moves to `bindings.types`-only. New ATTR arms on
+  `KObject::KTypeValue(...)`: `KType::Module { module, .. }` →
+  `access_module_member(module, field)`; `KType::Signature(s)` →
+  reverse-lookup against `s`; `KType::AbstractType { source_module, .. }`
+  → project against `source_module`; `KType::Number | Str | Bool | Null
+  | ...` → clean rejection ("type X has no members"). The existing
+  `KObject::KModule(_, _)` arm
+  ([`attr.rs`](../../src/builtins/attr.rs)) becomes the
+  `KTypeValue(KType::Module { .. })` arm.
+- *`SatisfiesSignature` at the binding site — decided.* Replaced with
+  `KType::Module { module, frame }` rather than extended with a
+  `source_module_id`. Once a FUNCTOR's signature-typed parameter binds,
+  the module identity is already in hand — write the module variant
+  directly and let ATTR-on-type project from it. `SatisfiesSignature`
+  the variant stays for slot-annotation use (the row in `type_identity_for`
+  changes its mint shape; the variant definition is untouched).
 - *Scheduler result plumbing — decided.* MODULE/SIG declarators wrap
   their result KType in `KObject::KTypeValue(KType)`. No new KObject
   variant; this carrier already exists for builtin type values.
-- *Migration ordering — open.* The move touches dispatch (admission
-  arms), scope lookup, ATTR (new arms), LET binding (write target
-  switches from `data` to `types`), FUNCTOR invoke (drop the
-  `bind_value` half), and every `match obj { KObject::KModule(...) }`
-  consumer. Big-bang vs. staged: a staged migration probably introduces
-  the new KType variants first behind a feature gate and migrates
-  consumers one at a time; a big-bang flips everything at once and lives
-  with a broken-build period.
+- *Migration ordering — decided.* Big-bang within a feature branch,
+  sequenced as five coherent commits: (1) parameterize `KType<'a>` as a
+  no-op prelude; (2) add the new variants with predicate/name/elaboration
+  arms while old variants stay in place; (3) flip producers
+  (MODULE/SIG/opaque-ascription) and lockstep consumers (ATTR, lift,
+  `derive_nominal_identity`, `using_scope`, `type_identity_for`); (4)
+  remove the old carriers (`KObject::KModule`, `KObject::KSignature`,
+  `KType::MetaSignature`, `UserTypeKind::Module`) and drop the FUNCTOR
+  `bind_value`-for-type-denoting-params branch in `invoke.rs`; (5)
+  verify the
+  [`node_store.rs`](../../src/machine/execute/scheduler/node_store.rs)
+  `read_result` panic is dissolved by re-running a FUNCTOR with a
+  signature-typed parameter, or attribute and file a follow-up if a
+  residual race remains. Step 1 is mechanical and reviewable on its own;
+  step 4 is the load-bearing one.
 
 ## Dependencies
 
@@ -124,6 +154,6 @@ duality it's reading.
   substrate move first lets FUNCTOR's signature-typed-parameter handling
   ride the single-store machinery from day one. The functor-definition
   panic on the dual-write path
-  ([node_store.rs:169](../../src/machine/execute/scheduler/node_store.rs),
+  ([node_store.rs](../../src/machine/execute/scheduler/node_store.rs),
   folded into functor-binder.md as a known blocker) is likely dissolved
   or relocated as a side effect of this work.
