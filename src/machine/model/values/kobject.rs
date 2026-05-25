@@ -230,7 +230,7 @@ impl<'a> KObject<'a> {
     /// and value types are both `Any`. Such a value has no join to infer from and was never
     /// stamped by an annotation; reaching an *untyped* resolution boundary (an untyped `LET`
     /// binding, a bare top-level expression result) with this shape is an error
-    /// (see [runtime-type-parameter-carriers](../../../../roadmap/predicate_typing/runtime-type-parameter-carriers.md)).
+    /// (see [runtime-type-parameter-carriers](../../../../roadmap/type_language/runtime-type-parameter-carriers.md)).
     ///
     /// A stamped empty container (e.g. `FN -> :(List Number) = ([])` re-tags to element
     /// `Number`) is *not* flagged: its carrier carries a non-`Any` element type. A

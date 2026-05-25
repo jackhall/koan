@@ -5,7 +5,7 @@ Future work on the type and module system. Each entry points at a
 
 ## Module-system stages
 
-- [Dependent parameter annotations](../../roadmap/predicate_typing/dependent-param-annotations.md)
+- [Dependent parameter annotations](../../roadmap/type_language/dependent-param-annotations.md)
   — parameter types that reference earlier parameters in the same FN
   signature; required for OCaml-style multi-parameter functor signatures
   with cross-parameter sharing constraints. Refines the `Deferred(_)`

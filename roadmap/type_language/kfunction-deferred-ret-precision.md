@@ -35,7 +35,7 @@ the structural `KType` would.
   `Deferred(Expression)`-carrying FN admits-or-rejects with a real
   shape comparison, not a silent refusal.
 - *Modular-implicit search
-  ([Stage 5](modular-implicits.md)) over deferred-
+  ([Stage 5](../predicate_typing/modular-implicits.md)) over deferred-
   return candidates becomes decidable.* Implicit resolution searches
   by structural `KType` shape; precision-aware synthesis lets the
   search distinguish candidates that differ only in their deferred
@@ -82,7 +82,7 @@ the structural `KType` would.
 
 **Unblocks:**
 
-- [Stage 5 — Modular implicits](modular-implicits.md)
+- [Stage 5 — Modular implicits](../predicate_typing/modular-implicits.md)
   — implicit search over functor-shaped candidates whose return
   types reference per-call parameters needs precision-aware
   structural comparison.

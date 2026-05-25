@@ -321,7 +321,7 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
 ///
 /// A `Deferred(_)` return collapses to `KType::Any` for this check (the structural
 /// comparison can't see the per-call resolution). See
-/// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/predicate_typing/kfunction-deferred-ret-precision.md).
+/// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
 pub(super) fn function_compat(
     sig: &ExpressionSignature<'_>,
     args: &[KType],

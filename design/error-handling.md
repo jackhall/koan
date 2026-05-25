@@ -149,7 +149,7 @@ the `error` payload (a `KError`) does not satisfy `MyErr`. Ascription at an
 annotated boundary stamps the carrier's `type_args` to the declared instantiation;
 the remaining per-call parameter-slot binding for generic value-slot functions is
 tracked under
-[runtime carriers for type parameters](../roadmap/predicate_typing/runtime-type-parameter-carriers.md).
+[runtime carriers for type parameters](../roadmap/type_language/runtime-type-parameter-carriers.md).
 
 ## `TRY-WITH`
 

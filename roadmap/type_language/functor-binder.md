@@ -18,7 +18,7 @@ today:
   coarsen `Deferred(_)` returns to `KType::Any` — the structural
   function-type language has no surface for "this FN is a functor and its
   return slot is module-kind," tracked under
-  [kfunction-deferred-ret-precision.md](../predicate_typing/kfunction-deferred-ret-precision.md).
+  [kfunction-deferred-ret-precision.md](kfunction-deferred-ret-precision.md).
 - No FN-def-time check forces the return slot of an intended functor to
   denote a module or signature; mistakes surface as opaque dispatch-time
   errors several frames removed from the binder.

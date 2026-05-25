@@ -89,7 +89,7 @@ along with this work:
   `:(Function (Type, Type) -> Number)` picks up the SIG-local shadow;
   (b) accept the gap and let modular-implicits' full type-shape
   checking absorb it when stage 5 lands. Deferred to
-  [Stage 5 — Modular implicits](modular-implicits.md)
+  [Stage 5 — Modular implicits](../predicate_typing/modular-implicits.md)
   unless a shipped test forces it sooner; modular implicits owns
   full structural-shape checking and will re-elaborate inner
   positions as part of its dispatch-key construction.
@@ -103,11 +103,11 @@ this item plugs the slot-read carrier identity into that machinery.
 
 **Unblocks:**
 
-- [Stage 4 — Property testing and axioms](axioms-and-generators.md)
+- [Stage 4 — Property testing and axioms](../predicate_typing/axioms-and-generators.md)
   — axiom quotes reference VAL-slot members by name and depend on
   those reads carrying the SIG's abstract type identity for the
   quote-elaboration scope to type-check.
-- [Stage 5 — Modular implicits](modular-implicits.md)
+- [Stage 5 — Modular implicits](../predicate_typing/modular-implicits.md)
   — implicit search dispatches on parameter types; correct identity
   tagging on VAL-slot reads keeps dispatch keys aligned with the
   declared abstract types.

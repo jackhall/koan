@@ -28,17 +28,17 @@ without first landing something else:
   a codebase can span more than one source file and files become modules.
 - [Group-based operators](roadmap/libraries/group-based-operators.md) — paired `+`/`-`-style
   operators as a group; the syntax-level shorthand variant has no hard prerequisites.
-- [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md) —
+- [Dependent parameter annotations](roadmap/type_language/dependent-param-annotations.md) —
   parameter type slots that reference earlier parameters in the same FN signature.
-- [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
+- [Structural KFunction admission across deferred return types](roadmap/type_language/kfunction-deferred-ret-precision.md)
   — per-call elaboration precision for structurally-typed FN slots.
 - [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
   — collapse the KObject/KType duality for modules and signatures, retiring the dual-write
   in `KFunction::invoke` for signature-typed FN parameters.
-- [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
+- [VAL-slot value-carrier abstract-identity tagging](roadmap/type_language/val-slot-abstract-identity-tagging.md)
   — VAL-slot reads carry the SIG's abstract identity rather than the underlying value's
   concrete `KType`.
-- [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
+- [Generic value-slot binding via the destructuring unifier](roadmap/type_language/runtime-type-parameter-carriers.md)
   — runtime type-parameter carriers shipped; remaining is wiring `unify_slot` into invoke so
   generic value-slot FNs like `FN head (xs :(List T)) -> :T` become definable.
 - [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
@@ -54,25 +54,20 @@ what the project buys the language and list its open items.
 
 ### Predicate typing — [roadmap/predicate_typing/](roadmap/predicate_typing/)
 
-Finish the type and module systems. The agreed design is captured in
-[design/typing/](design/typing/README.md); stages 1 and 2 shipped (the module
-language: `MODULE`/`SIG` declarators, `:|`/`:!` ascription, per-module type identity,
-plus the scheduler-driven elaborator, `SIG_WITH` sharing constraints, and
-higher-kinded type-constructor slots, plus runtime type-parameter carriers on
-`List` / `Dict` / `Result` values with ascription stamping at the FN return,
-argument, and `LET` boundaries). The remaining items land implicit search,
-axioms and equivalence-checked coherence, multi-parameter functor sharing, the
-structural-FN precision the implicit-search dispatch needs, and generic
-value-slot binding:
+The user-facing typing stages — axioms, modular implicits, equivalence-checked
+coherence, witness types — that ride on top of the type-language substrate.
+The agreed design is captured in [design/typing/](design/typing/README.md);
+stages 1 and 2 shipped (the module language: `MODULE`/`SIG` declarators,
+`:|`/`:!` ascription, per-module type identity, plus the scheduler-driven
+elaborator, `SIG_WITH` sharing constraints, and higher-kinded type-constructor
+slots, plus runtime type-parameter carriers on `List` / `Dict` / `Result`
+values with ascription stamping at the FN return, argument, and `LET`
+boundaries):
 
-- [Dependent parameter annotations](roadmap/predicate_typing/dependent-param-annotations.md)
-- [VAL-slot value-carrier abstract-identity tagging](roadmap/predicate_typing/val-slot-abstract-identity-tagging.md)
 - [Stage 4 — Property testing and axioms](roadmap/predicate_typing/axioms-and-generators.md)
 - [Stage 5 — Modular implicits](roadmap/predicate_typing/modular-implicits.md)
 - [Stage 6 — Equivalence-checked coherence](roadmap/predicate_typing/equivalence-checking.md)
 - [Stage 7 — Syntax tuning and witness types](roadmap/predicate_typing/syntax-tuning.md)
-- [Structural KFunction admission across deferred return types](roadmap/predicate_typing/kfunction-deferred-ret-precision.md)
-- [Generic value-slot binding via the destructuring unifier](roadmap/predicate_typing/runtime-type-parameter-carriers.md)
 
 ### Libraries — [roadmap/libraries/](roadmap/libraries/)
 
@@ -88,12 +83,18 @@ Rust builtins:
 
 ### Type language — [roadmap/type_language/](roadmap/type_language/)
 
-Engine-level work on how modules, signatures, and functors are represented in
-the type language. The substrate that the predicate-typing work and the
-stdlib's functor-heavy collections both build on:
+Engine-level type-language substrate — how modules, signatures, functors,
+deferred-return FNs, dependent parameter annotations, generic value-slot
+binding, and VAL-slot identity are represented in `KType` and routed through
+dispatch. The substrate the predicate-typing stages and the stdlib's
+functor-heavy collections both build on:
 
 - [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
 - [FUNCTOR binder](roadmap/type_language/functor-binder.md)
+- [Dependent parameter annotations](roadmap/type_language/dependent-param-annotations.md)
+- [VAL-slot value-carrier abstract-identity tagging](roadmap/type_language/val-slot-abstract-identity-tagging.md)
+- [Structural KFunction admission across deferred return types](roadmap/type_language/kfunction-deferred-ret-precision.md)
+- [Generic value-slot binding via the destructuring unifier](roadmap/type_language/runtime-type-parameter-carriers.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
