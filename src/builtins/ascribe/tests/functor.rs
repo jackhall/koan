@@ -128,16 +128,22 @@ fn functor_rejects_unascribed_module_argument() {
     );
     // Bind `IntOrd` (an unascribed module) under a lowercase identifier so the
     // auto-wrap pass triggers when the identifier appears in the SatisfiesSignature
-    // slot. The wrapped sub-Dispatch resolves to `Future(KModule(IntOrd, _))`, but
-    // IntOrd's `compatible_sigs` is empty — no overload matches. Surfaces as
-    // `DispatchFailed` out of `Scheduler::execute`.
+    // slot. The eager-resolve path splices `Future(KModule(IntOrd, _))` directly into
+    // the wrap-slot, commits to the tentative pick from Phase 2's `resolve_dispatch`,
+    // and surfaces the mismatch through `bind` as a per-slot `TypeMismatch` terminal
+    // — pre-eager-resolve the re-resolution walk produced an `execute`-return
+    // `DispatchFailed` instead.
     run(scope, "LET unascribed = IntOrd");
     let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("MAKESET unascribed"), scope);
-    let err = sched.execute().expect_err("MAKESET on unascribed module should fail dispatch");
+    let id = sched.add_dispatch(parse_one("MAKESET unascribed"), scope);
+    sched.execute().expect("execute does not surface per-slot errors");
+    let err = match sched.read_result(id) {
+        Ok(_) => panic!("MAKESET on unascribed module should fail dispatch"),
+        Err(e) => e,
+    };
     assert!(
-        matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
-        "expected DispatchFailed, got {err}",
+        matches!(&err.kind, KErrorKind::TypeMismatch { .. }),
+        "expected TypeMismatch, got {err}",
     );
 }
 

@@ -32,7 +32,7 @@ mod type_ops;
 mod union;
 mod using_scope;
 mod val_decl;
-mod value_lookup;
+pub(crate) mod value_lookup;
 mod value_pass;
 
 /// Route a resolved verb-object to its construction primitive's `apply` function. Returns

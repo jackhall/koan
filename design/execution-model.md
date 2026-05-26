@@ -270,19 +270,21 @@ and `register_function` remove their own placeholder before inserting into
 moment.
 
 The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) — is a
-five-phase linear pipeline: a bare-name short-circuit, the chain-walked
-resolution, the placeholder install, the auto-wrap + replay-park rewrite,
-and the dep schedule. Phase 2 calls
+four-phase linear pipeline: a bare-name short-circuit, the chain-walked
+resolution (with a fractional-step `2.5` placeholder install), an eager
+name-resolve pass that splices wrap-slot bindings in place and parks ref-name
+slots on still-pending producers, and the dep schedule. Phase 2 calls
 [`Scope::resolve_dispatch`](../src/machine/core/scope.rs) once and
 matches on its [`ResolveOutcome`](../src/machine/core/scope.rs):
-`Resolved(r)` continues into phase 3 with the picked function plus the
-per-slot index buckets `r.slots` carries (`wrap_indices`, `ref_name_indices`,
-`eager_indices`); `Ambiguous(n)` surfaces as an `AmbiguousDispatch` error;
-`Unmatched` surfaces as `DispatchFailed`; `Deferred` (no match against
-the bare shape but the expression carries nested `Expression` /
-`ListLiteral` / `DictLiteral` parts whose evaluation may produce typed
-`Future(_)` parts that match) jumps to phase 5's eager-fallthrough loop and
-re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
+`Resolved(r)` continues into phase 3 with the tentatively picked function
+plus the per-slot index buckets `r.slots` carries (`wrap_indices`,
+`ref_name_indices`, `eager_indices`); `Ambiguous(n)` surfaces as an
+`AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
+`Deferred` (no match against the bare shape but the expression carries
+nested `Expression` / `ListLiteral` / `DictLiteral` parts whose evaluation
+may produce typed `Future(_)` parts that match) jumps to phase 4's lazy
+arm (`schedule_deps_filtered` with no eager filter and no picked function)
+and re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
 after subs resolve.
 
 The four rails the resolution feeds:
@@ -294,39 +296,53 @@ The four rails the resolution feeds:
   sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
   produces the structured error.
 
-  Forward references resolve through this rail and the auto-wrap rail
-  (below), both of which route name lookups through `Scope::resolve` and so
-  consult the `placeholders` table. A *keyword-headed* call — `ID 7`, where
-  `ID` is the head Keyword — does not: function dispatch is a `functions`
-  bucket lookup with no placeholder consultation, so a call to a function
-  not yet registered in the same scope surfaces as `DispatchFailed` rather
-  than parking. Forward calls from a function *body* are unaffected: bodies
-  re-dispatch per call, by which point every sibling binder has registered.
-- **Placeholder install** (phase 3). If the picked function carries a
+  Forward references resolve through this rail and the eager name-resolve
+  rail (below), both of which route name lookups through `Scope::resolve`
+  and so consult the `placeholders` table. A *keyword-headed* call —
+  `ID 7`, where `ID` is the head Keyword — does not: function dispatch is
+  a `functions` bucket lookup with no placeholder consultation, so a call
+  to a function not yet registered in the same scope surfaces as
+  `DispatchFailed` rather than parking. Forward calls from a function
+  *body* are unaffected: bodies re-dispatch per call, by which point every
+  sibling binder has registered.
+- **Placeholder install** (phase 2.5). If the picked function carries a
   `pre_run` extractor, `Resolved.placeholder_name` is its result and the
   driver installs `name → NodeId(idx)` on the dispatching scope. A
   `Rebind` collision here surfaces as a `Done(Err(_))` step so other slots
   keep draining.
-- **Auto-wrap pass** (phase 4, carrier: `Resolved.slots.wrap_indices`). Promotes
-  bare-name parts in *value-typed* slots of the picked function to
-  single-part sub-expressions so they re-enter `run_dispatch` and route
-  through the bare-name short-circuit. Both `ExpressionPart::Identifier`
-  and bare leaf `ExpressionPart::Type` (a Type-token with no `<…>`
-  parameters) are bare-name parts here and ride identical rails: `LET y = z`
-  and `LET Ty = Number` walk the same wrap → sub-dispatch → `value_lookup`
-  path, the first through the `Identifier` overload and the second
-  through the `TypeExprRef` overload of `value_lookup`. Multi-name forward
-  references compose as N independent sub-Dispatches.
-- **Replay-park** (phase 4, carrier: `Resolved.slots.ref_name_indices`). Covers
-  literal-name slots that *don't* sub-dispatch (`call_by_name`'s verb,
-  `ATTR`'s identifier-lhs, `type_call`'s verb, ascription's `m` / `s`
-  slots): if any of those names — Identifier or bare leaf Type-token —
-  resolves to a placeholder whose producer hasn't terminalized, the outer
-  slot's work is rewritten to `Dispatch(same_expr)` and parked on the
-  producer's notify-list; on wake the re-dispatch finds the binding in
-  `data` and proceeds. If the producer already terminalized with an error,
-  the consumer's replay-park surfaces it with a `<replay-park>` frame
-  rather than parking on a dead slot.
+- **Eager name-resolve pass** (phase 3, carriers:
+  `Resolved.slots.wrap_indices` and `Resolved.slots.ref_name_indices`).
+  One walk over each index bucket calls the shared
+  [`resolve_name_part`](../src/machine/execute/scheduler/dispatch.rs)
+  helper against the dispatching scope. Both
+  `ExpressionPart::Identifier` and bare leaf `ExpressionPart::Type` (a
+  Type-token with no `<…>` parameters) are bare-name parts here and ride
+  identical rails; Type-tokens route through the shared
+  [`coerce_type_token_value`](../src/builtins/value_lookup.rs) seam so the
+  dispatch phase synthesizes the same `KTypeValue` / paired-carrier shape
+  the `value_lookup::body_type_expr` builtin produces. The helper returns a
+  [`NameOutcome`](../src/machine/execute/scheduler/dispatch.rs) ADT and the
+  caller branches on the variant:
+
+  - `Resolved(obj)` — for a `wrap_indices` slot, splice
+    `ExpressionPart::Future(obj)` into the slot in place. For a
+    `ref_name_indices` slot, no-op (literal-name slots keep the bare token).
+  - `Parked(producer)` — push onto a shared `producers_to_wait` list.
+  - `ProducerErrored(e)` — propagate via the shared
+    [`propagate_dep_error`](../src/machine/execute/scheduler/dispatch.rs)
+    helper with a `<wrap-resolve>` / `<replay-park>` frame.
+  - `Unbound(name)` — surface as a slot-terminal `UnboundName` (the
+    parent binder's Combine reads this through `read_result(dep)` and
+    short-circuits with the right framing).
+  - `Cycle(name)` — emit `KErrorKind::SchedulerDeadlock { pending: 1,
+    sample: "cycle in type alias …" }`. Catches `LET x = x` and
+    `LET Ty = Ty` uniformly without a special case in the elaborator.
+
+  After both buckets are walked, a single
+  `install_combined_park(producers_to_wait, …)` call installs every park
+  edge and rewrites the slot to a re-Dispatch on wake. Multi-name forward
+  references compose as one combined park rather than N independent
+  sub-Dispatches.
 
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's
@@ -336,56 +352,71 @@ the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
 by value), so the disjointness invariant lives in one place rather than as
 comment-enforced rules across the scheduler driver.
 
-The bare-name short-circuit and replay-park call `DepGraph::add_park_edge`,
-which records a `DepEdge::Notify(producer)` in the consumer's `dep_edges` entry
-alongside the `DepEdge::Owned(child)` entries that mark sub-slots the consumer
-owns. `add_park_edge` and its `add_owned_edge` sibling each install the
-forward `notify_list[producer]` wake and the `pending_deps[consumer]` bump
-atomically with the backward record, so a park-edge install is one atomic
-+1 across the three vectors. `free()` recurses only into `Owned` arms, so a
-consumer's reclamation cannot transit a park edge into a sibling producer's
-subtree. Same-scope rebind of a value name surfaces
-as `KErrorKind::Rebind`; an `FN` overload duplicating an existing exact
-signature surfaces as `KErrorKind::DuplicateOverload`. Type bindings share
-this placeholder mechanism: a type-binding site registers in
-`Scope::placeholders` exactly like a value binding, external lookups park
-the same way, and self-references during a binding's own elaboration
-short-circuit through the elaborator's threaded-set recognition (see
-[typing/elaboration.md](typing/elaboration.md)) so
-recursive type definitions don't deadlock on their own placeholder.
-FN-signature elaboration plugs into the same mechanism: when
+Phase 4 commits to the tentative pick from Phase 2 even when wrap-slots
+were spliced in Phase 3: `schedule_deps_filtered(expr, eager_indices,
+Some(picked), …)` schedules the remaining `Expression` / `ListLiteral` /
+`DictLiteral` parts as sub-nodes and builds a `Bind` slot against `picked`.
+A mismatch between the spliced carrier and `picked`'s strict slot type
+surfaces as `TypeMismatch` from `bind` (more specific than the generic
+`DispatchFailed` that a second `resolve_dispatch` would emit), saving a
+resolution walk per wrap-bearing dispatch on the success path. Dict and
+list literals (`classify_aggregate_part` in
+[`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
+ride the same eager rail when their `wrap_identifiers` plan-input is set:
+bare-name entries call `resolve_name_part` directly and materialize as
+`Slot::Static` (resolved) or `Slot::Park(i)` (parked producer), with the
+Combine driving a single wake across all parked siblings.
+
+The bare-name short-circuit and the eager-resolve pass call
+`DepGraph::add_park_edge`, which records a `DepEdge::Notify(producer)` in
+the consumer's `dep_edges` entry alongside the `DepEdge::Owned(child)`
+entries that mark sub-slots the consumer owns. `add_park_edge` and its
+`add_owned_edge` sibling each install the forward `notify_list[producer]`
+wake and the `pending_deps[consumer]` bump atomically with the backward
+record, so a park-edge install is one atomic +1 across the three vectors.
+`free()` recurses only into `Owned` arms, so a consumer's reclamation
+cannot transit a park edge into a sibling producer's subtree. Same-scope
+rebind of a value name surfaces as `KErrorKind::Rebind`; an `FN` overload
+duplicating an existing exact signature surfaces as
+`KErrorKind::DuplicateOverload`. Type bindings share this placeholder
+mechanism: a type-binding site registers in `Scope::placeholders` exactly
+like a value binding, external lookups park the same way, and
+self-references during a binding's own elaboration short-circuit through
+the elaborator's threaded-set recognition (see
+[typing/elaboration.md](typing/elaboration.md)) so recursive type
+definitions don't deadlock on their own placeholder. FN-signature
+elaboration plugs into the same mechanism: when
 [`elaborate_type_expr`](../src/machine/model/types/resolver.rs) hits a
-bare type-name leaf whose binder is in
-`Scope::placeholders` but not yet finalized, it returns
-`ElabResult::Park(producers)` and FN-def's body schedules a `Combine`
-over those producers that re-runs the signature elaboration against the
-now-final scope at finish time. A parens-wrapped parameter type
-(`xs: (LIST_OF Number)`) rides the same Combine: `parse_fn_param_list`
-records the `(slot_idx, sub_expr)` pair, FN-def schedules each sub-expression
-as its own `Dispatch`, and the Combine's finish closure splices each result
-into `signature_expr.parts[slot_idx]` as `Future(KTypeValue(_))` before
-re-running the parameter-list walk against the spliced signature. STRUCT and
-UNION share the same elaborator-and-Combine shape for their field-type lists. The replay-park
-rail itself cycle-checks before installing the park edge:
+bare type-name leaf whose binder is in `Scope::placeholders` but not yet
+finalized, it returns `ElabResult::Park(producers)` and FN-def's body
+schedules a `Combine` over those producers that re-runs the signature
+elaboration against the now-final scope at finish time. A parens-wrapped
+parameter type (`xs: (LIST_OF Number)`) rides the same Combine:
+`parse_fn_param_list` records the `(slot_idx, sub_expr)` pair, FN-def
+schedules each sub-expression as its own `Dispatch`, and the Combine's
+finish closure splices each result into
+`signature_expr.parts[slot_idx]` as `Future(KTypeValue(_))` before
+re-running the parameter-list walk against the spliced signature. STRUCT
+and UNION share the same elaborator-and-Combine shape for their
+field-type lists. The eager-resolve pass itself cycle-checks before
+installing each park edge:
 [`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs)
 walks the forward `notify_list` graph from the consumer and, if the
-producer is reachable, the replay-park surfaces a `ShapeError("cycle in
-type alias ...")` instead of installing the park edge. That catches the
-trivially-cyclic case (`LET Ty = Ty` — the value-side `Ty` sub-Dispatch is
-the LET binder's `Owned` child and is about to park on its own ancestor)
-generically rather than as a special case in the elaborator.
+producer is reachable, `resolve_name_part` returns `NameOutcome::Cycle`
+and the driver surfaces `SchedulerDeadlock` on the slot terminal instead
+of installing a park edge that would close the cycle. That catches the
+trivially-cyclic `LET Ty = Ty` / `LET x = x` shapes uniformly — both
+Identifier-LHS and Type-LHS cycles surface with the same error kind
+without a special case in the elaborator.
 
-`would_create_cycle` is a proactive check on the replay-park rail; the
-bare-name short-circuit (phase 1) parks without it, so a value self-reference
-(`LET x = x`, whose RHS `x` resolves through `Scope::resolve` to the binder's
-own placeholder) still forms a cycle. A drain-end guard catches that and any
-other cycle the proactive check doesn't: after [`execute`](../src/machine/execute/scheduler/execute.rs)
-empties its work queues, it scans the slot table for nodes still parked
-(`PreRun`) — a node parked on a dependency that can no longer fire — and
-returns `KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
-the top-level result read panic on an unresolved slot. `sample` is the source
-expression of the first parked `Dispatch`/`Bind` node, so the diagnostic points
-at code the reader can act on.
+A drain-end guard catches any cycle the proactive check doesn't: after
+[`execute`](../src/machine/execute/scheduler/execute.rs) empties its work
+queues, it scans the slot table for nodes still parked (`PreRun`) — a
+node parked on a dependency that can no longer fire — and returns
+`KErrorKind::SchedulerDeadlock { pending, sample }` rather than letting
+the top-level result read panic on an unresolved slot. `sample` is the
+source expression of the first parked `Dispatch`/`Bind` node, so the
+diagnostic points at code the reader can act on.
 
 ## `KObject` and the model/core boundary
 

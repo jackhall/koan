@@ -21,6 +21,10 @@ type-language collapse that puts modules and signatures in `KType` directly via
 retiring the `KObject::KModule` / `KObject::KSignature` duality — with
 implicit-search and axiom stages tracked as `module-system-*` roadmap items below). [design/effects.md](design/effects.md) captures the in-language
 monadic side-effects design (tracked in [roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md)).
+The dispatch driver's wrap-slot rail collapsed too: bare-name parts now eager-resolve
+against the dispatching scope and splice their carrier into the slot in place, retiring the
+old `apply_auto_wrap` + sub-Dispatch detour and unifying the Identifier-LHS and Type-LHS
+self-cycle surfaces under `SchedulerDeadlock`.
 
 ## Next items
 
@@ -37,10 +41,6 @@ without first landing something else:
 - [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
   function of its lexical position rather than the scheduler's queue order, so forward
   references resolve deterministically and sibling work can be reordered or parallelized.
-- [Eager wrap-slot resolution + scheduler duplication cleanup](roadmap/scheduler-eager-wrap-resolve.md)
-  — collapse `apply_auto_wrap`'s sub-Dispatch detour, the open-coded scope-resolve / park
-  pattern across three sites, the `schedule_deps` / `schedule_eager_fallthrough` near-twins,
-  and the error-propagation framing repeated across five sites.
 
 ## Open items
 

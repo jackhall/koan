@@ -33,13 +33,6 @@ use crate::machine::model::{KObject, KType};
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 /// Sub-dispatch `[Type(te)]` against `decl_scope`.
-///
-/// Avoids calling `elaborate_type_expr` directly: a `Placeholder` resolution would
-/// surface a producer NodeId that, if fed into `add_combine`, installs an OWNED
-/// edge to the SIG-sibling LET. The SIG outer Combine already owns that LET, and
-/// two combines cascade-freeing the same producer is a double-free. Sub-dispatching
-/// routes through `value_lookup::body_type_expr`, whose replay-park installs a
-/// Notify (not Owned) edge — the SIG outer Combine stays the sole owner.
 fn schedule_type_resolve<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     decl_scope: &'a Scope<'a>,

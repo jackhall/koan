@@ -5,6 +5,7 @@ use crate::machine::{
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
+use super::dispatch::propagate_dep_error;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
@@ -21,8 +22,9 @@ impl<'a> Scheduler<'a> {
         for (_, dep_id) in &subs {
             if let Err(e) = self.read_result(*dep_id) {
                 let frame = Frame::from_expr("<bind>", &expr);
-                let propagated = e.clone_for_propagation().with_frame(frame);
-                return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
+                return Ok(NodeStep::Done(NodeOutput::Err(
+                    propagate_dep_error(e, Some(frame)),
+                )));
             }
         }
         let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
@@ -100,8 +102,9 @@ impl<'a> Scheduler<'a> {
         let make_frame = || Frame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
-                let propagated = e.clone_for_propagation().with_frame(make_frame());
-                return NodeStep::Done(NodeOutput::Err(propagated));
+                return NodeStep::Done(NodeOutput::Err(
+                    propagate_dep_error(e, Some(make_frame())),
+                ));
             }
         }
         // Pre-collect refs so `finish` (which holds `&mut self` via the trait object)
@@ -136,7 +139,10 @@ impl<'a> Scheduler<'a> {
     ) -> NodeStep<'a> {
         let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
             Ok(v) => Ok(v),
-            Err(e) => Err(e.clone_for_propagation()),
+            // Frameless propagation: TRY-WITH's per-arm dispatch reads this `Err` and
+            // attaches its own frame at the recovery site, so adding one here would
+            // double-frame the error.
+            Err(e) => Err(propagate_dep_error(e, None)),
         };
         let body = finish(scope, self, result);
         self.reclaim_deps(idx, vec![from.index()]);

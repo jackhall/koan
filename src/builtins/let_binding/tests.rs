@@ -57,9 +57,11 @@ fn pre_run_install_then_body_finalize_clears_placeholder() {
 }
 
 /// Phase 3: `LET T = T` is a trivially cyclic alias — the RHS references the binder
-/// itself. The dispatcher detects the placeholder-points-at-self condition and
-/// surfaces a structured `ShapeError` rather than parking the sub-Dispatch on its own
-/// ancestor (which would deadlock).
+/// itself. The eager-resolve pass's `would_create_cycle` check catches the
+/// placeholder-points-at-self condition and surfaces a structured `SchedulerDeadlock`
+/// (the cycle-specific error kind) rather than parking the dispatch on its own
+/// ancestor. Same surface as the Identifier-LHS form (`LET x = x`); both shapes route
+/// through the dispatch driver's Phase 3 cycle arm.
 #[test]
 fn let_t_cycle_errors() {
     use crate::machine::RuntimeArena;
@@ -79,8 +81,8 @@ fn let_t_cycle_errors() {
     let res = sched.read_result(ids[0]);
     match res {
         Err(e) => assert!(
-            matches!(&e.kind, KErrorKind::ShapeError(msg) if msg.contains("cycle")),
-            "expected ShapeError mentioning cycle, got {e}",
+            matches!(&e.kind, KErrorKind::SchedulerDeadlock { sample, .. } if sample.contains("cycle")),
+            "expected SchedulerDeadlock mentioning cycle, got {e}",
         ),
         Ok(v) => panic!("expected cycle error, got value {:?}", v.ktype()),
     }

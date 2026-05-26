@@ -238,32 +238,25 @@ fn producer_error_propagates_to_parked_consumer() {
     );
 }
 
-/// Dependency-cycle guard: a self-referential binding (`LET x = x`) parks its RHS
-/// sub-dispatch on its own placeholder, so the binder waits on a sub that waits on the
-/// binder. The work queues drain with those slots still parked; `execute` detects the
-/// leftover `PreRun` slots and returns `SchedulerDeadlock` rather than letting the
-/// top-level result read panic on an unresolved slot.
+/// Self-referential binding guard: `LET x = x` parks the LET on its own placeholder
+/// during the eager wrap-resolve pass. The `would_create_cycle` check in
+/// `resolve_name_part` catches the self-park (producer == consumer) and surfaces a
+/// structured `SchedulerDeadlock` (cycle-specific error kind) as the LET slot's
+/// terminal — matching the `let_t_cycle_errors` library test contract for the Type-LHS
+/// form (`LET Ty = Ty`). Pre-eager-resolve the Identifier-LHS form deadlocked at
+/// finalize because Phase 1's short-circuit park didn't run a cycle check; the
+/// eager-resolve unification routes both shapes through the same `would_create_cycle`
+/// guard. Observed via `interpret_with_writer`, which threads slot terminals into its
+/// return `Result`.
 #[test]
 fn self_referential_binding_surfaces_deadlock() {
+    use koan::machine::interpret_with_writer;
     use koan::machine::KErrorKind;
-    let arena = RuntimeArena::new();
-    let captured = Rc::new(RefCell::new(Vec::new()));
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl std::io::Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-    let scope = default_scope(&arena, Box::new(SharedBuf(captured)));
-    let exprs = parse("LET x = x").expect("parse should succeed");
-    let mut sched = Scheduler::new();
-    for e in exprs { let _ = sched.add_dispatch(e, scope); }
-    let err = sched.execute().expect_err("self-reference should surface a deadlock");
+    let err = interpret_with_writer("LET x = x", Box::new(std::io::sink()))
+        .expect_err("self-reference should surface a cycle error");
     assert!(
-        matches!(&err.kind, KErrorKind::SchedulerDeadlock { pending, .. } if *pending > 0),
-        "expected SchedulerDeadlock, got {err}",
+        matches!(&err.kind, KErrorKind::SchedulerDeadlock { sample, .. } if sample.contains("cycle")),
+        "expected SchedulerDeadlock mentioning cycle, got {err}",
     );
 }
 

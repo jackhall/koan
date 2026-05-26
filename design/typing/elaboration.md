@@ -127,9 +127,15 @@ Four downstream consumers each carry a `TypeNameRef` arm beside the existing
   runs the same primitive/container blocklist as the `KTypeValue` arm and
   routes to `register_type` for type-valued RHSes;
 - [`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
-  which resolves through `bindings.types` and, on a nominal `UserType` /
-  `SatisfiesSignature` hit, recovers the paired value-side carrier from
-  `bindings.data`.
+  which normalizes the incoming carrier (rejecting parameterized
+  `KTypeValue` shapes) and delegates to
+  [`coerce_type_token_value`](../../src/builtins/value_lookup.rs) — the
+  shared coercion seam called both from this builtin overload and from
+  the dispatch driver's eager name-resolve pass
+  ([`scheduler/dispatch.rs`](../../src/machine/execute/scheduler/dispatch.rs)).
+  The helper resolves through `bindings.types` and, on a nominal
+  `UserType` / `SatisfiesSignature` / `Module` / `Signature` hit,
+  recovers the paired value-side carrier from `bindings.data`.
 
 FN's deferred return-type elaboration peeks the slot to pick between
 [`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs)
@@ -138,12 +144,12 @@ FN's deferred return-type elaboration peeks the slot to pick between
 (deferred carrier consuming the parser-preserved `TypeExpr`), then drives the
 existing park-on-placeholder machinery from there. The sole
 `KObject::KTypeValue` synthesis site for dispatch transport lives in
-[`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
-which mints `KObject::KTypeValue(kt.clone())` on a `resolve_type` hit. On a
-`resolve_type` miss, the bare-leaf arm of `elaborate_type_expr` falls through
-to `Scope::resolve` for compatibility with the small set of callers that still
-consult the value side; the `body_type_expr` reader, by contrast, is
-types-only.
+[`coerce_type_token_value`](../../src/builtins/value_lookup.rs), which
+mints `KObject::KTypeValue(kt.clone())` on a non-nominal `resolve_type`
+hit. On a `resolve_type` miss, the bare-leaf arm of `elaborate_type_expr`
+falls through to `Scope::resolve` for compatibility with the small set of
+callers that still consult the value side; the `coerce_type_token_value`
+reader, by contrast, is types-only.
 
 Every `KType` flowing through dispatch is fully elaborated — there is no
 surface-name carrier variant inside `KType` itself.

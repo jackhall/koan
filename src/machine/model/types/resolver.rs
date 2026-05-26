@@ -68,9 +68,6 @@ impl<'a> ElabResult<'a> {
 ///   `RecursiveRef` instead of parking on its own placeholder.
 /// - `fired_self_ref_for`: which threaded names actually fired a back-reference;
 ///   drives the caller's `KType::Mu` wrap decision.
-/// - `self_id`: the binder's own dispatch slot (when known). Lets `LET T = T` be
-///   detected as a self-park and surfaced as a structured cycle error instead of
-///   parking forever.
 /// - `current_decl_*`: SCC context. When set, the `Resolution::Placeholder` arm records
 ///   dependency edges into `pending_types` and runs DFS cycle detection from
 ///   `current_decl_name`. `None` for non-binder elaboration (FN signatures, LET RHS,
@@ -79,7 +76,6 @@ pub struct Elaborator<'s, 'a> {
     pub scope: &'s Scope<'a>,
     pub threaded: HashSet<String>,
     pub fired_self_ref_for: HashSet<String>,
-    pub self_id: Option<NodeId>,
     pub current_decl_name: Option<String>,
     pub current_decl_kind: Option<UserTypeKind<'a>>,
     pub current_decl_scope_id: Option<ScopeId>,
@@ -91,7 +87,6 @@ impl<'s, 'a> Elaborator<'s, 'a> {
             scope,
             threaded: HashSet::new(),
             fired_self_ref_for: HashSet::new(),
-            self_id: None,
             current_decl_name: None,
             current_decl_kind: None,
             current_decl_scope_id: None,
@@ -100,11 +95,6 @@ impl<'s, 'a> Elaborator<'s, 'a> {
 
     pub fn with_threaded<I: IntoIterator<Item = String>>(mut self, names: I) -> Self {
         self.threaded.extend(names);
-        self
-    }
-
-    pub fn with_self_id(mut self, id: NodeId) -> Self {
-        self.self_id = Some(id);
         self
     }
 
@@ -145,15 +135,13 @@ pub fn elaborate_type_expr<'a>(
             }
             match el.scope.resolve(name) {
                 Resolution::Placeholder(id) => {
-                    // `LET T = T`: the only producer we'd park on is ourselves. Surface
-                    // a structured error instead of queueing a self-park that can't wake.
-                    if Some(id) == el.self_id {
-                        return ElabResult::Unbound(format!("cycle in type alias `{name}`"));
-                    }
                     // Record the edge unconditionally: the parked-on name may not be in
                     // `pending_types` yet (its body hasn't dispatched), but DFS sees the
                     // persistent edge list later and closes the cycle when the second
-                    // binder records its reciprocal edge.
+                    // binder records its reciprocal edge. Trivial self-cycles
+                    // (`LET T = T`) are caught by the dispatch driver's eager-resolve
+                    // pass before the elaborator runs — see
+                    // `dispatch::resolve_name_part` / `would_create_cycle`.
                     if let Some(decl) = el.current_decl_name.clone() {
                         el.scope.bindings().record_pending_edge(&decl, name.clone());
                         if let Some(members) = detect_pending_cycle(el.scope, &decl) {
@@ -258,12 +246,10 @@ pub fn elaborate_type_expr<'a>(
                 }
             }
             // Forward reference to an in-flight `LET Wrap = ...` whose placeholder is
-            // registered but whose body hasn't dispatched. Self-cycle routes through
-            // the same Unbound path the bare leaf uses.
+            // registered but whose body hasn't dispatched. Trivial self-cycles
+            // (`LET Wrap = Wrap<...>`) are caught earlier by the dispatch driver's
+            // eager-resolve pass — see `dispatch::resolve_name_part`.
             if let Resolution::Placeholder(id) = el.scope.resolve(name) {
-                if Some(id) == el.self_id {
-                    return ElabResult::Unbound(format!("cycle in type alias `{name}`"));
-                }
                 return ElabResult::Park(vec![id]);
             }
             ElabResult::Unbound(format!("type `{name}` does not take type parameters"))
