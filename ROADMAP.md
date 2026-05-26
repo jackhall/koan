@@ -28,7 +28,9 @@ self-cycle surfaces under `SchedulerDeadlock`. The dedicated `FUNCTOR` binder sh
 alongside its `:(Functor (params) -> R)` type-position sigil, the one-way
 `KFunctor`/`KFunction` admissibility wall, and the Type-class `LET` allowlist flip
 (`KTypeValue` ∪ nominal-identity ∪ `is_functor`-flagged `KFunction`) that closes the
-plain-function-bound-to-a-Type-class-name hole.
+plain-function-bound-to-a-Type-class-name hole. The FUNCTOR-return validator
+folded into `classify_return_type` itself, so the carrier is walked once for
+both Resolved/Deferred classification and the admissibility verdict.
 
 ## Next items
 
@@ -90,7 +92,6 @@ binding, and VAL-slot identity are represented in `KType` and routed through
 dispatch. The substrate the predicate-typing stages and the stdlib's
 functor-heavy collections both build on:
 
-- [FUNCTOR return-validation fold](roadmap/type_language/functor-return-validation-fold.md)
 - [FUNCTOR application with a bare type-language argument](roadmap/type_language/functor-application-bare-arg.md)
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)

@@ -18,35 +18,32 @@
 //!    error here, before the body has a chance to surface a frames-removed
 //!    `TypeMismatch`.
 //!
-//! Validation runs in three arms (no `Box<dyn Fn>` plumbing — see the parallel
-//! header comment in [`super::fn_def::finalize`]):
+//! Validation is fused into [`classify_return_type`]: passing
+//! `Some(&param_type_map)` triggers the FUNCTOR-return verdict emission
+//! alongside classification, so the carrier is walked once. The verdict has
+//! three shapes:
 //!
-//! - **Resolved** (`ReturnTypeState::Done`): walk the `KType` against
-//!   [`KType::is_admissible_functor_return`] synchronously, here.
-//! - **Deferred** (`ReturnTypeState::Deferred`): inspect the surface-form head
-//!   of the captured `DeferredReturn`. `SIG_WITH` admissible; `MODULE_TYPE_OF`
-//!   not (it produces an `AbstractType`); `(Functor …)` sigil admissible; a
-//!   bare-param ref admissible iff the param's declared type is type-denoting
-//!   (`KType::is_type_denoting`). Best-effort: a bare leaf whose declared
-//!   param type itself parks falls through to the per-call dispatch boundary's
-//!   `matches_value` safety net rather than rejecting at the FUNCTOR site.
-//! - **Pending / ExprToSubDispatch** (Combine path): validation runs at the
-//!   Combine-finish boundary inside `finalize_fn_with_flag`, gated by the
-//!   `is_functor: true` flag we thread through `defer_via_combine`. Same
-//!   admissibility predicate, called on the resolved `KType`. No closure
-//!   allocation per FUNCTOR — the flag the FUNCTOR builtin already passes is
-//!   the only signal `finalize_fn_with_flag` needs.
+//! - **`Admissible`** — synchronously admissible (`Done` arm passes
+//!   [`KType::is_admissible_functor_return`]; `Deferred` arm's surface form
+//!   passes the head inspector).
+//! - **`Rejected`** — synchronously rejected with the formatted diagnostic.
+//! - **`DeferredToCombine`** — final check rides Combine-finish inside
+//!   `finalize_fn_with_flag`, gated by the `is_functor: true` flag threaded
+//!   through `defer_via_combine`. No `Box<dyn Fn>` plumbing — the flag the
+//!   FUNCTOR builtin already passes is the only signal needed.
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
-use crate::machine::model::types::{DeferredReturn, Elaborator};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::model::types::Elaborator;
 use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 
 use super::fn_def::finalize::{
     classify, defer_via_combine, finalize_fn_with_flag, FnPlan, ParamListResult,
 };
-use super::fn_def::return_type::{classify_return_type, extract_return_type_raw, ReturnTypeState};
+use super::fn_def::return_type::{
+    classify_return_type, extract_return_type_raw, AdmissibleVerdict,
+};
 use super::fn_def::signature::{
     collect_param_names_from_signature, parse_fn_param_list, ParamListOutcome,
 };
@@ -99,37 +96,17 @@ pub fn body<'a>(
 
     let mut elaborator = Elaborator::new(scope);
 
-    let return_type_state = match classify_return_type(return_type_raw, &param_names, scope) {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
-
-    // Synchronous-arm validation: a `Done` carrier validates against the
-    // admissible-carrier list now; a `Deferred` carrier validates its
-    // surface-form head now. The two remaining states (`Pending`,
-    // `ExprToSubDispatch`) ride the Combine path; the `is_functor: true` flag
-    // threaded through `defer_via_combine` makes `finalize_fn_with_flag`
-    // re-run the admissibility check on the resolved `KType` at Combine-finish
-    // time — no validator closure needed.
-    match &return_type_state {
-        ReturnTypeState::Done(kt) => {
-            if !kt.is_admissible_functor_return() {
-                return err(KError::new(KErrorKind::ShapeError(format!(
-                    "FUNCTOR return-type slot must denote a module, signature, or functor; got `{}`",
-                    kt.name(),
-                ))));
-            }
-        }
-        ReturnTypeState::Deferred(d) => {
-            if let Err(e) = validate_deferred_return_head(d, &param_type_map) {
-                return err(e);
-            }
-        }
-        ReturnTypeState::Pending { .. } | ReturnTypeState::ExprToSubDispatch(_) => {
-            // Validated at Combine finish inside `finalize_fn_with_flag`'s
-            // `is_functor` arm — see the post-Combine path on
-            // `defer_via_combine` below.
-        }
+    // Fused classify + FUNCTOR-return verdict emission. `Some(&map)` activates
+    // the verdict; `Rejected` short-circuits here. `Admissible` and
+    // `DeferredToCombine` both proceed — the latter rides Combine-finish via
+    // the `is_functor: true` flag threaded through `defer_via_combine`.
+    let (return_type_state, verdict) =
+        match classify_return_type(return_type_raw, &param_names, scope, Some(&param_type_map)) {
+            Ok(p) => p,
+            Err(e) => return err(e),
+        };
+    if let AdmissibleVerdict::Rejected(e) = verdict {
+        return err(e);
     }
 
     let params = match parse_fn_param_list(&signature_expr, &mut elaborator) {
@@ -151,105 +128,6 @@ pub fn body<'a>(
             // is a method call on `KType` keyed on the flag.
             defer_via_combine(scope, sched, signature_expr, inputs, body_expr, true)
         }
-    }
-}
-
-/// Deferred-arm validator. Pattern-match the surface form of the captured
-/// `DeferredReturn` against the admissible heads.
-///
-/// `TypeExpr` arm — a bare-leaf `Er` matching a parameter name admits iff
-/// that parameter's declared `KType` is type-denoting (e.g. `:OrderedSig`,
-/// `:Module`). A `Functor`-headed parameterized form admits via the
-/// type-position sigil. Other shapes are rejected here so the diagnostic
-/// surfaces at the FUNCTOR site.
-///
-/// `Expression` arm — inspect the leading `Keyword`. `SIG_WITH` produces a
-/// `SatisfiesSignature` so admits; `MODULE_TYPE_OF` produces an
-/// `AbstractType` and is rejected.
-fn validate_deferred_return_head<'a>(
-    d: &DeferredReturn<'a>,
-    param_type_map: &std::collections::HashMap<String, KType<'a>>,
-) -> Result<(), KError> {
-    match d {
-        DeferredReturn::TypeExpr(te) => validate_deferred_type_expr(te, param_type_map),
-        DeferredReturn::Expression(e) => validate_deferred_expression(e),
-    }
-}
-
-/// Inspect a `TypeExpr` for the FUNCTOR-return admissibility rules. Same shape
-/// as `is_admissible_functor_return` but operating on the surface form rather
-/// than an elaborated `KType` — so the rules look at parameter shapes
-/// (`TypeParams::None` → look up the param's declared type; `TypeParams::Function`
-/// with head `Functor` → admissible; everything else → rejected).
-fn validate_deferred_type_expr<'a>(
-    te: &TypeExpr,
-    param_type_map: &std::collections::HashMap<String, KType<'a>>,
-) -> Result<(), KError> {
-    match &te.params {
-        TypeParams::None => {
-            // Bare-leaf reference. If it matches a parameter name, admit iff
-            // the parameter's declared type is type-denoting (signature- or
-            // module-typed). If it doesn't match a parameter, defer the check
-            // to Combine-finish via the resolved validator — the head can't
-            // be authoritatively classified pre-elaboration.
-            if let Some(param_kt) = param_type_map.get(&te.name) {
-                if param_kt.is_type_denoting() {
-                    return Ok(());
-                }
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "FUNCTOR return-type slot must denote a module, signature, or functor; \
-                     parameter `{}` is declared as `{}`, which is not type-denoting",
-                    te.name,
-                    param_kt.name(),
-                ))));
-            }
-            // Non-parameter bare-leaf — falls through to the synchronous
-            // `Done` arm in practice (`classify_return_type` would have
-            // resolved it eagerly); reaching this branch from the Deferred
-            // arm means the param-name scan matched but the map didn't,
-            // which only happens if elaboration of the param's type slot
-            // failed eagerly. Admit conservatively; downstream resolution
-            // will surface a structured error if the carrier is invalid.
-            Ok(())
-        }
-        TypeParams::Function { .. } if te.name == "Functor" => Ok(()),
-        TypeParams::Function { .. } | TypeParams::List(_) => {
-            Err(KError::new(KErrorKind::ShapeError(format!(
-                "FUNCTOR return-type slot must denote a module, signature, or functor; got `{}`",
-                te.render(),
-            ))))
-        }
-    }
-}
-
-/// Inspect a parens-form return-type carrier (`(SIG_WITH …)`,
-/// `(MODULE_TYPE_OF …)`, etc) for the FUNCTOR-return admissibility rules.
-/// Head-keyword classification: `SIG_WITH` → admissible (yields
-/// `SatisfiesSignature`); `MODULE_TYPE_OF` → rejected (yields `AbstractType`).
-/// Other heads fall through to a generic rejection — the parens-form return
-/// carriers actually used as functor returns in shipped code are the two
-/// above and the bare-parameter / sigil shapes covered in the `TypeExpr` arm.
-fn validate_deferred_expression(e: &KExpression<'_>) -> Result<(), KError> {
-    let head_keyword = e.parts.iter().find_map(|p| match &p.value {
-        ExpressionPart::Keyword(s) => Some(s.as_str()),
-        _ => None,
-    });
-    match head_keyword {
-        Some("SIG_WITH") => Ok(()),
-        Some("MODULE_TYPE_OF") => Err(KError::new(KErrorKind::ShapeError(
-            "FUNCTOR return-type slot must denote a module, signature, or functor; \
-             `MODULE_TYPE_OF` produces an abstract type, not a module or signature"
-                .to_string(),
-        ))),
-        Some(other) => Err(KError::new(KErrorKind::ShapeError(format!(
-            "FUNCTOR return-type slot must denote a module, signature, or functor; \
-             head keyword `{other}` does not produce a module, signature, or functor",
-        )))),
-        None => Err(KError::new(KErrorKind::ShapeError(
-            "FUNCTOR return-type slot must denote a module, signature, or functor; \
-             return-type expression has no recognizable head"
-                .to_string(),
-        ))),
     }
 }
 

@@ -64,10 +64,15 @@ pub fn body<'a>(
 
     let mut elaborator = Elaborator::new(scope);
 
-    let return_type_state = match classify_return_type(return_type_raw, &param_names, scope) {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
+    // FN passes `None` for the FUNCTOR-return verdict context — the verdict
+    // is computed as a no-op `Admissible` and dropped. The FUNCTOR builtin
+    // (see `functor_def::body`) passes `Some(&param_type_map)` and consumes
+    // the verdict in the same arm.
+    let (return_type_state, _verdict) =
+        match classify_return_type(return_type_raw, &param_names, scope, None) {
+            Ok(p) => p,
+            Err(e) => return err(e),
+        };
 
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
