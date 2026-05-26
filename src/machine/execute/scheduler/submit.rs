@@ -1,26 +1,40 @@
 use std::rc::Rc;
 
-use crate::machine::{CatchFinish, CombineFinish, LexicalFrame, NodeId, Scope};
+use crate::machine::{BindingIndex, CatchFinish, CombineFinish, LexicalFrame, NodeId, Scope};
 use crate::machine::model::ast::KExpression;
 
 use super::super::nodes::{Node, NodeWork, work_park_producers};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
-/// Walk `scope` and its outer chain, looking for a function in `functions[expr.untyped_key()]`
-/// whose `pre_run` extractor returns `Some(name)` for `expr`. The first such name wins.
-/// Submission-time install lets a later sibling park on the placeholder before the producer
-/// slot is popped from the FIFO.
-fn extract_pre_run_name<'a>(expr: &KExpression<'a>, scope: &'a Scope<'a>) -> Option<String> {
+/// Submission-time placeholder install info. Walks `scope` and its outer chain looking
+/// for a function in `functions[expr.untyped_key()]` whose `pre_run` extractor returns
+/// `Some(name)` for `expr`. The first such name wins; the picked function's
+/// `is_nominal_binder` flag rides through too so the install at `add_with_chain` can
+/// stamp the matching D7 visibility carve-out on the [`BindingIndex`]. Submission-time
+/// install lets a later sibling park on the placeholder before the producer slot is
+/// popped from the FIFO.
+struct PreRunInstall {
+    name: String,
+    is_nominal_binder: bool,
+}
+
+fn extract_pre_run_install<'a>(
+    expr: &KExpression<'a>,
+    scope: &'a Scope<'a>,
+) -> Option<PreRunInstall> {
     let key = expr.untyped_key();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
         let functions_guard = s.bindings().functions();
         if let Some(bucket) = functions_guard.get(&key) {
-            for f in bucket.iter() {
+            for (f, _) in bucket.iter() {
                 if let Some(extractor) = f.pre_run {
                     if let Some(name) = extractor(expr) {
-                        return Some(name);
+                        return Some(PreRunInstall {
+                            name,
+                            is_nominal_binder: f.is_nominal_binder,
+                        });
                     }
                 }
             }
@@ -77,15 +91,24 @@ impl<'a> Scheduler<'a> {
     /// [`Self::add_with_chain`] directly.
     ///
     /// When there is no ambient chain (top-level test fixture, tests poking at
-    /// scheduler internals directly), synthesize a root frame `(scope.id, 0)` so
-    /// the chain invariant holds. The strict assertion in [`Self::add_with_chain`]
-    /// then never fires through this path; it remains in place as a tripwire for
-    /// any future code that builds an explicit-chain `None` argument by mistake.
+    /// scheduler internals directly), synthesize a root frame `(scope.id, idx)` so
+    /// the chain invariant holds. `idx` is consumed from the scope's monotonic
+    /// statement counter, so each auto-root submission picks up a fresh index that
+    /// sits strictly above all previous bindings in this scope — the same shape
+    /// `enter_block` uses for explicit-block submissions. Otherwise REPL-style /
+    /// test-fixture re-entry (`add_dispatch(LET x = 1)` then `add_dispatch(x)`)
+    /// would assign both calls the same index and the visibility gate
+    /// (`b.idx < c`, strict) would hide the binding from the consumer.
+    ///
+    /// The strict assertion in [`Self::add_with_chain`] never fires through this
+    /// path; it remains in place as a tripwire for any future code that builds an
+    /// explicit-chain `None` argument by mistake.
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         if self.active_chain.is_some() {
             self.add_with_chain(work, scope, None)
         } else {
-            let chain = LexicalFrame::root(scope.id, 0);
+            let idx = scope.consume_statement_indices(1);
+            let chain = LexicalFrame::root(scope.id, idx);
             self.add_with_chain(work, scope, Some(chain))
         }
     }
@@ -106,8 +129,8 @@ impl<'a> Scheduler<'a> {
     ) -> NodeId {
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
-        let placeholder_install: Option<String> = match &work {
-            NodeWork::Dispatch(expr) => extract_pre_run_name(expr, scope),
+        let placeholder_install: Option<PreRunInstall> = match &work {
+            NodeWork::Dispatch(expr) => extract_pre_run_install(expr, scope),
             _ => None,
         };
         let frame = self.active_frame.clone();
@@ -117,6 +140,14 @@ impl<'a> Scheduler<'a> {
                 "every dispatched node has a chain — submission outside enter_block / \
                  ambient active_chain is a bug",
             );
+        // Stamp the placeholder with the SAME `BindingIndex` the eventual `register_*`
+        // call at finalize will install — `idx` is this slot's lexical position; the
+        // D7 nominal-binder carve-out (true for STRUCT / named UNION / SIG / FUNCTOR /
+        // MODULE) rides on the picked binder's `is_nominal_binder` flag.
+        let bind_index_for_placeholder = placeholder_install.as_ref().map(|p| BindingIndex {
+            idx: chain.index,
+            nominal_binder: p.is_nominal_binder,
+        });
         let pending_owned: Vec<NodeId> = owned_edges
             .iter()
             .map(|e| e.node_id())
@@ -135,8 +166,10 @@ impl<'a> Scheduler<'a> {
         for p in &pending_park {
             self.deps.add_park_edge(*p, id);
         }
-        if let Some(name) = placeholder_install {
-            let _ = scope.install_placeholder(name, id);
+        if let Some(install) = placeholder_install {
+            // `bind_index_for_placeholder` is `Some` whenever `placeholder_install` is.
+            let bind_index = bind_index_for_placeholder.unwrap_or(BindingIndex::BUILTIN);
+            let _ = scope.install_placeholder(install.name, id, bind_index);
         }
         if pending_owned.is_empty() && pending_park.is_empty() {
             if self.active_frame.is_none() && no_owned && no_park {

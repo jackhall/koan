@@ -80,6 +80,15 @@ pub struct KFunction<'a> {
     /// directions of the `KFunctor`/`KFunction` mismatch silently — see
     /// [design/typing/functors.md](../../../design/typing/functors.md).
     pub is_functor: bool,
+    /// Flipped on by binder builtins whose binding installs a *nominal* identity —
+    /// `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE`. The placeholder install
+    /// site in [`crate::machine::execute::scheduler::submit`] reads this flag and
+    /// stamps the resulting [`crate::machine::core::BindingIndex`] with
+    /// `nominal_binder: true`, carving the entry out of the strict-lexical-cutoff
+    /// visibility test so siblings on the same block can refer to one another
+    /// regardless of source order (mutual recursion across nominal binders).
+    /// `LET` / `FN` (without FUNCTOR-flagging) and other binders leave this `false`.
+    pub is_nominal_binder: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -97,7 +106,7 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         pre_run: Option<PreRunFn>,
     ) -> Self {
-        Self::with_pre_run_and_functor(signature, body, captured, pre_run, None, false)
+        Self::with_pre_run_and_functor(signature, body, captured, pre_run, None, false, false)
     }
 
     /// Like [`Self::with_pre_run`] but lets the caller flip the `is_functor` flag at
@@ -105,6 +114,10 @@ impl<'a> KFunction<'a> {
     /// whose body registers a callable function and so wants a bucket-keyed
     /// pending-overload entry). Used by the `FUNCTOR` binder; everything else routes
     /// through `with_pre_run` and leaves both new fields at their defaults.
+    ///
+    /// `is_nominal_binder` flips on the D7 visibility carve-out for STRUCT / named
+    /// UNION / SIG / FUNCTOR / MODULE binders. LET / FN binders pass `false`. See
+    /// [`Self::is_nominal_binder`] for the consumer.
     pub fn with_pre_run_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
@@ -112,6 +125,7 @@ impl<'a> KFunction<'a> {
         pre_run: Option<PreRunFn>,
         pre_run_bucket: Option<PreRunBucketFn>,
         is_functor: bool,
+        is_nominal_binder: bool,
     ) -> Self {
         signature.normalize();
         Self {
@@ -122,6 +136,7 @@ impl<'a> KFunction<'a> {
             pre_run,
             pre_run_bucket,
             is_functor,
+            is_nominal_binder,
         }
     }
 
@@ -258,12 +273,12 @@ mod tests {
         while let Some(s) = current {
             let functions = s.bindings().functions();
             if let Some(bucket) = functions.get(&key) {
-                for f in bucket.iter() {
+                for (f, _) in bucket.iter() {
                     if f.signature.matches(expr) {
                         return Some(*f);
                     }
                 }
-                for f in bucket.iter() {
+                for (f, _) in bucket.iter() {
                     if f.accepts_for_wrap(expr) {
                         return Some(*f);
                     }
@@ -413,6 +428,7 @@ mod tests {
             None,
             None,
             true,
+            false,
         );
         let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
         match functor_obj.ktype() {

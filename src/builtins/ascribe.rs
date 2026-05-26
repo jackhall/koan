@@ -56,7 +56,7 @@ pub fn body_opaque<'a>(
     {
         let sig_types = s.decl_scope().bindings().types();
         for name in abstract_type_names_of(s.decl_scope()) {
-            let kt = match sig_types.get(&name) {
+            let kt = match sig_types.get(&name).map(|(t, _)| *t) {
                 Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }) => {
                     KType::UserType {
                         kind: UserTypeKind::TypeConstructor { param_names: param_names.clone() },

@@ -27,7 +27,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
 use crate::machine::{
-    Body, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope, SchedulerHandle,
+    BindingIndex, Body, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
+    SchedulerHandle,
 };
 
 use super::return_type::{
@@ -181,8 +182,9 @@ pub(crate) fn finalize_fn<'a>(
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    finalize_fn_with_flag(scope, elements, return_type, body_expr, false)
+    finalize_fn_with_flag(scope, elements, return_type, body_expr, false, bind_index)
 }
 
 /// Underlying variant used by both `finalize_fn` (FN: `is_functor=false`) and
@@ -202,6 +204,7 @@ pub(crate) fn finalize_fn_with_flag<'a>(
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
     is_functor: bool,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     // FUNCTOR-only post-resolution return-type validation. Mirror of the
     // synchronous-arm check in `functor_def::body` — fires here when the
@@ -241,6 +244,9 @@ pub(crate) fn finalize_fn_with_flag<'a>(
     let user_sig = ExpressionSignature { return_type, elements };
 
     let arena = scope.arena;
+    // The constructed function isn't itself a binder builtin; `is_nominal_binder`
+    // is `false` regardless of `is_functor`. The FUNCTOR carve-out is on the
+    // *binder builtin* (the FUNCTOR keyword), not on the function it produces.
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_pre_run_and_functor(
         user_sig,
         Body::UserDefined(body_expr),
@@ -248,12 +254,18 @@ pub(crate) fn finalize_fn_with_flag<'a>(
         None,
         None,
         is_functor,
+        false,
     ));
     // `frame: None` here — the lift-on-return logic in the scheduler will populate
     // the Rc when this KFunction value escapes out of a per-call body. For top-level
     // FNs, there's no per-call frame to clone, so None stays.
     let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
-    if let Err(e) = scope.register_function(name, f, obj) {
+    // The FN/FUNCTOR finalize runs as the body of the binder builtin slot — its
+    // lexical position matches the binder's submission index, threaded in by the
+    // caller via `bind_index`. Functor binders carry the D7 carve-out (siblings see
+    // each other regardless of source order); FN (no `is_functor`) is value-style
+    // gated. See [`super::body`] for the chain read.
+    if let Err(e) = scope.register_function(name, f, obj, bind_index) {
         return BodyResult::Err(e);
     }
     // Returning the function reference (rather than null) lets callers do
@@ -288,6 +300,7 @@ pub(crate) fn defer_via_combine<'a>(
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,
     is_functor: bool,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let CombineInputs { capture, park_producers, return_type_sub, sub_dispatches } = inputs;
     // Combine result layout: `[park_producers ++ return_type_sub? ++ sub_dispatches...]`.
@@ -360,7 +373,14 @@ pub(crate) fn defer_via_combine<'a>(
         // FUNCTOR-only return-type validation runs inside `finalize_fn_with_flag`
         // when `is_functor: true`. No closure or `Box<dyn Fn>` plumbing here —
         // the flag the caller already threads through is the only signal needed.
-        finalize_fn_with_flag(scope, elements, return_type, body_expr.clone(), is_functor)
+        finalize_fn_with_flag(
+            scope,
+            elements,
+            return_type,
+            body_expr.clone(),
+            is_functor,
+            bind_index,
+        )
     });
     let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
     BodyResult::DeferTo(combine_id)

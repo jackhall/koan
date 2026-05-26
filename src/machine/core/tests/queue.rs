@@ -1,5 +1,6 @@
 //! `queue` arm of `machine::core` tests.
 
+use crate::machine::BindingIndex;
 use super::super::RuntimeArena;
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction};
@@ -15,19 +16,19 @@ fn add_during_active_data_borrow_queues_and_drains() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let pre = arena.alloc(KObject::Number(1.0));
-    scope.bind_value("pre".to_string(), pre).unwrap();
+    scope.bind_value("pre".to_string(), pre, BindingIndex::BUILTIN).unwrap();
 
     let new_entry = arena.alloc(KObject::Number(2.0));
     {
         let snapshot = scope.bindings().data();
         assert!(snapshot.contains_key("pre"));
-        scope.bind_value("during".to_string(), new_entry).unwrap();
+        scope.bind_value("during".to_string(), new_entry, BindingIndex::BUILTIN).unwrap();
         assert!(!snapshot.contains_key("during"));
     }
     assert!(scope.bindings().data().get("during").is_none());
     scope.drain_pending();
     let after = scope.bindings().data();
-    assert!(matches!(after.get("during"), Some(KObject::Number(n)) if *n == 2.0));
+    assert!(matches!(after.get("during").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 2.0));
 }
 
 /// Companion to the queues-and-drains test above: the `debug_assert!` inside
@@ -56,12 +57,12 @@ fn drain_debug_asserts_on_invariant_violation() {
     // 1. Hold an outer `data` borrow open so the bind in step 2 must defer.
     let snapshot = scope.bindings().data();
     // 2. Defers — borrow contention on `data`.
-    scope.bind_value("a".to_string(), obj1).unwrap();
+    scope.bind_value("a".to_string(), obj1, BindingIndex::BUILTIN).unwrap();
     // 3. Release the outer borrow so step 4's direct write can proceed.
     drop(snapshot);
     // 4. Succeeds and seeds `kfn2` into the functions bucket under the shared
     //    untyped signature.
-    scope.register_function("b".to_string(), kfn2, obj2).unwrap();
+    scope.register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN).unwrap();
     // 5. Retries the deferred `bind_value`. Bucket walk finds `kfn2` with a
     //    structurally-equal signature → `DuplicateOverload` → `debug_assert!` fires.
     scope.drain_pending();
@@ -84,7 +85,7 @@ fn register_function_defers_and_drains_through_function_arm() {
         // Bare FN registration contends on `functions` (not `data`), so hold a live
         // `functions` borrow to force the defer.
         let snapshot = scope.bindings().functions();
-        scope.register_function("g".to_string(), kfn, obj).unwrap();
+        scope.register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN).unwrap();
         assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
     }
     scope.drain_pending();
@@ -106,12 +107,12 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
     let obj = arena.alloc(KObject::Number(7.0));
 
     let snapshot = scope.bindings().data();
-    scope.bind_value("v".to_string(), obj).unwrap();
+    scope.bind_value("v".to_string(), obj, BindingIndex::BUILTIN).unwrap();
     scope.drain_pending();
     assert!(!snapshot.contains_key("v"));
     drop(snapshot);
     scope.drain_pending();
-    assert!(matches!(scope.bindings().data().get("v"), Some(KObject::Number(n)) if *n == 7.0));
+    assert!(matches!(scope.bindings().data().get("v").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
 }
 
 /// `Function`-arm `Conflict` re-queue — same shape as the `Value` variant, but the
@@ -126,7 +127,7 @@ fn drain_requeues_function_on_persistent_borrow_conflict() {
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
-    scope.register_function("g".to_string(), kfn, obj).unwrap();
+    scope.register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN).unwrap();
     scope.drain_pending();
     assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
     drop(snapshot);
@@ -144,7 +145,7 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
     let scope = run_root_bare(&arena);
 
     let snapshot = scope.bindings().types();
-    scope.register_type("Foo".to_string(), KType::Number);
+    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
     scope.drain_pending();
     assert!(!snapshot.contains_key("Foo"));
     drop(snapshot);
@@ -171,9 +172,9 @@ fn drain_debug_asserts_on_function_arm_invariant_violation() {
     // Bare FN registration contends on `functions`, so hold a `functions` borrow to
     // force step "a" to defer.
     let snapshot = scope.bindings().functions();
-    scope.register_function("a".to_string(), kfn1, obj1).unwrap();
+    scope.register_function("a".to_string(), kfn1, obj1, BindingIndex::BUILTIN).unwrap();
     drop(snapshot);
-    scope.register_function("b".to_string(), kfn2, obj2).unwrap();
+    scope.register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN).unwrap();
     scope.drain_pending();
 }
 
@@ -187,8 +188,8 @@ fn drain_debug_asserts_on_type_arm_invariant_violation() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let snapshot = scope.bindings().types();
-    scope.register_type("Foo".to_string(), KType::Number);
+    scope.register_type("Foo".to_string(), KType::Number, BindingIndex::BUILTIN);
     drop(snapshot);
-    scope.register_type("Foo".to_string(), KType::Str);
+    scope.register_type("Foo".to_string(), KType::Str, BindingIndex::BUILTIN);
     scope.drain_pending();
 }

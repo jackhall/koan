@@ -14,7 +14,8 @@ fn recursive_struct_tree_elaborates_with_recursive_ref_on_field() {
     let scope = run_root_silent(&arena);
     run_one(scope, parse_one("STRUCT Tree = (children :(List Tree))"));
     let data = scope.bindings().data();
-    match data.get("Tree").expect("Tree should be bound") {
+    let (tree_obj, _) = *data.get("Tree").expect("Tree should be bound");
+    match tree_obj {
         KObject::StructType { name, fields, .. } => {
             assert_eq!(name, "Tree");
             assert_eq!(fields.len(), 1);
@@ -52,7 +53,7 @@ fn mutual_non_recursive_pair_does_not_wrap_either() {
     }
     sched.execute().unwrap();
     let data = scope.bindings().data();
-    let b_fields = match data.get("Bb") {
+    let b_fields = match data.get("Bb").map(|(o, _)| *o) {
         Some(KObject::StructType { fields, .. }) => fields.clone(),
         other => panic!("expected Bb to be a StructType, got {:?}", other.map(|o| o.ktype())),
     };
@@ -80,11 +81,11 @@ fn mutually_recursive_struct_pair() {
     }
     sched.execute().unwrap();
     let data = scope.bindings().data();
-    let a_fields = match data.get("TreeA") {
+    let a_fields = match data.get("TreeA").map(|(o, _)| *o) {
         Some(KObject::StructType { fields, .. }) => fields.clone(),
         other => panic!("expected TreeA StructType, got {:?}", other.map(|o| o.ktype())),
     };
-    let b_fields = match data.get("TreeB") {
+    let b_fields = match data.get("TreeB").map(|(o, _)| *o) {
         Some(KObject::StructType { fields, .. }) => fields.clone(),
         other => panic!("expected TreeB StructType, got {:?}", other.map(|o| o.ktype())),
     };
@@ -125,7 +126,7 @@ fn three_way_mutual_recursion_struct_chain() {
     for (from, expected_field, expected_target) in
         [("Aaa", "b", "Bbb"), ("Bbb", "c", "Ccc"), ("Ccc", "a", "Aaa")]
     {
-        let fields = match data.get(from) {
+        let fields = match data.get(from).map(|(o, _)| *o) {
             Some(KObject::StructType { fields, .. }) => fields.clone(),
             other => panic!("expected {from} StructType, got {:?}", other.map(|o| o.ktype())),
         };

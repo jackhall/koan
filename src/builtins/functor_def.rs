@@ -36,7 +36,9 @@ use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 use crate::machine::model::types::Elaborator;
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+};
 
 use super::fn_def::finalize::{
     classify, defer_via_combine, finalize_fn_with_flag, FnPlan, ParamListResult,
@@ -117,16 +119,32 @@ pub fn body<'a>(
         }
     };
 
+    // FUNCTOR's bind_index: lexical position of the executing slot with the D7
+    // nominal-binder carve-out so siblings on the same block see one another
+    // regardless of source order (mutual recursion across FUNCTORs).
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::nominal(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+
     match classify(return_type_state, params) {
         FnPlan::Synchronous { elements, return_type } => {
-            finalize_fn_with_flag(scope, elements, return_type, body_expr, true)
+            finalize_fn_with_flag(scope, elements, return_type, body_expr, true, bind_index)
         }
         FnPlan::Combine(inputs) => {
             // `is_functor: true` triggers the FUNCTOR-specific resolved-return
             // admissibility check inside `finalize_fn_with_flag` when the
             // Combine finish lands. No `Box<dyn Fn>` closure — the predicate
             // is a method call on `KType` keyed on the flag.
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, true)
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                inputs,
+                body_expr,
+                true,
+                bind_index,
+            )
         }
     }
 }
@@ -207,6 +225,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(super::fn_def::pre_run),
         Some(super::fn_def::pre_run_bucket),
         false,
+        // FUNCTOR is a nominal binder (D7 carve-out): siblings can refer to one
+        // another regardless of source order — `FUNCTOR A` body can mention `B`
+        // declared after it on the same block.
+        true,
     );
     register_builtin_full(
         scope,
@@ -223,6 +245,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(super::fn_def::pre_run),
         Some(super::fn_def::pre_run_bucket),
         false,
+        // FUNCTOR is a nominal binder (D7 carve-out): siblings can refer to one
+        // another regardless of source order — `FUNCTOR A` body can mention `B`
+        // declared after it on the same block.
+        true,
     );
 }
 

@@ -65,11 +65,6 @@ single-`Identifier` is short-circuited today in
 
 **Requires:**
 
-- [Index-gated resolution](index-gated-resolution.md) — strict-only
-  admission's `Placeholder` vs `Unbound` branch needs the structural
-  split. Without it, an in-scope binding can read as `Unbound` under
-  non-FIFO scheduling, which would cause strict-only admission to error
-  on a name that should park.
 - [Nested-binder recursive submission](nested-binder-submission.md) —
   strict-only admission would otherwise hard-error on a sibling that
   dispatches before a nested binder's sub-Dispatch is submitted.

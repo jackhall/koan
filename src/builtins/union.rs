@@ -5,8 +5,8 @@ use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
+    Scope, SchedulerHandle,
 };
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
@@ -15,7 +15,7 @@ use crate::machine::model::types::{
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder_with_pre_run, sig};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.
 ///
@@ -75,12 +75,23 @@ pub fn body<'a>(
         .with_current_decl(name.clone(), UserTypeKind::Tagged, scope_id);
     let outcome =
         parse_typed_field_list_via_elaborator(&schema_expr, "UNION schema", &mut elaborator);
+    // Named UNION is a nominal binder (D7 carve-out).
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::nominal(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
-        FieldListOutcome::Done(fields) => finalize_union(scope, name, fields),
+        FieldListOutcome::Done(fields) => finalize_union(scope, name, fields, bind_index),
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
-        FieldListOutcome::Park(producers) => {
-            defer_union_via_combine(scope, sched, name, schema_expr, producers, pending_guard)
-        }
+        FieldListOutcome::Park(producers) => defer_union_via_combine(
+            scope,
+            sched,
+            name,
+            schema_expr,
+            producers,
+            pending_guard,
+            bind_index,
+        ),
     }
 }
 
@@ -88,12 +99,13 @@ fn finalize_union<'a>(
     scope: &'a Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`. See
     // `finalize_struct` for the symmetric rationale.
     let bindings = scope.bindings();
     if bindings.types().get(&name).is_some() {
-        if let Some(existing) = bindings.data().get(&name).copied() {
+        if let Some((existing, _)) = bindings.data().get(&name).copied() {
             return BodyResult::Value(existing);
         }
     }
@@ -123,7 +135,7 @@ fn finalize_union<'a>(
         scope_id,
         name: name.clone(),
     };
-    match scope.register_nominal(name, identity, union_obj) {
+    match scope.register_nominal(name, identity, union_obj, bind_index) {
         Ok(obj) => BodyResult::Value(obj),
         Err(e) => err(e),
     }
@@ -136,6 +148,7 @@ fn defer_union_via_combine<'a>(
     schema_expr: KExpression<'a>,
     producers: Vec<NodeId>,
     pending_guard: PendingBinderGuard<'a>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
@@ -146,7 +159,9 @@ fn defer_union_via_combine<'a>(
             "UNION schema",
             &mut elaborator,
         ) {
-            FieldListOutcome::Done(fields) => finalize_union(scope, name_for_finish.clone(), fields),
+            FieldListOutcome::Done(fields) => {
+                finalize_union(scope, name_for_finish.clone(), fields, bind_index)
+            }
             FieldListOutcome::Err(msg) => BodyResult::Err(
                 KError::new(KErrorKind::ShapeError(msg))
                     .with_frame(Frame::bare("<union>", format!("UNION {} schema", name_for_finish))),
@@ -169,7 +184,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_pre_run(
+    register_nominal_binder_with_pre_run(
         scope,
         "UNION",
         sig(KType::Type, vec![
@@ -187,7 +202,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{KErrorKind, RuntimeArena};
+    use crate::machine::{BindingIndex, KErrorKind, RuntimeArena};
 
     /// Smoke test for the named-UNION pre_run extractor: structural extraction of the
     /// `Type(_)` token at `parts[1]` for the named form. The anonymous form has no
@@ -209,7 +224,7 @@ mod tests {
         );
         assert!(matches!(result, KObject::TaggedUnionType { .. }));
         let data = scope.bindings().data();
-        let entry = data.get("Maybe").expect("Maybe should be bound in scope");
+        let (entry, _) = data.get("Maybe").expect("Maybe should be bound in scope");
         match entry {
             KObject::TaggedUnionType { schema, .. } => {
                 assert_eq!(schema.get("some"), Some(&KType::Number));
@@ -292,12 +307,18 @@ mod tests {
             name: "Maybe".into(),
         };
         scope
-            .register_nominal("Maybe".into(), pre_identity, pre_carrier)
+            .register_nominal(
+                "Maybe".into(),
+                pre_identity,
+                pre_carrier,
+                BindingIndex::BUILTIN,
+            )
             .unwrap();
         let outcome = super::finalize_union(
             scope,
             "Maybe".into(),
             vec![("some".into(), KType::Number)],
+            BindingIndex::BUILTIN,
         );
         match outcome {
             crate::machine::BodyResult::Value(obj) => {
@@ -329,7 +350,7 @@ mod tests {
         }
         sched.execute().unwrap();
         let data = scope.bindings().data();
-        let wrap_fields = match data.get("Wrap") {
+        let wrap_fields = match data.get("Wrap").map(|(o, _)| *o) {
             Some(KObject::StructType { fields, .. }) => fields.clone(),
             other => panic!("expected Wrap StructType, got {:?}", other.map(|o| o.ktype())),
         };
@@ -338,7 +359,7 @@ mod tests {
             "Wrap.m expected UserType{{Tagged Maybe}}, got {:?}",
             wrap_fields[0].1,
         );
-        let maybe_schema = match data.get("Maybe") {
+        let maybe_schema = match data.get("Maybe").map(|(o, _)| *o) {
             Some(KObject::TaggedUnionType { schema, .. }) => schema.clone(),
             other => panic!("expected Maybe TaggedUnionType, got {:?}", other.map(|o| o.ktype())),
         };

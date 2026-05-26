@@ -14,20 +14,33 @@ use std::cell::RefCell;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::values::KObject;
 
-use super::bindings::{ApplyOutcome, Bindings};
+use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 
 /// A pending re-entrant write — queued when `try_borrow_mut` on `data`/`functions` collides
 /// with a borrow held up the call stack, retried by [`PendingQueue::drain`] between
 /// scheduler nodes. The variant tag preserves the per-signature dedupe and value/function
 /// collision check on retry, which a single shared retry path would skip.
+///
+/// Each variant carries the installing statement's [`BindingIndex`] so the eventual
+/// drain-time write installs the entry under the same lexical position the original
+/// (conflicted) write would have used.
 enum PendingWrite<'a> {
-    Value { name: String, obj: &'a KObject<'a> },
-    Function { name: String, fn_ref: &'a KFunction<'a>, obj: &'a KObject<'a> },
+    Value { name: String, obj: &'a KObject<'a>, index: BindingIndex },
+    Function {
+        name: String,
+        fn_ref: &'a KFunction<'a>,
+        obj: &'a KObject<'a>,
+        index: BindingIndex,
+    },
     /// Queued `Scope::register_type` retry. Mirrors `Bindings::try_register_type`'s
     /// argument shape; the variant tag preserves the `types`-map collision check on
     /// retry (a single shared retry path would collapse with `Value` and lose the
     /// `data`-vs-`types` storage distinction).
-    Type { name: String, kt: &'a crate::machine::model::types::KType<'a> },
+    Type {
+        name: String,
+        kt: &'a crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    },
 }
 
 /// Queue of writes deferred when their `try_borrow_mut` collided. Owned by [`super::scope::Scope`]
@@ -46,20 +59,33 @@ impl<'a> PendingQueue<'a> {
 
     /// Queue a LET-style value bind for retry. Mirrors [`Bindings::try_bind_value`]'s
     /// argument shape so the caller's try-then-defer site is symmetric.
-    pub fn defer_value(&self, name: String, obj: &'a KObject<'a>) {
-        self.pending.borrow_mut().push(PendingWrite::Value { name, obj });
+    pub fn defer_value(&self, name: String, obj: &'a KObject<'a>, index: BindingIndex) {
+        self.pending.borrow_mut().push(PendingWrite::Value { name, obj, index });
     }
 
     /// Queue an FN-style overload registration for retry. Mirrors
     /// [`Bindings::try_register_function`]'s argument shape.
-    pub fn defer_function(&self, name: String, fn_ref: &'a KFunction<'a>, obj: &'a KObject<'a>) {
-        self.pending.borrow_mut().push(PendingWrite::Function { name, fn_ref, obj });
+    pub fn defer_function(
+        &self,
+        name: String,
+        fn_ref: &'a KFunction<'a>,
+        obj: &'a KObject<'a>,
+        index: BindingIndex,
+    ) {
+        self.pending
+            .borrow_mut()
+            .push(PendingWrite::Function { name, fn_ref, obj, index });
     }
 
     /// Queue a `Scope::register_type` retry. Mirrors [`Bindings::try_register_type`]'s
     /// argument shape so the caller's try-then-defer site is symmetric.
-    pub fn defer_type(&self, name: String, kt: &'a crate::machine::model::types::KType<'a>) {
-        self.pending.borrow_mut().push(PendingWrite::Type { name, kt });
+    pub fn defer_type(
+        &self,
+        name: String,
+        kt: &'a crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    ) {
+        self.pending.borrow_mut().push(PendingWrite::Type { name, kt, index });
     }
 
     /// Apply queued writes through `bindings` between dispatch nodes. Items that still hit
@@ -85,11 +111,11 @@ impl<'a> PendingQueue<'a> {
         let mut still_pending: Vec<PendingWrite<'a>> = Vec::new();
         for item in pending {
             match item {
-                PendingWrite::Value { name, obj } => {
-                    match bindings.try_bind_value(&name, obj) {
+                PendingWrite::Value { name, obj, index } => {
+                    match bindings.try_bind_value(&name, obj, index) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
-                            still_pending.push(PendingWrite::Value { name, obj });
+                            still_pending.push(PendingWrite::Value { name, obj, index });
                         }
                         // `_e` (not `e`) so the release build's `debug_assert!` no-op
                         // doesn't trip the unused-variable lint — the format string only
@@ -102,11 +128,12 @@ impl<'a> PendingQueue<'a> {
                         }
                     }
                 }
-                PendingWrite::Function { name, fn_ref, obj } => {
-                    match bindings.try_register_function(&name, fn_ref, obj) {
+                PendingWrite::Function { name, fn_ref, obj, index } => {
+                    match bindings.try_register_function(&name, fn_ref, obj, index) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
-                            still_pending.push(PendingWrite::Function { name, fn_ref, obj });
+                            still_pending
+                                .push(PendingWrite::Function { name, fn_ref, obj, index });
                         }
                         Err(_e) => {
                             debug_assert!(
@@ -116,11 +143,11 @@ impl<'a> PendingQueue<'a> {
                         }
                     }
                 }
-                PendingWrite::Type { name, kt } => {
-                    match bindings.try_register_type(&name, kt) {
+                PendingWrite::Type { name, kt, index } => {
+                    match bindings.try_register_type(&name, kt, index) {
                         Ok(ApplyOutcome::Applied) => {}
                         Ok(ApplyOutcome::Conflict) => {
-                            still_pending.push(PendingWrite::Type { name, kt });
+                            still_pending.push(PendingWrite::Type { name, kt, index });
                         }
                         Err(_e) => {
                             debug_assert!(
@@ -165,12 +192,12 @@ mod tests {
         let bindings: Bindings<'_> = Bindings::new();
         let queue: PendingQueue<'_> = PendingQueue::new();
         let kt = arena.alloc(KType::Number);
-        queue.defer_type("Foo".to_string(), kt);
+        queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
         // Pre-drain: types map empty.
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);
         // Post-drain: replayed through try_register_type into the types map.
-        let stored = *bindings.types().get("Foo").expect("Foo should be in types after drain");
+        let (stored, _) = *bindings.types().get("Foo").expect("Foo should be in types after drain");
         assert!(std::ptr::eq(stored, kt));
     }
 

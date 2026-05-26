@@ -14,13 +14,16 @@
 //! attaches axioms.
 
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope,
+    SchedulerHandle,
+};
 use crate::machine::model::values::Signature;
 
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder_with_pre_run, sig};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -45,6 +48,11 @@ pub fn body<'a>(
 
     let deps = sched.plan_body_statements(decl_scope, body_expr);
 
+    // SIG is a nominal binder (D7 carve-out).
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::nominal(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
         let arena = parent_scope.arena;
@@ -63,7 +71,8 @@ pub fn body<'a>(
             pinned_slots: Vec::new(),
         };
         let sig_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Signature(sig)));
-        match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj) {
+        match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj, bind_index)
+        {
             Ok(obj) => BodyResult::Value(obj),
             Err(e) => BodyResult::Err(
                 e.with_frame(Frame::bare("<signature>", format!("SIG {} body", name_for_finish))),
@@ -81,7 +90,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_pre_run(
+    register_nominal_binder_with_pre_run(
         scope,
         "SIG",
         sig(KType::AnySignature, vec![
@@ -120,7 +129,7 @@ mod tests {
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let data = scope.bindings().data();
         assert!(matches!(
-            data.get("OrderedSig"),
+            data.get("OrderedSig").map(|(o, _)| *o),
             Some(KObject::KTypeValue(KType::Signature(_)))
         ));
     }
@@ -132,7 +141,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let data = scope.bindings().data();
-        let sig = match data.get("OrderedSig") {
+        let sig = match data.get("OrderedSig").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             _ => panic!("OrderedSig should be a signature"),
         };
@@ -152,12 +161,12 @@ mod tests {
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
         let data = scope.bindings().data();
         use crate::machine::model::types::KType;
-        let sig = match data.get("Foo") {
+        let sig = match data.get("Foo").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             _ => panic!("Foo should be a signature"),
         };
         let inner = sig.decl_scope().bindings().data();
-        let x = inner.get("x").expect("x must live in SIG's data");
+        let (x, _) = inner.get("x").expect("x must live in SIG's data");
         assert!(
             matches!(x, KObject::KTypeValue(crate::machine::model::KType::Number)),
             "x's declared type must elaborate to Number through the alias, got {:?}",
@@ -193,7 +202,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
         let types = scope.bindings().types();
-        let kt = types
+        let (kt, _) = types
             .get("OrderedSig")
             .expect("OrderedSig should be in bindings.types");
         assert!(matches!(
@@ -202,7 +211,7 @@ mod tests {
         ));
         drop(types);
         let data = scope.bindings().data();
-        let obj = data
+        let (obj, _) = data
             .get("OrderedSig")
             .expect("OrderedSig should be in bindings.data");
         assert!(matches!(obj, KObject::KTypeValue(KType::Signature(_))));

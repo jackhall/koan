@@ -16,11 +16,12 @@
 //! `kfunction/invoke.rs`), so a long tail-recursive loop produces an equal-depth
 //! chain each iteration rather than ballooning.
 //!
-//! Phase note: this phase plumbs chains onto every node and verifies an "every
-//! dispatched node has a chain" debug invariant. The lookup helper
-//! [`LexicalFrame::index_for`] exists for the consumer phase
-//! ([`index-gated-resolution`](../../../roadmap/dispatch_fix/index-gated-resolution.md))
-//! but is unread today.
+//! The lookup helper [`LexicalFrame::index_for`] backs the index-gated resolution
+//! gate: [`crate::machine::core::scope::visible`] reads it to decide whether a
+//! binding at index `i` is visible to a consumer at cutoff `c` (the `b.idx < c`
+//! predicate), and the overload-bucket pre-filter in
+//! [`crate::machine::core::resolve_dispatch`] applies the same predicate
+//! per-overload.
 
 use std::rc::Rc;
 
@@ -52,9 +53,10 @@ impl LexicalFrame {
 
     /// Walk this chain (head first) and return the first frame's `index` whose
     /// `scope_id` matches. `None` means "no frame on this chain mentions that
-    /// scope" — the index-gated resolution phase reads `None` as "this scope is
+    /// scope" — the index-gated resolution gate reads `None` as "this scope is
     /// complete from this chain's perspective" (every statement in it preceded
-    /// this one in source order).
+    /// this one in source order), so every entry there is visible.
+    /// [`crate::machine::core::scope::visible`] is the predicate.
     pub fn index_for(&self, scope_id: ScopeId) -> Option<usize> {
         let mut current: Option<&LexicalFrame> = Some(self);
         while let Some(frame) = current {
@@ -66,8 +68,8 @@ impl LexicalFrame {
         None
     }
 
-    /// Walk the chain head-to-tail. Test-only today; consumers will read the chain
-    /// through [`Self::index_for`] once the index-gated resolution phase lands.
+    /// Walk the chain head-to-tail. Test-only; production consumers read positions
+    /// through [`Self::index_for`].
     #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = &LexicalFrame> {
         std::iter::successors(Some(self), |f| f.parent.as_deref())

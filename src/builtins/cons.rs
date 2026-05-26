@@ -51,8 +51,15 @@ pub fn body<'a>(
     };
     // Head's value is discarded; its purpose is the side effects (PRINT, LET-binding) it
     // performs and the placeholder its `pre_run` may have installed at `add_dispatch` time.
+    //
+    // The head submission inherits the ambient chain (the CONS slot's chain). The
+    // tail-replace bumps the chain's head-frame index by 1 via `tail_advance` so the
+    // rest-of-the-statements slot sits one position past the head. Each CONS layer in a
+    // multi-statement body's fold thus assigns its statement a distinct index, making
+    // backward references across statements (`(LET a = 10) (LET b = (a))`) visible
+    // under the strict `b.idx < c` visibility predicate.
     sched.add_dispatch(head, scope);
-    BodyResult::tail(tail)
+    BodyResult::tail_advance(tail)
 }
 
 /// Right-fold a multi-statement body into a CONS chain. Input shape is the parens-content

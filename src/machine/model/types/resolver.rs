@@ -166,7 +166,7 @@ pub fn elaborate_type_expr<'a>(
                          binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
                     )),
                 },
-                Resolution::Unbound => match KType::<'a>::from_name(name) {
+                Resolution::UnboundName => match KType::<'a>::from_name(name) {
                     Some(kt) => ElabResult::Done(kt),
                     None => ElabResult::Unbound(format!("unknown type name `{name}`")),
                 },
@@ -351,6 +351,17 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
             scope_id,
             name: name.clone(),
         };
-        scope.cycle_close_install_identity(name, identity);
+        // Cycle members are nominal binders (STRUCT / named UNION). Recover the
+        // member's installed [`BindingIndex`] from its placeholder entry — the
+        // identity installs at the same lexical position the eventual finalize will
+        // use, and the placeholder install at submission has already carved the
+        // member's flag bit. Defensive fallback to a generic nominal tag at index 0:
+        // a cycle-close call without a matching placeholder is a programming error
+        // upstream, not a soft-recovery point.
+        let bind_index = scope
+            .ancestors()
+            .find_map(|s| s.bindings().placeholders().get(&name).map(|(_, idx)| *idx))
+            .unwrap_or(crate::machine::core::BindingIndex { idx: 0, nominal_binder: true });
+        scope.cycle_close_install_identity(name, identity, bind_index);
     }
 }

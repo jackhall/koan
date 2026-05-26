@@ -51,6 +51,20 @@ pub enum BodyResult<'a> {
         /// chain is assembled via the FN-body rule (see
         /// `kfunction/invoke.rs::assemble_body_chain`).
         block_entry: Option<ScopeId>,
+        /// CONS-tail steps a multi-statement body's chain by one index per CONS layer
+        /// so each statement in the body sits at a distinct lexical position. Without
+        /// it, every statement in an FN-body CONS chain shares the body-scope head
+        /// frame's index, and the strict `b.idx < c` visibility predicate (see
+        /// [`crate::machine::core::scope::visible`]) treats sibling statements as
+        /// invisible to one another — even a backward reference like
+        /// `(LET a = 10) (LET b = (a))` fails.
+        ///
+        /// `false` (the default) keeps the chain unchanged on tail-replace. CONS sets
+        /// it `true`. Combined with `block_entry: Some(...)` the block-entry frame is
+        /// pushed first and the advance is then applied to that new frame's index —
+        /// MATCH / TRY arms don't pair this flag with a block entry today, but the
+        /// reinstall site composes both safely.
+        advance_index: bool,
     },
     DeferTo(NodeId),
     Err(KError),
@@ -58,7 +72,29 @@ pub enum BodyResult<'a> {
 
 impl<'a> BodyResult<'a> {
     pub fn tail(expr: KExpression<'a>) -> Self {
-        BodyResult::Tail { expr, frame: None, function: None, block_entry: None }
+        BodyResult::Tail {
+            expr,
+            frame: None,
+            function: None,
+            block_entry: None,
+            advance_index: false,
+        }
+    }
+
+    /// CONS-tail variant: tail-continue in the same lexical block, but bump the chain's
+    /// head-frame index by one so the rest-of-the-statements slot sits one position
+    /// after the head it just submitted. Each CONS layer in a multi-statement body's
+    /// fold thus assigns its statement a distinct index, making backward references
+    /// across statements (`(LET a = 10) (LET b = (a))`) visible under the strict
+    /// `b.idx < c` predicate.
+    pub fn tail_advance(expr: KExpression<'a>) -> Self {
+        BodyResult::Tail {
+            expr,
+            frame: None,
+            function: None,
+            block_entry: None,
+            advance_index: true,
+        }
     }
 
     pub fn tail_with_frame(
@@ -76,6 +112,7 @@ impl<'a> BodyResult<'a> {
             frame: Some(frame),
             function: Some(function),
             block_entry: Some(body_scope_id),
+            advance_index: false,
         }
     }
 
@@ -93,6 +130,7 @@ impl<'a> BodyResult<'a> {
             frame,
             function: None,
             block_entry: Some(scope_id),
+            advance_index: false,
         }
     }
 

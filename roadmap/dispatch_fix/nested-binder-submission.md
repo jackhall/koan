@@ -57,12 +57,9 @@ dispatch driver installs in `placeholders` / `pending_overloads`).
 
 ## Dependencies
 
-**Requires:**
-
-- [Index-gated resolution](index-gated-resolution.md) — the race this
-  closes is only observable once strict-only admission lands, but the
-  structural `Placeholder` / `Unbound` split is the precondition that
-  makes the recursive-submit fix correct (rather than ordering-dependent).
+**Requires:** none. Index-gated resolution shipped, supplying the
+structural `Placeholder` vs `UnboundName` split that makes the
+recursive-submit fix correct rather than ordering-dependent.
 
 **Unblocks:**
 

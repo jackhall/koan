@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::core::Scope;
+use crate::machine::core::{BindingIndex, Scope};
 use crate::machine::model::types::{KType, UserTypeKind};
 use crate::machine::model::values::KObject;
 
@@ -39,7 +39,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     };
     // Registration runs once at prelude build, so a collision is a programming error;
     // `register_nominal` panics on borrow conflict and we drop the success value.
-    let _ = scope.register_nominal("Result".into(), identity, carrier);
+    let _ = scope.register_nominal("Result".into(), identity, carrier, BindingIndex::BUILTIN);
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
-    ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
@@ -16,9 +16,19 @@ use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 /// bind a name that classifies as a Type token under the parser's token-classification rules).
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
+    // The LET body runs against the executing slot's lexical chain — `index` is the
+    // statement position assigned at submission time. LET binders never carve out the
+    // nominal-binder visibility flag (D7): a LET-bound value is strictly lexically gated.
+    // Direct-body test fixtures that bypass the scheduler have no active chain; fall
+    // back to [`BindingIndex::BUILTIN`] in that case — the visibility filter is "always
+    // visible" so the lower-level rebind/dedupe properties stay testable in isolation.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     let value = match bundle.require("value") {
         Ok(v) => v,
         Err(e) => return err(e),
@@ -185,14 +195,20 @@ pub fn body<'a>(
         // so dispatch transport — `lift_kobject`, the `value_lookup`-TypeExprRef
         // synthesis site, downstream `KType::TypeExprRef`-typed slots — sees the
         // same shape as before the storage flip.
-        scope.register_type(name, kt);
+        // Type-class LET RHS — value-side gated (no nominal-binder carve-out): the
+        // alias is a let-style alias, not a fresh nominal type declaration.
+        scope.register_type(name, kt, bind_index);
     } else if let Some(identity) = nominal_identity {
         // Aliasing dual-write: `LET P2 = Point` writes `bindings.types[P2]` carrying
         // the ORIGINAL carrier's identity (Point's `name`/`scope_id`), not a fresh
         // identity minted from the alias name. This is what makes
         // `(PICK x: P2)` and `(PICK x: Point)` dispatch to the same overload — aliasing
         // preserves type identity rather than introducing a new nominal type.
-        if let Err(e) = scope.register_nominal(name, identity, allocated) {
+        //
+        // LET aliasing is still value-style gating — `nominal_binder` stays `false`. A
+        // proper nominal binder (STRUCT / SIG / FUNCTOR / MODULE / named UNION) sets it
+        // at its own install site; an alias is the dual-map mirror of `LET x = expr`.
+        if let Err(e) = scope.register_nominal(name, identity, allocated, bind_index) {
             return err(e);
         }
     } else {
@@ -209,7 +225,7 @@ pub fn body<'a>(
                  non-empty literal",
             ))));
         }
-        if let Err(e) = scope.bind_value(name, allocated) {
+        if let Err(e) = scope.bind_value(name, allocated, bind_index) {
             return err(e);
         }
     }

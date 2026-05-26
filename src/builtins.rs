@@ -1,7 +1,7 @@
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
-use crate::machine::core::{KError, Scope};
+use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
 };
@@ -93,13 +93,34 @@ pub(crate) fn register_builtin_with_pre_run<'a>(
     body: BuiltinFn,
     pre_run: Option<PreRunFn>,
 ) {
-    register_builtin_full(scope, name, signature, body, pre_run, None, false);
+    register_builtin_full(scope, name, signature, body, pre_run, None, false, false);
+}
+
+/// Like [`register_builtin_with_pre_run`] but stamps the registered overload as a
+/// *nominal* binder (D7 carve-out). Used by STRUCT, named UNION, SIG, MODULE — the
+/// forms whose placeholder must be visible to siblings on the same block regardless of
+/// source order, so mutual recursion across sibling nominal binders elaborates.
+/// FUNCTOR routes through [`register_builtin_full`] because it also needs
+/// `pre_run_bucket`.
+pub(crate) fn register_nominal_binder_with_pre_run<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: BuiltinFn,
+    pre_run: Option<PreRunFn>,
+) {
+    register_builtin_full(scope, name, signature, body, pre_run, None, false, true);
 }
 
 /// Full-form builtin registration with both pre-run hooks and the `is_functor` flag.
 /// Used by FN / FUNCTOR to supply the [`PreRunBucketFn`] that keys a pending-overload
 /// entry by inner-call bucket — see [`crate::machine::core::kfunction::PreRunBucketFn`].
 /// Everything else routes through the simpler [`register_builtin_with_pre_run`].
+///
+/// `is_nominal_binder` flips the D7 carve-out so the submission-time placeholder install
+/// in `submit::add_with_chain` stamps the [`BindingIndex`] with `nominal_binder: true`.
+/// Used by STRUCT / named UNION / SIG / FUNCTOR / MODULE.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn register_builtin_full<'a>(
     scope: &'a Scope<'a>,
     name: &str,
@@ -108,6 +129,7 @@ pub(crate) fn register_builtin_full<'a>(
     pre_run: Option<PreRunFn>,
     pre_run_bucket: Option<crate::machine::core::kfunction::PreRunBucketFn>,
     is_functor: bool,
+    is_nominal_binder: bool,
 ) {
     let arena = scope.arena;
     let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_pre_run_and_functor(
@@ -117,9 +139,10 @@ pub(crate) fn register_builtin_full<'a>(
         pre_run,
         pre_run_bucket,
         is_functor,
+        is_nominal_binder,
     ));
     let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
-    let _ = scope.register_function(name.into(), f, obj);
+    let _ = scope.register_function(name.into(), f, obj, BindingIndex::BUILTIN);
 }
 
 /// Build a run-root scope populated with the language's builtin `KFunction`s.
@@ -139,28 +162,37 @@ pub fn default_scope<'a>(
     // via `Scope::register_type` (post-stage-1.4 storage flip). Reads go through
     // `Scope::resolve_type`; the sole `KObject::KTypeValue` synthesis site for
     // dispatch transport lives in `value_lookup::body_type_expr`.
-    scope.register_type("Number".into(), KType::Number);
-    scope.register_type("Str".into(), KType::Str);
-    scope.register_type("Bool".into(), KType::Bool);
-    scope.register_type("Null".into(), KType::Null);
-    scope.register_type("List".into(), KType::List(Box::new(KType::Any)));
+    scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
+    scope.register_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
+    scope.register_type("Bool".into(), KType::Bool, BindingIndex::BUILTIN);
+    scope.register_type("Null".into(), KType::Null, BindingIndex::BUILTIN);
+    scope.register_type("List".into(), KType::List(Box::new(KType::Any)), BindingIndex::BUILTIN);
     scope.register_type(
         "Dict".into(),
         KType::Dict(Box::new(KType::Any), Box::new(KType::Any)),
+        BindingIndex::BUILTIN,
     );
-    scope.register_type("KExpression".into(), KType::KExpression);
-    scope.register_type("Type".into(), KType::Type);
+    scope.register_type("KExpression".into(), KType::KExpression, BindingIndex::BUILTIN);
+    scope.register_type("Type".into(), KType::Type, BindingIndex::BUILTIN);
     // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
     // carrier — matches `KType::from_name`'s mapping so type-name resolution through
     // the resolver and through the parser-side fast path agree. Per-declaration types
     // live as `KType::UserType` in `bindings.types`, dual-written by the finalize sites.
-    scope.register_type("Tagged".into(), KType::AnyUserType { kind: UserTypeKind::Tagged });
-    scope.register_type("Struct".into(), KType::AnyUserType { kind: UserTypeKind::Struct });
+    scope.register_type(
+        "Tagged".into(),
+        KType::AnyUserType { kind: UserTypeKind::Tagged },
+        BindingIndex::BUILTIN,
+    );
+    scope.register_type(
+        "Struct".into(),
+        KType::AnyUserType { kind: UserTypeKind::Struct },
+        BindingIndex::BUILTIN,
+    );
     // Post-collapse: `:Module` / `:Signature` slot wildcards have dedicated KType variants
     // (no more `UserTypeKind::Module` arm; `MetaSignature` retired in favor of `AnySignature`).
-    scope.register_type("Module".into(), KType::AnyModule);
-    scope.register_type("Signature".into(), KType::AnySignature);
-    scope.register_type("Any".into(), KType::Any);
+    scope.register_type("Module".into(), KType::AnyModule, BindingIndex::BUILTIN);
+    scope.register_type("Signature".into(), KType::AnySignature, BindingIndex::BUILTIN);
+    scope.register_type("Any".into(), KType::Any, BindingIndex::BUILTIN);
 
     let_binding::register(scope);
     print::register(scope);

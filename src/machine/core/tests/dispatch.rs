@@ -1,5 +1,6 @@
 //! `dispatch` arm of `machine::core` tests.
 
+use crate::machine::BindingIndex;
 use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
@@ -223,7 +224,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     let bucket_single: UntypedKey =
         vec![UntypedElement::Keyword("MAKESET".into()), UntypedElement::Slot];
     scope
-        .install_pending_overload(bucket_single, NodeId(42))
+        .install_pending_overload(bucket_single, NodeId(42), BindingIndex::BUILTIN)
         .expect("install_pending_overload");
 
     // Bare-arg call: `(MAKESET fwd)` — single-slot bucket matches the entry.

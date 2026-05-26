@@ -135,20 +135,41 @@ PRINT msg          # prints "hi" — `msg` in PRINT's value slot resolves to "hi
 LET copy = msg     # binds `copy` to "hi", not to the literal string "msg"
 ```
 
-A name lookup whose binder hasn't run yet — a forward reference between
-sibling top-level expressions — *parks* on the producer rather than
-failing. Once the binder finishes, the consumer wakes and resumes:
+Name resolution is **lexical**: a reference sees a binding only if the
+binding lexically precedes it. A forward value reference between sibling
+top-level expressions is `UnboundName`:
 
 ```
 LET y = x
 LET x = 42
+PRINT y            # UnboundName: x
+```
+
+Reorder to put the binder first and the reference resolves:
+
+```
+LET x = 42
+LET y = x
 PRINT y            # prints 42
 ```
 
-A name that no binder ever introduces still surfaces as `UnboundName`.
+Nominal binders — `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE` —
+carve themselves out of the lexical rule: their declared names are visible
+to siblings on both sides, so mutual references between sibling type
+declarations work without reordering. Function bodies re-dispatch each time
+they're called against the body's own lexical chain, so mutual recursion
+between sibling FNs works (each call resolves the other from inside an
+already-running body, not from the outer block's cutoff).
+
+A name that no binder visibly introduces surfaces as `UnboundName`.
 Re-binding a value name in the same scope surfaces as `Rebind`; shadowing
 across nested scopes (a child block, a function body) is allowed and is
 how lexical scoping works.
+
+A *visible* binding whose producer hasn't finished computing — typically a
+binding whose right-hand side is still running — *parks* the consumer on
+the producer rather than failing; the consumer wakes and resumes once the
+producer's value lands.
 
 When you write an expression, Koan picks which function (builtin or
 user-defined) to run by matching the *shape* of what you wrote — the

@@ -2,7 +2,7 @@ use crate::builtins::value_lookup::coerce_type_token_value;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::{KObject, Parseable};
 use crate::machine::{
-    Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Scope,
+    BindingIndex, Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Scope,
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 
@@ -68,7 +68,12 @@ pub(super) fn resolve_name_part<'a>(
     // scope — for value-side bindings under the same name (e.g. `LET ty = …`) a `Value`
     // hit wins; for forward `STRUCT Foo = …` references the binder's `pre_run` installs
     // a `Placeholder` we park on.
-    match scope.resolve(name) {
+    //
+    // Chain-gated: visibility against the consumer's lexical chain filters out
+    // later-sibling bindings (and placeholders) so the eager-resolve / replay-park
+    // passes agree with the gated `resolve_dispatch` walk that ran in Phase 2.
+    let chain = scheduler.active_chain.as_deref();
+    match scope.resolve_with_chain(name, chain) {
         Resolution::Placeholder(producer) => {
             return if scheduler.is_result_ready(producer) {
                 // Terminal-while-placeholder-set means the producer errored (success
@@ -92,7 +97,7 @@ pub(super) fn resolve_name_part<'a>(
             // Identifier leaves bind directly to the scope value.
             return NameOutcome::Resolved(obj);
         }
-        Resolution::Value(_) | Resolution::Unbound => {
+        Resolution::Value(_) | Resolution::UnboundName => {
             // Fall through for Type parts (which need `coerce_type_token_value`'s
             // type-side resolution against `bindings.types`) and for the Identifier
             // Unbound case (caller produces `UnboundName`). Type parts that miss
@@ -107,7 +112,7 @@ pub(super) fn resolve_name_part<'a>(
         // helper returns its own `UnboundName` on a `resolve_type` miss; that error is
         // returned to the caller as `Unbound` rather than `ProducerErrored` so the
         // wrap-slot phase surfaces the standard unbound surface.
-        Some(t) => match coerce_type_token_value(scope, t) {
+        Some(t) => match coerce_type_token_value(scope, t, chain) {
             Ok(obj) => NameOutcome::Resolved(obj),
             Err(KError { kind: KErrorKind::UnboundName(n), .. }) => NameOutcome::Unbound(n),
             Err(e) => NameOutcome::ProducerErrored(e),
@@ -179,7 +184,13 @@ impl<'a> Scheduler<'a> {
         // Phase 2. `Ambiguous` / `Unmatched` propagate as `Err` (rather than
         // `NodeStep::Done(NodeOutput::Err(_))`) so they surface at `Scheduler::execute`'s
         // return value, matching today's `scope.dispatch(...)?` shape.
-        let resolved = match scope.resolve_dispatch(&expr) {
+        //
+        // Chain-gated: every dispatched node carries an active chain by invariant, so
+        // pass it in so the resolver / bucket-pre-filter / pending-overload walk filter
+        // candidates by visibility against this consumer's lexical position. See
+        // `LexicalFrame::index_for` and `core::scope::visible`.
+        let chain = self.active_chain.as_deref();
+        let resolved = match scope.resolve_dispatch_with_chain(&expr, chain) {
             ResolveOutcome::Resolved(r) => r,
             ResolveOutcome::Ambiguous(n) => {
                 return Err(KError::new(KErrorKind::AmbiguousDispatch {
@@ -224,13 +235,28 @@ impl<'a> Scheduler<'a> {
         //   binders that register a callable function). Keying by the full inner-call
         //   bucket — not the lead keyword — keeps overloads with shared heads but
         //   different keyword shapes from colliding on the park edge.
+        // Both installs carry the executing slot's lexical index and the picked
+        // function's `is_nominal_binder` flag — the submission-time install in
+        // `submit::add_with_chain` used the same pair, so the placeholder→bind
+        // transition keeps a consistent visibility tag.
+        let lex_index = self
+            .active_chain
+            .as_ref()
+            .expect("dispatching slot must have an active chain")
+            .index;
+        let bind_index = BindingIndex {
+            idx: lex_index,
+            nominal_binder: resolved.function.is_nominal_binder,
+        };
         if let Some(name) = resolved.placeholder_name.as_ref() {
-            if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx)) {
+            if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index) {
                 return Ok(NodeStep::Done(NodeOutput::Err(e)));
             }
         }
         if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
-            if let Err(e) = scope.install_pending_overload(bucket.clone(), NodeId(idx)) {
+            if let Err(e) =
+                scope.install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
+            {
                 return Ok(NodeStep::Done(NodeOutput::Err(e)));
             }
         }
@@ -368,6 +394,7 @@ impl<'a> Scheduler<'a> {
             frame: None,
             function: None,
             block_entry: None,
+            advance_index: false,
         }
     }
 
@@ -426,7 +453,11 @@ impl<'a> Scheduler<'a> {
         idx: usize,
     ) -> Option<NodeStep<'a>> {
         if let [Spanned { value: ExpressionPart::Identifier(name), .. }] = expr.parts.as_slice() {
-            match scope.resolve(name) {
+            // Chain-gated: a later-sibling binding is invisible to this consumer, so
+            // a name that lexically does not yet exist falls through to the standard
+            // dispatch / `UnboundName` path rather than short-circuiting on a hidden
+            // value.
+            match scope.resolve_with_chain(name, self.active_chain.as_deref()) {
                 Resolution::Value(obj) => Some(NodeStep::Done(NodeOutput::Value(obj))),
                 Resolution::Placeholder(producer_id) => {
                     // Notify edge, not Owned: the producer is a sibling slot this Lift
@@ -443,11 +474,12 @@ impl<'a> Scheduler<'a> {
                         frame: None,
                         function: None,
                         block_entry: None,
+                        advance_index: false,
                     })
                 }
                 // Unbound falls through so `value_lookup`'s body produces the structured
                 // `UnboundName` error.
-                Resolution::Unbound => None,
+                Resolution::UnboundName => None,
             }
         } else {
             None
@@ -550,7 +582,7 @@ mod tests {
     use crate::machine::execute::Scheduler;
     use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::RuntimeArena;
+    use crate::machine::{BindingIndex, RuntimeArena};
 
     /// Resolved-Identifier path: bare Identifier in scope.bindings.data returns
     /// `NameOutcome::Resolved(&obj)` pointing at the bound carrier.
@@ -559,7 +591,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let bound = arena.alloc(KObject::Number(7.0));
-        scope.bind_value("x".to_string(), bound).unwrap();
+        scope.bind_value("x".to_string(), bound, BindingIndex::BUILTIN).unwrap();
         let part = ExpressionPart::Identifier("x".to_string());
         let sched = Scheduler::new();
         match resolve_name_part(scope, &part, &sched, None) {
@@ -607,7 +639,7 @@ mod tests {
             KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
             scope,
         );
-        scope.install_placeholder("fwd".to_string(), producer).unwrap();
+        scope.install_placeholder("fwd".to_string(), producer, BindingIndex::BUILTIN).unwrap();
         let part = ExpressionPart::Identifier("fwd".to_string());
         match resolve_name_part(scope, &part, &sched, None) {
             NameOutcome::Parked(p) => assert_eq!(p, producer),
@@ -644,7 +676,7 @@ mod tests {
             ])),
             scope,
         );
-        scope.install_placeholder("self_ref".to_string(), slot).unwrap();
+        scope.install_placeholder("self_ref".to_string(), slot, BindingIndex::BUILTIN).unwrap();
         let part = ExpressionPart::Identifier("self_ref".to_string());
         match resolve_name_part(scope, &part, &sched, Some(slot)) {
             NameOutcome::Cycle(name) => assert_eq!(name, "self_ref"),

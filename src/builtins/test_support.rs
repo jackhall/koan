@@ -98,7 +98,7 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
     let funcs = scope.bindings().functions();
     let mut found: Option<&'a KFunction<'a>> = None;
     for bucket in funcs.values() {
-        for f in bucket {
+        for (f, _) in bucket {
             let first_kw = f.signature.elements.iter().find_map(|e| match e {
                 SignatureElement::Keyword(s) => Some(s.as_str()),
                 _ => None,
@@ -118,7 +118,7 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 /// keywords never land in `data`).
 pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
     let funcs = scope.bindings().functions();
-    funcs.values().flatten().any(|f| {
+    funcs.values().flatten().any(|(f, _)| {
         f.signature.elements.iter().find_map(|e| match e {
             SignatureElement::Keyword(s) => Some(s.as_str()),
             _ => None,

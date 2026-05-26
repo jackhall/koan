@@ -18,7 +18,7 @@ fn transparent_ascription_returns_module() {
     );
     let data = scope.bindings().data();
     assert!(matches!(
-        data.get("IntOrdView"),
+        data.get("IntOrdView").map(|(o, _)| *o),
         Some(KObject::KTypeValue(KType::Module { module: _, frame: _ })),
     ));
 }
@@ -61,11 +61,11 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
         }
     }
     let data = scope.bindings().data();
-    let a = match data.get("FirstAbstract") {
+    let a = match data.get("FirstAbstract").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("FirstAbstract should be a module"),
     };
-    let b = match data.get("SecondAbstract") {
+    let b = match data.get("SecondAbstract").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("SecondAbstract should be a module"),
     };
@@ -95,7 +95,7 @@ fn transparent_ascription_does_not_mint_module_types() {
          LET ViewMod = (IntOrd :! OrderedSig)",
     );
     let data = scope.bindings().data();
-    let v = match data.get("ViewMod") {
+    let v = match data.get("ViewMod").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("ViewMod should be a module"),
     };
@@ -115,7 +115,7 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     );
 
     let data = scope.bindings().data();
-    let abstract_mod = match data.get("IntOrdAbstract") {
+    let abstract_mod = match data.get("IntOrdAbstract").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("IntOrdAbstract should be a module, got {:?}", other.map(|o| o.ktype())),
     };
@@ -133,6 +133,6 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     let compare = abstract_mod
         .child_scope().bindings().data()
         .get("compare")
-        .copied();
+        .map(|(o, _)| *o);
     assert!(matches!(compare, Some(KObject::Number(n)) if *n == 7.0));
 }

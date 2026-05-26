@@ -143,11 +143,11 @@ mod tests {
         // the audit pins: `child_scope()` (the captured-scope transmute) and
         // `type_members` (the RefCell on the Module).
         let data = scope.bindings().data();
-        let m = match data.get("Held") {
+        let m = match data.get("Held").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
             other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
         };
-        let probe = m.child_scope().bindings().data().get("probe").copied();
+        let probe = m.child_scope().bindings().data().get("probe").map(|(o, _)| *o);
         assert!(
             matches!(probe, Some(KObject::Number(n)) if *n == 11.0),
             "Held.probe must still read 11.0 after subsequent churn",

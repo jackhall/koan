@@ -21,7 +21,7 @@ fn let_inserts_binding_into_scope() {
     let value = body(scope, &mut sched, ArgumentBundle { args }).expect_value("LET");
     assert!(matches!(value, KObject::Number(n) if *n == 42.0));
     let data = scope.bindings().data();
-    let entry = data.get("x").expect("expected binding 'x'");
+    let (entry, _) = data.get("x").expect("expected binding 'x'");
     assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
 }
 
@@ -57,11 +57,13 @@ fn pre_run_install_then_body_finalize_clears_placeholder() {
 }
 
 /// Phase 3: `LET T = T` is a trivially cyclic alias — the RHS references the binder
-/// itself. The eager-resolve pass's `would_create_cycle` check catches the
-/// placeholder-points-at-self condition and surfaces a structured `SchedulerDeadlock`
-/// (the cycle-specific error kind) rather than parking the dispatch on its own
-/// ancestor. Same surface as the Identifier-LHS form (`LET x = x`); both shapes route
-/// through the dispatch driver's Phase 3 cycle arm.
+/// itself. Under index-gated resolution the self-reference is the degenerate "value
+/// LET defined at the same lexical position as the reference" case: the producer's
+/// `Ty` placeholder sits at index `i`, the consumer reads at cutoff `i`, and the
+/// strict `b.idx < c` predicate makes the binding invisible — so the consumer
+/// surfaces `UnboundName` rather than the old self-park cycle path. The
+/// non-nominal-binder carve-out does not apply (LET is value-style gated).
+/// Same surface as the Identifier-LHS form (`LET x = x`).
 #[test]
 fn let_t_cycle_errors() {
     use crate::machine::RuntimeArena;
@@ -81,10 +83,10 @@ fn let_t_cycle_errors() {
     let res = sched.read_result(ids[0]);
     match res {
         Err(e) => assert!(
-            matches!(&e.kind, KErrorKind::SchedulerDeadlock { sample, .. } if sample.contains("cycle")),
-            "expected SchedulerDeadlock mentioning cycle, got {e}",
+            matches!(&e.kind, KErrorKind::UnboundName(name) if name == "Ty"),
+            "expected UnboundName('Ty'), got {e}",
         ),
-        Ok(v) => panic!("expected cycle error, got value {:?}", v.ktype()),
+        Ok(v) => panic!("expected UnboundName error, got value {:?}", v.ktype()),
     }
 }
 
@@ -163,7 +165,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     let res = sched.read_result(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let data = scope.bindings().data();
-    let entry = data.get("foo").expect("expected binding 'foo'");
+    let (entry, _) = data.get("foo").expect("expected binding 'foo'");
     assert!(
         matches!(entry, KObject::Number(n) if *n == 1.0),
         "expected Number(1.0), got {:?}",
@@ -216,7 +218,7 @@ fn let_type_class_with_module_carrier_dual_writes() {
          LET IntOrdA = (IntOrd :| OrderedSig)",
     );
     let types = scope.bindings().types();
-    let kt = types
+    let (kt, _) = types
         .get("IntOrdA")
         .expect("IntOrdA should be in bindings.types");
     // Post-collapse: MODULE aliases dual-write `KType::Module { .. }` rather than
@@ -224,7 +226,7 @@ fn let_type_class_with_module_carrier_dual_writes() {
     assert!(matches!(**kt, KType::Module { .. }));
     drop(types);
     let data = scope.bindings().data();
-    let obj = data
+    let (obj, _) = data
         .get("IntOrdA")
         .expect("IntOrdA should be in bindings.data");
     assert!(matches!(obj, KObject::KTypeValue(KType::Module { module: _, frame: _ })));
@@ -249,11 +251,11 @@ fn let_aliases_struct_preserves_type_identity() {
          LET Pt = Point",
     );
     let types = scope.bindings().types();
-    let pt: &KType = types
+    let (pt, _): (&KType, _) = types
         .get("Pt")
         .copied()
         .expect("Pt should be in bindings.types after alias");
-    let point: &KType = types
+    let (point, _): (&KType, _) = types
         .get("Point")
         .copied()
         .expect("Point should be in bindings.types");
@@ -364,7 +366,7 @@ fn let_type_class_in_sig_body_still_works() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "SIG WithType = ((LET Type = Number) (VAL zero :Number))");
-    let s = match scope.bindings().data().get("WithType") {
+    let s = match scope.bindings().data().get("WithType").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         other => panic!("WithType should be a signature, got {:?}", other.map(|o| o.ktype())),
     };

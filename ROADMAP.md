@@ -36,6 +36,12 @@ What's shipped that the open items below build on:
   `Scheduler::enter_block` primitive, and each MATCH / TRY arm is its own lexical
   block — closing the divergent-bind hazard structurally and giving the remaining
   dispatch-fix phases a queue-order-independent provenance signal to read from.
+- *Index-gated name resolution.* `Scope::resolve_with_chain` and the function-bucket
+  `OverloadBucket::pick` filter every hit through the `idx < cutoff` visibility
+  predicate (with a `nominal_binder` carve-out for `STRUCT` / named `UNION` / `SIG` /
+  `FUNCTOR` / `MODULE`), so forward references resolve by lexical position rather
+  than by queue arrival order and `UnboundName` becomes structural rather than
+  transient.
 
 ## Next items
 
@@ -105,12 +111,11 @@ functor-heavy collections both build on:
 ### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
 
 Untangle dispatch into queue-order-independent name resolution plus a single
-unified ancestor walk per call site. Phases land sequentially: provenance
-plumbing first, then the index-gated `Resolution` split that makes visibility
-lexical, then a structural fix to the nested-binder submission race, then the
+unified ancestor walk per call site. The provenance-plumbing and index-gated
+resolution phases have shipped (see "What's shipped so far"); the remaining
+phases are a structural fix to the nested-binder submission race, then the
 walk-unification and strict-only admission collapse:
 
-- [Index-gated resolution](roadmap/dispatch_fix/index-gated-resolution.md)
 - [Nested-binder recursive submission](roadmap/dispatch_fix/nested-binder-submission.md)
 - [Unified walk + strict-only admission](roadmap/dispatch_fix/unified-walk.md)
 

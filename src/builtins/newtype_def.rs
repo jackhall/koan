@@ -27,7 +27,8 @@ use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_ktype, extract_type_name_ref,
 };
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, Scope,
+    SchedulerHandle,
 };
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::{KObject, NonWrappedRef};
@@ -51,7 +52,7 @@ use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 /// UNION declaration returns.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // Same shared helper STRUCT / UNION use — rejects parameterized binder forms
@@ -113,7 +114,15 @@ pub fn body<'a>(
     };
     let arena = scope.arena;
     let kt_ref: &'a KType = arena.alloc(identity);
-    match scope.bindings().try_register_type(&name, kt_ref) {
+    // NEWTYPE is treated as a value-style binding for visibility (no D7 carve-out):
+    // its identity-only install isn't typically referenced by a sibling NEWTYPE
+    // declaration in mutual-recursive fashion. The placeholder install at submission
+    // tagged it the same way; the bindings install carries the same flag.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+    match scope.bindings().try_register_type(&name, kt_ref, bind_index) {
         Ok(ApplyOutcome::Applied) => {
             // Mirror STRUCT / UNION's declaration return: the value is a `KTypeValue`
             // carrying a clone of the minted identity. Tests inspect `bindings.types`
@@ -244,7 +253,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run_one(scope, parse_one("NEWTYPE Distance = Number"));
         let types = scope.bindings().types();
-        let kt = types
+        let (kt, _) = types
             .get("Distance")
             .expect("Distance should be in bindings.types");
         match **kt {

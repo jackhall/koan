@@ -25,7 +25,7 @@ use crate::machine::core::ResolveTypeExprOutcome;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
     SchedulerHandle,
 };
 use crate::machine::model::{KObject, KType};
@@ -120,19 +120,29 @@ pub fn body<'a>(
         Err(e) => return err(e),
     };
 
+    // VAL is value-style gated — strict lexical cutoff applies. The SIG body itself
+    // is the lexical block; the VAL statement's index is the binder's submission
+    // position.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+
     match carrier {
-        CarrierForm::Direct(kt) => finalize_val(scope, name, kt),
+        CarrierForm::Direct(kt) => finalize_val(scope, name, kt, bind_index),
         CarrierForm::Leaf(te) => {
             let resolve_id = schedule_type_resolve(sched, scope, &te);
-            defer_val_via_combine(scope, sched, name, te, resolve_id)
+            defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index)
         }
         CarrierForm::Raw(te) => {
             if matches!(te.params, TypeParams::None) {
                 let resolve_id = schedule_type_resolve(sched, scope, &te);
-                return defer_val_via_combine(scope, sched, name, te, resolve_id);
+                return defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index);
             }
             match scope.resolve_type_expr(&te) {
-                ResolveTypeExprOutcome::Done(kt) => finalize_val(scope, name, kt.clone()),
+                ResolveTypeExprOutcome::Done(kt) => {
+                    finalize_val(scope, name, kt.clone(), bind_index)
+                }
                 ResolveTypeExprOutcome::Park(_) => {
                     let leaves = collect_leaf_names(&te);
                     let mut dep_ids: Vec<NodeId> = Vec::with_capacity(leaves.len());
@@ -140,7 +150,9 @@ pub fn body<'a>(
                         let leaf_te = TypeExpr::leaf(leaf.clone());
                         dep_ids.push(schedule_type_resolve(sched, scope, &leaf_te));
                     }
-                    defer_val_structural_via_combine(scope, sched, name, te, dep_ids)
+                    defer_val_structural_via_combine(
+                        scope, sched, name, te, dep_ids, bind_index,
+                    )
                 }
                 ResolveTypeExprOutcome::Unbound(msg) => {
                     err(KError::new(KErrorKind::ShapeError(format!("VAL type: {msg}"))))
@@ -190,10 +202,15 @@ fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
 }
 
 /// Bind `name` to `KObject::KTypeValue(declared_kt)` under `scope.bindings.data`.
-fn finalize_val<'a>(scope: &'a Scope<'a>, name: String, declared_kt: KType<'a>) -> BodyResult<'a> {
+fn finalize_val<'a>(
+    scope: &'a Scope<'a>,
+    name: String,
+    declared_kt: KType<'a>,
+    bind_index: BindingIndex,
+) -> BodyResult<'a> {
     let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(declared_kt));
-    if let Err(e) = scope.bind_value(name, allocated) {
+    if let Err(e) = scope.bind_value(name, allocated, bind_index) {
         return err(e);
     }
     BodyResult::Value(allocated)
@@ -207,6 +224,7 @@ fn defer_val_via_combine<'a>(
     name: String,
     te: TypeExpr,
     resolve_id: NodeId,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let name_for_finish = name;
     let te_for_finish = te;
@@ -225,7 +243,7 @@ fn defer_val_via_combine<'a>(
                 ))));
             }
         };
-        finalize_val(scope, name_for_finish.clone(), kt)
+        finalize_val(scope, name_for_finish.clone(), kt, bind_index)
     });
     let combine_id = sched.add_combine(vec![resolve_id], vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
@@ -240,12 +258,15 @@ fn defer_val_structural_via_combine<'a>(
     name: String,
     te: TypeExpr,
     dep_ids: Vec<NodeId>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let name_for_finish = name;
     let te_for_finish = te;
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
         match scope.resolve_type_expr(&te_for_finish) {
-            ResolveTypeExprOutcome::Done(kt) => finalize_val(scope, name_for_finish.clone(), kt.clone()),
+            ResolveTypeExprOutcome::Done(kt) => {
+                finalize_val(scope, name_for_finish.clone(), kt.clone(), bind_index)
+            }
             ResolveTypeExprOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
                 "VAL type `{}` elaboration parked again after all leaf sub-Dispatches \
                  terminalized — internal scheduling invariant violated",

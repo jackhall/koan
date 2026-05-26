@@ -13,10 +13,12 @@
 //! is a stronger signal.
 
 use crate::machine::core::kfunction::{ClassifiedSlots, KFunction};
+use crate::machine::core::lexical_frame::LexicalFrame;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::NodeId;
 
+use super::bindings::BindingIndex;
 use super::scope::{Resolution, Scope};
 
 /// Picked function plus the per-slot classification the dispatch driver needs for
@@ -60,6 +62,18 @@ impl<'a> Scope<'a> {
     ///   typed `+` overload only matches after `deep_call` resolves; the scheduler's
     ///   eager-sub loop rebuilds with `Future(_)` parts and re-dispatches.
     pub fn resolve_dispatch(&'a self, expr: &KExpression<'a>) -> ResolveOutcome<'a> {
+        self.resolve_dispatch_with_chain(expr, None)
+    }
+
+    /// Chain-gated dispatch resolution. Each candidate is checked against the
+    /// visibility predicate before the admit pass; per-overload tagging matters
+    /// because overloads in the same bucket may sit at different lexical positions.
+    /// `chain = None` disables the gate (test fixtures, builtin registration paths).
+    pub fn resolve_dispatch_with_chain(
+        &'a self,
+        expr: &KExpression<'a>,
+        chain: Option<&LexicalFrame>,
+    ) -> ResolveOutcome<'a> {
         let key = expr.untyped_key();
         // Bare-name peeks resolve in the *dispatch* scope, not the ancestor whose bucket is
         // under test — a name bound in an inner scope must still be found when the matching
@@ -74,8 +88,21 @@ impl<'a> Scope<'a> {
             // Per-step guard drops at the closure boundary so the chain walk never
             // accumulates live read borrows on `bindings().functions()`.
             let functions_guard = scope.bindings().functions();
-            let bucket = OverloadBucket { candidates: functions_guard.get(&key)?.as_slice() };
-            match bucket.pick_strict(expr, dispatch_scope) {
+            let raw = functions_guard.get(&key)?.as_slice();
+            // Pre-filter overloads by per-overload visibility. A consumer between two
+            // overloads in the same bucket sees only the earlier; a later-sibling
+            // overload is hidden from this consumer's reference. The `nominal_binder`
+            // carve-out doesn't apply here — FN bodies are value-style gated.
+            let visible_candidates: Vec<(&'a KFunction<'a>, BindingIndex)> = raw
+                .iter()
+                .filter(|(_, idx)| crate::machine::core::scope::visible(scope.id, *idx, chain))
+                .copied()
+                .collect();
+            if visible_candidates.is_empty() {
+                return None;
+            }
+            let bucket = OverloadBucket { candidates: &visible_candidates };
+            match bucket.pick_strict(expr, dispatch_scope, chain) {
                 PickPass::Picked(f) => Some(ResolveOutcome::Resolved(build_resolved(f, expr))),
                 // A strict tie whose deciding argument is still an unevaluated literal /
                 // sub-expression may resolve once evaluated: a typed `Future(List …)`
@@ -100,7 +127,7 @@ impl<'a> Scope<'a> {
                     PickPass::Tie(_) => {
                         if park_producers.is_empty() && unbound_name.is_none() {
                             let (placeholders, unbound) =
-                                classify_tie_bare_names(expr, dispatch_scope);
+                                classify_tie_bare_names(expr, dispatch_scope, chain);
                             park_producers = placeholders;
                             unbound_name = unbound;
                         }
@@ -138,7 +165,7 @@ impl<'a> Scope<'a> {
         // (`(MAKESET _)` vs `(MAKESET _ USING _)`) from colliding: the bare-arg
         // call's `untyped_key()` matches exactly one in-flight binder's
         // inner-call bucket.
-        if let Some(producer) = pending_overload_producer(&key, dispatch_scope) {
+        if let Some(producer) = pending_overload_producer(&key, dispatch_scope, chain) {
             return ResolveOutcome::ParkOnProducers(vec![producer]);
         }
         ResolveOutcome::Unmatched
@@ -149,13 +176,21 @@ impl<'a> Scope<'a> {
 /// by an FN / FUNCTOR binder's `pre_run_bucket` hook for the inner-call bucket key
 /// of the to-be-registered overload. Returns the producer `NodeId` of the first
 /// matching binder slot (lexically inner-most wins, mirroring `Scope::resolve`).
+///
+/// Filters per-entry visibility against `chain` so a later-sibling pending overload
+/// is hidden from this consumer: the bare-arg call would have to wait on a producer
+/// that is, by the visibility rule, not yet in scope. `chain = None` disables the
+/// gate, matching the value-side resolver convention (test fixtures / builtin paths).
 fn pending_overload_producer<'a>(
     key: &crate::machine::model::types::UntypedKey,
     scope: &Scope<'a>,
+    chain: Option<&LexicalFrame>,
 ) -> Option<NodeId> {
     for scope in scope.ancestors() {
-        if let Some(producer) = scope.bindings().pending_overloads().get(key).copied() {
-            return Some(producer);
+        if let Some((producer, idx)) = scope.bindings().pending_overloads().get(key).copied() {
+            if crate::machine::core::scope::visible(scope.id, idx, chain) {
+                return Some(producer);
+            }
         }
     }
     None
@@ -164,13 +199,26 @@ fn pending_overload_producer<'a>(
 /// View over a single scope's overload bucket. Encapsulates the
 /// filter‑then‑[`ExpressionSignature::most_specific`] dance that runs twice per
 /// scope (strict pass, then tentative auto‑wrap pass).
+///
+/// Candidates carry their per-overload [`BindingIndex`] — Phase 4 will pre-filter
+/// by visibility before the admit predicate runs.
 struct OverloadBucket<'a, 's> {
-    candidates: &'s [&'a KFunction<'a>],
+    candidates: &'s [(&'a KFunction<'a>, crate::machine::core::BindingIndex)],
 }
 
 impl<'a> OverloadBucket<'a, '_> {
-    fn pick_strict(&self, expr: &KExpression<'a>, dispatch_scope: &'a Scope<'a>) -> PickPass<'a> {
-        self.pick(expr, move |f, e| signature_admits_strict(&f.signature, e, dispatch_scope))
+    /// `chain` is the consumer's lexical chain — threaded through to
+    /// `signature_admits_strict`'s bare-name peek so the gated `resolve` agrees
+    /// with the gate the bucket itself just applied (D4). `None` disables the gate.
+    fn pick_strict(
+        &self,
+        expr: &KExpression<'a>,
+        dispatch_scope: &'a Scope<'a>,
+        chain: Option<&LexicalFrame>,
+    ) -> PickPass<'a> {
+        self.pick(expr, move |f, e| {
+            signature_admits_strict(&f.signature, e, dispatch_scope, chain)
+        })
     }
 
     fn pick_tentative(&self, expr: &KExpression<'a>) -> PickPass<'a> {
@@ -183,8 +231,12 @@ impl<'a> OverloadBucket<'a, '_> {
         admit: impl Fn(&'a KFunction<'a>, &KExpression<'a>) -> bool,
     ) -> PickPass<'a> {
         use crate::machine::model::types::ExpressionSignature;
-        let survivors: Vec<&'a KFunction<'a>> =
-            self.candidates.iter().copied().filter(|f| admit(f, expr)).collect();
+        let survivors: Vec<&'a KFunction<'a>> = self
+            .candidates
+            .iter()
+            .map(|(f, _)| *f)
+            .filter(|f| admit(f, expr))
+            .collect();
         let sigs: Vec<&ExpressionSignature> = survivors.iter().map(|f| &f.signature).collect();
         match ExpressionSignature::most_specific(&sigs) {
             Some(i) => PickPass::Picked(survivors[i]),
@@ -219,6 +271,7 @@ fn signature_admits_strict<'a>(
     sig: &ExpressionSignature<'a>,
     expr: &KExpression<'a>,
     dispatch_scope: &Scope<'a>,
+    chain: Option<&LexicalFrame>,
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
         return false;
@@ -229,9 +282,12 @@ fn signature_admits_strict<'a>(
         (SignatureElement::Argument(arg), ExpressionPart::Identifier(name))
             if matches!(arg.ktype, KType::List(_) | KType::Dict(_, _)) =>
         {
-            match dispatch_scope.resolve(name) {
+            // Consult the gated resolver so a not-yet-visible later-sibling
+            // binding is invisible to the strict-pass peek (it would park /
+            // tentative-tie instead).
+            match dispatch_scope.resolve_with_chain(name, chain) {
                 Resolution::Value(obj) => arg.ktype.accepts_part(&ExpressionPart::Future(obj)),
-                Resolution::Placeholder(_) | Resolution::Unbound => false,
+                Resolution::Placeholder(_) | Resolution::UnboundName => false,
             }
         }
         (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
@@ -248,15 +304,16 @@ fn signature_admits_strict<'a>(
 fn classify_tie_bare_names(
     expr: &KExpression<'_>,
     dispatch_scope: &Scope<'_>,
+    chain: Option<&LexicalFrame>,
 ) -> (Vec<NodeId>, Option<String>) {
     let mut placeholders = Vec::new();
     let mut unbound = None;
     for part in &expr.parts {
         if let ExpressionPart::Identifier(name) = &part.value {
-            match dispatch_scope.resolve(name) {
+            match dispatch_scope.resolve_with_chain(name, chain) {
                 Resolution::Placeholder(producer) => placeholders.push(producer),
-                Resolution::Unbound if unbound.is_none() => unbound = Some(name.clone()),
-                Resolution::Unbound | Resolution::Value(_) => {}
+                Resolution::UnboundName if unbound.is_none() => unbound = Some(name.clone()),
+                Resolution::UnboundName | Resolution::Value(_) => {}
             }
         }
     }

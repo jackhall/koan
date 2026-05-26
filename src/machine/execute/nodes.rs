@@ -35,6 +35,12 @@ pub(super) enum NodeStep<'a> {
         frame: Option<Rc<CallArena>>,
         function: Option<&'a KFunction<'a>>,
         block_entry: Option<ScopeId>,
+        /// CONS-tail wants its tail-replaced slot to sit one position past the head it
+        /// just submitted in the same lexical block. Combined with `block_entry: None`
+        /// the reinstall site rebuilds the chain's head frame at `index + 1`; otherwise
+        /// the index advance is applied to the freshly-pushed block-entry frame.
+        /// Default `false` keeps today's behavior for non-CONS tail-replace paths.
+        advance_index: bool,
     },
 }
 

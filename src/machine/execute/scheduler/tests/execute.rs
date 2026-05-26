@@ -47,5 +47,5 @@ fn later_expression_sees_earlier_binding_via_lookup() {
 
     sched.execute().unwrap();
     let data = root.bindings().data();
-    assert!(matches!(data.get("b"), Some(KObject::Number(n)) if *n == 10.0));
+    assert!(matches!(data.get("b").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 10.0));
 }

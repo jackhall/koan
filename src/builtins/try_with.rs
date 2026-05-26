@@ -20,8 +20,8 @@ use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, CallArena, CatchFinish, KError, KErrorKind, RuntimeArena, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CallArena, CatchFinish, KError, KErrorKind,
+    RuntimeArena, Scope, SchedulerHandle,
 };
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
@@ -121,7 +121,14 @@ fn dispatch_branch<'a>(
     // walking from the per-call child to its outer chain. Pinned by
     // `it_resolves_via_scope_for_eval_of_top_level_quoted_reference`.
     let it_obj: &'a KObject<'a> = inner_arena.alloc(it_value);
-    let _ = child.bind_value("it".to_string(), it_obj);
+    // `it` is bound *before* the WITH-arm body block opens — same pre-block bind
+    // pattern MATCH's `it` uses. Tag with the nominal-binder carve-out so the arm
+    // body sees the binding (the chain-cutoff rule would otherwise hide it).
+    let _ = child.bind_value(
+        "it".to_string(),
+        it_obj,
+        BindingIndex { idx: 0, nominal_binder: true },
+    );
     let _ = sched;
     // WITH-arm body is its own lexical block; chain assembly mirrors MATCH arms.
     BodyResult::tail_with_block(body_expr, Some(frame), child.id)

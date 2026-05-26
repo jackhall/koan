@@ -4,7 +4,9 @@ pub(crate) mod return_type;
 pub(crate) mod signature;
 
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+};
 use crate::machine::model::types::Elaborator;
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
@@ -82,12 +84,20 @@ pub fn body<'a>(
         }
     };
 
+    // FN's bind_index: lexical position of the executing slot. FN bindings are
+    // value-style gated (no D7 carve-out) — even though FN produces a callable,
+    // the binder itself never registers a sibling-visible nominal identity.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+
     match classify(return_type_state, params) {
         FnPlan::Synchronous { elements, return_type } => {
-            finalize_fn(scope, elements, return_type, body_expr)
+            finalize_fn(scope, elements, return_type, body_expr, bind_index)
         }
         FnPlan::Combine(inputs) => {
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, false)
+            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, false, bind_index)
         }
     }
 }
@@ -124,6 +134,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         Some(pre_run),
         Some(pre_run_bucket),
         false,
+        // FN is *not* a nominal binder: a `LET f = (FN ...)` form is value-side gated.
+        false,
     );
     register_builtin_full(
         scope,
@@ -139,6 +151,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         body,
         Some(pre_run),
         Some(pre_run_bucket),
+        false,
+        // FN is *not* a nominal binder: a `LET f = (FN ...)` form is value-side gated.
         false,
     );
 }

@@ -43,7 +43,7 @@ mod tests {
     use crate::machine::execute::Scheduler;
     use crate::machine::model::types::UserTypeKind;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{RuntimeArena, ScopeId};
+    use crate::machine::{BindingIndex, RuntimeArena, ScopeId};
 
     // ---------- Module-system stage 2 Workstream B: TYPE_CONSTRUCTOR builtin ----------
 
@@ -78,7 +78,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))");
-        let s = match scope.bindings().data().get("Monad") {
+        let s = match scope.bindings().data().get("Monad").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             _ => panic!("Monad must bind a KSignature"),
         };
@@ -110,6 +110,7 @@ mod tests {
                 scope_id: ScopeId::from_raw(0, 0xC0DE),
                 name: "Wrap".into(),
             },
+            BindingIndex::BUILTIN,
         );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(
@@ -180,7 +181,7 @@ mod tests {
             }
         }
         // The SIG must have bound — pull it out of scope and walk its decl_scope.
-        let s = match scope.bindings().data().get("Monad") {
+        let s = match scope.bindings().data().get("Monad").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             other => panic!("Monad must bind a KSignature, got {:?}", other.map(|o| o.ktype())),
         };
@@ -236,7 +237,7 @@ mod tests {
              LET Mo = (IntList :| MonadSig)",
         );
         // Mo's type_members must carry a TypeConstructor slot under `Wrap`.
-        let mo = match scope.bindings().data().get("Mo") {
+        let mo = match scope.bindings().data().get("Mo").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
             other => panic!("Mo should be a module, got {:?}", other.map(|o| o.ktype())),
         };

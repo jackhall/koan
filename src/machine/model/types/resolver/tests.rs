@@ -1,3 +1,4 @@
+use crate::machine::BindingIndex;
 use super::*;
 use crate::machine::model::ast::TypeExpr;
 use crate::machine::RuntimeArena;
@@ -30,7 +31,7 @@ fn wrap_applied_elaborates_to_constructor_apply() {
         scope_id: ScopeId::from_raw(0, 0xC0DE),
         name: "Wrap".into(),
     };
-    scope.register_type("Wrap".into(), ctor.clone());
+    scope.register_type("Wrap".into(), ctor.clone(), BindingIndex::BUILTIN);
     // Surface form: `Wrap<Number>` — a TypeExpr with name "Wrap" + List params.
     let te = list_typeexpr("Wrap", vec![leaf("Number")]);
     let mut el = Elaborator::new(scope);
@@ -66,8 +67,8 @@ fn wrap_applied_distinct_per_ascription() {
         scope_id: ScopeId::from_raw(0, 0xBBBB),
         name: "Wrap".into(),
     };
-    scope_a.register_type("Wrap".into(), ctor_a.clone());
-    scope_b.register_type("Wrap".into(), ctor_b.clone());
+    scope_a.register_type("Wrap".into(), ctor_a.clone(), BindingIndex::BUILTIN);
+    scope_b.register_type("Wrap".into(), ctor_b.clone(), BindingIndex::BUILTIN);
 
     let te = list_typeexpr("Wrap", vec![leaf("Number")]);
     let mut ela = Elaborator::new(scope_a);
@@ -95,7 +96,7 @@ fn wrap_applied_arity_mismatch_unbound() {
         scope_id: ScopeId::from_raw(0, 0xC0DE),
         name: "Wrap".into(),
     };
-    scope.register_type("Wrap".into(), ctor);
+    scope.register_type("Wrap".into(), ctor, BindingIndex::BUILTIN);
     // Two args against a single-param constructor: arity mismatch.
     let te = list_typeexpr("Wrap", vec![leaf("Number"), leaf("Str")]);
     let mut el = Elaborator::new(scope);
@@ -128,7 +129,7 @@ fn wrap_applied_parks_on_placeholder() {
         crate::builtins::test_support::parse_one("LET _placeholder_target = 1"),
         scope,
     );
-    scope.install_placeholder("Wrap".into(), dummy).expect("placeholder install");
+    scope.install_placeholder("Wrap".into(), dummy, BindingIndex::BUILTIN).expect("placeholder install");
     let te = list_typeexpr("Wrap", vec![leaf("Number")]);
     let mut el = Elaborator::new(scope);
     match elaborate_type_expr(&mut el, &te) {
@@ -150,7 +151,7 @@ fn value_language_leaf_names_layering() {
     let scope = run_root_silent(&arena);
     // `Gee` is a Type-class token, but bound in the value language.
     scope
-        .bind_value("Gee".into(), arena.alloc(KObject::Number(7.0)))
+        .bind_value("Gee".into(), arena.alloc(KObject::Number(7.0)), BindingIndex::BUILTIN)
         .expect("bind_value");
     let mut el = Elaborator::new(scope);
     match elaborate_type_expr(&mut el, &leaf("Gee")) {
@@ -221,7 +222,7 @@ fn functor_type_position_sigil_parks_on_forward_ref() {
         crate::builtins::test_support::parse_one("LET _placeholder = 1"),
         scope,
     );
-    scope.install_placeholder("MyType".into(), dummy).expect("placeholder install");
+    scope.install_placeholder("MyType".into(), dummy, BindingIndex::BUILTIN).expect("placeholder install");
     let te = TypeExpr {
         name: "Functor".into(),
         params: TypeParams::Function {

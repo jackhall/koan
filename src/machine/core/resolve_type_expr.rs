@@ -106,7 +106,7 @@ impl<'a> FinalizeGate<'a> {
             if !owner.bindings().pending_types().contains_key(name) {
                 continue;
             }
-            if let Some(node_id) = owner.bindings().placeholders().get(name).copied() {
+            if let Some((node_id, _)) = owner.bindings().placeholders().get(name).copied() {
                 if !pending.contains(&node_id) {
                     pending.push(node_id);
                 }

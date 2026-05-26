@@ -16,7 +16,7 @@ fn interprets_let_and_print() {
 
     assert_eq!(captured.borrow().as_slice(), b"hello\n");
     let data = scope.bindings().data();
-    assert!(matches!(data.get("x"), Some(KObject::Number(n)) if *n == 42.0));
+    assert!(matches!(data.get("x").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 42.0));
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn interprets_nested_expression() {
 
     assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
     let data = scope.bindings().data();
-    assert!(matches!(data.get("msg"), Some(KObject::KString(s)) if *s == "hello world!"));
+    assert!(matches!(data.get("msg").map(|(o, _)| *o), Some(KObject::KString(s)) if *s == "hello world!"));
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn let_binds_a_list_literal_of_numbers() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [1 2 3]\n", &arena, captured);
     let data = scope.bindings().data();
-    match data.get("xs") {
+    match data.get("xs").map(|(o, _)| *o) {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.len(), 3);
             assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
@@ -103,7 +103,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
         captured,
     );
     let data = scope.bindings().data();
-    match data.get("xs") {
+    match data.get("xs").map(|(o, _)| *o) {
         Some(obj @ KObject::List(items, _)) => {
             assert!(items.is_empty());
             assert_eq!(
@@ -142,7 +142,7 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [1 (LET y = 7) 3]\n", &arena, captured);
     let data = scope.bindings().data();
-    match data.get("xs") {
+    match data.get("xs").map(|(o, _)| *o) {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.len(), 3);
             assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
@@ -151,7 +151,7 @@ fn list_literal_with_subexpression_element_evaluates_eagerly() {
         }
         _ => panic!("expected `xs` bound to a List"),
     }
-    assert!(matches!(data.get("y"), Some(KObject::Number(n)) if *n == 7.0));
+    assert!(matches!(data.get("y").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn multiline_list_literal_binds_correctly() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [\n  1\n  2\n  3\n]\n", &arena, captured);
     let data = scope.bindings().data();
-    match data.get("xs") {
+    match data.get("xs").map(|(o, _)| *o) {
         Some(KObject::List(items, _)) => {
             assert_eq!(items.len(), 3);
             assert!(matches!(items[0], KObject::Number(n) if n == 1.0));
@@ -176,7 +176,7 @@ fn nested_list_literal_produces_list_of_lists() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [[1 2] [3 4]]\n", &arena, captured);
     let data = scope.bindings().data();
-    match data.get("xs") {
+    match data.get("xs").map(|(o, _)| *o) {
         Some(KObject::List(outer, _)) => {
             assert_eq!(outer.len(), 2);
             match &outer[0] {

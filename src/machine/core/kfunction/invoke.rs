@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use crate::machine::core::{
-    assemble_body_chain, CallArena, KError, KErrorKind, ResolveTypeExprOutcome, RuntimeArena,
-    Scope,
+    assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, ResolveTypeExprOutcome,
+    RuntimeArena, Scope,
 };
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
@@ -123,16 +123,24 @@ impl<'a> KFunction<'a> {
                     let is_type_denoting = signature_argument_by_name(self, name)
                         .map(|a| a.ktype.is_type_denoting())
                         .unwrap_or(false);
+                    // FN parameters are bound *before* the body block's first
+                    // statement runs. Tag with the nominal-binder carve-out so the
+                    // body's visibility test sees them — same logic the MATCH `it`
+                    // binding uses. Lexically they sit "before" any in-body
+                    // statement; the carve-out is what makes "before the block's
+                    // first statement" work under the chain-cutoff rule.
+                    let param_index =
+                        BindingIndex { idx: 0, nominal_binder: true };
                     if !is_type_denoting {
                         // Signature parser enforces parameter-name uniqueness; a
                         // rebind error here would mean an upstream invariant break.
-                        let _ = child.bind_value(name.clone(), allocated);
+                        let _ = child.bind_value(name.clone(), allocated, param_index);
                     }
                     if let Some(arg) = signature_argument_by_name(self, name) {
                         if arg.ktype.is_type_denoting() {
                             match type_identity_for(name, allocated, &arg.ktype, outer) {
                                 Ok(Some(identity)) => {
-                                    child.register_type(name.clone(), identity);
+                                    child.register_type(name.clone(), identity, param_index);
                                 }
                                 Ok(None) => {}
                                 Err(e) => return BodyResult::Err(e),

@@ -53,21 +53,22 @@ fn makeset_bare_type_token_resolves_eagerly() {
     assert_eq!(out.trim(), "1", "expected printed `1`, got `{out}`");
 }
 
-/// Forward Identifier reference: a wrap-slot's bare-name part resolves to a still-
-/// pending placeholder, so eager resolve parks the binder on that placeholder and
-/// re-dispatches once the binder runs.
+/// Backward Identifier reference: a wrap-slot's bare-name part resolves to a still-
+/// pending placeholder for an earlier-declared LET whose body hasn't terminalized
+/// yet (the LET's RHS sub-Dispatch may park on a binder of its own). Eager resolve
+/// parks the consumer on that placeholder; once the LET binder finalizes, the
+/// re-dispatch reads the resolved value. Forward references no longer drive this
+/// case under index-gated resolution — a later-sibling LET is invisible to the
+/// consumer.
 #[test]
-fn wrap_slot_forward_identifier_parks_and_resumes() {
-    // `FN (ECHO x :Number) -> Number = (x)` followed by `ECHO fwd` parks the call on
-    // `fwd`'s placeholder via the wrap-slot eager-resolve path; when `fwd = 42` binds,
-    // the LET-binder parks resume and the call re-dispatches with the resolved value.
+fn wrap_slot_backward_identifier_parks_and_resumes() {
     let out = run_capturing(
         "FN (ECHO x :Number) -> Number = (x)\n\
-         LET result = (ECHO fwd)\n\
          LET fwd = 42\n\
+         LET result = (ECHO fwd)\n\
          PRINT result",
     )
-    .expect("forward Identifier wrap-slot should park and resume");
+    .expect("backward Identifier wrap-slot should resolve");
     assert_eq!(out.trim(), "42", "expected printed `42`, got `{out}`");
 }
 
@@ -119,13 +120,13 @@ fn wrap_slot_parens_expression_still_sub_dispatches() {
 /// stay `Static`, not eager-resolved — so the corresponding shape lives only in dict
 /// keys/values.)
 #[test]
-fn dict_literal_forward_identifier_value_parks_through_real_wake() {
+fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
     let out = run_capturing(
-        "LET m = {\"a\": fwd}\n\
-         LET fwd = 99\n\
+        "LET fwd = 99\n\
+         LET m = {\"a\": fwd}\n\
          PRINT m",
     )
-    .expect("forward Identifier in dict literal value should park and resume");
+    .expect("backward Identifier in dict literal value should resolve");
     // Dict serialization wraps keys+values in `{}`.
     assert!(out.trim().contains("99"), "expected output to contain `99`, got `{out}`");
     assert!(out.trim().contains("\"a\""), "expected output to contain `\"a\"`, got `{out}`");

@@ -311,26 +311,56 @@ there:
   parks on the binder's producer and re-dispatches once it binds, where the now-bound
   type lets the strict-pass peek pick (`ResolveOutcome::ParkOnProducers`, parked
   through the same edges as the resolved-pick replay-park). This keeps dispatch
-  order-independent — `DESCRIBE xs` resolves to the same overload whether or not
-  `LET xs = …` had landed at first dispatch.
-- An `Unbound` name names nothing (no binding *and* no forward-declared placeholder),
-  so a tentative tie over it can never resolve. It surfaces as the precise
-  `UnboundName` error (`ResolveOutcome::UnboundName`), matching what the
-  single-overload path reports once its auto-wrapped name evaluates — not a generic
-  dispatch miss. This relies on every forward-declared name having its placeholder
-  installed before a consumer dispatches, so `Unbound` is definitive rather than
-  transient.
+  order-independent within the visibility window — `DESCRIBE xs` resolves to the
+  same overload whether or not `LET xs = …` had landed at first dispatch, provided
+  the binding is lexically visible to the reference (see
+  [Overload bucket visibility filter](#overload-bucket-visibility-filter)).
+- An `Unbound` name names nothing (no visible binding *and* no forward-declared
+  placeholder visible at the consumer's chain position), so a tentative tie over it
+  can never resolve. It surfaces as the precise `UnboundName` error
+  (`ResolveOutcome::UnboundName`), matching what the single-overload path reports
+  once its auto-wrapped name evaluates — not a generic dispatch miss.
+
+### Overload bucket visibility filter
+
+Function-bucket lookup pre-filters by per-overload visibility before the strict
+admit predicate runs. Each `Bindings::functions` entry carries a per-overload
+[`BindingIndex`](../../src/machine/core/bindings.rs) — the lexical statement
+index at which the overload was registered, paired with a `nominal_binder` flag.
+[`OverloadBucket::pick`](../../src/machine/core/resolve_dispatch.rs) consults
+the consumer's [`LexicalFrame`](../../src/machine/core/lexical_frame.rs) chain
+and drops any overload whose `BindingIndex` is not visible — same strict
+`idx < cutoff` predicate as [`Scope::resolve_with_chain`](../../src/machine/core/scope.rs).
+A consumer between two same-bucket overloads sees only the earlier; the
+later-sibling overload is hidden, and dispatch falls through to outer scopes
+unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
+does **not** apply to FN-bucket overloads — they're value-style gated. The
+sibling [`pending_overload_producer`](../../src/machine/core/resolve_dispatch.rs)
+applies the same per-entry visibility filter when scanning `pending_overloads`
+for a not-yet-registered binder to park on.
+
+The result: an FN reference resolves under the same lexical-position rule as a
+value-LET reference. Forward calls between sibling FNs work through the
+`nominal_binder` carve-out — an FN's name binding is itself nominal so the
+call's *resolve* sees it across the sibling cutoff, while the bucket entry for
+each new overload remains gated on its own `BindingIndex`. A bare value-LET
+forward reference inside a sibling expression surfaces `UnboundName` directly:
+visibility is lexical, and the parking edges are reserved for visible-but-not-ready
+producers.
 
 ## Open work
 
 - **Unified walk + strict-only admission**
   ([roadmap/dispatch_fix/unified-walk.md](../../roadmap/dispatch_fix/unified-walk.md)).
-  Replace strict-then-tentative with strict-only; specificity ranking becomes
-  a per-scope tiebreak. Innermost-scope wins; cross-scope ranking goes away.
-  Final phase of the dispatch-fix project — see
-  [roadmap/dispatch_fix/](../../roadmap/dispatch_fix/) for the index-gated
-  resolution phase that supplies the structural `Placeholder` vs `Unbound`
-  split this admission rule relies on.
+  Collapse the function-candidate ancestor walk and the per-bare-name slot
+  walks into one, replace strict-then-tentative with strict-only, and carve
+  out the no-keyword shapes into a candidate-machinery-free fast lane.
+  Specificity ranking becomes a per-scope tiebreak; innermost-scope wins.
+- **Nested-binder recursive submission**
+  ([roadmap/dispatch_fix/nested-binder-submission.md](../../roadmap/dispatch_fix/nested-binder-submission.md)).
+  Submit nested binders' sub-`Dispatch` nodes at parent-submission time so
+  their placeholders install before any sibling dispatches — the precondition
+  the strict-only admission rule above relies on.
 
 ## Known limitations
 

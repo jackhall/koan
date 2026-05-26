@@ -209,11 +209,18 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         scope: &'a Scope<'a>,
     ) -> Vec<NodeId> {
         let parent = self.active_chain.clone();
+        // Statement indices start at 1 (not 0): the visibility predicate is strict
+        // less-than (`b.idx < c`), and builtins sit at `idx = 0`. A top-level user
+        // statement at index 1 has cutoff 1, so `0 < 1` makes builtins visible.
+        // Indices are scope-monotonic across repeated `enter_block` calls (REPL /
+        // test-fixture re-entry) so a second submission against the same scope sees
+        // its previously-bound names at strictly lower indices — they stay visible.
+        let start = scope.consume_statement_indices(statements.len());
         statements
             .into_iter()
             .enumerate()
             .map(|(i, expr)| {
-                let chain = LexicalFrame::push(parent.clone(), scope_id, i);
+                let chain = LexicalFrame::push(parent.clone(), scope_id, start + i);
                 self.add_dispatch_with_chain(expr, scope, chain)
             })
             .collect()

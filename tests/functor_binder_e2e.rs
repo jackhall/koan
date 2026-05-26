@@ -60,7 +60,7 @@ fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
 fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     let funcs = scope.bindings().functions();
     for bucket in funcs.values() {
-        for f in bucket {
+        for (f, _) in bucket {
             let first_kw = f.signature.elements.iter().find_map(|e| match e {
                 SignatureElement::Keyword(s) => Some(s.as_str()),
                 _ => None,
@@ -128,7 +128,7 @@ fn functor_binder_e2e_makeset_produces_module() {
     // The functor body's `(LET tag = 0)` lifted into the result module's
     // child scope — verifies the per-call body actually ran and the
     // produced module carries its declared member.
-    let tag = m.child_scope().bindings().data().get("tag").copied();
+    let tag = m.child_scope().bindings().data().get("tag").map(|(o, _)| *o);
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 0.0),
         "IntSet's `tag` member should be 0, got {:?}",

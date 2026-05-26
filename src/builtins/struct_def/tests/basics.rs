@@ -31,7 +31,7 @@ fn struct_named_registers_type_in_scope() {
         other => panic!("expected StructType, got {:?}", other.ktype()),
     }
     let data = scope.bindings().data();
-    let entry = data.get("Point").expect("Point should be bound in scope");
+    let (entry, _) = data.get("Point").expect("Point should be bound in scope");
     assert!(matches!(entry, KObject::StructType { .. }));
 }
 
@@ -49,7 +49,8 @@ fn struct_preserves_field_order() {
     let scope = run_root_silent(&arena);
     run_one(scope, parse_one("STRUCT Backwards = (b :Number, a :Number)"));
     let data = scope.bindings().data();
-    match data.get("Backwards").unwrap() {
+    let (entry, _) = *data.get("Backwards").unwrap();
+    match entry {
         KObject::StructType { fields, .. } => {
             assert_eq!(fields[0].0, "b", "first field should be `b` (declaration order)");
             assert_eq!(fields[1].0, "a");

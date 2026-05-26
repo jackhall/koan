@@ -9,6 +9,15 @@
 //! Borrow discipline across the four maps: `types → functions → data`, with `types`
 //! only acquired when writing types. [`Scope`] embeds the façade by value so all
 //! interior borrows arbitrate against one another.
+//!
+//! Every entry in every map is tagged with a [`BindingIndex`] capturing the lexical
+//! position of the binder that installed it. `BindingIndex { idx: 0, .. }` is reserved
+//! for builtins (registered before any user statement); user statements at top-level
+//! start at `idx: 1`. The `nominal_binder` flag carves out STRUCT / UNION / SIG /
+//! FUNCTOR / MODULE so siblings on the same block can see one another's nominal
+//! identities regardless of source order (mutual recursion across nominal binders).
+//! [`Scope::resolve`] / [`Scope::resolve_type`] / overload-bucket picking apply the
+//! visibility filter; see [`crate::machine::core::lexical_frame::LexicalFrame`].
 
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
@@ -22,6 +31,47 @@ use super::kerror::{KError, KErrorKind};
 
 mod pending;
 pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
+
+/// Lexical position of a binding's installing statement, paired with a `nominal_binder`
+/// flag that carves out STRUCT / UNION / SIG / FUNCTOR / MODULE declarations from the
+/// strict-lexical-cutoff rule (so sibling nominal binders see one another regardless of
+/// source order). Stored alongside every entry in `data`, `placeholders`, `functions`
+/// (per overload), `pending_overloads`, and `types`.
+///
+/// - `idx == 0` is reserved for builtins, which register before any user statement runs.
+/// - User statements at top-level start at `idx: 1`; nested blocks restart from 0
+///   relative to their enclosing block (the visibility test consults
+///   [`LexicalFrame::index_for`] per scope, so the per-block index is what matters).
+/// - `nominal_binder: true` means "visible to siblings regardless of cutoff". Set by the
+///   nominal-decl forms (struct_def, union, sig_def, functor_def, module_def) at install
+///   time. LET / FN value-side bindings pass `false`.
+///
+/// See [`crate::machine::core::scope::Scope::resolve`] for the predicate.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub struct BindingIndex {
+    pub idx: usize,
+    pub nominal_binder: bool,
+}
+
+impl BindingIndex {
+    /// Builtins register before any user statement, so they always satisfy `b.idx < c`
+    /// for any `c >= 1`. Convention — there's no `Builtin` variant; the rule is "tag with
+    /// `idx: 0`".
+    pub const BUILTIN: BindingIndex = BindingIndex { idx: 0, nominal_binder: false };
+
+    /// Tag for a value-side bind (LET, FN body capture, MATCH / TRY `it`, FN parameters):
+    /// strictly lexically gated, sees only earlier-positioned siblings.
+    pub const fn value(idx: usize) -> Self {
+        BindingIndex { idx, nominal_binder: false }
+    }
+
+    /// Tag for a nominal-decl bind (STRUCT, named UNION, SIG, FUNCTOR, MODULE): visible
+    /// to siblings on the same block regardless of source order — the carve-out that lets
+    /// mutual-recursive nominal decls elaborate as an SCC.
+    pub const fn nominal(idx: usize) -> Self {
+        BindingIndex { idx, nominal_binder: true }
+    }
+}
 
 /// Façade owning the co-mutating `RefCell` maps that back every lexical binding:
 /// `types` (name → `&KType`), `data` (name → value), `functions`
@@ -51,17 +101,18 @@ pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
 ///
 /// Lifetime `'a` matches the arena lifetime of the stored references.
 pub struct Bindings<'a> {
-    types: RefCell<HashMap<String, &'a KType<'a>>>,
-    data: RefCell<HashMap<String, &'a KObject<'a>>>,
-    functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
-    placeholders: RefCell<HashMap<String, NodeId>>,
-    /// Bucket-key → producer NodeId for FN / FUNCTOR overloads whose binder has
-    /// dispatched but not finalized. Consulted by `resolve_dispatch`'s
-    /// no-bucket / no-eager-parts fallback so a bare-arg call to an inflight
-    /// overload parks on the producer instead of surfacing `DispatchFailed`.
-    /// Cleared in [`Bindings::try_apply`] at the same site where the overload
-    /// lands in `functions`, so the wake-and-retry sees the bucket populated.
-    pending_overloads: RefCell<HashMap<UntypedKey, NodeId>>,
+    types: RefCell<HashMap<String, (&'a KType<'a>, BindingIndex)>>,
+    data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex)>>,
+    functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
+    placeholders: RefCell<HashMap<String, (NodeId, BindingIndex)>>,
+    /// Bucket-key → (producer NodeId, lexical index) for FN / FUNCTOR overloads
+    /// whose binder has dispatched but not finalized. Consulted by
+    /// `resolve_dispatch`'s no-bucket / no-eager-parts fallback so a bare-arg call
+    /// to an inflight overload parks on the producer instead of surfacing
+    /// `DispatchFailed`. Cleared in [`Bindings::try_apply`] at the same site where
+    /// the overload lands in `functions`, so the wake-and-retry sees the bucket
+    /// populated.
+    pending_overloads: RefCell<HashMap<UntypedKey, (NodeId, BindingIndex)>>,
     /// In-flight named-type binders (STRUCT / named-UNION). Populated by
     /// struct_def / union before elaboration; consulted by the elaborator's
     /// `Resolution::Placeholder` arm to record dependency edges and run DFS
@@ -101,25 +152,38 @@ impl<'a> Bindings<'a> {
         memo.entry(te).or_insert(kt);
     }
 
-    pub fn data(&self) -> Ref<'_, HashMap<String, &'a KObject<'a>>> {
+    /// Read-only view of the data map. Each entry pairs the carrier with the lexical
+    /// [`BindingIndex`] of the statement that installed it. Most call sites use only the
+    /// carrier — destructure as `|(obj, _)| obj`.
+    pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex)>> {
         self.data.borrow()
     }
 
-    pub fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<&'a KFunction<'a>>>> {
+    /// Read-only view of the per-bucket overload list. Each overload carries its own
+    /// [`BindingIndex`] — overloads in the same bucket can sit at different lexical
+    /// positions, so visibility-filter siblings overload-by-overload rather than
+    /// bucket-by-bucket.
+    pub fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>> {
         self.functions.borrow()
     }
 
-    pub fn placeholders(&self) -> Ref<'_, HashMap<String, NodeId>> {
+    /// Read-only view of the dispatch-time name placeholder map. Each placeholder
+    /// carries the producer's `NodeId` (consumer parks on this for readiness) and the
+    /// [`BindingIndex`] of the producing statement (consumer filters this for visibility).
+    pub fn placeholders(&self) -> Ref<'_, HashMap<String, (NodeId, BindingIndex)>> {
         self.placeholders.borrow()
     }
 
-    /// Read-only view of the bucket-key → producer map. See
+    /// Read-only view of the bucket-key → (producer, lexical index) map. See
     /// [`Bindings::try_install_pending_overload`] for the writer.
-    pub fn pending_overloads(&self) -> Ref<'_, HashMap<UntypedKey, NodeId>> {
+    pub fn pending_overloads(&self) -> Ref<'_, HashMap<UntypedKey, (NodeId, BindingIndex)>> {
         self.pending_overloads.borrow()
     }
 
-    pub fn types(&self) -> Ref<'_, HashMap<String, &'a KType<'a>>> {
+    /// Read-only view of the types map. Each entry pairs the type with the lexical
+    /// [`BindingIndex`] of the statement that installed it. Builtins use
+    /// [`BindingIndex::BUILTIN`] (idx 0).
+    pub fn types(&self) -> Ref<'_, HashMap<String, (&'a KType<'a>, BindingIndex)>> {
         self.types.borrow()
     }
 
@@ -128,7 +192,7 @@ impl<'a> Bindings<'a> {
         self.data
             .borrow()
             .get(name)
-            .copied()
+            .map(|(obj, _)| *obj)
             .unwrap_or_else(|| panic!("expected bindings.data[{name:?}] to be present"))
     }
 
@@ -137,7 +201,7 @@ impl<'a> Bindings<'a> {
         self.types
             .borrow()
             .get(name)
-            .copied()
+            .map(|(kt, _)| *kt)
             .unwrap_or_else(|| panic!("expected bindings.types[{name:?}] to be present"))
     }
 
@@ -171,13 +235,17 @@ impl<'a> Bindings<'a> {
     /// keyed by its untyped signature so dispatch finds it — supports `LET f = (FN ...)`
     /// where the bound name doubles as a callable verb.
     ///
+    /// `index` is the lexical [`BindingIndex`] of the installing statement; visibility
+    /// reads against the resolver chain consult it via [`Scope::resolve`].
+    ///
     /// `Conflict` means borrow contention (caller queues); `Err` is semantic rejection.
     pub fn try_bind_value(
         &self,
         name: &str,
         obj: &'a KObject<'a>,
+        index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, obj.as_function(), true)
+        self.try_apply(name, obj, obj.as_function(), true, index)
     }
 
     /// Bare-`FN` overload registration. Adds `fn_ref` to the `functions` bucket keyed by
@@ -185,6 +253,10 @@ impl<'a> Bindings<'a> {
     /// bare FN keyword is dispatchable but not nameable as a value (use `LET f = (FN …)`
     /// for that). Errors:
     /// - `DuplicateOverload` if the bucket already holds an exact-signature equal function.
+    ///
+    /// `index` tags the registered overload with its installing statement's lexical
+    /// position; per-overload tagging matters because overloads sharing one bucket can
+    /// sit at different positions (`OverloadBucket::pick` filters per-overload).
     ///
     /// `obj` is unused on the write side today (no `data` insert) but kept in the signature
     /// so the call site, which has a `&KObject` carrier in hand, stays uniform with
@@ -194,20 +266,23 @@ impl<'a> Bindings<'a> {
         name: &str,
         fn_ref: &'a KFunction<'a>,
         obj: &'a KObject<'a>,
+        index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply(name, obj, Some(fn_ref), false)
+        self.try_apply(name, obj, Some(fn_ref), false, index)
     }
 
     /// Register `name` → `kt` in the type-binding map. Errors `Rebind` if
     /// `types[name]` already exists; returns `Ok(Conflict)` on borrow contention
     /// (caller queues — same shape as [`Bindings::try_bind_value`] and
     /// [`Bindings::try_register_function`]). Best-effort placeholder clear on success.
+    /// `index` tags the binding with its installing statement's lexical position.
     pub fn try_register_type(
         &self,
         name: &str,
         kt: &'a KType<'a>,
+        index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
-        self.try_apply_type(name, kt)
+        self.try_apply_type(name, kt, index)
     }
 
     /// Transactional dual-write for nominal declarations (STRUCT / UNION / MODULE):
@@ -234,6 +309,7 @@ impl<'a> Bindings<'a> {
         name: &str,
         kt: &'a KType<'a>,
         obj: &'a KObject<'a>,
+        index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
@@ -249,19 +325,21 @@ impl<'a> Bindings<'a> {
         if data.contains_key(name) {
             return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
         }
-        match types.get(name).copied() {
+        match types.get(name).map(|(t, _)| *t) {
             None => {
-                types.insert(name.to_string(), kt);
+                types.insert(name.to_string(), (kt, index));
             }
             Some(existing) if existing == kt => {
                 // Cycle-close-idempotent: SCC pre-registration already wrote the
-                // identity. Carrier-write below completes the pair.
+                // identity (with its own index). Carrier-write below completes the
+                // pair; keep the pre-installed index so cycle members agree on the
+                // single visibility tag for both maps.
             }
             Some(_) => {
                 return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
             }
         }
-        data.insert(name.to_string(), obj);
+        data.insert(name.to_string(), (obj, index));
         drop(data);
         drop(types);
         self.clear_placeholder_best_effort(name);
@@ -282,21 +360,31 @@ impl<'a> Bindings<'a> {
     /// [`Bindings::try_register_function`]): placeholder installs happen at
     /// dispatch-time outside the re-entrant-bind hot path, so a conflict here
     /// indicates a programming error.
-    pub fn try_install_placeholder(&self, name: String, idx: NodeId) -> Result<(), KError> {
-        if let Some(existing) = self.data.borrow().get(&name) {
+    ///
+    /// `index` tags the placeholder with its installing statement's lexical position.
+    /// The eventual `try_bind_value` / `try_register_*` call must carry the same index
+    /// (and the same `nominal_binder` flag) so the consumer's visibility test sees a
+    /// consistent answer across the placeholder → finalized-binding transition.
+    pub fn try_install_placeholder(
+        &self,
+        name: String,
+        idx: NodeId,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
+        if let Some((existing, _)) = self.data.borrow().get(&name).copied() {
             if matches!(existing, KObject::KFunction(_, _)) {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
         let mut ph = self.placeholders.borrow_mut();
-        if let Some(existing) = ph.get(&name).copied() {
+        if let Some((existing, _)) = ph.get(&name).copied() {
             if existing == idx {
                 return Ok(());
             }
             return Err(KError::new(KErrorKind::Rebind { name }));
         }
-        ph.insert(name, idx);
+        ph.insert(name, (idx, index));
         Ok(())
     }
 
@@ -314,16 +402,21 @@ impl<'a> Bindings<'a> {
     /// dispatch will hit the live bucket directly.
     ///
     /// Panics on borrow conflict, mirroring [`Bindings::try_install_placeholder`].
+    ///
+    /// `index` is the producing binder's lexical position; consumers filter
+    /// `pending_overloads` hits by this index in the same way the live `functions`
+    /// bucket filters per-overload.
     pub fn try_install_pending_overload(
         &self,
         bucket: UntypedKey,
         idx: NodeId,
+        index: BindingIndex,
     ) -> Result<(), KError> {
         if self.functions.borrow().contains_key(&bucket) {
             return Ok(());
         }
         let mut pending = self.pending_overloads.borrow_mut();
-        if let Some(existing) = pending.get(&bucket).copied() {
+        if let Some((existing, _)) = pending.get(&bucket).copied() {
             if existing == idx {
                 return Ok(());
             }
@@ -331,7 +424,7 @@ impl<'a> Bindings<'a> {
                 name: format!("pending-overload bucket {bucket:?}"),
             }));
         }
-        pending.insert(bucket, idx);
+        pending.insert(bucket, (idx, index));
         Ok(())
     }
 
@@ -345,13 +438,13 @@ impl<'a> Bindings<'a> {
     /// applied. Panics on `Conflict` — a fresh `Bindings` should never hit a borrow
     /// conflict against itself.
     pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
-        let snapshot: Vec<(String, &'a KObject<'a>)> = src
+        let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex)> = src
             .data()
             .iter()
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|(k, (v, idx))| (k.clone(), *v, *idx))
             .collect();
-        for (name, obj) in snapshot {
-            match self.try_apply(&name, obj, obj.as_function(), true)? {
+        for (name, obj, index) in snapshot {
+            match self.try_apply(&name, obj, obj.as_function(), true, index)? {
                 ApplyOutcome::Applied => {}
                 ApplyOutcome::Conflict => {
                     unreachable!(
@@ -375,6 +468,7 @@ impl<'a> Bindings<'a> {
         &self,
         name: &str,
         kt: &'a KType<'a>,
+        index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
@@ -383,7 +477,7 @@ impl<'a> Bindings<'a> {
         if types.contains_key(name) {
             return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
         }
-        types.insert(name.to_string(), kt);
+        types.insert(name.to_string(), (kt, index));
         drop(types);
         self.clear_placeholder_best_effort(name);
         Ok(ApplyOutcome::Applied)
@@ -414,6 +508,7 @@ impl<'a> Bindings<'a> {
         obj: &'a KObject<'a>,
         fn_part: Option<&'a KFunction<'a>>,
         write_data: bool,
+        index: BindingIndex,
     ) -> Result<ApplyOutcome, KError> {
         let mut functions_handle = if fn_part.is_some() {
             match self.functions.try_borrow_mut() {
@@ -436,7 +531,7 @@ impl<'a> Bindings<'a> {
         // `fn_part.is_some()` + existing `KFunction` falls through to bucket dedupe
         // (overload-add path); everything else is a rebind error.
         if let Some(data) = data.as_ref() {
-            if let Some(existing) = data.get(name) {
+            if let Some((existing, _)) = data.get(name) {
                 match fn_part {
                     None => return Err(KError::new(KErrorKind::Rebind { name: name.to_string() })),
                     Some(_) => {
@@ -452,7 +547,7 @@ impl<'a> Bindings<'a> {
             let key = f_ref.signature.untyped_key();
             let bucket = functions.entry(key.clone()).or_default();
             let mut already_present = false;
-            for existing in bucket.iter() {
+            for (existing, _) in bucket.iter() {
                 if std::ptr::eq(*existing, f_ref) {
                     already_present = true;
                     break;
@@ -465,12 +560,12 @@ impl<'a> Bindings<'a> {
                 }
             }
             if !already_present {
-                bucket.push(f_ref);
+                bucket.push((f_ref, index));
             }
             cleared_overload_bucket = Some(key);
         }
         if let Some(data) = data.as_mut() {
-            data.insert(name.to_string(), obj);
+            data.insert(name.to_string(), (obj, index));
         }
         drop(data);
         drop(functions_handle);

@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope,
+    SchedulerHandle,
+};
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::branch_walk::find_branch_body;
@@ -84,7 +87,18 @@ pub fn body<'a>(
     let it_obj: &'a KObject<'a> = inner_arena.alloc(value.deep_clone());
     // Fresh per-call child scope: the `it` binding never collides. `bind_value`'s rebind
     // check therefore always passes; the `_` swallow is intentional.
-    let _ = child.bind_value("it".to_string(), it_obj);
+    // `it` is the first (and only) sibling in the freshly minted per-MATCH child
+    // scope. Tag it at lexical index 0 — the arm body runs at index 0 too, but
+    // visibility takes care of itself: the consumer's chain prepends `(child.id, 0)`
+    // for the arm body, and the `it` entry's `idx: 0 < c: 0` would fail. We need
+    // `it` to be visible to the arm body, so install with the nominal-binder
+    // carve-out (semantically: it's not a sibling reference, it's the entire
+    // surrounding context for the arm — same logic the FN parameter path uses).
+    let _ = child.bind_value(
+        "it".to_string(),
+        it_obj,
+        BindingIndex { idx: 0, nominal_binder: true },
+    );
     // The arm body enters a fresh lexical block (its scope is the per-MATCH child
     // scope, distinct from the call-site scope). `tail_with_block` records the
     // entry so the scheduler prepends `(child.id, 0)` to the slot's chain on

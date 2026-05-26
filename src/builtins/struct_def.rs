@@ -4,8 +4,8 @@ use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
+    Scope, SchedulerHandle,
 };
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
@@ -14,7 +14,7 @@ use crate::machine::model::types::{
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder_with_pre_run, sig};
 
 /// `STRUCT <name:TypeExprRef> = (<schema>)` — declare a named record type.
 ///
@@ -83,8 +83,16 @@ pub fn body<'a>(
         "STRUCT schema",
         &mut elaborator,
     );
+    // STRUCT is a nominal binder (D7 carve-out): the placeholder install at submission
+    // already stamped `nominal_binder: true`; the eventual `register_nominal` must
+    // carry the same flag so the visibility tag stays consistent across the
+    // placeholder → finalized-binding transition.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::nominal(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
-        FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields),
+        FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields, bind_index),
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Park(producers) => defer_struct_via_combine(
             scope,
@@ -93,6 +101,7 @@ pub fn body<'a>(
             schema_expr,
             producers,
             pending_guard,
+            bind_index,
         ),
     }
 }
@@ -103,6 +112,7 @@ fn finalize_struct<'a>(
     scope: &'a Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`; the
     // guard drops on body / Combine-finish return and removes the entry. Cycle-close
@@ -117,7 +127,7 @@ fn finalize_struct<'a>(
     // pre-installed carrier.
     let bindings = scope.bindings();
     if bindings.types().get(&name).is_some() {
-        if let Some(existing) = bindings.data().get(&name).copied() {
+        if let Some((existing, _)) = bindings.data().get(&name).copied() {
             return BodyResult::Value(existing);
         }
     }
@@ -144,7 +154,7 @@ fn finalize_struct<'a>(
         scope_id,
         name: name.clone(),
     };
-    match scope.register_nominal(name, identity, struct_obj) {
+    match scope.register_nominal(name, identity, struct_obj, bind_index) {
         Ok(obj) => BodyResult::Value(obj),
         Err(e) => err(e),
     }
@@ -161,6 +171,7 @@ fn defer_struct_via_combine<'a>(
     schema_expr: KExpression<'a>,
     producers: Vec<NodeId>,
     pending_guard: PendingBinderGuard<'a>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
@@ -180,7 +191,7 @@ fn defer_struct_via_combine<'a>(
             &mut elaborator,
         ) {
             FieldListOutcome::Done(fields) => {
-                finalize_struct(scope, name_for_finish.clone(), fields)
+                finalize_struct(scope, name_for_finish.clone(), fields, bind_index)
             }
             FieldListOutcome::Err(msg) => BodyResult::Err(
                 KError::new(KErrorKind::ShapeError(msg))
@@ -205,7 +216,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_pre_run(
+    register_nominal_binder_with_pre_run(
         scope,
         "STRUCT",
         sig(KType::Type, vec![

@@ -244,30 +244,61 @@ Forward references between sibling top-level expressions, members of a
 `MODULE` body, and (eventually) names imported across files all require the
 same property: a value- or type-position lookup whose target binder has
 dispatched but not yet executed parks on the producer instead of failing with
-`UnboundName`. The park is keyed off `Scope::resolve` consulting the
-`placeholders` table, so it covers every name reached through that path —
-bare-name value slots and type-token slots. A *keyword-headed* function call
-(`ID 7`) is the exception: it resolves through the `functions` bucket, which
-does not consult `placeholders`, so calling a function not yet registered in
-the same scope fails rather than parking (forward calls from a function body
-are unaffected — bodies re-dispatch per call, after every sibling has
-registered). The mechanism lives in two pieces.
+`UnboundName` — **provided the binding is lexically visible from this
+reference's source position.** Visibility is the index gate (see
+[Lexical provenance chain](#lexical-provenance-chain) below): every binding
+carries the lexical statement index it was registered at, and a consumer at
+chain cutoff `c` sees only bindings with index `i < c` plus any binding
+flagged `nominal_binder` (the D7 carve-out for `STRUCT` / named `UNION` /
+`SIG` / `FUNCTOR` / `MODULE`, whose declared names cross the cutoff so
+mutual-recursive nominal references work). A *keyword-headed* function call
+(`ID 7`) resolves through the `functions` bucket, which applies the same
+per-overload visibility filter: a later-sibling overload registered after
+this consumer's statement is hidden, and dispatch falls through to outer
+scopes. Forward calls from a function body are unaffected — bodies re-dispatch
+per call against the body's lexical chain, by which point every sibling
+binder has registered.
+
+The mechanism lives in two pieces.
 
 A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
 inside the [`Bindings`](../src/machine/core/scope.rs) façade on
 `Scope`, alongside `data` and `functions`. When a binder dispatches, its
 `pre_run` hook (a per-`KFunction` extractor that pulls the to-be-bound name
 structurally out of the expression's parts) installs `name → producer NodeId`
-in the dispatching scope's placeholders. The six binder builtins (`LET`,
-`FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`) opt in via
-`register_builtin_with_pre_run`; everything else stays placeholder-free.
-`Scope::resolve` walks `data` then `placeholders` in each scope on the chain
-and returns one of three shapes: `Resolution::Value(&KObject)` for a
-finalized binding, `Resolution::Placeholder(NodeId)` for a still-running
-producer, or `Resolution::Unbound` for a genuinely missing name. `bind_value`
-and `register_function` remove their own placeholder before inserting into
-`data` / `functions`, so the two tables are mutually exclusive at any
-moment.
+in the dispatching scope's placeholders, paired with the binder's
+[`BindingIndex`](../src/machine/core/bindings.rs) (the lexical statement
+index, plus the `nominal_binder` flag for `STRUCT` / named `UNION` / `SIG` /
+`FUNCTOR` / `MODULE`). The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`,
+`UNION`, `MODULE`) opt in via `register_builtin_with_pre_run`; everything
+else stays placeholder-free.
+[`Scope::resolve_with_chain`](../src/machine/core/scope.rs) walks `data`
+then `placeholders` in each scope on the ancestor chain, filters every hit
+through the [`visible`](../src/machine/core/scope.rs) predicate (the
+`idx < cutoff` / `nominal_binder` rule), and returns one of three shapes:
+`Resolution::Value(&KObject)` for a finalized visible binding,
+`Resolution::Placeholder(NodeId)` for a still-running visible producer, or
+`Resolution::UnboundName` when no visible binding exists. The
+`Scope::resolve` shorthand (no chain argument) reads as "see everything" and
+is reserved for test fixtures and builtin-registration paths; production
+dispatch always threads the consumer's `LexicalFrame` chain through. The
+chain-aware [`resolve_type_with_chain`](../src/machine/core/scope.rs) and
+[`lookup_with_chain`](../src/machine/core/scope.rs) carry the same gate to
+the type-side resolver and the bare-identifier value lookup respectively.
+`bind_value` and `register_function` remove their own placeholder before
+inserting into `data` / `functions`, so the two tables are mutually
+exclusive at any moment.
+
+Per-scope statement indices flow through
+[`Scope::consume_statement_indices`](../src/machine/core/scope.rs): a
+monotonic counter that hands out fresh indices starting strictly above
+every previously-bound name. `Scheduler::enter_block` consumes from it
+when submitting a block's statements, so the REPL or a long-lived module
+scope that re-enters the same `Scope` gets a fresh window each time and
+previously-bound names stay visible (their indices sit below the new
+window). The `add_dispatch` auto-root path consumes from the counter too,
+so single-node test submissions outside `enter_block` get unique chain
+indices.
 
 The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) — is a
 four-phase linear pipeline: a bare-name short-circuit, the chain-walked
@@ -290,21 +321,27 @@ after subs resolve.
 The four rails the resolution feeds:
 
 - **Bare-name short-circuit** (phase 1, runs before resolution). A
-  single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
-  directly: `Value` returns inline, `Placeholder` rewrites the slot's work
-  to `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail` uses for
-  sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
-  produces the structured error.
+  single-`Identifier` dispatch slot (`(some_var)`) consults
+  `Scope::resolve_with_chain` directly against the consumer's `LexicalFrame`:
+  `Value` returns inline, `Placeholder` rewrites the slot's work to
+  `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
+  uses for sub-Bind waits), `UnboundName` falls through so `value_lookup`'s
+  body produces the structured error.
 
   Forward references resolve through this rail and the eager name-resolve
-  rail (below), both of which route name lookups through `Scope::resolve`
-  and so consult the `placeholders` table. A *keyword-headed* call —
-  `ID 7`, where `ID` is the head Keyword — does not: function dispatch is
-  a `functions` bucket lookup with no placeholder consultation, so a call
-  to a function not yet registered in the same scope surfaces as
-  `DispatchFailed` rather than parking. Forward calls from a function
-  *body* are unaffected: bodies re-dispatch per call, by which point every
-  sibling binder has registered.
+  rail (below), both of which route name lookups through
+  `Scope::resolve_with_chain` against the consumer's `LexicalFrame` and so
+  consult the visibility-gated `placeholders` table. A *keyword-headed*
+  call — `ID 7`, where `ID` is the head Keyword — dispatches through the
+  `functions` bucket, which applies the same per-overload visibility filter
+  (see [ktype.md § Overload bucket visibility filter](typing/ktype.md#overload-bucket-visibility-filter)).
+  A later-sibling overload registered after this consumer's statement is
+  hidden, and dispatch falls through to outer scopes; finding nothing
+  surfaces as `DispatchFailed`. Forward calls between sibling FNs work
+  through the `nominal_binder` carve-out (FN-name bindings are nominal
+  even though FN-bucket overloads are not); forward calls from a function
+  *body* are unaffected because bodies re-dispatch per call against the
+  body's lexical chain, by which point every sibling binder has registered.
 - **Placeholder install** (phase 2.5). If the picked function carries a
   `pre_run` extractor, `Resolved.placeholder_name` is its result and the
   driver installs `name → NodeId(idx)` on the dispatching scope. A
@@ -624,13 +661,18 @@ enclosing block where its visibility would depend on which arm fired.
 
 ### Read-side hook
 
-The chain is plumbed onto every node but currently unread on
-the resolution path; `LexicalFrame::index_for(scope_id)` is the
-lookup primitive future name-resolution work consumes when deciding
-whether a binding at index `i` in block `scope_id` is visible from
-this reference's lexical position. See
-[`index-gated-resolution`](../roadmap/dispatch_fix/index-gated-resolution.md)
-in Open work.
+The chain is read by name resolution through
+[`LexicalFrame::index_for(scope_id)`](../src/machine/core/lexical_frame.rs):
+the lookup primitive that returns the consumer's statement index in a
+given scope (or `None` when that scope is not on the chain — "already
+returned", visibility unconstrained). The
+[`visible`](../src/machine/core/scope.rs) predicate consumes it as
+`b.nominal_binder || b.idx < cutoff`; the value-side
+`Scope::resolve_with_chain`, the type-side `resolve_type_with_chain`, the
+bare-identifier `lookup_with_chain`, the function-bucket
+`OverloadBucket::pick`, and the `pending_overload_producer` scanner all
+filter through it. The gate is `chain = None`-bypassed for test fixtures
+and builtin-registration paths.
 
 ## Open work
 
@@ -649,13 +691,6 @@ in Open work.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Index-gated resolution**
-  ([roadmap/dispatch_fix/index-gated-resolution.md](../roadmap/dispatch_fix/index-gated-resolution.md)).
-  Flip name resolution from "does a placeholder exist yet?" to "is this
-  binding lexically before this reference?", reading the chain plumbed
-  by the lexical-provenance phase via `LexicalFrame::index_for` and
-  splitting `Resolution` so visibility (lexical) and readiness (timing)
-  are separately answerable.
 - **Unified walk + strict-only admission**
   ([roadmap/dispatch_fix/unified-walk.md](../roadmap/dispatch_fix/unified-walk.md)).
   Collapse W1 (function-candidate ancestor walk) and N×W3 (per bare-name slot
@@ -663,6 +698,9 @@ in Open work.
   admission with strict-only, branching the Empty case explicitly on bare-name
   resolution outcomes (`Deferred` / `ParkOnProducers` / `UnboundName`); carve
   out no-keyword expressions (single token, type call, function-value call)
-  into a candidate-machinery-free fast lane. Final phase of the dispatch-fix
-  project — see [roadmap/dispatch_fix/](../roadmap/dispatch_fix/) for the
-  preceding index-gate and nested-binder phases this builds on.
+  into a candidate-machinery-free fast lane.
+- **Nested-binder recursive submission**
+  ([roadmap/dispatch_fix/nested-binder-submission.md](../roadmap/dispatch_fix/nested-binder-submission.md)).
+  Submit nested binders' sub-`Dispatch` nodes at parent-submission time so
+  their placeholders install before any sibling can dispatch — closing the
+  `LET f = (FN NAME [x] x)` race the strict-only admission rule above relies on.

@@ -17,11 +17,11 @@ fn try_register_type_inserts_into_types_map() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = arena.alloc(KType::Number);
     let outcome = bindings
-        .try_register_type("Foo", kt)
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
     // Type-side storage is the only home for this binding — `data` stays empty.
-    let stored = *bindings.types().get("Foo").expect("Foo should be in types map");
+    let (stored, _) = *bindings.types().get("Foo").expect("Foo should be in types map");
     assert!(std::ptr::eq(stored, kt));
     assert!(bindings.data().get("Foo").is_none());
 }
@@ -32,14 +32,16 @@ fn try_register_type_rejects_collision_with_rebind() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt1: &KType = arena.alloc(KType::Number);
     let kt2: &KType = arena.alloc(KType::Str);
-    bindings.try_register_type("Foo", kt1).expect("first register should succeed");
-    let err = match bindings.try_register_type("Foo", kt2) {
+    bindings
+        .try_register_type("Foo", kt1, BindingIndex::BUILTIN)
+        .expect("first register should succeed");
+    let err = match bindings.try_register_type("Foo", kt2, BindingIndex::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
     assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
     // First binding remains intact — the collision must not overwrite.
-    let stored = *bindings.types().get("Foo").expect("Foo should still be present");
+    let (stored, _) = *bindings.types().get("Foo").expect("Foo should still be present");
     assert!(std::ptr::eq(stored, kt1));
 }
 
@@ -50,7 +52,7 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
     let kt: &KType = arena.alloc(KType::Number);
     let _r = bindings.types();
     let outcome = bindings
-        .try_register_type("Foo", kt)
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("conflict path returns Ok(Conflict), not Err");
     assert!(matches!(outcome, ApplyOutcome::Conflict));
     // Live read borrow blocked the write; nothing was inserted.
@@ -63,11 +65,11 @@ fn try_register_type_clears_matching_placeholder() {
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = arena.alloc(KType::Number);
     bindings
-        .try_install_placeholder("Bar".to_string(), NodeId(7))
+        .try_install_placeholder("Bar".to_string(), NodeId(7), BindingIndex::BUILTIN)
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .try_register_type("Bar", kt)
+        .try_register_type("Bar", kt, BindingIndex::BUILTIN)
         .expect("type register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }
@@ -77,7 +79,9 @@ fn try_register_type_does_not_touch_data_or_functions() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
     let kt: &KType = arena.alloc(KType::Number);
-    bindings.try_register_type("Foo", kt).expect("register should succeed");
+    bindings
+        .try_register_type("Foo", kt, BindingIndex::BUILTIN)
+        .expect("register should succeed");
     assert!(bindings.data().is_empty());
     assert!(bindings.functions().is_empty());
 }
@@ -89,12 +93,12 @@ fn try_register_nominal_inserts_into_both_maps() {
     let kt: &KType = arena.alloc(KType::Number);
     let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     let outcome = bindings
-        .try_register_nominal("Foo", kt, obj)
+        .try_register_nominal("Foo", kt, obj, BindingIndex::BUILTIN)
         .expect("try_register_nominal should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
     // Dual-write: both maps hold the exact pointers we supplied.
-    let stored_kt = *bindings.types().get("Foo").expect("Foo should be in types map");
-    let stored_obj = *bindings.data().get("Foo").expect("Foo should be in data map");
+    let (stored_kt, _) = *bindings.types().get("Foo").expect("Foo should be in types map");
+    let (stored_obj, _) = *bindings.data().get("Foo").expect("Foo should be in data map");
     assert!(std::ptr::eq(stored_kt, kt));
     assert!(std::ptr::eq(stored_obj, obj));
 }
@@ -107,9 +111,9 @@ fn try_register_nominal_rejects_collision_in_types_with_rebind() {
     let kt_new: &KType = arena.alloc(KType::Str);
     let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     bindings
-        .try_register_type("Foo", kt_existing)
+        .try_register_type("Foo", kt_existing, BindingIndex::BUILTIN)
         .expect("pre-seed types[Foo] should succeed");
-    let err = match bindings.try_register_nominal("Foo", kt_new, obj) {
+    let err = match bindings.try_register_nominal("Foo", kt_new, obj, BindingIndex::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("collision on types side must Err(Rebind), not Ok"),
     };
@@ -117,7 +121,7 @@ fn try_register_nominal_rejects_collision_in_types_with_rebind() {
     // Pre-check rejected the transaction before either insert: data side untouched.
     assert!(bindings.data().get("Foo").is_none());
     // First types binding survives intact.
-    let stored = *bindings.types().get("Foo").expect("Foo should still be in types");
+    let (stored, _) = *bindings.types().get("Foo").expect("Foo should still be in types");
     assert!(std::ptr::eq(stored, kt_existing));
 }
 
@@ -129,9 +133,9 @@ fn try_register_nominal_rejects_collision_in_data_with_rebind() {
     let obj_existing: &KObject<'_> = arena.alloc(KObject::Number(42.0));
     let obj_new: &KObject<'_> = arena.alloc(KObject::Number(7.0));
     bindings
-        .try_bind_value("Foo", obj_existing)
+        .try_bind_value("Foo", obj_existing, BindingIndex::BUILTIN)
         .expect("pre-seed data[Foo] should succeed");
-    let err = match bindings.try_register_nominal("Foo", kt, obj_new) {
+    let err = match bindings.try_register_nominal("Foo", kt, obj_new, BindingIndex::BUILTIN) {
         Err(e) => e,
         Ok(_) => panic!("collision on data side must Err(Rebind), not Ok"),
     };
@@ -139,7 +143,7 @@ fn try_register_nominal_rejects_collision_in_data_with_rebind() {
     // Pre-check rejected the transaction before either insert: types side untouched.
     assert!(bindings.types().get("Foo").is_none());
     // First data binding survives intact.
-    let stored = *bindings.data().get("Foo").expect("Foo should still be in data");
+    let (stored, _) = *bindings.data().get("Foo").expect("Foo should still be in data");
     assert!(std::ptr::eq(stored, obj_existing));
 }
 
@@ -151,7 +155,7 @@ fn try_register_nominal_yields_conflict_on_live_types_borrow() {
     let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     let _r = bindings.types();
     let outcome = bindings
-        .try_register_nominal("Foo", kt, obj)
+        .try_register_nominal("Foo", kt, obj, BindingIndex::BUILTIN)
         .expect("conflict path returns Ok(Conflict), not Err");
     assert!(matches!(outcome, ApplyOutcome::Conflict));
     // Borrow contention on `types` blocked the write: both maps untouched.
@@ -191,18 +195,18 @@ fn try_register_nominal_is_idempotent_against_matching_pre_installed_types() {
     assert!(!std::ptr::eq(kt_pre, kt_finalize), "alloc should produce distinct pointers");
     assert_eq!(*kt_pre, *kt_finalize, "values must be equal");
     let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
-    bindings.try_register_type("Foo", kt_pre).unwrap();
+    bindings.try_register_type("Foo", kt_pre, BindingIndex::BUILTIN).unwrap();
     // try_register_nominal: types[Foo] already populated with matching identity,
     // data[Foo] empty → idempotent path, write only data.
     let outcome = bindings
-        .try_register_nominal("Foo", kt_finalize, obj)
+        .try_register_nominal("Foo", kt_finalize, obj, BindingIndex::BUILTIN)
         .expect("idempotent arm should succeed");
     assert!(matches!(outcome, ApplyOutcome::Applied));
     // The types entry keeps the PRE-installed pointer (not the finalize's).
-    let stored_kt = *bindings.types().get("Foo").expect("Foo in types");
+    let (stored_kt, _) = *bindings.types().get("Foo").expect("Foo in types");
     assert!(std::ptr::eq(stored_kt, kt_pre));
     // The data entry is the finalize's carrier.
-    let stored_obj = *bindings.data().get("Foo").expect("Foo in data");
+    let (stored_obj, _) = *bindings.data().get("Foo").expect("Foo in data");
     assert!(std::ptr::eq(stored_obj, obj));
 }
 
@@ -259,11 +263,11 @@ fn try_register_nominal_clears_matching_placeholder() {
     let kt: &KType = arena.alloc(KType::Number);
     let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     bindings
-        .try_install_placeholder("Bar".to_string(), NodeId(7))
+        .try_install_placeholder("Bar".to_string(), NodeId(7), BindingIndex::BUILTIN)
         .expect("placeholder install should succeed on fresh bindings");
     assert!(bindings.placeholders().contains_key("Bar"));
     bindings
-        .try_register_nominal("Bar", kt, obj)
+        .try_register_nominal("Bar", kt, obj, BindingIndex::BUILTIN)
         .expect("nominal register should succeed and clear placeholder");
     assert!(!bindings.placeholders().contains_key("Bar"));
 }

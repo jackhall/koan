@@ -37,7 +37,10 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
     for (i, chain) in chains.iter().enumerate() {
         assert!(chain.parent.is_none(), "top-level frame i={i} must have parent: None");
         assert_eq!(chain.scope_id, root.id);
-        assert_eq!(chain.index, i);
+        // Statement indices start at 1 (BindingIndex::BUILTIN occupies 0), then advance
+        // monotonically — see `Scope::consume_statement_indices`. Top-level statements
+        // here get 1, 2, 3.
+        assert_eq!(chain.index, i + 1);
     }
     // Distinct frames per statement (different Rc pointers).
     assert!(!Rc::ptr_eq(&chains[0], &chains[1]));
@@ -73,9 +76,10 @@ fn sibling_statements_in_inner_block_share_parent_rc() {
 #[test]
 fn module_body_chain_parent_points_at_module_statement_frame() {
     // Submit `MODULE Foo = (LET x = 1)` and trace the body statement's chain.
-    // Top-level: `MODULE Foo = (...)` gets frame `(root, 0)`.
-    // Body: `LET x = 1` runs against `child_under_module(scope, "Foo")` and gets
-    // chain `(module_body_scope, 0) :: (root, 0)`.
+    // Top-level: `MODULE Foo = (...)` gets frame `(root, 1)` (indices start at 1
+    // — `BindingIndex::BUILTIN` occupies 0). Body: `LET x = 1` runs against
+    // `child_under_module(scope, "Foo")` and gets chain
+    // `(module_body_scope, 1) :: (root, 1)`.
     use crate::machine::model::values::Module;
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
@@ -85,7 +89,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     let top_id = ids[0];
     let top_chain = sched.chain_of(top_id).expect("module statement chain");
     assert_eq!(top_chain.scope_id, root.id);
-    assert_eq!(top_chain.index, 0);
+    assert_eq!(top_chain.index, 1);
     assert!(top_chain.parent.is_none());
     sched.execute().expect("module runs");
     // Module binding now exists on root; the module's child scope can be
@@ -94,7 +98,7 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     // above (top frame is root); the body-chain shape is exercised end-to-end
     // by the recursive smoke tests below.
     let data = root.bindings().data();
-    let foo = data.get("Foo").copied().expect("Foo bound");
+    let (foo, _) = data.get("Foo").copied().expect("Foo bound");
     let module = match foo {
         crate::machine::model::KObject::KTypeValue(crate::machine::model::KType::Module {
             module: m, ..
@@ -147,7 +151,7 @@ fn fn_body_call_with_spacers_produces_value() {
     );
     let data = scope.bindings().data();
     use crate::machine::model::KObject;
-    assert!(matches!(data.get("r"), Some(KObject::Number(n)) if *n == 5.0));
+    assert!(matches!(data.get("r").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 5.0));
 }
 
 #[test]

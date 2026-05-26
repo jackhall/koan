@@ -213,18 +213,19 @@ fn dispatch_disambiguates_element_only_overloads_on_bare_variable() {
     assert_eq!(strings, b"strings\n");
 }
 
-/// A *forward-referenced* bare variable disambiguates too: `DESCRIBE xs` is dispatched
-/// before `LET xs = …` binds, so the strict-pass peek finds only a pending `Placeholder`
-/// and the tentative pass ties. Rather than no-matching, dispatch parks on the binder's
-/// producer (`ResolveOutcome::ParkOnProducers`) and re-dispatches once `xs` binds, where the
-/// peek reads its `List<Number>` type and routes to `:(List Number)`.
+/// A backward-referenced bare variable disambiguates element-only overloads via
+/// the strict-pass peek: `LET xs = [1 2 3]` lands `xs` with a `List<Number>`
+/// carried type, then `(DESCRIBE xs)`'s strict pass reads that type through the
+/// gated `resolve_with_chain` and routes to `:(List Number)`. Forward references
+/// no longer drive this case under index-gated resolution — a later-sibling
+/// `LET xs = …` is invisible to the consumer (LET is value-style gated).
 #[test]
-fn dispatch_disambiguates_element_only_overloads_on_forward_ref_variable() {
+fn dispatch_disambiguates_element_only_overloads_on_bound_variable() {
     let bytes = capture_program_output(
         "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
          FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")\n\
-         LET y = (DESCRIBE xs)\n\
          LET xs = [1 2 3]\n\
+         LET y = (DESCRIBE xs)\n\
          PRINT y",
     );
     assert_eq!(bytes, b"numbers\n");
