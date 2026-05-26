@@ -90,7 +90,7 @@ fn functor_with_two_pinned_slots_round_trips() {
         "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))\n\
          SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     // Functor returns a SatisfiesSignature with two pins; body produces a module that pins
     // both. Use the same SIG (`Set`) on both sides so the body's MODULE Result can
@@ -145,7 +145,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     run(
         scope,
@@ -189,7 +189,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     // Functor returns SetSig with Elt pinned to Number; body's module pins Elt to Str.
     // The body's module isn't sig-ascribed, so the mismatch surfaces as a return-type
@@ -200,7 +200,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
          (MODULE Result = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("MAKEBAD int_ord"), scope);
+    let id = sched.add_dispatch(parse_one("MAKEBAD IntOrdView"), scope);
     sched.execute().expect("execute does not surface per-slot errors");
     let res = sched.read_result(id);
     assert!(

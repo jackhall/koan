@@ -18,7 +18,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         scope,
         "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     // FN-def must register with `ReturnType::Deferred(TypeExpr(Er))`. The body `(Er)`
     // returns the bound module value via value_lookup.
@@ -33,7 +33,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
         f.signature.return_type,
     );
     // Invoke and verify the per-call slot check accepts the bound module.
-    let result = run_one(scope, parse_one("USE_ID int_ord"));
+    let result = run_one(scope, parse_one("USE_ID IntOrdView"));
     match result {
         KObject::KTypeValue(KType::Module { module: _, frame: _ }) => {}
         other => panic!("expected KModule from USE_ID, got {:?}", other.ktype()),
@@ -53,7 +53,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
 /// `ReturnType::Deferred(_)`.
 ///
 /// **Caveat — kept simpler variant.** The plan also drafted an end-to-end
-/// invocation `(GET_ZERO int_ord)` returning the underlying `Number(0)` carrier.
+/// invocation `(GET_ZERO IntOrdView)` returning the underlying `Number(0)` carrier.
 /// That fails today: the per-call return-type check on `Deferred(_)` returns runs
 /// at lift-time and compares the body's `.ktype()` (Number, from the underlying
 /// ATTR-read) against the per-call-elaborated `KType::UserType { kind: Module,
@@ -79,14 +79,14 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
         scope,
         "SIG WithZero = ((LET Type = Number) (VAL zero :Type))\n\
          MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
-         LET int_ord = (IntOrd :| WithZero)",
+         LET IntOrdView = (IntOrd :| WithZero)",
     );
     // The ascription succeeded — that's the canonical VAL-slot-satisfied-by-LET
     // pairing this item exists to enable.
     let data = scope.bindings().data();
     assert!(
-        matches!(data.get("int_ord"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
-        "int_ord should be an opaquely-ascribed module satisfying WithZero's VAL zero slot",
+        matches!(data.get("IntOrdView"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
+        "IntOrdView should be an opaquely-ascribed module satisfying WithZero's VAL zero slot",
     );
     drop(data);
     // FN-def. Pre-Stage-B this errored with "unbound name `Er`" at FN-construction
@@ -122,7 +122,7 @@ fn functor_return_sig_with_parameter_ref_resolves_per_call() {
         "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          SIG Set = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     // FN-def registers with `ReturnType::Deferred(Expression(...))`.
     run(
@@ -158,7 +158,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
         scope,
         "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-         LET int_ord = (IntOrd :| OrderedSig)",
+         LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     // Functor declared to return `(MODULE_TYPE_OF Er Type)` (a KType value) but the body
     // returns a Number. Per-call check must reject.
@@ -167,7 +167,7 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
         "FN (BAD Er :OrderedSig) -> (MODULE_TYPE_OF Er Type) = (1)",
     );
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("BAD int_ord"), scope);
+    let id = sched.add_dispatch(parse_one("BAD IntOrdView"), scope);
     sched.execute().expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,

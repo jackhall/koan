@@ -33,7 +33,31 @@ pub fn body<'a>(
     let mut type_for_types_map: Option<KType<'a>> = None;
     let mut nominal_identity: Option<KType<'a>> = None;
     let name = match bundle.get("name") {
-        Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::KString(s)) => {
+            // Partition guard: a value-classified binder name (lowercase-leading)
+            // must not carry a module or signature value. Module/Signature carriers
+            // belong on a Type-classified identifier (uppercase-leading + ≥1 lowercase
+            // letter, per design/typing/tokens.md) so the type-side binding map is the
+            // single home for module values — closes the asymmetry that lets a
+            // value-side binding hide a category-mismatched module behind a lowercase
+            // alias. See design/typing/elaboration.md § Binding home and the dual-map.
+            let kind = match value {
+                KObject::KTypeValue(KType::Module { .. }) => Some("module"),
+                KObject::KTypeValue(KType::Signature(_)) => Some("signature"),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "LET binder `{name}` is value-classified but the bound value is a \
+                     {kind} (a type-language carrier); rebind under a Type-classified \
+                     identifier instead (uppercase-leading plus at least one lowercase \
+                     letter, e.g. `{suggestion}`)",
+                    name = s,
+                    suggestion = capitalize_identifier(s),
+                ))));
+            }
+            s.clone()
+        }
         // Stage-2 carrier: a Type-classed binder name not in `KType::from_name`'s
         // builtin table lands as a `TypeNameRef`. Parameterized shapes (`List<X>`,
         // function arrow forms) are rejected — the binder name must be a bare leaf.
@@ -260,6 +284,25 @@ fn is_admissible_type_class_rhs<'a>(value: &KObject<'a>) -> bool {
         return f.is_functor;
     }
     false
+}
+
+/// Suggest a Type-classified rewrite of a value-classified binder name for the
+/// Phase 1 partition-guard diagnostic. Capitalizes the first ASCII alphabetic
+/// character so the result reads as a Type token (uppercase-leading plus at
+/// least one lowercase, per design/typing/tokens.md). Falls back to a synthetic
+/// `M` prefix if the name starts with a non-alphabetic character (digit / `_`)
+/// where simple capitalization would not yield a Type-shape token.
+fn capitalize_identifier(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() => {
+            let mut out = String::with_capacity(name.len());
+            out.push(first.to_ascii_uppercase());
+            out.extend(chars);
+            out
+        }
+        _ => format!("M{name}"),
+    }
 }
 
 /// Dispatch-time placeholder extractor for LET. Both overloads (`LET <name:Identifier> = ...`

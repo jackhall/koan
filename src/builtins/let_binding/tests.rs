@@ -374,3 +374,65 @@ fn let_type_class_in_sig_body_still_works() {
         "Type binding should survive in SIG types map after Type-class LET",
     );
 }
+
+/// LET partition guard (design/typing/elaboration.md § Binding home and the
+/// dual-map): `LET <name> = <m>` where `name` is value-classified (lowercase-
+/// leading) and the RHS evaluates to a module value must reject at the LET
+/// site. Module / signature carriers belong on Type-classified identifiers
+/// only; this test pins the diagnostic so the partition rule has a regression
+/// site.
+#[test]
+fn let_value_class_lhs_with_module_rhs_rejects() {
+    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    // Set up a module value `IntOrd`. The lowercase rebind `int_ord` is the
+    // partition violation — lowercase binder, module RHS.
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         MODULE IntOrd = ((LET compare = 7))",
+    );
+    let err = run_one_err(scope, parse_one("LET int_ord = (IntOrd :! OrderedSig)"));
+    match &err.kind {
+        KErrorKind::ShapeError(msg) => {
+            assert!(
+                msg.contains("int_ord") && msg.contains("module"),
+                "expected diagnostic naming the binder and 'module', got: {msg}",
+            );
+            assert!(
+                msg.contains("Type-classified"),
+                "expected diagnostic to redirect to Type-classified identifier, got: {msg}",
+            );
+        }
+        _ => panic!("expected ShapeError, got {err}"),
+    }
+}
+
+/// Companion to `let_value_class_lhs_with_module_rhs_rejects`: signature carrier
+/// on the RHS surface fires the same partition rejection. Pinned independently
+/// because the predicate matches `KType::Module` and `KType::Signature` separately.
+#[test]
+fn let_value_class_lhs_with_signature_rhs_rejects() {
+    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "SIG OrderedSig = (VAL compare :Number)");
+    // `OrderedSig` is a Type-classified token; resolving it through `value_lookup`
+    // returns the signature carrier. The lowercase binder + signature RHS hits
+    // the partition guard.
+    let err = run_one_err(scope, parse_one("LET sig_alias = OrderedSig"));
+    match &err.kind {
+        KErrorKind::ShapeError(msg) => {
+            assert!(
+                msg.contains("sig_alias") && msg.contains("signature"),
+                "expected diagnostic naming the binder and 'signature', got: {msg}",
+            );
+        }
+        _ => panic!("expected ShapeError, got {err}"),
+    }
+}

@@ -26,6 +26,12 @@ use super::scope::{Resolution, Scope};
 pub struct Resolved<'a> {
     pub function: &'a KFunction<'a>,
     pub placeholder_name: Option<String>,
+    /// `Some(_)` only for binder builtins whose body registers a callable function
+    /// (FN, FUNCTOR). Holds the *inner-call* bucket key the dispatch driver will
+    /// install in `bindings.pending_overloads` so a sibling bare-arg call to the
+    /// to-be-registered overload parks on this slot. See
+    /// [`crate::machine::core::kfunction::PreRunBucketFn`].
+    pub pending_overload_bucket: Option<crate::machine::model::types::UntypedKey>,
     pub slots: ClassifiedSlots,
 }
 
@@ -116,11 +122,43 @@ impl<'a> Scope<'a> {
             return ResolveOutcome::UnboundName(name);
         }
         if expr_has_eager_part(expr) {
-            ResolveOutcome::Deferred
-        } else {
-            ResolveOutcome::Unmatched
+            return ResolveOutcome::Deferred;
+        }
+        // Keyword-headed dispatch with no matching bucket and no eager parts to
+        // re-dispatch through: if some sibling FN / FUNCTOR binder has installed
+        // a `pending_overloads[bucket_key]` entry for the *exact bucket* this call
+        // would dispatch into, park on that producer so the re-dispatch on wake
+        // picks up the now-registered overload. Without this, a bare-arg form
+        // like `(MAKESET IntOrd)` whose FUNCTOR sibling is still parked on a SIG
+        // body's Combine would race the FIFO submission order and surface
+        // `DispatchFailed` even though every ingredient is in flight.
+        //
+        // Keying by the full `UntypedKey` (not just the lead keyword) keeps
+        // overloads that share a head keyword but differ in later keywords
+        // (`(MAKESET _)` vs `(MAKESET _ USING _)`) from colliding: the bare-arg
+        // call's `untyped_key()` matches exactly one in-flight binder's
+        // inner-call bucket.
+        if let Some(producer) = pending_overload_producer(&key, dispatch_scope) {
+            return ResolveOutcome::ParkOnProducers(vec![producer]);
+        }
+        ResolveOutcome::Unmatched
+    }
+}
+
+/// Walk `scope.ancestors()` looking for a `pending_overloads[key]` entry — installed
+/// by an FN / FUNCTOR binder's `pre_run_bucket` hook for the inner-call bucket key
+/// of the to-be-registered overload. Returns the producer `NodeId` of the first
+/// matching binder slot (lexically inner-most wins, mirroring `Scope::resolve`).
+fn pending_overload_producer<'a>(
+    key: &crate::machine::model::types::UntypedKey,
+    scope: &Scope<'a>,
+) -> Option<NodeId> {
+    for scope in scope.ancestors() {
+        if let Some(producer) = scope.bindings().pending_overloads().get(key).copied() {
+            return Some(producer);
         }
     }
+    None
 }
 
 /// View over a single scope's overload bucket. Encapsulates the
@@ -245,6 +283,7 @@ fn build_resolved<'a>(picked: &'a KFunction<'a>, expr: &KExpression<'a>) -> Reso
     Resolved {
         function: picked,
         placeholder_name: picked.pre_run.and_then(|extractor| extractor(expr)),
+        pending_overload_bucket: picked.pre_run_bucket.and_then(|extractor| extractor(expr)),
         slots: picked.classify_for_pick(expr),
     }
 }

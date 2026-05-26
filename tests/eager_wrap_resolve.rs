@@ -46,8 +46,8 @@ fn makeset_bare_type_token_resolves_eagerly() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
          FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))\n\
-         LET my_set = (MAKESET (IntOrd :! OrderedSig))\n\
-         PRINT my_set.inner",
+         LET MySet = (MAKESET (IntOrd :! OrderedSig))\n\
+         PRINT MySet.inner",
     )
     .expect("MAKESET on inline-ascribed IntOrd should succeed");
     assert_eq!(out.trim(), "1", "expected printed `1`, got `{out}`");
@@ -101,8 +101,8 @@ fn wrap_slot_parens_expression_still_sub_dispatches() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
          FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 2))\n\
-         LET my_set = (MAKESET (IntOrd :| OrderedSig))\n\
-         PRINT my_set.inner",
+         LET MySet = (MAKESET (IntOrd :| OrderedSig))\n\
+         PRINT MySet.inner",
     )
     .expect("MAKESET with parens-Expression wrap-slot should sub-Dispatch");
     assert_eq!(out.trim(), "2", "expected printed `2`, got `{out}`");
@@ -143,8 +143,8 @@ fn dict_literal_forward_identifier_value_parks_through_real_wake() {
 fn using_lazy_arm_with_filter_routes_module_expr_through_filter() {
     let out = run_capturing(
         "MODULE Provider = (LET answer = 41)\n\
-         LET ident_mod = Provider\n\
-         LET picked = (USING (ident_mod) SCOPE (answer))\n\
+         LET IdentMod = Provider\n\
+         LET picked = (USING (IdentMod) SCOPE (answer))\n\
          PRINT picked",
     )
     .expect("USING with parens-Expression module slot should sub-Dispatch via filter");

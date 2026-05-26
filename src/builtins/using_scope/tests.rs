@@ -108,11 +108,11 @@ fn using_functor_result_closure_escapes_soundly() {
     run(
         scope,
         "FN (MAKE) -> Module = (MODULE Res = (LET val = 7))\n\
-         LET inst = (MAKE)",
+         LET Inst = (MAKE)",
     );
     // The block defines (and forwards-registers) `GETV`, whose body reads the module's
     // surfaced `val`. The closure captures the transparent scope and escapes the block.
-    run(scope, "USING inst SCOPE (FN (GETV) -> Number = (val))");
+    run(scope, "USING Inst SCOPE (FN (GETV) -> Number = (val))");
     // Churn the run-root arena: allocate and dispatch unrelated work so a dangling
     // reference into the dropped USING/functor arenas would surface under Miri.
     run(scope, "FN (NOOP) -> Number = (1)");

@@ -136,10 +136,16 @@ impl<'a> Scheduler<'a> {
     /// 2. **`Scope::resolve_dispatch`** — one chain walk yielding a [`Resolved`],
     ///    `Ambiguous(n)`, `Deferred`, or `Unmatched`. `Ambiguous` and `Unmatched` surface
     ///    as structured errors. `Deferred` jumps to schedule-deps; `Resolved` continues.
-    ///    A keyword-headed call to a not-yet-registered function fails here: function
-    ///    dispatch goes through the `functions` bucket, which does not consult the
-    ///    `placeholders` table, so it has no forward-reference park (unlike value/type
-    ///    slots, which route through `Scope::resolve` in phases 1 and 3).
+    ///    A keyword-headed call to a not-yet-registered function with no eager parts
+    ///    consults the `pending_overloads` table by the *full* inner-call bucket key
+    ///    as a last-step fallback: a sibling FN / FUNCTOR binder still parked on its
+    ///    own Combine will have installed a `pre_run_bucket` entry under that key.
+    ///    The walk parks on that producer rather than failing, so the bare-arg shape
+    ///    `(MAKESET IntOrd)` doesn't race the FIFO submission order. Keying by the
+    ///    full bucket (not just the lead keyword) keeps overloads with shared head
+    ///    keywords but different signatures from colliding. Value / type slot
+    ///    bare-name forward-reference parks ride phases 1 and 3 of this driver via
+    ///    `Scope::resolve` and the name-keyed `placeholders` table.
     ///
     ///    2.5: **Placeholder install** — if the picked function carried a `pre_run`
     ///    extractor, install its dispatch-time name placeholder against this slot's
@@ -206,9 +212,25 @@ impl<'a> Scheduler<'a> {
             }
         };
 
-        // Phase 2.5: install dispatch-time placeholder for the binder slot, if any.
+        // Phase 2.5: install dispatch-time placeholders for the binder slot.
+        // Two parallel installs:
+        // - `placeholder_name` -> name-keyed `placeholders[name]`, consulted by
+        //   `Scope::resolve` for forward-reference *name* resolution. Set by every
+        //   binder builtin's `pre_run` hook (LET, FN, FUNCTOR, STRUCT, UNION, SIG,
+        //   MODULE).
+        // - `pending_overload_bucket` -> bucket-keyed `pending_overloads[key]`,
+        //   consulted by `resolve_dispatch`'s no-bucket fallback for forward-reference
+        //   *dispatch* parks. Set only by FN / FUNCTOR's `pre_run_bucket` hook (the
+        //   binders that register a callable function). Keying by the full inner-call
+        //   bucket — not the lead keyword — keeps overloads with shared heads but
+        //   different keyword shapes from colliding on the park edge.
         if let Some(name) = resolved.placeholder_name.as_ref() {
             if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx)) {
+                return Ok(NodeStep::Done(NodeOutput::Err(e)));
+            }
+        }
+        if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
+            if let Err(e) = scope.install_pending_overload(bucket.clone(), NodeId(idx)) {
                 return Ok(NodeStep::Done(NodeOutput::Err(e)));
             }
         }

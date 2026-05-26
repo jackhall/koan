@@ -8,6 +8,7 @@ use std::rc::Rc;
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::{CallArena, KError, Scope};
+use crate::machine::model::types::UntypedKey;
 use crate::machine::model::values::KObject;
 
 use super::argument_bundle::ArgumentBundle;
@@ -93,6 +94,24 @@ pub type BuiltinFn = for<'a> fn(
 /// up `name` while this slot's body is still in flight parks on this slot (see
 /// [`crate::machine::core::Scope::resolve`]). `None` opts out.
 pub type PreRunFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
+
+/// Dispatch-time bucket-key extractor for a binder builtin whose body registers a
+/// callable function (`FN`, `FUNCTOR`). Returns the `UntypedKey` for a *call* to the
+/// to-be-registered overload — derived from the binder's captured signature
+/// expression (e.g. `(MAKESET Er :OrderedSig)` → `[Keyword("MAKESET"), Slot]`). The
+/// driver pairs the returned key with the binder's slot id and installs it in
+/// `bindings.pending_overloads` so a sibling bare-arg call form parks on the
+/// producer instead of failing dispatch. `None` opts out (everything other than FN /
+/// FUNCTOR).
+///
+/// Separate from [`PreRunFn`] because the two extractors serve different consumers:
+/// `PreRunFn` keys forward-reference *name* resolution (consulted via
+/// `Scope::resolve`); `PreRunBucketFn` keys forward-reference *dispatch* resolution
+/// (consulted via the no-bucket fallback in `resolve_dispatch`). Keying by the
+/// inner-call bucket — not just the lead keyword — keeps overloads that share a head
+/// keyword but differ in later keywords (`MAKESET _` vs `MAKESET _ USING _`) from
+/// colliding on the park edge.
+pub type PreRunBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
 
 /// An enum (rather than `Box<dyn Fn>`) so the `UserDefined` case stays introspectable —
 /// TCO and error-frame attribution both need to walk into the captured expression.

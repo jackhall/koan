@@ -115,7 +115,7 @@ mod tests {
             scope,
             "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
              MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-             LET elem_mod = (IntOrd :| OrderedSig)",
+             LET ElemMod = (IntOrd :| OrderedSig)",
         );
         // Functor body invokes MODULE_TYPE_OF on the per-call parameter `Er`. The
         // dispatched `KTypeValue` is allocated in the per-call arena and bound into the
@@ -127,7 +127,7 @@ mod tests {
             "FN (LIFT_TYPE Er :OrderedSig) -> Module = \
              (MODULE Result = ((LET Tslot = (MODULE_TYPE_OF Er Type)) (LET probe = 11)))",
         );
-        run(scope, "LET held = (LIFT_TYPE (elem_mod))");
+        run(scope, "LET Held = (LIFT_TYPE (ElemMod))");
 
         // Subsequent allocations and FN calls churn the run-root arena. The lifted
         // `KModule` and its child scope (carrying the dispatched type-op value) must
@@ -137,27 +137,27 @@ mod tests {
             run_one(scope, parse_one("NOOP"));
         }
         // Another functor call to allocate more per-call frames (and drop them).
-        run(scope, "LET other = (LIFT_TYPE (elem_mod))");
+        run(scope, "LET Other = (LIFT_TYPE (ElemMod))");
 
         // Hold the original `held` module across all that churn and read both surfaces
         // the audit pins: `child_scope()` (the captured-scope transmute) and
         // `type_members` (the RefCell on the Module).
         let data = scope.bindings().data();
-        let m = match data.get("held") {
+        let m = match data.get("Held") {
             Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-            other => panic!("held should be a module, got {:?}", other.map(|o| o.ktype())),
+            other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
         };
         let probe = m.child_scope().bindings().data().get("probe").copied();
         assert!(
             matches!(probe, Some(KObject::Number(n)) if *n == 11.0),
-            "held.probe must still read 11.0 after subsequent churn",
+            "Held.probe must still read 11.0 after subsequent churn",
         );
         // `Tslot` landed in `bindings.types` via the LET TypeExprRef overload — the
         // dispatched `KTypeValue` from the per-call MODULE_TYPE_OF call.
         let tslot = m.child_scope().resolve_type("Tslot");
         assert!(
             tslot.is_some(),
-            "held.Tslot must still resolve through bindings.types after churn",
+            "Held.Tslot must still resolve through bindings.types after churn",
         );
         // The RefCell on `type_members` is the other half of the Module's lifetime
         // surface; the borrow must complete cleanly (we don't assert contents here —

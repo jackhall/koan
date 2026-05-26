@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType};
+use koan::machine::model::{KObject, KType, Parseable};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -235,6 +235,40 @@ fn producer_error_propagates_to_parked_consumer() {
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for UNDEFINED_FN, got {err}",
+    );
+}
+
+/// Bucket-keyed FN park: a bare-arg call to a still-finalizing FN whose signature
+/// parameter is itself a forward reference. The submission order is:
+///   1. `LET out = (LIFT_BARE x)` — keyword `LIFT_BARE` has no bucket yet.
+///   2. `FN (LIFT_BARE arg :Wrap) -> Number = (LET _ = arg) 7` — installs a
+///      `pending_overloads[{Keyword("LIFT_BARE"), Slot}] = NodeId(this binder)`
+///      entry via the new bucket-keyed `pre_run_bucket` hook.
+///   3. `STRUCT Wrap = (n :Number)` — once finalized, the FN finalizes too.
+///   4. `LET x = (Wrap (n = 9))`.
+///
+/// Without the bucket-keyed entry, step 1's dispatch would fail `Unmatched`:
+/// `LIFT_BARE`'s `functions` bucket is empty and a name-keyed-only park has
+/// nothing to attach to (a bare-arg call to a still-finalizing FN doesn't
+/// resolve through `Scope::resolve`). The binder's `pre_run_bucket` install
+/// catches it. The FUNCTOR binder rides the same mechanism via the symmetric
+/// `pre_run_bucket` hook in `src/builtins/functor_def.rs`.
+#[test]
+fn fn_bare_arg_call_parks_on_pending_overload_bucket() {
+    let arena = RuntimeArena::new();
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    let scope = run(
+        &arena,
+        captured,
+        "LET out = (LIFT_BARE w)\n\
+         FN (LIFT_BARE arg :Wrap) -> Number = (7)\n\
+         STRUCT Wrap = (n :Number)\n\
+         LET w = (Wrap (n = 9))",
+    );
+    assert!(
+        matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
+        "expected `out` to be 7.0 via bucket-keyed FN park; got {}",
+        scope.lookup("out").map_or("None".to_string(), |o| o.summarize()),
     );
 }
 

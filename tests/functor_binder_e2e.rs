@@ -87,25 +87,23 @@ fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
 #[test]
 fn functor_binder_e2e_makeset_produces_module() {
     let arena = RuntimeArena::new();
-    // The application form `(MAKESET (int_ord))` (parens-wrapped value,
-    // bound through a `:!` ascription view) works around a dispatch-boundary
-    // bug tracked at
-    // [roadmap/type_language/functor-application-bare-arg.md](../roadmap/type_language/functor-application-bare-arg.md):
-    // the simpler `(MAKESET IntOrd)` form resolves `IntOrd` through the
-    // type-class lookup path before consulting the value-side binding, and
-    // the bare module value's `compatible_sigs` membership isn't consulted
-    // at the dispatch boundary for the signature-typed slot. The `:!`
-    // ascription on `IntOrd` mints a signature-pinned view; the parens
-    // around the argument force value-side evaluation. Both should become
-    // unnecessary once the bug is fixed.
+    // The natural FUNCTOR application form: `(MAKESET IntOrd)` works directly
+    // when `IntOrd`'s carrier carries the declared signature in its
+    // `compatible_sigs` set. The LET partition guard
+    // (design/typing/elaboration.md § Binding home and the dual-map) forces the
+    // ascription rebind to use a Type-classified identifier
+    // (`LET IntOrd = (IntOrdBase :! OrderedSig)`) so the module/signature
+    // carrier never rides a value-classified alias; the dispatch admission then
+    // consults `compatible_sigs` at the signature-typed slot, so no parens-wrap
+    // or ascription-view workaround is required at the call site.
     let scope = run(
         &arena,
         "SIG OrderedSig = (VAL compare :Number)\n\
-         MODULE IntOrd = ((LET compare = 7))\n\
-         LET int_ord = (IntOrd :! OrderedSig)\n\
+         MODULE IntOrdBase = ((LET compare = 7))\n\
+         LET IntOrd = (IntOrdBase :! OrderedSig)\n\
          FUNCTOR (MAKESET Er :OrderedSig) -> Module = \
             (MODULE Result = ((LET tag = 0)))\n\
-         LET IntSet = (MAKESET (int_ord))",
+         LET IntSet = (MAKESET IntOrd)",
     );
     // `MAKESET` registered as a FUNCTOR-flagged KFunction in the dispatch
     // table (FN / FUNCTOR write to `functions`, not `data`).

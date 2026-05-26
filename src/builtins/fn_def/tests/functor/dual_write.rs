@@ -16,27 +16,27 @@ fn functor_body_module_dispatch_does_not_dangle() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)",
     );
-    run(scope, "LET int_ord_a = (IntOrd :! OrderedSig)");
+    run(scope, "LET IntOrdA = (IntOrd :! OrderedSig)");
     run(
         scope,
         "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
     );
-    run(scope, "LET held_set = (MAKESET (int_ord_a))");
+    run(scope, "LET HeldSet = (MAKESET (IntOrdA))");
 
     run(scope, "FN (NOOP) -> Number = (1)");
     for _ in 0..20 {
         run_one(scope, parse_one("NOOP"));
     }
-    run(scope, "LET other_set = (MAKESET (int_ord_a))");
+    run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
 
     let data = scope.bindings().data();
-    let m = match data.get("held_set") {
+    let m = match data.get("HeldSet") {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("held_set should be a module, got {:?}", other.map(|o| o.ktype())),
+        other => panic!("HeldSet should be a module, got {:?}", other.map(|o| o.ktype())),
     };
     let inner = m.child_scope().bindings().data().get("inner").copied();
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
-            "held_set.inner must still read 1.0 after subsequent churn");
+            "HeldSet.inner must still read 1.0 after subsequent churn");
 }
 
 /// Functor body resolves a type-class parameter via the per-call dual-write: without
@@ -51,13 +51,13 @@ fn functor_body_module_type_of_via_dual_write() {
         scope,
         "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-         LET int_ord = (IntOrd :| OrderedSig)",
+         LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     run(
         scope,
         "FN (USE_TYPE Er :OrderedSig) -> Any = (MODULE_TYPE_OF Er Type)",
     );
-    let result = run_one(scope, parse_one("USE_TYPE int_ord"));
+    let result = run_one(scope, parse_one("USE_TYPE IntOrdView"));
     use crate::machine::model::KType;
     // Opaque ascription mints a fresh `UserType { kind: Module, name: "Type", .. }`
     // per ascription site (see `Module::type_members`); the body must return that
@@ -85,14 +85,14 @@ fn functor_closure_escape_pins_type_class_dual_write() {
         scope,
         "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))\n\
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
-         LET int_ord = (IntOrd :| OrderedSig)",
+         LET IntOrdView = (IntOrd :| OrderedSig)",
     );
     run(
         scope,
         "FN (MAKE_LOOKUP Er :OrderedSig) -> Any = \
             (FN (LOOKUP) -> Any = (MODULE_TYPE_OF Er Type))",
     );
-    run(scope, "LET _maker = (MAKE_LOOKUP int_ord)");
+    run(scope, "LET _maker = (MAKE_LOOKUP IntOrdView)");
     // Churn exercises the per-call arena's drop discipline before the inner call.
     for _ in 0..5 {
         run_one(scope, parse_one("PRINT 1"));
@@ -133,18 +133,18 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET ord = (IntOrd :! OrderedSig)\n\
+         LET OrdView = (IntOrd :! OrderedSig)\n\
          FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)",
     );
     // Exercise the FUNCTOR: no panic, result is a module value matching the
     // OrderedSig constraint (the same `ord` module we passed in).
-    let result = run_one(scope, parse_one("MAKESET ord"));
+    let result = run_one(scope, parse_one("MAKESET OrdView"));
     match result {
         KObject::KTypeValue(KType::Module { module, .. }) => {
             assert_eq!(module.path, "IntOrd :! OrderedSig");
         }
         other => panic!(
-            "MAKESET ord must return the passed-through module carrier, got {:?}",
+            "MAKESET OrdView must return the passed-through module carrier, got {:?}",
             other.ktype(),
         ),
     }

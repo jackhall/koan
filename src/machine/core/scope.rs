@@ -448,6 +448,22 @@ impl<'a> Scope<'a> {
         self.bindings.get().try_install_placeholder(name, idx)
     }
 
+    /// Bucket-keyed companion to [`Self::install_placeholder`] — installs a
+    /// `pending_overloads[bucket] = NodeId(idx)` entry so `resolve_dispatch`'s
+    /// no-bucket fallback parks bare-arg calls on the producing FN/FUNCTOR
+    /// binder. Forwards through the `Borrowed` window the same way as the
+    /// name-based companion. See [`Bindings::try_install_pending_overload`].
+    pub fn install_pending_overload(
+        &self,
+        bucket: crate::machine::model::types::UntypedKey,
+        idx: NodeId,
+    ) -> Result<(), KError> {
+        if self.bindings.is_borrowed() {
+            return self.write_target().install_pending_overload(bucket, idx);
+        }
+        self.bindings.get().try_install_pending_overload(bucket, idx)
+    }
+
     /// Walk the `outer` chain for the nearest `bindings.types[name]`. Type-side
     /// analogue of [`Self::lookup`] — no `Placeholder` variant.
     pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType<'a>> {

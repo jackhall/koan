@@ -47,7 +47,7 @@ use super::fn_def::return_type::{
 use super::fn_def::signature::{
     collect_param_names_from_signature, parse_fn_param_list, ParamListOutcome,
 };
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_full, sig};
 
 /// The body of a FUNCTOR binder. Mirrors [`crate::builtins::fn_def::body`]
 /// step-for-step; the only divergences are the keyword strings in
@@ -184,7 +184,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // Pre-run hook is the same `fn_def::pre_run` extractor — both binders
     // place the signature at `parts[1]` and the first `Keyword` in that
     // signature names the registered function.
-    register_builtin_with_pre_run(
+    // FUNCTOR mirrors FN: both pre_run (name-based, for forward-reference name
+    // resolution) and pre_run_bucket (inner-call bucket key, for
+    // pending-overload dispatch parks). The bucket key is the same one a future
+    // call to the registered FUNCTOR overload would compute, so
+    // `resolve_dispatch`'s no-bucket fallback finds this slot and parks on it —
+    // the bare-arg call form `(MAKESET IntOrd)` to a still-finalizing FUNCTOR
+    // binder relies on this entry to avoid racing FIFO submission order into
+    // `DispatchFailed`.
+    register_builtin_full(
         scope,
         "FUNCTOR",
         sig(KType::Any, vec![
@@ -197,8 +205,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         body,
         Some(super::fn_def::pre_run),
+        Some(super::fn_def::pre_run_bucket),
+        false,
     );
-    register_builtin_with_pre_run(
+    register_builtin_full(
         scope,
         "FUNCTOR",
         sig(KType::Any, vec![
@@ -211,6 +221,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         body,
         Some(super::fn_def::pre_run),
+        Some(super::fn_def::pre_run_bucket),
+        false,
     );
 }
 

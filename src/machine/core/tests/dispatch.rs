@@ -209,6 +209,49 @@ fn resolve_dispatch_with_no_outer_and_no_match_is_unmatched() {
     assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Unmatched));
 }
 
+/// No-bucket fallback consults `pending_overloads` by the *full* bucket key.
+/// An entry installed for `(MAKESET _)` parks a call shaped `(MAKESET <bare>)`,
+/// but a call shaped `(MAKESET <bare> USING <bare>)` — same lead keyword, different
+/// bucket — still surfaces `Unmatched`. Two FN/FUNCTOR overloads sharing a head
+/// keyword but differing in later keywords must not collide on the park edge.
+#[test]
+fn pending_overload_parks_only_on_exact_bucket_match() {
+    use crate::machine::model::types::{UntypedElement, UntypedKey};
+    use crate::machine::NodeId;
+    let arena = RuntimeArena::new();
+    let scope = run_root_bare(&arena);
+    let bucket_single: UntypedKey =
+        vec![UntypedElement::Keyword("MAKESET".into()), UntypedElement::Slot];
+    scope
+        .install_pending_overload(bucket_single, NodeId(42))
+        .expect("install_pending_overload");
+
+    // Bare-arg call: `(MAKESET fwd)` — single-slot bucket matches the entry.
+    let bare = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("MAKESET".into())),
+        Spanned::bare(ExpressionPart::Identifier("fwd".into())),
+    ]);
+    match scope.resolve_dispatch(&bare) {
+        ResolveOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId(42)]),
+        other => panic!("expected ParkOnProducers([42]) for matching bucket, got {}",
+            std::any::type_name_of_val(&other)),
+    }
+
+    // Multi-keyword call: `(MAKESET fwd USING other)` — same lead keyword but
+    // different bucket. Must NOT collide on the lead-keyword conflation; should
+    // surface `Unmatched` since no entry was installed for this bucket.
+    let multi = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("MAKESET".into())),
+        Spanned::bare(ExpressionPart::Identifier("fwd".into())),
+        Spanned::bare(ExpressionPart::Keyword("USING".into())),
+        Spanned::bare(ExpressionPart::Identifier("other".into())),
+    ]);
+    assert!(
+        matches!(scope.resolve_dispatch(&multi), ResolveOutcome::Unmatched),
+        "different-bucket call must not park on a lead-keyword sibling",
+    );
+}
+
 /// `<Number> OP <Any>` vs `<Any> OP <Number>` against `5 OP 7` are incomparable: each is
 /// more specific in one slot and less in the other. `resolve_dispatch` reports
 /// `Ambiguous`; the integration path surfaces the same error via Scheduler::execute.

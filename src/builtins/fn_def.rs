@@ -8,13 +8,13 @@ use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, Sche
 use crate::machine::model::types::Elaborator;
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_full, sig};
 
 use finalize::{classify, defer_via_combine, finalize_fn, FnPlan, ParamListResult};
 use return_type::{classify_return_type, extract_return_type_raw};
 use signature::ParamListOutcome;
 
-pub(crate) use signature::pre_run;
+pub(crate) use signature::{pre_run, pre_run_bucket};
 
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
 /// function constructor. Signature and body are captured as raw `KExpression`s; the signature
@@ -103,7 +103,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // (`-> (MODULE_TYPE_OF Er Type)`). The strict dispatch pass picks one
     // unambiguously; `Future(KTypeValue(_))` post-Combine wakes admit only against
     // `TypeExprRef`, since `KExpression` doesn't accept `Future(_)`.
-    register_builtin_with_pre_run(
+    // Both FN overloads supply `pre_run_bucket` alongside `pre_run`: a bare-arg
+    // call to a sibling FN that's still finalizing (e.g. its signature's parameter
+    // type is parked on a SIG body's Combine) now parks on this binder slot by
+    // *inner-call bucket key* rather than failing dispatch. Symmetry with FUNCTOR
+    // is intentional — both binders produce KFunctions and the wait shape is the
+    // same.
+    register_builtin_full(
         scope,
         "FN",
         sig(KType::Any, vec![
@@ -116,8 +122,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         body,
         Some(pre_run),
+        Some(pre_run_bucket),
+        false,
     );
-    register_builtin_with_pre_run(
+    register_builtin_full(
         scope,
         "FN",
         sig(KType::Any, vec![
@@ -130,6 +138,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         body,
         Some(pre_run),
+        Some(pre_run_bucket),
+        false,
     );
 }
 

@@ -34,7 +34,7 @@ pub mod pick;
 pub mod scheduler_handle;
 
 pub use argument_bundle::ArgumentBundle;
-pub use body::{Body, BodyResult, BuiltinFn, PreRunFn};
+pub use body::{Body, BodyResult, BuiltinFn, PreRunBucketFn, PreRunFn};
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
@@ -66,6 +66,13 @@ pub struct KFunction<'a> {
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE); `None` for
     /// everything else. See [`PreRunFn`].
     pub pre_run: Option<PreRunFn>,
+    /// `Some(_)` for binder builtins whose body registers a callable function — `FN`
+    /// and `FUNCTOR`. Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
+    /// dispatch driver installs an entry in `bindings.pending_overloads` and a
+    /// sibling bare-arg call form like `(MAKESET IntOrd)` parks on the binder slot
+    /// instead of surfacing `DispatchFailed` before finalize. See [`PreRunBucketFn`]
+    /// for the rationale on keying by bucket rather than lead keyword.
+    pub pre_run_bucket: Option<PreRunBucketFn>,
     /// Flipped on by the `FUNCTOR` binder (and stays `false` for `FN`). Distinguishes
     /// the same underlying `KFunction` shape into the two type-language families:
     /// `function_value_ktype` projects `is_functor → KType::KFunctor`, else
@@ -90,17 +97,20 @@ impl<'a> KFunction<'a> {
         captured: &'a Scope<'a>,
         pre_run: Option<PreRunFn>,
     ) -> Self {
-        Self::with_pre_run_and_functor(signature, body, captured, pre_run, false)
+        Self::with_pre_run_and_functor(signature, body, captured, pre_run, None, false)
     }
 
     /// Like [`Self::with_pre_run`] but lets the caller flip the `is_functor` flag at
-    /// construction time. Used by the `FUNCTOR` binder; everything else routes
-    /// through `with_pre_run` and leaves `is_functor: false`.
+    /// construction time and pass a `pre_run_bucket` extractor (for `FN` / `FUNCTOR`,
+    /// whose body registers a callable function and so wants a bucket-keyed
+    /// pending-overload entry). Used by the `FUNCTOR` binder; everything else routes
+    /// through `with_pre_run` and leaves both new fields at their defaults.
     pub fn with_pre_run_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
         pre_run: Option<PreRunFn>,
+        pre_run_bucket: Option<PreRunBucketFn>,
         is_functor: bool,
     ) -> Self {
         signature.normalize();
@@ -110,6 +120,7 @@ impl<'a> KFunction<'a> {
             captured: NonNull::from(captured),
             _p: PhantomData,
             pre_run,
+            pre_run_bucket,
             is_functor,
         }
     }
@@ -399,6 +410,7 @@ mod tests {
             make_sig(),
             Body::Builtin(body_any),
             scope,
+            None,
             None,
             true,
         );

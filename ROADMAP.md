@@ -30,7 +30,15 @@ alongside its `:(Functor (params) -> R)` type-position sigil, the one-way
 (`KTypeValue` ∪ nominal-identity ∪ `is_functor`-flagged `KFunction`) that closes the
 plain-function-bound-to-a-Type-class-name hole. The FUNCTOR-return validator
 folded into `classify_return_type` itself, so the carrier is walked once for
-both Resolved/Deferred classification and the admissibility verdict.
+both Resolved/Deferred classification and the admissibility verdict. FUNCTOR
+application now reads naturally — `(MAKESET IntOrd)` works directly when
+`IntOrd` is a Type-classified module satisfying the declared signature — via
+two pieces: a value-side `LET` partition guard that rejects module/signature
+RHSes bound under lowercase names (forcing module/signature carriers onto
+Type-classified identifiers, so the type-side binding map is the single home
+for them), and a bucket-keyed `pending_overloads` dispatch park that lets a
+bare-arg call to a still-finalizing FN / FUNCTOR overload park on the binder
+slot instead of racing FIFO submission order into `DispatchFailed`.
 
 ## Next items
 
@@ -92,7 +100,6 @@ binding, and VAL-slot identity are represented in `KType` and routed through
 dispatch. The substrate the predicate-typing stages and the stdlib's
 functor-heavy collections both build on:
 
-- [FUNCTOR application with a bare type-language argument](roadmap/type_language/functor-application-bare-arg.md)
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)

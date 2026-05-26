@@ -246,6 +246,7 @@ pub(crate) fn finalize_fn_with_flag<'a>(
         Body::UserDefined(body_expr),
         scope,
         None,
+        None,
         is_functor,
     ));
     // `frame: None` here — the lift-on-return logic in the scheduler will populate

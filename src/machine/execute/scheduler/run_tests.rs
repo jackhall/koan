@@ -203,7 +203,7 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     for e in parse_all(
-        "LET aResult = (IntOrd :| OrderedSig)\n\
+        "LET AResult = (IntOrd :| OrderedSig)\n\
          MODULE IntOrd = (LET compare = 0)\n\
          SIG OrderedSig = (VAL compare :Number)",
     ) {
@@ -211,8 +211,8 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     }
     sched.execute().unwrap();
     assert!(
-        matches!(scope.lookup("aResult"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
-        "aResult should bind to a KModule after replay-park on forward-declared MODULE / SIG",
+        matches!(scope.lookup("AResult"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
+        "AResult should bind to a KModule after replay-park on forward-declared MODULE / SIG",
     );
 }
 

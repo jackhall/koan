@@ -180,15 +180,90 @@ pub(crate) fn parse_fn_param_list<'a>(
 /// Returns `None` if the signature slot is missing or malformed — `body`'s full parse
 /// surfaces the real `ShapeError`.
 pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
-    let sig_part = expr.parts.get(1)?;
-    let signature_expr = match &sig_part.value {
-        ExpressionPart::Expression(boxed) => boxed,
-        _ => return None,
-    };
+    let signature_expr = signature_expr_part(expr)?;
     for part in &signature_expr.parts {
         if let ExpressionPart::Keyword(s) = &part.value {
             return Some(s.clone());
         }
     }
     None
+}
+
+/// Dispatch-time *bucket-key* extractor for FN / FUNCTOR. The bucket key matches what
+/// a future call to the registered overload would compute via
+/// `KExpression::untyped_key`: each Keyword part maps to `UntypedElement::Keyword`, and
+/// each `<name> :<Type>` parameter pair collapses to one `UntypedElement::Slot`.
+///
+/// The walk mirrors [`collect_param_names_from_signature`]'s shape-classifier so the
+/// keys match exactly: `Identifier` or bare `Type` followed by a type slot
+/// (`Type` / `Expression` / `Future`) consumes two parts and emits one `Slot`;
+/// anything else emits no entry and advances by one (the body's full parse surfaces
+/// `ShapeError` on real malformations, so we err toward producing the bucket key for
+/// well-formed signatures and silently skipping unknown shapes).
+///
+/// Returns `None` only when the signature slot itself is missing or non-expression —
+/// the rare cases where there's no signature to read a key out of.
+pub(crate) fn pre_run_bucket(
+    expr: &KExpression<'_>,
+) -> Option<crate::machine::model::types::UntypedKey> {
+    use crate::machine::model::types::UntypedElement;
+    let signature_expr = signature_expr_part(expr)?;
+    let parts = &signature_expr.parts;
+    let mut key = Vec::with_capacity(parts.len());
+    let mut i = 0;
+    while i < parts.len() {
+        match &parts[i].value {
+            ExpressionPart::Keyword(s) => {
+                key.push(UntypedElement::Keyword(s.clone()));
+                i += 1;
+            }
+            ExpressionPart::Identifier(_) => {
+                let next_is_type_slot = parts.get(i + 1).is_some_and(|p| {
+                    matches!(
+                        p.value,
+                        ExpressionPart::Type(_)
+                            | ExpressionPart::Expression(_)
+                            | ExpressionPart::Future(_)
+                    )
+                });
+                if next_is_type_slot {
+                    key.push(UntypedElement::Slot);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+                let next_is_type_slot = parts.get(i + 1).is_some_and(|p| {
+                    matches!(
+                        p.value,
+                        ExpressionPart::Type(_)
+                            | ExpressionPart::Expression(_)
+                            | ExpressionPart::Future(_)
+                    )
+                });
+                if next_is_type_slot {
+                    key.push(UntypedElement::Slot);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    Some(key)
+}
+
+/// Shared "extract the signature expression at `parts[1]`" helper for the two
+/// pre-run extractors. Returns `None` on shape mismatch; the binder body surfaces
+/// the structured `ShapeError`.
+fn signature_expr_part<'a, 'e>(expr: &'e KExpression<'a>) -> Option<&'e KExpression<'a>> {
+    let sig_part = expr.parts.get(1)?;
+    match &sig_part.value {
+        ExpressionPart::Expression(boxed) => Some(boxed.as_ref()),
+        _ => None,
+    }
 }

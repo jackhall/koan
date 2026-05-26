@@ -93,11 +93,31 @@ pub(crate) fn register_builtin_with_pre_run<'a>(
     body: BuiltinFn,
     pre_run: Option<PreRunFn>,
 ) {
+    register_builtin_full(scope, name, signature, body, pre_run, None, false);
+}
+
+/// Full-form builtin registration with both pre-run hooks and the `is_functor` flag.
+/// Used by FN / FUNCTOR to supply the [`PreRunBucketFn`] that keys a pending-overload
+/// entry by inner-call bucket — see [`crate::machine::core::kfunction::PreRunBucketFn`].
+/// Everything else routes through the simpler [`register_builtin_with_pre_run`].
+pub(crate) fn register_builtin_full<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: BuiltinFn,
+    pre_run: Option<PreRunFn>,
+    pre_run_bucket: Option<crate::machine::core::kfunction::PreRunBucketFn>,
+    is_functor: bool,
+) {
     let arena = scope.arena;
-    // The captured scope's arena must be the same arena the KFunction lives in, so
-    // `lift_kobject`'s arena-pointer comparison identifies builtins as never-in-a-dying-frame.
-    let f: &'a KFunction<'a> =
-        arena.alloc_function(KFunction::with_pre_run(signature, Body::Builtin(body), scope, pre_run));
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_pre_run_and_functor(
+        signature,
+        Body::Builtin(body),
+        scope,
+        pre_run,
+        pre_run_bucket,
+        is_functor,
+    ));
     let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj);
 }

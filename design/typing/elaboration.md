@@ -101,6 +101,17 @@ alias dispatches identically to the original); pure-type `KTypeValue(kt)`
 carriers (Number, etc.) take `register_type` directly; `is_functor`
 KFunctions and `Struct` / `Tagged` carriers fall through to `bind_value`.
 
+The partition is one-way: a value-classified LET (lowercase-leading binder
+name) rejects a `KType::Module` or `KType::Signature` RHS at the LET site
+with a `ShapeError` redirecting the user to a Type-classified name. Combined
+with the Type-class LET allowlist above, this makes `bindings.types` the
+single home for module and signature values — a module value never rides a
+value-classified alias, so the value-side lookup and type-class lookup
+paths never both find a module under the same name. The
+[token-class rule](tokens.md) defines the Type-class shape
+(uppercase-leading plus at least one lowercase letter); the partition guard
+lives in [`let_binding`'s `body`](../../src/builtins/let_binding.rs).
+
 The value-side ATTR walker and ascription's abstract-type member sweep both
 walk `bindings.types` and `bindings.data` via the `abstract_type_names_of`
 helper, so SIG `Type` declarations resolve uniformly whether the signature
