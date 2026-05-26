@@ -311,6 +311,17 @@ there:
   installed before a consumer dispatches, so `Unbound` is definitive rather than
   transient.
 
+## Open work
+
+- **Unified walk + strict-only admission**
+  ([roadmap/dispatch_fix/unified-walk.md](../../roadmap/dispatch_fix/unified-walk.md)).
+  Replace strict-then-tentative with strict-only; specificity ranking becomes
+  a per-scope tiebreak. Innermost-scope wins; cross-scope ranking goes away.
+  Final phase of the dispatch-fix project — see
+  [roadmap/dispatch_fix/](../../roadmap/dispatch_fix/) for the index-gated
+  resolution phase that supplies the structural `Placeholder` vs `Unbound`
+  split this admission rule relies on.
+
 ## Known limitations
 
 - **TCO collapses frames.** When A tail-calls B, only B's return type is

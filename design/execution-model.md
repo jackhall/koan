@@ -558,3 +558,14 @@ it.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Unified walk + strict-only admission**
+  ([roadmap/dispatch_fix/unified-walk.md](../roadmap/dispatch_fix/unified-walk.md)).
+  Collapse W1 (function-candidate ancestor walk) and N×W3 (per bare-name slot
+  ancestor walks) into a single unified walk; replace strict-then-tentative
+  admission with strict-only, branching the Empty case explicitly on bare-name
+  resolution outcomes (`Deferred` / `ParkOnProducers` / `UnboundName`); carve
+  out no-keyword expressions (single token, type call, function-value call)
+  into a candidate-machinery-free fast lane. Final phase of the dispatch-fix
+  project — see [roadmap/dispatch_fix/](../roadmap/dispatch_fix/) for the
+  preceding lexical-provenance, index-gate, and nested-binder phases this
+  builds on.

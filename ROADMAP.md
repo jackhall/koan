@@ -52,9 +52,11 @@ without first landing something else:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
   — free type-parameter names in parameter slots bind per call, from either an
   argument's carried type structure or an earlier parameter's value.
-- [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
-  function of its lexical position rather than the scheduler's queue order, so forward
-  references resolve deterministically and sibling work can be reordered or parallelized.
+- [Lexical provenance plumbing](roadmap/dispatch_fix/lexical-provenance.md) — first phase
+  of the dispatch-fix project: attach an immutable cactus-chain frame
+  `{ scope_id, index, parent }` to every unit of work and route top-level / FN body /
+  MODULE body through a single `enter_block` primitive, plumbing the data the
+  index-gated resolver later reads.
 
 ## Open items
 
@@ -103,6 +105,19 @@ functor-heavy collections both build on:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
+
+### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
+
+Untangle dispatch into queue-order-independent name resolution plus a single
+unified ancestor walk per call site. Phases land sequentially: provenance
+plumbing first, then the index-gated `Resolution` split that makes visibility
+lexical, then a structural fix to the nested-binder submission race, then the
+walk-unification and strict-only admission collapse:
+
+- [Lexical provenance plumbing](roadmap/dispatch_fix/lexical-provenance.md)
+- [Index-gated resolution](roadmap/dispatch_fix/index-gated-resolution.md)
+- [Nested-binder recursive submission](roadmap/dispatch_fix/nested-binder-submission.md)
+- [Unified walk + strict-only admission](roadmap/dispatch_fix/unified-walk.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
