@@ -56,10 +56,13 @@ group-operators, and JIT items.
 
 ## Properties of this design
 
-- **Multi-parameter dispatch is native.** A signature can declare multiple
-  abstract types; implicit search dispatches on all of them, so binary-operator
-  dispatch (`+`, `==`, `intersect`) and other multi-type predicates have a
-  uniform mechanism rather than a partial-order tiebreak.
+- **Multi-abstract-type implicit resolution is native.** A signature can
+  declare multiple abstract types; implicit search aligns all of them against
+  the call site's argument types simultaneously, so binary-operator dispatch
+  (`+`, `==`, `intersect`) and other multi-type predicates pick the right
+  implicit through one mechanism rather than ranking single-type candidates
+  against each other. (Multi-parameter dispatch on declared types is already
+  native to FN; this property is about the implicit-search layer on top.)
 - **Higher-kinded abstraction is native.** Signatures can declare type
   constructors (`(TYPE_CONSTRUCTOR Type)`); functors can take and return them.
 - **Representation hiding is principled.** Opaque ascription is the

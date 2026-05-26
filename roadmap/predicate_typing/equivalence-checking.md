@@ -1,13 +1,18 @@
 # Module system stage 6 — Equivalence-checked coherence
 
-**Problem.** Stage 5's strict-on-ambiguity policy errors when multiple
-implicits could resolve a search. Sometimes that's correct: two genuinely
-different implementations need the user to disambiguate. Sometimes it's
-overconservative: two implementations that produce the same observable
-behavior are interchangeable, and erroring on their coexistence is a tax.
-Stage 6 closes this gap by **testing the candidates against each other**
-with the property-testing engine — agreement means silent ambiguity is
-safe, and disagreement means the user gets a counterexample-bearing error.
+**Problem.** Stage 5's automatic resolution makes coherence the language's
+problem rather than the user's. Before stage 5, witnesses are passed by
+hand and the user owns which dictionary applies where; once
+`SEARCH_IMPLICIT` picks witnesses from scope, two different witnesses for
+the same signature can be selected at different call sites and produce
+silent wrong answers when values built under one ordering get queried
+under another. Stage 5's strict-on-ambiguity policy errors when multiple
+implicits could resolve a search, which is correct when the
+implementations are genuinely different but a tax when they're observably
+interchangeable. Stage 6 is the **coherence layer for stage 5's
+resolution**: it **tests candidates against each other** with the
+property-testing engine — agreement means silent ambiguity is safe, and
+disagreement becomes a counterexample-bearing error.
 
 This is the differentiating coherence story. Strict trait systems (Rust,
 Haskell) prevent it via global orphan rules; lax ones (Scala) silently pick.

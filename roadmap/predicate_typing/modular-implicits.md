@@ -1,16 +1,19 @@
 # Module system stage 5 — Modular implicits
 
-**Problem.** Stages 1-2 give an explicit module language: every functor
-application, every module-typed argument, every signature constraint is
-written by hand. For everyday generic code this is verbose. The
+**Problem.** Generic dictionary-style polymorphism already works:
+modules are first-class values
+([`KType::Module`](../../src/machine/model/types/ktype.rs)), signatures are
+first-class values ([`KType::Signature`](../../src/machine/model/types/ktype.rs)),
+and dispatch on `:(Signature Foo)` slots picks behavior by signature
+satisfaction. A user can write `(SORT IntOrd xs)` today — the witness
+module flows through `LET`, ATTR, and function calls like any other value.
+What stays verbose is the **witness argument itself**: every generic call
+site carries an extra module argument that's redundant given the other
+arguments' types. The
 [`KType::AnyModule`](../../src/machine/model/types/ktype.rs) wildcard
-slot accepts any module value regardless of which signature it satisfies,
-so even the explicit-module path lacks the signature-bound dispatch a
-generic-function call site needs. Stage 5 introduces **implicit module
-parameters**: a function declares that it requires some module satisfying
-a given signature, and at the call site the compiler resolves which
-module to thread in by searching scope. This is the ergonomic payoff of
-the design.
+also accepts any module value regardless of which signature it satisfies,
+so the explicit-module path lacks the signature-bound slot a generic call
+site needs.
 
 **Impact.**
 
@@ -21,10 +24,14 @@ the design.
 - *Natural standard-library shape.* `sort`, `min`, `intersect`, `==` take
   their dictionary of operations implicitly and ship as ordinary generic
   Koan code rather than as verbose explicit-module functions or builtins.
-- *Multi-parameter dispatch.* Binary operators (`+`, `==`, `intersect`) and other
-  multi-type predicates dispatch natively — a multi-type implicit signature
-  dispatches on all of its abstract types simultaneously rather than needing a
-  partial-order tiebreak between single-type candidates.
+- *Multi-abstract-type implicit resolution.* A signature with multiple abstract
+  types (`Type`, `Elt`, `Key`, ...) resolves implicit candidates by aligning all
+  of them against the call site's argument types simultaneously, so binary
+  operators (`+`, `==`, `intersect`) and other multi-type predicates pick the
+  right implicit without ranking single-type candidates against each other.
+  Multi-parameter dispatch on declared types is already native to FN; what's
+  new is the implicit-search side picking witnesses whose signatures span
+  multiple abstract types.
 
 **Directions.**
 
