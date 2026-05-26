@@ -1,7 +1,7 @@
-mod finalize;
+pub(crate) mod finalize;
 mod param_refs;
-mod return_type;
-mod signature;
+pub(crate) mod return_type;
+pub(crate) mod signature;
 
 use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
@@ -82,7 +82,7 @@ pub fn body<'a>(
             finalize_fn(scope, elements, return_type, body_expr)
         }
         FnPlan::Combine(inputs) => {
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr)
+            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, false)
         }
     }
 }

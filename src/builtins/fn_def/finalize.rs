@@ -12,6 +12,15 @@
 //! inside `classify` as small `park_producers.push(id)` / `.extend(_)` calls
 //! against the produced `CombineInputs`. Everything downstream of `classify` is
 //! shape‑uniform.
+//!
+//! The FUNCTOR binder rides this same path with `is_functor: true` threaded
+//! through [`finalize_fn_with_flag`] and [`defer_via_combine`]. The flag flips
+//! the `KFunction::is_functor` carrier bit (so `function_value_ktype` projects
+//! to `KType::KFunctor`) AND triggers the FUNCTOR-only return-type
+//! admissibility check on the resolved carrier via
+//! [`KType::is_admissible_functor_return`]. There is no closure / Box<dyn Fn>
+//! plumbing — the FUNCTOR-specific rule reduces to a single predicate call on
+//! the resolved `KType`, gated by the flag the caller already passes.
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -29,7 +38,7 @@ use super::signature::{parse_fn_param_list, ParamListOutcome};
 /// Local mirror of [`ParamListOutcome`] minus the structural‑error variant
 /// (short‑circuited in `body` before [`classify`] runs) and with `Pending`'s
 /// payload kept by‑value so the planning `match` stays readable.
-pub(super) enum ParamListResult<'a> {
+pub(crate) enum ParamListResult<'a> {
     Done(Vec<SignatureElement<'a>>),
     Pending {
         park_producers: Vec<NodeId>,
@@ -40,7 +49,7 @@ pub(super) enum ParamListResult<'a> {
 /// The terminal shape of FN‑def's planning step. `Synchronous` carries inputs
 /// to [`finalize_fn`] directly; `Combine` carries a [`CombineInputs`] bundle
 /// that [`defer_via_combine`] schedules.
-pub(super) enum FnPlan<'a> {
+pub(crate) enum FnPlan<'a> {
     Synchronous {
         elements: Vec<SignatureElement<'a>>,
         return_type: ReturnType<'a>,
@@ -51,7 +60,7 @@ pub(super) enum FnPlan<'a> {
 /// Inputs to [`defer_via_combine`]: the carrier that survives the Combine
 /// boundary plus the two parking lists (placeholder producers and pending
 /// sub‑Dispatches). Held by value; consumed by the deferred path.
-pub(super) struct CombineInputs<'a> {
+pub(crate) struct CombineInputs<'a> {
     pub capture: ReturnTypeCapture<'a>,
     /// Existing sibling slots whose values this Combine reads at finish-time
     /// but does NOT own. Install as `Notify` (park) edges.
@@ -75,7 +84,7 @@ pub(super) struct CombineInputs<'a> {
 /// they merge the two parking lists (return‑type sub‑Dispatch + parameter‑list
 /// parking). All eight `(ReturnTypeState × ParamListResult)` combos route to
 /// exactly one [`FnPlan`] outcome — no further routing downstream.
-pub(super) fn classify<'a>(
+pub(crate) fn classify<'a>(
     rt: ReturnTypeState<'a>,
     params: ParamListResult<'a>,
 ) -> FnPlan<'a> {
@@ -164,13 +173,52 @@ pub(super) fn classify<'a>(
 }
 
 /// Build the `KFunction` and register it in `scope`. Shared between the
-/// synchronous (no‑park) path and the Combine‑finish path.
-pub(super) fn finalize_fn<'a>(
+/// synchronous (no‑park) path and the Combine‑finish path. `is_functor`
+/// flips the FUNCTOR-binder seam (set by the FUNCTOR builtin; FN always
+/// passes `false`).
+pub(crate) fn finalize_fn<'a>(
     scope: &'a Scope<'a>,
     elements: Vec<SignatureElement<'a>>,
     return_type: ReturnType<'a>,
     body_expr: KExpression<'a>,
 ) -> BodyResult<'a> {
+    finalize_fn_with_flag(scope, elements, return_type, body_expr, false)
+}
+
+/// Underlying variant used by both `finalize_fn` (FN: `is_functor=false`) and
+/// the FUNCTOR builtin (`is_functor=true`). Kept separate so the existing
+/// `finalize_fn` shape stays a thin façade and the FUNCTOR-binder change site
+/// is the only place where the flag's truth-value choice surfaces.
+///
+/// When `is_functor` is true and `return_type` is `Resolved`, the carrier is
+/// validated against [`KType::is_admissible_functor_return`] before the
+/// `KFunction` is registered. `Deferred` carriers ride the surface-form check
+/// that runs at the FUNCTOR-binder site (see `functor_def::body`); the
+/// per-call dispatch boundary's `matches_value` path is the safety net for
+/// any deferred carrier that resolves to a non-admissible shape later.
+pub(crate) fn finalize_fn_with_flag<'a>(
+    scope: &'a Scope<'a>,
+    elements: Vec<SignatureElement<'a>>,
+    return_type: ReturnType<'a>,
+    body_expr: KExpression<'a>,
+    is_functor: bool,
+) -> BodyResult<'a> {
+    // FUNCTOR-only post-resolution return-type validation. Mirror of the
+    // synchronous-arm check in `functor_def::body` — fires here when the
+    // return slot rode the Combine path through `Pending` / `ExprToSubDispatch`
+    // and only resolved at Combine-finish time. The diagnostic still surfaces
+    // at the FUNCTOR site (this is the Combine the FUNCTOR builtin scheduled).
+    if is_functor {
+        if let ReturnType::Resolved(kt) = &return_type {
+            if !kt.is_admissible_functor_return() {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "FUNCTOR return-type slot must denote a module, signature, or functor; \
+                     got `{}`",
+                    kt.name(),
+                ))));
+            }
+        }
+    }
     // Pick the first Keyword as the data-table key. `Bindings::functions` does the
     // load-bearing dispatch lookup by signature; `Bindings::data` is mostly for
     // discoverability and shadow-by-name semantics, neither of which has a single
@@ -193,10 +241,12 @@ pub(super) fn finalize_fn<'a>(
     let user_sig = ExpressionSignature { return_type, elements };
 
     let arena = scope.arena;
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::new(
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_pre_run_and_functor(
         user_sig,
         Body::UserDefined(body_expr),
         scope,
+        None,
+        is_functor,
     ));
     // `frame: None` here — the lift-on-return logic in the scheduler will populate
     // the Rc when this KFunction value escapes out of a per-call body. For top-level
@@ -224,12 +274,19 @@ pub(super) fn finalize_fn<'a>(
 /// Combine wakes, the finish closure splices each result into
 /// `signature_expr.parts[slot_idx]` as `Future(obj)` before re‑running
 /// `parse_fn_param_list` against the now‑final scope.
-pub(super) fn defer_via_combine<'a>(
+///
+/// `is_functor` is threaded through to [`finalize_fn_with_flag`] in the
+/// finish closure: FN's `body` passes `false`; the FUNCTOR builtin passes
+/// `true`. The flag is the only FUNCTOR-specific shape this function sees —
+/// the post-Combine return-type admissibility check lives at the
+/// `finalize_fn_with_flag` seam (no closure plumbing through this function).
+pub(crate) fn defer_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     signature_expr: KExpression<'a>,
     inputs: CombineInputs<'a>,
     body_expr: KExpression<'a>,
+    is_functor: bool,
 ) -> BodyResult<'a> {
     let CombineInputs { capture, park_producers, return_type_sub, sub_dispatches } = inputs;
     // Combine result layout: `[park_producers ++ return_type_sub? ++ sub_dispatches...]`.
@@ -299,7 +356,10 @@ pub(super) fn defer_via_combine<'a>(
                 )));
             }
         };
-        finalize_fn(scope, elements, return_type, body_expr.clone())
+        // FUNCTOR-only return-type validation runs inside `finalize_fn_with_flag`
+        // when `is_functor: true`. No closure or `Box<dyn Fn>` plumbing here —
+        // the flag the caller already threads through is the only signal needed.
+        finalize_fn_with_flag(scope, elements, return_type, body_expr.clone(), is_functor)
     });
     let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
     BodyResult::DeferTo(combine_id)

@@ -83,18 +83,23 @@ pointer as the builtin.
 [LET routing in `let_binding`](../../src/builtins/let_binding.rs) detects
 Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
 RHSes (type-valued aliases). A bind-time
-`KErrorKind::TypeClassBindingExpectsType` diagnostic rejects
-`LET <Type-class> = <non-type>` at the binder using a primitive/container
-blocklist (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so
-type-language carriers (`StructType`, `TaggedUnionType`,
-`KTypeValue(KType::Module { .. })`, `KTypeValue(KType::Signature(_))`),
-whose runtime `KType` is `Type` / `Module` / `Signature` rather than a
-blocklist scalar, continue to bind through the existing `bind_value`
-path. Module and signature LET aliases additionally dual-write the
-identity carrier into `bindings.types` via `register_nominal` (modules
-preserve their `KType::Module` carrier verbatim; signatures lower to
-the `KType::SatisfiesSignature` constraint form so a slot typed by the
-alias dispatches identically to the original).
+`KErrorKind::TypeClassBindingExpectsType` diagnostic gates the RHS via an
+**allowlist**: a Type-class LET admits a value only if it carries
+type-language identity in one of three shapes — `KObject::KTypeValue(_)`
+(pure-type carriers including `KType::Module` / `KType::Signature`),
+`derive_nominal_identity → Some(_)` (`StructType` / `TaggedUnionType`,
+which redundantly subsumes the `Module` / `Signature` `KTypeValue` arm),
+or `KObject::KFunction(f, _)` with `f.is_functor` set (the `FUNCTOR`
+binder's output). Plain `KFunction` rejects, closing the
+`LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole
+that a pure value-shape gate cannot discriminate; the `is_functor` flag
+is the discrimination signal. Module and signature LET aliases route through
+`register_nominal` to dual-write the identity carrier into `bindings.types`
+(modules preserve their `KType::Module` carrier verbatim; signatures lower
+to the `KType::SatisfiesSignature` constraint form so a slot typed by the
+alias dispatches identically to the original); pure-type `KTypeValue(kt)`
+carriers (Number, etc.) take `register_type` directly; `is_functor`
+KFunctions and `Struct` / `Tagged` carriers fall through to `bind_value`.
 
 The value-side ATTR walker and ascription's abstract-type member sweep both
 walk `bindings.types` and `bindings.data` via the `abstract_type_names_of`

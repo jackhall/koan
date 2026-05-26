@@ -171,6 +171,12 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                         self.stack.push(a);
                     }
                 }
+                KType::KFunctor { params, ret } => {
+                    self.stack.push(ret);
+                    for p in params.iter().rev() {
+                        self.stack.push(p);
+                    }
+                }
                 KType::Mu { body, .. } => self.stack.push(body),
                 KType::ConstructorApply { ctor, args } => {
                     for a in args.iter().rev() {

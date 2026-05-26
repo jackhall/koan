@@ -24,7 +24,11 @@ monadic side-effects design (tracked in [roadmap/libraries/monadic-side-effects.
 The dispatch driver's wrap-slot rail collapsed too: bare-name parts now eager-resolve
 against the dispatching scope and splice their carrier into the slot in place, retiring the
 old `apply_auto_wrap` + sub-Dispatch detour and unifying the Identifier-LHS and Type-LHS
-self-cycle surfaces under `SchedulerDeadlock`.
+self-cycle surfaces under `SchedulerDeadlock`. The dedicated `FUNCTOR` binder shipped
+alongside its `:(Functor (params) -> R)` type-position sigil, the one-way
+`KFunctor`/`KFunction` admissibility wall, and the Type-class `LET` allowlist flip
+(`KTypeValue` ∪ nominal-identity ∪ `is_functor`-flagged `KFunction`) that closes the
+plain-function-bound-to-a-Type-class-name hole.
 
 ## Next items
 
@@ -86,7 +90,8 @@ binding, and VAL-slot identity are represented in `KType` and routed through
 dispatch. The substrate the predicate-typing stages and the stdlib's
 functor-heavy collections both build on:
 
-- [FUNCTOR binder](roadmap/type_language/functor-binder.md)
+- [FUNCTOR return-validation fold](roadmap/type_language/functor-return-validation-fold.md)
+- [FUNCTOR application with a bare type-language argument](roadmap/type_language/functor-application-bare-arg.md)
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)

@@ -83,6 +83,17 @@ pub enum KType<'a> {
         args: Vec<KType<'a>>,
         ret: Box<KType<'a>>,
     },
+    /// Structural functor type — mirrors `KFunction` storage and rendering, but
+    /// carries no admissibility against `KFunction` (the cross-arms in
+    /// `function_compat` refuse both directions). Minted by the `FUNCTOR` binder
+    /// when `is_functor: true` flips on the underlying `KFunctionValue`, and by
+    /// the `Functor` arm of `elaborate_type_expr` for the `:(Functor (params) -> R)`
+    /// surface-form sigil. `params` mirror `KFunction::args` (positional, same
+    /// shape); `ret` mirrors `KFunction::ret`.
+    KFunctor {
+        params: Vec<KType<'a>>,
+        ret: Box<KType<'a>>,
+    },
     Identifier,
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
     /// when (or whether) to run it.
@@ -179,6 +190,10 @@ impl<'a> KType<'a> {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
                 format!(":(Function ({}) -> {})", arg_names.join(" "), ret.name())
             }
+            KType::KFunctor { params, ret } => {
+                let param_names: Vec<String> = params.iter().map(|p| p.name()).collect();
+                format!(":(Functor ({}) -> {})", param_names.join(" "), ret.name())
+            }
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
             KType::TypeExprRef => "TypeExprRef".into(),
@@ -239,6 +254,9 @@ impl<'a> PartialEq for KType<'a> {
             (Dict(ka, va), Dict(kb, vb)) => ka == kb && va == vb,
             (KFunction { args: a1, ret: r1 }, KFunction { args: a2, ret: r2 }) => {
                 a1 == a2 && r1 == r2
+            }
+            (KFunctor { params: p1, ret: r1 }, KFunctor { params: p2, ret: r2 }) => {
+                p1 == p2 && r1 == r2
             }
             (
                 UserType { kind: k1, scope_id: s1, name: n1 },
@@ -313,6 +331,62 @@ mod tests {
             ret: Box::new(KType::Bool),
         };
         assert_eq!(t.name(), ":(Function (Number Str) -> Bool)");
+    }
+
+    #[test]
+    fn name_renders_functor() {
+        let t = KType::KFunctor {
+            params: vec![KType::Number, KType::Str],
+            ret: Box::new(KType::Bool),
+        };
+        assert_eq!(t.name(), ":(Functor (Number Str) -> Bool)");
+    }
+
+    #[test]
+    fn functor_structural_eq_same_shape() {
+        let a = KType::KFunctor {
+            params: vec![KType::Number, KType::Str],
+            ret: Box::new(KType::Bool),
+        };
+        let b = KType::KFunctor {
+            params: vec![KType::Number, KType::Str],
+            ret: Box::new(KType::Bool),
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn functor_structural_neq_when_params_or_ret_differ() {
+        let base = KType::KFunctor {
+            params: vec![KType::Number],
+            ret: Box::new(KType::Bool),
+        };
+        let diff_params = KType::KFunctor {
+            params: vec![KType::Str],
+            ret: Box::new(KType::Bool),
+        };
+        let diff_ret = KType::KFunctor {
+            params: vec![KType::Number],
+            ret: Box::new(KType::Null),
+        };
+        assert_ne!(base, diff_params);
+        assert_ne!(base, diff_ret);
+    }
+
+    #[test]
+    fn functor_and_function_are_disjoint_types() {
+        // Stage 0: structural identity is shape-disjoint even when params and ret align.
+        // The cross-arm wall in `function_compat` enforces the same disjointness at the
+        // admissibility layer (Stage 4).
+        let f = KType::KFunction {
+            args: vec![KType::Number],
+            ret: Box::new(KType::Bool),
+        };
+        let g = KType::KFunctor {
+            params: vec![KType::Number],
+            ret: Box::new(KType::Bool),
+        };
+        assert_ne!(f, g);
     }
 
     #[test]

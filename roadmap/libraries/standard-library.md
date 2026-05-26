@@ -64,9 +64,8 @@ boilerplate by hand for every step.
 - *Applicative functor semantics — deferred to predicate typing.* Stage
   5's implicit resolution makes independent `(MakeSet)` call sites
   resolve to the same `IntOrd` without users seeing it; under the
-  generative-only semantics shipped by
-  [functor-binder](../type_language/functor-binder.md) (and spec'd
-  in [design/typing/functors.md](../../design/typing/functors.md)), two
+  generative-only semantics spec'd in
+  [design/typing/functors.md](../../design/typing/functors.md), two
   such applications mint distinct Set types and the resulting sets
   cannot interoperate. Applicative semantics — same-functor-applied-to-
   same-module produces equal types — closes this. The decided seam is
@@ -105,9 +104,6 @@ concrete type.
 
 - [Files and imports](files-and-imports.md) — the stdlib lives across
   multiple `.koan` files, so user code needs a way to load them.
-- [FUNCTOR binder](../type_language/functor-binder.md) — collections ship as FUNCTORs over
-  their element/key types; the binder is the substrate for stdlib
-  data-structure code.
 
 **Unblocks:**
 

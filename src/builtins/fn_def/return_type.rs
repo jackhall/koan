@@ -21,7 +21,7 @@ use super::param_refs::{kexpression_references_any, type_expr_references_any};
 /// `ExprCarrier` is captured raw rather than sub‑dispatched in the outer scope
 /// because overload 2's expression may reference a parameter that is by
 /// construction unbound there.
-pub(super) enum ReturnTypeRaw<'a> {
+pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType<'a>),
     TypeExprCarrier(TypeExpr),
     ExprCarrier(KExpression<'a>),
@@ -33,7 +33,7 @@ pub(super) enum ReturnTypeRaw<'a> {
 /// surface an `Unbound` because the referenced parameter is by construction
 /// not in the FN's lexical scope. Per‑call elaboration runs at the dispatch
 /// boundary instead.
-pub(super) enum ReturnTypeState<'a> {
+pub(crate) enum ReturnTypeState<'a> {
     Done(KType<'a>),
     Pending { te: TypeExpr, producers: Vec<NodeId> },
     Deferred(DeferredReturn<'a>),
@@ -52,7 +52,7 @@ pub(super) enum ReturnTypeState<'a> {
 /// `TypeExpr` plumbs the structured form (rather than just the leaf name) so
 /// that `TypeParams::List` / `TypeParams::Function` survive verbatim — rendering
 /// and re‑parsing would round‑trip through a string and strip the structure.
-pub(super) enum ReturnTypeCapture<'a> {
+pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType<'a>),
     Unresolved(String),
     TypeExpr(TypeExpr),
@@ -63,7 +63,7 @@ pub(super) enum ReturnTypeCapture<'a> {
 
 /// `unreachable!` arms guard the `get(kind) → extract_kind` pairing — an
 /// internal invariant of [`ArgumentBundle`], not a user‑surface error.
-pub(super) fn extract_return_type_raw<'a>(
+pub(crate) fn extract_return_type_raw<'a>(
     bundle: &mut ArgumentBundle<'a>,
 ) -> Result<ReturnTypeRaw<'a>, KError> {
     match bundle.get("return_type") {
@@ -88,7 +88,7 @@ pub(super) fn extract_return_type_raw<'a>(
 
 /// The parameter‑name scan runs first: a match short‑circuits eager
 /// elaboration so the carrier survives verbatim to the dispatch boundary.
-pub(super) fn classify_return_type<'a>(
+pub(crate) fn classify_return_type<'a>(
     raw: ReturnTypeRaw<'a>,
     param_names: &[String],
     scope: &'a Scope<'a>,

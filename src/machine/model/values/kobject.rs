@@ -432,16 +432,26 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
             _ => None,
         })
         .collect();
-    // Module-system functor-params Stage B coarsening: structural `KType::KFunction`
-    // can't carry a `Deferred(_)` return-type carrier (the structural type language has
-    // no surface for "per-call elaboration of this expression"). Collapse to `KType::Any`
-    // so the structural type stays well-formed; the precise per-call return type is
-    // observed at the dispatch boundary, not from a structural-type comparison.
+    // Module-system functor-params Stage B coarsening: structural `KType::KFunction` /
+    // `KFunctor` can't carry a `Deferred(_)` return-type carrier (the structural type
+    // language has no surface for "per-call elaboration of this expression"). Collapse
+    // to `KType::Any` so the structural type stays well-formed; the precise per-call
+    // return type is observed at the dispatch boundary, not from a structural-type
+    // comparison. Tracked separately at
+    // [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
     let ret = match &f.signature.return_type {
         ReturnType::Resolved(kt) => Box::new(kt.clone()),
         ReturnType::Deferred(_) => Box::new(KType::Any),
     };
-    KType::KFunction { args, ret }
+    // The `is_functor` flag (set at FUNCTOR-binder construction time) projects this
+    // value's type-language carrier into the disjoint `KFunctor` family. Cross-arm
+    // admissibility is refused in `function_compat` — see
+    // [design/typing/functors.md](../../../../design/typing/functors.md).
+    if f.is_functor {
+        KType::KFunctor { params: args, ret }
+    } else {
+        KType::KFunction { args, ret }
+    }
 }
 
 impl<'a> Parseable<'a> for KObject<'a> {

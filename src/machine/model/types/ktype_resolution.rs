@@ -81,11 +81,19 @@ impl<'a> KType<'a> {
                 let ret = Box::new(KType::from_type_expr(ret)?);
                 Ok(KType::KFunction { args, ret })
             }
+            ("Functor", TypeParams::Function { args, ret }) => {
+                let params = args
+                    .iter()
+                    .map(KType::from_type_expr)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret = Box::new(KType::from_type_expr(ret)?);
+                Ok(KType::KFunctor { params, ret })
+            }
             (_, TypeParams::List(_)) => {
                 Err(format!("type `{}` does not take type parameters", t.name))
             }
             (_, TypeParams::Function { .. }) => Err(format!(
-                "only `Function` accepts a `(args) -> ret` shape; got `{}`",
+                "only `Function` / `Functor` accept a `(args) -> ret` shape; got `{}`",
                 t.name
             )),
         }

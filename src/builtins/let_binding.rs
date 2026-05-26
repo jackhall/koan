@@ -48,21 +48,25 @@ pub fn body<'a>(
             }
             crate::machine::model::ast::TypeParams::None => {
                 let resolved_name = t.name.clone();
-                if matches!(
-                    value.ktype(),
-                    KType::Number | KType::Str | KType::Bool | KType::Null
-                        | KType::List(_) | KType::Dict(_, _)
-                ) {
+                // Type-class LET allowlist: a Type-class LET RHS must be a
+                // type-language carrier (`KTypeValue`), a nominal-identity
+                // carrier recoverable via `derive_nominal_identity` (Struct /
+                // Tagged / Module / Signature alias), or an `is_functor`-flagged
+                // KFunction (the FUNCTOR binder's output). Plain functions,
+                // primitives, and containers all reject here rather than
+                // silently landing under `bindings.data`. See
+                // `is_admissible_type_class_rhs` below for the predicate.
+                if !is_admissible_type_class_rhs(value) {
                     return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
                         got: value.ktype().name(),
                     }));
                 }
-                // Same routing rule as the `KTypeValue`-binder arm below: module /
-                // signature carriers dual-write through `nominal_identity`; pure-type
-                // `KTypeValue(kt)` carriers (Number, etc.) take the `register_type`
-                // path; other carrier shapes (`StructType` / `TaggedUnionType`) fall
-                // through `derive_nominal_identity`.
+                // Storage routing (unchanged): module / signature carriers dual-
+                // write through `nominal_identity`; pure-type `KTypeValue(kt)`
+                // carriers (Number, etc.) take the `register_type` path;
+                // `is_functor` KFunctions and other nominal-identity carriers
+                // (Struct / Tagged) fall through to the value-side binding.
                 match value {
                     KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
                         nominal_identity = derive_nominal_identity(value);
@@ -84,6 +88,7 @@ pub fn body<'a>(
             KType::List(_)
             | KType::Dict(_, _)
             | KType::KFunction { .. }
+            | KType::KFunctor { .. }
             | KType::Mu { .. }
             | KType::RecursiveRef(_) => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
@@ -92,19 +97,12 @@ pub fn body<'a>(
                 ))));
             }
             _ => {
-                // Bind-time rejection for `LET <Type-class> = <non-type>`. Blocklist —
-                // not `value.ktype() != KType::TypeExprRef` — because the type-language
-                // carriers `KModule` / `KSignature` / `StructType` / `TaggedUnionType`
-                // report `Module` / `Signature` / `Type`, not `TypeExprRef`, and shipped
-                // `LET IntOrdAbstract = (IntOrd :| OrderedSig)` patterns in `ascribe.rs`
-                // depend on those being accepted. The non-`KTypeValue` carriers continue
-                // to write `data` via `bind_value` until their own storage migration.
+                // Same allowlist as the `TypeNameRef` arm above: type-language
+                // carrier, nominal-identity carrier, or `is_functor`-flagged
+                // KFunction. Plain `KFunction` (e.g. `LET Plain = (FN ...)`)
+                // rejects rather than silently landing under `bindings.data`.
                 let resolved_name = t.name();
-                if matches!(
-                    value.ktype(),
-                    KType::Number | KType::Str | KType::Bool | KType::Null
-                        | KType::List(_) | KType::Dict(_, _)
-                ) {
+                if !is_admissible_type_class_rhs(value) {
                     return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
                         got: value.ktype().name(),
@@ -117,7 +115,8 @@ pub fn body<'a>(
                 // (for value-position lookups like `IntOrdView.compare`). Pure-type
                 // `KTypeValue(kt)` carriers (Number, List<Any>, etc.) take the
                 // `register_type` path — there's no useful value-side binding to
-                // alias against. Stage-1.7 storage flip preserved for the latter.
+                // alias against. `is_functor` KFunctions and Struct / Tagged
+                // carriers fall through to `bind_value`.
                 match value {
                     KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
                         nominal_identity = derive_nominal_identity(value);
@@ -230,6 +229,37 @@ fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
         }),
         _ => None,
     }
+}
+
+/// Type-class LET allowlist. A Type-class binder name (`LET MyName = <value>`
+/// where `MyName` classifies as a Type token) admits a value only if it
+/// carries a type-language identity in one of three shapes:
+///
+/// 1. `KObject::KTypeValue(_)` — pure-type carriers (`Number`, `:(List Str)`),
+///    module / signature carriers (`KType::Module`, `KType::Signature`), and
+///    abstract-type carriers all land here.
+/// 2. A value whose `derive_nominal_identity` returns `Some(_)` —
+///    `StructType` / `TaggedUnionType` carriers (and, redundantly with arm 1,
+///    Module / Signature `KTypeValue`s).
+/// 3. `KObject::KFunction(f, _)` where `f.is_functor` — the output of the
+///    `FUNCTOR` binder. Plain `KFunction` (the FN output) rejects, so
+///    `LET Plain = (FN …)` cannot silently bind a plain function under a
+///    Type-class name.
+///
+/// Anything else surfaces `TypeClassBindingExpectsType`. See
+/// [design/typing/elaboration.md](../../design/typing/elaboration.md)
+/// (binding home and the dual-map) for the design rationale.
+fn is_admissible_type_class_rhs<'a>(value: &KObject<'a>) -> bool {
+    if matches!(value, KObject::KTypeValue(_)) {
+        return true;
+    }
+    if derive_nominal_identity(value).is_some() {
+        return true;
+    }
+    if let KObject::KFunction(f, _) = value {
+        return f.is_functor;
+    }
+    false
 }
 
 /// Dispatch-time placeholder extractor for LET. Both overloads (`LET <name:Identifier> = ...`

@@ -217,6 +217,28 @@ pub fn elaborate_type_expr<'a>(
                 Err(e) => e,
             }
         }
+        // `Functor` type-position sigil: same shape rule as `Function` above but lowers
+        // to `KType::KFunctor`. The Type-class token (the head of the `:(Functor ...)`
+        // surface form) stays disjoint from the `FUNCTOR` binder keyword on the same
+        // rule that keeps `Function`/`FN` disjoint — no shared spelling, no shared lex
+        // class. See [design/typing/functors.md](../../../../design/typing/functors.md).
+        (name, TypeParams::Function { args, ret }) if name == "Functor" => {
+            let mut slots: Vec<ElabResult> = args
+                .iter()
+                .map(|a| elaborate_type_expr(el, a))
+                .collect();
+            slots.push(elaborate_type_expr(el, ret));
+            match ElabResult::collect(slots) {
+                Ok(mut kts) => {
+                    let ret_kt = kts.pop().expect("ret slot pushed above");
+                    ElabResult::Done(KType::KFunctor {
+                        params: kts,
+                        ret: Box::new(ret_kt),
+                    })
+                }
+                Err(e) => e,
+            }
+        }
         (name, TypeParams::List(items)) => {
             // Scope-aware constructor application. A self-reference of the form
             // `Wrap<T>` is currently rejected: the threaded set only fires on bare
@@ -255,7 +277,7 @@ pub fn elaborate_type_expr<'a>(
             ElabResult::Unbound(format!("type `{name}` does not take type parameters"))
         }
         (name, TypeParams::Function { .. }) => ElabResult::Unbound(format!(
-            "only `Function` accepts a `(args) -> ret` shape; got `{name}`"
+            "only `Function` / `Functor` accept a `(args) -> ret` shape; got `{name}`"
         )),
     }
 }

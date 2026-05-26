@@ -15,6 +15,7 @@ mod catch;
 mod cons;
 mod eval;
 mod fn_def;
+mod functor_def;
 mod let_binding;
 mod match_case;
 mod module_def;
@@ -146,6 +147,7 @@ pub fn default_scope<'a>(
     value_lookup::register(scope);
     value_pass::register(scope);
     fn_def::register(scope);
+    functor_def::register(scope);
     call_by_name::register(scope);
     union::register(scope);
     result::register(scope);

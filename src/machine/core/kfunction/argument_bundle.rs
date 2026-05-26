@@ -190,6 +190,7 @@ pub(crate) fn extract_bare_type_name<'a>(
             KType::List(_)
             | KType::Dict(_, _)
             | KType::KFunction { .. }
+            | KType::KFunctor { .. }
             | KType::Mu { .. }
             | KType::RecursiveRef(_)
             | KType::ConstructorApply { .. } => Err(KError::new(KErrorKind::ShapeError(format!(

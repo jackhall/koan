@@ -66,6 +66,13 @@ pub struct KFunction<'a> {
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE); `None` for
     /// everything else. See [`PreRunFn`].
     pub pre_run: Option<PreRunFn>,
+    /// Flipped on by the `FUNCTOR` binder (and stays `false` for `FN`). Distinguishes
+    /// the same underlying `KFunction` shape into the two type-language families:
+    /// `function_value_ktype` projects `is_functor → KType::KFunctor`, else
+    /// `KType::KFunction`. The cross-arm wall in `function_compat` refuses both
+    /// directions of the `KFunctor`/`KFunction` mismatch silently — see
+    /// [design/typing/functors.md](../../../design/typing/functors.md).
+    pub is_functor: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -78,10 +85,23 @@ impl<'a> KFunction<'a> {
     }
 
     pub fn with_pre_run(
+        signature: ExpressionSignature<'a>,
+        body: Body<'a>,
+        captured: &'a Scope<'a>,
+        pre_run: Option<PreRunFn>,
+    ) -> Self {
+        Self::with_pre_run_and_functor(signature, body, captured, pre_run, false)
+    }
+
+    /// Like [`Self::with_pre_run`] but lets the caller flip the `is_functor` flag at
+    /// construction time. Used by the `FUNCTOR` binder; everything else routes
+    /// through `with_pre_run` and leaves `is_functor: false`.
+    pub fn with_pre_run_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
         pre_run: Option<PreRunFn>,
+        is_functor: bool,
     ) -> Self {
         signature.normalize();
         Self {
@@ -90,6 +110,7 @@ impl<'a> KFunction<'a> {
             captured: NonNull::from(captured),
             _p: PhantomData,
             pre_run,
+            is_functor,
         }
     }
 
@@ -348,6 +369,47 @@ mod tests {
         assert_eq!(pick.ref_name_indices, vec![1]);
         assert!(pick.wrap_indices.is_empty());
         assert!(!pick.picked_has_pre_run);
+    }
+
+    /// Stage 2: a manually-constructed `KFunction` with the `is_functor` flag set
+    /// projects through `KObject::ktype()` as `KType::KFunctor`; the unflagged
+    /// case stays `KType::KFunction`. Pins the projection split that drives the
+    /// cross-arm wall in `function_compat`.
+    #[test]
+    fn function_value_ktype_projects_kfunctor_when_flagged() {
+        use crate::machine::model::types::{ReturnType, ExpressionSignature};
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let make_sig = || ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::Number),
+            elements: vec![
+                SignatureElement::Keyword("CALL".into()),
+                SignatureElement::Argument(crate::machine::model::types::Argument {
+                    name: "x".into(),
+                    ktype: KType::Number,
+                }),
+            ],
+        };
+        // Plain FN: `is_functor: false`, projects KFunction.
+        let plain = KFunction::with_pre_run(make_sig(), Body::Builtin(body_any), scope, None);
+        let plain_obj = KObject::KFunction(arena.alloc_function(plain), None);
+        assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
+        // Flagged FN: `is_functor: true`, projects KFunctor.
+        let functor = KFunction::with_pre_run_and_functor(
+            make_sig(),
+            Body::Builtin(body_any),
+            scope,
+            None,
+            true,
+        );
+        let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
+        match functor_obj.ktype() {
+            KType::KFunctor { params, ret } => {
+                assert_eq!(params, vec![KType::Number]);
+                assert_eq!(*ret, KType::Number);
+            }
+            other => panic!("expected KFunctor, got {:?}", other),
+        }
     }
 
     /// Companion to the literal-name slot case: a bare leaf Type-token in an `Any` slot of a

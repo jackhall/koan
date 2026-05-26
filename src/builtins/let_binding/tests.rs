@@ -304,6 +304,56 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     }
 }
 
+/// Stage-5 allowlist regression — plain FN bound to a Type-class name now
+/// errors at the LET site. Pre-Stage-5 the denylist accepted this case (no
+/// primitive / container match) and silently landed the function in `data`;
+/// the allowlist's three-arm test rejects it as `TypeClassBindingExpectsType`
+/// because a plain `KFunction` carries neither `KTypeValue`, nominal identity,
+/// nor the `is_functor` flag.
+#[test]
+fn let_type_class_with_plain_function_rejects() {
+    use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    let err = run_one_err(
+        scope,
+        parse_one("LET Plain = (FN (PP x :Number) -> Number = (x))"),
+    );
+    match &err.kind {
+        KErrorKind::TypeClassBindingExpectsType { name, .. } => {
+            assert_eq!(name, "Plain", "binder name should surface in diagnostic");
+        }
+        _ => panic!("expected TypeClassBindingExpectsType, got {err}"),
+    }
+}
+
+/// Stage-5 allowlist regression — FUNCTOR-flagged KFunction admits as a
+/// Type-class LET RHS. The `is_functor: true` flag flips the third arm of
+/// `is_admissible_type_class_rhs`; the binding lands in `bindings.data` via
+/// the fallthrough `bind_value` (FUNCTOR isn't a nominal-identity carrier).
+#[test]
+fn let_type_class_with_functor_admits() {
+    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         LET MyF = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))",
+    );
+    let obj = scope
+        .lookup("MyF")
+        .expect("MyF must be value-bound — allowlist admits the functor");
+    assert!(
+        matches!(obj, KObject::KFunction(f, _) if f.is_functor),
+        "MyF should resolve to a FUNCTOR-flagged KFunction, got {:?}",
+        obj.ktype(),
+    );
+}
+
 /// SIG-body `LET <Type-class> = ...` keeps working post-VAL — the strict reject
 /// only fires for the value-route. `LET Type = Number` lands on `register_type`,
 /// not `bind_value`, so the SIG-body gate doesn't fire.

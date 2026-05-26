@@ -51,19 +51,25 @@ impl<'a> TypeExprFrame<'a> {
         };
         let rest = &parts[1..];
         let arrow_idx = find_arrow(&head_name, rest)?;
-        let is_function = head_name == "Function";
+        // `Function` is the plain-function arrow head; `Functor` shares the same
+        // `(args) -> R` shape but lowers to `KType::KFunctor` downstream. Both
+        // allow `->`; every other head treats `->` as a parse error.
+        let is_arrow_head = head_name == "Function" || head_name == "Functor";
 
-        match (arrow_idx, is_function) {
+        match (arrow_idx, is_arrow_head) {
             (Some(_), false) => Err(KError::parse(
                 format!(
                     "type `:({head_name} ...)` cannot contain `->` — \
-                     the arrow is reserved for `:(Function (args) -> return)`",
+                     the arrow is reserved for `:(Function (args) -> return)` / \
+                     `:(Functor (args) -> return)`",
                 ),
                 None,
             )),
             (None, true) => Err(KError::parse(
-                "type `:(Function ...)` requires `->` to separate args from the return type \
-                 (e.g. `:(Function (Number) -> Str)`, or `:(Function () -> Str)` for nullary)",
+                format!(
+                    "type `:({head_name} ...)` requires `->` to separate args from the return type \
+                     (e.g. `:({head_name} (Number) -> Str)`, or `:({head_name} () -> Str)` for nullary)",
+                ),
                 None,
             )),
             (None, false) => build_list_params(head_name, rest.to_vec()),

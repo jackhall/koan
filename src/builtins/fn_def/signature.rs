@@ -15,7 +15,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 /// type elaboration. Must run before any outer-scope elaboration, otherwise the eager
 /// path would surface `Unbound` against a parameter name. Returns names in declaration
 /// order.
-pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) -> Vec<String> {
+pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) -> Vec<String> {
     let parts = &signature.parts;
     let mut names: Vec<String> = Vec::new();
     let mut i = 0;
@@ -47,7 +47,7 @@ pub(super) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
 }
 
 /// Result of one walk over an FN signature's part list.
-pub(super) enum ParamListOutcome<'a> {
+pub(crate) enum ParamListOutcome<'a> {
     Done(Vec<SignatureElement<'a>>),
     /// One or more parameter slots couldn't elaborate synchronously. The caller schedules
     /// a `Combine` over `park_producers` and any sub-Dispatches spawned from
@@ -72,7 +72,7 @@ pub(super) enum ParamListOutcome<'a> {
 /// `ElabResult::Park(producers)` for type-binding names that have dispatched but not
 /// finalized. Parking producers and parens-wrapped sub-Dispatches accumulate across the
 /// whole signature walk so the caller can register every blocker in one Combine.
-pub(super) fn parse_fn_param_list<'a>(
+pub(crate) fn parse_fn_param_list<'a>(
     signature: &KExpression<'a>,
     elaborator: &mut Elaborator<'_, 'a>,
 ) -> ParamListOutcome<'a> {
