@@ -7,7 +7,6 @@ use crate::machine::model::ast::{KExpression, TypeExpr};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture, ScopeId};
 use crate::machine::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
-use super::module::{Module, Signature};
 
 #[cfg(test)]
 mod tests;
@@ -57,14 +56,14 @@ pub enum KObject<'a> {
     /// declared element type (coarsening included). `ktype()` reads this field directly
     /// rather than re-walking the contents. Construct via [`KObject::list`] /
     /// [`KObject::list_with_type`]; never the tuple directly outside this module.
-    List(Rc<Vec<KObject<'a>>>, Box<KType>),
+    List(Rc<Vec<KObject<'a>>>, Box<KType<'a>>),
     /// Dict value. The second/third fields are the memoized/ascribed key + value types,
     /// computed once at construction (`KObject::dict`) as the join of the keys / values, or
     /// re-stamped at an annotated boundary. `ktype()` reads them directly.
     Dict(
-        Rc<HashMap<Box<dyn Serializable + 'a>, KObject<'a>>>,
-        Box<KType>,
-        Box<KType>,
+        Rc<HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>>,
+        Box<KType<'a>>,
+        Box<KType<'a>>,
     ),
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
@@ -77,7 +76,7 @@ pub enum KObject<'a> {
     /// which `crate::builtins::tagged_union::construct` copies onto each
     /// produced value.
     TaggedUnionType {
-        schema: Rc<HashMap<String, KType>>,
+        schema: Rc<HashMap<String, KType<'a>>>,
         name: String,
         scope_id: ScopeId,
     },
@@ -88,7 +87,7 @@ pub enum KObject<'a> {
     StructType {
         name: String,
         scope_id: ScopeId,
-        fields: Rc<Vec<(String, KType)>>,
+        fields: Rc<Vec<(String, KType<'a>)>>,
     },
     /// Tagged-union value. `(name, scope_id)` carries the declaring schema's identity
     /// through to the value, populated by `crate::builtins::tagged_union::construct` from the schema
@@ -105,7 +104,7 @@ pub enum KObject<'a> {
         value: Rc<KObject<'a>>,
         scope_id: ScopeId,
         name: String,
-        type_args: Rc<Vec<KType>>,
+        type_args: Rc<Vec<KType<'a>>>,
     },
     /// Struct value. `(name, scope_id)` carries the declaring schema's identity through
     /// to the value, populated by `crate::builtins::struct_value::construct`. `ktype()` synthesizes
@@ -120,7 +119,12 @@ pub enum KObject<'a> {
     /// `Type(_)` tokens, the type-builtins for parameterized sub-dispatches) so consumers
     /// downstream never see surface syntax again. Slot kind is still `KType::TypeExprRef`;
     /// the slot is the dispatch-position marker, the variant is the runtime value.
-    KTypeValue(KType),
+    ///
+    /// Post-collapse this is the sole value-side carrier for first-class modules and
+    /// signatures too: a module value is `KTypeValue(KType::Module { module, frame })`,
+    /// a signature value is `KTypeValue(KType::Signature(s))`. The dedicated
+    /// `KModule` / `KSignature` variants retired with the type-language collapse.
+    KTypeValue(KType<'a>),
     /// Bind-time carrier for a `TypeExprRef`-slot value whose surface `TypeExpr` couldn't
     /// be lowered to a concrete `KType` at `ExpressionPart::resolve_for` time — i.e. a
     /// bare-leaf name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`,
@@ -129,14 +133,6 @@ pub enum KObject<'a> {
     /// type elaboration, `LET <Type-class> = …`); scope-aware resolution + memoization
     /// now lives on [`crate::machine::core::Scope::resolve_type_expr`].
     TypeNameRef(TypeExpr),
-    /// `Option<Rc<CallArena>>` mirrors `KFunction`'s lifecycle anchor: a `Module` whose
-    /// child scope was alloc'd inside a per-call frame (a functor body's freshly-built
-    /// `MODULE Result = (...)`) carries the frame's `Rc` so the captured scope outlives
-    /// the dying frame. `None` for modules built outside a per-call frame (top-level
-    /// `MODULE Foo = (...)` and the ascription paths). See [memory-model.md § Closure
-    /// escape](../../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
-    KModule(&'a Module<'a>, Option<Rc<CallArena>>),
-    KSignature(&'a Signature<'a>),
     /// Stage-4 NEWTYPE carrier. Tags a representation value with a NEWTYPE type identity.
     /// `inner` is the underlying representation value, invariantly *not* a `Wrapped` —
     /// the [`NonWrappedRef`] field type enforces newtype-over-newtype collapse at the
@@ -152,7 +148,7 @@ pub enum KObject<'a> {
     /// doesn't force every field accessor to redo.
     Wrapped {
         inner: NonWrappedRef<'a>,
-        type_id: &'a KType,
+        type_id: &'a KType<'a>,
     },
     Null,
 }
@@ -170,13 +166,13 @@ impl<'a> KObject<'a> {
     /// `List` carrier with an explicitly supplied element type. Used by lift (preserve the
     /// already-memoized type across an arena-anchor rebuild) and by ascription stamping
     /// (re-tag to the declared element type, coarsening included).
-    pub fn list_with_type(items: Rc<Vec<KObject<'a>>>, elem: KType) -> KObject<'a> {
+    pub fn list_with_type(items: Rc<Vec<KObject<'a>>>, elem: KType<'a>) -> KObject<'a> {
         KObject::List(items, Box::new(elem))
     }
 
     /// Fresh `Dict` carrier: computes key + value types once as the join of the keys /
     /// values.
-    pub fn dict(map: HashMap<Box<dyn Serializable + 'a>, KObject<'a>>) -> KObject<'a> {
+    pub fn dict(map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>) -> KObject<'a> {
         let k = KType::join_iter(map.keys().map(|k| k.ktype()));
         let v = KType::join_iter(map.values().map(|v| v.ktype()));
         KObject::Dict(Rc::new(map), Box::new(k), Box::new(v))
@@ -184,9 +180,9 @@ impl<'a> KObject<'a> {
 
     /// `Dict` carrier with explicitly supplied key + value types. See [`Self::list_with_type`].
     pub fn dict_with_type(
-        map: Rc<HashMap<Box<dyn Serializable + 'a>, KObject<'a>>>,
-        key: KType,
-        value: KType,
+        map: Rc<HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>>,
+        key: KType<'a>,
+        value: KType<'a>,
     ) -> KObject<'a> {
         KObject::Dict(map, Box::new(key), Box::new(value))
     }
@@ -203,7 +199,7 @@ impl<'a> KObject<'a> {
     /// stamped against a `ConstructorApply`, the constructor identity must already match
     /// (the caller's `matches_value` guaranteed it); the `type_args` are replaced with the
     /// declared args. Empty containers stamp vacuously (the declared element type wins).
-    pub fn stamp_type(self, declared: &KType) -> KObject<'a> {
+    pub fn stamp_type(self, declared: &KType<'a>) -> KObject<'a> {
         match (self, declared) {
             (KObject::List(items, _), KType::List(elem)) => {
                 KObject::List(items, elem.clone())
@@ -252,7 +248,7 @@ impl<'a> KObject<'a> {
 
     /// Runtime type tag. `KFuture` reports as `KFunction` since a bound-but-unrun call is
     /// functionally a thunk and KFutures don't escape as user-visible values today.
-    pub fn ktype(&self) -> KType {
+    pub fn ktype(&self) -> KType<'a> {
         match self {
             KObject::Number(_) => KType::Number,
             KObject::KString(_) => KType::Str,
@@ -266,9 +262,9 @@ impl<'a> KObject<'a> {
             KObject::KExpression(_) => KType::KExpression,
             // Schema carriers report the meta-type (`KType::Type`): they are values *of*
             // the meta-type, not user-typed values. Per-declaration value carriers
-            // (`Struct`, `Tagged`, `KModule`) synthesize `KType::UserType` from their
-            // `(scope_id, name)` identity fields so dispatch on type identity sees
-            // distinct types per declaration.
+            // (`Struct`, `Tagged`) synthesize `KType::UserType` from their `(scope_id,
+            // name)` identity fields so dispatch on type identity sees distinct types
+            // per declaration.
             KObject::TaggedUnionType { .. } => KType::Type,
             KObject::StructType { .. } => KType::Type,
             // Erased `type_args` reports the bare `UserType` identity (today's behavior);
@@ -294,18 +290,23 @@ impl<'a> KObject<'a> {
                 scope_id: *scope_id,
                 name: name.clone(),
             },
-            KObject::KTypeValue(_) => KType::TypeExprRef,
+            // Post-collapse: module/signature values ride `KTypeValue(KType::Module/Signature)`.
+            // The carried `KType` IS the identity; report it directly rather than the
+            // meta-type marker, so dispatch and slot admission see the same shape as a
+            // type-position carrier (no `KType::UserType { kind: Module, .. }` synthesis).
+            //
+            // Other `KTypeValue` carriers (`Number`, `Str`, builtin-shape types) still
+            // report as `TypeExprRef` — they fill the dispatch-position marker for surface
+            // type expressions.
+            KObject::KTypeValue(kt) => match kt {
+                KType::Module { .. } | KType::Signature(_) => kt.clone(),
+                _ => KType::TypeExprRef,
+            },
             // `TypeNameRef` is dispatch-equivalent to `KTypeValue` — both fill a
             // `TypeExprRef`-typed slot. The slot's role is the dispatch-position marker;
             // whether the carrier resolved at `resolve_for` time or stays surface-form
             // until a scope-aware consumer asks is an internal detail.
             KObject::TypeNameRef(_) => KType::TypeExprRef,
-            KObject::KModule(m, _) => KType::UserType {
-                kind: UserTypeKind::Module,
-                scope_id: m.scope_id(),
-                name: m.path.clone(),
-            },
-            KObject::KSignature(_) => KType::MetaSignature,
             // Stage 4: a `Wrapped` reports its cached NEWTYPE identity directly. The cell
             // is the arena ref the declaration site minted; cloning preserves the
             // `(kind, scope_id, name)` triple the dispatcher reads.
@@ -352,8 +353,6 @@ impl<'a> KObject<'a> {
             },
             KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
             KObject::TypeNameRef(t) => KObject::TypeNameRef(t.clone()),
-            KObject::KModule(m, frame) => KObject::KModule(m, frame.clone()),
-            KObject::KSignature(s) => KObject::KSignature(s),
             // Stage 4: both fields are arena references; copying them preserves the
             // immutable-carrier contract. `inner` already lives in the arena, so no
             // deep allocation is needed here.
@@ -373,35 +372,41 @@ impl<'a> KObject<'a> {
 
     /// Returns the `Rc` directly so callers can `Rc::clone` the field list.
     #[allow(clippy::type_complexity)]
-    pub fn as_struct_type(&self) -> Option<(&str, &Rc<Vec<(String, KType)>>)> {
+    pub fn as_struct_type(&self) -> Option<(&str, &Rc<Vec<(String, KType<'a>)>>)> {
         match self {
             KObject::StructType { name, fields, .. } => Some((name.as_str(), fields)),
             _ => None,
         }
     }
 
-    pub fn as_tagged_union_type(&self) -> Option<&Rc<HashMap<String, KType>>> {
+    pub fn as_tagged_union_type(&self) -> Option<&Rc<HashMap<String, KType<'a>>>> {
         match self {
             KObject::TaggedUnionType { schema, .. } => Some(schema),
             _ => None,
         }
     }
 
-    pub fn as_module(&self) -> Option<&'a Module<'a>> {
+    /// First-class module accessor. Post-collapse, module values ride the
+    /// `KTypeValue(KType::Module { .. })` carrier; this helper projects through that
+    /// shape so consumers (`bundle.require_module`, ATTR's `access_module_member`) read
+    /// the same `&'a Module<'a>` they used to read from `KObject::KModule`.
+    pub fn as_module(&self) -> Option<&'a super::module::Module<'a>> {
         match self {
-            KObject::KModule(m, _) => Some(*m),
+            KObject::KTypeValue(KType::Module { module, .. }) => Some(*module),
             _ => None,
         }
     }
 
-    pub fn as_signature(&self) -> Option<&'a Signature<'a>> {
+    /// First-class signature accessor. Same shape as `as_module` — projects through the
+    /// `KTypeValue(KType::Signature(_))` carrier.
+    pub fn as_signature(&self) -> Option<&'a super::module::Signature<'a>> {
         match self {
-            KObject::KSignature(s) => Some(*s),
+            KObject::KTypeValue(KType::Signature(s)) => Some(*s),
             _ => None,
         }
     }
 
-    pub fn as_ktype(&self) -> Option<&KType> {
+    pub fn as_ktype(&self) -> Option<&KType<'a>> {
         match self {
             KObject::KTypeValue(t) => Some(t),
             _ => None,
@@ -416,9 +421,9 @@ impl<'a> KObject<'a> {
     }
 }
 
-fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {
+fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
     use crate::machine::model::types::ReturnType;
-    let args: Vec<KType> = f
+    let args: Vec<KType<'a>> = f
         .signature
         .elements
         .iter()
@@ -427,23 +432,33 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType {
             _ => None,
         })
         .collect();
-    // Module-system functor-params Stage B coarsening: structural `KType::KFunction`
-    // can't carry a `Deferred(_)` return-type carrier (the structural type language has
-    // no surface for "per-call elaboration of this expression"). Collapse to `KType::Any`
-    // so the structural type stays well-formed; the precise per-call return type is
-    // observed at the dispatch boundary, not from a structural-type comparison.
+    // Module-system functor-params Stage B coarsening: structural `KType::KFunction` /
+    // `KFunctor` can't carry a `Deferred(_)` return-type carrier (the structural type
+    // language has no surface for "per-call elaboration of this expression"). Collapse
+    // to `KType::Any` so the structural type stays well-formed; the precise per-call
+    // return type is observed at the dispatch boundary, not from a structural-type
+    // comparison. Tracked separately at
+    // [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
     let ret = match &f.signature.return_type {
         ReturnType::Resolved(kt) => Box::new(kt.clone()),
         ReturnType::Deferred(_) => Box::new(KType::Any),
     };
-    KType::KFunction { args, ret }
+    // The `is_functor` flag (set at FUNCTOR-binder construction time) projects this
+    // value's type-language carrier into the disjoint `KFunctor` family. Cross-arm
+    // admissibility is refused in `function_compat` — see
+    // [design/typing/functors.md](../../../../design/typing/functors.md).
+    if f.is_functor {
+        KType::KFunctor { params: args, ret }
+    } else {
+        KType::KFunction { args, ret }
+    }
 }
 
-impl<'a> Parseable for KObject<'a> {
-    fn equal(&self, other: &dyn Parseable) -> bool {
+impl<'a> Parseable<'a> for KObject<'a> {
+    fn equal(&self, other: &dyn Parseable<'a>) -> bool {
         self.summarize() == other.summarize()
     }
-    fn ktype(&self) -> KType {
+    fn ktype(&self) -> KType<'a> {
         KObject::ktype(self)
     }
     fn summarize(&self) -> String {
@@ -488,14 +503,18 @@ impl<'a> Parseable for KObject<'a> {
                 format!("{}({})", name, parts.join(", "))
             }
             KObject::Null => "null".to_string(),
+            // Post-collapse: module/signature carriers ride `KTypeValue(KType::Module/Signature)`.
+            // Render as `module <path>` / `sig <path>` so user-visible diagnostics stay the
+            // same shape as before the collapse; all other `KTypeValue` carriers (Number,
+            // Str, etc.) render via the type's `name()`.
+            KObject::KTypeValue(KType::Module { module, .. }) => format!("module {}", module.path),
+            KObject::KTypeValue(KType::Signature(s)) => format!("sig {}", s.path),
             KObject::KTypeValue(t) => t.render(),
             // Preserve the surface form the user wrote (`Point`, `Foo<Bar>`) for
             // diagnostics — rendering through the scope-resolved `&KType` would route
             // via `name()` and might normalize, which the "surface form survives bind"
             // invariant forbids.
             KObject::TypeNameRef(t) => t.render(),
-            KObject::KModule(m, _) => format!("module {}", m.path),
-            KObject::KSignature(s) => format!("sig {}", s.path),
             // Stage 4: render as `Distance(<inner summary>)`. `type_id.name()` returns
             // the bare declared name (per `user_type_name_renders_bare_name`); the
             // inner summary recurses via the `Parseable` impl, mirroring the

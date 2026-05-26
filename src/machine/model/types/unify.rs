@@ -19,12 +19,12 @@ use super::ktype::KType;
 
 /// Outcome of a unification walk.
 #[derive(Debug, PartialEq)]
-pub enum UnifyResult {
+pub enum UnifyResult<'a> {
     /// Every structural position lined up; `bindings` are the `(param_name, concrete)`
     /// pairs to register into the per-call type scope. A parameter that appears in more
     /// than one position must bind consistently — a conflicting second occurrence is a
     /// `Mismatch`.
-    Bound(Vec<(String, KType)>),
+    Bound(Vec<(String, KType<'a>)>),
     /// The declared shape and the value's carried type don't line up (different head
     /// constructor, wrong arity, or a parameter bound to two incompatible types).
     Mismatch(String),
@@ -37,19 +37,23 @@ pub enum UnifyResult {
 /// parameter leaf binds to whatever `actual` subtype occupies its position. Container and
 /// constructor shapes recurse position-wise. Arity or head-constructor disagreement is a
 /// `Mismatch`.
-pub fn unify_slot(declared: &TypeExpr, actual: &KType, params: &HashSet<String>) -> UnifyResult {
-    let mut out: Vec<(String, KType)> = Vec::new();
+pub fn unify_slot<'a>(
+    declared: &TypeExpr,
+    actual: &KType<'a>,
+    params: &HashSet<String>,
+) -> UnifyResult<'a> {
+    let mut out: Vec<(String, KType<'a>)> = Vec::new();
     match walk(declared, actual, params, &mut out) {
         Ok(()) => UnifyResult::Bound(out),
         Err(msg) => UnifyResult::Mismatch(msg),
     }
 }
 
-fn walk(
+fn walk<'a>(
     declared: &TypeExpr,
-    actual: &KType,
+    actual: &KType<'a>,
     params: &HashSet<String>,
-    out: &mut Vec<(String, KType)>,
+    out: &mut Vec<(String, KType<'a>)>,
 ) -> Result<(), String> {
     match (&declared.name, &declared.params) {
         // Bare leaf: a parameter name binds to `actual`; any other leaf must already
@@ -109,7 +113,7 @@ fn walk(
     }
 }
 
-fn bind(name: &str, ty: KType, out: &mut Vec<(String, KType)>) -> Result<(), String> {
+fn bind<'a>(name: &str, ty: KType<'a>, out: &mut Vec<(String, KType<'a>)>) -> Result<(), String> {
     if let Some((_, existing)) = out.iter().find(|(n, _)| n == name) {
         if *existing != ty {
             return Err(format!(

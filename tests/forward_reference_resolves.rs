@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::KObject;
+use koan::machine::model::{KObject, KType, Parseable};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -53,7 +53,7 @@ fn module_body_forward_reference_resolves() {
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&arena, captured, "MODULE Mod = ((LET y = x) (LET x = 1))");
     let m = match scope.lookup("Mod") {
-        Some(KObject::KModule(m, _)) => *m,
+        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("Mod should be a module"),
     };
     let data = m.child_scope().bindings().data();
@@ -238,32 +238,59 @@ fn producer_error_propagates_to_parked_consumer() {
     );
 }
 
-/// Dependency-cycle guard: a self-referential binding (`LET x = x`) parks its RHS
-/// sub-dispatch on its own placeholder, so the binder waits on a sub that waits on the
-/// binder. The work queues drain with those slots still parked; `execute` detects the
-/// leftover `PreRun` slots and returns `SchedulerDeadlock` rather than letting the
-/// top-level result read panic on an unresolved slot.
+/// Bucket-keyed FN park: a bare-arg call to a still-finalizing FN whose signature
+/// parameter is itself a forward reference. The submission order is:
+///   1. `LET out = (LIFT_BARE x)` — keyword `LIFT_BARE` has no bucket yet.
+///   2. `FN (LIFT_BARE arg :Wrap) -> Number = (LET _ = arg) 7` — installs a
+///      `pending_overloads[{Keyword("LIFT_BARE"), Slot}] = NodeId(this binder)`
+///      entry via the new bucket-keyed `pre_run_bucket` hook.
+///   3. `STRUCT Wrap = (n :Number)` — once finalized, the FN finalizes too.
+///   4. `LET x = (Wrap (n = 9))`.
+///
+/// Without the bucket-keyed entry, step 1's dispatch would fail `Unmatched`:
+/// `LIFT_BARE`'s `functions` bucket is empty and a name-keyed-only park has
+/// nothing to attach to (a bare-arg call to a still-finalizing FN doesn't
+/// resolve through `Scope::resolve`). The binder's `pre_run_bucket` install
+/// catches it. The FUNCTOR binder rides the same mechanism via the symmetric
+/// `pre_run_bucket` hook in `src/builtins/functor_def.rs`.
 #[test]
-fn self_referential_binding_surfaces_deadlock() {
-    use koan::machine::KErrorKind;
+fn fn_bare_arg_call_parks_on_pending_overload_bucket() {
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
-    struct SharedBuf(Rc<RefCell<Vec<u8>>>);
-    impl std::io::Write for SharedBuf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-    let scope = default_scope(&arena, Box::new(SharedBuf(captured)));
-    let exprs = parse("LET x = x").expect("parse should succeed");
-    let mut sched = Scheduler::new();
-    for e in exprs { let _ = sched.add_dispatch(e, scope); }
-    let err = sched.execute().expect_err("self-reference should surface a deadlock");
+    let scope = run(
+        &arena,
+        captured,
+        "LET out = (LIFT_BARE w)\n\
+         FN (LIFT_BARE arg :Wrap) -> Number = (7)\n\
+         STRUCT Wrap = (n :Number)\n\
+         LET w = (Wrap (n = 9))",
+    );
     assert!(
-        matches!(&err.kind, KErrorKind::SchedulerDeadlock { pending, .. } if *pending > 0),
-        "expected SchedulerDeadlock, got {err}",
+        matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
+        "expected `out` to be 7.0 via bucket-keyed FN park; got {}",
+        scope.lookup("out").map_or("None".to_string(), |o| o.summarize()),
+    );
+}
+
+/// Self-referential binding guard: `LET x = x` parks the LET on its own placeholder
+/// during the eager wrap-resolve pass. The `would_create_cycle` check in
+/// `resolve_name_part` catches the self-park (producer == consumer) and surfaces a
+/// structured `SchedulerDeadlock` (cycle-specific error kind) as the LET slot's
+/// terminal — matching the `let_t_cycle_errors` library test contract for the Type-LHS
+/// form (`LET Ty = Ty`). Pre-eager-resolve the Identifier-LHS form deadlocked at
+/// finalize because Phase 1's short-circuit park didn't run a cycle check; the
+/// eager-resolve unification routes both shapes through the same `would_create_cycle`
+/// guard. Observed via `interpret_with_writer`, which threads slot terminals into its
+/// return `Result`.
+#[test]
+fn self_referential_binding_surfaces_deadlock() {
+    use koan::machine::interpret_with_writer;
+    use koan::machine::KErrorKind;
+    let err = interpret_with_writer("LET x = x", Box::new(std::io::sink()))
+        .expect_err("self-reference should surface a cycle error");
+    assert!(
+        matches!(&err.kind, KErrorKind::SchedulerDeadlock { sample, .. } if sample.contains("cycle")),
+        "expected SchedulerDeadlock mentioning cycle, got {err}",
     );
 }
 

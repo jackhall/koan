@@ -15,9 +15,36 @@ topical docs covering the execution model, memory model, functional programming,
 expressions and parsing, and error handling, plus the [design/typing/](design/typing/README.md)
 subdirectory covering the type and module systems end-to-end (the module language and
 runtime type system shipped — including `USING … SCOPE` block-scoped module opening, which
-surfaces a module value's members as bare names for the duration of a block — with
+surfaces a module value's members as bare names for the duration of a block, and the
+type-language collapse that puts modules and signatures in `KType` directly via
+`KType::Module { .. }` / `KType::Signature(_)` / `KType::AbstractType { .. }` carriers,
+retiring the `KObject::KModule` / `KObject::KSignature` duality — with
 implicit-search and axiom stages tracked as `module-system-*` roadmap items below). [design/effects.md](design/effects.md) captures the in-language
 monadic side-effects design (tracked in [roadmap/libraries/monadic-side-effects.md](roadmap/libraries/monadic-side-effects.md)).
+The dispatch driver's wrap-slot rail collapsed too: bare-name parts now eager-resolve
+against the dispatching scope and splice their carrier into the slot in place, retiring the
+old `apply_auto_wrap` + sub-Dispatch detour and unifying the Identifier-LHS and Type-LHS
+self-cycle surfaces under `SchedulerDeadlock`. The dedicated `FUNCTOR` binder shipped
+alongside its `:(Functor (params) -> R)` type-position sigil, the one-way
+`KFunctor`/`KFunction` admissibility wall, and the Type-class `LET` allowlist flip
+(`KTypeValue` ∪ nominal-identity ∪ `is_functor`-flagged `KFunction`) that closes the
+plain-function-bound-to-a-Type-class-name hole. The FUNCTOR-return validator
+folded into `classify_return_type` itself, so the carrier is walked once for
+both Resolved/Deferred classification and the admissibility verdict. FUNCTOR
+application now reads naturally — `(MAKESET IntOrd)` works directly when
+`IntOrd` is a Type-classified module satisfying the declared signature — via
+two pieces: a value-side `LET` partition guard that rejects module/signature
+RHSes bound under lowercase names (forcing module/signature carriers onto
+Type-classified identifiers, so the type-side binding map is the single home
+for them), and a bucket-keyed `pending_overloads` dispatch park that lets a
+bare-arg call to a still-finalizing FN / FUNCTOR overload park on the binder
+slot instead of racing FIFO submission order into `DispatchFailed`. The
+`:Type` parameter slot admits any `KTypeValue`-carried type — bare builtin
+tokens (`Number`, `Str`, `Bool`, `Null`) along with `TaggedUnionType` /
+`StructType` schema carriers — so single-type-parameter functor surfaces
+like `(MAKETREE Number)` work directly without a signature-typed wrapper
+module per builtin, while module and signature carriers still route through
+their dedicated slots to preserve the overload wall.
 
 ## Next items
 
@@ -31,12 +58,11 @@ without first landing something else:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
   — free type-parameter names in parameter slots bind per call, from either an
   argument's carried type structure or an earlier parameter's value.
-- [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
-  — collapse the KObject/KType duality for modules and signatures, retiring the dual-write
-  in `KFunction::invoke` for signature-typed FN parameters.
-- [Lexical-order name resolution](roadmap/lexical-ordering.md) — make a name's visibility a
-  function of its lexical position rather than the scheduler's queue order, so forward
-  references resolve deterministically and sibling work can be reordered or parallelized.
+- [Lexical provenance plumbing](roadmap/dispatch_fix/lexical-provenance.md) — first phase
+  of the dispatch-fix project: attach an immutable cactus-chain frame
+  `{ scope_id, index, parent }` to every unit of work and route top-level / FN body /
+  MODULE body through a single `enter_block` primitive, plumbing the data the
+  index-gated resolver later reads.
 
 ## Open items
 
@@ -82,11 +108,22 @@ binding, and VAL-slot identity are represented in `KType` and routed through
 dispatch. The substrate the predicate-typing stages and the stdlib's
 functor-heavy collections both build on:
 
-- [Module and signature carriers move from KObject to KType](roadmap/type_language/module-signature-as-ktype.md)
-- [FUNCTOR binder](roadmap/type_language/functor-binder.md)
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
+
+### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
+
+Untangle dispatch into queue-order-independent name resolution plus a single
+unified ancestor walk per call site. Phases land sequentially: provenance
+plumbing first, then the index-gated `Resolution` split that makes visibility
+lexical, then a structural fix to the nested-binder submission race, then the
+walk-unification and strict-only admission collapse:
+
+- [Lexical provenance plumbing](roadmap/dispatch_fix/lexical-provenance.md)
+- [Index-gated resolution](roadmap/dispatch_fix/index-gated-resolution.md)
+- [Nested-binder recursive submission](roadmap/dispatch_fix/nested-binder-submission.md)
+- [Unified walk + strict-only admission](roadmap/dispatch_fix/unified-walk.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

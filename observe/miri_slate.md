@@ -3,10 +3,11 @@
 <!-- slate-fingerprint
 src/builtins/match_case.rs: 2
 src/builtins/try_with.rs: 2
-src/machine/core/arena.rs: 21
+src/machine/core/arena.rs: 23
 src/machine/core/kfunction.rs: 1
 src/machine/core/kfunction/invoke.rs: 1
 src/machine/execute/scheduler/node_store.rs: 1
+src/machine/model/ast.rs: 1
 src/machine/model/values/module.rs: 3
 -->
 
@@ -35,7 +36,7 @@ unsafe and fingerprint-drift checks still fire.
 
 ## The slate
 
-29 tests, grouped by the unsafe site each pins down. Names below are the exact
+30 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command.
 
 **Singleton transmutes** ([src/machine/core/arena.rs](../src/machine/core/arena.rs)) — the `'static`→`'a`
@@ -157,6 +158,16 @@ the scheduler path the binder follows.
 
 - `module_body_dispatch_does_not_dangle`
 
+**`TypeExpr::builtin_cache` lifetime lift** ([src/machine/model/ast.rs](../src/machine/model/ast.rs)) — the
+Layer-1 resolution cache stores `KType<'static>` because the builtin-only
+`from_type_expr` path never carries arena-pinned `Module` / `Signature`
+references. The cache-hit path in `ExpressionPart::resolve_for` clones the
+cached value and transmutes `KType<'static> → KType<'a>` to hand it back at the
+caller's lifetime. Sound because the clone is owned-data-only (no aliasing into
+the cache), but tree borrows still needs to see the lift on a non-`'static` `'a`.
+
+- `builtin_cache_lifetime_lift_does_not_dangle`
+
 **`NodeStore::reinstall_with_frame` slot re-anchor** ([src/machine/execute/scheduler/node_store.rs](../src/machine/execute/scheduler/node_store.rs)) —
 the Replace arm transmutes `frame.scope()` from its receiver-bound borrow to
 `'a` (the slot-storage lifetime) before installing it in `self.nodes[id]`,
@@ -188,9 +199,9 @@ new entry on every full-slate run and trims to five so this list stays bounded.
 Use the most-recent entry as the baseline expectation when scheduling a run.
 
 <!-- slate-durations:start -->
+- 2026-05-25: 625.29s — 30 tests, 0 leaks, 0 UB
 - 2026-05-20: 597.64s — 29 tests, 0 leaks, 0 UB
 - 2026-05-18: 507.72s — 27 tests, 0 leaks, 0 UB
 - 2026-05-14: 371.79s — 24 tests, 0 leaks, 0 UB
 - 2026-05-12: 283.68s — 22 tests, 0 leaks, 0 UB
-- 2026-05-10: 281.61s — 24 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

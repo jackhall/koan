@@ -26,7 +26,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
             elements: vec![SignatureElement::Keyword("__SLOW__".into())],
         },
         Body::Builtin(|s, _, _| crate::machine::BodyResult::Value(
-            s.arena.alloc_object(KObject::Null)
+            s.arena.alloc(KObject::Null)
         )),
         dying.scope(),
     );
@@ -74,7 +74,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
             elements: vec![SignatureElement::Keyword("__SLOW__".into())],
         },
         Body::Builtin(|s, _, _| crate::machine::BodyResult::Value(
-            s.arena.alloc_object(KObject::Null)
+            s.arena.alloc(KObject::Null)
         )),
         dying.scope(),
     );
@@ -83,7 +83,7 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(7.0));
+    let inside: &KObject = dying.arena().alloc(KObject::Number(7.0));
     future.parsed.parts.push(Spanned::bare(ExpressionPart::Future(inside)));
     let kf_obj = KObject::KFuture(future, None);
 
@@ -196,7 +196,7 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(17.0));
+    let inside: &KObject = dying.arena().alloc(KObject::Number(17.0));
     let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(inside))]);
     future
         .parsed
@@ -229,7 +229,7 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(19.0));
+    let inside: &KObject = dying.arena().alloc(KObject::Number(19.0));
     let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Future(inside))]);
     future
         .bundle
@@ -394,7 +394,7 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     future
         .bundle
         .args
-        .insert("m".into(), Rc::new(KObject::KModule(m_ref, None)));
+        .insert("m".into(), Rc::new(KObject::KTypeValue(KType::Module { module: m_ref, frame: None })));
     let obj = KObject::KFuture(future, None);
     let before = Rc::strong_count(&dying);
 
@@ -421,7 +421,7 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(11.0));
+    let inside: &KObject = dying.arena().alloc(KObject::Number(11.0));
     future
         .parsed
         .parts
@@ -452,7 +452,7 @@ fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
     let mut exprs = parse("PRINT \"hi\"").expect("parse should succeed");
     let parsed = exprs.remove(0);
     let mut future = dispatch_for_test(scope, parsed).expect("dispatch should succeed");
-    let inside: &KObject = dying.arena().alloc_object(KObject::Number(13.0));
+    let inside: &KObject = dying.arena().alloc(KObject::Number(13.0));
     future.parsed.parts.push(Spanned::bare(ExpressionPart::DictLiteral(vec![(
         ExpressionPart::Keyword("k".into()),
         ExpressionPart::Future(inside),

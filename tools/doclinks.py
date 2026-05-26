@@ -209,19 +209,22 @@ NONE_RE = re.compile(r"\bnone\b", re.IGNORECASE)
 
 # ---------- deps ----------
 
-def parse_dep_section(path: Path) -> tuple[set[str], set[str]]:
-    """Return (requires, unblocks) — sets of roadmap basenames (e.g. 'traits.md').
+def parse_dep_section(path: Path) -> tuple[set[Path], set[Path]]:
+    """Return (requires, unblocks) — sets of resolved paths into `roadmap/`.
 
     Reads only the **Dependencies** section. A section ends at the next h2 header
-    (`## ...`) or EOF. Targets outside roadmap/ (e.g. design/foo.md) are ignored —
-    only intra-roadmap edges have a symmetric partner.
+    (`## ...`) or EOF. Targets outside `roadmap/` (e.g. `design/foo.md`) are
+    ignored — only intra-roadmap edges have a symmetric partner. Targets are
+    resolved against the link's source file's directory so `../sibling.md` and
+    `../topic/item.md` work for items in `roadmap/<subdir>/`.
     """
-    requires: set[str] = set()
-    unblocks: set[str] = set()
+    roadmap_dir = (REPO / "roadmap").resolve()
+    requires: set[Path] = set()
+    unblocks: set[Path] = set()
     text = path.read_text(encoding="utf-8")
 
     in_deps = False
-    current: set[str] | None = None
+    current: set[Path] | None = None
     for line in text.splitlines():
         if matches_h2_header(line, "dependencies"):
             in_deps = True
@@ -238,38 +241,53 @@ def parse_dep_section(path: Path) -> tuple[set[str], set[str]]:
         if current is None:
             continue
         for m in LINK_RE.finditer(line):
-            target = m.group(2).split("#", 1)[0]
-            # only intra-roadmap links — paths with no slash, ending in .md
-            if "/" in target or not target.endswith(".md"):
+            raw = m.group(2).split("#", 1)[0].split("?", 1)[0]
+            if not raw or raw.startswith(("http://", "https://", "mailto:")):
                 continue
-            current.add(target)
+            if not raw.endswith(".md"):
+                continue
+            resolved = (path.parent / raw).resolve()
+            try:
+                resolved.relative_to(roadmap_dir)
+            except ValueError:
+                continue
+            current.add(resolved)
     return requires, unblocks
 
 
 def _check_deps() -> int:
     roadmap_dir = REPO / "roadmap"
-    items = sorted(roadmap_dir.glob("*.md"))
-    deps: dict[str, tuple[set[str], set[str]]] = {}
+    items = sorted(roadmap_dir.glob("**/*.md"))
+    deps: dict[Path, tuple[set[Path], set[Path]]] = {}
     for f in items:
-        deps[f.name] = parse_dep_section(f)
+        deps[f.resolve()] = parse_dep_section(f)
+
+    def disp(p: Path) -> str:
+        return rel(p)
 
     issues: list[str] = []
     for name, (req, unb) in deps.items():
         for target in sorted(req):
             if target not in deps:
-                issues.append(f"{name}: requires '{target}' but file does not exist")
+                issues.append(
+                    f"{disp(name)}: requires '{disp(target)}' but file does not exist"
+                )
                 continue
             if name not in deps[target][1]:
                 issues.append(
-                    f"{name} requires {target}, but {target} does not list {name} under Unblocks"
+                    f"{disp(name)} requires {disp(target)}, but {disp(target)} "
+                    f"does not list {disp(name)} under Unblocks"
                 )
         for target in sorted(unb):
             if target not in deps:
-                issues.append(f"{name}: unblocks '{target}' but file does not exist")
+                issues.append(
+                    f"{disp(name)}: unblocks '{disp(target)}' but file does not exist"
+                )
                 continue
             if name not in deps[target][0]:
                 issues.append(
-                    f"{name} unblocks {target}, but {target} does not list {name} under Requires"
+                    f"{disp(name)} unblocks {disp(target)}, but {disp(target)} "
+                    f"does not list {disp(name)} under Requires"
                 )
 
     for line in issues:
@@ -529,7 +547,7 @@ def cmd_rm_roadmap(args: argparse.Namespace) -> int:
     plan: list[tuple[Path, list[str], int]] = []  # (path, new_lines, removed)
 
     # 1. Other roadmap items: prune Dependencies bullets pointing at target.
-    for f in sorted(roadmap_dir.glob("*.md")):
+    for f in sorted(roadmap_dir.glob("**/*.md")):
         if f.resolve() == target:
             continue
         lines = f.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -596,23 +614,29 @@ def cmd_dag(args: argparse.Namespace) -> int:
     one.
     """
     roadmap_dir = REPO / "roadmap"
-    items = sorted(roadmap_dir.glob("*.md"))
+    items = sorted(roadmap_dir.glob("**/*.md"))
 
-    titles: dict[str, str] = {}
-    edges: set[tuple[str, str]] = set()
+    # Key by resolved path so subdirectory items with colliding basenames stay
+    # distinct. The on-graph URL is the repo-relative path (also unique).
+    titles: dict[Path, str] = {}
+    rels: dict[Path, str] = {}
+    edges: set[tuple[Path, Path]] = set()
     for f in items:
-        titles[f.name] = read_h1_title(f) or f.stem
+        key = f.resolve()
+        titles[key] = read_h1_title(f) or f.stem
+        rels[key] = rel(f)
     for f in items:
+        key = f.resolve()
         req, unb = parse_dep_section(f)
         for r in req:
             if r in titles:
-                edges.add((r, f.name))
+                edges.add((r, key))
         for u in unb:
             if u in titles:
-                edges.add((f.name, u))
+                edges.add((key, u))
 
-    def node_id(name: str) -> str:
-        return "n_" + re.sub(r"[^A-Za-z0-9]", "_", name[:-3] if name.endswith(".md") else name)
+    def node_id(p: Path) -> str:
+        return "n_" + re.sub(r"[^A-Za-z0-9]", "_", rels[p].removesuffix(".md"))
 
     def esc(s: str) -> str:
         return s.replace("\\", "\\\\").replace('"', '\\"')
@@ -622,10 +646,10 @@ def cmd_dag(args: argparse.Namespace) -> int:
     print("  node [shape=box, style=\"rounded,filled\", fillcolor=\"#f5f5f5\", "
           "fontname=\"Helvetica\"];")
     print("  edge [color=\"#555555\"];")
-    for name in sorted(titles):
-        print(f'  {node_id(name)} [label="{esc(titles[name])}", '
-              f'tooltip="{esc(name)}", URL="{esc(name)}"];')
-    for src, dst in sorted(edges):
+    for key in sorted(titles, key=lambda p: rels[p]):
+        print(f'  {node_id(key)} [label="{esc(titles[key])}", '
+              f'tooltip="{esc(rels[key])}", URL="{esc(rels[key])}"];')
+    for src, dst in sorted(edges, key=lambda e: (rels[e[0]], rels[e[1]])):
         print(f"  {node_id(src)} -> {node_id(dst)};")
     print("}")
     return 0

@@ -1,20 +1,20 @@
-mod finalize;
+pub(crate) mod finalize;
 mod param_refs;
-mod return_type;
-mod signature;
+pub(crate) mod return_type;
+pub(crate) mod signature;
 
 use crate::machine::model::KType;
 use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::machine::model::types::Elaborator;
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_full, sig};
 
 use finalize::{classify, defer_via_combine, finalize_fn, FnPlan, ParamListResult};
 use return_type::{classify_return_type, extract_return_type_raw};
 use signature::ParamListOutcome;
 
-pub(crate) use signature::pre_run;
+pub(crate) use signature::{pre_run, pre_run_bucket};
 
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
 /// function constructor. Signature and body are captured as raw `KExpression`s; the signature
@@ -64,10 +64,15 @@ pub fn body<'a>(
 
     let mut elaborator = Elaborator::new(scope);
 
-    let return_type_state = match classify_return_type(return_type_raw, &param_names, scope, sched) {
-        Ok(s) => s,
-        Err(e) => return err(e),
-    };
+    // FN passes `None` for the FUNCTOR-return verdict context — the verdict
+    // is computed as a no-op `Admissible` and dropped. The FUNCTOR builtin
+    // (see `functor_def::body`) passes `Some(&param_type_map)` and consumes
+    // the verdict in the same arm.
+    let (return_type_state, _verdict) =
+        match classify_return_type(return_type_raw, &param_names, scope, None) {
+            Ok(p) => p,
+            Err(e) => return err(e),
+        };
 
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
@@ -82,7 +87,7 @@ pub fn body<'a>(
             finalize_fn(scope, elements, return_type, body_expr)
         }
         FnPlan::Combine(inputs) => {
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr)
+            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, false)
         }
     }
 }
@@ -98,7 +103,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // (`-> (MODULE_TYPE_OF Er Type)`). The strict dispatch pass picks one
     // unambiguously; `Future(KTypeValue(_))` post-Combine wakes admit only against
     // `TypeExprRef`, since `KExpression` doesn't accept `Future(_)`.
-    register_builtin_with_pre_run(
+    // Both FN overloads supply `pre_run_bucket` alongside `pre_run`: a bare-arg
+    // call to a sibling FN that's still finalizing (e.g. its signature's parameter
+    // type is parked on a SIG body's Combine) now parks on this binder slot by
+    // *inner-call bucket key* rather than failing dispatch. Symmetry with FUNCTOR
+    // is intentional — both binders produce KFunctions and the wait shape is the
+    // same.
+    register_builtin_full(
         scope,
         "FN",
         sig(KType::Any, vec![
@@ -111,8 +122,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         body,
         Some(pre_run),
+        Some(pre_run_bucket),
+        false,
     );
-    register_builtin_with_pre_run(
+    register_builtin_full(
         scope,
         "FN",
         sig(KType::Any, vec![
@@ -125,6 +138,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         body,
         Some(pre_run),
+        Some(pre_run_bucket),
+        false,
     );
 }
 

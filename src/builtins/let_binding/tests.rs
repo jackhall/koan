@@ -4,7 +4,7 @@ use std::rc::Rc;
 use super::body;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, KType};
 use crate::machine::ArgumentBundle;
 use crate::machine::execute::Scheduler;
 
@@ -57,9 +57,11 @@ fn pre_run_install_then_body_finalize_clears_placeholder() {
 }
 
 /// Phase 3: `LET T = T` is a trivially cyclic alias — the RHS references the binder
-/// itself. The dispatcher detects the placeholder-points-at-self condition and
-/// surfaces a structured `ShapeError` rather than parking the sub-Dispatch on its own
-/// ancestor (which would deadlock).
+/// itself. The eager-resolve pass's `would_create_cycle` check catches the
+/// placeholder-points-at-self condition and surfaces a structured `SchedulerDeadlock`
+/// (the cycle-specific error kind) rather than parking the dispatch on its own
+/// ancestor. Same surface as the Identifier-LHS form (`LET x = x`); both shapes route
+/// through the dispatch driver's Phase 3 cycle arm.
 #[test]
 fn let_t_cycle_errors() {
     use crate::machine::RuntimeArena;
@@ -79,8 +81,8 @@ fn let_t_cycle_errors() {
     let res = sched.read_result(ids[0]);
     match res {
         Err(e) => assert!(
-            matches!(&e.kind, KErrorKind::ShapeError(msg) if msg.contains("cycle")),
-            "expected ShapeError mentioning cycle, got {e}",
+            matches!(&e.kind, KErrorKind::SchedulerDeadlock { sample, .. } if sample.contains("cycle")),
+            "expected SchedulerDeadlock mentioning cycle, got {e}",
         ),
         Ok(v) => panic!("expected cycle error, got value {:?}", v.ktype()),
     }
@@ -96,9 +98,10 @@ fn let_t_cycle_errors() {
 fn let_type_class_with_non_type_value_errors() {
     use crate::machine::RuntimeArena;
     use crate::machine::KErrorKind;
-    use crate::machine::model::KType;
     use crate::parse::parse;
-    for (src, expected) in [("LET Foo = 1", KType::Number), ("LET Foo = \"hello\"", KType::Str)] {
+    // Post-collapse: `TypeClassBindingExpectsType.got` is the pre-rendered type name
+    // (e.g. `"Number"`) rather than a `KType` value — keeps `KError` lifetime-free.
+    for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let mut sched = Scheduler::new();
@@ -108,7 +111,7 @@ fn let_type_class_with_non_type_value_errors() {
         match sched.read_result(id) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
-                    if name == "Foo" && got == &expected),
+                    if name == "Foo" && got == expected),
                 "expected TypeClassBindingExpectsType for {src:?}, got {e}",
             ),
             Ok(v) => panic!("expected bind-time error for {src:?}, got {:?}", v.ktype()),
@@ -202,7 +205,6 @@ fn let_parameterized_type_lhs_still_shape_errors() {
 #[test]
 fn let_type_class_with_module_carrier_dual_writes() {
     use crate::machine::RuntimeArena;
-    use crate::machine::model::types::UserTypeKind;
     use crate::machine::model::KType;
     use crate::builtins::test_support::run;
     let arena = RuntimeArena::new();
@@ -217,16 +219,15 @@ fn let_type_class_with_module_carrier_dual_writes() {
     let kt = types
         .get("IntOrdA")
         .expect("IntOrdA should be in bindings.types");
-    assert!(matches!(
-        **kt,
-        KType::UserType { kind: UserTypeKind::Module, .. }
-    ));
+    // Post-collapse: MODULE aliases dual-write `KType::Module { .. }` rather than
+    // the old `UserType { kind: Module, .. }` indirection.
+    assert!(matches!(**kt, KType::Module { .. }));
     drop(types);
     let data = scope.bindings().data();
     let obj = data
         .get("IntOrdA")
         .expect("IntOrdA should be in bindings.data");
-    assert!(matches!(obj, KObject::KModule(_, _)));
+    assert!(matches!(obj, KObject::KTypeValue(KType::Module { module: _, frame: _ })));
 }
 
 /// Stage 3.1 aliasing-preserves-identity: `LET Pt = Point` writes a `types[Pt]`
@@ -303,6 +304,56 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     }
 }
 
+/// Stage-5 allowlist regression — plain FN bound to a Type-class name now
+/// errors at the LET site. Pre-Stage-5 the denylist accepted this case (no
+/// primitive / container match) and silently landed the function in `data`;
+/// the allowlist's three-arm test rejects it as `TypeClassBindingExpectsType`
+/// because a plain `KFunction` carries neither `KTypeValue`, nominal identity,
+/// nor the `is_functor` flag.
+#[test]
+fn let_type_class_with_plain_function_rejects() {
+    use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    let err = run_one_err(
+        scope,
+        parse_one("LET Plain = (FN (PP x :Number) -> Number = (x))"),
+    );
+    match &err.kind {
+        KErrorKind::TypeClassBindingExpectsType { name, .. } => {
+            assert_eq!(name, "Plain", "binder name should surface in diagnostic");
+        }
+        _ => panic!("expected TypeClassBindingExpectsType, got {err}"),
+    }
+}
+
+/// Stage-5 allowlist regression — FUNCTOR-flagged KFunction admits as a
+/// Type-class LET RHS. The `is_functor: true` flag flips the third arm of
+/// `is_admissible_type_class_rhs`; the binding lands in `bindings.data` via
+/// the fallthrough `bind_value` (FUNCTOR isn't a nominal-identity carrier).
+#[test]
+fn let_type_class_with_functor_admits() {
+    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         LET MyF = (FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))",
+    );
+    let obj = scope
+        .lookup("MyF")
+        .expect("MyF must be value-bound — allowlist admits the functor");
+    assert!(
+        matches!(obj, KObject::KFunction(f, _) if f.is_functor),
+        "MyF should resolve to a FUNCTOR-flagged KFunction, got {:?}",
+        obj.ktype(),
+    );
+}
+
 /// SIG-body `LET <Type-class> = ...` keeps working post-VAL — the strict reject
 /// only fires for the value-route. `LET Type = Number` lands on `register_type`,
 /// not `bind_value`, so the SIG-body gate doesn't fire.
@@ -314,7 +365,7 @@ fn let_type_class_in_sig_body_still_works() {
     let scope = run_root_silent(&arena);
     run(scope, "SIG WithType = ((LET Type = Number) (VAL zero :Number))");
     let s = match scope.bindings().data().get("WithType") {
-        Some(KObject::KSignature(s)) => *s,
+        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         other => panic!("WithType should be a signature, got {:?}", other.map(|o| o.ktype())),
     };
     let types = s.decl_scope().bindings().types();
@@ -322,4 +373,66 @@ fn let_type_class_in_sig_body_still_works() {
         types.contains_key("Type"),
         "Type binding should survive in SIG types map after Type-class LET",
     );
+}
+
+/// LET partition guard (design/typing/elaboration.md § Binding home and the
+/// dual-map): `LET <name> = <m>` where `name` is value-classified (lowercase-
+/// leading) and the RHS evaluates to a module value must reject at the LET
+/// site. Module / signature carriers belong on Type-classified identifiers
+/// only; this test pins the diagnostic so the partition rule has a regression
+/// site.
+#[test]
+fn let_value_class_lhs_with_module_rhs_rejects() {
+    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    // Set up a module value `IntOrd`. The lowercase rebind `int_ord` is the
+    // partition violation — lowercase binder, module RHS.
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\n\
+         MODULE IntOrd = ((LET compare = 7))",
+    );
+    let err = run_one_err(scope, parse_one("LET int_ord = (IntOrd :! OrderedSig)"));
+    match &err.kind {
+        KErrorKind::ShapeError(msg) => {
+            assert!(
+                msg.contains("int_ord") && msg.contains("module"),
+                "expected diagnostic naming the binder and 'module', got: {msg}",
+            );
+            assert!(
+                msg.contains("Type-classified"),
+                "expected diagnostic to redirect to Type-classified identifier, got: {msg}",
+            );
+        }
+        _ => panic!("expected ShapeError, got {err}"),
+    }
+}
+
+/// Companion to `let_value_class_lhs_with_module_rhs_rejects`: signature carrier
+/// on the RHS surface fires the same partition rejection. Pinned independently
+/// because the predicate matches `KType::Module` and `KType::Signature` separately.
+#[test]
+fn let_value_class_lhs_with_signature_rhs_rejects() {
+    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+    use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "SIG OrderedSig = (VAL compare :Number)");
+    // `OrderedSig` is a Type-classified token; resolving it through `value_lookup`
+    // returns the signature carrier. The lowercase binder + signature RHS hits
+    // the partition guard.
+    let err = run_one_err(scope, parse_one("LET sig_alias = OrderedSig"));
+    match &err.kind {
+        KErrorKind::ShapeError(msg) => {
+            assert!(
+                msg.contains("sig_alias") && msg.contains("signature"),
+                "expected diagnostic naming the binder and 'signature', got: {msg}",
+            );
+        }
+        _ => panic!("expected ShapeError, got {err}"),
+    }
 }

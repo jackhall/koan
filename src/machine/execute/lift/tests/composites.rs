@@ -22,7 +22,7 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
     let dying = CallArena::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
-    let mut inner_map: HashMap<Box<dyn Serializable>, KObject> = HashMap::new();
+    let mut inner_map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
     inner_map.insert(
         Box::new(KKey::String("f".into())),
         KObject::KFunction(kf_ref, None),
@@ -104,7 +104,10 @@ fn list_with_pre_anchored_variants_skips_them() {
     let items = Rc::new(vec![
         KObject::KFunction(kf_ref, Some(Rc::clone(&other))),
         KObject::KFuture(future, Some(Rc::clone(&other))),
-        KObject::KModule(m_ref, Some(Rc::clone(&other))),
+        KObject::KTypeValue(KType::Module {
+            module: m_ref,
+            frame: Some(Rc::clone(&other)),
+        }),
     ]);
     let list = KObject::list_with_type(Rc::clone(&items), KType::Any);
     let before = Rc::strong_count(&dying);
@@ -160,13 +163,16 @@ fn list_with_unanchored_kmodule_anchors() {
     let module = Module::new("LocalM".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
 
-    let list = KObject::list(vec![KObject::KModule(m_ref, None)]);
+    let list = KObject::list(vec![KObject::KTypeValue(KType::Module { module: m_ref, frame: None })]);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&list, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::List(out, _) => assert!(matches!(&out[0], KObject::KModule(_, Some(_)))),
+        KObject::List(out, _) => assert!(matches!(
+            &out[0],
+            KObject::KTypeValue(KType::Module { frame: Some(_), .. }),
+        )),
         other => panic!("expected List, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
@@ -266,7 +272,7 @@ fn dict_no_descendants_clones_rc() {
     let dying = CallArena::new(scope, None);
     defeat_fast_path(&dying);
 
-    let mut map: HashMap<Box<dyn Serializable>, KObject> = HashMap::new();
+    let mut map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
     map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
     let entries = Rc::new(map);
     let dict = KObject::dict_with_type(Rc::clone(&entries), KType::Any, KType::Any);
@@ -294,7 +300,7 @@ fn dict_with_local_kfunction_rebuilds_and_anchors() {
     let dying = CallArena::new(scope, None);
     let kf_ref = alloc_local_kf(&dying);
 
-    let mut map: HashMap<Box<dyn Serializable>, KObject> = HashMap::new();
+    let mut map: HashMap<Box<dyn Serializable<'_>>, KObject> = HashMap::new();
     map.insert(
         Box::new(KKey::String("f".into())),
         KObject::KFunction(kf_ref, None),

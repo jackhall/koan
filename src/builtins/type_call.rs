@@ -111,10 +111,12 @@ pub fn body<'a>(
                 })),
             }
         }
-        // MODULE-as-constructor lands with module-system stage 2 (functor application).
-        // Today the verb resolves to a Module identity but there's no construction
-        // semantics to drive — surface a `TypeMismatch` until then.
-        KType::UserType { kind: UserTypeKind::Module, .. } => err(KError::new(KErrorKind::TypeMismatch {
+        // MODULE-as-constructor (functor application) lands with the functor-binder
+        // roadmap item. Today the verb resolves to a module identity but there's no
+        // construction semantics to drive — surface a `TypeMismatch` until then.
+        // Post-collapse the carrier is `KType::Module { .. }` directly; the old
+        // `UserType { kind: Module, .. }` indirection is gone.
+        KType::Module { .. } => err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
             got: identity.name(),

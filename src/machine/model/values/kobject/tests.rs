@@ -36,7 +36,7 @@ fn ktype_of_nested_list() {
 
 #[test]
 fn ktype_of_dict_string_number() {
-    let mut map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
+    let mut map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> = HashMap::new();
     map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
     map.insert(Box::new(KKey::String("b".into())), KObject::Number(2.0));
     let d: KObject<'_> = KObject::dict(map);
@@ -48,7 +48,7 @@ fn ktype_of_dict_string_number() {
 
 #[test]
 fn ktype_of_empty_dict_is_dict_any_any() {
-    let map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
+    let map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> = HashMap::new();
     let d: KObject<'_> = KObject::dict(map);
     assert_eq!(
         d.ktype(),
@@ -152,7 +152,7 @@ fn unstamped_empty_container_detection() {
     let hetero = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
     assert!(!hetero.is_unstamped_empty_container());
     // Empty dict, default carrier — flagged.
-    let map: HashMap<Box<dyn Serializable + 'static>, KObject<'static>> = HashMap::new();
+    let map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> = HashMap::new();
     assert!(KObject::dict(map).is_unstamped_empty_container());
 }
 
@@ -193,8 +193,8 @@ fn ktype_value_round_trips_through_summarize() {
 fn wrapped_ktype_reports_clone_of_type_id() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc_ktype(KType::UserType {
+    let inner = arena.alloc(KObject::Number(3.0));
+    let type_id: &KType = arena.alloc(KType::UserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
@@ -216,8 +216,8 @@ fn wrapped_summarize_renders_surface_form() {
     use crate::machine::RuntimeArena;
     use crate::machine::model::types::Parseable;
     let arena = RuntimeArena::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
-    let type_id = arena.alloc_ktype(KType::UserType {
+    let inner = arena.alloc(KObject::Number(3.0));
+    let type_id = arena.alloc(KType::UserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
@@ -232,8 +232,8 @@ fn wrapped_summarize_renders_surface_form() {
 fn wrapped_deep_clone_preserves_arena_references() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
-    let inner = arena.alloc_object(KObject::Number(3.0));
-    let type_id = arena.alloc_ktype(KType::UserType {
+    let inner = arena.alloc(KObject::Number(3.0));
+    let type_id = arena.alloc(KType::UserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),

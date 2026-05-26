@@ -150,7 +150,7 @@ fn value_language_leaf_names_layering() {
     let scope = run_root_silent(&arena);
     // `Gee` is a Type-class token, but bound in the value language.
     scope
-        .bind_value("Gee".into(), arena.alloc_object(KObject::Number(7.0)))
+        .bind_value("Gee".into(), arena.alloc(KObject::Number(7.0)))
         .expect("bind_value");
     let mut el = Elaborator::new(scope);
     match elaborate_type_expr(&mut el, &leaf("Gee")) {
@@ -175,6 +175,69 @@ fn unbound_leaf_names_unknown_type() {
             "expected an unknown-type-name message naming `NopeType`, got: {msg}",
         ),
         other => panic!("expected Unbound, got {:?}", other),
+    }
+}
+
+/// Stage 1: bare `:(Functor (params) -> R)` elaboration lowers to
+/// `KType::KFunctor { params, ret }` with the right structural shape. Parallels
+/// the `Function` arm's path; only the head keyword and the resulting variant
+/// differ.
+#[test]
+fn functor_type_position_sigil_elaborates_to_kfunctor() {
+    use crate::machine::model::ast::TypeParams;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    // `:(Functor (Number) -> Str)` — a 1-ary functor type with primitive slots.
+    let te = TypeExpr {
+        name: "Functor".into(),
+        params: TypeParams::Function {
+            args: vec![leaf("Number")],
+            ret: Box::new(leaf("Str")),
+        },
+        builtin_cache: std::cell::OnceCell::new(),
+    };
+    let mut el = Elaborator::new(scope);
+    match elaborate_type_expr(&mut el, &te) {
+        ElabResult::Done(KType::KFunctor { params, ret }) => {
+            assert_eq!(params, vec![KType::Number]);
+            assert_eq!(*ret, KType::Str);
+        }
+        other => panic!("expected Done(KFunctor), got {:?}", other),
+    }
+}
+
+/// Stage 1: `:(Functor ...)` with a forward reference inside an arg position
+/// parks on the producer placeholder, matching the `Function` arm's forward-ref
+/// coverage. Closes the symmetry: the new arm must inherit Park/Done/Unbound
+/// precedence verbatim.
+#[test]
+fn functor_type_position_sigil_parks_on_forward_ref() {
+    use crate::machine::execute::Scheduler;
+    use crate::machine::model::ast::TypeParams;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    let mut sched = Scheduler::new();
+    let dummy = sched.add_dispatch(
+        crate::builtins::test_support::parse_one("LET _placeholder = 1"),
+        scope,
+    );
+    scope.install_placeholder("MyType".into(), dummy).expect("placeholder install");
+    let te = TypeExpr {
+        name: "Functor".into(),
+        params: TypeParams::Function {
+            args: vec![leaf("MyType")],
+            ret: Box::new(leaf("Number")),
+        },
+        builtin_cache: std::cell::OnceCell::new(),
+    };
+    let mut el = Elaborator::new(scope);
+    match elaborate_type_expr(&mut el, &te) {
+        ElabResult::Park(ids) => assert!(
+            ids.contains(&dummy),
+            "expected parked on the MyType placeholder, got {:?}",
+            ids,
+        ),
+        other => panic!("expected Park, got {:?}", other),
     }
 }
 

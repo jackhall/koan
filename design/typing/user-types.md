@@ -1,21 +1,31 @@
 # User-declared nominal types
 
 [`KType::UserType { kind, scope_id, name }`](../../src/machine/model/types/ktype.rs)
-is the per-declaration identity tag for every user-declared nominal type —
-`STRUCT`, named `UNION`, `MODULE`, opaque-ascription module identities, and
+is the per-declaration identity tag for `STRUCT`, named `UNION`, and
 `NEWTYPE`. The companion
 [`KType::AnyUserType { kind }`](../../src/machine/model/types/ktype.rs)
-wildcard accepts any `UserType` of the matching kind.
+wildcard accepts any `UserType` of the matching kind. Modules and
+signatures live in their own KType variants —
+[`KType::Module { module, frame }`](../../src/machine/model/types/ktype.rs)
+for first-class module values,
+[`KType::Signature(s)`](../../src/machine/model/types/ktype.rs) for
+first-class signature values, and
+[`KType::AbstractType { source_module, name }`](../../src/machine/model/types/ktype.rs)
+for the abstract-type members opaque ascription mints — with
+`KType::AnyModule` and `KType::AnySignature` as the matching wildcards
+(see [modules.md](modules.md) for the carrier model).
 
-[`enum UserTypeKind { Struct, Tagged, Module, Newtype { repr }, TypeConstructor { param_names } }`](../../src/machine/model/types/ktype.rs)
+[`enum UserTypeKind { Struct, Tagged, Newtype { repr }, TypeConstructor { param_names } }`](../../src/machine/model/types/ktype.rs)
 has a `surface_keyword()` accessor; the two payload-carrying variants
 (`Newtype`, `TypeConstructor`) have a manual `PartialEq` that ignores their
 payloads so wildcard / identity comparisons key on kind and `(scope_id, name)`
-only. The surface names `"Struct"` / `"Tagged"` / `"Module"` lower to
+only. The surface names `"Struct"` / `"Tagged"` lower to
 `AnyUserType { kind }` in
-[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs),
-and [`scope.register_type`](../../src/builtins.rs) agrees so the
-type-resolver and the builtin registry produce the same wildcard carrier.
+[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs);
+`"Module"` lowers to `KType::AnyModule` and `"Signature"` to
+`KType::AnySignature`. [`scope.register_type`](../../src/builtins.rs)
+agrees so the type-resolver and the builtin registry produce the same
+wildcard carrier.
 
 ## Specificity stratification
 
@@ -23,30 +33,40 @@ Predicate arms
 ([`ktype_predicates.rs`](../../src/machine/model/types/ktype_predicates.rs))
 place `UserType { kind: K, .. }` strictly below `AnyUserType { kind: K }`
 strictly below `Any` in `is_more_specific_than`, and `AnyUserType { kind }`
-matches any `KObject::Struct` / `Tagged` / `KModule` of the matching kind.
-Each kind ranks alongside the others with no per-kind branching at the
-dispatcher.
+matches any `KObject::Struct` / `Tagged` of the matching kind. Each kind
+ranks alongside the others with no per-kind branching at the dispatcher.
+The module/signature variants follow the parallel stratification:
+`KType::Module { .. }` ≺ `KType::AnyModule` ≺ `Any`, and
+`KType::Signature(_)` ≺ `KType::AnySignature` ≺ `Any`.
 
 ## Value carriers and dual-write
 
 Value carriers — [`KObject::Struct`](../../src/machine/model/values/kobject.rs),
 [`KObject::Tagged`](../../src/machine/model/values/kobject.rs),
 [`KObject::StructType`](../../src/machine/model/values/kobject.rs),
-[`KObject::TaggedUnionType`](../../src/machine/model/values/kobject.rs),
-and `KObject::KModule` — carry `(scope_id, name)` identity fields populated
-at finalize time via the `scope as *const _ as usize` scheme `Module::scope_id()`
-uses. `ktype()` on a `KObject::Struct` / `Tagged` / `KModule` reconstructs
-`KType::UserType { kind, scope_id, name }`, while schema carriers (`StructType`
-/ `TaggedUnionType`) keep reporting `KType::Type` — they are values *of the
-meta-type*, not user-typed values.
+and [`KObject::TaggedUnionType`](../../src/machine/model/values/kobject.rs) —
+carry `(scope_id, name)` identity fields populated at finalize time via
+the `scope as *const _ as usize` scheme `Module::scope_id()` uses.
+`ktype()` on a `KObject::Struct` / `Tagged` reconstructs
+`KType::UserType { kind, scope_id, name }`, while schema carriers
+(`StructType` / `TaggedUnionType`) report `KType::Type` — they are values
+*of the meta-type*, not user-typed values. Module and signature values
+ride [`KObject::KTypeValue(KType::Module { .. })`](../../src/machine/model/values/kobject.rs) /
+`KObject::KTypeValue(KType::Signature(_))`; `ktype()` projects the carried
+`KType` directly, so the identity is the carrier rather than a synthesized
+shadow.
 
 STRUCT / UNION-named / MODULE / SIG finalize each route through the
 [`Scope::register_nominal`](../../src/machine/core/scope.rs) shim,
 which transactionally writes `bindings.types[name] = &KType` and
 `bindings.data[name] = &KObject` together so the single-home invariant —
-Type-classed name lookups go through `Scope::resolve_type` only — holds. SIG
-declarations write `KType::SatisfiesSignature { sig_id, sig_path }` on the type
-side.
+Type-classed name lookups go through `Scope::resolve_type` only — holds.
+MODULE writes `KType::Module { module, frame }` on both sides — the value
+carrier IS the identity. SIG writes `KType::SatisfiesSignature { sig_id,
+sig_path }` on the type side and `KTypeValue(KType::Signature(s))` on the
+data side: slot annotations (`Er :OrderedSig`) mean "any module satisfying
+OrderedSig," the constraint form; value-position lookups want the
+identity-bearing signature carrier itself.
 
 `LET <Type-class> = <module/sig/struct-value>` (e.g.
 `LET IntOrdA = (IntOrd :| OrderedSig)`) also dual-writes, preserving the

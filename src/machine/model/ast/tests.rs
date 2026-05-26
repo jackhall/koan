@@ -54,6 +54,62 @@ fn resolve_for_skips_cache_for_user_bound_leaf() {
     }
 }
 
+/// Targeted Miri coverage for the `TypeExpr::builtin_cache` lifetime-lift in
+/// [`crate::machine::model::ast::ExpressionPart::resolve_for`]. The cache stores
+/// owned-data `KType<'static>` and the cache-hit path clones-then-transmutes the
+/// cached value to `KType<'a>` for the caller. The transmute is sound because
+/// the clone carries no `Module` / `Signature` arena references — only owned
+/// variants (`Number`, `List<Any>`, `Function<...>`, wildcards) reach the cache.
+///
+/// This test exercises the lift twice against two *distinct* non-`'static`
+/// arena lifetimes with a pre-seeded cache, so each call hits the cache-hit
+/// transmute path. Under tree borrows, a pointer-aliasing or use-after-free
+/// regression on the cache cell would fire here.
+#[test]
+fn builtin_cache_lifetime_lift_does_not_dangle() {
+    use crate::machine::core::RuntimeArena;
+
+    // Pre-seed the cache so both calls hit the unsafe lift path (rather than
+    // running through the from_type_expr fallback that re-populates).
+    let te = TypeExpr::leaf("Number".into());
+    te.builtin_cache.set(KType::Number).expect("OnceCell is empty");
+
+    // Round 1: arena_a's lifetime drives the `'a` instantiation. The clone
+    // copies the populated cache content into the part-owned TypeExpr.
+    {
+        let arena_a = RuntimeArena::new();
+        let part_a: ExpressionPart<'_> = ExpressionPart::Type(te.clone());
+        let slot_a: KType<'_> = KType::TypeExprRef;
+        let r = part_a.resolve_for(&slot_a);
+        match r {
+            KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
+            _ => panic!("expected KTypeValue from cache-hit path"),
+        }
+        // Defeat any single-arena optimization tree borrows could mistake for
+        // a stable address: a sibling alloc on arena_a between the two calls.
+        let _other = arena_a.alloc(KObject::Number(1.0));
+        let _ = arena_a;
+    }
+
+    // Round 2: a *fresh* arena with a different `'a`. The cache (still
+    // populated on `te`) is re-read; the lift produces a new `KType<'a>`
+    // that must be independent of arena_a's now-dead lifetime.
+    {
+        let arena_b = RuntimeArena::new();
+        let part_b: ExpressionPart<'_> = ExpressionPart::Type(te.clone());
+        let slot_b: KType<'_> = KType::TypeExprRef;
+        let r = part_b.resolve_for(&slot_b);
+        match r {
+            KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
+            _ => panic!("expected KTypeValue from cache-hit path"),
+        }
+        let _ = arena_b;
+    }
+
+    // Sanity-check the cache survives both runs intact.
+    assert_eq!(te.builtin_cache.get(), Some(&KType::Number));
+}
+
 // --- Readback helpers used by error rendering and dispatch ---
 // `summarize` per variant, `binder_name_from_type_part`,
 // `borrow_inner_expressions`, `try_take_inner_expressions_split` (all four

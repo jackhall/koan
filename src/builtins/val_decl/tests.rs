@@ -13,7 +13,7 @@ fn val_inside_sig_binds_typeexpr_carrier() {
     let scope = run_root_silent(&arena);
     run(scope, "SIG OrderedSig = ((VAL zero :Number))");
     let s = match scope.bindings().data().get("OrderedSig") {
-        Some(KObject::KSignature(s)) => *s,
+        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         _ => panic!("OrderedSig must bind a KSignature"),
     };
     let zero = s.decl_scope().bindings().expect_value("zero");
@@ -37,7 +37,7 @@ fn val_resolves_sig_local_type_shadow() {
         "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
     );
     let s = match scope.bindings().data().get("WithZero") {
-        Some(KObject::KSignature(s)) => *s,
+        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         _ => panic!("WithZero must bind a KSignature"),
     };
     let zero = s.decl_scope().bindings().expect_value("zero");
@@ -102,7 +102,7 @@ fn val_function_typed_slot() {
         "SIG OrderedSig = ((VAL compare :(Function (Number Number) -> Number)))",
     );
     let s = match scope.bindings().data().get("OrderedSig") {
-        Some(KObject::KSignature(s)) => *s,
+        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         _ => panic!("OrderedSig must bind a KSignature"),
     };
     let compare = s.decl_scope().bindings().expect_value("compare");
@@ -156,7 +156,7 @@ fn val_slot_satisfied_by_module_let_member() {
          LET Ord = (IntOrd :| WithCompare)",
     );
     let data = scope.bindings().data();
-    assert!(matches!(data.get("Ord"), Some(KObject::KModule(_, _))));
+    assert!(matches!(data.get("Ord"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))));
 }
 
 /// SIG body mixing the abstract type declaration (`LET Type = Number`) with a VAL
@@ -170,7 +170,7 @@ fn val_with_abstract_type_member_declaration() {
         "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
     );
     let s = match scope.bindings().data().get("WithZero") {
-        Some(KObject::KSignature(s)) => *s,
+        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         _ => panic!("WithZero must bind a KSignature"),
     };
     // `Type` lives in the SIG's `bindings.types`; `zero` lives in `bindings.data`.

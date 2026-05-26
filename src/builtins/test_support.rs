@@ -130,12 +130,12 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 /// whose bodies return distinct markers (`"identifier"`, `"any"`, …) so the test asserts
 /// which overload won by inspecting the produced string.
 pub(crate) fn marker<'a>(scope: &'a Scope<'a>, label: &'static str) -> &'a KObject<'a> {
-    scope.arena.alloc_object(KObject::KString(label.into()))
+    scope.arena.alloc(KObject::KString(label.into()))
 }
 
 /// Build a one-argument signature (`<name: kt>`) returning `Any`. Used by dispatch-test
 /// builtins on both sides of the scope/scheduler split.
-pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType) -> ExpressionSignature<'a> {
+pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType<'a>) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Argument(Argument {

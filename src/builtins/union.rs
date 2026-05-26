@@ -87,7 +87,7 @@ pub fn body<'a>(
 fn finalize_union<'a>(
     scope: &'a Scope<'a>,
     name: String,
-    fields: Vec<(String, KType)>,
+    fields: Vec<(String, KType<'a>)>,
 ) -> BodyResult<'a> {
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`. See
     // `finalize_struct` for the symmetric rationale.
@@ -105,7 +105,7 @@ fn finalize_union<'a>(
     // UNION addresses by tag name and doesn't care about declaration order; flatten the
     // ordered field list (which `parse_typed_field_list_via_elaborator` shares with
     // `STRUCT`) into a HashMap. Duplicate detection has already happened in the helper.
-    let schema: HashMap<String, KType> = fields.into_iter().collect();
+    let schema: HashMap<String, KType<'a>> = fields.into_iter().collect();
     let arena = scope.arena;
     // Per-declaration identity: same `*const _ as usize` scheme `finalize_struct` and
     // `Module::scope_id()` use. Dual-write the identity into `bindings.types` next to
@@ -113,7 +113,7 @@ fn finalize_union<'a>(
     // name and dispatch on `(PICK x: Maybe)` lowers to the same `KType::UserType` the
     // carrier's `ktype()` reports.
     let scope_id = scope.id;
-    let union_obj: &'a KObject<'a> = arena.alloc_object(KObject::TaggedUnionType {
+    let union_obj: &'a KObject<'a> = arena.alloc(KObject::TaggedUnionType {
         schema: Rc::new(schema),
         name: name.clone(),
         scope_id,
@@ -156,7 +156,9 @@ fn defer_union_via_combine<'a>(
             ))),
         }
     });
-    let combine_id = sched.add_combine(producers, scope, finish);
+    // `producers` are sibling slots the schema parked on while elaborating;
+    // this Combine reads their values at finish-time but does NOT own them.
+    let combine_id = sched.add_combine(vec![], producers, scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 
@@ -279,7 +281,7 @@ mod tests {
         let scope_id = scope.id;
         let mut schema: HashMap<String, KType> = HashMap::new();
         schema.insert("some".into(), KType::Number);
-        let pre_carrier: &KObject<'_> = arena.alloc_object(KObject::TaggedUnionType {
+        let pre_carrier: &KObject<'_> = arena.alloc(KObject::TaggedUnionType {
             name: "Maybe".into(),
             scope_id,
             schema: Rc::new(schema),

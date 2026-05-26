@@ -84,22 +84,91 @@ fn any_user_type_struct_accepts_struct_future_only() {
     // lifetime is tied to the arena's, dodging the false-positive.
     let arena = RuntimeArena::new();
     let t = KType::AnyUserType { kind: UserTypeKind::Struct };
-    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
+    let s: &KObject<'_> = arena.alloc(KObject::Struct {
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
         fields: Rc::new(IndexMap::new()),
     });
-    let tagged: &KObject<'_> = arena.alloc_object(KObject::Tagged {
+    let tagged: &KObject<'_> = arena.alloc(KObject::Tagged {
         tag: "some".into(),
         value: Rc::new(KObject::Number(1.0)),
         scope_id: ScopeId::SENTINEL,
         name: "Maybe".into(),
         type_args: Rc::new(vec![]),
     });
-    let n: &KObject<'_> = arena.alloc_object(KObject::Number(1.0));
+    let n: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     assert!(t.accepts_part(&ExpressionPart::Future(s)));
     assert!(!t.accepts_part(&ExpressionPart::Future(tagged)));
     assert!(!t.accepts_part(&ExpressionPart::Future(n)));
+}
+
+/// Direct admission table for `KType::Type::accepts_part` post bare-type-token
+/// widening. Pins the cut-(a) admission set without going through the
+/// scheduler: bare builtin type tokens (`Number` / `Str` / `Bool` / `Null`)
+/// and `TaggedUnionType` / `StructType` carriers admit; the cut-(a) wall on
+/// `KTypeValue(KType::Module { .. })` / `KTypeValue(KType::Signature(_))`
+/// rejects (so the `:Type` vs `:Module` overload distinction stays intact);
+/// non-type-denoting `Future(_)` carriers (a raw `Number(7)` literal, a
+/// `KString`) reject. The `ExpressionPart::Type(_)` branch is exercised
+/// implicitly by every FN/FUNCTOR call test that passes a `TypeExpr` in a
+/// `:Type` slot — this test pins the carrier-bearing arm of the admission
+/// table that has no end-to-end counterpart short of `[FUNCTOR ... :Type]`
+/// drivers.
+#[test]
+fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
+    use crate::builtins::default_scope;
+    use crate::machine::core::RuntimeArena;
+    use crate::machine::model::values::{Module, Signature};
+    use std::collections::HashMap;
+    use std::rc::Rc;
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let t = KType::Type;
+    // Admit: bare builtin type tokens carried as `KTypeValue(KType::<prim>)`.
+    let kt_number: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Number));
+    let kt_str: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Str));
+    let kt_bool: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Bool));
+    let kt_null: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Null));
+    assert!(t.accepts_part(&ExpressionPart::Future(kt_number)));
+    assert!(t.accepts_part(&ExpressionPart::Future(kt_str)));
+    assert!(t.accepts_part(&ExpressionPart::Future(kt_bool)));
+    assert!(t.accepts_part(&ExpressionPart::Future(kt_null)));
+    // Admit: tagged-union and struct schema carriers (Type-denoting via the
+    // `TaggedUnionType` / `StructType` arms — these carriers ride directly,
+    // not wrapped in `KTypeValue`).
+    let tagged_schema: &KObject<'_> = arena.alloc(KObject::TaggedUnionType {
+        schema: Rc::new(HashMap::new()),
+        name: "Maybe".into(),
+        scope_id: ScopeId::SENTINEL,
+    });
+    let struct_schema: &KObject<'_> = arena.alloc(KObject::StructType {
+        name: "Point".into(),
+        scope_id: ScopeId::SENTINEL,
+        fields: Rc::new(Vec::new()),
+    });
+    assert!(t.accepts_part(&ExpressionPart::Future(tagged_schema)));
+    assert!(t.accepts_part(&ExpressionPart::Future(struct_schema)));
+    // Cut-(a) wall: module carrier rejects. `:Module` / `:SatisfiesSignature`
+    // catch module values; admitting them here would collapse the wall.
+    let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
+        scope,
+        "IntMod".into(),
+    ));
+    let module = arena.alloc_module(Module::new("IntMod".into(), child));
+    let kt_module: &KObject<'_> =
+        arena.alloc(KObject::KTypeValue(KType::Module { module, frame: None }));
+    assert!(!t.accepts_part(&ExpressionPart::Future(kt_module)));
+    // Cut-(a) wall: signature carrier rejects. `:Signature` (`AnySignature`)
+    // catches signature values.
+    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
+    let kt_sig: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Signature(sig)));
+    assert!(!t.accepts_part(&ExpressionPart::Future(kt_sig)));
+    // Non-type carriers reject: a `Number(7)` literal (a value, not a type
+    // token) and a `KString` (a string literal) both fall through.
+    let n: &KObject<'_> = arena.alloc(KObject::Number(7.0));
+    let s: &KObject<'_> = arena.alloc(KObject::KString("hi".into()));
+    assert!(!t.accepts_part(&ExpressionPart::Future(n)));
+    assert!(!t.accepts_part(&ExpressionPart::Future(s)));
 }
 
 /// Stage 4: a `Wrapped` value with a NEWTYPE identity fills both the wildcard
@@ -113,17 +182,17 @@ fn any_user_type_newtype_accepts_wrapped_only() {
     let t = KType::AnyUserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
     };
-    let inner: &KObject<'_> = arena.alloc_object(KObject::Number(3.0));
-    let type_id: &KType = arena.alloc_ktype(KType::UserType {
+    let inner: &KObject<'_> = arena.alloc(KObject::Number(3.0));
+    let type_id: &KType = arena.alloc(KType::UserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     });
-    let w: &KObject<'_> = arena.alloc_object(KObject::Wrapped {
+    let w: &KObject<'_> = arena.alloc(KObject::Wrapped {
         inner: crate::machine::model::values::NonWrappedRef::peel(inner),
         type_id,
     });
-    let s: &KObject<'_> = arena.alloc_object(KObject::Struct {
+    let s: &KObject<'_> = arena.alloc(KObject::Struct {
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
         fields: std::rc::Rc::new(indexmap::IndexMap::new()),
@@ -199,23 +268,23 @@ fn is_type_denoting_table() {
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     assert!(sb_pinned.is_type_denoting());
-    // Signature — first-class signature value.
-    assert!(KType::MetaSignature.is_type_denoting());
+    // `:Signature` slot wildcard — admits first-class signature values.
+    assert!(KType::AnySignature.is_type_denoting());
     // Type — schema meta-type.
     assert!(KType::Type.is_type_denoting());
     // TypeExprRef — TypeExpr carrier.
     assert!(KType::TypeExprRef.is_type_denoting());
-    // AnyUserType { kind: Module } — unascribed module wildcard.
-    assert!(KType::AnyUserType { kind: UserTypeKind::Module }.is_type_denoting());
+    // `:Module` slot wildcard — admits any first-class module value.
+    assert!(KType::AnyModule.is_type_denoting());
     // Sibling AnyUserType kinds are NOT type-denoting at the parameter level —
     // a STRUCT-typed parameter doesn't make its name a type-language binder.
     assert!(!KType::AnyUserType { kind: UserTypeKind::Struct }.is_type_denoting());
     assert!(!KType::AnyUserType { kind: UserTypeKind::Tagged }.is_type_denoting());
-    // Per-declaration UserType is NOT type-denoting — the nominal identity already
-    // lives in the declaring scope's `bindings.types`; rebinding per-call would
-    // be a no-op (or worse, a shadow).
+    // Per-declaration UserType (Struct / Tagged / Newtype / TypeConstructor) is NOT
+    // type-denoting — the nominal identity already lives in the declaring scope's
+    // `bindings.types`; rebinding per-call would be a no-op (or worse, a shadow).
     let ut = KType::UserType {
-        kind: UserTypeKind::Module,
+        kind: UserTypeKind::Struct,
         scope_id: ScopeId::from_raw(0, 1),
         name: "Foo".into(),
     };
@@ -280,7 +349,7 @@ fn is_more_specific_for_pinned_signature_bound() {
         sig_path: "OrderedSig".into(),
         pinned_slots: vec![("Elt".into(), KType::Number)],
     };
-    let any_module = KType::AnyUserType { kind: UserTypeKind::Module };
+    let any_module = KType::AnyModule;
 
     // Pinned strictly more specific than bare same-sig.
     assert!(pinned_number.is_more_specific_than(&bare));

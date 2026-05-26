@@ -18,7 +18,7 @@ pub fn body<'a>(
     };
     let line = format!("{rendered}\n");
     scope.write_out(line.as_bytes());
-    BodyResult::Value(scope.arena.alloc_object(KObject::KString(rendered)))
+    BodyResult::Value(scope.arena.alloc(KObject::KString(rendered)))
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

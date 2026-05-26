@@ -2,17 +2,22 @@
 //! of the dual-write itself lives in
 //! [`crate::builtins::fn_def::tests::functor::dual_write`]; these tests pin
 //! the per-row mapping in isolation without the surrounding scheduler.
+//!
+//! Post-collapse: module/signature carriers ride
+//! `KObject::KTypeValue(KType::Module/Signature)`; the per-call identity is the
+//! same `KType` shape (no `UserType { kind: Module, .. }` synthesis), so each
+//! row's expected output is literally what was carried.
 
 use super::*;
 use crate::builtins::default_scope;
 use crate::machine::core::{RuntimeArena, ScopeId};
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::{Module, Signature};
 
-/// `SatisfiesSignature`-declared parameter bound to a `KModule` yields a
-/// `UserType { kind: Module, scope_id, name }` identity.
+/// `SatisfiesSignature`-declared parameter bound to a `KTypeValue(KType::Module
+/// { .. })` yields the same `KType::Module { .. }` identity — ATTR-on-type
+/// projects directly from it for `Er.pure(x)` references.
 #[test]
-fn type_identity_for_signature_bound_yields_module_user_type() {
+fn type_identity_for_signature_bound_yields_module_carrier() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -20,7 +25,7 @@ fn type_identity_for_signature_bound_yields_module_user_type() {
         "Foo".into(),
     ));
     let module = arena.alloc_module(Module::new("Foo".into(), child));
-    let obj = arena.alloc_object(KObject::KModule(module, None));
+    let obj = arena.alloc(KObject::KTypeValue(KType::Module { module, frame: None }));
     let declared = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 42),
         sig_path: "OrderedSig".into(),
@@ -29,21 +34,14 @@ fn type_identity_for_signature_bound_yields_module_user_type() {
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("module identity expected");
-    assert_eq!(
-        identity,
-        KType::UserType {
-            kind: UserTypeKind::Module,
-            scope_id: module.scope_id(),
-            name: "Foo".into(),
-        },
-    );
+    assert_eq!(identity, KType::Module { module, frame: None });
 }
 
-/// `AnyUserType { kind: Module }`-declared parameter bound to a `KModule`
-/// yields the same `UserType { kind: Module, .. }` identity. Mirrors the
-/// `SatisfiesSignature` arm.
+/// `:Module`-declared parameter bound to a module carrier yields the same
+/// `KType::Module { .. }` identity. Mirrors the `SatisfiesSignature` arm — both
+/// rows extract the carrier verbatim.
 #[test]
-fn type_identity_for_any_module_yields_module_user_type() {
+fn type_identity_for_any_module_yields_module_carrier() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -51,41 +49,28 @@ fn type_identity_for_any_module_yields_module_user_type() {
         "Bar".into(),
     ));
     let module = arena.alloc_module(Module::new("Bar".into(), child));
-    let obj = arena.alloc_object(KObject::KModule(module, None));
-    let declared = KType::AnyUserType { kind: UserTypeKind::Module };
+    let obj = arena.alloc(KObject::KTypeValue(KType::Module { module, frame: None }));
+    let declared = KType::AnyModule;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("module identity expected");
-    assert_eq!(
-        identity,
-        KType::UserType {
-            kind: UserTypeKind::Module,
-            scope_id: module.scope_id(),
-            name: "Bar".into(),
-        },
-    );
+    assert_eq!(identity, KType::Module { module, frame: None });
 }
 
-/// `Signature`-declared parameter bound to a `KSignature` yields a bare
-/// `SatisfiesSignature { sig_id, sig_path, pinned_slots: [] }` identity.
+/// `:Signature`-declared parameter bound to a signature carrier yields the same
+/// `KType::Signature(_)` identity directly — the old `MetaSignature` row that
+/// minted a `SatisfiesSignature` was retired with the type-language collapse.
 #[test]
-fn type_identity_for_signature_yields_signature_bound() {
+fn type_identity_for_signature_yields_signature_carrier() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let obj = arena.alloc_object(KObject::KSignature(sig));
-    let declared = KType::MetaSignature;
+    let obj = arena.alloc(KObject::KTypeValue(KType::Signature(sig)));
+    let declared = KType::AnySignature;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("signature identity expected");
-    assert_eq!(
-        identity,
-        KType::SatisfiesSignature {
-            sig_id: sig.sig_id(),
-            sig_path: "OrderedSig".into(),
-            pinned_slots: Vec::new(),
-        },
-    );
+    assert_eq!(identity, KType::Signature(sig));
 }
 
 /// `Type`-declared parameter bound to a `KTypeValue(kt)` yields `kt.clone()`.
@@ -94,7 +79,7 @@ fn type_identity_for_type_yields_inner_ktype() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::List(Box::new(KType::Number));
-    let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
+    let obj = arena.alloc(KObject::KTypeValue(inner.clone()));
     let declared = KType::Type;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
@@ -109,7 +94,7 @@ fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let inner = KType::Number;
-    let obj = arena.alloc_object(KObject::KTypeValue(inner.clone()));
+    let obj = arena.alloc(KObject::KTypeValue(inner.clone()));
     let declared = KType::TypeExprRef;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
@@ -125,7 +110,7 @@ fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
 fn type_identity_for_carrier_mismatch_returns_none() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let obj = arena.alloc_object(KObject::Number(1.0));
+    let obj = arena.alloc(KObject::Number(1.0));
     let declared = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 1),
         sig_path: "OrderedSig".into(),

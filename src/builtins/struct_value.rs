@@ -93,7 +93,7 @@ pub fn apply<'a>(
 pub fn construct<'a>(
     type_name: &str,
     scope_id: ScopeId,
-    fields: &[(String, KType)],
+    fields: &[(String, KType<'a>)],
     values: &[KObject<'a>],
 ) -> Result<KObject<'a>, KError> {
     if values.len() != fields.len() {
@@ -163,7 +163,7 @@ fn primitive_body<'a>(
         }
     };
     match construct(&type_name, scope_id, &fields, &values) {
-        Ok(struct_value) => BodyResult::Value(scope.arena.alloc_object(struct_value)),
+        Ok(struct_value) => BodyResult::Value(scope.arena.alloc(struct_value)),
         Err(e) => BodyResult::Err(e),
     }
 }

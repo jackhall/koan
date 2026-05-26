@@ -26,6 +26,12 @@ use super::scope::{Resolution, Scope};
 pub struct Resolved<'a> {
     pub function: &'a KFunction<'a>,
     pub placeholder_name: Option<String>,
+    /// `Some(_)` only for binder builtins whose body registers a callable function
+    /// (FN, FUNCTOR). Holds the *inner-call* bucket key the dispatch driver will
+    /// install in `bindings.pending_overloads` so a sibling bare-arg call to the
+    /// to-be-registered overload parks on this slot. See
+    /// [`crate::machine::core::kfunction::PreRunBucketFn`].
+    pub pending_overload_bucket: Option<crate::machine::model::types::UntypedKey>,
     pub slots: ClassifiedSlots,
 }
 
@@ -53,7 +59,7 @@ impl<'a> Scope<'a> {
     /// - [`ResolveOutcome::Deferred`] covers shapes like `((deep_call) + 1)` where a
     ///   typed `+` overload only matches after `deep_call` resolves; the scheduler's
     ///   eager-sub loop rebuilds with `Future(_)` parts and re-dispatches.
-    pub fn resolve_dispatch<'e>(&'a self, expr: &KExpression<'e>) -> ResolveOutcome<'a> {
+    pub fn resolve_dispatch(&'a self, expr: &KExpression<'a>) -> ResolveOutcome<'a> {
         let key = expr.untyped_key();
         // Bare-name peeks resolve in the *dispatch* scope, not the ancestor whose bucket is
         // under test — a name bound in an inner scope must still be found when the matching
@@ -116,11 +122,43 @@ impl<'a> Scope<'a> {
             return ResolveOutcome::UnboundName(name);
         }
         if expr_has_eager_part(expr) {
-            ResolveOutcome::Deferred
-        } else {
-            ResolveOutcome::Unmatched
+            return ResolveOutcome::Deferred;
+        }
+        // Keyword-headed dispatch with no matching bucket and no eager parts to
+        // re-dispatch through: if some sibling FN / FUNCTOR binder has installed
+        // a `pending_overloads[bucket_key]` entry for the *exact bucket* this call
+        // would dispatch into, park on that producer so the re-dispatch on wake
+        // picks up the now-registered overload. Without this, a bare-arg form
+        // like `(MAKESET IntOrd)` whose FUNCTOR sibling is still parked on a SIG
+        // body's Combine would race the FIFO submission order and surface
+        // `DispatchFailed` even though every ingredient is in flight.
+        //
+        // Keying by the full `UntypedKey` (not just the lead keyword) keeps
+        // overloads that share a head keyword but differ in later keywords
+        // (`(MAKESET _)` vs `(MAKESET _ USING _)`) from colliding: the bare-arg
+        // call's `untyped_key()` matches exactly one in-flight binder's
+        // inner-call bucket.
+        if let Some(producer) = pending_overload_producer(&key, dispatch_scope) {
+            return ResolveOutcome::ParkOnProducers(vec![producer]);
+        }
+        ResolveOutcome::Unmatched
+    }
+}
+
+/// Walk `scope.ancestors()` looking for a `pending_overloads[key]` entry — installed
+/// by an FN / FUNCTOR binder's `pre_run_bucket` hook for the inner-call bucket key
+/// of the to-be-registered overload. Returns the producer `NodeId` of the first
+/// matching binder slot (lexically inner-most wins, mirroring `Scope::resolve`).
+fn pending_overload_producer<'a>(
+    key: &crate::machine::model::types::UntypedKey,
+    scope: &Scope<'a>,
+) -> Option<NodeId> {
+    for scope in scope.ancestors() {
+        if let Some(producer) = scope.bindings().pending_overloads().get(key).copied() {
+            return Some(producer);
         }
     }
+    None
 }
 
 /// View over a single scope's overload bucket. Encapsulates the
@@ -131,18 +169,18 @@ struct OverloadBucket<'a, 's> {
 }
 
 impl<'a> OverloadBucket<'a, '_> {
-    fn pick_strict(&self, expr: &KExpression<'_>, dispatch_scope: &'a Scope<'a>) -> PickPass<'a> {
+    fn pick_strict(&self, expr: &KExpression<'a>, dispatch_scope: &'a Scope<'a>) -> PickPass<'a> {
         self.pick(expr, move |f, e| signature_admits_strict(&f.signature, e, dispatch_scope))
     }
 
-    fn pick_tentative(&self, expr: &KExpression<'_>) -> PickPass<'a> {
+    fn pick_tentative(&self, expr: &KExpression<'a>) -> PickPass<'a> {
         self.pick(expr, |f, e| f.accepts_for_wrap(e))
     }
 
     fn pick(
         &self,
-        expr: &KExpression<'_>,
-        admit: impl Fn(&'a KFunction<'a>, &KExpression<'_>) -> bool,
+        expr: &KExpression<'a>,
+        admit: impl Fn(&'a KFunction<'a>, &KExpression<'a>) -> bool,
     ) -> PickPass<'a> {
         use crate::machine::model::types::ExpressionSignature;
         let survivors: Vec<&'a KFunction<'a>> =
@@ -177,10 +215,10 @@ enum PickPass<'a> {
 /// park path unchanged — which is what keeps dispatch order-independent: a not-yet-bound name
 /// parks and re-dispatches onto the same pick once its binding exists, rather than peeking a
 /// transiently-absent type. Non-container slots are left to the pure `Argument::matches`.
-fn signature_admits_strict(
-    sig: &ExpressionSignature<'_>,
-    expr: &KExpression<'_>,
-    dispatch_scope: &Scope<'_>,
+fn signature_admits_strict<'a>(
+    sig: &ExpressionSignature<'a>,
+    expr: &KExpression<'a>,
+    dispatch_scope: &Scope<'a>,
 ) -> bool {
     if sig.elements.len() != expr.parts.len() {
         return false;
@@ -241,10 +279,11 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 
 /// Sole producer of the embedded `slots` — disjointness lives in
 /// [`KFunction::classify_for_pick`].
-fn build_resolved<'a>(picked: &'a KFunction<'a>, expr: &KExpression<'_>) -> Resolved<'a> {
+fn build_resolved<'a>(picked: &'a KFunction<'a>, expr: &KExpression<'a>) -> Resolved<'a> {
     Resolved {
         function: picked,
         placeholder_name: picked.pre_run.and_then(|extractor| extractor(expr)),
+        pending_overload_bucket: picked.pre_run_bucket.and_then(|extractor| extractor(expr)),
         slots: picked.classify_for_pick(expr),
     }
 }

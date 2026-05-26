@@ -33,13 +33,6 @@ use crate::machine::model::{KObject, KType};
 use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 
 /// Sub-dispatch `[Type(te)]` against `decl_scope`.
-///
-/// Avoids calling `elaborate_type_expr` directly: a `Placeholder` resolution would
-/// surface a producer NodeId that, if fed into `add_combine`, installs an OWNED
-/// edge to the SIG-sibling LET. The SIG outer Combine already owns that LET, and
-/// two combines cascade-freeing the same producer is a double-free. Sub-dispatching
-/// routes through `value_lookup::body_type_expr`, whose replay-park installs a
-/// Notify (not Owned) edge — the SIG outer Combine stays the sole owner.
 fn schedule_type_resolve<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     decl_scope: &'a Scope<'a>,
@@ -49,7 +42,7 @@ fn schedule_type_resolve<'a>(
     sched.add_dispatch(expr, decl_scope)
 }
 
-fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
+fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm<'a>, KError> {
     match obj {
         KObject::KTypeValue(kt) => match kt {
             KType::Number
@@ -57,7 +50,8 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
             | KType::Bool
             | KType::Null
             | KType::Type
-            | KType::MetaSignature
+            | KType::AnySignature
+            | KType::AnyModule
             | KType::Any
             | KType::Identifier
             | KType::KExpression
@@ -73,14 +67,14 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm, KError> {
     }
 }
 
-enum CarrierForm {
+enum CarrierForm<'a> {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
     Leaf(TypeExpr),
     /// Parser-preserved `TypeExpr` from a `TypeNameRef` carrier.
     Raw(TypeExpr),
     /// Structural carrier accepted as-is; inner names are not re-bound.
-    Direct(KType),
+    Direct(KType<'a>),
 }
 
 pub fn body<'a>(
@@ -196,9 +190,9 @@ fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
 }
 
 /// Bind `name` to `KObject::KTypeValue(declared_kt)` under `scope.bindings.data`.
-fn finalize_val<'a>(scope: &'a Scope<'a>, name: String, declared_kt: KType) -> BodyResult<'a> {
+fn finalize_val<'a>(scope: &'a Scope<'a>, name: String, declared_kt: KType<'a>) -> BodyResult<'a> {
     let arena = scope.arena;
-    let allocated: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(declared_kt));
+    let allocated: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(declared_kt));
     if let Err(e) = scope.bind_value(name, allocated) {
         return err(e);
     }
@@ -233,7 +227,7 @@ fn defer_val_via_combine<'a>(
         };
         finalize_val(scope, name_for_finish.clone(), kt)
     });
-    let combine_id = sched.add_combine(vec![resolve_id], scope, finish);
+    let combine_id = sched.add_combine(vec![resolve_id], vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 
@@ -262,7 +256,7 @@ fn defer_val_structural_via_combine<'a>(
             }
         }
     });
-    let combine_id = sched.add_combine(dep_ids, scope, finish);
+    let combine_id = sched.add_combine(dep_ids, vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 

@@ -69,13 +69,18 @@ the call-site scope and pin every prior frame's bindings alive.
 When a per-call value gets lifted out of its dying frame (typically: a closure
 returned from a body, or any value depending on closure-internal state),
 [`lift_kobject`](../src/machine/execute/lift.rs) rebuilds it in the destination arena.
-Two `KObject` variants carry an optional `Rc<CallArena>` that anchors the
+Three `KObject` shapes carry an optional `Rc<CallArena>` that anchors the
 underlying per-call arena alive when needed:
 
 - `KObject::KFunction(&fn, Option<Rc<CallArena>>)` — the closure itself.
   `lift_kobject` compares the lifted function's `captured_scope().arena` pointer
   to the dying frame's arena pointer; match → carry an `Rc` clone, mismatch → no
   `Rc`.
+- `KObject::KTypeValue(KType::Module { module, frame })` — a first-class
+  module value. The `frame` is the per-call `Rc<CallArena>` of the
+  functor call that minted the module (`None` for top-level MODULE
+  declarations). `lift_kobject` checks `module.child_scope().arena`
+  against the dying frame to decide whether to carry an `Rc`.
 - `KObject::KFuture(KFuture, Option<Rc<CallArena>>)` — `KFuture`s embed
   `&KFunction` plus a bundle and a parsed `KExpression` whose `Future(&KObject)`
   parts can independently point into the dying arena. `lift_kobject` runs a

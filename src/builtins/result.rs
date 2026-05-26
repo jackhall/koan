@@ -27,7 +27,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     let mut schema: HashMap<String, KType> = HashMap::with_capacity(2);
     schema.insert("ok".into(), KType::Any);
     schema.insert("error".into(), KType::Any);
-    let carrier: &'a KObject<'a> = arena.alloc_object(KObject::TaggedUnionType {
+    let carrier: &'a KObject<'a> = arena.alloc(KObject::TaggedUnionType {
         schema: Rc::new(schema),
         name: "Result".into(),
         scope_id,

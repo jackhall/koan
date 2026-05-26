@@ -162,6 +162,7 @@ src/
     │   ├── newtype_def.rs         NEWTYPE
     │   ├── module_def.rs          MODULE
     │   ├── sig_def.rs             SIG
+    │   ├── functor_def.rs         FUNCTOR — modules parameterized by modules
     │   ├── val_decl.rs            VAL (SIG-body value-slot declarator)
     │   ├── ascribe.rs             :| / :! module ascription
     │   ├── test_support.rs

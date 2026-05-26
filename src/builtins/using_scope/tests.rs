@@ -108,11 +108,11 @@ fn using_functor_result_closure_escapes_soundly() {
     run(
         scope,
         "FN (MAKE) -> Module = (MODULE Res = (LET val = 7))\n\
-         LET inst = (MAKE)",
+         LET Inst = (MAKE)",
     );
     // The block defines (and forwards-registers) `GETV`, whose body reads the module's
     // surfaced `val`. The closure captures the transparent scope and escapes the block.
-    run(scope, "USING inst SCOPE (FN (GETV) -> Number = (val))");
+    run(scope, "USING Inst SCOPE (FN (GETV) -> Number = (val))");
     // Churn the run-root arena: allocate and dispatch unrelated work so a dangling
     // reference into the dropped USING/functor arenas would surface under Miri.
     run(scope, "FN (NOOP) -> Number = (1)");
@@ -152,19 +152,25 @@ fn using_temporary_functor_result_is_sound() {
     );
 }
 
-/// `USING` on a non-module value finds no matching overload (the `m` slot is
-/// `Module`-typed), surfacing a clean `DispatchFailed` through `execute()` rather than a
-/// panic. Pins that a misuse degrades gracefully.
+/// `USING` on a non-module value: the eager-resolve path splices `Future(KObject::Number)`
+/// into the `m :Module` wrap-slot and commits to the tentative pick from
+/// `resolve_dispatch`. `bind` then rejects the Number-carrier against the Module-typed slot
+/// as `TypeMismatch` (a per-slot terminal). Pre-eager-resolve the re-resolution walk
+/// surfaced `DispatchFailed` out of `execute()`. Pins that a misuse degrades gracefully.
 #[test]
 fn using_on_non_module_fails_dispatch() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET n = 5");
     let mut sched = Scheduler::new();
-    let _ = sched.add_dispatch(parse_one("USING n SCOPE (1)"), scope);
-    let err = sched.execute().expect_err("USING on a non-module should fail dispatch");
+    let id = sched.add_dispatch(parse_one("USING n SCOPE (1)"), scope);
+    sched.execute().expect("execute does not surface per-slot errors");
+    let err = match sched.read_result(id) {
+        Ok(_) => panic!("USING on a non-module should fail dispatch"),
+        Err(e) => e,
+    };
     assert!(
-        matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
-        "expected DispatchFailed for USING on a Number, got {err}",
+        matches!(&err.kind, KErrorKind::TypeMismatch { .. }),
+        "expected TypeMismatch for USING on a Number, got {err}",
     );
 }

@@ -3,7 +3,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::TypeParams;
 use std::cell::OnceCell;
 
-fn one_slot<'a>(kt: KType) -> ExpressionSignature<'a> {
+fn one_slot<'a>(kt: KType<'a>) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Argument(Argument {

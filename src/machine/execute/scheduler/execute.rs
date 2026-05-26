@@ -28,7 +28,9 @@ impl<'a> Scheduler<'a> {
             let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope, idx)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
-                NodeWork::Combine { deps, finish } => self.run_combine(deps, finish, scope, idx),
+                NodeWork::Combine { deps, park_count, finish } => {
+                    self.run_combine(deps, park_count, finish, scope, idx)
+                }
                 NodeWork::Catch { from, finish } => self.run_catch(from, finish, scope, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
@@ -75,7 +77,7 @@ impl<'a> Scheduler<'a> {
                                     lifted_obj = lifted_obj.stamp_type(declared);
                                 }
                             }
-                            let lifted = dest.alloc_object(lifted_obj);
+                            let lifted = dest.alloc(lifted_obj);
                             self.finalize(idx, NodeOutput::Value(lifted));
                         }
                         (NodeOutput::Err(e), Some(_frame)) => {

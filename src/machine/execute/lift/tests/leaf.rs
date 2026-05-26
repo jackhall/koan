@@ -61,7 +61,7 @@ fn kfunction_with_foreign_runtime_does_not_anchor() {
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__FOREIGN__".into())],
         },
-        Body::Builtin(|s, _, _| BodyResult::Value(s.arena.alloc_object(KObject::Null))),
+        Body::Builtin(|s, _, _| BodyResult::Value(s.arena.alloc(KObject::Null))),
         scope,
     );
     let foreign_ref: &KFunction = arena.alloc_function(foreign);
@@ -92,13 +92,13 @@ fn kmodule_with_local_child_scope_anchors() {
 
     let module = Module::new("LocalMod".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
-    let obj = KObject::KModule(m_ref, None);
+    let obj = KObject::KTypeValue(KType::Module { module: m_ref, frame: None });
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&obj, &dying);
     let count_after = Rc::strong_count(&dying);
     match lifted {
-        KObject::KModule(_, frame) => assert!(
+        KObject::KTypeValue(KType::Module { module: _, frame }) => assert!(
             frame.is_some(),
             "KModule with child scope in dying arena must anchor",
         ),
@@ -119,13 +119,13 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
 
     let module = Module::new("ForeignMod".into(), scope);
     let m_ref: &Module = arena.alloc_module(module);
-    let obj = KObject::KModule(m_ref, None);
+    let obj = KObject::KTypeValue(KType::Module { module: m_ref, frame: None });
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&obj, &dying);
     let count_after = Rc::strong_count(&dying);
     match lifted {
-        KObject::KModule(_, frame) => assert!(frame.is_none()),
+        KObject::KTypeValue(KType::Module { module: _, frame }) => assert!(frame.is_none()),
         other => panic!("expected KModule, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before);
@@ -144,13 +144,16 @@ fn kmodule_with_existing_anchor_preserves_it() {
 
     let module = Module::new("Pre".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
-    let obj = KObject::KModule(m_ref, Some(Rc::clone(&other)));
+    let obj = KObject::KTypeValue(KType::Module {
+        module: m_ref,
+        frame: Some(Rc::clone(&other)),
+    });
     let other_before = Rc::strong_count(&other);
 
     let lifted = lift_kobject(&obj, &dying);
     let other_after = Rc::strong_count(&other);
     match lifted {
-        KObject::KModule(_, frame) => {
+        KObject::KTypeValue(KType::Module { module: _, frame }) => {
             let f = frame.expect("pre-anchored frame persists");
             assert!(Rc::ptr_eq(&f, &other));
         }

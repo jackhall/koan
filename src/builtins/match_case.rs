@@ -81,7 +81,7 @@ pub fn body<'a>(
     // re-borrow ends before the `frame` move into `BodyResult::Tail`.
     let inner_arena: &'a RuntimeArena = unsafe { &*(arena_ptr as *const _) };
     let child: &'a Scope<'a> = unsafe { &*(scope_ptr as *const _) };
-    let it_obj: &'a KObject<'a> = inner_arena.alloc_object(value.deep_clone());
+    let it_obj: &'a KObject<'a> = inner_arena.alloc(value.deep_clone());
     // Fresh per-call child scope: the `it` binding never collides. `bind_value`'s rebind
     // check therefore always passes; the `_` swallow is intentional.
     let _ = child.bind_value("it".to_string(), it_obj);

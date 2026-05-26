@@ -40,38 +40,36 @@ pub fn body_opaque<'a>(
     }
 
     let new_module: &'a Module<'a> = arena.alloc_module(Module::new(m.path.clone(), new_scope));
-    // Each minted abstract type carries the new module's `scope_id`, so two opaque
-    // ascriptions of the same source yield distinct types — the abstraction-barrier
-    // identity property. `kind: Module` reuses the user-declared-module family; the
-    // distinction from a first-class module value is by `name` (the abstract type
-    // name, typically `"Type"`, vs. the module's full path).
+    // Each minted abstract type carries the new module's `&Module` pointer; manual
+    // `PartialEq` on `KType::AbstractType` compares `(source_module.scope_id(), name)`
+    // so two opaque ascriptions of the same source-and-name compare equal even though
+    // each ascription allocates a fresh `&Module` (with a distinct `scope_id`,
+    // preserving the abstraction barrier between two ascriptions).
     //
-    // Module-system stage 2: per-slot kind selection. A SIG slot declared with
-    // `LET Wrap = (TYPE_CONSTRUCTOR T)` lives in the SIG's decl_scope as a
-    // `KType::UserType { kind: TypeConstructor { param_names }, .. }` template; we
-    // mint a fresh per-call `TypeConstructor` rather than the default `Module` arm.
-    // The lookup inspects `bindings.types` (where Type-class LET aliases land via
-    // `register_type`) and falls back to the default `Module` mint for plain
-    // abstract-type slots (`LET Type = Number`).
-    let scope_id = new_module.scope_id();
-    let mut minted: Vec<(String, KType)> = Vec::new();
+    // Per-slot kind selection. A SIG slot declared with `LET Wrap = (TYPE_CONSTRUCTOR T)`
+    // lives in the SIG's decl_scope as a `KType::UserType { kind: TypeConstructor
+    // { param_names }, .. }` template; mint a fresh per-call `TypeConstructor` rather
+    // than the default `AbstractType` arm. The lookup inspects `bindings.types`
+    // (where Type-class LET aliases land via `register_type`) and falls back to the
+    // default `AbstractType` mint for plain abstract-type slots (`LET Type = Number`).
+    let mut minted: Vec<(String, KType<'a>)> = Vec::new();
     {
         let sig_types = s.decl_scope().bindings().types();
         for name in abstract_type_names_of(s.decl_scope()) {
-            let kind = match sig_types.get(&name) {
+            let kt = match sig_types.get(&name) {
                 Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }) => {
-                    UserTypeKind::TypeConstructor { param_names: param_names.clone() }
+                    KType::UserType {
+                        kind: UserTypeKind::TypeConstructor { param_names: param_names.clone() },
+                        scope_id: new_module.scope_id(),
+                        name: name.clone(),
+                    }
                 }
-                _ => UserTypeKind::Module,
-            };
-            minted.push((
-                name.clone(),
-                KType::UserType {
-                    kind,
-                    scope_id,
+                _ => KType::AbstractType {
+                    source_module: new_module,
                     name: name.clone(),
                 },
-            ));
+            };
+            minted.push((name.clone(), kt));
         }
     }
     if !minted.is_empty() {
@@ -92,7 +90,9 @@ pub fn body_opaque<'a>(
 
     // Ascription paths run on the outer scheduler; the resulting `Module` lives in `arena`
     // (the calling scope's arena), not in any per-call frame. `frame: None` is correct.
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(new_module, None));
+    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(
+        KType::Module { module: new_module, frame: None },
+    ));
     BodyResult::Value(module_obj)
 }
 
@@ -118,7 +118,9 @@ pub fn body_transparent<'a>(
     // Same compat-set bookkeeping as `body_opaque`. `:!` makes the module appear as the
     // sig at the type level too — sig-typed slots accept it.
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KObject<'a> = arena.alloc_object(KObject::KModule(new_module, None));
+    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(
+        KType::Module { module: new_module, frame: None },
+    ));
     BodyResult::Value(module_obj)
 }
 
@@ -198,26 +200,26 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // Both ascription operators take already-evaluated `Module` / `Signature` values.
     // Bare Type-token operands (`IntOrd :| OrderedSig`) ride the unified auto-wrap +
     // replay-park rails in [`KFunction::classify_for_pick`] — they sub-dispatch through
-    // the `value_lookup`-TypeExprRef overload to a `Future(KModule)` / `Future(KSignature)`,
-    // which then matches these slots strictly. No parallel Type-Type overload required.
-    let module_ty = KType::AnyUserType { kind: UserTypeKind::Module };
+    // the `value_lookup`-TypeExprRef overload to a
+    // `Future(KTypeValue(KType::Module/Signature))` which then matches these slots
+    // strictly. No parallel Type-Type overload required.
     register_builtin(
         scope,
         ":|",
-        sig(module_ty.clone(), vec![
-            arg("m", module_ty.clone()),
+        sig(KType::AnyModule, vec![
+            arg("m", KType::AnyModule),
             kw(":|"),
-            arg("s", KType::MetaSignature),
+            arg("s", KType::AnySignature),
         ]),
         body_opaque,
     );
     register_builtin(
         scope,
         ":!",
-        sig(module_ty.clone(), vec![
-            arg("m", module_ty),
+        sig(KType::AnyModule, vec![
+            arg("m", KType::AnyModule),
             kw(":!"),
-            arg("s", KType::MetaSignature),
+            arg("s", KType::AnySignature),
         ]),
         body_transparent,
     );

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, KType};
 use crate::machine::{CallArena, KFuture, RuntimeArena};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
@@ -53,12 +53,13 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
             };
             KObject::KFuture(t.deep_clone(), new_frame)
         }
-        KObject::KModule(m, existing) => {
-            // Mirror of the `KFunction` arm: if the module's child scope was alloc'd in
-            // the dying frame's arena (a functor body's freshly-built `MODULE Result =
-            // (...)`), anchor on the dying frame's `Rc` so the child scope outlives the
-            // returned `&Module`. Pre-anchored values (e.g. lifted twice) keep their
-            // existing frame; modules built outside this frame need no anchor.
+        // Post-collapse: a module value rides `KTypeValue(KType::Module { module, frame })`.
+        // Mirror of the `KFunction` arm: if the module's child scope was alloc'd in the
+        // dying frame's arena (a functor body's freshly-built `MODULE Result = (...)`),
+        // anchor on the dying frame's `Rc` so the child scope outlives the returned
+        // `&Module`. Pre-anchored values (e.g. lifted twice) keep their existing frame;
+        // modules built outside this frame need no anchor.
+        KObject::KTypeValue(KType::Module { module: m, frame: existing }) => {
             let new_frame = if existing.is_some() {
                 existing.clone()
             } else {
@@ -70,7 +71,7 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                     None
                 }
             };
-            KObject::KModule(m, new_frame)
+            KObject::KTypeValue(KType::Module { module: m, frame: new_frame })
         }
         // Lifting only attaches arena anchors to descendants; it never changes an element's
         // `ktype()`, so the memoized carrier type is preserved verbatim across the rebuild.
@@ -173,8 +174,11 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
         }
         KObject::KFuture(_, Some(_)) => Some(false),
         KObject::KFuture(t, None) => Some(kfuture_borrows_dying_arena(t, dying_frame.arena())),
-        KObject::KModule(_, Some(_)) => Some(false),
-        KObject::KModule(m, None) => {
+        // Post-collapse module-anchor check: project through the `KTypeValue(KType::Module
+        // { .. })` carrier. Anchored carriers short-circuit; an unanchored carrier whose
+        // module's child scope lives in the dying arena triggers a lift.
+        KObject::KTypeValue(KType::Module { frame: Some(_), .. }) => Some(false),
+        KObject::KTypeValue(KType::Module { module: m, frame: None }) => {
             let module_runtime: *const RuntimeArena = m.child_scope().arena;
             Some(std::ptr::eq(module_runtime, dying_runtime))
         }
@@ -228,7 +232,8 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
             f.captured_scope().arena,
             arena as *const RuntimeArena,
         )),
-        KObject::KModule(m, _) => Some(std::ptr::eq(
+        // Post-collapse: module carriers ride `KTypeValue(KType::Module { module, .. })`.
+        KObject::KTypeValue(KType::Module { module: m, .. }) => Some(std::ptr::eq(
             m.child_scope().arena,
             arena as *const RuntimeArena,
         )),

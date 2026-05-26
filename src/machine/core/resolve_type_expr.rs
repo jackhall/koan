@@ -35,7 +35,7 @@ use super::scope_id::ScopeId;
 /// arena-allocated cache reference and `Park` carries scheduler `NodeId`s the
 /// caller parks on.
 pub enum ResolveTypeExprOutcome<'a> {
-    Done(&'a KType),
+    Done(&'a KType<'a>),
     Park(Vec<NodeId>),
     Unbound(String),
 }
@@ -66,7 +66,7 @@ impl<'a> Scope<'a> {
             ElabResult::Done(kt) => {
                 let pending = FinalizeGate { scope: self }.pending_producers(&kt);
                 if pending.is_empty() {
-                    let kt_ref: &'a KType = self.arena.alloc_ktype(kt);
+                    let kt_ref: &'a KType<'a> = self.arena.alloc(kt);
                     self.type_expr_memo_insert(te.clone(), kt_ref);
                     ResolveTypeExprOutcome::Done(kt_ref)
                 } else {
@@ -97,7 +97,7 @@ impl<'a> FinalizeGate<'a> {
     /// Walks the *top level* of `kt` via [`KTypeUserRefs`], looks each
     /// `(scope_id, name)` up in its owning scope's `pending_types`, and
     /// deduplicates the producer ids it collects.
-    fn pending_producers(&self, kt: &KType) -> Vec<NodeId> {
+    fn pending_producers(&self, kt: &KType<'_>) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();
         for (scope_id, name) in KTypeUserRefs::of(kt) {
             let Some(owner) = self.scope.ancestors().find(|s| s.id == scope_id) else {
@@ -125,17 +125,17 @@ impl<'a> FinalizeGate<'a> {
 /// `kind` payload. SCC closure is atomic across members, so a finalized `Foo`
 /// guarantees every user‑type embedded in `Foo`'s payload is also finalized;
 /// payload recursion would only re‑prove that.
-struct KTypeUserRefs<'k> {
-    stack: Vec<&'k KType>,
+struct KTypeUserRefs<'k, 'a> {
+    stack: Vec<&'k KType<'a>>,
 }
 
-impl<'k> KTypeUserRefs<'k> {
-    fn of(kt: &'k KType) -> Self {
+impl<'k, 'a> KTypeUserRefs<'k, 'a> {
+    fn of(kt: &'k KType<'a>) -> Self {
         Self { stack: vec![kt] }
     }
 }
 
-impl<'k> Iterator for KTypeUserRefs<'k> {
+impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
     type Item = (ScopeId, &'k str);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -147,6 +147,19 @@ impl<'k> Iterator for KTypeUserRefs<'k> {
                 KType::SatisfiesSignature { sig_id, sig_path, .. } => {
                     return Some((*sig_id, sig_path.as_str()));
                 }
+                // Post-collapse: a module/signature/abstract-type carrier identifies its
+                // owning scope by the carried `&Module` / `&Signature` pointer's
+                // `scope_id()` / `sig_id()`. The `name` is the module's `path` (for
+                // first-class modules and abstract-type members) or the signature's `path`.
+                KType::Module { module, .. } => {
+                    return Some((module.scope_id(), module.path.as_str()));
+                }
+                KType::Signature(s) => {
+                    return Some((s.sig_id(), s.path.as_str()));
+                }
+                KType::AbstractType { source_module, name } => {
+                    return Some((source_module.scope_id(), name.as_str()));
+                }
                 KType::List(inner) => self.stack.push(inner),
                 KType::Dict(k, v) => {
                     self.stack.push(v);
@@ -156,6 +169,12 @@ impl<'k> Iterator for KTypeUserRefs<'k> {
                     self.stack.push(ret);
                     for a in args.iter().rev() {
                         self.stack.push(a);
+                    }
+                }
+                KType::KFunctor { params, ret } => {
+                    self.stack.push(ret);
+                    for p in params.iter().rev() {
+                        self.stack.push(p);
                     }
                 }
                 KType::Mu { body, .. } => self.stack.push(body),
@@ -174,7 +193,8 @@ impl<'k> Iterator for KTypeUserRefs<'k> {
                 | KType::KExpression
                 | KType::TypeExprRef
                 | KType::Type
-                | KType::MetaSignature
+                | KType::AnyModule
+                | KType::AnySignature
                 | KType::Any
                 | KType::AnyUserType { .. }
                 | KType::RecursiveRef(_) => {}

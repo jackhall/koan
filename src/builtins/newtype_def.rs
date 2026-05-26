@@ -112,14 +112,14 @@ pub fn body<'a>(
         name: name.clone(),
     };
     let arena = scope.arena;
-    let kt_ref: &'a KType = arena.alloc_ktype(identity);
+    let kt_ref: &'a KType = arena.alloc(identity);
     match scope.bindings().try_register_type(&name, kt_ref) {
         Ok(ApplyOutcome::Applied) => {
             // Mirror STRUCT / UNION's declaration return: the value is a `KTypeValue`
             // carrying a clone of the minted identity. Tests inspect `bindings.types`
             // for the persisted entry; surface-level code receives the Type-value for
             // potential chaining (`LET D = NEWTYPE Distance = Number` style).
-            let v: &'a KObject<'a> = arena.alloc_object(KObject::KTypeValue(kt_ref.clone()));
+            let v: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(kt_ref.clone()));
             BodyResult::Value(v)
         }
         // Borrow contention at the declaration site is a programming error — finalize
@@ -161,7 +161,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 pub fn newtype_construct<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
-    identity: &'a KType,
+    identity: &'a KType<'a>,
     parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> BodyResult<'a> {
     if parts.is_empty() {
@@ -200,9 +200,9 @@ pub fn newtype_construct<'a>(
             inner: NonWrappedRef::peel(value),
             type_id: identity,
         };
-        BodyResult::Value(scope.arena.alloc_object(wrapped))
+        BodyResult::Value(scope.arena.alloc(wrapped))
     });
-    let combine_id = sched.add_combine(vec![value_id], scope, finish);
+    let combine_id = sched.add_combine(vec![value_id], vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 

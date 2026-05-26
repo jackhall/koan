@@ -34,7 +34,7 @@ pub mod pick;
 pub mod scheduler_handle;
 
 pub use argument_bundle::ArgumentBundle;
-pub use body::{Body, BodyResult, BuiltinFn, PreRunFn};
+pub use body::{Body, BodyResult, BuiltinFn, PreRunBucketFn, PreRunFn};
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
@@ -66,6 +66,20 @@ pub struct KFunction<'a> {
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE); `None` for
     /// everything else. See [`PreRunFn`].
     pub pre_run: Option<PreRunFn>,
+    /// `Some(_)` for binder builtins whose body registers a callable function — `FN`
+    /// and `FUNCTOR`. Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
+    /// dispatch driver installs an entry in `bindings.pending_overloads` and a
+    /// sibling bare-arg call form like `(MAKESET IntOrd)` parks on the binder slot
+    /// instead of surfacing `DispatchFailed` before finalize. See [`PreRunBucketFn`]
+    /// for the rationale on keying by bucket rather than lead keyword.
+    pub pre_run_bucket: Option<PreRunBucketFn>,
+    /// Flipped on by the `FUNCTOR` binder (and stays `false` for `FN`). Distinguishes
+    /// the same underlying `KFunction` shape into the two type-language families:
+    /// `function_value_ktype` projects `is_functor → KType::KFunctor`, else
+    /// `KType::KFunction`. The cross-arm wall in `function_compat` refuses both
+    /// directions of the `KFunctor`/`KFunction` mismatch silently — see
+    /// [design/typing/functors.md](../../../design/typing/functors.md).
+    pub is_functor: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -78,10 +92,26 @@ impl<'a> KFunction<'a> {
     }
 
     pub fn with_pre_run(
+        signature: ExpressionSignature<'a>,
+        body: Body<'a>,
+        captured: &'a Scope<'a>,
+        pre_run: Option<PreRunFn>,
+    ) -> Self {
+        Self::with_pre_run_and_functor(signature, body, captured, pre_run, None, false)
+    }
+
+    /// Like [`Self::with_pre_run`] but lets the caller flip the `is_functor` flag at
+    /// construction time and pass a `pre_run_bucket` extractor (for `FN` / `FUNCTOR`,
+    /// whose body registers a callable function and so wants a bucket-keyed
+    /// pending-overload entry). Used by the `FUNCTOR` binder; everything else routes
+    /// through `with_pre_run` and leaves both new fields at their defaults.
+    pub fn with_pre_run_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
         pre_run: Option<PreRunFn>,
+        pre_run_bucket: Option<PreRunBucketFn>,
+        is_functor: bool,
     ) -> Self {
         signature.normalize();
         Self {
@@ -90,6 +120,8 @@ impl<'a> KFunction<'a> {
             captured: NonNull::from(captured),
             _p: PhantomData,
             pre_run,
+            pre_run_bucket,
+            is_functor,
         }
     }
 
@@ -219,7 +251,7 @@ mod tests {
     /// without re-invoking the full resolution outcome.
     fn find_match<'a>(
         scope: &'a Scope<'a>,
-        expr: &KExpression<'_>,
+        expr: &KExpression<'a>,
     ) -> Option<&'a KFunction<'a>> {
         let key = expr.untyped_key();
         let mut current: Option<&Scope<'a>> = Some(scope);
@@ -348,6 +380,48 @@ mod tests {
         assert_eq!(pick.ref_name_indices, vec![1]);
         assert!(pick.wrap_indices.is_empty());
         assert!(!pick.picked_has_pre_run);
+    }
+
+    /// Stage 2: a manually-constructed `KFunction` with the `is_functor` flag set
+    /// projects through `KObject::ktype()` as `KType::KFunctor`; the unflagged
+    /// case stays `KType::KFunction`. Pins the projection split that drives the
+    /// cross-arm wall in `function_compat`.
+    #[test]
+    fn function_value_ktype_projects_kfunctor_when_flagged() {
+        use crate::machine::model::types::{ReturnType, ExpressionSignature};
+        let arena = RuntimeArena::new();
+        let scope = run_root_bare(&arena);
+        let make_sig = || ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::Number),
+            elements: vec![
+                SignatureElement::Keyword("CALL".into()),
+                SignatureElement::Argument(crate::machine::model::types::Argument {
+                    name: "x".into(),
+                    ktype: KType::Number,
+                }),
+            ],
+        };
+        // Plain FN: `is_functor: false`, projects KFunction.
+        let plain = KFunction::with_pre_run(make_sig(), Body::Builtin(body_any), scope, None);
+        let plain_obj = KObject::KFunction(arena.alloc_function(plain), None);
+        assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
+        // Flagged FN: `is_functor: true`, projects KFunctor.
+        let functor = KFunction::with_pre_run_and_functor(
+            make_sig(),
+            Body::Builtin(body_any),
+            scope,
+            None,
+            None,
+            true,
+        );
+        let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
+        match functor_obj.ktype() {
+            KType::KFunctor { params, ret } => {
+                assert_eq!(params, vec![KType::Number]);
+                assert_eq!(*ret, KType::Number);
+            }
+            other => panic!("expected KFunctor, got {:?}", other),
+        }
     }
 
     /// Companion to the literal-name slot case: a bare leaf Type-token in an `Any` slot of a

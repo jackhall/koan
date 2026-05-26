@@ -38,7 +38,7 @@ impl<'a> KFunction<'a> {
     /// bound by an `ExpressionPart::Expression`; the caller schedules the returned eager
     /// indices as deps and leaves the lazy ones in place for the receiving builtin to
     /// dispatch itself. Returns `None` when `self` isn't a lazy candidate.
-    pub fn lazy_eager_indices(&self, expr: &KExpression<'_>) -> Option<Vec<usize>> {
+    pub fn lazy_eager_indices(&self, expr: &KExpression<'a>) -> Option<Vec<usize>> {
         let sig = &self.signature;
         if sig.elements.len() != expr.parts.len() {
             return None;
@@ -111,7 +111,7 @@ impl<'a> KFunction<'a> {
     ///   the false-tentative-match noise that would otherwise show up here.
     ///
     /// All other slot/part pairings reuse the normal `Argument::matches` check.
-    pub fn accepts_for_wrap(&self, expr: &KExpression<'_>) -> bool {
+    pub fn accepts_for_wrap(&self, expr: &KExpression<'a>) -> bool {
         let sig = &self.signature;
         if sig.elements.len() != expr.parts.len() {
             return false;
@@ -157,7 +157,7 @@ impl<'a> KFunction<'a> {
     /// buckets of [`ClassifiedSlots`]. Disjointness is guaranteed by construction — each
     /// `(SignatureElement, ExpressionPart)` shape lands in at most one bucket — and the
     /// downstream scheduler relies on it.
-    pub fn classify_for_pick(&self, expr: &KExpression<'_>) -> ClassifiedSlots {
+    pub fn classify_for_pick(&self, expr: &KExpression<'a>) -> ClassifiedSlots {
         let eager_indices = self.lazy_eager_indices(expr);
         let mut wrap_indices: Vec<usize> = Vec::new();
         let mut ref_name_indices: Vec<usize> = Vec::new();

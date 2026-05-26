@@ -102,7 +102,7 @@ pub fn body<'a>(
 fn finalize_struct<'a>(
     scope: &'a Scope<'a>,
     name: String,
-    fields: Vec<(String, KType)>,
+    fields: Vec<(String, KType<'a>)>,
 ) -> BodyResult<'a> {
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`; the
     // guard drops on body / Combine-finish return and removes the entry. Cycle-close
@@ -134,7 +134,7 @@ fn finalize_struct<'a>(
     // fields so dispatch on the carrier (via its `ktype()`) and dispatch through a
     // slot typed by the identity reach the same `UserType` value.
     let scope_id = scope.id;
-    let struct_obj: &'a KObject<'a> = arena.alloc_object(KObject::StructType {
+    let struct_obj: &'a KObject<'a> = arena.alloc(KObject::StructType {
         name: name.clone(),
         scope_id,
         fields: Rc::new(fields),
@@ -191,7 +191,9 @@ fn defer_struct_via_combine<'a>(
             ))),
         }
     });
-    let combine_id = sched.add_combine(producers, scope, finish);
+    // `producers` are sibling slots the schema parked on while elaborating;
+    // this Combine reads their values at finish-time but does NOT own them.
+    let combine_id = sched.add_combine(vec![], producers, scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 

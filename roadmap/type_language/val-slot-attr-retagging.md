@@ -12,7 +12,7 @@ identity the SIG body's declared slot type names. For `SIG WithZero =
 = Number) (LET zero = 0))` plus `LET int_ord = (IntOrd :| WithZero)`,
 the ATTR read `(int_ord.zero)` returns `Number(0)` — the underlying
 value's `ktype()` is `KType::Number`, not the fresh per-call
-`KType::UserType { kind: Module, name: "Type", scope_id: <int_ord-mint> }`
+`KType::AbstractType { source_module: <int_ord-module>, name: "Type" }`
 that `:|` minted for `int_ord.Type`. The functor return-type check in
 [`KFunction::invoke`](../../src/machine/core/kfunction/invoke.rs)'s
 Combine-finish closure compares the body's `.ktype()` against the per-call
@@ -43,15 +43,15 @@ returning the underlying `Number(0)` is what this item closes.
 
 **Directions.**
 
-- *Tagging site — decided.* The new `KType::Module` arm of ATTR-on-type
-  (introduced by [module-signature-as-ktype](module-signature-as-ktype.md))
+- *Tagging site — decided.* The `KType::Module` arm of ATTR-on-type
+  ([`attr.rs`](../../src/builtins/attr.rs)'s `access_module_member`)
   performs the re-tagging. On a VAL-slot read, the arm looks up the
   slot's declared `:Type` in the source SIG, resolves `Type` through the
   module's `type_members`, and wraps the returned value's carrier with
-  that abstract identity. The substrate move puts both the source `&Module`
-  pointer and the per-call frame in hand at the ATTR call site, so the
-  work is local to `access_module_member` (or its successor) and stays
-  inside that arm.
+  that abstract identity. The source `&Module` pointer and the per-call
+  frame are both in hand at the ATTR call site (the carrier is
+  `KType::Module { module, frame }`), so the work is local to
+  `access_module_member` and stays inside that arm.
 - *Wrap vs. override — open.* Whether the re-tagging produces a new
   `KObject::Wrapped`-style carrier with the abstract identity in its
   `ktype()`, or extends an existing carrier with a per-site identity
@@ -78,11 +78,6 @@ returning the underlying `Number(0)` is what this item closes.
 ## Dependencies
 
 **Requires:**
-
-- [Module and signature carriers move from KObject to KType](module-signature-as-ktype.md)
-  — ATTR-on-type is the projection mechanism this item lives inside;
-  without the substrate move, the per-call frame and the underlying
-  `&Module` pointer aren't both in hand at the ATTR call site.
 
 **Unblocks:**
 

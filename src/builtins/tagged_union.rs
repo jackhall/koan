@@ -75,7 +75,7 @@ pub fn apply<'a>(
 /// tag, then build the `KObject::Tagged`. Pure logic — no scope, no scheduler. The
 /// construction-primitive builtin's body is a thin shim around this.
 pub fn construct<'a>(
-    schema: &HashMap<String, KType>,
+    schema: &HashMap<String, KType<'a>>,
     schema_name: &str,
     schema_scope_id: ScopeId,
     tag: String,
@@ -158,7 +158,7 @@ fn primitive_body<'a>(
         }
     };
     match construct(&schema, &schema_name, schema_scope_id, tag, value) {
-        Ok(tagged) => BodyResult::Value(scope.arena.alloc_object(tagged)),
+        Ok(tagged) => BodyResult::Value(scope.arena.alloc(tagged)),
         Err(e) => BodyResult::Err(e),
     }
 }

@@ -83,12 +83,34 @@ pointer as the builtin.
 [LET routing in `let_binding`](../../src/builtins/let_binding.rs) detects
 Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
 RHSes (type-valued aliases). A bind-time
-`KErrorKind::TypeClassBindingExpectsType` diagnostic rejects
-`LET <Type-class> = <non-type>` at the binder using a primitive/container
-blocklist (`Number | Str | Bool | Null | List(_) | Dict(_, _)`) so type-language
-carriers (`KModule`, `KSignature`, `StructType`, `TaggedUnionType`), whose
-runtime `KType` is `Module` / `MetaSignature` / `Type` rather than `TypeExprRef`,
-continue to bind through the existing `bind_value` path.
+`KErrorKind::TypeClassBindingExpectsType` diagnostic gates the RHS via an
+**allowlist**: a Type-class LET admits a value only if it carries
+type-language identity in one of three shapes — `KObject::KTypeValue(_)`
+(pure-type carriers including `KType::Module` / `KType::Signature`),
+`derive_nominal_identity → Some(_)` (`StructType` / `TaggedUnionType`,
+which redundantly subsumes the `Module` / `Signature` `KTypeValue` arm),
+or `KObject::KFunction(f, _)` with `f.is_functor` set (the `FUNCTOR`
+binder's output). Plain `KFunction` rejects, closing the
+`LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole
+that a pure value-shape gate cannot discriminate; the `is_functor` flag
+is the discrimination signal. Module and signature LET aliases route through
+`register_nominal` to dual-write the identity carrier into `bindings.types`
+(modules preserve their `KType::Module` carrier verbatim; signatures lower
+to the `KType::SatisfiesSignature` constraint form so a slot typed by the
+alias dispatches identically to the original); pure-type `KTypeValue(kt)`
+carriers (Number, etc.) take `register_type` directly; `is_functor`
+KFunctions and `Struct` / `Tagged` carriers fall through to `bind_value`.
+
+The partition is one-way: a value-classified LET (lowercase-leading binder
+name) rejects a `KType::Module` or `KType::Signature` RHS at the LET site
+with a `ShapeError` redirecting the user to a Type-classified name. Combined
+with the Type-class LET allowlist above, this makes `bindings.types` the
+single home for module and signature values — a module value never rides a
+value-classified alias, so the value-side lookup and type-class lookup
+paths never both find a module under the same name. The
+[token-class rule](tokens.md) defines the Type-class shape
+(uppercase-leading plus at least one lowercase letter); the partition guard
+lives in [`let_binding`'s `body`](../../src/builtins/let_binding.rs).
 
 The value-side ATTR walker and ascription's abstract-type member sweep both
 walk `bindings.types` and `bindings.data` via the `abstract_type_names_of`
@@ -121,9 +143,15 @@ Four downstream consumers each carry a `TypeNameRef` arm beside the existing
   runs the same primitive/container blocklist as the `KTypeValue` arm and
   routes to `register_type` for type-valued RHSes;
 - [`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
-  which resolves through `bindings.types` and, on a nominal `UserType` /
-  `SatisfiesSignature` hit, recovers the paired value-side carrier from
-  `bindings.data`.
+  which normalizes the incoming carrier (rejecting parameterized
+  `KTypeValue` shapes) and delegates to
+  [`coerce_type_token_value`](../../src/builtins/value_lookup.rs) — the
+  shared coercion seam called both from this builtin overload and from
+  the dispatch driver's eager name-resolve pass
+  ([`scheduler/dispatch.rs`](../../src/machine/execute/scheduler/dispatch.rs)).
+  The helper resolves through `bindings.types` and, on a nominal
+  `UserType` / `SatisfiesSignature` / `Module` / `Signature` hit,
+  recovers the paired value-side carrier from `bindings.data`.
 
 FN's deferred return-type elaboration peeks the slot to pick between
 [`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs)
@@ -132,12 +160,12 @@ FN's deferred return-type elaboration peeks the slot to pick between
 (deferred carrier consuming the parser-preserved `TypeExpr`), then drives the
 existing park-on-placeholder machinery from there. The sole
 `KObject::KTypeValue` synthesis site for dispatch transport lives in
-[`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
-which mints `KObject::KTypeValue(kt.clone())` on a `resolve_type` hit. On a
-`resolve_type` miss, the bare-leaf arm of `elaborate_type_expr` falls through
-to `Scope::resolve` for compatibility with the small set of callers that still
-consult the value side; the `body_type_expr` reader, by contrast, is
-types-only.
+[`coerce_type_token_value`](../../src/builtins/value_lookup.rs), which
+mints `KObject::KTypeValue(kt.clone())` on a non-nominal `resolve_type`
+hit. On a `resolve_type` miss, the bare-leaf arm of `elaborate_type_expr`
+falls through to `Scope::resolve` for compatibility with the small set of
+callers that still consult the value side; the `coerce_type_token_value`
+reader, by contrast, is types-only.
 
 Every `KType` flowing through dispatch is fully elaborated — there is no
 surface-name carrier variant inside `KType` itself.
@@ -180,7 +208,7 @@ on the carrier:
 
 Consumers that need the scope-resolved identity —
 [`type_identity_for`](../../src/machine/core/kfunction/invoke.rs)
-at the dispatch boundary's per-call parameter dual-write,
+at the dispatch boundary's per-call type-side bind,
 [`val_decl::body`](../../src/builtins/val_decl.rs)'s structural
 carrier path and its post-Combine finish, and
 [`fn_def::body`](../../src/builtins/fn_def.rs)'s return-type
@@ -190,5 +218,5 @@ intentionally non-park-aware: an unresolvable repr is a hard error, not a
 forward reference). The dispatch boundary's `type_identity_for` surfaces a
 `Park` outcome as the structured
 `KError::TypeIdentityPendingAtDispatch { param, surface, pending_on }` rather
-than silently skipping the dual-write, so a workload that triggers it is
+than silently skipping the per-call bind, so a workload that triggers it is
 debuggable from the error alone.

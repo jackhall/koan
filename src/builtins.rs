@@ -15,6 +15,7 @@ mod catch;
 mod cons;
 mod eval;
 mod fn_def;
+mod functor_def;
 mod let_binding;
 mod match_case;
 mod module_def;
@@ -32,7 +33,7 @@ mod type_ops;
 mod union;
 mod using_scope;
 mod val_decl;
-mod value_lookup;
+pub(crate) mod value_lookup;
 mod value_pass;
 
 /// Route a resolved verb-object to its construction primitive's `apply` function. Returns
@@ -58,19 +59,19 @@ pub(crate) fn err<'a>(e: KError) -> BodyResult<'a> {
 }
 
 /// Signature-element constructor for a keyword slot.
-pub(crate) fn kw(s: &str) -> SignatureElement {
+pub(crate) fn kw<'a>(s: &str) -> SignatureElement<'a> {
     SignatureElement::Keyword(s.into())
 }
 
 /// Signature-element constructor for an argument slot.
-pub(crate) fn arg(name: &str, ktype: KType) -> SignatureElement {
+pub(crate) fn arg<'a>(name: &str, ktype: KType<'a>) -> SignatureElement<'a> {
     SignatureElement::Argument(Argument { name: name.into(), ktype })
 }
 
 /// Assemble an `ExpressionSignature` whose return type is `Resolved(return_type)`.
 /// All shipped builtins resolve their return type at registration time; FN-bodies that
 /// need `Deferred(...)` build the `ExpressionSignature` directly.
-pub(crate) fn sig<'a>(return_type: KType, elements: Vec<SignatureElement>) -> ExpressionSignature<'a> {
+pub(crate) fn sig<'a>(return_type: KType<'a>, elements: Vec<SignatureElement<'a>>) -> ExpressionSignature<'a> {
     ExpressionSignature { return_type: ReturnType::Resolved(return_type), elements }
 }
 
@@ -92,12 +93,32 @@ pub(crate) fn register_builtin_with_pre_run<'a>(
     body: BuiltinFn,
     pre_run: Option<PreRunFn>,
 ) {
+    register_builtin_full(scope, name, signature, body, pre_run, None, false);
+}
+
+/// Full-form builtin registration with both pre-run hooks and the `is_functor` flag.
+/// Used by FN / FUNCTOR to supply the [`PreRunBucketFn`] that keys a pending-overload
+/// entry by inner-call bucket — see [`crate::machine::core::kfunction::PreRunBucketFn`].
+/// Everything else routes through the simpler [`register_builtin_with_pre_run`].
+pub(crate) fn register_builtin_full<'a>(
+    scope: &'a Scope<'a>,
+    name: &str,
+    signature: ExpressionSignature<'a>,
+    body: BuiltinFn,
+    pre_run: Option<PreRunFn>,
+    pre_run_bucket: Option<crate::machine::core::kfunction::PreRunBucketFn>,
+    is_functor: bool,
+) {
     let arena = scope.arena;
-    // The captured scope's arena must be the same arena the KFunction lives in, so
-    // `lift_kobject`'s arena-pointer comparison identifies builtins as never-in-a-dying-frame.
-    let f: &'a KFunction<'a> =
-        arena.alloc_function(KFunction::with_pre_run(signature, Body::Builtin(body), scope, pre_run));
-    let obj: &'a KObject<'a> = arena.alloc_object(KObject::KFunction(f, None));
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_pre_run_and_functor(
+        signature,
+        Body::Builtin(body),
+        scope,
+        pre_run,
+        pre_run_bucket,
+        is_functor,
+    ));
+    let obj: &'a KObject<'a> = arena.alloc(KObject::KFunction(f, None));
     let _ = scope.register_function(name.into(), f, obj);
 }
 
@@ -135,8 +156,10 @@ pub fn default_scope<'a>(
     // live as `KType::UserType` in `bindings.types`, dual-written by the finalize sites.
     scope.register_type("Tagged".into(), KType::AnyUserType { kind: UserTypeKind::Tagged });
     scope.register_type("Struct".into(), KType::AnyUserType { kind: UserTypeKind::Struct });
-    scope.register_type("Module".into(), KType::AnyUserType { kind: UserTypeKind::Module });
-    scope.register_type("Signature".into(), KType::MetaSignature);
+    // Post-collapse: `:Module` / `:Signature` slot wildcards have dedicated KType variants
+    // (no more `UserTypeKind::Module` arm; `MetaSignature` retired in favor of `AnySignature`).
+    scope.register_type("Module".into(), KType::AnyModule);
+    scope.register_type("Signature".into(), KType::AnySignature);
     scope.register_type("Any".into(), KType::Any);
 
     let_binding::register(scope);
@@ -144,6 +167,7 @@ pub fn default_scope<'a>(
     value_lookup::register(scope);
     value_pass::register(scope);
     fn_def::register(scope);
+    functor_def::register(scope);
     call_by_name::register(scope);
     union::register(scope);
     result::register(scope);

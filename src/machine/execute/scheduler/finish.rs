@@ -5,6 +5,7 @@ use crate::machine::{
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
+use super::dispatch::propagate_dep_error;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
@@ -21,8 +22,9 @@ impl<'a> Scheduler<'a> {
         for (_, dep_id) in &subs {
             if let Err(e) = self.read_result(*dep_id) {
                 let frame = Frame::from_expr("<bind>", &expr);
-                let propagated = e.clone_for_propagation().with_frame(frame);
-                return Ok(NodeStep::Done(NodeOutput::Err(propagated)));
+                return Ok(NodeStep::Done(NodeOutput::Err(
+                    propagate_dep_error(e, Some(frame)),
+                )));
             }
         }
         let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
@@ -81,12 +83,15 @@ impl<'a> Scheduler<'a> {
     /// Run a `Combine` slot: short-circuit on the first errored dep using the same
     /// frame-attached propagation as `run_bind`, then call `finish` over the dep values
     /// and decode the returned `BodyResult` (Value, Tail, or Err) into a `NodeStep`
-    /// using the same dispatch as `invoke_to_step`. Deps are eagerly freed on the
-    /// success path; the error path leaves them in `dep_edges[idx]` for
-    /// chain-free at slot drop.
+    /// using the same dispatch as `invoke_to_step`. Only the `deps[park_count..]`
+    /// owned-sub suffix is eagerly freed on the success path; the `[..park_count]`
+    /// park-producer prefix is kept alive (those slots are sibling producers the
+    /// Combine merely read at finish-time). The error path leaves the Combine's
+    /// edges in `dep_edges[idx]` for chain-free at slot drop.
     pub(super) fn run_combine(
         &mut self,
         deps: Vec<NodeId>,
+        park_count: usize,
         finish: CombineFinish<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
@@ -97,16 +102,18 @@ impl<'a> Scheduler<'a> {
         let make_frame = || Frame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
-                let propagated = e.clone_for_propagation().with_frame(make_frame());
-                return NodeStep::Done(NodeOutput::Err(propagated));
+                return NodeStep::Done(NodeOutput::Err(
+                    propagate_dep_error(e, Some(make_frame())),
+                ));
             }
         }
         // Pre-collect refs so `finish` (which holds `&mut self` via the trait object)
         // doesn't reborrow `self` for reads.
         let values: Vec<&'a KObject<'a>> = deps.iter().map(|d| self.read(*d)).collect();
-        let dep_indices: Vec<usize> = deps.iter().map(|d| d.index()).collect();
+        let owned_indices: Vec<usize> =
+            deps[park_count..].iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
-        self.reclaim_deps(idx, dep_indices);
+        self.reclaim_deps(idx, owned_indices);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
             BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
@@ -132,7 +139,10 @@ impl<'a> Scheduler<'a> {
     ) -> NodeStep<'a> {
         let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
             Ok(v) => Ok(v),
-            Err(e) => Err(e.clone_for_propagation()),
+            // Frameless propagation: TRY-WITH's per-arm dispatch reads this `Err` and
+            // attaches its own frame at the recovery site, so adding one here would
+            // double-frame the error.
+            Err(e) => Err(propagate_dep_error(e, None)),
         };
         let body = finish(scope, self, result);
         self.reclaim_deps(idx, vec![from.index()]);

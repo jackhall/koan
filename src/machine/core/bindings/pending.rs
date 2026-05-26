@@ -20,7 +20,7 @@ use super::super::scope_id::ScopeId;
 /// re-runs against the post-pre-registration scope; `edges` is the adjacency
 /// list to other in-flight binders this one has parked on.
 pub struct PendingTypeEntry<'a> {
-    pub kind: UserTypeKind,
+    pub kind: UserTypeKind<'a>,
     pub scope_id: ScopeId,
     pub schema_expr: KExpression<'a>,
     pub edges: Vec<String>,

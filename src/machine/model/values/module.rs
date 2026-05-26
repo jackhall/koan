@@ -21,17 +21,18 @@ use super::super::types::KType;
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
-/// they currently expose (e.g. `Foo.Type` resolving to a `KType::UserType { kind:
-/// Module, .. }` minted by opaque ascription). The `kind: Module` reuse covers both
-/// first-class module values and per-module abstract types — the two are distinguished
-/// by `name` (the abstract type's name, typically `"Type"`, vs. the module's full path).
+/// they currently expose. Post-collapse, opaque-ascription members mint
+/// `KType::AbstractType { source_module, name }`; the first-class module value itself
+/// rides `KType::Module { module, frame }` in the surrounding `KObject::KTypeValue`
+/// carrier (the two are distinguished by KType variant, not by a shared `UserType`
+/// `kind` tag).
 pub struct Module<'a> {
     pub path: String,
     child_scope_ptr: *const Scope<'static>,
     /// `RefCell` because opaque-ascription installs entries after the surrounding `KObject`
     /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
-    pub type_members: RefCell<HashMap<String, KType>>,
+    pub type_members: RefCell<HashMap<String, KType<'a>>>,
     /// Sigs this module shape-checks against. Populated by `:|` and `:!` at ascription
     /// time via [`Module::mark_satisfies`]. `accepts_part` for `KType::SatisfiesSignature {
     /// sig_id }` is an O(1) membership check against this set. `RefCell` because
@@ -143,7 +144,7 @@ mod tests {
         assert!(ptr::eq(recovered, scope));
         // Re-borrow after a sibling alloc — tree borrows is sensitive to interleaved
         // mutation under live shared borrows.
-        let _other = arena.alloc_object(crate::machine::model::values::KObject::Number(1.0));
+        let _other = arena.alloc(crate::machine::model::values::KObject::Number(1.0));
         let recovered2 = module.child_scope();
         assert!(ptr::eq(recovered2, scope));
     }
@@ -158,7 +159,7 @@ mod tests {
         let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
         let recovered = sig.decl_scope();
         assert!(ptr::eq(recovered, scope));
-        let _other = arena.alloc_object(crate::machine::model::values::KObject::Number(1.0));
+        let _other = arena.alloc(crate::machine::model::values::KObject::Number(1.0));
         let recovered2 = sig.decl_scope();
         assert!(ptr::eq(recovered2, scope));
     }
@@ -168,18 +169,18 @@ mod tests {
     /// borrows is strict about interior mutation under a live shared borrow.
     #[test]
     fn module_type_members_refcell_mutation_with_held_module_ref() {
-        use crate::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(sink()));
         let module = arena.alloc_module(Module::new("M".into(), scope));
         let scope_id = module.scope_id();
         {
             let mut tm = module.type_members.borrow_mut();
+            // Post-collapse: opaque-ascription members are minted as
+            // `KType::AbstractType { source_module, name }`.
             tm.insert(
                 "Type".into(),
-                KType::UserType {
-                    kind: UserTypeKind::Module,
-                    scope_id,
+                KType::AbstractType {
+                    source_module: module,
                     name: "Type".into(),
                 },
             );
@@ -187,16 +188,15 @@ mod tests {
         let bound = module.type_members.borrow().get("Type").cloned();
         assert!(matches!(
             &bound,
-            Some(KType::UserType { kind: UserTypeKind::Module, scope_id: id, name })
-                if *id == scope_id && name == "Type"
+            Some(KType::AbstractType { source_module, name })
+                if source_module.scope_id() == scope_id && name == "Type"
         ));
     }
 
-    /// Module-system stage 2 (functor slice). Minimal-shape mirror of
-    /// [`crate::machine::execute`]'s internal `lift_kobject` `KModule` arm: build a `Module` whose
-    /// `child_scope` lives in a `CallArena`, lift it against the dying frame, and assert
-    /// the lifted result carries the arena anchor. Pins the unsafe site behind functor
-    /// execution end-to-end.
+    /// Post-collapse: a module value rides `KTypeValue(KType::Module { module, frame })`.
+    /// Build one whose `child_scope` lives in a `CallArena`, lift it against the dying
+    /// frame, and assert the lifted carrier carries the arena anchor. Pins the unsafe
+    /// site behind functor execution end-to-end through the new variant.
     #[test]
     fn functor_per_call_module_lifts_correctly() {
         use crate::machine::core::kfunction::{Body, KFunction};
@@ -223,7 +223,7 @@ mod tests {
                 elements: vec![SignatureElement::Keyword("__SLOW__".into())],
             },
             Body::Builtin(|s, _, _| {
-                crate::machine::core::kfunction::BodyResult::Value(s.arena.alloc_object(KObject::Null))
+                crate::machine::core::kfunction::BodyResult::Value(s.arena.alloc(KObject::Null))
             }),
             frame.scope(),
         );
@@ -235,16 +235,16 @@ mod tests {
             crate::machine::core::Scope::child_under_module(frame.scope(), "Inner".into()),
         );
         let module = inner_arena.alloc_module(Module::new("Inner".into(), inner_scope));
-        let m_obj = KObject::KModule(module, None);
+        let m_obj = KObject::KTypeValue(KType::Module { module, frame: None });
 
         let strong_before = Rc::strong_count(&frame);
         let lifted = lift_kobject_for_test(&m_obj, &frame);
         match &lifted {
-            KObject::KModule(_, anchor) => assert!(
+            KObject::KTypeValue(KType::Module { frame: anchor, .. }) => assert!(
                 anchor.is_some(),
-                "KModule whose child scope lives in the dying arena must lift with frame=Some(rc)",
+                "Module carrier whose child scope lives in the dying arena must lift with frame=Some(rc)",
             ),
-            other => panic!("expected lifted KModule, got {:?}", other.ktype()),
+            other => panic!("expected lifted Module carrier, got {:?}", other.ktype()),
         }
         assert_eq!(
             Rc::strong_count(&frame),

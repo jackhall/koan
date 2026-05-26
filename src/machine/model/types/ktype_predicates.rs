@@ -7,7 +7,7 @@ use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::values::KObject;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 
-impl KType {
+impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
     /// identity is meaningful as a *type* binding (not just a value binding), so the
     /// per-call binding must be dual-written into the types-side scope.
@@ -15,17 +15,43 @@ impl KType {
         matches!(
             self,
             KType::SatisfiesSignature { .. }
-                | KType::MetaSignature
+                | KType::AnySignature
                 | KType::Type
                 | KType::TypeExprRef
-                | KType::AnyUserType { kind: UserTypeKind::Module }
+                | KType::AnyModule
         )
+    }
+
+    /// Admissibility predicate for the FUNCTOR return-type slot. Mirrors the
+    /// list in [design/typing/functors.md](../../../../design/typing/functors.md):
+    /// module / signature carriers admit (`AnyModule`, `Module`, `AnySignature`,
+    /// `SatisfiesSignature`, `Signature`), and the recursive `KFunctor` arm
+    /// covers curried multi-module functors. `KType::Type` is intentionally NOT
+    /// on the list — a return slot of bare `Type` denotes "any type value"
+    /// rather than "a module or signature value", and the design pins the seam
+    /// to the narrower set.
+    ///
+    /// Lives here (structural predicate on `KType`) rather than in
+    /// `builtins/functor_def.rs` so the FUNCTOR-binder finalize path can call
+    /// it without re-importing functor-specific plumbing — see
+    /// `finalize_fn_with_flag`'s `is_functor` arm for the post-Combine call
+    /// site.
+    pub fn is_admissible_functor_return(&self) -> bool {
+        match self {
+            KType::AnySignature
+            | KType::SatisfiesSignature { .. }
+            | KType::AnyModule
+            | KType::Module { .. }
+            | KType::Signature(_) => true,
+            KType::KFunctor { ret, .. } => ret.is_admissible_functor_return(),
+            _ => false,
+        }
     }
 
     /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`; for parameterized
     /// containers, refinement of any inner slot makes the whole type more specific (covariant in
     /// element / key / value / arg / return positions). Strict — returns `false` for equal types.
-    pub fn is_more_specific_than(&self, other: &KType) -> bool {
+    pub fn is_more_specific_than(&self, other: &KType<'a>) -> bool {
         use KType::*;
         if matches!(other, Any) && !matches!(self, Any) {
             return true;
@@ -49,7 +75,29 @@ impl KType {
                 let ret_eq = ar == br;
                 (args_more && (ret_more || ret_eq)) || (args_eq && ret_more)
             }
-            (SatisfiesSignature { .. }, AnyUserType { kind: UserTypeKind::Module }) => true,
+            // Same shape rules as `KFunction → KFunction`. The `KFunction`/`KFunctor`
+            // cross-arms refuse both directions in `function_compat`; specificity within
+            // the same family stays covariant in arg/ret positions.
+            (
+                KFunctor { params: pa, ret: ra },
+                KFunctor { params: pb, ret: rb },
+            ) if pa.len() == pb.len() => {
+                let params_more =
+                    pa.iter().zip(pb.iter()).any(|(x, y)| x.is_more_specific_than(y));
+                let params_eq = pa == pb;
+                let ret_more = ra.is_more_specific_than(rb);
+                let ret_eq = ra == rb;
+                (params_more && (ret_more || ret_eq)) || (params_eq && ret_more)
+            }
+            // Module-typed slot specificity after the type-language collapse:
+            // - `SatisfiesSignature { .. }` is strictly more specific than `AnyModule`
+            //   (a signature-pinned module is a refinement of "any module").
+            // - `KType::Module { .. }` is strictly more specific than `AnyModule` (a
+            //   concrete module value is the most-specific module shape).
+            // - `KType::Signature(_)` is strictly more specific than `AnySignature`.
+            (SatisfiesSignature { .. }, AnyModule) => true,
+            (Module { .. }, AnyModule) => true,
+            (Signature(_), AnySignature) => true,
             // Same-sig: strict refinement iff `pa` covers every `(name, kt)` in `pb`
             // with equal `KType` AND carries at least one constraint `pb` lacks.
             // Disjoint or same-key-different-`KType` pin sets are incomparable.
@@ -92,7 +140,7 @@ impl KType {
     /// helper for dispatch admission of *evaluated* containers (see `accepts_part`): a
     /// `List<Number>` value fills a `:(List Any)` slot, but a `List<Any>` value (the join an
     /// empty or heterogeneous literal memoizes) does not fill `:(List Number)`.
-    pub fn satisfied_by(&self, carried: &KType) -> bool {
+    pub fn satisfied_by(&self, carried: &KType<'a>) -> bool {
         *self == *carried || carried.is_more_specific_than(self)
     }
 
@@ -100,7 +148,7 @@ impl KType {
     /// everything; container types recurse into element/key/value positions; function types
     /// require structural signature compatibility (a `KFuture` thunk is accepted because its
     /// result isn't known yet — full check deferred to runtime).
-    pub fn matches_value(&self, obj: &KObject<'_>) -> bool {
+    pub fn matches_value(&self, obj: &KObject<'a>) -> bool {
         match self {
             KType::Any => true,
             KType::List(elem) => match obj {
@@ -116,12 +164,38 @@ impl KType {
                 _ => false,
             },
             KType::KFunction { args, ret } => match obj {
-                KObject::KFunction(f, _) => function_compat(&f.signature, args, ret),
+                KObject::KFunction(f, _) => {
+                    // Stage 4 cross-arm wall: a functor-flagged KFunction cannot fill a
+                    // plain-function slot. `function_compat` enforces the same disjointness
+                    // via its `(slot_is_functor, value_is_functor)` cross-arms; this guard
+                    // sits at the value-side `matches_value` entry where the carrier flag
+                    // is the only signal available.
+                    if f.is_functor {
+                        return false;
+                    }
+                    function_compat(&f.signature, args, ret, false)
+                }
                 KObject::KFuture(_, _) => true,
                 _ => false,
             },
+            // Mirror of `KFunction`: a functor-typed slot admits only a flagged
+            // `KFunction` carrier (a FUNCTOR-bound value) — `function_compat`'s
+            // cross-arms refuse a plain-FN value here.
+            KType::KFunctor { params, ret } => match obj {
+                KObject::KFunction(f, _) => {
+                    if !f.is_functor {
+                        return false;
+                    }
+                    function_compat(&f.signature, params, ret, true)
+                }
+                KObject::KFuture(_, _) => true,
+                _ => false,
+            },
+            // Post-collapse: module values ride `KObject::KTypeValue(KType::Module { .. })`.
+            // The `compatible_sigs` membership + `pinned_slots` check shape is the same as
+            // before; only the carrier-extraction arm changed.
             KType::SatisfiesSignature { sig_id, pinned_slots, .. } => match obj {
-                KObject::KModule(m, _) => {
+                KObject::KTypeValue(KType::Module { module: m, .. }) => {
                     if !m.compatible_sigs.borrow().contains(sig_id) {
                         return false;
                     }
@@ -135,11 +209,14 @@ impl KType {
                 }
                 _ => false,
             },
+            // `:Module` admits any first-class module value carrier.
+            KType::AnyModule => matches!(obj, KObject::KTypeValue(KType::Module { .. })),
+            // `:Signature` admits any first-class signature value carrier.
+            KType::AnySignature => matches!(obj, KObject::KTypeValue(KType::Signature(_))),
             KType::AnyUserType { kind } => matches!(
                 (kind, obj),
                 (UserTypeKind::Struct, KObject::Struct { .. })
                     | (UserTypeKind::Tagged, KObject::Tagged { .. })
-                    | (UserTypeKind::Module, KObject::KModule(_, _))
                     | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
             ),
             // One-unfold. No runtime value carries a `RecursiveRef`, so this can't
@@ -197,7 +274,7 @@ impl KType {
     /// falls through the scope walk rather than committing to a bind-time mismatch. Function
     /// slots with a structural `KFunction { args, ret }` shape validate the bound function's
     /// signature here, since `KObject::KFunction` carries the full signature.
-    pub fn accepts_part(&self, part: &ExpressionPart<'_>) -> bool {
+    pub fn accepts_part(&self, part: &ExpressionPart<'a>) -> bool {
         match self {
             KType::Any => true,
             KType::Number => matches!(
@@ -233,22 +310,56 @@ impl KType {
             },
             KType::KFunction { args, ret } => match part {
                 ExpressionPart::Future(KObject::KFunction(f, _)) => {
-                    function_compat(&f.signature, args, ret)
+                    // Stage 4 cross-arm wall — see `matches_value`'s `KFunction` arm.
+                    if f.is_functor {
+                        return false;
+                    }
+                    function_compat(&f.signature, args, ret, false)
+                }
+                ExpressionPart::Future(KObject::KFuture(_, _)) => true,
+                _ => false,
+            },
+            KType::KFunctor { params, ret } => match part {
+                ExpressionPart::Future(KObject::KFunction(f, _)) => {
+                    if !f.is_functor {
+                        return false;
+                    }
+                    function_compat(&f.signature, params, ret, true)
                 }
                 ExpressionPart::Future(KObject::KFuture(_, _)) => true,
                 _ => false,
             },
             KType::Identifier => matches!(part, ExpressionPart::Identifier(_)),
             KType::KExpression => matches!(part, ExpressionPart::Expression(_)),
-            KType::TypeExprRef => matches!(
-                part,
-                ExpressionPart::Type(_) | ExpressionPart::Future(KObject::KTypeValue(_))
-            ),
-            KType::Type => matches!(
-                part,
+            // Post-collapse: a `KTypeValue` carrier of a first-class module or signature
+            // is NOT a `TypeExprRef` admission — those carriers route through the
+            // dedicated `AnyModule` / `AnySignature` / `Module` / `Signature` slot
+            // shapes. Otherwise an `[ATTR <m> <field>]` chained-attr call would tie
+            // between the `body_module` and `body_type_lhs` overloads (both slots
+            // would admit the lhs).
+            KType::TypeExprRef => match part {
+                ExpressionPart::Type(_) => true,
+                ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
+                | ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_))) => false,
+                ExpressionPart::Future(KObject::KTypeValue(_)) => true,
+                _ => false,
+            },
+            // Same shape as `TypeExprRef` above, including the wall on
+            // `KTypeValue(KType::Module { .. })` / `KTypeValue(KType::Signature(_))` —
+            // those carriers route through `AnyModule` / `AnySignature` /
+            // `SatisfiesSignature` slots. Admitting any other `KTypeValue` lets bare
+            // builtin type tokens (`Number`, `Str`, `Bool`, `Null`) and other
+            // type-denoting carriers fill a `:Type` slot without forcing a
+            // signature-typed-wrapper-module workaround at the call site.
+            KType::Type => match part {
+                ExpressionPart::Type(_) => true,
+                ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
+                | ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_))) => false,
+                ExpressionPart::Future(KObject::KTypeValue(_)) => true,
                 ExpressionPart::Future(KObject::TaggedUnionType { .. })
-                    | ExpressionPart::Future(KObject::StructType { .. })
-            ),
+                | ExpressionPart::Future(KObject::StructType { .. }) => true,
+                _ => false,
+            },
             // Strict equality is the abstraction-barrier check for opaquely-ascribed
             // module abstract types (`Foo.Type`).
             KType::UserType { .. } => {
@@ -259,16 +370,42 @@ impl KType {
                     (kind, obj),
                     (UserTypeKind::Struct, KObject::Struct { .. })
                         | (UserTypeKind::Tagged, KObject::Tagged { .. })
-                        | (UserTypeKind::Module, KObject::KModule(_, _))
                         | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
                 ),
                 _ => false,
             },
-            // A `Future(KModule)` fills a sig-typed slot iff its ascription-populated
-            // `compatible_sigs` set carries `sig_id`. Unascribed source modules never
-            // match (their compat set is empty) — pass them through `:|` / `:!` first.
+            // `:Module` slot wildcard admits any first-class module value carrier.
+            KType::AnyModule => matches!(
+                part,
+                ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
+            ),
+            // `:Signature` slot wildcard admits any first-class signature value carrier.
+            KType::AnySignature => matches!(
+                part,
+                ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_)))
+            ),
+            // First-class module / signature carrier admissibility: strict identity equality
+            // against the slot's pinned `KType::Module { .. }` / `KType::Signature(_)`.
+            KType::Module { .. } => matches!(
+                part,
+                ExpressionPart::Future(obj) if obj.ktype() == *self
+            ),
+            KType::Signature(_) => matches!(
+                part,
+                ExpressionPart::Future(obj) if obj.ktype() == *self
+            ),
+            // Abstract-type members from opaque ascription — identity equality against the
+            // value's reported ktype, same shape as `UserType { .. }`.
+            KType::AbstractType { .. } => matches!(
+                part,
+                ExpressionPart::Future(obj) if obj.ktype() == *self
+            ),
+            // A `Future(KTypeValue(Module { .. }))` fills a sig-typed slot iff its
+            // ascription-populated `compatible_sigs` set carries `sig_id`. Unascribed
+            // source modules never match (their compat set is empty) — pass them through
+            // `:|` / `:!` first.
             KType::SatisfiesSignature { sig_id, pinned_slots, .. } => match part {
-                ExpressionPart::Future(KObject::KModule(m, _)) => {
+                ExpressionPart::Future(KObject::KTypeValue(KType::Module { module: m, .. })) => {
                     if !m.compatible_sigs.borrow().contains(sig_id) {
                         return false;
                     }
@@ -282,7 +419,6 @@ impl KType {
                 }
                 _ => false,
             },
-            KType::MetaSignature => matches!(part, ExpressionPart::Future(KObject::KSignature(_))),
             KType::Mu { body, .. } => body.accepts_part(part),
             KType::RecursiveRef(_) => true,
             // Meta-type path: no runtime carrier synthesizes a `ConstructorApply`
@@ -319,16 +455,30 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
 /// Strict equality, not subtyping — a function declared `(x: Number) -> Str` only fills
 /// a slot typed `Function<(Number) -> Str>`, not `Function<(Any) -> Str>`.
 ///
+/// `slot_is_functor` is the slot-side flag carried in by the caller (`true` when the
+/// slot is `KType::KFunctor`, `false` for `KType::KFunction`). The caller pairs this
+/// with the value-side `KFunction::is_functor` carrier flag at the `matches_value` /
+/// `accepts_part` entry; this function trusts that pairing and only checks structural
+/// arg/ret equality.
+///
+/// Stage 4 cross-arm wall: `(slot_is_functor=true, KFunction)` and
+/// `(slot_is_functor=false, KFunctor)` carriers are refused at the call site before
+/// `function_compat` runs (see the `is_functor` guard in `matches_value` /
+/// `accepts_part`). The wall is silent — both directions return `false` rather than
+/// surfacing a dedicated message; the rendered names already distinguish
+/// `Function(...)` from `Functor(...)` in the generic `TypeMismatch` diagnostic.
+///
 /// A `Deferred(_)` return collapses to `KType::Any` for this check (the structural
 /// comparison can't see the per-call resolution). See
 /// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
-pub(super) fn function_compat(
-    sig: &ExpressionSignature<'_>,
-    args: &[KType],
-    ret: &KType,
+pub(super) fn function_compat<'a>(
+    sig: &ExpressionSignature<'a>,
+    args: &[KType<'a>],
+    ret: &KType<'a>,
+    _slot_is_functor: bool,
 ) -> bool {
     use crate::machine::model::types::ReturnType;
-    let sig_ret_kt: &KType = match &sig.return_type {
+    let sig_ret_kt: &KType<'a> = match &sig.return_type {
         ReturnType::Resolved(kt) => kt,
         ReturnType::Deferred(_) => {
             debug_assert!(

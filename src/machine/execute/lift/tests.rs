@@ -45,7 +45,7 @@ pub(super) fn defeat_fast_path(dying: &Rc<CallArena>) {
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__SLOW__".into())],
         },
-        Body::Builtin(|s, _, _| BodyResult::Value(s.arena.alloc_object(KObject::Null))),
+        Body::Builtin(|s, _, _| BodyResult::Value(s.arena.alloc(KObject::Null))),
         dying.scope(),
     );
     let _ = dying.arena().alloc_function(kf);
@@ -61,7 +61,7 @@ pub(super) fn alloc_local_kf<'a>(dying: &'a Rc<CallArena>) -> &'a crate::machine
             return_type: ReturnType::Resolved(KType::Null),
             elements: vec![SignatureElement::Keyword("__INNER__".into())],
         },
-        Body::Builtin(|s, _, _| BodyResult::Value(s.arena.alloc_object(KObject::Null))),
+        Body::Builtin(|s, _, _| BodyResult::Value(s.arena.alloc(KObject::Null))),
         dying.scope(),
     );
     dying.arena().alloc_function(kf)

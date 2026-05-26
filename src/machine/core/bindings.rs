@@ -23,10 +23,21 @@ use super::kerror::{KError, KErrorKind};
 mod pending;
 pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
 
-/// Façade owning the four co-mutating `RefCell` maps that back every lexical binding:
+/// Façade owning the co-mutating `RefCell` maps that back every lexical binding:
 /// `types` (name → `&KType`), `data` (name → value), `functions`
-/// (untyped-signature bucket → overloads), and `placeholders` (name → producer
-/// NodeId for dispatch-time forward references).
+/// (untyped-signature bucket → overloads), `placeholders` (name → producer
+/// NodeId for forward-reference *name* resolution), and `pending_overloads`
+/// (UntypedKey → producer NodeId for forward-reference *dispatch* parking on
+/// not-yet-finalized FN / FUNCTOR overloads).
+///
+/// The two placeholder maps are intentionally separate: `placeholders` is
+/// consulted by name (`Scope::resolve` → `Resolution::Placeholder`) and serves
+/// type / value forward references; `pending_overloads` is consulted by
+/// dispatch bucket key and serves a bare-arg call form like
+/// `(MAKESET IntOrd)` whose FN/FUNCTOR overload is still finalizing. Keying
+/// dispatch parks by full bucket key (rather than just the lead keyword) keeps
+/// `(MAKESET _)` and `(MAKESET _ USING _)` from colliding when one ships before
+/// the other.
 ///
 /// [`Bindings::try_apply`] enforces the dual-map invariant — every `data[name]`
 /// entry wrapping a `KFunction` lives in `functions[signature.untyped_key()]` — and
@@ -40,10 +51,17 @@ pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
 ///
 /// Lifetime `'a` matches the arena lifetime of the stored references.
 pub struct Bindings<'a> {
-    types: RefCell<HashMap<String, &'a KType>>,
+    types: RefCell<HashMap<String, &'a KType<'a>>>,
     data: RefCell<HashMap<String, &'a KObject<'a>>>,
     functions: RefCell<HashMap<UntypedKey, Vec<&'a KFunction<'a>>>>,
     placeholders: RefCell<HashMap<String, NodeId>>,
+    /// Bucket-key → producer NodeId for FN / FUNCTOR overloads whose binder has
+    /// dispatched but not finalized. Consulted by `resolve_dispatch`'s
+    /// no-bucket / no-eager-parts fallback so a bare-arg call to an inflight
+    /// overload parks on the producer instead of surfacing `DispatchFailed`.
+    /// Cleared in [`Bindings::try_apply`] at the same site where the overload
+    /// lands in `functions`, so the wake-and-retry sees the bucket populated.
+    pending_overloads: RefCell<HashMap<UntypedKey, NodeId>>,
     /// In-flight named-type binders (STRUCT / named-UNION). Populated by
     /// struct_def / union before elaboration; consulted by the elaborator's
     /// `Resolution::Placeholder` arm to record dependency edges and run DFS
@@ -53,7 +71,7 @@ pub struct Bindings<'a> {
     /// are written only when the elaborated `KType` and every user-type it
     /// references are fully finalized; the finalize gate prevents caching
     /// mid-SCC pre-close identities. `Scope::resolve_type_expr` owns the writer.
-    type_expr_memo: RefCell<HashMap<TypeExpr, &'a KType>>,
+    type_expr_memo: RefCell<HashMap<TypeExpr, &'a KType<'a>>>,
 }
 
 impl<'a> Bindings<'a> {
@@ -63,12 +81,13 @@ impl<'a> Bindings<'a> {
             data: RefCell::new(HashMap::new()),
             functions: RefCell::new(HashMap::new()),
             placeholders: RefCell::new(HashMap::new()),
+            pending_overloads: RefCell::new(HashMap::new()),
             pending: PendingTypes::new(),
             type_expr_memo: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn type_expr_memo_get(&self, te: &TypeExpr) -> Option<&'a KType> {
+    pub fn type_expr_memo_get(&self, te: &TypeExpr) -> Option<&'a KType<'a>> {
         self.type_expr_memo.borrow().get(te).copied()
     }
 
@@ -77,7 +96,7 @@ impl<'a> Bindings<'a> {
     /// Monotonic: overwrites would indicate a violation of the immutable-binding
     /// invariant; we silently keep the existing entry rather than panic since
     /// the value would be equal by definition.
-    pub fn type_expr_memo_insert(&self, te: TypeExpr, kt: &'a KType) {
+    pub fn type_expr_memo_insert(&self, te: TypeExpr, kt: &'a KType<'a>) {
         let mut memo = self.type_expr_memo.borrow_mut();
         memo.entry(te).or_insert(kt);
     }
@@ -94,7 +113,13 @@ impl<'a> Bindings<'a> {
         self.placeholders.borrow()
     }
 
-    pub fn types(&self) -> Ref<'_, HashMap<String, &'a KType>> {
+    /// Read-only view of the bucket-key → producer map. See
+    /// [`Bindings::try_install_pending_overload`] for the writer.
+    pub fn pending_overloads(&self) -> Ref<'_, HashMap<UntypedKey, NodeId>> {
+        self.pending_overloads.borrow()
+    }
+
+    pub fn types(&self) -> Ref<'_, HashMap<String, &'a KType<'a>>> {
         self.types.borrow()
     }
 
@@ -108,7 +133,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn expect_type(&self, name: &str) -> &'a KType {
+    pub fn expect_type(&self, name: &str) -> &'a KType<'a> {
         self.types
             .borrow()
             .get(name)
@@ -180,7 +205,7 @@ impl<'a> Bindings<'a> {
     pub fn try_register_type(
         &self,
         name: &str,
-        kt: &'a KType,
+        kt: &'a KType<'a>,
     ) -> Result<ApplyOutcome, KError> {
         self.try_apply_type(name, kt)
     }
@@ -207,7 +232,7 @@ impl<'a> Bindings<'a> {
     pub fn try_register_nominal(
         &self,
         name: &str,
-        kt: &'a KType,
+        kt: &'a KType<'a>,
         obj: &'a KObject<'a>,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
@@ -275,6 +300,41 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
+    /// Install a dispatch-time pending-overload entry: `bucket → producer`. The
+    /// bucket key MUST equal what `KExpression::untyped_key` would compute for
+    /// a *call* to the eventual overload (not the binder call itself), so the
+    /// no-bucket fallback in `resolve_dispatch` finds the producer by the same
+    /// key. Multiple in-flight FN/FUNCTOR binders sharing a lead keyword but
+    /// differing in later keywords get separate entries — keying by the full
+    /// `UntypedKey` (rather than just the lead keyword) is the whole point.
+    ///
+    /// Idempotent if re-entered with the same `(bucket, idx)`; rejects `Rebind`
+    /// on a different `idx`. If the bucket is already populated in `functions`
+    /// (the overload finalized concurrently), silently no-ops — the next
+    /// dispatch will hit the live bucket directly.
+    ///
+    /// Panics on borrow conflict, mirroring [`Bindings::try_install_placeholder`].
+    pub fn try_install_pending_overload(
+        &self,
+        bucket: UntypedKey,
+        idx: NodeId,
+    ) -> Result<(), KError> {
+        if self.functions.borrow().contains_key(&bucket) {
+            return Ok(());
+        }
+        let mut pending = self.pending_overloads.borrow_mut();
+        if let Some(existing) = pending.get(&bucket).copied() {
+            if existing == idx {
+                return Ok(());
+            }
+            return Err(KError::new(KErrorKind::Rebind {
+                name: format!("pending-overload bucket {bucket:?}"),
+            }));
+        }
+        pending.insert(bucket, idx);
+        Ok(())
+    }
+
     /// Replay another `Bindings`'s `data` through `try_apply` on self. Snapshots the
     /// source `data` into a `Vec` and releases `src`'s `Ref` before the replay so
     /// re-entrant ascription cannot deadlock. Routing through `try_apply` re-mirrors
@@ -314,7 +374,7 @@ impl<'a> Bindings<'a> {
     fn try_apply_type(
         &self,
         name: &str,
-        kt: &'a KType,
+        kt: &'a KType<'a>,
     ) -> Result<ApplyOutcome, KError> {
         let mut types = match self.types.try_borrow_mut() {
             Ok(t) => t,
@@ -387,9 +447,10 @@ impl<'a> Bindings<'a> {
                 }
             }
         }
+        let mut cleared_overload_bucket: Option<UntypedKey> = None;
         if let (Some(f_ref), Some(functions)) = (fn_part, functions_handle.as_mut()) {
             let key = f_ref.signature.untyped_key();
-            let bucket = functions.entry(key).or_default();
+            let bucket = functions.entry(key.clone()).or_default();
             let mut already_present = false;
             for existing in bucket.iter() {
                 if std::ptr::eq(*existing, f_ref) {
@@ -406,6 +467,7 @@ impl<'a> Bindings<'a> {
             if !already_present {
                 bucket.push(f_ref);
             }
+            cleared_overload_bucket = Some(key);
         }
         if let Some(data) = data.as_mut() {
             data.insert(name.to_string(), obj);
@@ -413,6 +475,9 @@ impl<'a> Bindings<'a> {
         drop(data);
         drop(functions_handle);
         self.clear_placeholder_best_effort(name);
+        if let Some(bucket) = cleared_overload_bucket {
+            self.clear_pending_overload_best_effort(&bucket);
+        }
         Ok(ApplyOutcome::Applied)
     }
 
@@ -423,6 +488,16 @@ impl<'a> Bindings<'a> {
     fn clear_placeholder_best_effort(&self, name: &str) {
         if let Ok(mut ph) = self.placeholders.try_borrow_mut() {
             ph.remove(name);
+        }
+    }
+
+    /// Companion to [`Bindings::clear_placeholder_best_effort`] for the bucket-keyed
+    /// pending-overload table. Same tolerant pattern — a caller mid-read up the stack
+    /// is fine; the entry is purely a wakeable forward reference, and the bucket is
+    /// already populated by the time this runs.
+    fn clear_pending_overload_best_effort(&self, bucket: &UntypedKey) {
+        if let Ok(mut p) = self.pending_overloads.try_borrow_mut() {
+            p.remove(bucket);
         }
     }
 }

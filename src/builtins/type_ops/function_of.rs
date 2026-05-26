@@ -44,7 +44,7 @@ pub fn body<'a>(
         }
     }
     BodyResult::Value(
-        scope.arena.alloc_object(KObject::KTypeValue(KType::KFunction {
+        scope.arena.alloc(KObject::KTypeValue(KType::KFunction {
             args,
             ret: Box::new(ret),
         })),

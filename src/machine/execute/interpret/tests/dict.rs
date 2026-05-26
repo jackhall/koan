@@ -12,26 +12,26 @@ use crate::machine::KErrorKind;
 use super::run;
 
 fn lookup_string_key<'a, 'b>(
-    d: &'b std::collections::HashMap<Box<dyn Serializable + 'a>, KObject<'a>>,
+    d: &'b std::collections::HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>,
     key: &str,
 ) -> Option<&'b KObject<'a>> {
-    let probe: Box<dyn Serializable> = Box::new(KKey::String(key.to_string()));
+    let probe: Box<dyn Serializable<'_>> = Box::new(KKey::String(key.to_string()));
     d.get(&probe)
 }
 
 fn lookup_number_key<'a, 'b>(
-    d: &'b std::collections::HashMap<Box<dyn Serializable + 'a>, KObject<'a>>,
+    d: &'b std::collections::HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>,
     key: f64,
 ) -> Option<&'b KObject<'a>> {
-    let probe: Box<dyn Serializable> = Box::new(KKey::Number(key));
+    let probe: Box<dyn Serializable<'_>> = Box::new(KKey::Number(key));
     d.get(&probe)
 }
 
 fn lookup_bool_key<'a, 'b>(
-    d: &'b std::collections::HashMap<Box<dyn Serializable + 'a>, KObject<'a>>,
+    d: &'b std::collections::HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>,
     key: bool,
 ) -> Option<&'b KObject<'a>> {
-    let probe: Box<dyn Serializable> = Box::new(KKey::Bool(key));
+    let probe: Box<dyn Serializable<'_>> = Box::new(KKey::Bool(key));
     d.get(&probe)
 }
 

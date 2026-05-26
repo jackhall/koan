@@ -26,14 +26,38 @@ pub fn body<'a>(
     // `type_for_types_map` is `Some(kt)` iff this call should route storage through
     // `register_type` (a Type-class LHS with an actual `KTypeValue(kt)` RHS).
     // `nominal_identity` is `Some(kt)` iff the RHS is a type-language carrier with a
-    // recoverable nominal identity (`KModule` / `KSignature` / `StructType` /
+    // recoverable nominal identity (`KTypeValue(Module/Signature)` / `StructType` /
     // `TaggedUnionType`); those route through `register_nominal` so the alias name
     // resolves both type-side (via `resolve_type`) and value-side (via `lookup`).
     // Only one of the two is `Some` at any time — they're mutually exclusive RHS shapes.
-    let mut type_for_types_map: Option<KType> = None;
-    let mut nominal_identity: Option<KType> = None;
+    let mut type_for_types_map: Option<KType<'a>> = None;
+    let mut nominal_identity: Option<KType<'a>> = None;
     let name = match bundle.get("name") {
-        Some(KObject::KString(s)) => s.clone(),
+        Some(KObject::KString(s)) => {
+            // Partition guard: a value-classified binder name (lowercase-leading)
+            // must not carry a module or signature value. Module/Signature carriers
+            // belong on a Type-classified identifier (uppercase-leading + ≥1 lowercase
+            // letter, per design/typing/tokens.md) so the type-side binding map is the
+            // single home for module values — closes the asymmetry that lets a
+            // value-side binding hide a category-mismatched module behind a lowercase
+            // alias. See design/typing/elaboration.md § Binding home and the dual-map.
+            let kind = match value {
+                KObject::KTypeValue(KType::Module { .. }) => Some("module"),
+                KObject::KTypeValue(KType::Signature(_)) => Some("signature"),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                return err(KError::new(KErrorKind::ShapeError(format!(
+                    "LET binder `{name}` is value-classified but the bound value is a \
+                     {kind} (a type-language carrier); rebind under a Type-classified \
+                     identifier instead (uppercase-leading plus at least one lowercase \
+                     letter, e.g. `{suggestion}`)",
+                    name = s,
+                    suggestion = capitalize_identifier(s),
+                ))));
+            }
+            s.clone()
+        }
         // Stage-2 carrier: a Type-classed binder name not in `KType::from_name`'s
         // builtin table lands as a `TypeNameRef`. Parameterized shapes (`List<X>`,
         // function arrow forms) are rejected — the binder name must be a bare leaf.
@@ -48,20 +72,35 @@ pub fn body<'a>(
             }
             crate::machine::model::ast::TypeParams::None => {
                 let resolved_name = t.name.clone();
-                if matches!(
-                    value.ktype(),
-                    KType::Number | KType::Str | KType::Bool | KType::Null
-                        | KType::List(_) | KType::Dict(_, _)
-                ) {
+                // Type-class LET allowlist: a Type-class LET RHS must be a
+                // type-language carrier (`KTypeValue`), a nominal-identity
+                // carrier recoverable via `derive_nominal_identity` (Struct /
+                // Tagged / Module / Signature alias), or an `is_functor`-flagged
+                // KFunction (the FUNCTOR binder's output). Plain functions,
+                // primitives, and containers all reject here rather than
+                // silently landing under `bindings.data`. See
+                // `is_admissible_type_class_rhs` below for the predicate.
+                if !is_admissible_type_class_rhs(value) {
                     return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
-                        got: value.ktype(),
+                        got: value.ktype().name(),
                     }));
                 }
-                if let KObject::KTypeValue(kt) = value {
-                    type_for_types_map = Some(kt.clone());
-                } else {
-                    nominal_identity = derive_nominal_identity(value);
+                // Storage routing (unchanged): module / signature carriers dual-
+                // write through `nominal_identity`; pure-type `KTypeValue(kt)`
+                // carriers (Number, etc.) take the `register_type` path;
+                // `is_functor` KFunctions and other nominal-identity carriers
+                // (Struct / Tagged) fall through to the value-side binding.
+                match value {
+                    KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
+                    KObject::KTypeValue(kt) => {
+                        type_for_types_map = Some(kt.clone());
+                    }
+                    _ => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
                 }
                 resolved_name
             }
@@ -73,6 +112,7 @@ pub fn body<'a>(
             KType::List(_)
             | KType::Dict(_, _)
             | KType::KFunction { .. }
+            | KType::KFunctor { .. }
             | KType::Mu { .. }
             | KType::RecursiveRef(_) => {
                 return err(KError::new(KErrorKind::ShapeError(format!(
@@ -81,32 +121,36 @@ pub fn body<'a>(
                 ))));
             }
             _ => {
-                // Bind-time rejection for `LET <Type-class> = <non-type>`. Blocklist —
-                // not `value.ktype() != KType::TypeExprRef` — because the type-language
-                // carriers `KModule` / `KSignature` / `StructType` / `TaggedUnionType`
-                // report `Module` / `Signature` / `Type`, not `TypeExprRef`, and shipped
-                // `LET IntOrdAbstract = (IntOrd :| OrderedSig)` patterns in `ascribe.rs`
-                // depend on those being accepted. The non-`KTypeValue` carriers continue
-                // to write `data` via `bind_value` until their own storage migration.
+                // Same allowlist as the `TypeNameRef` arm above: type-language
+                // carrier, nominal-identity carrier, or `is_functor`-flagged
+                // KFunction. Plain `KFunction` (e.g. `LET Plain = (FN ...)`)
+                // rejects rather than silently landing under `bindings.data`.
                 let resolved_name = t.name();
-                if matches!(
-                    value.ktype(),
-                    KType::Number | KType::Str | KType::Bool | KType::Null
-                        | KType::List(_) | KType::Dict(_, _)
-                ) {
+                if !is_admissible_type_class_rhs(value) {
                     return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                         name: resolved_name,
-                        got: value.ktype(),
+                        got: value.ktype().name(),
                     }));
                 }
-                // Stage-1.7 storage flip: Type-class LHS + `KTypeValue(kt)` RHS routes
-                // through `register_type` so the bound name lives in `bindings.types`
-                // alongside builtin type names. The dispatch carrier returned below
-                // stays a `KObject::KTypeValue(kt)` — only the storage location moves.
-                if let KObject::KTypeValue(kt) = value {
-                    type_for_types_map = Some(kt.clone());
-                } else {
-                    nominal_identity = derive_nominal_identity(value);
+                // Type-class LHS + value-routing. Module / signature carriers
+                // (`KTypeValue(KType::Module/Signature)`) take the `nominal_identity`
+                // path via `derive_nominal_identity` so they dual-write both
+                // `bindings.types` (for type-position lookups) AND `bindings.data`
+                // (for value-position lookups like `IntOrdView.compare`). Pure-type
+                // `KTypeValue(kt)` carriers (Number, List<Any>, etc.) take the
+                // `register_type` path — there's no useful value-side binding to
+                // alias against. `is_functor` KFunctions and Struct / Tagged
+                // carriers fall through to `bind_value`.
+                match value {
+                    KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
+                    KObject::KTypeValue(kt) => {
+                        type_for_types_map = Some(kt.clone());
+                    }
+                    _ => {
+                        nominal_identity = derive_nominal_identity(value);
+                    }
                 }
                 resolved_name
             }
@@ -133,7 +177,7 @@ pub fn body<'a>(
     }
     let cloned = value.deep_clone();
     let arena = scope.arena;
-    let allocated: &'a KObject<'a> = arena.alloc_object(cloned);
+    let allocated: &'a KObject<'a> = arena.alloc(cloned);
     if let Some(kt) = type_for_types_map {
         // Infallible `register_type` matches the prior `bind_value` shape for shipped
         // call sites (placeholder-resolution catches name conflicts upstream before
@@ -172,26 +216,29 @@ pub fn body<'a>(
     BodyResult::Value(allocated)
 }
 
-/// Recover the nominal identity (a `KType::UserType` or `KType::SatisfiesSignature`) carried
-/// by a type-language value `obj`. Returns `Some(identity)` for the four shapes that came
-/// from a STRUCT / UNION / MODULE / SIG declaration (or an alias of one); `None` for
-/// every other carrier shape — those keep flowing through `Scope::bind_value` and never
-/// dual-write to `bindings.types`.
+/// Recover the nominal identity carried by a type-language value `obj`. Returns
+/// `Some(identity)` for the four shapes that came from a STRUCT / UNION / MODULE / SIG
+/// declaration (or an alias of one); `None` for every other carrier shape — those keep
+/// flowing through `Scope::bind_value` and never dual-write to `bindings.types`.
 ///
-/// The identity preserves the ORIGINAL declaration's `name` / `scope_id` rather than the
-/// alias's binder name, so `LET P2 = Point` makes `P2` resolve to the same `UserType`
-/// that `Point` carries.
-fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
+/// Post-collapse: MODULE/SIG carriers ride `KTypeValue(KType::Module/Signature)`; their
+/// identity IS the carried KType, so the alias preserves the original `&Module` /
+/// `&Signature` reference (which preserves `scope_id` / `sig_id` for downstream lookups,
+/// the property `LET P2 = Point` already had for `Point`).
+fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
     match obj {
-        KObject::KModule(m, _) => Some(KType::UserType {
-            kind: UserTypeKind::Module,
-            scope_id: m.scope_id(),
-            name: m.path.clone(),
-        }),
-        KObject::KSignature(s) => Some(KType::SatisfiesSignature {
+        // Module carrier: the slot-annotation form IS the carrier itself
+        // (`KType::Module { module, frame }`). `(PICK m: AliasName)` should dispatch
+        // identically to `(PICK m: OriginalName)`.
+        KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
+        // Signature carrier: slot-annotation form is the CONSTRAINT shape
+        // `SatisfiesSignature { sig_id: s.sig_id(), .. }`. `(PICK m: S2)` and
+        // `(PICK m: OrderedSig)` dispatch identically — both lower to the same
+        // sig_id constraint. The value-side data binding still wraps the carrier
+        // `KTypeValue(Signature(s))` so value-position uses see the signature value.
+        KObject::KTypeValue(KType::Signature(s)) => Some(KType::SatisfiesSignature {
             sig_id: s.sig_id(),
             sig_path: s.path.clone(),
-            // A bare SIG alias (`LET S2 = OrderedSig`) carries no sharing constraints.
             pinned_slots: Vec::new(),
         }),
         KObject::StructType { name, scope_id, .. } => Some(KType::UserType {
@@ -205,6 +252,56 @@ fn derive_nominal_identity(obj: &KObject<'_>) -> Option<KType> {
             name: name.clone(),
         }),
         _ => None,
+    }
+}
+
+/// Type-class LET allowlist. A Type-class binder name (`LET MyName = <value>`
+/// where `MyName` classifies as a Type token) admits a value only if it
+/// carries a type-language identity in one of three shapes:
+///
+/// 1. `KObject::KTypeValue(_)` — pure-type carriers (`Number`, `:(List Str)`),
+///    module / signature carriers (`KType::Module`, `KType::Signature`), and
+///    abstract-type carriers all land here.
+/// 2. A value whose `derive_nominal_identity` returns `Some(_)` —
+///    `StructType` / `TaggedUnionType` carriers (and, redundantly with arm 1,
+///    Module / Signature `KTypeValue`s).
+/// 3. `KObject::KFunction(f, _)` where `f.is_functor` — the output of the
+///    `FUNCTOR` binder. Plain `KFunction` (the FN output) rejects, so
+///    `LET Plain = (FN …)` cannot silently bind a plain function under a
+///    Type-class name.
+///
+/// Anything else surfaces `TypeClassBindingExpectsType`. See
+/// [design/typing/elaboration.md](../../design/typing/elaboration.md)
+/// (binding home and the dual-map) for the design rationale.
+fn is_admissible_type_class_rhs<'a>(value: &KObject<'a>) -> bool {
+    if matches!(value, KObject::KTypeValue(_)) {
+        return true;
+    }
+    if derive_nominal_identity(value).is_some() {
+        return true;
+    }
+    if let KObject::KFunction(f, _) = value {
+        return f.is_functor;
+    }
+    false
+}
+
+/// Suggest a Type-classified rewrite of a value-classified binder name for the
+/// Phase 1 partition-guard diagnostic. Capitalizes the first ASCII alphabetic
+/// character so the result reads as a Type token (uppercase-leading plus at
+/// least one lowercase, per design/typing/tokens.md). Falls back to a synthetic
+/// `M` prefix if the name starts with a non-alphabetic character (digit / `_`)
+/// where simple capitalization would not yield a Type-shape token.
+fn capitalize_identifier(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() => {
+            let mut out = String::with_capacity(name.len());
+            out.push(first.to_ascii_uppercase());
+            out.extend(chars);
+            out
+        }
+        _ => format!("M{name}"),
     }
 }
 

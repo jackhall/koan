@@ -59,7 +59,7 @@ pub fn body<'a>(
             // caught `error(KError)` without a stamped carrier here.
             type_args: Rc::new(vec![]),
         };
-        BodyResult::Value(scope.arena.alloc_object(tagged))
+        BodyResult::Value(scope.arena.alloc(tagged))
     });
     let catch_id = sched.add_catch(sub_id, scope, finish);
     BodyResult::DeferTo(catch_id)

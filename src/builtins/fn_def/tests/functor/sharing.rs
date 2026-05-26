@@ -24,7 +24,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_num: &Module<'_> = arena.alloc_module(Module::new("NumPinned".into(), child_a));
     m_num.type_members.borrow_mut().insert("Type".into(), KType::Number);
     m_num.mark_satisfies(ScopeId::from_raw(0, 42)); // arbitrary sig_id matching the slot below
-    let m_num_obj = arena.alloc_object(KObject::KModule(m_num, None));
+    let m_num_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_num, frame: None }));
 
     let child_b = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -33,7 +33,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_str: &Module<'_> = arena.alloc_module(Module::new("StrPinned".into(), child_b));
     m_str.type_members.borrow_mut().insert("Type".into(), KType::Str);
     m_str.mark_satisfies(ScopeId::from_raw(0, 42));
-    let m_str_obj = arena.alloc_object(KObject::KModule(m_str, None));
+    let m_str_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_str, frame: None }));
 
     // A module that satisfies the sig but doesn't even have a `Type` pin — also rejected.
     let child_c = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -42,7 +42,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(ScopeId::from_raw(0, 42));
-    let m_none_obj = arena.alloc_object(KObject::KModule(m_none, None));
+    let m_none_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_none, frame: None }));
 
     let slot = KType::SatisfiesSignature {
         sig_id: ScopeId::from_raw(0, 42),
@@ -68,7 +68,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     let m_unascribed: &Module<'_> = arena.alloc_module(Module::new("Unascribed".into(), child_d));
     m_unascribed.type_members.borrow_mut().insert("Type".into(), KType::Number);
     // Note: NO mark_satisfies — compatible_sigs is empty.
-    let m_unascribed_obj = arena.alloc_object(KObject::KModule(m_unascribed, None));
+    let m_unascribed_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_unascribed, frame: None }));
     assert!(!slot.matches_value(m_unascribed_obj));
     assert!(!slot.accepts_part(&ExpressionPart::Future(m_unascribed_obj)));
 }
@@ -90,7 +90,7 @@ fn functor_with_two_pinned_slots_round_trips() {
         "SIG Set = ((LET Elt = Number) (LET Ord = Number) (VAL tag :Number))\n\
          SIG OrderedSig = (VAL compare :Number)\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     // Functor returns a SatisfiesSignature with two pins; body produces a module that pins
     // both. Use the same SIG (`Set`) on both sides so the body's MODULE Result can
@@ -145,7 +145,7 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     run(
         scope,
@@ -189,7 +189,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          SIG SetSig = ((LET Elt = Number) (VAL insert :Number))\n\
          MODULE IntOrd = (LET compare = 7)\n\
-         LET int_ord = (IntOrd :! OrderedSig)",
+         LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     // Functor returns SetSig with Elt pinned to Number; body's module pins Elt to Str.
     // The body's module isn't sig-ascribed, so the mismatch surfaces as a return-type
@@ -200,7 +200,7 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
          (MODULE Result = ((LET Elt = Str) (LET insert = 0)))",
     );
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("MAKEBAD int_ord"), scope);
+    let id = sched.add_dispatch(parse_one("MAKEBAD IntOrdView"), scope);
     sched.execute().expect("execute does not surface per-slot errors");
     let res = sched.read_result(id);
     assert!(
