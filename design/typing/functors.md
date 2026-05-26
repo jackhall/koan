@@ -155,6 +155,22 @@ value parameter never enters type identity; const-generic-style
 parameterization, where the value *is* part of the type, is a different
 model koan does not adopt.
 
+The same no-stratum reasoning extends symmetrically to bare type tokens. A
+`:Type`-typed parameter slot admits any `KTypeValue`-carried type — bare
+builtin tokens (`Number`, `Str`, `Bool`, `Null`) and `TaggedUnionType` /
+`StructType` schema carriers — so `(MAKETREE Number)` against
+`FUNCTOR (MAKETREE Elt :Type) -> …` binds `Elt = KType::Number` per call
+with no call-site wrapping. The per-call type-side bind treats the
+builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
+resolves to `KType::Number` through `Scope::resolve_type`, and a deferred
+return like `-> :Elt` re-elaborates through the same Combine-finish slot
+check the nominal-keyed path uses. The wall on `KType::Module { .. }` /
+`KType::Signature(_)` carriers stays in place — those route through
+`AnyModule` / `AnySignature` / `SatisfiesSignature` slots, keeping the
+`:Type` vs `:Module` overload distinction. OCaml structurally cannot match
+this without modular implicits, because its module language is stratified
+above the value language.
+
 ## Deferred return-type elaboration
 
 Return-type expressions that reference a per-call FUNCTOR parameter
@@ -181,8 +197,8 @@ via `SchedulerHandle::with_active_frame`, then joins them in a `Combine`
 whose finish closure runs `per_call_ret.matches_value(body_value)` and
 surfaces mismatches with `(per-call return type)` wording. The
 `TypeExpr` carrier elaborates inline against the per-call scope where the
-dual-write has installed the parameter-name identities; both carriers feed
-the same Combine. The lift-time return-type check in
+per-call type-side bind has installed the parameter-name identities; both
+carriers feed the same Combine. The lift-time return-type check in
 [`scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the Combine
@@ -211,7 +227,7 @@ LET MakeMap = (FUNCTOR (MAKEMAP Er :OrderedSig)
 The outer return type is admitted by the recursive `KFunctor` arm in
 [Definition-time validation](#definition-time-validation); the inner functor
 inherits the outer's per-call scope, so `Er.Type` in its return slot resolves
-through the same dual-write path body-position references use.
+through the same per-call type-side bind path body-position references use.
 
 ## Higher-kinded type slots
 

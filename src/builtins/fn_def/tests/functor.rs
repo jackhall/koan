@@ -10,7 +10,11 @@
 //! - [`deferred_return`] — return-type expressions that reference earlier
 //!   parameters (`MODULE_TYPE_OF p`, bare param name, `SIG_WITH p.T`),
 //!   resolved per-call.
+//! - [`bare_type_token`] — bare builtin type tokens (`Number`, `Str`,
+//!   `Bool`, `Null`) as `:Type`-typed arguments (cut (a) of
+//!   `roadmap/type_language/bare-type-token-functor-arg.md`).
 
+mod bare_type_token;
 mod deferred_return;
 mod dual_write;
 mod elaboration;

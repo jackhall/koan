@@ -344,11 +344,22 @@ impl<'a> KType<'a> {
                 ExpressionPart::Future(KObject::KTypeValue(_)) => true,
                 _ => false,
             },
-            KType::Type => matches!(
-                part,
+            // Same shape as `TypeExprRef` above, including the wall on
+            // `KTypeValue(KType::Module { .. })` / `KTypeValue(KType::Signature(_))` —
+            // those carriers route through `AnyModule` / `AnySignature` /
+            // `SatisfiesSignature` slots. Admitting any other `KTypeValue` lets bare
+            // builtin type tokens (`Number`, `Str`, `Bool`, `Null`) and other
+            // type-denoting carriers fill a `:Type` slot without forcing a
+            // signature-typed-wrapper-module workaround at the call site.
+            KType::Type => match part {
+                ExpressionPart::Type(_) => true,
+                ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
+                | ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_))) => false,
+                ExpressionPart::Future(KObject::KTypeValue(_)) => true,
                 ExpressionPart::Future(KObject::TaggedUnionType { .. })
-                    | ExpressionPart::Future(KObject::StructType { .. })
-            ),
+                | ExpressionPart::Future(KObject::StructType { .. }) => true,
+                _ => false,
+            },
             // Strict equality is the abstraction-barrier check for opaquely-ascribed
             // module abstract types (`Foo.Type`).
             KType::UserType { .. } => {

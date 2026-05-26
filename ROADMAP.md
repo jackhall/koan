@@ -38,7 +38,13 @@ RHSes bound under lowercase names (forcing module/signature carriers onto
 Type-classified identifiers, so the type-side binding map is the single home
 for them), and a bucket-keyed `pending_overloads` dispatch park that lets a
 bare-arg call to a still-finalizing FN / FUNCTOR overload park on the binder
-slot instead of racing FIFO submission order into `DispatchFailed`.
+slot instead of racing FIFO submission order into `DispatchFailed`. The
+`:Type` parameter slot admits any `KTypeValue`-carried type — bare builtin
+tokens (`Number`, `Str`, `Bool`, `Null`) along with `TaggedUnionType` /
+`StructType` schema carriers — so single-type-parameter functor surfaces
+like `(MAKETREE Number)` work directly without a signature-typed wrapper
+module per builtin, while module and signature carriers still route through
+their dedicated slots to preserve the overload wall.
 
 ## Next items
 

@@ -208,7 +208,7 @@ on the carrier:
 
 Consumers that need the scope-resolved identity —
 [`type_identity_for`](../../src/machine/core/kfunction/invoke.rs)
-at the dispatch boundary's per-call parameter dual-write,
+at the dispatch boundary's per-call type-side bind,
 [`val_decl::body`](../../src/builtins/val_decl.rs)'s structural
 carrier path and its post-Combine finish, and
 [`fn_def::body`](../../src/builtins/fn_def.rs)'s return-type
@@ -218,5 +218,5 @@ intentionally non-park-aware: an unresolvable repr is a hard error, not a
 forward reference). The dispatch boundary's `type_identity_for` surfaces a
 `Park` outcome as the structured
 `KError::TypeIdentityPendingAtDispatch { param, surface, pending_on }` rather
-than silently skipping the dual-write, so a workload that triggers it is
+than silently skipping the per-call bind, so a workload that triggers it is
 debuggable from the error alone.

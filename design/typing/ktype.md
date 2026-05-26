@@ -10,7 +10,17 @@
 - Meta-type for type-position slots: `TypeExprRef` — see
   [Type-position slot kinds](#type-position-slot-kinds).
 - First-class type values: `Type` (a tagged-union or struct schema, the meta-type
-  reported by `KObject::StructType` and `KObject::TaggedUnionType`).
+  reported by `KObject::StructType` and `KObject::TaggedUnionType`). As a
+  parameter-slot annotation (`:Type`), it admits any type-denoting carrier:
+  bare builtin type tokens (`Number`, `Str`, `Bool`, `Null`) carried as
+  `KObject::KTypeValue(_)`, tagged-union and struct schema carriers, and any
+  other non-module / non-signature `KTypeValue`. Module and signature
+  carriers route through the dedicated `AnyModule` / `AnySignature` /
+  `SatisfiesSignature` slots so the `:Type` vs `:Module` overload
+  distinction stays intact — see
+  [`KType::Type::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
+  and the pin test
+  [`type_slot_admits_bare_builtin_tokens_and_user_type_carriers`](../../src/machine/model/types/ktype_predicates/tests.rs).
 - User-declared nominal types: `UserType { kind: UserTypeKind, scope_id: usize,
   name: String }` — the per-declaration identity tag synthesized by
   `KObject::ktype()` for `Struct` and `Tagged` carriers. Two distinct STRUCTs
