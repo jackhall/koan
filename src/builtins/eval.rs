@@ -44,7 +44,7 @@ pub fn body<'a>(
     // (MATCH binds `it` for its branch body); the captured body's free names resolve
     // straight through the outer chain.
     let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
-    BodyResult::Tail { expr: inner, frame: Some(frame), function: None }
+    BodyResult::Tail { expr: inner, frame: Some(frame), function: None, block_entry: None }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

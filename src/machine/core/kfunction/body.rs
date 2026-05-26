@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::KExpression;
 
-use crate::machine::core::{CallArena, KError, Scope};
+use crate::machine::core::{CallArena, KError, Scope, ScopeId};
 use crate::machine::model::types::UntypedKey;
 use crate::machine::model::values::KObject;
 
@@ -42,6 +42,15 @@ pub enum BodyResult<'a> {
         /// and on error `function.summarize()` becomes the appended `Frame`'s function
         /// name. `None` for builtin tails that are deferred-eval continuations, not calls.
         function: Option<&'a KFunction<'a>>,
+        /// Lexical-block entry annotation. `None` means the tail continues in the same
+        /// lexical block as its slot's current chain (CONS-tail, builtin tail
+        /// continuations). `Some(scope_id)` means the tail enters a fresh lexical block
+        /// — MATCH / TRY arms, FN body resolved-return. The reinstall site in
+        /// `execute.rs`'s `NodeStep::Replace` arm prepends `(scope_id, 0)` to the
+        /// slot's chain when `function` is `None`; when `function` is `Some(f)` the
+        /// chain is assembled via the FN-body rule (see
+        /// `kfunction/invoke.rs::assemble_body_chain`).
+        block_entry: Option<ScopeId>,
     },
     DeferTo(NodeId),
     Err(KError),
@@ -49,7 +58,7 @@ pub enum BodyResult<'a> {
 
 impl<'a> BodyResult<'a> {
     pub fn tail(expr: KExpression<'a>) -> Self {
-        BodyResult::Tail { expr, frame: None, function: None }
+        BodyResult::Tail { expr, frame: None, function: None, block_entry: None }
     }
 
     pub fn tail_with_frame(
@@ -57,7 +66,34 @@ impl<'a> BodyResult<'a> {
         frame: Rc<CallArena>,
         function: &'a KFunction<'a>,
     ) -> Self {
-        BodyResult::Tail { expr, frame: Some(frame), function: Some(function) }
+        // FN body entry: capture the per-call child scope's id before moving `frame`
+        // into the variant. The reinstall site (`compute_replace_chain` in
+        // `execute.rs`) reads `block_entry` to know this is an FN-body block-entry,
+        // and pulls the same scope id off `frame.scope()` to assemble the chain.
+        let body_scope_id = frame.scope().id;
+        BodyResult::Tail {
+            expr,
+            frame: Some(frame),
+            function: Some(function),
+            block_entry: Some(body_scope_id),
+        }
+    }
+
+    /// Tail-into-a-new-lexical-block constructor for builtins that don't carry a
+    /// `&KFunction`. MATCH and TRY arms use this — they prepend `(scope_id, 0)` to the
+    /// slot's chain at the reinstall site, with `function: None` so the FN-body
+    /// assembly path is skipped.
+    pub fn tail_with_block(
+        expr: KExpression<'a>,
+        frame: Option<Rc<CallArena>>,
+        scope_id: ScopeId,
+    ) -> Self {
+        BodyResult::Tail {
+            expr,
+            frame,
+            function: None,
+            block_entry: Some(scope_id),
+        }
     }
 
     pub fn err(e: KError) -> Self {

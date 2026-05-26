@@ -1,4 +1,7 @@
-use crate::machine::{Frame, KError, KErrorKind, NodeId};
+use std::rc::Rc;
+
+use crate::machine::core::{assemble_body_chain, ScopeId};
+use crate::machine::{Frame, KError, KErrorKind, KFunction, LexicalFrame, NodeId};
 
 use super::super::lift::lift_kobject;
 use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
@@ -18,6 +21,7 @@ impl<'a> Scheduler<'a> {
             let scope = node.scope;
             let work = node.work;
             let prev_function = node.function;
+            let prev_chain_carrier = node.chain;
             // Move the slot's frame into `active_frame` (no clone) so the Rc lives in
             // exactly one place during the step. Builtins read it through
             // `SchedulerHandle::current_frame`; tail-reuse takes it via
@@ -25,6 +29,10 @@ impl<'a> Scheduler<'a> {
             // back out — if the step consumed it for reuse, the slot's frame is now
             // `None` and the new frame arrives via `NodeStep::Replace`.
             let prev_active = std::mem::replace(&mut self.active_frame, node.frame);
+            // Mirror the frame save/restore for the lexical chain so sub-slots
+            // submitted via `Scheduler::add` inherit this slot's chain rather than
+            // the previous slot's. Cloning is cheap (Rc bump).
+            let prev_active_chain = self.active_chain.replace(prev_chain_carrier.clone());
             let step = match work {
                 NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope, idx)?,
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
@@ -35,6 +43,8 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
             let prev_frame = std::mem::replace(&mut self.active_frame, prev_active);
+            self.active_chain = prev_active_chain;
+            let prev_chain = prev_chain_carrier;
             // Drain re-entrant writes while `scope` is still live; match arms below may
             // drop the frame it's anchored to. See design/memory-model.md.
             scope.drain_pending();
@@ -92,15 +102,32 @@ impl<'a> Scheduler<'a> {
                         }
                     }
                 }
-                NodeStep::Replace { work: new_work, frame: new_frame, function: new_function } => {
+                NodeStep::Replace {
+                    work: new_work,
+                    frame: new_frame,
+                    function: new_function,
+                    block_entry,
+                } => {
                     let next_function = new_function.or(prev_function);
+                    let new_chain = compute_replace_chain(
+                        prev_chain.clone(),
+                        block_entry,
+                        new_function,
+                        new_frame.as_deref(),
+                    );
                     match new_frame {
                         Some(f) => {
                             // Drop the previous frame; the new frame's child scope's
                             // `outer` is the captured scope, not the previous frame's.
                             // `'a`-anchoring lives in `reinstall_with_frame`'s SAFETY.
                             drop(prev_frame);
-                            self.store.reinstall_with_frame(id, f, new_work, next_function);
+                            self.store.reinstall_with_frame(
+                                id,
+                                f,
+                                new_work,
+                                next_function,
+                                new_chain,
+                            );
                         }
                         None => {
                             self.store.reinstall(id, Node {
@@ -108,6 +135,7 @@ impl<'a> Scheduler<'a> {
                                 scope,
                                 frame: prev_frame,
                                 function: next_function,
+                                chain: new_chain,
                             });
                         }
                     }
@@ -169,8 +197,9 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Frame / function are left as `None` so the slot's existing per-call frame and
-    /// function label stay attached when the Lift writes its terminal.
+    /// Frame / function are left as `None` and `block_entry: None` so the slot's
+    /// existing per-call frame, function label, and chain stay attached when the
+    /// Lift writes its terminal.
     ///
     /// `bind_id` is a fresh slot, so the producer-not-terminal precondition for
     /// `add_owned_edge` holds, and the Owned edge ensures `free`'s Owned-only recursion
@@ -183,6 +212,33 @@ impl<'a> Scheduler<'a> {
             work: NodeWork::Lift(LiftState::Pending(bind_id)),
             frame: None,
             function: None,
+            block_entry: None,
         }
+    }
+}
+
+/// Compute the chain for a `NodeStep::Replace`. Three cases by `block_entry` /
+/// `new_function`:
+///
+/// 1. `block_entry: None` — TCO continuation in the same lexical block. Keep
+///    `prev_chain` unchanged (CONS-tail, builtin tail continuations).
+/// 2. `block_entry: Some(scope_id)` + `new_function: None` — block-entry without a
+///    new FN body (MATCH arm, TRY arm). Prepend `(scope_id, 0)` to `prev_chain`.
+/// 3. `block_entry: Some(body_scope_id)` + `new_function: Some(_)` — FN body
+///    invoke. The new body's chain is assembled from the FN's lexical `outer`
+///    walk so chain depth tracks lexical nesting, not call depth (tail-recursive
+///    loops produce equal-depth chains each iteration).
+fn compute_replace_chain<'a>(
+    prev_chain: Rc<LexicalFrame>,
+    block_entry: Option<ScopeId>,
+    new_function: Option<&'a KFunction<'a>>,
+    new_frame: Option<&crate::machine::core::CallArena>,
+) -> Rc<LexicalFrame> {
+    let Some(scope_id) = block_entry else {
+        return prev_chain;
+    };
+    match (new_function, new_frame) {
+        (Some(_f), Some(frame)) => assemble_body_chain(frame.scope(), prev_chain),
+        _ => LexicalFrame::push(Some(prev_chain), scope_id, 0),
     }
 }

@@ -85,10 +85,13 @@ pub fn body<'a>(
     // Fresh per-call child scope: the `it` binding never collides. `bind_value`'s rebind
     // check therefore always passes; the `_` swallow is intentional.
     let _ = child.bind_value("it".to_string(), it_obj);
-    // Construct the Tail variant directly. `tail_with_frame` requires a `&KFunction` for
-    // return-type enforcement and error-frame attribution; MATCH has no meaningful
-    // function to attach (declared return is `Any`, so the check would be a no-op).
-    BodyResult::Tail { expr: branch_body, frame: Some(frame), function: None }
+    // The arm body enters a fresh lexical block (its scope is the per-MATCH child
+    // scope, distinct from the call-site scope). `tail_with_block` records the
+    // entry so the scheduler prepends `(child.id, 0)` to the slot's chain on
+    // reinstall — `function: None` because MATCH attaches no `&KFunction` to
+    // the slot, so the FN-body chain-assembly path is skipped.
+    let arm_scope_id = child.id;
+    BodyResult::tail_with_block(branch_body, Some(frame), arm_scope_id)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

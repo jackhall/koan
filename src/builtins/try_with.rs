@@ -50,7 +50,14 @@ pub fn body<'a>(
         }
     };
 
-    let sub_id = sched.add_dispatch(expr_inner, scope);
+    // TRY body runs as its own lexical block (own scope_id, fresh frame on the
+    // chain). The lexical structure mirrors MATCH/TRY WITH arms — preventing a LET
+    // inside the body from leaking into the enclosing block on success. The scope
+    // itself is a fresh `child_under` so the body's binds attach to a non-shared
+    // scope; reads still chain out to `scope`.
+    let body_scope: &'a Scope<'a> = scope.arena.alloc_scope(Scope::child_under(scope));
+    let sub_ids = sched.enter_block(body_scope.id, vec![expr_inner], body_scope);
+    let sub_id = sub_ids[0];
     let outer_frame = sched.current_frame();
     let finish: CatchFinish<'a> = Box::new(move |scope, sched, result| {
         dispatch_branch(scope, sched, result, branches_expr, outer_frame)
@@ -116,7 +123,8 @@ fn dispatch_branch<'a>(
     let it_obj: &'a KObject<'a> = inner_arena.alloc(it_value);
     let _ = child.bind_value("it".to_string(), it_obj);
     let _ = sched;
-    BodyResult::Tail { expr: body_expr, frame: Some(frame), function: None }
+    // WITH-arm body is its own lexical block; chain assembly mirrors MATCH arms.
+    BodyResult::tail_with_block(body_expr, Some(frame), child.id)
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

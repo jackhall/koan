@@ -367,6 +367,7 @@ impl<'a> Scheduler<'a> {
             work: NodeWork::Dispatch(expr),
             frame: None,
             function: None,
+            block_entry: None,
         }
     }
 
@@ -441,6 +442,7 @@ impl<'a> Scheduler<'a> {
                         work: NodeWork::Lift(LiftState::Pending(producer_id)),
                         frame: None,
                         function: None,
+                        block_entry: None,
                     })
                 }
                 // Unbound falls through so `value_lookup`'s body produces the structured

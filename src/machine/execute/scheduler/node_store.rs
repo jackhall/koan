@@ -19,7 +19,7 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::machine::core::{CallArena, Scope};
+use crate::machine::core::{CallArena, LexicalFrame, Scope};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::NodeId;
 use crate::machine::model::KObject;
@@ -133,11 +133,13 @@ impl<'a> NodeStore<'a> {
         frame: Rc<CallArena>,
         work: NodeWork<'a>,
         function: Option<&'a KFunction<'a>>,
+        chain: Rc<LexicalFrame>,
     ) {
         let scope: &'a Scope<'a> = unsafe {
             std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope())
         };
-        self.slots[id] = SlotState::PreRun(Node { work, scope, frame: Some(frame), function });
+        self.slots[id] =
+            SlotState::PreRun(Node { work, scope, frame: Some(frame), function, chain });
     }
 
     /// Terminal write: the only path that produces `Done`. Callers must
@@ -295,5 +297,16 @@ impl<'a> NodeStore<'a> {
     #[cfg(test)]
     pub(super) fn free_list_len(&self) -> usize {
         self.free_list.len()
+    }
+
+    /// Test-only chain peek. Returns `None` if the slot has already terminalized
+    /// (no payload to read) — every `PreRun` slot has a chain set at submission
+    /// time.
+    #[cfg(test)]
+    pub(super) fn chain_of(&self, id: NodeId) -> Option<Rc<LexicalFrame>> {
+        match self.slots.get(id) {
+            Some(SlotState::PreRun(node)) => Some(node.chain.clone()),
+            _ => None,
+        }
     }
 }

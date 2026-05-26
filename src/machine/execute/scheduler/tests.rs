@@ -4,10 +4,12 @@
 //! - [`reclaim`] — `free` / node-reclamation invariants.
 //! - [`combine`] — combine, defer_to, and tail-call slot reuse.
 //! - [`dispatch`] — overload routing rules end-to-end through the scheduler.
+//! - [`lexical_provenance`] — `LexicalFrame` chain attachment + assembly.
 
 mod combine;
 mod dispatch;
 mod execute;
+mod lexical_provenance;
 mod reclaim;
 
 use crate::machine::core::source::Spanned;

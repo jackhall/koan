@@ -197,6 +197,7 @@ src/
         │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
         │   ├── scope.rs       Scope, KFuture, plus Scope::resolve_dispatch and the Resolved / ResolveOutcome types
         │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
+        │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
         │   ├── kfunction.rs   KFunction, Body, BodyResult — body shapes plus the dispatch-to-execute bridge
         │   └── kfunction/
         │       ├── argument_bundle.rs   ArgumentBundle — resolved-slot carrier

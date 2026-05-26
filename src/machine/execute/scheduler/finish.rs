@@ -116,10 +116,11 @@ impl<'a> Scheduler<'a> {
         self.reclaim_deps(idx, owned_indices);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
+            BodyResult::Tail { expr, frame, function, block_entry } => NodeStep::Replace {
                 work: NodeWork::Dispatch(expr),
                 frame,
                 function,
+                block_entry,
             },
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
@@ -148,10 +149,11 @@ impl<'a> Scheduler<'a> {
         self.reclaim_deps(idx, vec![from.index()]);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
+            BodyResult::Tail { expr, frame, function, block_entry } => NodeStep::Replace {
                 work: NodeWork::Dispatch(expr),
                 frame,
                 function,
+                block_entry,
             },
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
@@ -196,10 +198,11 @@ impl<'a> Scheduler<'a> {
     ) -> NodeStep<'a> {
         match future.function.invoke(scope, self, future.bundle) {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
+            BodyResult::Tail { expr, frame, function, block_entry } => NodeStep::Replace {
                 work: NodeWork::Dispatch(expr),
                 frame,
                 function,
+                block_entry,
             },
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),

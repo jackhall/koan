@@ -523,7 +523,9 @@ plus `it.frames :List<Str>` (one entry per call frame, rendered
 `"in <expression> (<function>)"`). The `ok` arm binds `it` to the bare
 success value, not a wrapper. No matching arm and no `_` re-raises the
 original error; a successful expression with no `ok` arm raises a
-synthetic `ShapeError`. See
+synthetic `ShapeError`. The TRY body and each WITH arm are their own
+lexical blocks — a `LET` inside the body or an arm is local to that
+arm and is not visible after the `TRY`. See
 [design/error-handling.md](design/error-handling.md) for the full per-arm
 shape table.
 

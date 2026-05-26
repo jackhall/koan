@@ -541,6 +541,97 @@ loops. What it can't do cheaply:
 The constant factor is the price; the behaviors above are what bought
 it.
 
+## Lexical provenance chain
+
+Every dispatched node carries an immutable
+[`LexicalFrame`](../src/machine/core/lexical_frame.rs) recording its
+position in the source-level block nesting:
+
+```rust
+struct LexicalFrame {
+    scope_id: ScopeId,
+    index: usize,
+    parent: Option<Rc<LexicalFrame>>,
+}
+```
+
+The head is the innermost enclosing block; the chain walks outward
+through every enclosing lexical block; `parent: None` at the tail marks
+a top-level statement. Sibling statements in the same block share their
+`parent` `Rc` (cactus sharing), so the chain is constant-space per
+sibling on top of the shared spine.
+
+### Single entry point: `Scheduler::enter_block`
+
+Every dispatched node has a chain because every new lexical block is
+entered through one primitive. `Scheduler::enter_block(scope_id,
+statements, scope)` prepends a frame `(scope_id, i)` for each
+statement `i` onto the current ambient chain and submits the
+statements as dispatch nodes:
+
+- Top-level statements
+  ([`interpret`](../src/machine/execute/interpret.rs)) enter through
+  `enter_block(root.id, exprs, root)` against an empty parent chain.
+- `MODULE` and `SIG` bodies enter through
+  [`plan_body_statements`](../src/machine/core/kfunction/scheduler_handle.rs),
+  which delegates to `enter_block`.
+- FN bodies route through `KFunction::invoke` (see below — the chain
+  shape is special because the call site's chain is not the body's
+  lexical chain).
+- `MATCH` arms ([`match_case`](../src/builtins/match_case.rs)) and
+  `TRY` body + `WITH` arms ([`try_with`](../src/builtins/try_with.rs))
+  each become their own lexical block via
+  [`Scope::child_under`](../src/machine/core/scope.rs) and submit
+  through `enter_block` with the child scope.
+
+The "every dispatched node has a chain" invariant is a debug
+assertion in the strict
+[`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
+path; the public `add` path auto-roots a chain when no ambient one is
+present (so unit-test sites that submit a single node outside
+`enter_block` stay simple).
+
+### FN-body chain assembly
+
+A function's body chain depth must equal the **lexical** nesting of
+its definition site, not the **call** depth — otherwise tail-recursion
+and mutual tail-recursion would grow the chain without bound.
+[`assemble_body_chain`](../src/machine/core/lexical_frame.rs) walks
+the FN's captured `outer` scope chain (the lexical-definition path
+set up by `CallArena::new`) and, for each enclosing scope, looks it
+up in the **call-site** chain via `LexicalFrame::index_for`. Hits
+become frames; the result is prepended with the body's own
+`(body_scope.id, 0)` head. Misses ("this enclosing lexical block is
+not on the call-site chain — it has already returned") drop out of
+the chain rather than adding frames.
+
+A tail-recursive FN therefore produces an identical-shape chain on
+every iteration; a non-tail recursive call does the same; mutual
+tail-recursion across two FNs produces chains bounded by the lexical
+depth of whichever body is currently dispatching, not the call
+stack's depth.
+
+### Arms as own blocks
+
+Each `MATCH` arm and each `TRY` body / `WITH` arm submits through
+`enter_block` against a fresh `child_under` scope. The structural
+consequence: a `LET` inside a `TRY` body binds into the arm-local
+scope and does not survive past the `TRY` (test:
+[`try_body_let_not_visible_after_try`](../src/builtins/try_with/tests.rs)).
+This closes the **divergent-bind hazard** at the source level — a
+binding visible only on one arm's runtime branch can't leak into the
+enclosing block where its visibility would depend on which arm fired.
+
+### Read-side hook
+
+The chain is plumbed onto every node but currently unread on
+the resolution path; `LexicalFrame::index_for(scope_id)` is the
+lookup primitive future name-resolution work consumes when deciding
+whether a binding at index `i` in block `scope_id` is visible from
+this reference's lexical position. See
+[`index-gated-resolution`](../roadmap/dispatch_fix/index-gated-resolution.md)
+in Open work.
+
 ## Open work
 
 - **Inference and search as scheduler work**
@@ -558,6 +649,13 @@ it.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Index-gated resolution**
+  ([roadmap/dispatch_fix/index-gated-resolution.md](../roadmap/dispatch_fix/index-gated-resolution.md)).
+  Flip name resolution from "does a placeholder exist yet?" to "is this
+  binding lexically before this reference?", reading the chain plumbed
+  by the lexical-provenance phase via `LexicalFrame::index_for` and
+  splitting `Resolution` so visibility (lexical) and readiness (timing)
+  are separately answerable.
 - **Unified walk + strict-only admission**
   ([roadmap/dispatch_fix/unified-walk.md](../roadmap/dispatch_fix/unified-walk.md)).
   Collapse W1 (function-candidate ancestor walk) and N×W3 (per bare-name slot
@@ -567,5 +665,4 @@ it.
   out no-keyword expressions (single token, type call, function-value call)
   into a candidate-machinery-free fast lane. Final phase of the dispatch-fix
   project — see [roadmap/dispatch_fix/](../roadmap/dispatch_fix/) for the
-  preceding lexical-provenance, index-gate, and nested-binder phases this
-  builds on.
+  preceding index-gate and nested-binder phases this builds on.

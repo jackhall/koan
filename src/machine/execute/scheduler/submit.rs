@@ -1,4 +1,6 @@
-use crate::machine::{CatchFinish, CombineFinish, NodeId, Scope};
+use std::rc::Rc;
+
+use crate::machine::{CatchFinish, CombineFinish, LexicalFrame, NodeId, Scope};
 use crate::machine::model::ast::KExpression;
 
 use super::super::nodes::{Node, NodeWork, work_park_producers};
@@ -33,6 +35,8 @@ impl<'a> Scheduler<'a> {
     /// Submit an unresolved expression for the scheduler to dispatch + execute against
     /// `scope`. The only public way to add work; `Bind`/`Combine` are internal scaffolding
     /// spawned during a `Dispatch` node's run.
+    ///
+    /// Routes through [`Self::add`]; the ambient-vs-root chain decision lives there.
     pub fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
         self.add(NodeWork::Dispatch(expr), scope)
     }
@@ -66,46 +70,71 @@ impl<'a> Scheduler<'a> {
         self.add(NodeWork::Catch { from, finish }, scope)
     }
 
+    /// Inherit-from-ambient entry point. Sub-dispatches inside a builtin body (CONS-
+    /// head, FN signature subs, list/dict literal items, ...) route here so they
+    /// pick up the executing slot's `active_chain` without each call site naming
+    /// it. Block-entry sites that compute their own chain call
+    /// [`Self::add_with_chain`] directly.
+    ///
+    /// When there is no ambient chain (top-level test fixture, tests poking at
+    /// scheduler internals directly), synthesize a root frame `(scope.id, 0)` so
+    /// the chain invariant holds. The strict assertion in [`Self::add_with_chain`]
+    /// then never fires through this path; it remains in place as a tripwire for
+    /// any future code that builds an explicit-chain `None` argument by mistake.
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
+        if self.active_chain.is_some() {
+            self.add_with_chain(work, scope, None)
+        } else {
+            let chain = LexicalFrame::root(scope.id, 0);
+            self.add_with_chain(work, scope, Some(chain))
+        }
+    }
+
+    /// Single funnel for node creation. `explicit_chain` is `Some` for
+    /// `enter_block`-routed submissions (top-level, MODULE / SIG body, TRY body
+    /// success-as-block, FN body invoke), `None` for everything else (which then
+    /// inherits `self.active_chain`).
+    ///
+    /// Debug-asserts that *some* chain is in scope — top-level routes through
+    /// `enter_block(root.id, ...)` so the only path that hits this with both
+    /// `explicit_chain: None` and `active_chain: None` is a bug.
+    pub(super) fn add_with_chain(
+        &mut self,
+        work: NodeWork<'a>,
+        scope: &'a Scope<'a>,
+        explicit_chain: Option<Rc<LexicalFrame>>,
+    ) -> NodeId {
         let owned_edges = work_owned_edges(&work);
         let no_owned = owned_edges.is_empty();
-        // Submission-time install lets a later sibling park on the placeholder before the
-        // producer slot is popped from the FIFO. No-op for non-Dispatch work and for
-        // Dispatch shapes whose picked function has no `pre_run`.
         let placeholder_install: Option<String> = match &work {
             NodeWork::Dispatch(expr) => extract_pre_run_name(expr, scope),
             _ => None,
         };
-        // Inherit the active slot's frame so sub-slots spawned during a user-fn body's run
-        // keep that body's per-call arena alive until they finalize.
         let frame = self.active_frame.clone();
-        // Pre-filter owned-edge producers to those not yet terminal — only those
-        // need a wake installed. Already-terminal producers are skipped because
-        // their notify-walk has already happened. `DepGraph` stays oblivious to
-        // results storage; the filter lives at the call site.
+        let chain = explicit_chain
+            .or_else(|| self.active_chain.clone())
+            .expect(
+                "every dispatched node has a chain — submission outside enter_block / \
+                 ambient active_chain is a bug",
+            );
         let pending_owned: Vec<NodeId> = owned_edges
             .iter()
             .map(|e| e.node_id())
             .filter(|p| !self.is_result_ready(*p))
             .collect();
-        // Park-producer prefix for `Combine`: sibling slots this work reads at
-        // finish-time but does not own. Pre-filter to non-terminal producers
-        // for the same reason as `pending_owned`.
         let pending_park: Vec<NodeId> = work_park_producers(&work)
             .iter()
             .copied()
             .filter(|p| !self.is_result_ready(*p))
             .collect();
         let no_park = work_park_producers(&work).is_empty();
-        let id = self.store.alloc_slot(Node { work, scope, frame, function: None });
+        let id = self
+            .store
+            .alloc_slot(Node { work, scope, frame, function: None, chain });
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
         for p in &pending_park {
             self.deps.add_park_edge(*p, id);
         }
-        // Install before enqueueing: the queued slot's `run_dispatch` will idempotently
-        // re-install via `Scope::install_placeholder` after `resolve_dispatch` returns the
-        // binder's `placeholder_name`. A failure here (e.g. `Rebind` collision) is
-        // surfaced at that later install rather than aborting `add`.
         if let Some(name) = placeholder_install {
             let _ = scope.install_placeholder(name, id);
         }

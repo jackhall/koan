@@ -1,5 +1,5 @@
 use crate::builtins::default_scope;
-use crate::machine::{KError, RuntimeArena};
+use crate::machine::{KError, RuntimeArena, SchedulerHandle};
 use super::scheduler::Scheduler;
 use crate::parse::{parse, parse_with_path};
 
@@ -33,10 +33,10 @@ pub fn interpret_with_writer_path(
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, out);
     let mut scheduler = Scheduler::new();
-    let mut top_level: Vec<crate::machine::NodeId> = Vec::with_capacity(exprs.len());
-    for expr in exprs {
-        top_level.push(scheduler.add_dispatch(expr, root));
-    }
+    // Route top-level statements through `enter_block` so each gets a root
+    // `LexicalFrame { scope_id: root.id, index: i, parent: None }`. Every other
+    // dispatched node inherits from there (cactus chain).
+    let top_level = scheduler.enter_block(root.id, exprs, root);
     scheduler.execute()?;
     // Top-level dispatches share the run-root scope and execute independently; surface
     // the first errored result as the program's outcome.

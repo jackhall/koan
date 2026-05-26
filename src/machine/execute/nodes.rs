@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, KFunction, NodeId, Scope};
+use crate::machine::{
+    CallArena, CatchFinish, CombineFinish, KError, KFunction, LexicalFrame, NodeId, Scope,
+};
+use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
@@ -17,12 +20,21 @@ pub(super) enum NodeOutput<'a> {
 /// slot's scope and its `arena()` owns per-call allocations; `None` keeps the existing
 /// frame and scope. `function`, when set, names the user-fn whose body the replacement is
 /// entering — any error landing on this slot gets a `Frame` appended for the trace.
+///
+/// `block_entry` is the lexical-block-entry annotation carried over from
+/// `BodyResult::Tail.block_entry`. `None` keeps the slot's current `LexicalFrame` chain
+/// unchanged (CONS-tail, builtin tail continuations). `Some(scope_id)` enters a new
+/// lexical block: when `function` is `None` the reinstall site prepends `(scope_id, 0)`
+/// to the chain; when `function` is `Some(f)` the chain is rebuilt via
+/// `assemble_body_chain` (the FN-body rule that keeps chain depth = lexical nesting
+/// depth, NOT call depth).
 pub(super) enum NodeStep<'a> {
     Done(NodeOutput<'a>),
     Replace {
         work: NodeWork<'a>,
         frame: Option<Rc<CallArena>>,
         function: Option<&'a KFunction<'a>>,
+        block_entry: Option<ScopeId>,
     },
 }
 
@@ -88,6 +100,12 @@ pub(super) struct Node<'a> {
     /// intermediate frames' types agree — to be enforced statically by the future
     /// type-check pass.
     pub(super) function: Option<&'a KFunction<'a>>,
+    /// Immutable cactus-chain naming this node's lexical position. Head frame is the
+    /// innermost enclosing block; tail (`parent: None`) is top-level. Attached by
+    /// `Scheduler::add` from `enter_block`'s explicit chain or the ambient
+    /// `active_chain`. See `core/lexical_frame.rs` and the roadmap item
+    /// `dispatch_fix/lexical-provenance.md`.
+    pub(super) chain: Rc<LexicalFrame>,
 }
 
 /// Owned `NodeId`s a node must read before running, or `None` if it has no

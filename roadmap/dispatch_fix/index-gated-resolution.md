@@ -74,7 +74,9 @@ running siblings concurrently could make an in-scope name read as
 - *Resolution walks `outer` and queries the chain — decided.* Per
   enclosing `Scope` on the [`outer`](../../src/machine/core/scope.rs)
   chain, look up its `scope_id` in the provenance chain — hit ⇒ that
-  index, miss ⇒ `∞`.
+  index, miss ⇒ `∞`. The chain is already plumbed onto every node;
+  [`LexicalFrame::index_for`](../../src/machine/core/lexical_frame.rs)
+  is the read-side hook to call (currently unread).
 
 - *Transparent and forwarding scopes — open.* How the gate composes
   with `USING … SCOPE` transparent windows and module-body scopes,
@@ -84,10 +86,7 @@ running siblings concurrently could make an in-scope name read as
 
 ## Dependencies
 
-**Requires:**
-
-- [Lexical provenance plumbing](lexical-provenance.md) — the gate reads
-  the chain that phase installs.
+**Requires:** none.
 
 **Unblocks:**
 

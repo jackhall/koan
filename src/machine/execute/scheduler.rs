@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
+use crate::machine::{
+    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, SchedulerHandle,
+};
+use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 
 use super::nodes::NodeWork;
@@ -66,6 +69,12 @@ pub struct Scheduler<'a> {
     /// so frame-creating builtins (MATCH) can chain it onto their new frame; see
     /// [memory-model.md § Per-call-frame chaining](../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
+    /// Lexical chain of the slot currently executing. Mirrors `active_frame`'s
+    /// save/restore pattern. `Scheduler::add` reads this to attach a chain to every
+    /// sub-slot that doesn't carry an explicit `enter_block` chain — that's how
+    /// internal binder sub-dispatches (CONS-head, FN signature subs, NEWTYPE value
+    /// sub, USING-body) inherit the parent's chain without each call site naming it.
+    pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
     /// Count of tail-reuse opportunities accepted by
     /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
     /// path returns `Some`/`None` without touching this field's gate.
@@ -80,6 +89,7 @@ impl<'a> Scheduler<'a> {
             deps: DepGraph::new(),
             store: NodeStore::new(),
             active_frame: None,
+            active_chain: None,
             #[cfg(test)]
             tail_reuse_count: 0,
         }
@@ -87,6 +97,14 @@ impl<'a> Scheduler<'a> {
 
     #[cfg(test)]
     pub fn tail_reuse_count(&self) -> usize { self.tail_reuse_count }
+
+    /// Test-only chain peek. Returns the `LexicalFrame` chain attached to slot
+    /// `id`. Only valid before the slot terminalizes — once a slot is `Done` the
+    /// payload (and its chain) has been moved out by `take_for_run`.
+    #[cfg(test)]
+    pub fn chain_of(&self, id: NodeId) -> Option<Rc<LexicalFrame>> {
+        self.store.chain_of(id)
+    }
 
     pub fn len(&self) -> usize { self.store.len() }
     pub fn is_empty(&self) -> bool { self.store.is_empty() }
@@ -115,7 +133,12 @@ impl<'a> Default for Scheduler<'a> {
 
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
-        Scheduler::add(self, NodeWork::Dispatch(expr), scope)
+        // Delegate to the inherent method so both `sched.add_dispatch(...)` (direct
+        // struct call from test harnesses / the interpret driver) and the trait
+        // method (sub-dispatches from inside a builtin body) share the same
+        // auto-root behavior for top-level submissions and ambient-inherit for
+        // sub-dispatches.
+        Scheduler::add_dispatch(self, expr, scope)
     }
 
     fn add_combine(
@@ -173,5 +196,35 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
             self.active_frame = Some(candidate);
             None
         }
+    }
+
+    fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
+        self.active_chain.clone()
+    }
+
+    fn enter_block(
+        &mut self,
+        scope_id: ScopeId,
+        statements: Vec<KExpression<'a>>,
+        scope: &'a Scope<'a>,
+    ) -> Vec<NodeId> {
+        let parent = self.active_chain.clone();
+        statements
+            .into_iter()
+            .enumerate()
+            .map(|(i, expr)| {
+                let chain = LexicalFrame::push(parent.clone(), scope_id, i);
+                self.add_dispatch_with_chain(expr, scope, chain)
+            })
+            .collect()
+    }
+
+    fn add_dispatch_with_chain(
+        &mut self,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId {
+        Scheduler::add_with_chain(self, NodeWork::Dispatch(expr), scope, Some(chain))
     }
 }

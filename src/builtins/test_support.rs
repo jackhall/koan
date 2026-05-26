@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::machine::model::KObject;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
-use crate::machine::{KError, RuntimeArena, Scope};
+use crate::machine::{KError, RuntimeArena, Scope, SchedulerHandle};
 use crate::machine::execute::Scheduler;
 use crate::machine::model::ast::KExpression;
 use crate::parse::parse;
@@ -63,7 +63,8 @@ pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
 /// the test expects a `KError`.
 pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(expr, scope);
+    let ids = sched.enter_block(scope.id, vec![expr], scope);
+    let id = ids[0];
     sched.execute().expect("scheduler should succeed");
     sched.read(id)
 }
@@ -72,7 +73,8 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
 /// node finished without an error.
 pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(expr, scope);
+    let ids = sched.enter_block(scope.id, vec![expr], scope);
+    let id = ids[0];
     sched.execute().expect("scheduler should not surface errors directly");
     match sched.read_result(id) {
         Ok(_) => panic!("expected error"),
@@ -83,9 +85,7 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
 pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
-    for expr in exprs {
-        sched.add_dispatch(expr, scope);
-    }
+    sched.enter_block(scope.id, exprs, scope);
     sched.execute().expect("scheduler should succeed");
 }
 

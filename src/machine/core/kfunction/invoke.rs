@@ -1,7 +1,8 @@
 use std::rc::Rc;
 
 use crate::machine::core::{
-    CallArena, KError, KErrorKind, ResolveTypeExprOutcome, RuntimeArena, Scope,
+    assemble_body_chain, CallArena, KError, KErrorKind, ResolveTypeExprOutcome, RuntimeArena,
+    Scope,
 };
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
@@ -188,9 +189,24 @@ impl<'a> KFunction<'a> {
                                 PerCallReturnType::Pending(tid.expect("type dispatch must spawn"))
                             }
                         };
+                        // FN body runs in its own lexical block (the per-call child
+                        // scope). Assemble the body chain from the call-site chain and
+                        // the FN's lexical outer walk so chain depth tracks lexical
+                        // nesting, not call depth. The chain construction mirrors
+                        // `compute_replace_chain`'s FN-body arm — kept inline here
+                        // because the deferred-return path doesn't go through
+                        // `NodeStep::Replace`.
+                        let call_site_chain = sched
+                            .current_lexical_chain()
+                            .expect("FN invoke runs inside an enter_block / active_chain");
+                        let body_chain = assemble_body_chain(child, call_site_chain);
                         let mut bid = None;
                         sched.with_active_frame(frame.clone(), &mut |s| {
-                            bid = Some(s.add_dispatch(body_expr.clone(), child));
+                            bid = Some(s.add_dispatch_with_chain(
+                                body_expr.clone(),
+                                child,
+                                body_chain.clone(),
+                            ));
                         });
                         let body_id = bid.expect("body dispatch must spawn");
 
