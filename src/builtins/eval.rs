@@ -49,7 +49,6 @@ pub fn body<'a>(
         frame: Some(frame),
         function: None,
         block_entry: None,
-        advance_index: false,
         body_index: 0,
     }
 }

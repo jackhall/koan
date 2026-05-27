@@ -107,7 +107,6 @@ impl<'a> Scheduler<'a> {
                     frame: new_frame,
                     function: new_function,
                     block_entry,
-                    advance_index,
                     body_index,
                 } => {
                     let next_function = new_function.or(prev_function);
@@ -116,7 +115,6 @@ impl<'a> Scheduler<'a> {
                         block_entry,
                         new_function,
                         new_frame.as_deref(),
-                        advance_index,
                         body_index,
                     );
                     match new_frame {
@@ -217,66 +215,38 @@ impl<'a> Scheduler<'a> {
             frame: None,
             function: None,
             block_entry: None,
-            advance_index: false,
             body_index: 0,
         }
     }
 }
 
 /// Compute the chain for a `NodeStep::Replace`. Cases by `block_entry` /
-/// `new_function` / `advance_index`:
+/// `new_function`:
 ///
-/// 1. `block_entry: None`, `advance_index: false` — TCO continuation in the same
-///    lexical block. Keep `prev_chain` unchanged (FN-body tail-recursion, builtin
-///    tail continuations that aren't statement-stepping).
-/// 2. `block_entry: None`, `advance_index: true` — CONS-tail. Rebuild the chain's
-///    head frame at `index + 1` so the rest-of-the-statements slot sits one
-///    lexical position past the head it just submitted. Each CONS layer bumps the
-///    index by 1; backward refs across statements then satisfy `b.idx < c`.
-/// 3. `block_entry: Some(scope_id)` + `new_function: None` — block-entry without a
-///    new FN body (MATCH arm, TRY arm). Prepend `(scope_id, 0)` to `prev_chain`;
-///    `advance_index: true` here would bump the freshly-pushed frame, currently
-///    unused but composable.
-/// 4. `block_entry: Some(body_scope_id)` + `new_function: Some(_)` — FN body
+/// 1. `block_entry: None` — TCO continuation in the same lexical block. Keep
+///    `prev_chain` unchanged (FN-body tail-recursion, builtin tail continuations).
+/// 2. `block_entry: Some(scope_id)` + `new_function: None` — block-entry without a
+///    new FN body (MATCH arm, TRY arm). Prepend `(scope_id, body_index)` to
+///    `prev_chain` — `body_index = 0` for single-statement arm bodies, `N` for
+///    the last-stmt tail-replace path of a multi-statement arm body.
+/// 3. `block_entry: Some(body_scope_id)` + `new_function: Some(_)` — FN body
 ///    invoke. The new body's chain is assembled from the FN's lexical `outer`
 ///    walk so chain depth tracks lexical nesting, not call depth (tail-recursive
-///    loops produce equal-depth chains each iteration). `advance_index` is
-///    ignored on this arm (FN-body entry doesn't statement-step).
+///    loops produce equal-depth chains each iteration). `body_index` positions
+///    the freshly-pushed body-scope frame: `0` for single-statement bodies, `N`
+///    for the multi-statement tail-into-last path.
 fn compute_replace_chain<'a>(
     prev_chain: Rc<LexicalFrame>,
     block_entry: Option<ScopeId>,
     new_function: Option<&'a KFunction<'a>>,
     new_frame: Option<&crate::machine::core::CallArena>,
-    advance_index: bool,
     body_index: usize,
 ) -> Rc<LexicalFrame> {
     let Some(scope_id) = block_entry else {
-        if !advance_index {
-            return prev_chain;
-        }
-        // CONS-tail: same scope, index+1. Rebuild the head frame, preserving the
-        // parent chain (cactus-shared with the head's siblings).
-        return LexicalFrame::push(
-            prev_chain.parent.clone(),
-            prev_chain.scope_id,
-            prev_chain.index + 1,
-        );
+        return prev_chain;
     };
     match (new_function, new_frame) {
         (Some(_f), Some(frame)) => assemble_body_chain(frame.scope(), prev_chain, body_index),
-        _ => {
-            // Non-FN block-entry (MATCH / TRY arm). `body_index` overrides the
-            // freshly-pushed frame's index for the "tail-replace into the LAST
-            // statement of a multi-statement arm body" case; otherwise
-            // `advance_index` (CONS-tail historical) selects 1, default 0.
-            let start = if body_index > 0 {
-                body_index
-            } else if advance_index {
-                1
-            } else {
-                0
-            };
-            LexicalFrame::push(Some(prev_chain), scope_id, start)
-        }
+        _ => LexicalFrame::push(Some(prev_chain), scope_id, body_index),
     }
 }

@@ -80,7 +80,8 @@ pub fn body<'a>(
             )));
         }
     };
-    let body_expr = super::cons::fold_multi_statement(body_expr);
+    // Multi-statement FUNCTOR bodies (`((s_0) ... (s_{N-1}))`) split at
+    // `KFunction::invoke` time, same as FN bodies — no CONS-fold here.
 
     let param_names = collect_param_names_from_signature(&signature_expr);
 

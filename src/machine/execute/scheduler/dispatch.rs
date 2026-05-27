@@ -394,7 +394,6 @@ impl<'a> Scheduler<'a> {
             frame: None,
             function: None,
             block_entry: None,
-            advance_index: false,
             body_index: 0,
         }
     }
@@ -475,7 +474,6 @@ impl<'a> Scheduler<'a> {
                         frame: None,
                         function: None,
                         block_entry: None,
-                        advance_index: false,
                         body_index: 0,
                     })
                 }

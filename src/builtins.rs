@@ -12,7 +12,6 @@ mod attr;
 mod branch_walk;
 pub mod call_by_name;
 mod catch;
-mod cons;
 mod eval;
 mod fn_def;
 mod functor_def;
@@ -220,7 +219,6 @@ pub fn default_scope<'a>(
     val_decl::register(scope);
     ascribe::register(scope);
     type_ops::register(scope);
-    cons::register(scope);
 
     scope
 }

@@ -51,28 +51,16 @@ pub enum BodyResult<'a> {
         /// chain is assembled via the FN-body rule (see
         /// `kfunction/invoke.rs::assemble_body_chain`).
         block_entry: Option<ScopeId>,
-        /// CONS-tail steps a multi-statement body's chain by one index per CONS layer
-        /// so each statement in the body sits at a distinct lexical position. Without
-        /// it, every statement in an FN-body CONS chain shares the body-scope head
-        /// frame's index, and the strict `b.idx < c` visibility predicate (see
-        /// [`crate::machine::core::scope::visible`]) treats sibling statements as
-        /// invisible to one another — even a backward reference like
-        /// `(LET a = 10) (LET b = (a))` fails.
-        ///
-        /// `false` (the default) keeps the chain unchanged on tail-replace. CONS sets
-        /// it `true`. Combined with `block_entry: Some(...)` the block-entry frame is
-        /// pushed first and the advance is then applied to that new frame's index —
-        /// MATCH / TRY arms don't pair this flag with a block entry today, but the
-        /// reinstall site composes both safely.
-        advance_index: bool,
-        /// Body-scope chain index for an FN-body tail-replace (block_entry: Some +
-        /// function: Some). `0` (the default) for single-statement bodies — the
-        /// body's lone statement sees only its own parameters (carved out). For
-        /// multi-statement bodies where the FN-slot tail-replaces into the *last*
-        /// statement, this is `N` (one past the earlier `1..N-1` siblings submitted
-        /// via `enter_block` against the body scope), so the strict `b.idx < c`
-        /// predicate admits every earlier sibling. Ignored when `function` is `None`
-        /// (block-entry without an FN body — MATCH / TRY arms).
+        /// Body-scope chain index for an FN-body tail-replace (`block_entry: Some` +
+        /// `function: Some`) or a MATCH / TRY arm-body tail-replace (`block_entry:
+        /// Some` + `function: None`). `0` (the default) for single-statement bodies —
+        /// the body's lone statement sees only its own parameters / `it` binding
+        /// (both carved out via `nominal_binder: true`). For multi-statement bodies
+        /// where the slot tail-replaces into the *last* statement, this is `N` (one
+        /// past the earlier `1..N-1` siblings submitted via `add_dispatch_with_chain`
+        /// against the body / arm scope), so the strict `b.idx < c` predicate admits
+        /// every earlier sibling. Ignored when `block_entry: None` (TCO continuation
+        /// in the same lexical block).
         body_index: usize,
     },
     DeferTo(NodeId),
@@ -86,24 +74,6 @@ impl<'a> BodyResult<'a> {
             frame: None,
             function: None,
             block_entry: None,
-            advance_index: false,
-            body_index: 0,
-        }
-    }
-
-    /// CONS-tail variant: tail-continue in the same lexical block, but bump the chain's
-    /// head-frame index by one so the rest-of-the-statements slot sits one position
-    /// after the head it just submitted. Each CONS layer in a multi-statement body's
-    /// fold thus assigns its statement a distinct index, making backward references
-    /// across statements (`(LET a = 10) (LET b = (a))`) visible under the strict
-    /// `b.idx < c` predicate.
-    pub fn tail_advance(expr: KExpression<'a>) -> Self {
-        BodyResult::Tail {
-            expr,
-            frame: None,
-            function: None,
-            block_entry: None,
-            advance_index: true,
             body_index: 0,
         }
     }
@@ -138,7 +108,6 @@ impl<'a> BodyResult<'a> {
             frame: Some(frame),
             function: Some(function),
             block_entry: Some(body_scope_id),
-            advance_index: false,
             body_index,
         }
     }
@@ -173,7 +142,6 @@ impl<'a> BodyResult<'a> {
             frame,
             function: None,
             block_entry: Some(scope_id),
-            advance_index: false,
             body_index,
         }
     }

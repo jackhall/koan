@@ -35,16 +35,11 @@ pub(super) enum NodeStep<'a> {
         frame: Option<Rc<CallArena>>,
         function: Option<&'a KFunction<'a>>,
         block_entry: Option<ScopeId>,
-        /// CONS-tail wants its tail-replaced slot to sit one position past the head it
-        /// just submitted in the same lexical block. Combined with `block_entry: None`
-        /// the reinstall site rebuilds the chain's head frame at `index + 1`; otherwise
-        /// the index advance is applied to the freshly-pushed block-entry frame.
-        /// Default `false` keeps today's behavior for non-CONS tail-replace paths.
-        advance_index: bool,
-        /// Body-scope chain index for FN-body tail-replace (mirrors
-        /// [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
-        /// Read by `compute_replace_chain`'s FN-body arm to pass to
-        /// `assemble_body_chain`. Ignored on non-FN-body paths.
+        /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
+        /// (mirrors [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
+        /// Read by `compute_replace_chain`'s `block_entry: Some(_)` arms to position
+        /// the freshly-pushed block frame at index `N` for multi-statement
+        /// tail-into-last; `0` (the default) is the single-statement case.
         body_index: usize,
     },
 }

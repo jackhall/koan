@@ -265,4 +265,42 @@ mod tests {
             "expected inexhaustive ShapeError for missing true branch, got {err}",
         );
     }
+
+    /// Multi-statement MATCH arm body: each statement runs and the arm's terminal
+    /// is the last statement's value. Effect ordering between statements is
+    /// topological (sibling sub-slots), not strict source-order.
+    #[test]
+    fn multi_statement_match_branch_returns_last_value() {
+        let bytes = run_program(
+            "UNION Maybe = (some :Number none :Null)\n\
+             LET m = (Maybe (some 5))\n\
+             MATCH (m) WITH (\
+                 some -> ((PRINT \"got\") (PRINT it))\
+                 none -> (PRINT \"no\")\
+             )",
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.contains("got"), "missing 'got' in {s:?}");
+        assert!(s.contains("5"), "missing 'it' value in {s:?}");
+    }
+
+    /// FN recursion through a multi-statement MATCH arm: the recursive HOP call is
+    /// the last statement of the `one` arm and gets tail-replaced. Without TCO,
+    /// deep recursion would blow the scheduler.
+    #[test]
+    fn fn_recursion_with_multi_statement_body_via_match_terminates() {
+        let bytes = run_program(
+            "UNION Bit = (one :Null zero :Null)\n\
+             FN (HOP b :Tagged) -> Any = (\
+                 (PRINT \"step\")\
+                 (MATCH (b) WITH (\
+                     one -> (HOP (Bit (zero null)))\
+                     zero -> (PRINT \"done\")\
+                 ))\
+             )\n\
+             HOP (Bit (one null))",
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.contains("done"), "expected 'done' to print, got {s:?}");
+    }
 }
