@@ -15,7 +15,7 @@ use crate::machine::model::types::{
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_nominal_binder_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder, sig};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.
 ///
@@ -179,12 +179,12 @@ fn defer_union_via_combine<'a>(
 
 /// Dispatch-time placeholder extractor for UNION. `parts[1]` is a `Type(t)` token —
 /// the binder name slot. Same shape as STRUCT / MODULE / SIG.
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder_with_pre_run(
+    register_nominal_binder(
         scope,
         "UNION",
         sig(KType::Type, vec![
@@ -194,7 +194,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("schema", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 
@@ -204,13 +204,13 @@ mod tests {
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, KErrorKind, RuntimeArena};
 
-    /// Smoke test for the named-UNION pre_run extractor: structural extraction of the
+    /// Smoke test for the named-UNION binder_name extractor: structural extraction of the
     /// `Type(_)` token at `parts[1]` for the named form. The anonymous form has no
-    /// pre_run.
+    /// binder_name.
     #[test]
-    fn pre_run_extracts_named_union_name() {
+    fn binder_name_extracts_named_union_name() {
         let expr = parse_one("UNION Maybe = (some :Number, none :Null)");
-        let name = super::pre_run(&expr);
+        let name = super::binder_name(&expr);
         assert_eq!(name.as_deref(), Some("Maybe"));
     }
 

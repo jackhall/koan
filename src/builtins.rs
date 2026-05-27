@@ -1,6 +1,6 @@
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, PreRunFn};
+use crate::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, BinderNameFn};
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
@@ -80,41 +80,41 @@ pub fn register_builtin<'a>(
     signature: ExpressionSignature<'a>,
     body: BuiltinFn,
 ) {
-    register_builtin_with_pre_run(scope, name, signature, body, None);
+    register_builtin_with_binder(scope, name, signature, body, None);
 }
 
 /// Errors from `register_function` are dropped: `default_scope` registers each builtin once
 /// at run-root construction, so a collision is a programming error, not a runtime failure.
-pub(crate) fn register_builtin_with_pre_run<'a>(
+pub(crate) fn register_builtin_with_binder<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
     body: BuiltinFn,
-    pre_run: Option<PreRunFn>,
+    binder_name: Option<BinderNameFn>,
 ) {
-    register_builtin_full(scope, name, signature, body, pre_run, None, false, false);
+    register_builtin_full(scope, name, signature, body, binder_name, None, false, false);
 }
 
-/// Like [`register_builtin_with_pre_run`] but stamps the registered overload as a
+/// Like [`register_builtin_with_binder`] but stamps the registered overload as a
 /// *nominal* binder (D7 carve-out). Used by STRUCT, named UNION, SIG, MODULE — the
 /// forms whose placeholder must be visible to siblings on the same block regardless of
 /// source order, so mutual recursion across sibling nominal binders elaborates.
 /// FUNCTOR routes through [`register_builtin_full`] because it also needs
-/// `pre_run_bucket`.
-pub(crate) fn register_nominal_binder_with_pre_run<'a>(
+/// `binder_bucket`.
+pub(crate) fn register_nominal_binder<'a>(
     scope: &'a Scope<'a>,
     name: &str,
     signature: ExpressionSignature<'a>,
     body: BuiltinFn,
-    pre_run: Option<PreRunFn>,
+    binder_name: Option<BinderNameFn>,
 ) {
-    register_builtin_full(scope, name, signature, body, pre_run, None, false, true);
+    register_builtin_full(scope, name, signature, body, binder_name, None, false, true);
 }
 
-/// Full-form builtin registration with both pre-run hooks and the `is_functor` flag.
-/// Used by FN / FUNCTOR to supply the [`PreRunBucketFn`] that keys a pending-overload
-/// entry by inner-call bucket — see [`crate::machine::core::kfunction::PreRunBucketFn`].
-/// Everything else routes through the simpler [`register_builtin_with_pre_run`].
+/// Full-form builtin registration with both binder hooks and the `is_functor` flag.
+/// Used by FN / FUNCTOR to supply the [`BinderBucketFn`] that keys a pending-overload
+/// entry by inner-call bucket — see [`crate::machine::core::kfunction::BinderBucketFn`].
+/// Everything else routes through the simpler [`register_builtin_with_binder`].
 ///
 /// `is_nominal_binder` flips the D7 carve-out so the submission-time placeholder install
 /// in `submit::add_with_chain` stamps the [`BindingIndex`] with `nominal_binder: true`.
@@ -125,18 +125,18 @@ pub(crate) fn register_builtin_full<'a>(
     name: &str,
     signature: ExpressionSignature<'a>,
     body: BuiltinFn,
-    pre_run: Option<PreRunFn>,
-    pre_run_bucket: Option<crate::machine::core::kfunction::PreRunBucketFn>,
+    binder_name: Option<BinderNameFn>,
+    binder_bucket: Option<crate::machine::core::kfunction::BinderBucketFn>,
     is_functor: bool,
     is_nominal_binder: bool,
 ) {
     let arena = scope.arena;
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_pre_run_and_functor(
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
         signature,
         Body::Builtin(body),
         scope,
-        pre_run,
-        pre_run_bucket,
+        binder_name,
+        binder_bucket,
         is_functor,
         is_nominal_binder,
     ));

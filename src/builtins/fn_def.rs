@@ -16,7 +16,7 @@ use finalize::{classify, defer_via_combine, finalize_fn, FnPlan, ParamListResult
 use return_type::{classify_return_type, extract_return_type_raw};
 use signature::ParamListOutcome;
 
-pub(crate) use signature::{pre_run, pre_run_bucket};
+pub(crate) use signature::{binder_name, binder_bucket};
 
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
 /// function constructor. Signature and body are captured as raw `KExpression`s; the signature
@@ -113,7 +113,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // (`-> (MODULE_TYPE_OF Er Type)`). The strict dispatch pass picks one
     // unambiguously; `Future(KTypeValue(_))` post-Combine wakes admit only against
     // `TypeExprRef`, since `KExpression` doesn't accept `Future(_)`.
-    // Both FN overloads supply `pre_run_bucket` alongside `pre_run`: a bare-arg
+    // Both FN overloads supply `binder_bucket` alongside `binder_name`: a bare-arg
     // call to a sibling FN that's still finalizing (e.g. its signature's parameter
     // type is parked on a SIG body's Combine) now parks on this binder slot by
     // *inner-call bucket key* rather than failing dispatch. Symmetry with FUNCTOR
@@ -131,8 +131,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
-        Some(pre_run_bucket),
+        Some(binder_name),
+        Some(binder_bucket),
         false,
         // FN is *not* a nominal binder: a `LET f = (FN ...)` form is value-side gated.
         false,
@@ -149,8 +149,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
-        Some(pre_run_bucket),
+        Some(binder_name),
+        Some(binder_bucket),
         false,
         // FN is *not* a nominal binder: a `LET f = (FN ...)` form is value-side gated.
         false,

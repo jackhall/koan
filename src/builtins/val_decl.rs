@@ -30,7 +30,7 @@ use crate::machine::{
 };
 use crate::machine::model::{KObject, KType};
 
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 /// Sub-dispatch `[Type(te)]` against `decl_scope`.
 fn schedule_type_resolve<'a>(
@@ -282,7 +282,7 @@ fn defer_val_structural_via_combine<'a>(
 }
 
 /// Dispatch-time placeholder extractor: `parts[1]` is the bound name's `Identifier`.
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
         _ => None,
@@ -291,7 +291,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // The Design-B sigil consumes `:`, so the signature has no explicit colon keyword.
-    register_builtin_with_pre_run(
+    register_builtin_with_binder(
         scope,
         "VAL",
         sig(KType::Any, vec![
@@ -300,7 +300,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("ty", KType::TypeExprRef),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 

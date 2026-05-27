@@ -42,6 +42,11 @@ What's shipped that the open items below build on:
   `FUNCTOR` / `MODULE`), so forward references resolve by lexical position rather
   than by queue arrival order and `UnboundName` becomes structural rather than
   transient.
+- *Recursive binder submission.* `Scheduler::add_with_chain` walks each binder-shaped
+  Dispatch's eager Expression-slot parts and submits them as sub-Dispatches at the
+  same outermost submission point, so nested binders' placeholders all install before
+  any sibling can dispatch. The pre-submitted children ride through `NodeWork::Dispatch.pre_subs`
+  into Phase 4, which reuses them instead of allocating fresh sub-Dispatches.
 
 ## Next items
 
@@ -114,12 +119,11 @@ functor-heavy collections both build on:
 ### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
 
 Untangle dispatch into queue-order-independent name resolution plus a single
-unified ancestor walk per call site. The provenance-plumbing and index-gated
-resolution phases have shipped (see "What's shipped so far"); the remaining
-phases are a structural fix to the nested-binder submission race, then the
-walk-unification and strict-only admission collapse:
+unified ancestor walk per call site. The provenance-plumbing, index-gated
+resolution, and recursive-binder-submission phases have shipped (see "What's
+shipped so far"); the remaining phase is the walk-unification and strict-only
+admission collapse:
 
-- [Nested-binder recursive submission](roadmap/dispatch_fix/nested-binder-submission.md)
 - [Unified walk + strict-only admission](roadmap/dispatch_fix/unified-walk.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

@@ -5,7 +5,7 @@ use crate::machine::{
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 /// `LET <name> = <value:Any>` — copies the bound value into an arena-allocated `KObject`,
 /// inserts it under `name`, and returns that same arena reference. Compound values recurse
@@ -325,7 +325,7 @@ fn capitalize_identifier(name: &str) -> String {
 /// and `LET <name:TypeExprRef> = ...`) put the bound name at `parts[1]`; pull it out
 /// structurally without dispatching anything. Returns `None` on shape mismatch (the body
 /// will surface a structured error later).
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
         ExpressionPart::Type(t) => Some(t.name.clone()),
@@ -334,7 +334,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_pre_run(
+    register_builtin_with_binder(
         scope,
         "LET",
         sig(KType::Any, vec![
@@ -344,9 +344,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("value", KType::Any),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
-    register_builtin_with_pre_run(
+    register_builtin_with_binder(
         scope,
         "LET",
         sig(KType::Any, vec![
@@ -356,7 +356,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("value", KType::Any),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 

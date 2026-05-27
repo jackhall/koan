@@ -66,7 +66,7 @@ pub(super) fn resolve_name_part<'a>(
     // and parking on the producer must precede the resolved-value check. The
     // `scope.resolve` chain consults `bindings.data` then `bindings.placeholders` per
     // scope — for value-side bindings under the same name (e.g. `LET ty = …`) a `Value`
-    // hit wins; for forward `STRUCT Foo = …` references the binder's `pre_run` installs
+    // hit wins; for forward `STRUCT Foo = …` references the binder's `binder_name` installs
     // a `Placeholder` we park on.
     //
     // Chain-gated: visibility against the consumer's lexical chain filters out
@@ -144,7 +144,7 @@ impl<'a> Scheduler<'a> {
     ///    A keyword-headed call to a not-yet-registered function with no eager parts
     ///    consults the `pending_overloads` table by the *full* inner-call bucket key
     ///    as a last-step fallback: a sibling FN / FUNCTOR binder still parked on its
-    ///    own Combine will have installed a `pre_run_bucket` entry under that key.
+    ///    own Combine will have installed a `binder_bucket` entry under that key.
     ///    The walk parks on that producer rather than failing, so the bare-arg shape
     ///    `(MAKESET IntOrd)` doesn't race the FIFO submission order. Keying by the
     ///    full bucket (not just the lead keyword) keeps overloads with shared head
@@ -152,7 +152,7 @@ impl<'a> Scheduler<'a> {
     ///    bare-name forward-reference parks ride phases 1 and 3 of this driver via
     ///    `Scope::resolve` and the name-keyed `placeholders` table.
     ///
-    ///    2.5: **Placeholder install** — if the picked function carried a `pre_run`
+    ///    2.5: **Placeholder install** — if the picked function carried a `binder_name`
     ///    extractor, install its dispatch-time name placeholder against this slot's
     ///    `NodeId`. Conceptually between phase 2 and phase 3; numbered with a fractional
     ///    step so the surrounding list reads as the canonical four-phase pipeline.
@@ -173,6 +173,7 @@ impl<'a> Scheduler<'a> {
     pub(super) fn run_dispatch(
         &mut self,
         expr: KExpression<'a>,
+        pre_subs: Vec<(usize, NodeId)>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
@@ -209,14 +210,21 @@ impl<'a> Scheduler<'a> {
                 // eager parts whose evaluation may surface matching types. Schedule them
                 // through the standard eager loop (no eager_indices filter, no picked
                 // function — the receiving `run_bind` re-dispatches after the subs
-                // resolve).
-                return Ok(self.schedule_deps_filtered(expr, None, None, scope, idx));
+                // resolve). `pre_subs` is empty by construction: recursive submission
+                // only runs when a binder is picked at submit time, and Deferred means
+                // no overload picked.
+                debug_assert!(
+                    pre_subs.is_empty(),
+                    "Deferred resolve_dispatch implies no binder pick at submit time; \
+                     `pre_subs` must be empty here",
+                );
+                return Ok(self.schedule_deps_filtered(expr, None, None, pre_subs, scope, idx));
             }
             ResolveOutcome::ParkOnProducers(producers) => {
                 // A tentative tie hinged on a forward-referenced bare name. Park on its
                 // producer(s) and re-dispatch on wake, when the strict-pass peek can read
-                // the bound type.
-                return Ok(self.park_pending_and_redispatch(producers, expr, idx));
+                // the bound type. Preserve `pre_subs` across the re-Dispatch.
+                return Ok(self.park_pending_and_redispatch(producers, expr, pre_subs, idx));
             }
             ResolveOutcome::UnboundName(name) => {
                 return Err(KError::new(KErrorKind::UnboundName(name)));
@@ -227,11 +235,11 @@ impl<'a> Scheduler<'a> {
         // Two parallel installs:
         // - `placeholder_name` -> name-keyed `placeholders[name]`, consulted by
         //   `Scope::resolve` for forward-reference *name* resolution. Set by every
-        //   binder builtin's `pre_run` hook (LET, FN, FUNCTOR, STRUCT, UNION, SIG,
+        //   binder builtin's `binder_name` hook (LET, FN, FUNCTOR, STRUCT, UNION, SIG,
         //   MODULE).
         // - `pending_overload_bucket` -> bucket-keyed `pending_overloads[key]`,
         //   consulted by `resolve_dispatch`'s no-bucket fallback for forward-reference
-        //   *dispatch* parks. Set only by FN / FUNCTOR's `pre_run_bucket` hook (the
+        //   *dispatch* parks. Set only by FN / FUNCTOR's `binder_bucket` hook (the
         //   binders that register a callable function). Keying by the full inner-call
         //   bucket — not the lead keyword — keeps overloads with shared heads but
         //   different keyword shapes from colliding on the park edge.
@@ -357,7 +365,7 @@ impl<'a> Scheduler<'a> {
             }
         }
         if !producers_to_wait.is_empty() {
-            return Ok(self.install_combined_park(producers_to_wait, expr, idx));
+            return Ok(self.install_combined_park(producers_to_wait, expr, pre_subs, idx));
         }
 
         // Phase 4: schedule eager subs from the resolution's indices. Commit to the
@@ -370,6 +378,7 @@ impl<'a> Scheduler<'a> {
             expr,
             resolved.slots.eager_indices.as_deref(),
             Some(resolved.function),
+            pre_subs,
             scope,
             idx,
         ))
@@ -384,13 +393,19 @@ impl<'a> Scheduler<'a> {
         &mut self,
         producers: Vec<NodeId>,
         expr: KExpression<'a>,
+        pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
     ) -> NodeStep<'a> {
         for p in &producers {
             self.deps.add_park_edge(*p, NodeId(idx));
         }
+        // Preserve `pre_subs` across re-Dispatch: the recursive submission only
+        // happens at the *original* `add_with_chain`, so a parked binder dispatch
+        // that wakes and re-runs must still see its pre-submitted children to
+        // avoid double-submission in Phase 4. See
+        // `roadmap/dispatch_fix/nested-binder-submission.md`.
         NodeStep::Replace {
-            work: NodeWork::Dispatch(expr),
+            work: NodeWork::Dispatch { expr, pre_subs },
             frame: None,
             function: None,
             block_entry: None,
@@ -410,6 +425,7 @@ impl<'a> Scheduler<'a> {
         &mut self,
         producers: Vec<NodeId>,
         expr: KExpression<'a>,
+        pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
     ) -> NodeStep<'a> {
         let mut to_wait: Vec<NodeId> = Vec::new();
@@ -435,7 +451,7 @@ impl<'a> Scheduler<'a> {
                 reason: "no matching function".to_string(),
             })));
         }
-        self.install_combined_park(to_wait, expr, idx)
+        self.install_combined_park(to_wait, expr, pre_subs, idx)
     }
 
     /// Phase 1. Bare-name short-circuit. `Some(step)` only fires on `Value` (terminate
@@ -516,6 +532,7 @@ impl<'a> Scheduler<'a> {
         expr: KExpression<'a>,
         eager_filter: Option<&[usize]>,
         picked: Option<&'a crate::machine::core::kfunction::KFunction<'a>>,
+        pre_subs: Vec<(usize, NodeId)>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
@@ -530,9 +547,19 @@ impl<'a> Scheduler<'a> {
                 new_parts.push(Spanned { value: part.value, span });
                 continue;
             }
+            // Pre-submission splice: if this slot was recursively pre-submitted at
+            // outermost-submission time (binder-shaped expression — see
+            // `submit::add_with_chain`), reuse that NodeId instead of allocating a
+            // fresh sub-Dispatch. Pre-empts the Expression arm to avoid
+            // double-submission. See `roadmap/dispatch_fix/nested-binder-submission.md`.
+            if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {
+                subs.push((i, sub_id));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                continue;
+            }
             match part.value {
                 ExpressionPart::Expression(boxed) => {
-                    let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
+                    let sub_id = self.add(NodeWork::dispatch(*boxed), scope);
                     subs.push((i, sub_id));
                     new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                 }
@@ -625,7 +652,7 @@ mod tests {
         }
     }
 
-    /// Parked path: a Dispatch slot installed as a `pre_run` placeholder against the
+    /// Parked path: a Dispatch slot installed as a `binder_name` placeholder against the
     /// name resolves to `NameOutcome::Parked(producer)`. Mimics a forward LET binder
     /// by manually installing a placeholder against a fresh slot.
     #[test]
@@ -671,7 +698,7 @@ mod tests {
         // Submit a Dispatch slot and install a placeholder for `self_ref` pointing at
         // itself. Then resolve "self_ref" with `consumer = Some(that_slot)`.
         let slot = sched.add(
-            NodeWork::Dispatch(KExpression::new(vec![
+            NodeWork::dispatch(KExpression::new(vec![
                 Spanned::bare(ExpressionPart::Identifier("self_ref".into())),
             ])),
             scope,

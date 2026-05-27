@@ -1,15 +1,15 @@
-//! pre_run extraction, type registration, field ordering, schema-rejection errors.
+//! binder_name extraction, type registration, field ordering, schema-rejection errors.
 
 use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
-/// Smoke test for STRUCT's pre_run extractor: structural extraction of the `Type(_)`
+/// Smoke test for STRUCT's binder_name extractor: structural extraction of the `Type(_)`
 /// token at `parts[1]`.
 #[test]
-fn pre_run_extracts_struct_name() {
+fn binder_name_extracts_struct_name() {
     let expr = parse_one("STRUCT Point = (x :Number, y :Number)");
-    let name = super::super::pre_run(&expr);
+    let name = super::super::binder_name(&expr);
     assert_eq!(name.as_deref(), Some("Point"));
 }
 

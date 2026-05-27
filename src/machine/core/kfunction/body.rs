@@ -1,5 +1,5 @@
 //! Body-shape types: what a builtin body returns (`BodyResult`), the `fn`-pointer
-//! aliases for builtin bodies and pre-run name hooks (`BuiltinFn`, `PreRunFn`), and the
+//! aliases for builtin bodies and binder-name hooks (`BuiltinFn`, `BinderNameFn`), and the
 //! `Body` enum that picks between a builtin pointer and a captured user-defined
 //! `KExpression`.
 
@@ -199,7 +199,7 @@ pub type BuiltinFn = for<'a> fn(
 /// `placeholders[name] = NodeId(this_slot)` in the dispatching scope so a sibling looking
 /// up `name` while this slot's body is still in flight parks on this slot (see
 /// [`crate::machine::core::Scope::resolve`]). `None` opts out.
-pub type PreRunFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
+pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
 
 /// Dispatch-time bucket-key extractor for a binder builtin whose body registers a
 /// callable function (`FN`, `FUNCTOR`). Returns the `UntypedKey` for a *call* to the
@@ -210,14 +210,14 @@ pub type PreRunFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
 /// producer instead of failing dispatch. `None` opts out (everything other than FN /
 /// FUNCTOR).
 ///
-/// Separate from [`PreRunFn`] because the two extractors serve different consumers:
-/// `PreRunFn` keys forward-reference *name* resolution (consulted via
-/// `Scope::resolve`); `PreRunBucketFn` keys forward-reference *dispatch* resolution
+/// Separate from [`BinderNameFn`] because the two extractors serve different consumers:
+/// `BinderNameFn` keys forward-reference *name* resolution (consulted via
+/// `Scope::resolve`); `BinderBucketFn` keys forward-reference *dispatch* resolution
 /// (consulted via the no-bucket fallback in `resolve_dispatch`). Keying by the
 /// inner-call bucket — not just the lead keyword — keeps overloads that share a head
 /// keyword but differ in later keywords (`MAKESET _` vs `MAKESET _ USING _`) from
 /// colliding on the park edge.
-pub type PreRunBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
+pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
 
 /// An enum (rather than `Box<dyn Fn>`) so the `UserDefined` case stays introspectable —
 /// TCO and error-frame attribution both need to walk into the captured expression.

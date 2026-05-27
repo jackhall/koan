@@ -79,11 +79,10 @@ single-`Identifier` is short-circuited today in
 
 ## Dependencies
 
-**Requires:**
-
-- [Nested-binder recursive submission](nested-binder-submission.md) —
-  strict-only admission would otherwise hard-error on a sibling that
-  dispatches before a nested binder's sub-Dispatch is submitted.
+**Requires:** none. Nested-binder recursive submission shipped, so a
+sibling dispatching before its sibling's binder slot pops still finds
+the placeholder and parks rather than hard-erroring under strict-only
+admission.
 
 **Unblocks:** none — leaf simplification.
 

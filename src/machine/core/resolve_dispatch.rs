@@ -32,7 +32,7 @@ pub struct Resolved<'a> {
     /// (FN, FUNCTOR). Holds the *inner-call* bucket key the dispatch driver will
     /// install in `bindings.pending_overloads` so a sibling bare-arg call to the
     /// to-be-registered overload parks on this slot. See
-    /// [`crate::machine::core::kfunction::PreRunBucketFn`].
+    /// [`crate::machine::core::kfunction::BinderBucketFn`].
     pub pending_overload_bucket: Option<crate::machine::model::types::UntypedKey>,
     pub slots: ClassifiedSlots,
 }
@@ -173,7 +173,7 @@ impl<'a> Scope<'a> {
 }
 
 /// Walk `scope.ancestors()` looking for a `pending_overloads[key]` entry — installed
-/// by an FN / FUNCTOR binder's `pre_run_bucket` hook for the inner-call bucket key
+/// by an FN / FUNCTOR binder's `binder_bucket` hook for the inner-call bucket key
 /// of the to-be-registered overload. Returns the producer `NodeId` of the first
 /// matching binder slot (lexically inner-most wins, mirroring `Scope::resolve`).
 ///
@@ -339,8 +339,8 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
 fn build_resolved<'a>(picked: &'a KFunction<'a>, expr: &KExpression<'a>) -> Resolved<'a> {
     Resolved {
         function: picked,
-        placeholder_name: picked.pre_run.and_then(|extractor| extractor(expr)),
-        pending_overload_bucket: picked.pre_run_bucket.and_then(|extractor| extractor(expr)),
+        placeholder_name: picked.binder_name.and_then(|extractor| extractor(expr)),
+        pending_overload_bucket: picked.binder_bucket.and_then(|extractor| extractor(expr)),
         slots: picked.classify_for_pick(expr),
     }
 }

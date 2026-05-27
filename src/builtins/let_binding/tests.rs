@@ -25,22 +25,22 @@ fn let_inserts_binding_into_scope() {
     assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
 }
 
-/// Smoke test for LET's pre_run extractor: structural extraction of `parts[1]`
+/// Smoke test for LET's binder_name extractor: structural extraction of `parts[1]`
 /// returns the bound name without requiring sub-dispatches.
 #[test]
-fn pre_run_extracts_let_name() {
+fn binder_name_extracts_let_name() {
     use crate::parse::parse;
     let mut exprs = parse("LET hello = 1").expect("parse should succeed");
     let expr = exprs.remove(0);
-    let name = super::pre_run(&expr);
+    let name = super::binder_name(&expr);
     assert_eq!(name.as_deref(), Some("hello"));
 }
 
 /// End-to-end install-then-clear: dispatch `LET x = 1` through the scheduler. The
-/// pre_run hook installs `placeholders["x"] = NodeId(...)` before the body runs;
+/// binder_name hook installs `placeholders["x"] = NodeId(...)` before the body runs;
 /// after the body finalizes via `bind_value`, the placeholder is removed.
 #[test]
-fn pre_run_install_then_body_finalize_clears_placeholder() {
+fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::machine::RuntimeArena;
     use crate::machine::execute::Scheduler;
     use crate::builtins::default_scope;

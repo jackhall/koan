@@ -247,7 +247,7 @@ pub(crate) fn finalize_fn_with_flag<'a>(
     // The constructed function isn't itself a binder builtin; `is_nominal_binder`
     // is `false` regardless of `is_functor`. The FUNCTOR carve-out is on the
     // *binder builtin* (the FUNCTOR keyword), not on the function it produces.
-    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_pre_run_and_functor(
+    let f: &'a KFunction<'a> = arena.alloc_function(KFunction::with_binder_and_functor(
         user_sig,
         Body::UserDefined(body_expr),
         scope,

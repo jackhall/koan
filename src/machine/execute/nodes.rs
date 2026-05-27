@@ -55,7 +55,18 @@ pub(super) enum NodeStep<'a> {
 /// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a fixed set
 /// of dep slots and runs a host closure over their resolved values.
 pub(super) enum NodeWork<'a> {
-    Dispatch(KExpression<'a>),
+    /// Resolve and schedule a single expression. `pre_subs` carries any
+    /// recursively pre-submitted sub-Dispatches keyed by their slot index in
+    /// `expr.parts`; populated by submit-time recursion for binder-shaped
+    /// expressions (so a nested binder's placeholders install at the
+    /// outermost submission point — see
+    /// `roadmap/dispatch_fix/nested-binder-submission.md`), empty otherwise.
+    /// Phase 4 of `run_dispatch` reuses these instead of allocating fresh
+    /// sub-Dispatches for the named slots.
+    Dispatch {
+        expr: KExpression<'a>,
+        pre_subs: Vec<(usize, NodeId)>,
+    },
     Bind {
         expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
@@ -79,6 +90,14 @@ pub(super) enum NodeWork<'a> {
         finish: CatchFinish<'a>,
     },
     Lift(LiftState<'a>),
+}
+
+impl<'a> NodeWork<'a> {
+    /// `Dispatch` with an empty `pre_subs`. The common construction path —
+    /// only the submit-time binder walk populates `pre_subs`.
+    pub(super) fn dispatch(expr: KExpression<'a>) -> Self {
+        NodeWork::Dispatch { expr, pre_subs: Vec::new() }
+    }
 }
 
 /// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped
@@ -120,7 +139,9 @@ pub(super) struct Node<'a> {
 /// prefix is installed separately as `Notify` edges by `Scheduler::add`.
 pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
-        NodeWork::Dispatch(_) => None,
+        // `pre_subs` are NOT read-deps of the Dispatch itself; they become
+        // owned-deps of the Bind that Phase 4 of `run_dispatch` spawns.
+        NodeWork::Dispatch { .. } => None,
         NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
         NodeWork::Combine { deps, park_count, .. } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),

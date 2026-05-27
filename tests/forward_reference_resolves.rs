@@ -342,7 +342,7 @@ fn producer_error_propagates_to_parked_consumer() {
 /// Submission order:
 ///   1. `FN (LIFT_BARE arg :Wrap) -> Number = (7)` — installs a
 ///      `pending_overloads[{Keyword("LIFT_BARE"), Slot}] = NodeId(this binder)`
-///      entry via the bucket-keyed `pre_run_bucket` hook. `Wrap` (the param type)
+///      entry via the bucket-keyed `binder_bucket` hook. `Wrap` (the param type)
 ///      is a forward reference to the STRUCT below — visible because STRUCT is a
 ///      nominal-binder carve-out.
 ///   2. `STRUCT Wrap = (n :Number)`.

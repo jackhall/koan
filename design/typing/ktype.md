@@ -356,11 +356,6 @@ producers.
   walks into one, replace strict-then-tentative with strict-only, and carve
   out the no-keyword shapes into a candidate-machinery-free fast lane.
   Specificity ranking becomes a per-scope tiebreak; innermost-scope wins.
-- **Nested-binder recursive submission**
-  ([roadmap/dispatch_fix/nested-binder-submission.md](../../roadmap/dispatch_fix/nested-binder-submission.md)).
-  Submit nested binders' sub-`Dispatch` nodes at parent-submission time so
-  their placeholders install before any sibling dispatches — the precondition
-  the strict-only admission rule above relies on.
 
 ## Known limitations
 

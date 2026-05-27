@@ -188,7 +188,7 @@ fn add_with_chain_without_chain_panics() {
     // tripwire. The public `add_dispatch` auto-routes; the strict path is
     // internal so reaching it requires the (super-visible) helper below.
     sched.add_with_chain(
-        super::super::super::nodes::NodeWork::Dispatch(KExpression::new(vec![
+        super::super::super::nodes::NodeWork::dispatch(KExpression::new(vec![
             Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
         ])),
         scope,

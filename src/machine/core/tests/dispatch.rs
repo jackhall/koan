@@ -44,7 +44,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
         ResolveOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
             assert!(r.slots.ref_name_indices.is_empty());
-            assert!(!r.slots.picked_has_pre_run);
+            assert!(!r.slots.picked_has_binder_name);
         }
         _ => panic!("expected Resolved for known overload"),
     }
@@ -102,11 +102,11 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     }
 }
 
-/// A pre_run-bearing overload (here a synthetic LET-like binder) populates
+/// A binder_name-bearing overload (here a synthetic LET-like binder) populates
 /// `placeholder_name` from its extractor.
 #[test]
-fn resolve_carries_placeholder_name_for_pre_run_function() {
-    use crate::builtins::register_builtin_with_pre_run;
+fn resolve_carries_placeholder_name_for_binder_function() {
+    use crate::builtins::register_builtin_with_binder;
     fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
         // Mirror LET's shape: expression's 2nd part is the binder Identifier.
         match expr.parts.get(1).map(|p| &p.value) {
@@ -125,7 +125,7 @@ fn resolve_carries_placeholder_name_for_pre_run_function() {
             SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
         ],
     };
-    register_builtin_with_pre_run(scope, "LETLIKE", sig, body_a, Some(name_extractor));
+    register_builtin_with_binder(scope, "LETLIKE", sig, body_a, Some(name_extractor));
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
         Spanned::bare(ExpressionPart::Identifier("foo".into())),
@@ -135,7 +135,7 @@ fn resolve_carries_placeholder_name_for_pre_run_function() {
     match scope.resolve_dispatch(&expr) {
         ResolveOutcome::Resolved(r) => {
             assert_eq!(r.placeholder_name.as_deref(), Some("foo"));
-            assert!(r.slots.picked_has_pre_run);
+            assert!(r.slots.picked_has_binder_name);
         }
         _ => panic!("expected Resolved with placeholder_name"),
     }

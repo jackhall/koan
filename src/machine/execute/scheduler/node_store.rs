@@ -195,7 +195,7 @@ impl<'a> NodeStore<'a> {
             if let SlotState::PreRun(node) = slot {
                 count += 1;
                 match &node.work {
-                    NodeWork::Dispatch(expr) | NodeWork::Bind { expr, .. }
+                    NodeWork::Dispatch { expr, .. } | NodeWork::Bind { expr, .. }
                         if expr_sample.is_none() =>
                     {
                         expr_sample = Some(expr.summarize());

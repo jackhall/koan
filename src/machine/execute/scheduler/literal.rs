@@ -159,7 +159,7 @@ impl<'a> Scheduler<'a> {
                 Slot::Owned(pos)
             }
             ExpressionPart::Expression(boxed) => {
-                let sub_id = self.add(NodeWork::Dispatch(*boxed), scope);
+                let sub_id = self.add(NodeWork::dispatch(*boxed), scope);
                 let pos = deps.len();
                 deps.push(sub_id);
                 Slot::Owned(pos)
@@ -217,7 +217,7 @@ impl<'a> Scheduler<'a> {
                 let expr = crate::machine::model::ast::KExpression::new(vec![
                     Spanned::bare(part.clone()),
                 ]);
-                let sub_id = self.add(NodeWork::Dispatch(expr), scope);
+                let sub_id = self.add(NodeWork::dispatch(expr), scope);
                 let pos = deps.len();
                 deps.push(sub_id);
                 Slot::Owned(pos)

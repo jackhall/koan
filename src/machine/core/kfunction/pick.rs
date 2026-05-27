@@ -19,10 +19,10 @@ use super::KFunction;
 /// - `wrap_indices`: bare-Identifier / bare-Type parts in non-literal-name slots to
 ///   auto-wrap as sub-Dispatches.
 /// - `ref_name_indices`: bare-Identifier / bare-Type parts in literal-name slots
-///   (`KType::Identifier` / `KType::TypeExprRef`) of a non-`pre_run` function; candidates
+///   (`KType::Identifier` / `KType::TypeExprRef`) of a non-`binder_name` function; candidates
 ///   for replay-park.
 ///
-/// `picked_has_pre_run` distinguishes binder-shaped expressions (literal-name slots are
+/// `picked_has_binder_name` distinguishes binder-shaped expressions (literal-name slots are
 /// declarations) from call-shaped expressions (literal-name slots are references that may
 /// need to park). The three index vectors are disjoint by construction over disjoint
 /// `(SignatureElement, ExpressionPart)` shapes — `classify_for_pick` is the sole producer.
@@ -30,7 +30,7 @@ pub struct ClassifiedSlots {
     pub eager_indices: Option<Vec<usize>>,
     pub wrap_indices: Vec<usize>,
     pub ref_name_indices: Vec<usize>,
-    pub picked_has_pre_run: bool,
+    pub picked_has_binder_name: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -161,7 +161,7 @@ impl<'a> KFunction<'a> {
         let eager_indices = self.lazy_eager_indices(expr);
         let mut wrap_indices: Vec<usize> = Vec::new();
         let mut ref_name_indices: Vec<usize> = Vec::new();
-        let picked_has_pre_run = self.pre_run.is_some();
+        let picked_has_binder_name = self.binder_name.is_some();
         for (i, (el, part)) in self.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
             let SignatureElement::Argument(arg) = el else { continue };
             if !is_bare_name(&part.value) {
@@ -171,7 +171,7 @@ impl<'a> KFunction<'a> {
                 // Binders' literal-name slots are *declarations* — the slot already owns
                 // the name and must not park on its own placeholder.
                 KType::Identifier | KType::TypeExprRef => {
-                    if !picked_has_pre_run {
+                    if !picked_has_binder_name {
                         ref_name_indices.push(i);
                     }
                 }
@@ -182,7 +182,7 @@ impl<'a> KFunction<'a> {
             eager_indices,
             wrap_indices,
             ref_name_indices,
-            picked_has_pre_run,
+            picked_has_binder_name,
         }
     }
 }

@@ -34,7 +34,7 @@ use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::model::KType;
 
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 /// Body of `NEWTYPE <name> = <repr>`. Extracts the bare type name, resolves `repr`
 /// to a concrete [`KType`] (rejecting unresolved bare-leaf carriers), mints a
@@ -144,7 +144,7 @@ pub fn body<'a>(
 
 /// Dispatch-time placeholder extractor. Same shape STRUCT / UNION use — the binder
 /// name lives at `parts[1]` (after the `NEWTYPE` keyword).
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
@@ -220,7 +220,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // from `type_call::body`'s `Newtype` arm via `newtype_construct`; no second
     // registered builtin (a separate value-side primitive would share `type_call`'s
     // signature bucket and re-dispatch infinitely).
-    register_builtin_with_pre_run(
+    register_builtin_with_binder(
         scope,
         "NEWTYPE",
         sig(KType::Type, vec![
@@ -230,7 +230,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("repr", KType::TypeExprRef),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 

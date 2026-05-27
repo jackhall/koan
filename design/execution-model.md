@@ -263,15 +263,22 @@ The mechanism lives in two pieces.
 
 A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
 inside the [`Bindings`](../src/machine/core/scope.rs) façade on
-`Scope`, alongside `data` and `functions`. When a binder dispatches, its
-`pre_run` hook (a per-`KFunction` extractor that pulls the to-be-bound name
-structurally out of the expression's parts) installs `name → producer NodeId`
-in the dispatching scope's placeholders, paired with the binder's
+`Scope`, alongside `data` and `functions`. When a binder is submitted, its
+[`binder_name`](../src/machine/core/kfunction/body.rs) hook (a per-`KFunction`
+extractor of type [`BinderNameFn`](../src/machine/core/kfunction/body.rs) that
+pulls the to-be-bound name structurally out of the expression's parts)
+installs `name → producer NodeId` in the dispatching scope's placeholders,
+paired with the binder's
 [`BindingIndex`](../src/machine/core/bindings.rs) (the lexical statement
 index, plus the `nominal_binder` flag for `STRUCT` / named `UNION` / `SIG` /
-`FUNCTOR` / `MODULE`). The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`,
-`UNION`, `MODULE`) opt in via `register_builtin_with_pre_run`; everything
-else stays placeholder-free.
+`FUNCTOR` / `MODULE`). FN and FUNCTOR carry a sibling
+[`binder_bucket`](../src/machine/core/kfunction/body.rs) extractor
+([`BinderBucketFn`](../src/machine/core/kfunction/body.rs)) that keys
+forward-reference *dispatch* parks against the inner-call bucket so a
+later-arriving call expression can park on a not-yet-finalized overload.
+The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`)
+opt in via [`register_builtin_with_binder`](../src/machine/core/kfunction.rs);
+everything else stays placeholder-free.
 [`Scope::resolve_with_chain`](../src/machine/core/scope.rs) walks `data`
 then `placeholders` in each scope on the ancestor chain, filters every hit
 through the [`visible`](../src/machine/core/scope.rs) predicate (the
@@ -288,6 +295,48 @@ the type-side resolver and the bare-identifier value lookup respectively.
 `bind_value` and `register_function` remove their own placeholder before
 inserting into `data` / `functions`, so the two tables are mutually
 exclusive at any moment.
+
+### Submission-time binder install and recursive sub-Dispatch
+
+[`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
+inspects every incoming `NodeWork::Dispatch` against the dispatching
+scope's ancestor chain via `extract_binder_install`: if a function in
+the matching `functions[expr.untyped_key()]` bucket carries a
+`binder_name` extractor that returns `Some(name)` for the expression,
+the submission walk picks that overload's `name` and stamps the
+placeholder before the slot is ever popped from the work queues. The
+companion `binder_bucket` install on the same scope rides through the
+same path. This closes the race that FIFO ordering used to mask: a
+later sibling that dispatches before the binder's slot pops still finds
+the placeholder and parks rather than failing with `UnboundName`.
+
+For binder-shaped Dispatch nodes, the submission walk also recurses into
+the expression's eager Expression-shaped argument slots and submits each
+as a sub-Dispatch *at the same outermost submission point*. The walk
+computes an `eager_slot_mask` over the bucket — a slot is eager only if
+*every* binder overload in the bucket marks it non-`KType::KExpression`;
+any overload tagging a slot lazy keeps that slot out of the recursive
+walk because the eventual dispatch may resolve to that overload. Lazy
+slots — FN body, FN signature/return-type-`KExpression` overload, FUNCTOR
+body, MODULE body — dispatch in the callee's scope at body-invoke time,
+not here. Each recursive `add_with_chain` runs its own
+`extract_binder_install`, so a nested binder's placeholder installs at
+the same outermost step as its parent's; recursion terminates at
+non-binder leaves and at lazy slots, bounded by AST depth.
+
+The collected `(slot_idx, sub_node_id)` pairs ride through into the
+parent's `NodeWork::Dispatch { expr, pre_subs }`
+([`nodes.rs`](../src/machine/execute/nodes.rs)). When the parent runs,
+its Phase 4 `schedule_deps_filtered`
+([`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs)) consults
+`pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
+a slot already pre-submitted reuses the existing `NodeId` (and replaces
+the part with an empty-`Identifier` placeholder for the eventual `Bind`
+splice) rather than allocating a fresh sub-Dispatch. The re-Dispatch
+paths in [`install_combined_park`](../src/machine/execute/scheduler/dispatch.rs)
+and [`park_pending_and_redispatch`](../src/machine/execute/scheduler/dispatch.rs)
+preserve `pre_subs` across the rewrite so a park-and-wake cycle does
+not re-allocate the pre-submitted children.
 
 Statement indices are per-`enter_block` call: each call to
 [`Scheduler::enter_block`](../src/machine/execute/scheduler.rs) mints
@@ -343,10 +392,15 @@ The four rails the resolution feeds:
   *body* are unaffected because bodies re-dispatch per call against the
   body's lexical chain, by which point every sibling binder has registered.
 - **Placeholder install** (phase 2.5). If the picked function carries a
-  `pre_run` extractor, `Resolved.placeholder_name` is its result and the
-  driver installs `name → NodeId(idx)` on the dispatching scope. A
-  `Rebind` collision here surfaces as a `Done(Err(_))` step so other slots
-  keep draining.
+  `binder_name` extractor, `Resolved.placeholder_name` is its result and the
+  driver installs `name → NodeId(idx)` on the dispatching scope. A picked
+  `binder_bucket` extractor installs the matching entry into the
+  `pending_overloads` table on the same scope. Both installs are
+  idempotent against the matching submission-time install (see [Submission-time
+  binder install and recursive sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)
+  below) — a `(name, idx)` pair already installed at submission re-applies
+  cleanly here. A `Rebind` collision against a different producer surfaces
+  as a `Done(Err(_))` step so other slots keep draining.
 - **Eager name-resolve pass** (phase 3, carriers:
   `Resolved.slots.wrap_indices` and `Resolved.slots.ref_name_indices`).
   One walk over each index bucket calls the shared
@@ -707,8 +761,3 @@ and builtin-registration paths.
   resolution outcomes (`Deferred` / `ParkOnProducers` / `UnboundName`); carve
   out no-keyword expressions (single token, type call, function-value call)
   into a candidate-machinery-free fast lane.
-- **Nested-binder recursive submission**
-  ([roadmap/dispatch_fix/nested-binder-submission.md](../roadmap/dispatch_fix/nested-binder-submission.md)).
-  Submit nested binders' sub-`Dispatch` nodes at parent-submission time so
-  their placeholders install before any sibling can dispatch — closing the
-  `LET f = (FN NAME [x] x)` race the strict-only admission rule above relies on.

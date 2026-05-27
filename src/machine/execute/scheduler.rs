@@ -232,6 +232,6 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         scope: &'a Scope<'a>,
         chain: Rc<LexicalFrame>,
     ) -> NodeId {
-        Scheduler::add_with_chain(self, NodeWork::Dispatch(expr), scope, Some(chain))
+        Scheduler::add_with_chain(self, NodeWork::dispatch(expr), scope, Some(chain))
     }
 }

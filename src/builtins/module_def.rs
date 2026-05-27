@@ -27,7 +27,7 @@ use crate::machine::model::values::Module;
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_nominal_binder_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder, sig};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -149,12 +149,12 @@ pub fn body<'a>(
 
 /// Dispatch-time placeholder extractor for MODULE. `parts[1]` is the `Type(t)` token of the
 /// module's name slot. Same shape as STRUCT / SIG / named UNION.
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder_with_pre_run(
+    register_nominal_binder(
         scope,
         "MODULE",
         sig(KType::AnyModule, vec![
@@ -164,7 +164,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 
@@ -174,12 +174,12 @@ mod tests {
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, KErrorKind, RuntimeArena};
 
-    /// Smoke test for MODULE's pre_run extractor: structural extraction of the `Type(_)`
+    /// Smoke test for MODULE's binder_name extractor: structural extraction of the `Type(_)`
     /// token at `parts[1]`.
     #[test]
-    fn pre_run_extracts_module_name() {
+    fn binder_name_extracts_module_name() {
         let expr = parse_one("MODULE Foo = (LET x = 1)");
-        let name = super::pre_run(&expr);
+        let name = super::binder_name(&expr);
         assert_eq!(name.as_deref(), Some("Foo"));
     }
 

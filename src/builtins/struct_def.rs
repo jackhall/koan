@@ -14,7 +14,7 @@ use crate::machine::model::types::{
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_nominal_binder_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder, sig};
 
 /// `STRUCT <name:TypeExprRef> = (<schema>)` — declare a named record type.
 ///
@@ -211,12 +211,12 @@ fn defer_struct_via_combine<'a>(
 /// Dispatch-time placeholder extractor for STRUCT. The name slot at `parts[1]` is a
 /// `Type(t)` token (the `TypeExprRef`-typed `name` argument). Only fires for bare leaves —
 /// parameterized forms (`STRUCT Foo<X> = ...`) aren't supported until functors land.
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_nominal_binder_with_pre_run(
+    register_nominal_binder(
         scope,
         "STRUCT",
         sig(KType::Type, vec![
@@ -226,7 +226,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("schema", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 

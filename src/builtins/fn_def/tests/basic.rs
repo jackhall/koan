@@ -8,13 +8,13 @@ use crate::machine::RuntimeArena;
 
 use super::capture_program_output;
 
-/// Smoke test for FN's pre_run extractor: pulls the first Keyword out of the
+/// Smoke test for FN's binder_name extractor: pulls the first Keyword out of the
 /// signature Expression at `parts[1]` (FN's name slot is *inside* the signature,
 /// not at `parts[1]` directly).
 #[test]
-fn pre_run_extracts_first_keyword_of_signature() {
+fn binder_name_extracts_first_keyword_of_signature() {
     let expr = parse_one("FN (DOUBLE x :Number) -> Number = (x)");
-    let name = crate::builtins::fn_def::pre_run(&expr);
+    let name = crate::builtins::fn_def::binder_name(&expr);
     assert_eq!(name.as_deref(), Some("DOUBLE"));
 }
 

@@ -58,7 +58,10 @@ impl<'a> Scheduler<'a> {
             // A bare name in the rebuilt expression is still a pending forward reference:
             // park on its producer and re-dispatch, mirroring the `run_dispatch` path.
             ResolveOutcome::ParkOnProducers(producers) => {
-                return Ok(self.park_pending_and_redispatch(producers, expr, idx));
+                // `Bind` deps resolved; re-Dispatch carries no `pre_subs` (the
+                // recursive-submission optimization fires only at the original
+                // outermost `add_with_chain`, not at bind-time re-resolve).
+                return Ok(self.park_pending_and_redispatch(producers, expr, Vec::new(), idx));
             }
             ResolveOutcome::UnboundName(name) => {
                 return Err(KError::new(KErrorKind::UnboundName(name)));
@@ -118,7 +121,7 @@ impl<'a> Scheduler<'a> {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
             BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
                 NodeStep::Replace {
-                    work: NodeWork::Dispatch(expr),
+                    work: NodeWork::dispatch(expr),
                     frame,
                     function,
                     block_entry,
@@ -154,7 +157,7 @@ impl<'a> Scheduler<'a> {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
             BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
                 NodeStep::Replace {
-                    work: NodeWork::Dispatch(expr),
+                    work: NodeWork::dispatch(expr),
                     frame,
                     function,
                     block_entry,
@@ -206,7 +209,7 @@ impl<'a> Scheduler<'a> {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
             BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
                 NodeStep::Replace {
-                    work: NodeWork::Dispatch(expr),
+                    work: NodeWork::dispatch(expr),
                     frame,
                     function,
                     block_entry,

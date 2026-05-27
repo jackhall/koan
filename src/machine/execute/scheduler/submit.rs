@@ -1,43 +1,87 @@
 use std::rc::Rc;
 
-use crate::machine::{BindingIndex, CatchFinish, CombineFinish, LexicalFrame, NodeId, Scope};
-use crate::machine::model::ast::KExpression;
+use crate::machine::{BindingIndex, CatchFinish, CombineFinish, KFunction, LexicalFrame, NodeId, Scope};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::{KType, SignatureElement};
 
 use super::super::nodes::{Node, NodeWork, work_park_producers};
 use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
 /// Submission-time placeholder install info. Walks `scope` and its outer chain looking
-/// for a function in `functions[expr.untyped_key()]` whose `pre_run` extractor returns
+/// for a function in `functions[expr.untyped_key()]` whose `binder_name` extractor returns
 /// `Some(name)` for `expr`. The first such name wins; the picked function's
 /// `is_nominal_binder` flag rides through too so the install at `add_with_chain` can
 /// stamp the matching D7 visibility carve-out on the [`BindingIndex`]. Submission-time
 /// install lets a later sibling park on the placeholder before the producer slot is
 /// popped from the FIFO.
-struct PreRunInstall {
+///
+/// `eager_slot_mask` records which argument slot indices are *unanimously* eager
+/// (non-`KExpression`) across every binder overload in the bucket that matched
+/// this expression. The recursive-submission walk in
+/// [`Scheduler::add_with_chain`] pre-submits exactly those slots; any slot a
+/// single overload tags `KExpression` (lazy) cannot be pre-submitted because the
+/// eventual dispatch may resolve to that overload. See
+/// `roadmap/dispatch_fix/nested-binder-submission.md`.
+struct BinderInstall {
     name: String,
     is_nominal_binder: bool,
+    eager_slot_mask: Vec<bool>,
 }
 
-fn extract_pre_run_install<'a>(
+fn extract_binder_install<'a>(
     expr: &KExpression<'a>,
     scope: &'a Scope<'a>,
-) -> Option<PreRunInstall> {
+) -> Option<BinderInstall> {
     let key = expr.untyped_key();
     let mut current: Option<&Scope<'a>> = Some(scope);
     while let Some(s) = current {
         let functions_guard = s.bindings().functions();
         if let Some(bucket) = functions_guard.get(&key) {
-            for (f, _) in bucket.iter() {
-                if let Some(extractor) = f.pre_run {
-                    if let Some(name) = extractor(expr) {
-                        return Some(PreRunInstall {
-                            name,
-                            is_nominal_binder: f.is_nominal_binder,
-                        });
+            // Find the first overload whose `binder_name` extractor matches.
+            // Its `name` and `is_nominal_binder` win; the per-slot eager mask
+            // intersects over EVERY binder overload in the bucket — a slot is
+            // eager only if no overload tags it as `KExpression`.
+            let picked: Option<(&KFunction<'a>, String)> = bucket.iter().find_map(|(f, _)| {
+                f.binder_name
+                    .and_then(|extractor| extractor(expr).map(|name| (*f, name)))
+            });
+            let Some((picked_fn, name)) = picked else {
+                drop(functions_guard);
+                current = s.outer;
+                continue;
+            };
+            // Build the eager mask: start from the picked overload's signature
+            // shape, then AND in every other binder overload in the bucket.
+            let mut mask: Vec<bool> = picked_fn
+                .signature
+                .elements
+                .iter()
+                .map(|el| match el {
+                    SignatureElement::Argument(arg) => arg.ktype != KType::KExpression,
+                    SignatureElement::Keyword(_) => false,
+                })
+                .collect();
+            for (other, _) in bucket.iter() {
+                if other.binder_name.is_none() {
+                    continue;
+                }
+                for (i, el) in other.signature.elements.iter().enumerate() {
+                    if i >= mask.len() {
+                        break;
+                    }
+                    if let SignatureElement::Argument(arg) = el {
+                        if arg.ktype == KType::KExpression {
+                            mask[i] = false;
+                        }
                     }
                 }
             }
+            return Some(BinderInstall {
+                name,
+                is_nominal_binder: picked_fn.is_nominal_binder,
+                eager_slot_mask: mask,
+            });
         }
         drop(functions_guard);
         current = s.outer;
@@ -52,7 +96,7 @@ impl<'a> Scheduler<'a> {
     ///
     /// Routes through [`Self::add`]; the ambient-vs-root chain decision lives there.
     pub fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
-        self.add(NodeWork::Dispatch(expr), scope)
+        self.add(NodeWork::dispatch(expr), scope)
     }
 
     /// Schedule a `Combine` slot. `owned_subs` are sub-Dispatches this Combine
@@ -118,19 +162,87 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         explicit_chain: Option<Rc<LexicalFrame>>,
     ) -> NodeId {
-        let owned_edges = work_owned_edges(&work);
-        let no_owned = owned_edges.is_empty();
-        let placeholder_install: Option<PreRunInstall> = match &work {
-            NodeWork::Dispatch(expr) => extract_pre_run_install(expr, scope),
-            _ => None,
-        };
-        let frame = self.active_frame.clone();
+        // Compute the chain FIRST so recursive sub-submissions inherit the
+        // parent's lexical chain (and therefore its visibility index). Reading
+        // `self.active_chain` after the recursive `self.add(...)` call would be
+        // unreliable since sub-submissions don't write `active_chain`.
         let chain = explicit_chain
             .or_else(|| self.active_chain.clone())
             .expect(
                 "every dispatched node has a chain — submission outside enter_block / \
                  ambient active_chain is a bug",
             );
+        // Decide up front whether this submission is a binder-shaped Dispatch.
+        // If so: (a) extract the install info as today, and (b) recursively submit
+        // each eager Expression-shaped argument slot as a sub-Dispatch, so any
+        // nested binder's own placeholder installs at this outermost submission
+        // point. The collected `pre_subs` rides through into the parent's
+        // `NodeWork::Dispatch { pre_subs }` so Phase 4 reuses them instead of
+        // allocating fresh sub-Dispatches. See
+        // `roadmap/dispatch_fix/nested-binder-submission.md`.
+        let placeholder_install: Option<BinderInstall> = match &work {
+            NodeWork::Dispatch { expr, .. } => extract_binder_install(expr, scope),
+            _ => None,
+        };
+        let pre_subs: Vec<(usize, NodeId)> = if let (
+            Some(install),
+            NodeWork::Dispatch { expr, .. },
+        ) = (placeholder_install.as_ref(), &work)
+        {
+            let mut subs = Vec::new();
+            for (i, part) in expr.parts.iter().enumerate() {
+                // `eager_slot_mask[i]` is true only for slots EVERY binder
+                // overload in the bucket tags as non-`KExpression`. Lazy slots
+                // (e.g. FN's signature / return-type-KExpression overload / body,
+                // FUNCTOR / MODULE bodies) dispatch in the callee's scope at
+                // body-invoke time — not here.
+                if !install.eager_slot_mask.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                let ExpressionPart::Expression(boxed) = &part.value else { continue; };
+                let sub_expr = (**boxed).clone();
+                // Inherit the parent's chain so the sub-Dispatch's lexical index
+                // matches the parent's — the same one its eventual Phase 4 Bind
+                // dep would have used. Without this, a top-level submission with
+                // no ambient `active_chain` would assign a detached chain (which
+                // bypasses index-gated visibility entirely and lets a forward
+                // sibling resolve).
+                let sub_id = self.add_with_chain(
+                    NodeWork::dispatch(sub_expr),
+                    scope,
+                    Some(chain.clone()),
+                );
+                subs.push((i, sub_id));
+            }
+            subs
+        } else {
+            Vec::new()
+        };
+        // Rewrite the work so the parent's Dispatch carries the pre-submitted
+        // sub-NodeIds. Non-Dispatch variants pass through untouched. The pre-sub
+        // re-bundling MUST happen before `work_owned_edges` reads the work shape,
+        // but since `pre_subs` are not read-deps of the Dispatch (they become
+        // owned-deps of the Bind that Phase 4 spawns), `work_owned_edges` returns
+        // the same edges either way.
+        let work = match work {
+            NodeWork::Dispatch { expr, pre_subs: prior } => {
+                // The submission entry points (`add_dispatch`, `add_with_chain` via
+                // `add_dispatch_with_chain`, `literal`/`finish` re-Dispatches) all
+                // construct `Dispatch` with empty `pre_subs`. A non-empty `prior`
+                // would indicate a re-submission of an already-prepared Dispatch,
+                // which the current callers never do.
+                debug_assert!(
+                    prior.is_empty(),
+                    "add_with_chain only receives Dispatch with empty pre_subs",
+                );
+                let _ = prior;
+                NodeWork::Dispatch { expr, pre_subs }
+            }
+            other => other,
+        };
+        let owned_edges = work_owned_edges(&work);
+        let no_owned = owned_edges.is_empty();
+        let frame = self.active_frame.clone();
         // Stamp the placeholder with the SAME `BindingIndex` the eventual `register_*`
         // call at finalize will install — `idx` is this slot's lexical position; the
         // D7 nominal-binder carve-out (true for STRUCT / named UNION / SIG / FUNCTOR /

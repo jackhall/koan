@@ -200,11 +200,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // strict dispatch pass picks one; `Future(KTypeValue(_))` post-Combine
     // wakes admit only against `TypeExprRef`.
     //
-    // Pre-run hook is the same `fn_def::pre_run` extractor — both binders
+    // Binder-name hook is the same `fn_def::binder_name` extractor — both binders
     // place the signature at `parts[1]` and the first `Keyword` in that
     // signature names the registered function.
-    // FUNCTOR mirrors FN: both pre_run (name-based, for forward-reference name
-    // resolution) and pre_run_bucket (inner-call bucket key, for
+    // FUNCTOR mirrors FN: both binder_name (name-based, for forward-reference name
+    // resolution) and binder_bucket (inner-call bucket key, for
     // pending-overload dispatch parks). The bucket key is the same one a future
     // call to the registered FUNCTOR overload would compute, so
     // `resolve_dispatch`'s no-bucket fallback finds this slot and parks on it —
@@ -223,8 +223,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(super::fn_def::pre_run),
-        Some(super::fn_def::pre_run_bucket),
+        Some(super::fn_def::binder_name),
+        Some(super::fn_def::binder_bucket),
         false,
         // FUNCTOR is a nominal binder (D7 carve-out): siblings can refer to one
         // another regardless of source order — `FUNCTOR A` body can mention `B`
@@ -243,8 +243,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(super::fn_def::pre_run),
-        Some(super::fn_def::pre_run_bucket),
+        Some(super::fn_def::binder_name),
+        Some(super::fn_def::binder_bucket),
         false,
         // FUNCTOR is a nominal binder (D7 carve-out): siblings can refer to one
         // another regardless of source order — `FUNCTOR A` body can mention `B`

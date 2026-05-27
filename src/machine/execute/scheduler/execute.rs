@@ -34,7 +34,9 @@ impl<'a> Scheduler<'a> {
             // the previous slot's. Cloning is cheap (Rc bump).
             let prev_active_chain = self.active_chain.replace(prev_chain_carrier.clone());
             let step = match work {
-                NodeWork::Dispatch(expr) => self.run_dispatch(expr, scope, idx)?,
+                NodeWork::Dispatch { expr, pre_subs } => {
+                    self.run_dispatch(expr, pre_subs, scope, idx)?
+                }
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
                 NodeWork::Combine { deps, park_count, finish } => {
                     self.run_combine(deps, park_count, finish, scope, idx)
