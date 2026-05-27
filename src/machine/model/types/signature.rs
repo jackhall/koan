@@ -14,6 +14,7 @@
 //! expression-preserved form for per-call re-elaboration at the dispatch boundary.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::values::NamedPairs;
 
 use super::ktraits::Parseable;
 use super::ktype::KType;
@@ -238,6 +239,51 @@ impl<'a> ExpressionSignature<'a> {
             (SignatureElement::Keyword(_), _) => false,
             (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
         })
+    }
+
+    /// Named-argument call-shape match — the *only* admission check for the
+    /// `FunctionValueCall` fast lane. Parses `args.parts` as `<name> = <value>` triples
+    /// (or the dict-literal surface — see [`NamedPairs`]) and reports `true` iff every
+    /// `SignatureElement::Argument` in this signature has a name-keyed entry with a
+    /// type-accepting value, with no residual unknown names. `SignatureElement::Keyword`
+    /// entries are *elided* — they appear in the reconstructed positional form (see
+    /// [`KFunction::apply`](crate::machine::core::kfunction::KFunction::apply)) but never
+    /// appear in the named-arg surface.
+    ///
+    /// Pairs the [`KFunction::apply`] path that rebuilds the positional expression by
+    /// interleaving signature keywords between picked-by-name values: that path is the
+    /// invocation side; this is the call-shape check that gates whether the invocation
+    /// can run at all. Arg-order independence falls out of the named-by-name lookup —
+    /// `(a = 1, b = 2)` and `(b = 2, a = 1)` both satisfy `(a :Number PICK b :Number)`.
+    ///
+    /// Used by [`fast_lane_function_value_call`](
+    ///   crate::machine::execute::scheduler::dispatch::Scheduler::fast_lane_function_value_call)
+    /// to gate the bypass of `resolve_dispatch_with_chain` for `f (x = 7)`-shape calls
+    /// where `f` resolves to a `KFunction` directly. A parse failure (malformed pair
+    /// list, duplicate name, missing-`=`-separator, etc.) returns `false`; the handler
+    /// then falls through to the keyworded path so `call_by_name`'s body surfaces the
+    /// structured error. There is no companion positional `matches_*` admission — koan
+    /// has no `f 1 2` call syntax for function values, so the named-arg shape is the
+    /// whole user-facing surface.
+    pub fn matches_without_keywords(&self, args: &KExpression<'a>) -> bool {
+        let mut pairs = match NamedPairs::parse(args, "function call") {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        // Every Argument must have a name-keyed entry whose value-part is accepted by
+        // the slot's ktype. Skips Keyword elements entirely — they are part of the
+        // dispatch form, not the named-arg surface.
+        for el in &self.elements {
+            if let SignatureElement::Argument(arg) = el {
+                match pairs.take(&arg.name) {
+                    Some(part) if arg.matches(&part) => {}
+                    _ => return false,
+                }
+            }
+        }
+        // Any residual entry is an unknown-name error in the named-arg surface, so the
+        // signature does not admit this call shape.
+        pairs.into_unknown().is_none()
     }
 
     /// Slot types are erased — same shape with different types lives in the same bucket and

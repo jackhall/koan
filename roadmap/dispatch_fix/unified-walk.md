@@ -3,7 +3,7 @@
 Reduce dispatch to a single ancestor walk that co-resolves function
 candidates and bare-name arguments, replace strict-then-tentative
 admission with strict-only, and add a no-keyword fast lane that bypasses
-the candidate machinery entirely for the three shapes that have no
+the candidate machinery entirely for the four shapes that have no
 candidates.
 
 **Problem.** A keyword-headed call today does one ancestor walk in
@@ -15,11 +15,7 @@ admission (strict peeks bare names; tentative admits them blind)
 compounds the unpredictability: which overload wins depends on whether
 each arg is a name, literal, or forward reference; inner-scope tentative
 shadows outer-scope strict; the `Deferred` and `ParkOnProducers`
-outcomes are buried inside the tentative pass. No-keyword expressions —
-`(xs)`, `(Number)`, `(List Number)`, `(f 7)` — go through the same
-candidate machinery though they have no candidates; only
-single-`Identifier` is short-circuited today in
-[`try_short_circuit`](../../src/machine/execute/scheduler/dispatch.rs).
+outcomes are buried inside the tentative pass.
 
 **Impact.**
 
@@ -33,22 +29,36 @@ single-`Identifier` is short-circuited today in
   `ParkOnProducers`; `Unbound` → `UnboundName`; otherwise `Unmatched`.
   Binders admit under strict unchanged — their critical slots are
   `Identifier` and `KExpression`, neither of which peek.
-- *No-keyword fast lane for three flavors.* Token-shape classification
-  before any walk: single bare token (Identifier or Type) → direct
-  `Scope::resolve` / `resolve_type`; ≥2 Type-tokens (`(List Number)`)
-  → small type-call evaluator; lowercase-Identifier head + non-keyword
-  body (`(f 7)`) → resolve head to `KFunction`, bind args directly.
-  Keyword = all-caps Identifier; qualified paths expand to ATTR at
-  parse time and stay on the candidate path.
+- *No-keyword fast lane for four flavors.* Token-shape classification
+  before any walk: single bare `Identifier` → direct
+  `Scope::resolve_with_chain`; single leaf `Type` →
+  `coerce_type_token_value`; ≥2 leaf-Type tokens (`(List Number)`) →
+  small type-call evaluator on `resolve_type_expr`;
+  lowercase-`Identifier` head with a single nested-parens named-arg part
+  (`f (x = 7)`) → resolve head to `KFunction`, admit via
+  `matches_without_keywords`, bind directly. Keyword = all-caps
+  Identifier; qualified paths expand to ATTR at parse time and stay on
+  the candidate path.
 - *Specificity is a per-scope tiebreak.* Innermost-scope wins; ties at a
   scope break by slot-specificity. Cross-scope ranking collapses to
   lexical-scoping intuition: the nearest enclosing definition wins.
 
 **Directions.**
 
-- *Token-shape classification on the dispatch node — open.* Parse-time
-  decidable; compute once on `Dispatch` construction, branch on it in
-  `run_dispatch`.
+- *Token-shape classification on the dispatch node — partially shipped.*
+  `classify_dispatch_shape` in
+  [`scheduler/dispatch.rs`](../../src/machine/execute/scheduler/dispatch.rs)
+  computes a five-variant `DispatchShape` once at the top of `run_dispatch`
+  and routes the four no-keyword variants (`BareIdentifier`, `BareTypeLeaf`,
+  `TypeCall`, `FunctionValueCall`) through fast-lane handlers that never
+  enter `resolve_dispatch_with_chain`; the `Keyworded` variant falls into
+  the existing candidate pipeline unchanged. `FunctionValueCall` admits via
+  `ExpressionSignature::matches_without_keywords` against the inner
+  nested-parens part — koan's user-facing function-value call shape is
+  `f (a = 1, b = 2)`, never `f 1 2`, so the named-arg surface is the only
+  admission rule. Still open: moving the classifier to `Dispatch`-node
+  construction time (today it runs per `run_dispatch` entry) is deferred
+  pending the unified walk itself.
 - *Unified-walk slot-resolution contract — open.* At each scope level
   the candidate-bucket lookup and the bare-name slot resolution share
   the same scope handle; the candidate-pick commits only when every

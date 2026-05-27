@@ -373,11 +373,19 @@ branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 scope visible. This is what lets a REPL query read through to every
 prior bind without sharing an index space with them.
 
-The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) — is a
-four-phase linear pipeline: a bare-name short-circuit, the chain-walked
-resolution (with a fractional-step `2.5` placeholder install), an eager
-name-resolve pass that splices wrap-slot bindings in place and parks ref-name
-slots on still-pending producers, and the dep schedule. Phase 2 calls
+The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) —
+opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
+expression's parts for any `Keyword` first and, if none, branches on the head
+token's shape, producing one of five `DispatchShape` variants. The four
+no-keyword variants (`BareIdentifier`, `BareTypeLeaf`, `TypeCall`,
+`FunctionValueCall`) run their own fast-lane handlers and never enter
+`Scope::resolve_dispatch_with_chain`: there are no candidates in
+`bindings.functions` for these shapes, so the candidate machinery would do
+no useful work. The `Keyworded` variant (anywhere a keyword appears, or any
+head shape outside the fast-lane set) falls into the chain-walked resolution
+plus eager name-resolve plus dep-schedule pipeline below.
+
+Phase 2 of the keyworded pipeline calls
 [`Scope::resolve_dispatch`](../src/machine/core/scope.rs) once and
 matches on its [`ResolveOutcome`](../src/machine/core/scope.rs):
 `Resolved(r)` continues into phase 3 with the tentatively picked function
@@ -391,18 +399,58 @@ arm (`schedule_deps_filtered` with no eager filter and no picked function)
 and re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
 after subs resolve.
 
-The four rails the resolution feeds:
+The rails the dispatch driver feeds:
 
-- **Bare-name short-circuit** (phase 1, runs before resolution). A
-  single-`Identifier` dispatch slot (`(some_var)`) consults
-  `Scope::resolve_with_chain` directly against the consumer's `LexicalFrame`:
-  `Value` returns inline, `Placeholder` rewrites the slot's work to
-  `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
-  uses for sub-Bind waits), `UnboundName` falls through so `value_lookup`'s
-  body produces the structured error.
+- **Fast lane** (pre-walk classifier, runs before any resolve walk).
+  `classify_dispatch_shape` is one pass over `expr.parts`: keyword anywhere
+  ⇒ `Keyworded`; single-part `Identifier` ⇒ `BareIdentifier`; single-part
+  leaf `Type` ⇒ `BareTypeLeaf`; multi-part with leaf-`Type` head and every
+  other part a leaf `Type` ⇒ `TypeCall`; multi-part with `Identifier` head
+  ⇒ `FunctionValueCall`; everything else ⇒ `Keyworded`. The "sweep first,
+  branch on head second" ordering matters: a mixed shape like `(f IF x)`
+  goes to `Keyworded` because only the candidate machinery knows how to
+  dispatch the `(_ IF _)` bucket.
 
-  Forward references resolve through this rail and the eager name-resolve
-  rail (below), both of which route name lookups through
+  Each fast-lane variant has its own handler:
+
+  - `BareIdentifier` (`(some_var)`) — `fast_lane_bare_identifier` consults
+    `Scope::resolve_with_chain` against the consumer's `LexicalFrame`:
+    `Value` returns inline, `Placeholder` rewrites the slot's work to
+    `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
+    uses for sub-Bind waits), `UnboundName` falls through to the keyworded
+    path so `value_lookup`'s body produces the structured error.
+  - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `fast_lane_bare_type_leaf`
+    routes through `coerce_type_token_value` so the dispatch-phase carrier
+    matches what `value_lookup::body_type_expr` would synthesize. Failures
+    surface directly; there is no candidate-machinery alternative for a
+    bare leaf type.
+  - `TypeCall` (`(List Number)`, `(Dict KString Number)`) —
+    `fast_lane_type_call` synthesizes a parameterized `TypeExpr` and
+    elaborates it through `Scope::resolve_type_expr`, wrapping the result
+    as a `KTypeValue` carrier. `Unbound` surfaces directly; the elaborator
+    `Park` arm is a defensive surface (today's leaf-Type-only args never
+    produce one).
+  - `FunctionValueCall` (`f (x = 7)`) — `fast_lane_function_value_call`
+    resolves the `Identifier` head: on `Value(KFunction)` it admits the
+    call iff `expr.parts[1..]` is exactly one nested-parens part *and*
+    `ExpressionSignature::matches_without_keywords` accepts the inner
+    `<name> = <value>` triples (the *only* admission rule — koan has no
+    `f 1 2` call syntax for function values, so the named-arg shape is
+    the whole user-facing surface). On admission,
+    `KFunction::reconstruct_positional` rebuilds the positional expression
+    by interleaving the signature's `Keyword` elements between the
+    picked-by-name values and `schedule_deps_filtered` dispatches with
+    `picked = Some(f)`, bypassing both the candidate walk and the
+    `call_by_name` re-dispatch. A `Placeholder` head installs a combined
+    park; head-bound-to-non-function or unbound falls through to
+    `Keyworded` so `dispatch_constructor`-style overloads can still match
+    or the keyworded path can surface today's `DispatchFailed`. The bypass
+    is value-only: missing/unknown/duplicate-named args, malformed-pair
+    shapes, and non-function verbs all fall through to `call_by_name`'s
+    body for the structured error surface.
+
+  Forward references resolve through the fast lane and the eager
+  name-resolve rail (below), both of which route name lookups through
   `Scope::resolve_with_chain` against the consumer's `LexicalFrame` and so
   consult the visibility-gated `placeholders` table. A *keyword-headed*
   call — `ID 7`, where `ID` is the head Keyword — dispatches through the
@@ -482,7 +530,8 @@ bare-name entries call `resolve_name_part` directly and materialize as
 `Slot::Static` (resolved) or `Slot::Park(i)` (parked producer), with the
 Combine driving a single wake across all parked siblings.
 
-The bare-name short-circuit and the eager-resolve pass call
+The fast-lane handlers (`fast_lane_bare_identifier`,
+`fast_lane_function_value_call`) and the eager-resolve pass call
 `DepGraph::add_park_edge`, which records a `DepEdge::Notify(producer)` in
 the consumer's `dep_edges` entry alongside the `DepEdge::Owned(child)`
 entries that mark sub-slots the consumer owns. `add_park_edge` and its

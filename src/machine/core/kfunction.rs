@@ -214,11 +214,29 @@ impl<'a> KFunction<'a> {
     /// [`NamedPairs`] rejects duplicate names at parse time, so consuming every declared
     /// argument and finding the residual empty witnesses an exact match.
     pub fn apply<'b>(&self, args: Vec<Spanned<ExpressionPart<'b>>>) -> BodyResult<'b> {
+        match self.reconstruct_positional(args) {
+            Ok(expr) => BodyResult::tail(expr),
+            Err(e) => BodyResult::Err(e),
+        }
+    }
+
+    /// Shared part-reconstruction core for the named-arg invocation path. Parses `args`
+    /// as `<name> = <value>` triples (or the dict-literal surface) and rebuilds the
+    /// positional expression with each signature `Keyword` element re-interleaved at
+    /// its declared position. Bind / dispatch against the returned expression mirrors
+    /// what the original keyword-bearing call site would have produced.
+    ///
+    /// Drives both [`Self::apply`] (which emits the result as a `BodyResult::Tail`
+    /// for the scheduler to re-dispatch through the candidate path) and the dispatch
+    /// scheduler's fast-lane `FunctionValueCall` handler — which calls `bind` on the
+    /// reconstructed expression directly, bypassing `resolve_dispatch_with_chain`.
+    pub fn reconstruct_positional<'b>(
+        &self,
+        args: Vec<Spanned<ExpressionPart<'b>>>,
+    ) -> Result<KExpression<'b>, KError> {
         let tmp_expr = KExpression::new(args);
-        let mut pairs = match NamedPairs::parse(&tmp_expr, "function call") {
-            Ok(p) => p,
-            Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
-        };
+        let mut pairs = NamedPairs::parse(&tmp_expr, "function call")
+            .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
         let mut parts: Vec<Spanned<ExpressionPart<'b>>> =
             Vec::with_capacity(self.signature.elements.len());
         for el in &self.signature.elements {
@@ -229,17 +247,17 @@ impl<'a> KFunction<'a> {
                 SignatureElement::Argument(a) => match pairs.take(&a.name) {
                     Some(v) => parts.push(Spanned::bare(v)),
                     None => {
-                        return BodyResult::Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
+                        return Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
                     }
                 },
             }
         }
         if let Some(unknown) = pairs.into_unknown() {
-            return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+            return Err(KError::new(KErrorKind::ShapeError(format!(
                 "unknown name `{unknown}` in function call",
             ))));
         }
-        BodyResult::tail(KExpression::new(parts))
+        Ok(KExpression::new(parts))
     }
 }
 

@@ -21,6 +21,31 @@ use crate::machine::NodeId;
 use super::bindings::{FunctionLookup, Resolution};
 use super::scope::Scope;
 
+// Test-only entry counter for `Scope::resolve_dispatch_with_chain`. Used by the
+// fast-lane dispatch-shape tests (`scheduler::tests::dispatch_shapes`) to assert
+// that no-keyword shapes (`BareTypeLeaf`, `TypeCall`, `FunctionValueCall`,
+// `BareIdentifier`) route around the candidate machinery — the counter must not
+// advance for a fast-lane shape. Lives on a thread-local because the test harness
+// runs each test in a single thread and constructs a fresh scheduler per case.
+#[cfg(test)]
+thread_local! {
+    static RESOLVE_DISPATCH_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Test-only: read the entry counter. Returns the number of times
+/// `resolve_dispatch_with_chain` has been entered on this thread since the last reset.
+#[cfg(test)]
+pub fn resolve_dispatch_entry_count() -> usize {
+    RESOLVE_DISPATCH_ENTRIES.with(|c| c.get())
+}
+
+/// Test-only: zero the entry counter so a subsequent call to
+/// `resolve_dispatch_entry_count` measures only the operations that follow.
+#[cfg(test)]
+pub fn reset_resolve_dispatch_entry_count() {
+    RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(0));
+}
+
 /// Picked function plus the per-slot classification the dispatch driver needs for
 /// auto-wrap, replay-park, and eager-sub scheduling. Sole carrier of the disjoint
 /// `(eager_indices | wrap_indices | ref_name_indices)` invariant documented on
@@ -74,6 +99,8 @@ impl<'a> Scope<'a> {
         expr: &KExpression<'a>,
         chain: Option<&LexicalFrame>,
     ) -> ResolveOutcome<'a> {
+        #[cfg(test)]
+        RESOLVE_DISPATCH_ENTRIES.with(|c| c.set(c.get() + 1));
         let key = expr.untyped_key();
         // Bare-name peeks resolve in the *dispatch* scope, not the ancestor whose bucket is
         // under test — a name bound in an inner scope must still be found when the matching

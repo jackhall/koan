@@ -4,10 +4,99 @@ use crate::machine::model::{KObject, Parseable};
 use crate::machine::{
     BindingIndex, Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Scope,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::core::ResolveTypeExprOutcome;
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
+
+/// Pre-walk classification of a `KExpression` into the four no-keyword fast-lane
+/// shapes plus the catch-all keyword-bearing shape. Driven by [`classify_dispatch_shape`]
+/// at the top of [`Scheduler::run_dispatch`]; the four no-keyword variants run their own
+/// handlers and never enter `resolve_dispatch_with_chain`. `Keyworded` falls into the
+/// existing Phase 1-4 candidate pipeline unchanged.
+///
+/// Rationale: only `Keyworded` calls have candidates in `bindings.functions`. The other
+/// shapes (a bare identifier, a leaf type token, a type-call like `(List Number)`, a
+/// function-value call like `(f 7)`) all resolve through scope value/type lookups, not
+/// the overload bucket — so the candidate machinery does no useful work for them.
+///
+/// See the unified-walk roadmap item D4 / D5.
+/// Pre-walk classification of a `KExpression` into the four no-keyword fast-lane
+/// shapes plus the catch-all keyword-bearing shape. The variants carry per-shape
+/// indices into `expr.parts` rather than reference data — borrowing references would
+/// keep `expr` borrowed for the dispatch driver's whole match, which conflicts with
+/// the keyworded arm needing to move `expr` into `resolve_dispatch_with_chain`.
+pub(super) enum DispatchShape {
+    /// Single bare `Identifier` part. Handler reads the name out of
+    /// `expr.parts[0]`.
+    BareIdentifier,
+    /// Single bare leaf `Type` part. Handler reads the `TypeExpr` out of
+    /// `expr.parts[0]`.
+    BareTypeLeaf,
+    /// Type-call shape: head (index 0) is a leaf `Type`, every other part is a leaf
+    /// `Type`. Handler synthesizes `TypeExpr { name: head.name, params: List(args) }`
+    /// and elaborates through `scope.resolve_type_expr`.
+    TypeCall,
+    /// Function-value call: head (index 0) is a lowercase `Identifier`, followed by
+    /// ≥1 non-keyword parts. Handler resolves the head and falls back to the
+    /// keyworded path when it doesn't bind to a `KFunction`.
+    FunctionValueCall,
+    /// A keyword appears anywhere in `expr.parts`, OR the expression doesn't fit any
+    /// fast-lane shape (parameterized Type head, literal head, `Future` head, etc.).
+    /// Drives the existing candidate-walk pipeline.
+    Keyworded,
+}
+
+/// One-pass classifier. **Sweeps every part for `Keyword` first** so a mixed shape
+/// like `(f IF x)` (lowercase head, keyword in body) goes to `Keyworded` — only the
+/// candidate machinery knows how to dispatch against the `(_ IF _)` bucket. Only when
+/// the no-keyword precondition is established do we branch on head shape.
+///
+/// Single-part fast-lane: a parens-wrapped bare name (`(some_var)`) or leaf type
+/// (`(Number)`) maps to `BareIdentifier` / `BareTypeLeaf`. Anything else single-part
+/// (literal, `Future`, parameterized Type) falls to `Keyworded` — the parser keeps
+/// those for the candidate path.
+///
+/// Multi-part fast-lane: head is leaf `Type` *and* every other part is leaf `Type` →
+/// `TypeCall`. Head is lowercase `Identifier` → `FunctionValueCall`. Parameterized
+/// Type tokens like `(List<Number>)` are NOT a `TypeCall` shape; only the parens-form
+/// `(List Number)` with leaf-Type args qualifies (per plan §D4).
+pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
+    // 1. Any Keyword part anywhere ⇒ Keyworded. Head position is not special — D4's
+    // "sweep first, branch on head second" ordering.
+    if expr.parts.iter().any(|p| matches!(&p.value, ExpressionPart::Keyword(_))) {
+        return DispatchShape::Keyworded;
+    }
+    // 2. Single-part cases.
+    if let [only] = expr.parts.as_slice() {
+        return match &only.value {
+            ExpressionPart::Identifier(_) => DispatchShape::BareIdentifier,
+            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+                DispatchShape::BareTypeLeaf
+            }
+            // Parenthesized literal, Future, parameterized Type, ListLiteral, ...:
+            // not a fast-lane shape; the keyworded path surfaces today's Deferred /
+            // Unmatched / DispatchFailed for these.
+            _ => DispatchShape::Keyworded,
+        };
+    }
+    // 3. Multi-part, no-keyword. Branch on head-token shape. An empty parts list
+    // (which the parser never produces but the scheduler can construct via splicing)
+    // falls through to `Keyworded` so the candidate path surfaces today's
+    // `DispatchFailed`.
+    let Some(head_part) = expr.parts.first() else {
+        return DispatchShape::Keyworded;
+    };
+    match &head_part.value {
+        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None)
+            && expr.parts[1..].iter().all(|p| matches!(&p.value,
+                ExpressionPart::Type(inner) if matches!(inner.params, TypeParams::None))) =>
+            DispatchShape::TypeCall,
+        ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
+        _ => DispatchShape::Keyworded,
+    }
+}
 
 /// Outcome of resolving a bare-name part (`Identifier` or leaf `Type`) against the
 /// dispatching scope. Shared between Phase 3 (wrap-slot eager resolve) and Phase 4
@@ -133,11 +222,12 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 }
 
 impl<'a> Scheduler<'a> {
-    /// Dispatch driver: a linear pipeline.
+    /// Dispatch driver. Opens with [`classify_dispatch_shape`]; the four no-keyword
+    /// shapes (`BareIdentifier`, `BareTypeLeaf`, `TypeCall`, `FunctionValueCall`) run
+    /// their fast-lane handlers and never enter `resolve_dispatch_with_chain`. The
+    /// `Keyworded` arm — the only shape with candidates in `bindings.functions` — drives
+    /// the existing Phase 2-4 pipeline:
     ///
-    /// 1. **`try_short_circuit`** — bare-name match in the current scope. A `Value` hit
-    ///    terminates immediately; a `Placeholder` hit installs a park edge and rewrites the
-    ///    slot to a `Lift`. `Unbound` and non-bare-name shapes fall through.
     /// 2. **`Scope::resolve_dispatch`** — one chain walk yielding a [`Resolved`],
     ///    `Ambiguous(n)`, `Deferred`, or `Unmatched`. `Ambiguous` and `Unmatched` surface
     ///    as structured errors. `Deferred` jumps to schedule-deps; `Resolved` continues.
@@ -149,8 +239,8 @@ impl<'a> Scheduler<'a> {
     ///    `(MAKESET IntOrd)` doesn't race the FIFO submission order. Keying by the
     ///    full bucket (not just the lead keyword) keeps overloads with shared head
     ///    keywords but different signatures from colliding. Value / type slot
-    ///    bare-name forward-reference parks ride phases 1 and 3 of this driver via
-    ///    `Scope::resolve` and the name-keyed `placeholders` table.
+    ///    bare-name forward-reference parks ride the fast-lane handlers and Phase 3
+    ///    via `Scope::resolve` and the name-keyed `placeholders` table.
     ///
     ///    2.5: **Placeholder install** — if the picked function carried a `binder_name`
     ///    extractor, install its dispatch-time name placeholder against this slot's
@@ -167,6 +257,11 @@ impl<'a> Scheduler<'a> {
     ///    `Bind` slot. If no subs needed, bind the function directly and step to its
     ///    body.
     ///
+    /// Fast lane is one-pass: `BareTypeLeaf` and `TypeCall` don't fall back; their
+    /// failures surface directly. Only `FunctionValueCall` falls back to the
+    /// `Keyworded` path when the head doesn't resolve to a function — a keyword-headed
+    /// overload may still match.
+    ///
     /// See [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)
     /// for the bare-name short-circuit, placeholder install, and forward-name park rules
     /// referenced above.
@@ -177,9 +272,42 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        // Phase 1.
-        if let Some(step) = self.try_short_circuit(&expr, scope, idx) {
-            return Ok(step);
+        // Fast lane: classify before any walk. The four no-keyword shapes route around
+        // `resolve_dispatch_with_chain` entirely (no candidates to consider for them);
+        // `Keyworded` falls into the Phase 2-4 pipeline below.
+        match classify_dispatch_shape(&expr) {
+            DispatchShape::BareIdentifier => {
+                // Classifier guarantees expr.parts is single-element Identifier.
+                let name = match &expr.parts[0].value {
+                    ExpressionPart::Identifier(n) => n.clone(),
+                    _ => unreachable!("BareIdentifier shape implies single Identifier part"),
+                };
+                if let Some(step) = self.fast_lane_bare_identifier(&name, scope, idx) {
+                    return Ok(step);
+                }
+                // Unbound bare identifier falls through to the keyworded path so
+                // `value_lookup::body_identifier` produces the structured `UnboundName`
+                // surface (preserves today's contract).
+            }
+            DispatchShape::BareTypeLeaf => {
+                let t = match &expr.parts[0].value {
+                    ExpressionPart::Type(t) => t.clone(),
+                    _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
+                };
+                return Ok(self.fast_lane_bare_type_leaf(&t, scope));
+            }
+            DispatchShape::TypeCall => {
+                return Ok(self.fast_lane_type_call(&expr, scope));
+            }
+            DispatchShape::FunctionValueCall => {
+                if let Some(step) = self.fast_lane_function_value_call(&expr, scope, idx) {
+                    return Ok(step);
+                }
+                // Head didn't resolve to a function: fall through to the keyworded path
+                // so a matching keyword-headed overload (`(f IF x)`-like) can still
+                // resolve, or surface today's `DispatchFailed` / `UnboundName`.
+            }
+            DispatchShape::Keyworded => {}
         }
 
         // Phase 2. `Ambiguous` / `Unmatched` propagate as `Err` (rather than
@@ -454,51 +582,228 @@ impl<'a> Scheduler<'a> {
         self.install_combined_park(to_wait, expr, pre_subs, idx)
     }
 
-    /// Phase 1. Bare-name short-circuit. `Some(step)` only fires on `Value` (terminate
-    /// with the bound value) or `Placeholder` (install park edge, rewrite to `Lift`).
-    /// `Unbound` and non-bare-name shapes return `None` for the caller to continue.
+    /// Fast lane for `DispatchShape::BareIdentifier`. Resolves the name against the
+    /// dispatching scope. `Some(step)` fires on `Value` (terminate with the bound value)
+    /// or `Placeholder` (install park edge, rewrite the slot to a `Lift`). `Unbound`
+    /// returns `None`, letting the caller fall through to the keyworded path so
+    /// `value_lookup::body_identifier` produces the structured `UnboundName` error.
     ///
-    /// The Lift transition is unique to single-bare-name short-circuit (no other phase
-    /// rewrites the slot to a Lift on park) — combined-park phases call
+    /// The Lift transition is unique to this single-bare-name short-circuit (no other
+    /// phase rewrites the slot to a Lift on park) — combined-park phases call
     /// [`Self::install_combined_park`] instead, which keeps the slot as a Dispatch and
     /// re-runs the full pipeline on wake.
-    fn try_short_circuit(
+    ///
+    /// This is the post-classifier home for the old `try_short_circuit` — folded into
+    /// the shape-driven dispatch routing per the unified-walk roadmap.
+    fn fast_lane_bare_identifier(
+        &mut self,
+        name: &str,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Option<NodeStep<'a>> {
+        // Chain-gated: a later-sibling binding is invisible to this consumer, so
+        // a name that lexically does not yet exist falls through to the standard
+        // dispatch / `UnboundName` path rather than short-circuiting on a hidden
+        // value.
+        match scope.resolve_with_chain(name, self.active_chain.as_deref()) {
+            Resolution::Value(obj) => Some(NodeStep::Done(NodeOutput::Value(obj))),
+            Resolution::Placeholder(producer_id) => {
+                // Notify edge, not Owned: the producer is a sibling slot this Lift only
+                // parks on for a wake — it is not part of this slot's reclaim subtree.
+                // `add_park_edge` installs the forward wake on `notify_list[producer]`
+                // and bumps `pending_deps[idx]` in the same atomic body; `free` skips
+                // past Notify edges via `owned_children`. Producer-not-terminal
+                // precondition: `Resolution::Placeholder` is only returned between
+                // submission and terminalization of the placeholder's slot, so
+                // `producer_id` is not yet terminal here.
+                self.deps.add_park_edge(producer_id, NodeId(idx));
+                Some(NodeStep::Replace {
+                    work: NodeWork::Lift(LiftState::Pending(producer_id)),
+                    frame: None,
+                    function: None,
+                    block_entry: None,
+                    body_index: 0,
+                })
+            }
+            // Unbound falls through so `value_lookup`'s body produces the structured
+            // `UnboundName` error.
+            Resolution::UnboundName => None,
+        }
+    }
+
+    /// Fast lane for `DispatchShape::BareTypeLeaf` (`(Number)`, `(IntOrd)`, etc.).
+    /// Routes through `coerce_type_token_value` so the dispatch-phase carrier matches
+    /// what `value_lookup::body_type_expr` would synthesize — `KTypeValue` for builtin
+    /// leaves and aliases, paired carrier (`KSignature` / `KModule` / `StructType` /
+    /// `TaggedUnionType`) for nominal identities via the dual-write lookup.
+    ///
+    /// `UnboundName` surfaces directly here rather than falling back: bare leaf-Type
+    /// dispatch has no candidate-machinery alternative, and the candidate path would
+    /// surface the same `UnboundName` after a wasted bucket walk.
+    fn fast_lane_bare_type_leaf(
+        &mut self,
+        t: &TypeExpr,
+        scope: &'a Scope<'a>,
+    ) -> NodeStep<'a> {
+        let chain = self.active_chain.as_deref();
+        match coerce_type_token_value(scope, t, chain) {
+            Ok(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+            Err(KError { kind: KErrorKind::UnboundName(n), .. }) => {
+                NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
+            }
+            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        }
+    }
+
+    /// Fast lane for `DispatchShape::TypeCall` — the parens-form `(List Number)` /
+    /// `(Dict KString Number)` / `(ConstructorApply T)` etc. with every arg a leaf
+    /// `Type` token. Synthesizes a parameterized `TypeExpr` and elaborates it through
+    /// `Scope::resolve_type_expr`. The result `KType` is wrapped as `KTypeValue` so
+    /// the carrier matches every other dispatch-phase type-side result.
+    ///
+    /// `Park` from the elaborator (a placeholder in the type-side bindings, or a
+    /// referenced user-type still in `pending_types`) surfaces as an installed park
+    /// edge plus a slot rebuild — the same shape `install_combined_park` produces for
+    /// Phase 3 parks. `Unbound` surfaces directly; no fall back to the keyworded path
+    /// because leaf-Type-only args have no candidate-machinery alternative.
+    fn fast_lane_type_call(
+        &mut self,
+        expr: &KExpression<'a>,
+        scope: &'a Scope<'a>,
+    ) -> NodeStep<'a> {
+        // Classifier guarantees expr.parts[0] is a leaf Type and every subsequent part
+        // is a leaf Type.
+        let head = match &expr.parts[0].value {
+            ExpressionPart::Type(t) => t,
+            _ => unreachable!("TypeCall shape implies leaf-Type head"),
+        };
+        let inner: Vec<TypeExpr> = expr.parts[1..]
+            .iter()
+            .map(|p| match &p.value {
+                ExpressionPart::Type(t) => t.clone(),
+                _ => unreachable!(
+                    "classify_dispatch_shape guarantees every TypeCall arg is a leaf Type",
+                ),
+            })
+            .collect();
+        let synth = TypeExpr {
+            name: head.name.clone(),
+            params: TypeParams::List(inner),
+            builtin_cache: std::cell::OnceCell::new(),
+        };
+        match scope.resolve_type_expr(&synth) {
+            ResolveTypeExprOutcome::Done(kt) => {
+                let obj = scope.arena.alloc(KObject::KTypeValue(kt.clone()));
+                NodeStep::Done(NodeOutput::Value(obj))
+            }
+            ResolveTypeExprOutcome::Unbound(msg) => NodeStep::Done(NodeOutput::Err(KError::new(
+                KErrorKind::UnboundName(msg),
+            ))),
+            ResolveTypeExprOutcome::Park(_producers) => {
+                // The elaborator reported a producer to wait on. Surface as a
+                // `ShapeError` for now — the unified walk's PR C will handle this
+                // through the cached-outcome park path; PR B's contract is "leaf-Type
+                // args never produce a Park" under today's elaborator, so this is a
+                // defensive arm rather than a hot path.
+                NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "type-call `{}` requires forward references to be resolved",
+                    synth.render()
+                )))))
+            }
+        }
+    }
+
+    /// Fast lane for `DispatchShape::FunctionValueCall` — `f (x = 7)` where `f`
+    /// resolves to a `KFunction` value and the args are a single nested-parens
+    /// `<name> = <value>` list whose names cover every signature `Argument`.
+    ///
+    /// **One admission rule**: `expr.parts[1..]` is exactly `[Spanned(Expression(inner))]`
+    /// and `f.signature.matches_without_keywords(inner)` reports `true`. Named-argument
+    /// calls are the only valid `FunctionValueCall` surface — koan's user-facing form
+    /// for invoking a function value is `f (a = 1, b = 2)`, never `f 1 2`. There is no
+    /// positional admission path: `(f 7)` is not a koan call shape, and a putative
+    /// no-keyword FN signature is not a thing users can write today.
+    ///
+    /// On admission the fast lane reconstructs the positional expression via
+    /// [`KFunction::reconstruct_positional`] (which interleaves the signature's
+    /// `Keyword` elements between picked-by-name argument values, identical to
+    /// [`KFunction::apply`]'s rebuild) and dispatches through `schedule_deps_filtered`
+    /// with `picked = Some(f)`. Sub-Expression / ListLiteral / DictLiteral values
+    /// inside the reconstructed expression schedule through schedule-all the same way
+    /// the candidate path would have. The bypass saves the candidate walk, the
+    /// `call_by_name`-body invocation, and the `BodyResult::Tail` re-dispatch.
+    ///
+    /// `Some(step)` covers the named-arg admission plus the forward-reference park:
+    /// - head → `KFunction(f)`, named-arg admission fires → bind directly.
+    /// - head → `Placeholder(producer)` → install combined park; the re-dispatch on
+    ///   wake re-runs the fast lane against the now-bound function.
+    ///
+    /// `None` (fall through to the keyworded path) covers:
+    /// - head unbound.
+    /// - head bound to a non-function value (number, string, type carrier, etc.) —
+    ///   the candidate path can still match `dispatch_constructor`-style overloads
+    ///   for tagged-union / struct constructors.
+    /// - head → `KFunction(f)` but the args aren't a single nested-parens shape, or
+    ///   `matches_without_keywords` returns false (missing arg, unknown name,
+    ///   malformed pair list, type mismatch). `call_by_name`'s body surfaces the
+    ///   structured error.
+    fn fast_lane_function_value_call(
         &mut self,
         expr: &KExpression<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Option<NodeStep<'a>> {
-        if let [Spanned { value: ExpressionPart::Identifier(name), .. }] = expr.parts.as_slice() {
-            // Chain-gated: a later-sibling binding is invisible to this consumer, so
-            // a name that lexically does not yet exist falls through to the standard
-            // dispatch / `UnboundName` path rather than short-circuiting on a hidden
-            // value.
-            match scope.resolve_with_chain(name, self.active_chain.as_deref()) {
-                Resolution::Value(obj) => Some(NodeStep::Done(NodeOutput::Value(obj))),
-                Resolution::Placeholder(producer_id) => {
-                    // Notify edge, not Owned: the producer is a sibling slot this Lift
-                    // only parks on for a wake — it is not part of this slot's reclaim
-                    // subtree. `add_park_edge` installs the forward wake on
-                    // `notify_list[producer]` and bumps `pending_deps[idx]` in the same
-                    // atomic body; `free` skips past Notify edges via `owned_children`.
-                    // Producer-not-terminal precondition: `Resolution::Placeholder` is
-                    // only returned between submission and terminalization of the
-                    // placeholder's slot, so `producer_id` is not yet terminal here.
-                    self.deps.add_park_edge(producer_id, NodeId(idx));
-                    Some(NodeStep::Replace {
-                        work: NodeWork::Lift(LiftState::Pending(producer_id)),
-                        frame: None,
-                        function: None,
-                        block_entry: None,
-                        body_index: 0,
-                    })
+        // Classifier guarantees expr.parts[0] is a lowercase Identifier.
+        let head = match &expr.parts[0].value {
+            ExpressionPart::Identifier(n) => n.clone(),
+            _ => unreachable!("FunctionValueCall shape implies Identifier head"),
+        };
+        let chain = self.active_chain.as_deref();
+        match scope.resolve_with_chain(&head, chain) {
+            Resolution::Value(KObject::KFunction(f, _)) => {
+                // Named-arg admission: args must be a single nested-parens part whose
+                // inner parts are `<name> = <value>` triples covering every signature
+                // Argument. Anything else — bare positional args, multiple parts,
+                // missing names — falls through to `call_by_name` for the structured
+                // error surface.
+                let [Spanned { value: ExpressionPart::Expression(inner), .. }] =
+                    expr.parts[1..].as_ref()
+                else {
+                    return None;
+                };
+                if !f.signature.matches_without_keywords(inner.as_ref()) {
+                    return None;
                 }
-                // Unbound falls through so `value_lookup`'s body produces the structured
-                // `UnboundName` error.
-                Resolution::UnboundName => None,
+                let inner_parts = inner.parts.clone();
+                match f.reconstruct_positional(inner_parts) {
+                    Ok(rebuilt) => Some(self.schedule_deps_filtered(
+                        rebuilt,
+                        None,
+                        Some(*f),
+                        Vec::new(),
+                        scope,
+                        idx,
+                    )),
+                    // matches_without_keywords already verified the call shape; a
+                    // reconstruction error here would be an invariant break. Surface
+                    // as Err on the slot rather than falling through.
+                    Err(e) => Some(NodeStep::Done(NodeOutput::Err(e))),
+                }
             }
-        } else {
-            None
+            // Head bound to a non-function value (number, string, etc.). Fall through
+            // so the candidate path can match a keyword-shape overload (e.g. type
+            // constructors via `dispatch_constructor`) or surface today's
+            // `DispatchFailed`.
+            Resolution::Value(_) => None,
+            Resolution::Placeholder(producer_id) => {
+                // Forward-reference park: install a park edge and rebuild this slot as
+                // a re-Dispatch so the now-bound function reaches the fast lane on
+                // wake. Uses the same combined-park machinery as Phase 3.
+                Some(self.install_combined_park(vec![producer_id], expr.clone(), Vec::new(), idx))
+            }
+            // Unbound — fall through to the keyworded path so the existing error
+            // surface (`DispatchFailed` / `UnboundName`) applies.
+            Resolution::UnboundName => None,
         }
     }
 

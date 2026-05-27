@@ -4,6 +4,9 @@
 //! - [`reclaim`] — `free` / node-reclamation invariants.
 //! - [`combine`] — combine, defer_to, and tail-call slot reuse.
 //! - [`dispatch`] — overload routing rules end-to-end through the scheduler.
+//! - [`dispatch_shapes`] — no-keyword fast-lane (PR B of the unified-walk roadmap
+//!   item): asserts the four no-keyword shapes route around
+//!   `resolve_dispatch_with_chain`, and keyword-bearing shapes still enter it.
 //! - [`lexical_provenance`] — `LexicalFrame` chain attachment + assembly.
 //! - [`index_gated`] — index-gated resolution end-to-end (forward / backward refs,
 //!   value-style vs nominal-binder visibility, overload pre-filter, type-side gate,
@@ -15,6 +18,7 @@
 
 mod combine;
 mod dispatch;
+mod dispatch_shapes;
 mod execute;
 mod index_gated;
 mod lexical_provenance;
