@@ -68,17 +68,14 @@ fn pre_run_install_then_body_finalize_clears_placeholder() {
 fn let_t_cycle_errors() {
     use crate::machine::RuntimeArena;
     use crate::machine::execute::Scheduler;
-    use crate::machine::KErrorKind;
+    use crate::machine::{KErrorKind, SchedulerHandle};
     use crate::builtins::default_scope;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let exprs = parse("LET Ty = Ty").unwrap();
-    let mut ids = Vec::new();
-    for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
-    }
+    let ids = sched.enter_block(scope.id, exprs, scope);
     sched.execute().expect("execute does not surface per-slot errors");
     let res = sched.read_result(ids[0]);
     match res {

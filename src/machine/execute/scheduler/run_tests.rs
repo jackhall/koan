@@ -2,6 +2,7 @@
 //! replay-park routing in `run_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
 use crate::builtins::default_scope;
+use crate::machine::SchedulerHandle;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use super::Scheduler;
@@ -40,10 +41,7 @@ fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let ids: Vec<_> = parse_all("LET y = (x)\nLET x = 1")
-        .into_iter()
-        .map(|e| sched.add_dispatch(e, scope))
-        .collect();
+    let ids = sched.enter_block(scope.id, parse_all("LET y = (x)\nLET x = 1"), scope);
     sched.execute().unwrap();
     let err = sched
         .read_result(ids[0])
@@ -94,10 +92,7 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let ids: Vec<_> = parse_all("LET y = z\nLET z = 9")
-        .into_iter()
-        .map(|e| sched.add_dispatch(e, scope))
-        .collect();
+    let ids = sched.enter_block(scope.id, parse_all("LET y = z\nLET z = 9"), scope);
     sched.execute().unwrap();
     let err = sched
         .read_result(ids[0])
@@ -142,12 +137,14 @@ fn call_by_name_forward_function_reference_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    for e in parse_all(
-        "LET out = (DOUBLE 7)\n\
-         FN (DOUBLE x :Number) -> Number = (x)",
-    ) {
-        sched.add_dispatch(e, scope);
-    }
+    sched.enter_block(
+        scope.id,
+        parse_all(
+            "LET out = (DOUBLE 7)\n\
+             FN (DOUBLE x :Number) -> Number = (x)",
+        ),
+        scope,
+    );
     let err = sched.execute().expect_err("forward-FN call should fail dispatch");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_)),

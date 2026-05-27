@@ -59,6 +59,9 @@ without first landing something else:
   TRY a static return type (arms-agree vs synthesized-union vs hybrid), closing the
   divergent-result hazard symmetric to the divergent-bind hazard the lexical-provenance
   phase closes structurally.
+- [RETURN from anywhere](roadmap/early-return.md) — explicit `(RETURN <expr>)` form
+  that ends the enclosing FN's body from any position and TCO-optimizes when `<expr>`
+  is a function call, decoupling tail-call position from "last statement in the body".
 
 ## Open items
 

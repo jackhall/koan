@@ -51,6 +51,15 @@ impl LexicalFrame {
         Rc::new(LexicalFrame { scope_id, index, parent })
     }
 
+    /// A chain that mentions no real scope — `index_for` returns `None` for every
+    /// `ScopeId`, so the visibility predicate sees every scope as "complete" and
+    /// every binding in it as visible. Used by [`crate::machine::execute::Scheduler::add`]'s
+    /// auto-root branch (no ambient chain) so a REPL / test-fixture submission
+    /// against an existing scope reads through to previously-bound names.
+    pub fn detached() -> Rc<Self> {
+        Rc::new(LexicalFrame { scope_id: ScopeId::DETACHED, index: 0, parent: None })
+    }
+
     /// Walk this chain (head first) and return the first frame's `index` whose
     /// `scope_id` matches. `None` means "no frame on this chain mentions that
     /// scope" — the index-gated resolution gate reads `None` as "this scope is

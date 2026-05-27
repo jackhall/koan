@@ -39,6 +39,13 @@ impl ScopeId {
     /// have a nonzero random session, so the sentinel cannot collide.
     pub const SENTINEL: ScopeId = ScopeId { session: 0, idx: 0 };
 
+    /// Sentinel id reserved for [`LexicalFrame::detached`](super::lexical_frame::LexicalFrame::detached)
+    /// — a chain frame mentioning no real scope, so `index_for` against any real
+    /// `ScopeId` returns `None` and the visibility predicate treats every scope as
+    /// "complete." Session is 0, idx is 1; cannot collide with [`Self::SENTINEL`]
+    /// (idx 0) or any real minted id (nonzero session).
+    pub const DETACHED: ScopeId = ScopeId { session: 0, idx: 1 };
+
     /// Mint a fresh `ScopeId`. Called by [`Scope`](super::Scope) constructors.
     pub fn next() -> ScopeId {
         ScopeId { session: session_id(), idx: next_idx() }

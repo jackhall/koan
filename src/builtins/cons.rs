@@ -13,7 +13,7 @@
 //! the later CONS step's `add_dispatch` happens only after the outer slot has tail-replaced
 //! and the head's slot has already started, so the later binding's placeholder is not yet
 //! installed when the head dispatches. This is a known trade-off vs. the parallel
-//! `plan_body_statements` path used by MODULE / SIG.
+//! `enter_body_block` path used by MODULE / SIG.
 //!
 //! Effect ordering between head and tail is topological, not source-order: head is a
 //! sibling slot in the ready queue, tail is the slot's replaced work. Either may run
@@ -71,7 +71,7 @@ pub fn body<'a>(
 /// ```
 ///
 /// Bodies with `n < 2` parts, or any non-`Expression` part, pass through unchanged — the
-/// stricter all-`Expression` rule mirrors `SchedulerHandle::plan_body_statements` so a single
+/// stricter all-`Expression` rule mirrors `SchedulerHandle::enter_body_block` so a single
 /// statement like `(LET x = (FN ...))` doesn't get mis-split (its inner `Expression`
 /// would otherwise look like a second statement).
 pub(crate) fn fold_multi_statement<'a>(body: KExpression<'a>) -> KExpression<'a> {

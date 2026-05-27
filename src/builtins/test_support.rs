@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::machine::model::KObject;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
-use crate::machine::{KError, RuntimeArena, Scope, SchedulerHandle};
+use crate::machine::{KError, RuntimeArena, Scope};
 use crate::machine::execute::Scheduler;
 use crate::machine::model::ast::KExpression;
 use crate::parse::parse;
@@ -61,10 +61,14 @@ pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
 
 /// Semantic errors surface via `read_result`, not `execute`; reach for [`run_one_err`] when
 /// the test expects a `KError`.
+///
+/// Uses `add_dispatch` (not `enter_block`) so the submission picks up the detached
+/// auto-root chain — visibility is "complete" against `scope`, so every binding from
+/// prior `run(...)` calls reads through. This matches REPL semantics: a single
+/// expression queried against an existing scope sees everything in it.
 pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = Scheduler::new();
-    let ids = sched.enter_block(scope.id, vec![expr], scope);
-    let id = ids[0];
+    let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should succeed");
     sched.read(id)
 }
@@ -73,8 +77,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
 /// node finished without an error.
 pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
     let mut sched = Scheduler::new();
-    let ids = sched.enter_block(scope.id, vec![expr], scope);
-    let id = ids[0];
+    let id = sched.add_dispatch(expr, scope);
     sched.execute().expect("scheduler should not surface errors directly");
     match sched.read_result(id) {
         Ok(_) => panic!("expected error"),
@@ -82,10 +85,19 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
     }
 }
 
+/// REPL-style setup: parse `source` and dispatch each top-level statement
+/// individually via `add_dispatch`, so each picks up the detached auto-root chain
+/// and reads through to every previously-bound name. Chained calls
+/// (`run(scope, "...")` then `run(scope, "...")`) compose because each submission's
+/// visibility is "complete" against `scope`. Tests that need to assert top-level
+/// statement *ordering* (e.g. forward-ref-fails behavior) call `enter_block`
+/// directly instead.
 pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
-    sched.enter_block(scope.id, exprs, scope);
+    for expr in exprs {
+        sched.add_dispatch(expr, scope);
+    }
     sched.execute().expect("scheduler should succeed");
 }
 

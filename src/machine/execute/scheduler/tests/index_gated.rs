@@ -11,6 +11,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
+use crate::machine::SchedulerHandle;
 use crate::machine::execute::Scheduler;
 use crate::machine::model::{KObject, KType, Parseable};
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
@@ -36,7 +37,7 @@ fn run_scope<'a>(arena: &'a RuntimeArena, source: &str) -> &'a Scope<'a> {
     let scope = default_scope(arena, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
-    for e in exprs { sched.add_dispatch(e, scope); }
+    sched.enter_block(scope.id, exprs, scope);
     let _ = sched.execute();
     scope
 }
@@ -46,7 +47,7 @@ fn run_collect_err(source: &str) -> Option<KError> {
     let scope = default_scope(&arena, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
-    let ids: Vec<_> = exprs.into_iter().map(|e| sched.add_dispatch(e, scope)).collect();
+    let ids: Vec<_> = sched.enter_block(scope.id, exprs, scope);
     if let Err(e) = sched.execute() {
         return Some(e);
     }

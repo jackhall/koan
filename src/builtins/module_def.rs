@@ -57,7 +57,7 @@ pub fn body<'a>(
     // Plan each top-level body statement onto the outer scheduler. A statement referencing
     // a sibling name dispatched in the same batch parks on its placeholder via the standard
     // notify-walk; the inner-scheduler version of this code couldn't see those placeholders.
-    let deps = sched.plan_body_statements(child_scope, body_expr);
+    let deps = sched.enter_body_block(child_scope, body_expr);
 
     // The closure runs on the outer scheduler's main loop after every body statement has
     // terminalized. `name` is moved in by clone so it lives across the closure's life.

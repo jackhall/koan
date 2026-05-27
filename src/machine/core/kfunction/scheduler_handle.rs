@@ -1,5 +1,5 @@
 //! Scheduler-facing types a builtin body uses to spawn additional work: stable `NodeId`
-//! handles, the `SchedulerHandle` trait (with the default `plan_body_statements` planner
+//! handles, the `SchedulerHandle` trait (with the default `enter_body_block` planner
 //! shared by binder builtins), and the `CombineFinish` closure type for `Combine` slots.
 //! Defined in `kfunction` so `BuiltinFn` / `BodyResult` can name them without `kfunction`
 //! importing from `execute`; `execute/scheduler.rs` impls `SchedulerHandle`.
@@ -90,7 +90,7 @@ pub trait SchedulerHandle<'a> {
     /// = current `active_chain`) and dispatches each statement against `scope`,
     /// returning their `NodeId`s. The single primitive every block-entry site funnels
     /// through: top-level (`interpret.rs`), MODULE / SIG body
-    /// (`plan_body_statements`), and TRY body's success-as-block.
+    /// (`enter_body_block`), and TRY body's success-as-block.
     fn enter_block(
         &mut self,
         scope_id: ScopeId,
@@ -117,7 +117,7 @@ pub trait SchedulerHandle<'a> {
     /// otherwise the whole body is dispatched as a single statement. The stricter all-
     /// Expression rule prevents `LET x = (FN ...)` from being mis-split (its inner
     /// `Expression` part would otherwise look like a second statement).
-    fn plan_body_statements(
+    fn enter_body_block(
         &mut self,
         scope: &'a Scope<'a>,
         body_expr: KExpression<'a>,

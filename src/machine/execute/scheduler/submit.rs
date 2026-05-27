@@ -90,26 +90,17 @@ impl<'a> Scheduler<'a> {
     /// it. Block-entry sites that compute their own chain call
     /// [`Self::add_with_chain`] directly.
     ///
-    /// When there is no ambient chain (top-level test fixture, tests poking at
-    /// scheduler internals directly), synthesize a root frame `(scope.id, idx)` so
-    /// the chain invariant holds. `idx` is consumed from the scope's monotonic
-    /// statement counter, so each auto-root submission picks up a fresh index that
-    /// sits strictly above all previous bindings in this scope — the same shape
-    /// `enter_block` uses for explicit-block submissions. Otherwise REPL-style /
-    /// test-fixture re-entry (`add_dispatch(LET x = 1)` then `add_dispatch(x)`)
-    /// would assign both calls the same index and the visibility gate
-    /// (`b.idx < c`, strict) would hide the binding from the consumer.
-    ///
-    /// The strict assertion in [`Self::add_with_chain`] never fires through this
-    /// path; it remains in place as a tripwire for any future code that builds an
-    /// explicit-chain `None` argument by mistake.
+    /// When there is no ambient chain (REPL-style submission, test fixtures
+    /// poking at scheduler internals), synthesize a detached chain so the visibility
+    /// predicate treats every scope as "complete" and the submission reads through
+    /// to every previously-bound name. This is what lets a fixture call
+    /// `run(scope, "(LET x = 1)")` then `run_one(scope, parse_one("x"))` and have
+    /// the second submission see `x`.
     pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         if self.active_chain.is_some() {
             self.add_with_chain(work, scope, None)
         } else {
-            let idx = scope.consume_statement_indices(1);
-            let chain = LexicalFrame::root(scope.id, idx);
-            self.add_with_chain(work, scope, Some(chain))
+            self.add_with_chain(work, scope, Some(LexicalFrame::detached()))
         }
     }
 

@@ -46,7 +46,7 @@ pub fn body<'a>(
     let arena = scope.arena;
     let decl_scope = arena.alloc_scope(Scope::child_under_sig(scope, name.clone()));
 
-    let deps = sched.plan_body_statements(decl_scope, body_expr);
+    let deps = sched.enter_body_block(decl_scope, body_expr);
 
     // SIG is a nominal binder (D7 carve-out).
     let bind_index = sched

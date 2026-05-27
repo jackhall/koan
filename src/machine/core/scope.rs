@@ -95,16 +95,6 @@ pub struct Scope<'a> {
     pub id: ScopeId,
     pending: PendingQueue<'a>,
     pub kind: ScopeKind,
-    /// Monotonic counter handing out the next [`LexicalFrame::index`] to a statement
-    /// submitted into this scope via [`crate::machine::execute::SchedulerHandle::enter_block`].
-    /// Starts at `1` (reserving `0` for the builtin tag — see [`BindingIndex::BUILTIN`])
-    /// and advances by `n` per `enter_block` call so a REPL-style series of submissions
-    /// against the same scope assigns each statement a unique, monotonically-increasing
-    /// position. Re-entry (test fixtures calling `enter_block(scope.id, ...)` repeatedly
-    /// against the same scope) continues the count rather than resetting it; the previous
-    /// invocations' bindings remain visible because their indices sit strictly less than
-    /// the new statements' cutoffs.
-    next_statement_index: RefCell<usize>,
 }
 
 /// A scope's binding storage. `Owned` is the default — the scope holds its own
@@ -166,7 +156,6 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
-            next_statement_index: RefCell::new(1),
         }
     }
 
@@ -185,7 +174,6 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
-            next_statement_index: RefCell::new(1),
         }
     }
 
@@ -199,7 +187,6 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Sig { name },
-            next_statement_index: RefCell::new(1),
         }
     }
 
@@ -214,7 +201,6 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Module { name },
-            next_statement_index: RefCell::new(1),
         }
     }
 
@@ -235,25 +221,7 @@ impl<'a> Scope<'a> {
             id: ScopeId::next(),
             pending: PendingQueue::new(),
             kind: ScopeKind::Anonymous,
-            next_statement_index: RefCell::new(1),
         }
-    }
-
-    /// Consume the next `count` statement indices from this scope's counter. Used by
-    /// [`crate::machine::execute::SchedulerHandle::enter_block`] to assign each statement
-    /// a monotonically-increasing position in this scope's source order. Returns the
-    /// starting index; the caller hands out `start..(start + count)` to its statements.
-    ///
-    /// Counters advance across repeated `enter_block` calls against the same scope, so
-    /// a test fixture that calls `run(...)` to register bindings and then `run_one(...)`
-    /// to read them sees the new call assigned an index strictly greater than the
-    /// previous binds. That's what keeps previously-bound names visible (their indices
-    /// sit strictly less than the new call's cutoff under the `b.idx < c` predicate).
-    pub fn consume_statement_indices(&self, count: usize) -> usize {
-        let mut next = self.next_statement_index.borrow_mut();
-        let start = *next;
-        *next += count;
-        start
     }
 
     pub fn bindings(&self) -> &Bindings<'a> {
