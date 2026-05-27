@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use crate::machine::model::ast::KExpression;
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::{CallArena, KError, Scope, ScopeId};
 use crate::machine::model::types::UntypedKey;
@@ -152,13 +152,29 @@ impl<'a> BodyResult<'a> {
         frame: Option<Rc<CallArena>>,
         scope_id: ScopeId,
     ) -> Self {
+        Self::tail_with_block_at_index(expr, frame, scope_id, 0)
+    }
+
+    /// Block-entry tail-replace with an explicit chain index for the freshly-
+    /// pushed block frame. `0` (the default) for single-statement arm bodies;
+    /// `N` lets MATCH / TRY tail-replace into the *last* statement of an N-
+    /// statement arm body whose earlier `N-1` siblings were submitted via
+    /// `enter_block` against the arm's per-call child scope (chain indices
+    /// `1..N-1`). The last statement at index `N` sees every earlier sibling
+    /// under the strict `b.idx < c` predicate.
+    pub fn tail_with_block_at_index(
+        expr: KExpression<'a>,
+        frame: Option<Rc<CallArena>>,
+        scope_id: ScopeId,
+        body_index: usize,
+    ) -> Self {
         BodyResult::Tail {
             expr,
             frame,
             function: None,
             block_entry: Some(scope_id),
             advance_index: false,
-            body_index: 0,
+            body_index,
         }
     }
 
@@ -178,6 +194,26 @@ impl<'a> BodyResult<'a> {
             BodyResult::DeferTo(_) => panic!("{ctx}: expected Value, got DeferTo"),
             BodyResult::Err(e) => panic!("{ctx}: expected Value, got Err({e})"),
         }
+    }
+}
+
+/// Split an FN / MATCH-arm / TRY-arm body into top-level statements. Mirrors the
+/// all-`Expression` detection used by [`super::scheduler_handle::SchedulerHandle::enter_body_block`]
+/// so a body of bare sub-expressions (`((s_0) (s_1) ... (s_{N-1}))`) yields `N`
+/// separately-dispatchable statements; any non-`Expression` part (or `< 2` parts)
+/// leaves the body as a single statement. Always returns at least one element.
+pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
+    let is_multi = body.parts.len() >= 2
+        && body.parts.iter().all(|p| matches!(p.value, ExpressionPart::Expression(_)));
+    if is_multi {
+        body.parts.into_iter()
+            .filter_map(|p| match p.value {
+                ExpressionPart::Expression(e) => Some(*e),
+                _ => None,
+            })
+            .collect()
+    } else {
+        vec![body]
     }
 }
 

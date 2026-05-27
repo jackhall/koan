@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope,
@@ -7,6 +8,7 @@ use crate::machine::{
 };
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use crate::machine::core::kfunction::body::split_body_statements;
 use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -100,12 +102,35 @@ pub fn body<'a>(
         BindingIndex { idx: 0, nominal_binder: true },
     );
     // The arm body enters a fresh lexical block (its scope is the per-MATCH child
-    // scope, distinct from the call-site scope). `tail_with_block` records the
-    // entry so the scheduler prepends `(child.id, 0)` to the slot's chain on
-    // reinstall — `function: None` because MATCH attaches no `&KFunction` to
-    // the slot, so the FN-body chain-assembly path is skipped.
+    // scope, distinct from the call-site scope). For multi-statement arm bodies
+    // (`tag -> ((s_0) (s_1) ... (s_{N-1}))`) split into N statements: submit the
+    // first N-1 as siblings into the arm scope at chain indices `1..N-1`, then
+    // tail-replace into the last statement at index `N`. Single-statement bodies
+    // pass through unchanged at index 0.
     let arm_scope_id = child.id;
-    BodyResult::tail_with_block(branch_body, Some(frame), arm_scope_id)
+    let statements = split_body_statements(branch_body);
+    let n = statements.len();
+    if n >= 2 {
+        let call_site_chain = sched
+            .current_lexical_chain()
+            .expect("MATCH body runs inside an enter_block / active_chain");
+        let mut stmts = statements;
+        let last = stmts.pop().expect("n >= 2");
+        for (i, stmt) in stmts.into_iter().enumerate() {
+            let chain = LexicalFrame::push(
+                Some(call_site_chain.clone()),
+                arm_scope_id,
+                i + 1,
+            );
+            sched.with_active_frame(frame.clone(), &mut |s| {
+                s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
+            });
+        }
+        BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n)
+    } else {
+        let only = statements.into_iter().next().expect("n >= 1");
+        BodyResult::tail_with_block(only, Some(frame), arm_scope_id)
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

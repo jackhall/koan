@@ -4,7 +4,7 @@ use crate::machine::core::{
     assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, LexicalFrame,
     ResolveTypeExprOutcome, RuntimeArena, Scope,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression};
+use super::body::split_body_statements;
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
     SignatureElement,
@@ -325,26 +325,6 @@ impl<'a> KFunction<'a> {
                 }
             }
         }
-    }
-}
-
-/// Split an FN body into top-level statements. Mirrors the all-`Expression`
-/// detection used by [`SchedulerHandle::enter_body_block`] so a body of bare
-/// sub-expressions (`((s_0) (s_1) ... (s_{N-1}))`) yields `N` separately-
-/// dispatchable statements; any non-`Expression` part (or `< 2` parts) leaves
-/// the body as a single statement. Always returns at least one element.
-fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
-    let is_multi = body.parts.len() >= 2
-        && body.parts.iter().all(|p| matches!(p.value, ExpressionPart::Expression(_)));
-    if is_multi {
-        body.parts.into_iter()
-            .filter_map(|p| match p.value {
-                ExpressionPart::Expression(e) => Some(*e),
-                _ => None,
-            })
-            .collect()
-    } else {
-        vec![body]
     }
 }
 

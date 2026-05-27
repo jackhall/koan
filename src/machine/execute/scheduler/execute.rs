@@ -265,7 +265,17 @@ fn compute_replace_chain<'a>(
     match (new_function, new_frame) {
         (Some(_f), Some(frame)) => assemble_body_chain(frame.scope(), prev_chain, body_index),
         _ => {
-            let start = if advance_index { 1 } else { 0 };
+            // Non-FN block-entry (MATCH / TRY arm). `body_index` overrides the
+            // freshly-pushed frame's index for the "tail-replace into the LAST
+            // statement of a multi-statement arm body" case; otherwise
+            // `advance_index` (CONS-tail historical) selects 1, default 0.
+            let start = if body_index > 0 {
+                body_index
+            } else if advance_index {
+                1
+            } else {
+                0
+            };
             LexicalFrame::push(Some(prev_chain), scope_id, start)
         }
     }

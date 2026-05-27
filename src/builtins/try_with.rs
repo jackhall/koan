@@ -18,6 +18,7 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CallArena, CatchFinish, KError, KErrorKind,
@@ -25,6 +26,7 @@ use crate::machine::{
 };
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use crate::machine::core::kfunction::body::split_body_statements;
 use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -129,9 +131,34 @@ fn dispatch_branch<'a>(
         it_obj,
         BindingIndex { idx: 0, nominal_binder: true },
     );
-    let _ = sched;
     // WITH-arm body is its own lexical block; chain assembly mirrors MATCH arms.
-    BodyResult::tail_with_block(body_expr, Some(frame), child.id)
+    // Multi-statement bodies (`tag -> ((s_0) ... (s_{N-1}))`) split into N
+    // statements: the first N-1 run as siblings into the arm scope at chain
+    // indices `1..N-1`, and the TRY slot tail-replaces into the last at `N`.
+    let arm_scope_id = child.id;
+    let statements = split_body_statements(body_expr);
+    let n = statements.len();
+    if n >= 2 {
+        let call_site_chain = sched
+            .current_lexical_chain()
+            .expect("TRY body runs inside an enter_block / active_chain");
+        let mut stmts = statements;
+        let last = stmts.pop().expect("n >= 2");
+        for (i, stmt) in stmts.into_iter().enumerate() {
+            let chain = LexicalFrame::push(
+                Some(call_site_chain.clone()),
+                arm_scope_id,
+                i + 1,
+            );
+            sched.with_active_frame(frame.clone(), &mut |s| {
+                s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
+            });
+        }
+        BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n)
+    } else {
+        let only = statements.into_iter().next().expect("n >= 1");
+        BodyResult::tail_with_block(only, Some(frame), arm_scope_id)
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
