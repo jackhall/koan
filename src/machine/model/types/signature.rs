@@ -241,29 +241,31 @@ impl<'a> ExpressionSignature<'a> {
         })
     }
 
-    /// Named-argument call-shape match — the *only* admission check for the
-    /// `FunctionValueCall` fast lane. Parses `args.parts` as `<name> = <value>` triples
-    /// (or the dict-literal surface — see [`NamedPairs`]) and reports `true` iff every
-    /// `SignatureElement::Argument` in this signature has a name-keyed entry with a
-    /// type-accepting value, with no residual unknown names. `SignatureElement::Keyword`
-    /// entries are *elided* — they appear in the reconstructed positional form (see
-    /// [`KFunction::apply`](crate::machine::core::kfunction::KFunction::apply)) but never
-    /// appear in the named-arg surface.
+    /// Named-argument call-shape match. Parses `args.parts` as `<name> = <value>`
+    /// triples (or the dict-literal surface — see [`NamedPairs`]) and reports
+    /// `true` iff every `SignatureElement::Argument` in this signature has a
+    /// name-keyed entry with a type-accepting value, with no residual unknown
+    /// names. `SignatureElement::Keyword` entries are *elided* — they appear in
+    /// the reconstructed positional form (see
+    /// [`KFunction::reconstruct_positional`](crate::machine::core::kfunction::KFunction::reconstruct_positional))
+    /// but never appear in the named-arg surface.
     ///
-    /// Pairs the [`KFunction::apply`] path that rebuilds the positional expression by
-    /// interleaving signature keywords between picked-by-name values: that path is the
-    /// invocation side; this is the call-shape check that gates whether the invocation
-    /// can run at all. Arg-order independence falls out of the named-by-name lookup —
-    /// `(a = 1, b = 2)` and `(b = 2, a = 1)` both satisfy `(a :Number PICK b :Number)`.
+    /// Companion to `KFunction::reconstruct_positional`, which rebuilds the
+    /// positional expression by interleaving signature keywords between
+    /// picked-by-name values: that path is the invocation side; this is the
+    /// call-shape probe. Arg-order independence falls out of the named-by-name
+    /// lookup — `(a = 1, b = 2)` and `(b = 2, a = 1)` both satisfy `(a :Number
+    /// PICK b :Number)`.
     ///
-    /// Used by [`fast_lane_function_value_call`](
-    ///   crate::machine::execute::scheduler::dispatch::Scheduler::fast_lane_function_value_call)
-    /// to gate the bypass of `resolve_dispatch_with_chain` for `f (x = 7)`-shape calls
-    /// where `f` resolves to a `KFunction` directly. A parse failure (malformed pair
-    /// list, duplicate name, missing-`=`-separator, etc.) returns `false`; the handler
-    /// then falls through to the keyworded path so `call_by_name`'s body surfaces the
-    /// structured error. There is no companion positional `matches_*` admission — koan
-    /// has no `f 1 2` call syntax for function values, so the named-arg shape is the
+    /// Originally used by `fast_lane_function_value_call` as a gating check before
+    /// calling `reconstruct_positional`; since Phase 1 of
+    /// `scratch/plan-fast-lane-subsume.md` deleted the keyworded `call_by_name`
+    /// fall-through, the fast lane calls `reconstruct_positional` directly and
+    /// surfaces its structured `KError` instead of pre-checking with this. The
+    /// helper remains in the public API for downstream callers and as a cheap
+    /// shape probe; the dispatch scheduler no longer consults it on the named-arg
+    /// surface. There is no companion positional `matches_*` admission — koan has
+    /// no `f 1 2` call syntax for function values, so the named-arg shape is the
     /// whole user-facing surface.
     pub fn matches_without_keywords(&self, args: &KExpression<'a>) -> bool {
         let mut pairs = match NamedPairs::parse(args, "function call") {

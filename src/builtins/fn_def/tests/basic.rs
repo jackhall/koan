@@ -158,8 +158,10 @@ fn fn_signature_with_no_keyword_is_rejected() {
 }
 
 /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a
-/// callable handle via `LET f = (FN ...)`. Calling the captured handle is tested in
-/// [`call_by_name`](crate::builtins::call_by_name).
+/// callable handle via `LET f = (FN ...)`. Calling the captured handle is tested by
+/// the fast-lane dispatch surface in
+/// `src/machine/execute/scheduler/tests/dispatch_shapes.rs` (the migrated suite
+/// for the deleted `call_by_name` builtin).
 #[test]
 fn fn_def_returns_the_registered_kfunction() {
     let arena = RuntimeArena::new();

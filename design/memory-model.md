@@ -279,8 +279,8 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   asserts 50 ECHO calls grow the run-root arena by exactly 50 — one lifted
   return value per call, with all per-call scaffolding freed at call return.
 - Closure-escape tests
-  ([`closure_escapes_outer_call_and_remains_invocable`](../src/builtins/call_by_name.rs),
-  [`escaped_closure_with_param_returns_body_value`](../src/builtins/call_by_name.rs))
+  ([`fast_lane_closure_escapes_outer_call_and_remains_invocable`](../src/machine/execute/scheduler/tests/dispatch_shapes.rs),
+  [`fast_lane_escaped_closure_with_param_returns_body_value`](../src/machine/execute/scheduler/tests/dispatch_shapes.rs))
   confirm a closure returned from its defining frame remains invocable.
 - [`add_during_active_data_borrow_queues_and_drains`](../src/machine/core/scope.rs)
   holds a `data` borrow, calls `bind_value`, drops the borrow, drains, and

@@ -235,19 +235,22 @@ mod tests {
     }
 
     /// Stage 3.2 removed the anonymous `UNION (...)` form. The bare parens shape no
-    /// longer matches any registered overload — `DispatchFailed` surfaces out of
-    /// `Scheduler::execute()` (the failure is structural, not a node-level result).
+    /// longer matches any registered overload. Under the Phase 1 fast-lane subsumption
+    /// (`roadmap/dispatch_fix/unified-walk.md`), the inner sub-expression `(ok :Number
+    /// err :Str)` classifies as a `FunctionValueCall` with bare identifier `ok` as the
+    /// head; the fast lane resolves `ok` → `Unbound` and surfaces `UnboundName("ok")`
+    /// directly on the slot rather than falling through to a candidate-walk that would
+    /// produce a scheduler-level `DispatchFailed`. The outer `<bind>` propagates the
+    /// dep error to the top-level slot.
     #[test]
     fn anonymous_union_fails_dispatch() {
-        use crate::machine::execute::Scheduler;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let mut sched = Scheduler::new();
-        sched.add_dispatch(parse_one("UNION (ok :Number err :Str)"), scope);
-        let err = sched.execute().expect_err("bare UNION should fail dispatch");
+        let err = run_one_err(scope, parse_one("UNION (ok :Number err :Str)"));
         assert!(
-            matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
-            "expected DispatchFailed on bare UNION (...), got {err}",
+            matches!(&err.kind, KErrorKind::UnboundName(name) if name == "ok"),
+            "expected UnboundName(\"ok\") on bare UNION (...) (sub-expression `ok` \
+             is unbound in the fast lane); got {err}",
         );
     }
 

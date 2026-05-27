@@ -1,10 +1,12 @@
 use crate::builtins::value_lookup::coerce_type_token_value;
+use crate::builtins::{struct_value, tagged_union};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::{KObject, Parseable};
 use crate::machine::{
     BindingIndex, Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Scope,
 };
 use crate::machine::core::ResolveTypeExprOutcome;
+use crate::machine::core::kfunction::BodyResult;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -210,6 +212,27 @@ pub(super) fn resolve_name_part<'a>(
     }
 }
 
+/// Pull the inner parts of a `f (...)` call out of `expr.parts[1..]`. The
+/// `FunctionValueCall` classifier guarantees an Identifier head and ≥1 non-keyword
+/// body part; this checks the body is exactly a single nested-parens
+/// (`ExpressionPart::Expression`) and clones its inner parts. Anything else
+/// surfaces a `DispatchFailed` `KError` — koan has no positional call shape for
+/// function values, so any non-paren body is a genuine shape error. Free
+/// function (not on `Scheduler`) so the caller's `&mut self` borrow is unaffected
+/// during the extraction.
+fn extract_named_call_inner<'a>(
+    expr: &KExpression<'a>,
+) -> Result<Vec<Spanned<ExpressionPart<'a>>>, KError> {
+    let [Spanned { value: ExpressionPart::Expression(inner), .. }] = expr.parts[1..].as_ref()
+    else {
+        return Err(KError::new(KErrorKind::DispatchFailed {
+            expr: expr.summarize(),
+            reason: "no matching function".to_string(),
+        }));
+    };
+    Ok(inner.parts.clone())
+}
+
 /// Centralized propagation: clone a dep's terminal error and attach a caller-chosen
 /// frame. `frame = None` is the `run_catch` frameless variant — passing a `None`-shaped
 /// label keeps the propagation chain consistent without inventing an empty frame.
@@ -300,12 +323,14 @@ impl<'a> Scheduler<'a> {
                 return Ok(self.fast_lane_type_call(&expr, scope));
             }
             DispatchShape::FunctionValueCall => {
-                if let Some(step) = self.fast_lane_function_value_call(&expr, scope, idx) {
-                    return Ok(step);
-                }
-                // Head didn't resolve to a function: fall through to the keyworded path
-                // so a matching keyword-headed overload (`(f IF x)`-like) can still
-                // resolve, or surface today's `DispatchFailed` / `UnboundName`.
+                // Phase 1 of the call_by_name subsumption (see
+                // `roadmap/dispatch_fix/unified-walk.md`): the fast lane now handles
+                // every Identifier-headed call outcome — KFunction admission, struct
+                // / tagged-union constructor application, non-callable head, unbound
+                // head, and forward-reference park — directly. No more fall-through
+                // to Keyworded for this shape; the `call_by_name` builtin that
+                // formerly served the fall-through has been deleted.
+                return Ok(self.fast_lane_function_value_call(&expr, scope, idx));
             }
             DispatchShape::Keyworded => {}
         }
@@ -713,46 +738,48 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Fast lane for `DispatchShape::FunctionValueCall` — `f (x = 7)` where `f`
-    /// resolves to a `KFunction` value and the args are a single nested-parens
-    /// `<name> = <value>` list whose names cover every signature `Argument`.
+    /// Fast lane for `DispatchShape::FunctionValueCall` — Identifier-headed calls of
+    /// the surface form `f (...)` where `f` resolves to a `KFunction`, a `StructType`,
+    /// or a `TaggedUnionType` carrier. Phase 1 of the `call_by_name` subsumption
+    /// (`roadmap/dispatch_fix/unified-walk.md`): this handler now covers every outcome
+    /// the deleted `call_by_name` builtin used to serve.
     ///
-    /// **One admission rule**: `expr.parts[1..]` is exactly `[Spanned(Expression(inner))]`
-    /// and `f.signature.matches_without_keywords(inner)` reports `true`. Named-argument
-    /// calls are the only valid `FunctionValueCall` surface — koan's user-facing form
-    /// for invoking a function value is `f (a = 1, b = 2)`, never `f 1 2`. There is no
-    /// positional admission path: `(f 7)` is not a koan call shape, and a putative
-    /// no-keyword FN signature is not a thing users can write today.
+    /// **Admission rule for the call shape.** `expr.parts[1..]` must be exactly
+    /// `[Spanned(Expression(inner))]` — a single nested-parens body. Named-argument
+    /// calls are the only valid `FunctionValueCall` surface; koan has no `f 1 2`
+    /// positional call syntax for function values. Anything else (bare positional
+    /// arg, multiple parts) surfaces `DispatchFailed`, matching the keyworded-path
+    /// surface the `call_by_name` typed-slot bind used to produce.
     ///
-    /// On admission the fast lane reconstructs the positional expression via
-    /// [`KFunction::reconstruct_positional`] (which interleaves the signature's
-    /// `Keyword` elements between picked-by-name argument values, identical to
-    /// [`KFunction::apply`]'s rebuild) and dispatches through `schedule_deps_filtered`
-    /// with `picked = Some(f)`. Sub-Expression / ListLiteral / DictLiteral values
-    /// inside the reconstructed expression schedule through schedule-all the same way
-    /// the candidate path would have. The bypass saves the candidate walk, the
-    /// `call_by_name`-body invocation, and the `BodyResult::Tail` re-dispatch.
+    /// **Head resolution branches (four admission types per D1.1 of the plan):**
+    /// - `KFunction(f, _)` → reconstruct the positional expression via
+    ///   [`KFunction::reconstruct_positional`] (interleaves signature `Keyword`
+    ///   elements between picked-by-name argument values) and dispatch through
+    ///   `schedule_deps_filtered` with `picked = Some(f)`. Any error from
+    ///   reconstruction (`MissingArg`, `ShapeError` for malformed / unknown / duplicate)
+    ///   surfaces directly as `NodeOutput::Err`.
+    /// - `StructType { .. }` → [`struct_value::apply`] returns a `BodyResult::Tail`
+    ///   re-dispatching through the `struct_construct` primitive. Tail expressions
+    ///   become a `NodeWork::Dispatch` replacement on this slot, identical to how
+    ///   `run_combine` / `invoke_to_step` decode `BodyResult::Tail`.
+    /// - `TaggedUnionType { .. }` → same shape via [`tagged_union::apply`] → the
+    ///   `tagged_union_construct` primitive.
+    /// - Anything else (`KNumber`, `KString`, `Bool`, instance `Struct`, `Module`, …)
+    ///   → `TypeMismatch { arg: "verb", expected: "KFunction or Type", got }` — same
+    ///   wording the deleted `call_by_name` body produced.
     ///
-    /// `Some(step)` covers the named-arg admission plus the forward-reference park:
-    /// - head → `KFunction(f)`, named-arg admission fires → bind directly.
-    /// - head → `Placeholder(producer)` → install combined park; the re-dispatch on
-    ///   wake re-runs the fast lane against the now-bound function.
+    /// **Forward-reference park** (`Placeholder(producer)`) installs a combined park
+    /// and rebuilds this slot as a re-Dispatch; on wake the fast lane re-runs against
+    /// the now-bound carrier.
     ///
-    /// `None` (fall through to the keyworded path) covers:
-    /// - head unbound.
-    /// - head bound to a non-function value (number, string, type carrier, etc.) —
-    ///   the candidate path can still match `dispatch_constructor`-style overloads
-    ///   for tagged-union / struct constructors.
-    /// - head → `KFunction(f)` but the args aren't a single nested-parens shape, or
-    ///   `matches_without_keywords` returns false (missing arg, unknown name,
-    ///   malformed pair list, type mismatch). `call_by_name`'s body surfaces the
-    ///   structured error.
+    /// **Unbound head** surfaces `UnboundName(name)` directly — D1.2: no more
+    /// fall-through to Keyworded for this shape.
     fn fast_lane_function_value_call(
         &mut self,
         expr: &KExpression<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
-    ) -> Option<NodeStep<'a>> {
+    ) -> NodeStep<'a> {
         // Classifier guarantees expr.parts[0] is a lowercase Identifier.
         let head = match &expr.parts[0].value {
             ExpressionPart::Identifier(n) => n.clone(),
@@ -760,50 +787,95 @@ impl<'a> Scheduler<'a> {
         };
         let chain = self.active_chain.as_deref();
         match scope.resolve_with_chain(&head, chain) {
-            Resolution::Value(KObject::KFunction(f, _)) => {
-                // Named-arg admission: args must be a single nested-parens part whose
-                // inner parts are `<name> = <value>` triples covering every signature
-                // Argument. Anything else — bare positional args, multiple parts,
-                // missing names — falls through to `call_by_name` for the structured
-                // error surface.
-                let [Spanned { value: ExpressionPart::Expression(inner), .. }] =
-                    expr.parts[1..].as_ref()
-                else {
-                    return None;
-                };
-                if !f.signature.matches_without_keywords(inner.as_ref()) {
-                    return None;
-                }
-                let inner_parts = inner.parts.clone();
+            Resolution::Value(obj) => self.dispatch_callable_value(expr, obj, scope, idx),
+            Resolution::Placeholder(producer_id) => {
+                // Forward-reference park: install a park edge and rebuild this slot as
+                // a re-Dispatch so the now-bound carrier reaches the fast lane on
+                // wake. Uses the same combined-park machinery as Phase 3.
+                self.install_combined_park(vec![producer_id], expr.clone(), Vec::new(), idx)
+            }
+            Resolution::UnboundName => NodeStep::Done(NodeOutput::Err(KError::new(
+                KErrorKind::UnboundName(head),
+            ))),
+        }
+    }
+
+    /// Branch on the resolved head carrier of a `FunctionValueCall`. Split out from
+    /// [`Self::fast_lane_function_value_call`] so the head-resolution match arm stays
+    /// readable; per D1.1 of `scratch/plan-fast-lane-subsume.md` only three carrier
+    /// shapes admit, and everything else surfaces a `TypeMismatch` with the wording
+    /// the deleted `call_by_name` body produced.
+    fn dispatch_callable_value(
+        &mut self,
+        expr: &KExpression<'a>,
+        head_obj: &'a KObject<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        // Extract the inner parts from the single-nested-parens body. Anything else
+        // is not a koan call shape — surface `DispatchFailed` to match today's
+        // keyworded-path bind-error surface.
+        let inner_parts = match extract_named_call_inner(expr) {
+            Ok(parts) => parts,
+            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        };
+        match head_obj {
+            KObject::KFunction(f, _) => {
+                // D1.4: error precedence (missing → unknown → malformed) is enforced
+                // by `reconstruct_positional`; propagate its `Err(KError)` directly
+                // rather than running a separate admission check first. The bind step
+                // in `schedule_deps_filtered` re-validates types per arg.
                 match f.reconstruct_positional(inner_parts) {
-                    Ok(rebuilt) => Some(self.schedule_deps_filtered(
+                    Ok(rebuilt) => self.schedule_deps_filtered(
                         rebuilt,
                         None,
                         Some(*f),
                         Vec::new(),
                         scope,
                         idx,
-                    )),
-                    // matches_without_keywords already verified the call shape; a
-                    // reconstruction error here would be an invariant break. Surface
-                    // as Err on the slot rather than falling through.
-                    Err(e) => Some(NodeStep::Done(NodeOutput::Err(e))),
+                    ),
+                    Err(e) => NodeStep::Done(NodeOutput::Err(e)),
                 }
             }
-            // Head bound to a non-function value (number, string, etc.). Fall through
-            // so the candidate path can match a keyword-shape overload (e.g. type
-            // constructors via `dispatch_constructor`) or surface today's
-            // `DispatchFailed`.
-            Resolution::Value(_) => None,
-            Resolution::Placeholder(producer_id) => {
-                // Forward-reference park: install a park edge and rebuild this slot as
-                // a re-Dispatch so the now-bound function reaches the fast lane on
-                // wake. Uses the same combined-park machinery as Phase 3.
-                Some(self.install_combined_park(vec![producer_id], expr.clone(), Vec::new(), idx))
+            KObject::StructType { .. } => {
+                self.schedule_constructor_tail(struct_value::apply(head_obj, inner_parts))
             }
-            // Unbound — fall through to the keyworded path so the existing error
-            // surface (`DispatchFailed` / `UnboundName`) applies.
-            Resolution::UnboundName => None,
+            KObject::TaggedUnionType { .. } => {
+                self.schedule_constructor_tail(tagged_union::apply(head_obj, inner_parts))
+            }
+            other => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "KFunction or Type".to_string(),
+                got: other.summarize(),
+            }))),
+        }
+    }
+
+    /// Decode a constructor `BodyResult` returned by `struct_value::apply` /
+    /// `tagged_union::apply` into a `NodeStep`. `Tail(expr)` rewrites the slot as a
+    /// `Dispatch(expr)` re-dispatch through the construction primitive — same
+    /// `BodyResult::Tail` decode the `run_combine` / `invoke_to_step` paths use, but
+    /// without a `frame` / `function` / `block_entry` (constructors are scope-neutral
+    /// builtin tails). `Value` / `DeferTo` are unreachable for these constructor
+    /// `apply` helpers but handled defensively to avoid a future-bug-hidden-by-panic.
+    fn schedule_constructor_tail(&mut self, body: BodyResult<'a>) -> NodeStep<'a> {
+        match body {
+            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
+                NodeStep::Replace {
+                    work: NodeWork::dispatch(expr),
+                    frame,
+                    function,
+                    block_entry,
+                    body_index,
+                }
+            }
+            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+            BodyResult::DeferTo(_) => NodeStep::Done(NodeOutput::Err(KError::new(
+                KErrorKind::ShapeError(
+                    "constructor apply returned DeferTo (scheduler invariant break)".to_string(),
+                ),
+            ))),
+            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }
 

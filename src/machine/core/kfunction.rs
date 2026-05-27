@@ -206,30 +206,24 @@ impl<'a> KFunction<'a> {
         })
     }
 
-    /// Apply this function to a named-argument list (the inner parts of `f (a: 1, b: 2)`):
-    /// parse name-value pairs, consume one per declared argument, and emit a
-    /// `BodyResult::Tail` matching the keyword-bucketed signature on re-dispatch.
-    ///
-    /// Validation precedence (first wins): missing arg → unknown arg. Arity is implicit —
-    /// [`NamedPairs`] rejects duplicate names at parse time, so consuming every declared
-    /// argument and finding the residual empty witnesses an exact match.
-    pub fn apply<'b>(&self, args: Vec<Spanned<ExpressionPart<'b>>>) -> BodyResult<'b> {
-        match self.reconstruct_positional(args) {
-            Ok(expr) => BodyResult::tail(expr),
-            Err(e) => BodyResult::Err(e),
-        }
-    }
-
-    /// Shared part-reconstruction core for the named-arg invocation path. Parses `args`
+    /// Part-reconstruction core for the named-arg invocation path. Parses `args`
     /// as `<name> = <value>` triples (or the dict-literal surface) and rebuilds the
     /// positional expression with each signature `Keyword` element re-interleaved at
     /// its declared position. Bind / dispatch against the returned expression mirrors
     /// what the original keyword-bearing call site would have produced.
     ///
-    /// Drives both [`Self::apply`] (which emits the result as a `BodyResult::Tail`
-    /// for the scheduler to re-dispatch through the candidate path) and the dispatch
-    /// scheduler's fast-lane `FunctionValueCall` handler — which calls `bind` on the
-    /// reconstructed expression directly, bypassing `resolve_dispatch_with_chain`.
+    /// Sole caller is the dispatch scheduler's fast-lane `FunctionValueCall`
+    /// handler — which calls `bind` on the reconstructed expression directly via
+    /// `schedule_deps_filtered`, bypassing `resolve_dispatch_with_chain`. The
+    /// former `apply` wrapper that emitted a `BodyResult::Tail` for the deleted
+    /// `call_by_name` builtin to re-dispatch through was removed in Phase 1 of
+    /// `scratch/plan-fast-lane-subsume.md`.
+    ///
+    /// Validation precedence (first wins): malformed pair shape (`ShapeError` from
+    /// `NamedPairs::parse`) → missing arg (`MissingArg`) → unknown arg
+    /// (`ShapeError("unknown name ...")`). Arity is implicit — `NamedPairs` rejects
+    /// duplicate names at parse time, so consuming every declared argument and
+    /// finding the residual empty witnesses an exact match.
     pub fn reconstruct_positional<'b>(
         &self,
         args: Vec<Spanned<ExpressionPart<'b>>>,
@@ -335,14 +329,32 @@ mod tests {
         assert!(!pick.picked_has_binder_name);
     }
 
-    /// `call_by_name`'s shape — `<verb:Identifier> <args:KExpression>` — picked against
-    /// `myFn (x: 1)` returns ref_name_indices = [0]: the Identifier slot is a literal-name
-    /// reference and the function has no binder_name, so replay-park will check whether `myFn`
-    /// resolves to a placeholder.
+    /// The `<verb:Identifier> <args:KExpression>` shape — picked against `myFn (x: 1)`
+    /// — returns ref_name_indices = [0]: the Identifier slot is a literal-name reference
+    /// and the function has no binder_name, so replay-park will check whether `myFn`
+    /// resolves to a placeholder. (Historically this was `call_by_name`'s registered
+    /// signature; that builtin was deleted in Phase 1 of
+    /// `scratch/plan-fast-lane-subsume.md` and the test registers an equivalent
+    /// `[Identifier, KExpression]` overload locally so the classification check
+    /// remains exercised.)
     #[test]
     fn classify_returns_ref_name_indices_for_non_binder_function() {
         let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::Any),
+            elements: vec![
+                SignatureElement::Argument(Argument {
+                    name: "verb".into(),
+                    ktype: KType::Identifier,
+                }),
+                SignatureElement::Argument(Argument {
+                    name: "args".into(),
+                    ktype: KType::KExpression,
+                }),
+            ],
+        };
+        register_builtin(scope, "ident_call_probe", sig, body_any);
         let inner = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Identifier("x".into())),
             Spanned::bare(ExpressionPart::Keyword(":".into())),
@@ -353,7 +365,7 @@ mod tests {
             Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
         ]);
         let f = find_match(scope, &expr)
-            .expect("call_by_name should match Identifier-leading expression");
+            .expect("test overload should match an Identifier-leading expression");
         let pick = f.classify_for_pick(&expr);
         assert!(pick.ref_name_indices.contains(&0));
         assert!(!pick.picked_has_binder_name);

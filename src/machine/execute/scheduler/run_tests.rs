@@ -135,7 +135,7 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
 /// directly (matching the `?` propagation on a dispatch miss; see
 /// `Scheduler::run_dispatch`).
 #[test]
-fn call_by_name_forward_function_reference_is_unbound() {
+fn forward_keyword_function_reference_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();

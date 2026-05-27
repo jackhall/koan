@@ -431,23 +431,27 @@ The rails the dispatch driver feeds:
     `Park` arm is a defensive surface (today's leaf-Type-only args never
     produce one).
   - `FunctionValueCall` (`f (x = 7)`) — `fast_lane_function_value_call`
-    resolves the `Identifier` head: on `Value(KFunction)` it admits the
-    call iff `expr.parts[1..]` is exactly one nested-parens part *and*
-    `ExpressionSignature::matches_without_keywords` accepts the inner
-    `<name> = <value>` triples (the *only* admission rule — koan has no
-    `f 1 2` call syntax for function values, so the named-arg shape is
-    the whole user-facing surface). On admission,
-    `KFunction::reconstruct_positional` rebuilds the positional expression
-    by interleaving the signature's `Keyword` elements between the
-    picked-by-name values and `schedule_deps_filtered` dispatches with
-    `picked = Some(f)`, bypassing both the candidate walk and the
-    `call_by_name` re-dispatch. A `Placeholder` head installs a combined
-    park; head-bound-to-non-function or unbound falls through to
-    `Keyworded` so `dispatch_constructor`-style overloads can still match
-    or the keyworded path can surface today's `DispatchFailed`. The bypass
-    is value-only: missing/unknown/duplicate-named args, malformed-pair
-    shapes, and non-function verbs all fall through to `call_by_name`'s
-    body for the structured error surface.
+    resolves the `Identifier` head and handles every admission outcome
+    directly. The call shape admits iff `expr.parts[1..]` is exactly one
+    nested-parens part (the *only* call shape — koan has no `f 1 2`
+    positional call syntax for function values, so the named-arg shape
+    is the whole user-facing surface). Three head-carrier shapes admit:
+    `KFunction(f, _)` runs `KFunction::reconstruct_positional` to
+    interleave the signature's `Keyword` elements between the
+    picked-by-name values and dispatches via `schedule_deps_filtered`
+    with `picked = Some(f)`; `StructType { .. }` and `TaggedUnionType
+    { .. }` route through `struct_value::apply` and `tagged_union::apply`
+    respectively, each returning a `BodyResult::Tail` that rewrites the
+    slot as a re-Dispatch through the corresponding construction
+    primitive. Any other carrier (number, string, instance struct,
+    module, …) surfaces `TypeMismatch { arg: "verb", expected:
+    "KFunction or Type", got }` directly. A `Placeholder` head installs
+    a combined park; an unbound head surfaces `UnboundName(name)`
+    directly — this shape never falls through to `Keyworded`. Reconstruction
+    errors from `KFunction::reconstruct_positional` (missing /
+    unknown / duplicate-named args, malformed pair shapes) surface as
+    `NodeOutput::Err` with the same structured wording the keyworded
+    path produces.
 
   Forward references resolve through the fast lane and the eager
   name-resolve rail (below), both of which route name lookups through

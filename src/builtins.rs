@@ -10,7 +10,6 @@ use crate::machine::model::values::KObject;
 mod ascribe;
 mod attr;
 mod branch_walk;
-pub mod call_by_name;
 mod catch;
 mod eval;
 mod fn_def;
@@ -36,9 +35,14 @@ pub(crate) mod value_lookup;
 mod value_pass;
 
 /// Route a resolved verb-object to its construction primitive's `apply` function. Returns
-/// `Some(BodyResult)` for `TaggedUnionType` / `StructType`; `None` otherwise. Called from
-/// [`call_by_name`] and [`type_call`]; single growth point for any future first-class
-/// constructible carrier.
+/// `Some(BodyResult)` for `TaggedUnionType` / `StructType`; `None` otherwise. Sole
+/// remaining caller is [`type_call`] (the `call_by_name` builtin that previously
+/// invoked this helper was deleted in Phase 1 of
+/// `scratch/plan-fast-lane-subsume.md`; the dispatch scheduler's
+/// `fast_lane_function_value_call` now calls `struct_value::apply` /
+/// `tagged_union::apply` directly). Phase 2 of the same plan inlines or
+/// relocates this helper alongside the fast lane once `type_call`'s constructor
+/// arms also migrate.
 pub(crate) fn dispatch_constructor<'a>(
     verb_obj: &'a KObject<'a>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
@@ -199,7 +203,10 @@ pub fn default_scope<'a>(
     value_pass::register(scope);
     fn_def::register(scope);
     functor_def::register(scope);
-    call_by_name::register(scope);
+    // `call_by_name` was deleted in Phase 1 of the `unified-walk` follow-up
+    // (`scratch/plan-fast-lane-subsume.md`); its Identifier-headed call
+    // semantics are now served by `fast_lane_function_value_call` in the
+    // dispatch scheduler.
     union::register(scope);
     result::register(scope);
     tagged_union::register(scope);
