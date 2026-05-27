@@ -6,6 +6,7 @@
 //! - [`binder_name`] — dispatch-time placeholder extractor that announces the function's name
 //!   before its body runs.
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::{Argument, KObject, SignatureElement};
 use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
 use crate::machine::NodeId;
@@ -33,6 +34,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
                 next,
                 Some(ExpressionPart::Type(_))
                     | Some(ExpressionPart::Expression(_))
+                    | Some(ExpressionPart::SigiledTypeExpr(_))
                     | Some(ExpressionPart::Future(_))
             );
             if next_is_type_slot {
@@ -125,6 +127,23 @@ pub(crate) fn parse_fn_param_list<'a>(
                         // `slot_idx` is the part's position in `signature.parts` so the
                         // Combine finish can splice the result back into the right slot.
                         sub_dispatches.push((i + 1, (**boxed).clone()));
+                        i += 2;
+                    }
+                    Some(ExpressionPart::SigiledTypeExpr(boxed)) => {
+                        // `:(...)` slot in `name :(...)` annotation. Always sub-Dispatch
+                        // the wrapped SigiledTypeExpr through the dispatcher — the
+                        // same path the `Expression(_)` arm above takes. The dispatcher
+                        // routes the unwrapped inner expression through its standard
+                        // classifier (Keyworded for `:(LIST OF Number)`, TypeCall for
+                        // legacy positional `:(List Number)`, etc.) and returns a
+                        // type-side carrier the Combine finish splices back as
+                        // `Future(_)`. Synchronous shortcut removed in this iteration —
+                        // any sibling-binder placeholder collision must be diagnosed at
+                        // its real source, not papered over here.
+                        let wrapped = KExpression::new(vec![Spanned::bare(
+                            ExpressionPart::SigiledTypeExpr(boxed.clone()),
+                        )]);
+                        sub_dispatches.push((i + 1, wrapped));
                         i += 2;
                     }
                     Some(ExpressionPart::Future(KObject::KTypeValue(kt))) => {
@@ -223,6 +242,7 @@ pub(crate) fn binder_bucket(
                         p.value,
                         ExpressionPart::Type(_)
                             | ExpressionPart::Expression(_)
+                            | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::Future(_)
                     )
                 });
@@ -239,6 +259,7 @@ pub(crate) fn binder_bucket(
                         p.value,
                         ExpressionPart::Type(_)
                             | ExpressionPart::Expression(_)
+                            | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::Future(_)
                     )
                 });
@@ -267,3 +288,4 @@ fn signature_expr_part<'a, 'e>(expr: &'e KExpression<'a>) -> Option<&'e KExpress
         _ => None,
     }
 }
+

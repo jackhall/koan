@@ -65,14 +65,14 @@ fn walk<'a>(
             } else {
                 // Non-parameter leaf: nothing to bind. Disagreement is the caller's
                 // concern (it ran `matches_value`); accept so a concrete-leaf slot like
-                // `:(List Number)` doesn't spuriously fail the unifier.
+                // `:(LIST OF Number)` doesn't spuriously fail the unifier.
                 Ok(())
             }
         }
         (name, TypeParams::List(items)) if name == "List" && items.len() == 1 => match actual {
             KType::List(elem) => walk(&items[0], elem, params, out),
             other => Err(format!(
-                "declared `:(List _)` but value carries `{}`",
+                "declared `:(LIST OF _)` but value carries `{}`",
                 other.name()
             )),
         },
@@ -82,7 +82,7 @@ fn walk<'a>(
                 walk(&items[1], v, params, out)
             }
             other => Err(format!(
-                "declared `:(Dict _ _)` but value carries `{}`",
+                "declared `:(MAP _ -> _)` but value carries `{}`",
                 other.name()
             )),
         },

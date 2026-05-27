@@ -328,14 +328,16 @@ fn classify_tie_bare_names(
     (placeholders, unbound)
 }
 
-/// True iff `expr` carries any `Expression` / `ListLiteral` / `DictLiteral` part —
-/// the shapes the scheduler's eager loop would schedule as sub-Dispatches.
+/// True iff `expr` carries any `Expression` / `SigiledTypeExpr` / `ListLiteral` /
+/// `DictLiteral` part — the shapes the scheduler's eager loop would schedule as
+/// sub-Dispatches.
 fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
     use crate::machine::model::ast::ExpressionPart;
     expr.parts.iter().any(|p| {
         matches!(
             &p.value,
             ExpressionPart::Expression(_)
+                | ExpressionPart::SigiledTypeExpr(_)
                 | ExpressionPart::ListLiteral(_)
                 | ExpressionPart::DictLiteral(_)
         )

@@ -58,6 +58,17 @@ What's shipped that the open items below build on:
   gated `#[cfg(test)]`; production sites that legitimately sweep all members
   (module surface mirroring, signature shape-check, REPL reflection) use the
   value-yielding `iter_data` / `iter_types` / `iter_functions`.
+- *Type language via dispatch.* The `:(...)` sigil is a parse-context marker
+  emitting `ExpressionPart::SigiledTypeExpr(Box<KExpression>)` with no inner
+  shape-folding; the dispatcher's `SigiledTypeExpr` fast lane tail-replaces
+  the slot with a `Dispatch` of the wrapped expression. Keyworded
+  overloads — `LIST OF`, `MAP _ -> _`, `FN`, `FUNCTOR` — register in
+  `builtins/type_constructors.rs` and serve every fresh parameterized-type
+  annotation. The submission walk reifies the binder install channel as
+  `BinderKey::Name` (`LET` / `STRUCT` / `UNION` / `SIG` / `MODULE`) vs.
+  `BinderKey::Bucket` (`FN` / `FUNCTOR`), and `pending_overloads` carries a
+  per-bucket Vec so sibling FN / FUNCTOR overloads coexist as distinct
+  wake sources with earliest-index-visible parking.
 
 ## Next items
 
@@ -132,12 +143,15 @@ functor-heavy collections both build on:
 
 Untangle dispatch into queue-order-independent name resolution plus a single
 unified ancestor walk per call site. The provenance-plumbing, index-gated
-resolution, and recursive-binder-submission phases have shipped (see "What's
-shipped so far"); the remaining phase is the walk-unification and strict-only
-admission collapse:
+resolution, recursive-binder-submission, and type-language-via-dispatch
+phases have shipped (see "What's shipped so far"); the remaining items pick
+up the SCC-context gap surfaced by routing the type language through the
+dispatcher, the user-functor application surface, and the walk-unification
+collapse:
 
 - [Unified walk + strict-only admission](roadmap/dispatch_fix/unified-walk.md)
-- [Type language via dispatch](roadmap/dispatch_fix/type-language-via-dispatch.md)
+- [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
+- [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

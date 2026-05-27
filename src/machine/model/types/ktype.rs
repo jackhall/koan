@@ -176,23 +176,25 @@ pub enum KType<'a> {
 }
 
 impl<'a> KType<'a> {
-    /// Surface-syntax rendering. Mirrors the parser's `Function<(args) -> R>` / `List<T>` /
-    /// `Dict<K, V>` syntax so a round-trip through the parser produces the same `KType`.
+    /// Surface-syntax rendering. Mirrors the keyworded type-language overloads
+    /// (`LIST OF T`, `MAP K -> V`, `FN <args> -> R`, `FUNCTOR <params> -> R`) so the
+    /// rendered form parses back to the same `KType` through the dispatch-driven
+    /// type-language path (see `design/typing/type-language-via-dispatch.md`).
     pub fn name(&self) -> String {
         match self {
             KType::Number => "Number".into(),
             KType::Str => "Str".into(),
             KType::Bool => "Bool".into(),
             KType::Null => "Null".into(),
-            KType::List(t) => format!(":(List {})", t.name()),
-            KType::Dict(k, v) => format!(":(Dict {} {})", k.name(), v.name()),
+            KType::List(t) => format!(":(LIST OF {})", t.name()),
+            KType::Dict(k, v) => format!(":(MAP {} -> {})", k.name(), v.name()),
             KType::KFunction { args, ret } => {
                 let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
-                format!(":(Function ({}) -> {})", arg_names.join(" "), ret.name())
+                format!(":(FN ({}) -> {})", arg_names.join(" "), ret.name())
             }
             KType::KFunctor { params, ret } => {
                 let param_names: Vec<String> = params.iter().map(|p| p.name()).collect();
-                format!(":(Functor ({}) -> {})", param_names.join(" "), ret.name())
+                format!(":(FUNCTOR ({}) -> {})", param_names.join(" "), ret.name())
             }
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
@@ -315,13 +317,13 @@ mod tests {
     #[test]
     fn name_renders_parameterized_list() {
         let t = KType::List(Box::new(KType::List(Box::new(KType::Number))));
-        assert_eq!(t.name(), ":(List :(List Number))");
+        assert_eq!(t.name(), ":(LIST OF :(LIST OF Number))");
     }
 
     #[test]
     fn name_renders_dict() {
         let t = KType::Dict(Box::new(KType::Str), Box::new(KType::Number));
-        assert_eq!(t.name(), ":(Dict Str Number)");
+        assert_eq!(t.name(), ":(MAP Str -> Number)");
     }
 
     #[test]
@@ -330,7 +332,7 @@ mod tests {
             args: vec![KType::Number, KType::Str],
             ret: Box::new(KType::Bool),
         };
-        assert_eq!(t.name(), ":(Function (Number Str) -> Bool)");
+        assert_eq!(t.name(), ":(FN (Number Str) -> Bool)");
     }
 
     #[test]
@@ -339,7 +341,7 @@ mod tests {
             params: vec![KType::Number, KType::Str],
             ret: Box::new(KType::Bool),
         };
-        assert_eq!(t.name(), ":(Functor (Number Str) -> Bool)");
+        assert_eq!(t.name(), ":(FUNCTOR (Number Str) -> Bool)");
     }
 
     #[test]
@@ -395,7 +397,7 @@ mod tests {
             args: vec![],
             ret: Box::new(KType::Any),
         };
-        assert_eq!(t.name(), ":(Function () -> Any)");
+        assert_eq!(t.name(), ":(FN () -> Any)");
     }
 
     #[test]

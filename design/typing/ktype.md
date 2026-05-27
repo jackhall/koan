@@ -82,13 +82,33 @@ types on the variant directly. `KType` is not `Copy`; structural payloads are
 `Box`ed where the variant would otherwise be self-referential.
 
 **Surface syntax** is a glued-right `:` sigil opening an S-expression
-type-expression group. The parser treats `:(...)` as a type-position frame
-anchored to the `:` — `:(List Number)` is one
-[`ExpressionPart::Type`](../../src/machine/model/ast.rs) carrying a structured
-`TypeExpr`, not four tokens. `<` and `>` flow through unencumbered as
-keyword tokens, leaving the arithmetic comparison operators available. The
-framing logic lives in
-[type_expr_frame.rs](../../src/parse/type_expr_frame.rs).
+type-expression group. The parser treats `:(...)` as a parse-context marker
+anchored to the `:` — every sigil emits one
+[`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../../src/machine/model/ast.rs)
+wrapping the raw inner expression verbatim, with no shape recognition at
+parse time. Shape decisions (positional `:(List Number)`, keyworded
+`:(LIST OF Number)`, user-functor `:(MyFunctor (T = IntOrd))`, etc.) are the
+dispatcher's responsibility — the parser's only job is to flag "this slot
+evaluates to a type". `<` and `>` flow through unencumbered as keyword
+tokens, leaving the arithmetic comparison operators available. The framing
+logic lives in [frame.rs](../../src/parse/frame.rs) (`Frame::TypeExpr`);
+the dispatcher's `fast_lane_sigiled_type_expr` handler
+([dispatch.rs](../../src/machine/execute/scheduler/dispatch.rs))
+tail-replaces the slot with a `Dispatch` of the wrapped expression. See
+[type-language-via-dispatch.md](type-language-via-dispatch.md) for the full
+sigil-and-dispatch contract.
+
+**Keyworded surface overloads** for the four builtin parameterized
+constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
+`FUNCTOR <sig> -> _` — register in
+[`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
+alongside the older `LIST_OF` / `DICT_OF` / `FUNCTION_OF` /
+`MODULE_TYPE_OF` builtins in
+[`type_ops/`](../../src/builtins/type_ops.rs). Both surfaces produce
+`KObject::KTypeValue(KType::...)` carriers; the keyworded forms are the
+canonical syntax served by the type-language dispatch path, and the
+`type_ops/` forms are the value-side construction primitives that
+dispatched type-expression sub-expressions assemble through.
 
 ### Variance
 

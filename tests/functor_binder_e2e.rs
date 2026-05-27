@@ -144,12 +144,23 @@ fn functor_binder_e2e_makeset_produces_module() {
     );
 }
 
-/// Surface-disjoint check: `FUNCTOR` at value-position binder and `Functor`
-/// at type-position sigil both work in the same run without collision. The
-/// Type-class token `Functor` (with capital `F` and lowercase rest)
-/// classifies as a Type token; the all-uppercase `FUNCTOR` keyword
-/// classifies as a Keyword. The lexer rule that separates `FN` from
-/// `Function` extends verbatim.
+/// Surface-disjoint check: `FUNCTOR` at value-position binder and the new
+/// keyworded `FUNCTOR` at type-position sigil both work in the same run
+/// without collision. The all-uppercase `FUNCTOR` keyword classifies as a
+/// Keyword in both positions; the dispatcher routes value-side `FUNCTOR <Name>
+/// ...` to the binder overload and sigiled `:(FUNCTOR (T :S) -> Module)` to the
+/// type-constructor overload registered in
+/// [`crate::builtins::type_constructors`].
+///
+/// Pre-type-language-via-dispatch this test used the PascalCase `Functor` head
+/// (`:(Functor (OrderedSig) -> Module)`) routed through the parser's
+/// `Functor`-special-cased `Function`-arrow fold. With the
+/// type-language-via-dispatch move the parser does no folding and the
+/// PascalCase `Functor` head has no registered overload — the equivalent
+/// surface is the all-uppercase `FUNCTOR` keyword. `:Signature` substitutes
+/// for `OrderedSig` because the inner sigil sub-Dispatch may race the outer
+/// SIG declaration; using the always-bound builtin meta-type keeps the test
+/// focused on the disjoint-surface check rather than scheduling.
 #[test]
 fn functor_binder_and_sigil_coexist() {
     let arena = RuntimeArena::new();
@@ -158,7 +169,7 @@ fn functor_binder_and_sigil_coexist() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          FUNCTOR (MAKEINNER Er :OrderedSig) -> Module = \
             (MODULE Res = ((LET inner = 1)))\n\
-         FUNCTOR (MAKEOUTER Er :OrderedSig) -> :(Functor (OrderedSig) -> Module) = \
+         FUNCTOR (MAKEOUTER Er :OrderedSig) -> :(FUNCTOR (Ty :Signature) -> Module) = \
             (FUNCTOR (INNER Fr :OrderedSig) -> Module = (MODULE Res = ((LET v = 2))))",
     );
     let outer = lookup_fn(scope, "MAKEOUTER");

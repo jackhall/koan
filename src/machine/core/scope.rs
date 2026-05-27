@@ -528,11 +528,13 @@ impl<'a> Scope<'a> {
         self.bindings.get().try_install_placeholder(name, idx, index)
     }
 
-    /// Bucket-keyed companion to [`Self::install_placeholder`] — installs a
-    /// `pending_overloads[bucket] = NodeId(idx)` entry so `resolve_dispatch`'s
+    /// Bucket-keyed companion to [`Self::install_placeholder`] — appends a
+    /// `pending_overloads[bucket]` entry (per-bucket Vec) so `resolve_dispatch`'s
     /// no-bucket fallback parks bare-arg calls on the producing FN/FUNCTOR
-    /// binder. Forwards through the `Borrowed` window the same way as the
-    /// name-based companion. See [`Bindings::try_install_pending_overload`].
+    /// binder. Sibling installs sharing the same bucket each append a distinct
+    /// entry; the entry is removed on finalize by matching the producing
+    /// binder's `BindingIndex`. Forwards through the `Borrowed` window the same
+    /// way as the name-based companion. See [`Bindings::try_install_pending_overload`].
     pub fn install_pending_overload(
         &self,
         bucket: crate::machine::model::types::UntypedKey,

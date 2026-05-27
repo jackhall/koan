@@ -4,9 +4,9 @@ Load parameter names from the sigil surface into `KType` identity so
 function-typed slots can mechanically enforce that callers use the
 declared parameter names.
 
-**Problem.**
-[`type-language-via-dispatch`](../dispatch_fix/type-language-via-dispatch.md)
-introduces the `:(FN (x :Number, y :Str) -> Bool)` and
+**Problem.** The
+[type-language-via-dispatch](../../design/typing/type-language-via-dispatch.md)
+substrate ships the `:(FN (x :Number, y :Str) -> Bool)` and
 `:(FUNCTOR (T :SomeSig) -> Module)` sigil surfaces, which declare
 parameter names at the type position. Lowering drops the names:
 [`KType::KFunction { args, ret }`](../../src/machine/model/types/ktype.rs)
@@ -64,7 +64,3 @@ constraint can't be checked against the slot's type.
 ## Dependencies
 
 **Requires:**
-- [Type language via dispatch](../dispatch_fix/type-language-via-dispatch.md) —
-  ships the named sigil surface (`:(FN (x :Number) -> Bool)` etc.)
-  that this item loads into `KType` identity. The lowering drops
-  names today; this item picks them up.

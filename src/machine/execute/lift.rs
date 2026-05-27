@@ -146,10 +146,12 @@ where
             .any(|x| any_descendant(x, predicate)),
         KObject::KExpression(e) => e.parts.iter().any(|p| match &p.value {
             ExpressionPart::Future(obj) => any_descendant(obj, predicate),
-            ExpressionPart::Expression(inner) => inner.parts.iter().any(|p2| match &p2.value {
-                ExpressionPart::Future(obj) => any_descendant(obj, predicate),
-                _ => false,
-            }),
+            ExpressionPart::Expression(inner) | ExpressionPart::SigiledTypeExpr(inner) => {
+                inner.parts.iter().any(|p2| match &p2.value {
+                    ExpressionPart::Future(obj) => any_descendant(obj, predicate),
+                    _ => false,
+                })
+            }
             _ => false,
         }),
         // Predicate-returned-None on a non-composite variant is treated as a `false`
@@ -212,6 +214,10 @@ fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bo
     match part {
         ExpressionPart::Future(obj) => arena.owns_object(*obj as *const KObject<'b>),
         ExpressionPart::Expression(e) => expression_borrows_arena(e, arena),
+        // SigiledTypeExpr wraps a raw KExpression that may contain `Future` parts after
+        // dispatch-time splicing; recurse so the arena-borrow detection sees through the
+        // type-context marker.
+        ExpressionPart::SigiledTypeExpr(e) => expression_borrows_arena(e, arena),
         ExpressionPart::ListLiteral(items) => items.iter().any(|p| part_borrows_arena(p, arena)),
         ExpressionPart::DictLiteral(pairs) => pairs.iter().any(|(k, v)| {
             part_borrows_arena(k, arena) || part_borrows_arena(v, arena)

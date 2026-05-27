@@ -46,6 +46,10 @@ fn part_references_any(part: &ExpressionPart<'_>, param_names: &[String]) -> boo
         ExpressionPart::Identifier(name) => param_names.iter().any(|n| n == name),
         ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
         ExpressionPart::Expression(boxed) => kexpression_references_any(boxed, param_names),
+        // SigiledTypeExpr carries a KExpression; recurse so a parameter-name reference
+        // inside a sigiled return-type (`-> :(LIST OF Er)`) is detected for deferred-
+        // return classification.
+        ExpressionPart::SigiledTypeExpr(boxed) => kexpression_references_any(boxed, param_names),
         ExpressionPart::ListLiteral(items) => {
             items.iter().any(|p| part_references_any(p, param_names))
         }

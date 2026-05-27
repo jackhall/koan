@@ -101,33 +101,11 @@ fn bare_type_leaf_short_circuits() {
     );
 }
 
-/// `(List Number)` — parens-form type-call with leaf-Type-only args. Classifies as
-/// `TypeCall`; the fast lane elaborates `TypeExpr { name: "List", params: List([Number]) }`
-/// via `scope.resolve_type_expr` and wraps the result as a `KTypeValue` carrier.
-#[test]
-fn type_call_short_circuits() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let expr = parse_one("(List Number)");
-    reset_resolve_dispatch_entry_count();
-    let result = dispatch_one(scope, expr);
-    assert_eq!(
-        resolve_dispatch_entry_count(),
-        0,
-        "TypeCall must not enter resolve_dispatch_with_chain",
-    );
-    match result {
-        KObject::KTypeValue(KType::List(elem)) => assert_eq!(
-            elem.name(),
-            "Number",
-            "(List Number) must carry KType::List(Number)",
-        ),
-        other => panic!(
-            "(List Number) must terminate to KTypeValue(List(Number)); got {}",
-            other.summarize()
-        ),
-    }
-}
+// `type_call_short_circuits` removed: the legacy `TypeCall` arm + its fast lane
+// are deleted. `(List Number)` now classifies as `TypeConstructorCall` (head is
+// a leaf `Type`, body is non-empty) and falls through to the keyworded path,
+// where no overload matches and the call surfaces `DispatchFailed`. The
+// keyworded `LIST OF Number` form is the supported way to parameterize List.
 
 /// User-facing named-arg path. `LET f = (FN (DOUBLE x :Number) -> Number = (x))`
 /// registers a function whose signature is `[Keyword("DOUBLE"), Argument(x :Number)]`.
@@ -475,7 +453,7 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FN (MAKE) -> :(Function () -> Str) = (FN (INNER) -> Str = (\"hi\"))\n\
+        "FN (MAKE) -> :(FN () -> Str) = (FN (INNER) -> Str = (\"hi\"))\n\
          LET f = (MAKE)",
     );
     let result = run_one(scope, parse_one("f ()"));
@@ -496,7 +474,7 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "FN (MAKE) -> :(Function (Number) -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
+        "FN (MAKE) -> :(FN (x :Number) -> Number) = (FN (ECHO x :Number) -> Number = (x))\n\
          LET f = (MAKE)",
     );
     let result = run_one(scope, parse_one("f (x = 42)"));
@@ -653,16 +631,18 @@ fn classifier_newtype_construct_routes_to_type_constructor_call() {
     );
 }
 
-/// `(List Number)` — leaf-Type head, every arg a leaf Type. Stays on
-/// `TypeCall` after the Phase 2 split: the partition is "leaf-only args ⇒
-/// TypeCall, any non-leaf arg ⇒ TypeConstructorCall", and `Number` is leaf.
+/// `(List Number)` — leaf-Type head, every arg a leaf Type. Post-`TypeCall`
+/// deletion this collapses to `TypeConstructorCall` (every leaf-Type-headed
+/// multi-part call routes through one classifier variant). The keyworded
+/// `LIST OF` overload is the supported way to elaborate `List<Number>`.
 #[test]
-fn classifier_type_call_partition_preserved() {
+fn classifier_legacy_positional_collapses_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("(List Number)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
-        "leaf-Type head + leaf-Type args must stay on TypeCall after the split",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
+        "leaf-Type head + leaf-Type args must collapse to TypeConstructorCall \
+         after the TypeCall arm is removed",
     );
 }
 

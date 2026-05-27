@@ -60,7 +60,8 @@ span multiple physical lines:
 
 Output is one [`KExpression`](../src/machine/model/ast.rs) per top-level line:
 an ordered sequence of `ExpressionPart`s — `Keyword`, `Identifier`, `Type`,
-nested `Expression`, `ListLiteral`, `DictLiteral`, or typed `Literal`.
+nested `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, or typed
+`Literal`.
 
 The `Keyword`-vs-slot split is the parser's contract with dispatch:
 
@@ -71,6 +72,21 @@ The `Keyword`-vs-slot split is the parser's contract with dispatch:
 
 `KExpression` is itself a first-class `KObject` variant — user code can hold an
 unevaluated expression as a value, pass it around, and evaluate it on demand.
+
+## Type-expression sigil
+
+The `:(...)` glued-right sigil opens a *parse-context marker* group. The
+parser collects the inner tokens into a regular `KExpression` and wraps it as
+[`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../src/machine/model/ast.rs)
+— no inner-shape recognition runs at parse time. Shape decisions
+(positional `:(List Number)`, keyworded `:(LIST OF Number)`, user-functor
+`:(MyFunctor (T = IntOrd))`, etc.) are the dispatcher's responsibility: the
+sigil's only job is to flag "this slot evaluates to a type, not a value". The
+framing logic lives in [frame.rs](../src/parse/frame.rs)
+(`Frame::TypeExpr`); the dispatcher's `fast_lane_sigiled_type_expr` handler
+tail-replaces the slot with a `Dispatch` of the wrapped expression. See
+[typing/type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
+for the full sigil-and-dispatch contract.
 
 ## Eager evaluation by default
 

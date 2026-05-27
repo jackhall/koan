@@ -259,26 +259,57 @@ scopes. Forward calls from a function body are unaffected — bodies re-dispatch
 per call against the body's lexical chain, by which point every sibling
 binder has registered.
 
-The mechanism lives in two pieces.
+The mechanism lives in two pieces, each routed through a separate install
+channel keyed by the binder's shape.
 
-A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
-inside the [`Bindings`](../src/machine/core/bindings.rs) façade on
-`Scope`, alongside `data`, `types`, `functions`, and `pending_overloads`.
-When a binder is submitted, its
-[`binder_name`](../src/machine/core/kfunction/body.rs) hook (a per-`KFunction`
-extractor of type [`BinderNameFn`](../src/machine/core/kfunction/body.rs) that
-pulls the to-be-bound name structurally out of the expression's parts)
-installs `name → producer NodeId` in the dispatching scope's placeholders,
-paired with the binder's
+A `placeholders` table — a `RefCell<HashMap<String, (NodeId, BindingIndex)>>`
+— lives inside the [`Bindings`](../src/machine/core/bindings.rs) façade
+on `Scope` alongside `data`, `types`, `functions`, and
+`pending_overloads`. *Name-keyed binders* (`LET`, `STRUCT`, `UNION`,
+`SIG`, `MODULE`) install through their
+[`binder_name`](../src/machine/core/kfunction/body.rs) hook (a per-
+`KFunction` extractor of type
+[`BinderNameFn`](../src/machine/core/kfunction/body.rs) that pulls the
+to-be-bound name structurally out of the expression's parts), stamping
+`name → producer NodeId` paired with the binder's
 [`BindingIndex`](../src/machine/core/bindings.rs) (the lexical statement
-index, plus the `nominal_binder` flag for `STRUCT` / named `UNION` / `SIG` /
-`FUNCTOR` / `MODULE`). FN and FUNCTOR carry a sibling
+index, plus the `nominal_binder` flag for `STRUCT` / named `UNION` /
+`SIG` / `MODULE` whose declared names cross the cutoff for
+mutual-recursive references).
+
+*Bucket-keyed binders* (`FN`, `FUNCTOR`) install through a
 [`binder_bucket`](../src/machine/core/kfunction/body.rs) extractor
-([`BinderBucketFn`](../src/machine/core/kfunction/body.rs)) that keys
-forward-reference *dispatch* parks against the inner-call bucket so a
-later-arriving call expression can park on a not-yet-finalized overload.
-The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`)
-opt in via [`register_builtin_with_binder`](../src/machine/core/kfunction.rs);
+([`BinderBucketFn`](../src/machine/core/kfunction/body.rs)) into a
+separate `pending_overloads` table — a
+`RefCell<HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>>` keyed by
+the inner-call bucket key so a later-arriving call expression can park
+on a not-yet-finalized overload. FN/FUNCTOR carry **only** the
+`binder_bucket` extractor — no `binder_name` — because sibling
+overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
+`FN (PICK xs :B) ...` declarations) must not collide on a single
+`placeholders[name]` slot. The two channels are mutually exclusive per
+binder: each binder uses exactly one. The submission walk reifies the
+choice as a
+[`BinderKey`](../src/machine/execute/scheduler/submit.rs) enum
+(`Name(String)` vs. `Bucket(UntypedKey)`) so the dichotomy rides in
+the type rather than as a two-Option convention.
+
+The bucket vec is what admits multiple sibling FN/FUNCTOR binders
+sharing one bucket key: each install appends a distinct entry at its
+own `BindingIndex`. A consumer looking up the bucket via
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs) gets
+`FunctionLookup::Pending(NodeId)` for the *earliest-index visible*
+entry — the most-likely-first-finalizer. On that producer's finalize,
+only the matching entry is removed from the vec (others stay
+pending); the consumer wakes, re-dispatches, and either picks from
+the now-live `functions[bucket]` or re-parks on the next-earliest
+pending sibling. Each re-dispatch is cheap, and the expected case
+(consumer's match lands in the first 1–2 siblings) avoids the cost
+entirely.
+
+The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`,
+`MODULE`) opt in via
+[`register_builtin_with_binder`](../src/machine/core/kfunction.rs);
 everything else stays placeholder-free.
 
 Production reads go through three visibility-aware lookups on the façade:
@@ -324,15 +355,17 @@ moment.
 
 [`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
 inspects every incoming `NodeWork::Dispatch` against the dispatching
-scope's ancestor chain via `extract_binder_install`: if a function in
-the matching `functions[expr.untyped_key()]` bucket carries a
-`binder_name` extractor that returns `Some(name)` for the expression,
-the submission walk picks that overload's `name` and stamps the
-placeholder before the slot is ever popped from the work queues. The
-companion `binder_bucket` install on the same scope rides through the
-same path. This closes the race that FIFO ordering used to mask: a
-later sibling that dispatches before the binder's slot pops still finds
-the placeholder and parks rather than failing with `UnboundName`.
+scope's ancestor chain via `extract_binder_install`: it finds the first
+overload in the matching `functions[expr.untyped_key()]` bucket whose
+`binder_name` OR `binder_bucket` extractor returns `Some(_)` for the
+expression. The picked overload's install channel is reified as
+`BinderKey::Name(name)` (for `LET` / `STRUCT` / `UNION` / `SIG` /
+`MODULE`) or `BinderKey::Bucket(key)` (for `FN` / `FUNCTOR`); the
+install site stamps the corresponding `placeholders[name]` or
+`pending_overloads[bucket]` entry on the dispatching scope before the
+slot is ever popped from the work queues. A later sibling that
+dispatches before the binder's slot pops finds the entry and parks
+rather than surfacing `UnboundName` / `DispatchFailed`.
 
 For binder-shaped Dispatch nodes, the submission walk also recurses into
 the expression's eager Expression-shaped argument slots and submits each
@@ -376,14 +409,15 @@ prior bind without sharing an index space with them.
 The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) —
 opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
 expression's parts for any `Keyword` first and, if none, branches on the head
-token's shape, producing one of five `DispatchShape` variants. The four
-no-keyword variants (`BareIdentifier`, `BareTypeLeaf`, `TypeCall`,
-`FunctionValueCall`) run their own fast-lane handlers and never enter
-`Scope::resolve_dispatch_with_chain`: there are no candidates in
-`bindings.functions` for these shapes, so the candidate machinery would do
-no useful work. The `Keyworded` variant (anywhere a keyword appears, or any
-head shape outside the fast-lane set) falls into the chain-walked resolution
-plus eager name-resolve plus dep-schedule pipeline below.
+token's shape, producing one of six `DispatchShape` variants. The five
+no-keyword variants (`BareIdentifier`, `BareTypeLeaf`,
+`TypeConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) run their own
+fast-lane handlers and never enter `Scope::resolve_dispatch_with_chain`:
+there are no candidates in `bindings.functions` for these shapes, so the
+candidate machinery would do no useful work. The `Keyworded` variant
+(anywhere a keyword appears, or any head shape outside the fast-lane set)
+falls into the chain-walked resolution plus eager name-resolve plus
+dep-schedule pipeline below.
 
 Phase 2 of the keyworded pipeline calls
 [`Scope::resolve_dispatch`](../src/machine/core/scope.rs) once and
@@ -404,9 +438,10 @@ The rails the dispatch driver feeds:
 - **Fast lane** (pre-walk classifier, runs before any resolve walk).
   `classify_dispatch_shape` is one pass over `expr.parts`: keyword anywhere
   ⇒ `Keyworded`; single-part `Identifier` ⇒ `BareIdentifier`; single-part
-  leaf `Type` ⇒ `BareTypeLeaf`; multi-part with leaf-`Type` head and every
-  other part a leaf `Type` ⇒ `TypeCall`; multi-part with `Identifier` head
-  ⇒ `FunctionValueCall`; everything else ⇒ `Keyworded`. The "sweep first,
+  leaf `Type` ⇒ `BareTypeLeaf`; single-part `SigiledTypeExpr` ⇒
+  `SigiledTypeExpr`; multi-part with leaf-`Type` head ⇒
+  `TypeConstructorCall`; multi-part with `Identifier` head ⇒
+  `FunctionValueCall`; everything else ⇒ `Keyworded`. The "sweep first,
   branch on head second" ordering matters: a mixed shape like `(f IF x)`
   goes to `Keyworded` because only the candidate machinery knows how to
   dispatch the `(_ IF _)` bucket.
@@ -424,12 +459,23 @@ The rails the dispatch driver feeds:
     matches what `value_lookup::body_type_expr` would synthesize. Failures
     surface directly; there is no candidate-machinery alternative for a
     bare leaf type.
-  - `TypeCall` (`(List Number)`, `(Dict KString Number)`) —
-    `fast_lane_type_call` synthesizes a parameterized `TypeExpr` and
-    elaborates it through `Scope::resolve_type_expr`, wrapping the result
-    as a `KTypeValue` carrier. `Unbound` surfaces directly; the elaborator
-    `Park` arm is a defensive surface (today's leaf-Type-only args never
-    produce one).
+  - `TypeConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
+    `fast_lane_type_constructor_call` resolves the head Type token and
+    routes `StructType` / `TaggedUnionType` / `Newtype` / `TypeConstructor`
+    carriers through their construction primitives via a `Tail` rewrite.
+    Opaque / Module / unbound heads fall through to the keyworded
+    `type_call` builtin. The legacy positional sigil shape
+    (`:(List Number)`) classifies here as well — the dispatcher's
+    `SigiledTypeExpr` handler sub-dispatches the inner expression, which
+    then lands in `TypeConstructorCall` and routes through the same
+    construction primitives.
+  - `SigiledTypeExpr` (single-part `:(...)` wrapper) —
+    `fast_lane_sigiled_type_expr` tail-replaces the slot with a `Dispatch`
+    of the wrapped `KExpression`, so the inner expression runs through the
+    same classifier and produces the same carrier shape any other dispatch
+    site does. See
+    [type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
+    for the full type-language dispatch contract.
   - `FunctionValueCall` (`f (x = 7)`) — `fast_lane_function_value_call`
     resolves the `Identifier` head and handles every admission outcome
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
@@ -463,20 +509,29 @@ The rails the dispatch driver feeds:
   A later-sibling overload registered after this consumer's statement is
   hidden, and dispatch falls through to outer scopes; finding nothing
   surfaces as `DispatchFailed`. Forward calls between sibling FNs work
-  through the `nominal_binder` carve-out (FN-name bindings are nominal
-  even though FN-bucket overloads are not); forward calls from a function
-  *body* are unaffected because bodies re-dispatch per call against the
-  body's lexical chain, by which point every sibling binder has registered.
+  through the bucket-keyed `pending_overloads` channel: each sibling FN
+  install appends a distinct entry to the per-bucket vec, and a parking
+  consumer wakes on the earliest-index visible producer, re-parking on
+  the next-earliest if its pick doesn't admit. Forward calls from a
+  function *body* are unaffected because bodies re-dispatch per call
+  against the body's lexical chain, by which point every sibling binder
+  has registered.
 - **Placeholder install** (phase 2.5). If the picked function carries a
-  `binder_name` extractor, `Resolved.placeholder_name` is its result and the
-  driver installs `name → NodeId(idx)` on the dispatching scope. A picked
-  `binder_bucket` extractor installs the matching entry into the
-  `pending_overloads` table on the same scope. Both installs are
-  idempotent against the matching submission-time install (see [Submission-time
-  binder install and recursive sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)
+  `binder_name` extractor, the driver installs `name → NodeId(idx)` into
+  `placeholders` on the dispatching scope. If it carries a `binder_bucket`
+  extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
+  into `pending_overloads[bucket]` on the same scope. Each binder uses
+  exactly one of the two channels — the `BinderKey` enum in
+  [`submit.rs`](../src/machine/execute/scheduler/submit.rs) makes the
+  dichotomy a type-level fact. Both installs are lenient against the
+  matching submission-time install (see [Submission-time binder install
+  and recursive sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)
   below) — a `(name, idx)` pair already installed at submission re-applies
-  cleanly here. A `Rebind` collision against a different producer surfaces
-  as a `Done(Err(_))` step so other slots keep draining.
+  cleanly here, and a bucket entry already appended at submission is not
+  re-appended. A `Rebind` collision on the name channel against a
+  different producer surfaces as a `Done(Err(_))` step so other slots
+  keep draining; bucket-channel installs never Rebind (sibling appends
+  are the intended shape).
 - **Eager name-resolve pass** (phase 3, carriers:
   `Resolved.slots.wrap_indices` and `Resolved.slots.ref_name_indices`).
   One walk over each index bucket calls the shared

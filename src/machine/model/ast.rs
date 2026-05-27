@@ -112,9 +112,9 @@ impl TypeExpr {
 }
 
 /// One element of a parsed expression. Parser outputs are `Keyword`, `Identifier`, `Type`,
-/// `Expression`, `ListLiteral`, `DictLiteral`, and `Literal`; the scheduler introduces
-/// `Future` later, splicing a completed dep's resolved value into its dependent's parts
-/// list before late dispatch.
+/// `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, and `Literal`; the
+/// scheduler introduces `Future` later, splicing a completed dep's resolved value into
+/// its dependent's parts list before late dispatch.
 pub enum ExpressionPart<'a> {
     Keyword(String),
     Identifier(String),
@@ -122,6 +122,13 @@ pub enum ExpressionPart<'a> {
     /// carries any nested parameters; leaf types use `TypeParams::None`.
     Type(TypeExpr),
     Expression(Box<KExpression<'a>>),
+    /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` is the raw
+    /// inner expression and must dispatch in type-context, returning a type-side carrier
+    /// (`KTypeValue`, `Module`, `Signature`, `UserType`, `KFunctor`). Shape recognition
+    /// is the dispatcher's responsibility — the parser does no folding here, so legacy
+    /// positional `:(List Number)` and new keyworded `:(LIST OF Number)` both ride
+    /// this variant. See [design/typing/type-language-via-dispatch.md].
+    SigiledTypeExpr(Box<KExpression<'a>>),
     ListLiteral(Vec<ExpressionPart<'a>>),
     DictLiteral(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
     Literal(KLiteral),
@@ -135,6 +142,7 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
             ExpressionPart::Identifier(s) => f.debug_tuple("Identifier").field(s).finish(),
             ExpressionPart::Type(t) => f.debug_tuple("Type").field(t).finish(),
             ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
+            ExpressionPart::SigiledTypeExpr(e) => f.debug_tuple("SigiledTypeExpr").field(e).finish(),
             ExpressionPart::ListLiteral(items) => f.debug_tuple("ListLiteral").field(items).finish(),
             ExpressionPart::DictLiteral(pairs) => f.debug_tuple("DictLiteral").field(pairs).finish(),
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
@@ -158,6 +166,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Identifier(s) => s.clone(),
             ExpressionPart::Type(t) => t.render(),
             ExpressionPart::Expression(e) => e.summarize(),
+            ExpressionPart::SigiledTypeExpr(e) => format!(":({})", e.summarize()),
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(|p| p.summarize()).collect();
                 format!("[{}]", inner.join(" "))
@@ -257,6 +266,16 @@ impl<'a> ExpressionPart<'a> {
             // Sub-expression elements should already have been replaced with `Future`s by
             // the scheduler; a raw `Expression` here round-trips as a `KExpression` value
             // rather than its computed result.
+            // SigiledTypeExpr in `resolve()` should not occur: every SigiledTypeExpr is
+            // either dispatched through the dispatcher's SigiledTypeExpr fast lane (where
+            // it tail-replaces with the inner expression) or sub-Dispatched as a single-
+            // part KExpression wrapper (where the dispatcher unwraps it the same way).
+            // A bare `resolve()` here would mean a builtin extracted the raw part value
+            // without going through the dispatcher — which loses the type-context
+            // marker. Panic to surface that.
+            ExpressionPart::SigiledTypeExpr(_) => {
+                unreachable!("SigiledTypeExpr only valid in type-context dispatch")
+            }
             ExpressionPart::ListLiteral(items) => {
                 KObject::list(items.iter().map(|p| p.resolve()).collect())
             }
@@ -288,6 +307,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::Identifier(s) => ExpressionPart::Identifier(s.clone()),
             ExpressionPart::Type(t) => ExpressionPart::Type(t.clone()),
             ExpressionPart::Expression(e) => ExpressionPart::Expression(e.clone()),
+            ExpressionPart::SigiledTypeExpr(e) => ExpressionPart::SigiledTypeExpr(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),

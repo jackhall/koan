@@ -140,7 +140,7 @@ fn extract_bare_type_name_accepts_ktypevalue_leaf() {
 }
 
 /// `KTypeValue` structural arm: `List<Number>` is parameterized and rejected with
-/// the rendered `:(List Number)` surface form embedded in the message.
+/// the rendered `:(LIST OF Number)` surface form embedded in the message.
 #[test]
 fn extract_bare_type_name_rejects_ktypevalue_structural() {
     let list = KType::List(Box::new(KType::Number));
@@ -149,7 +149,7 @@ fn extract_bare_type_name_rejects_ktypevalue_structural() {
     match err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(msg.contains("STRUCT T must be a bare type name"));
-            assert!(msg.contains(":(List Number)"));
+            assert!(msg.contains(":(LIST OF Number)"));
         }
         other => panic!("expected ShapeError, got {:?}", std::mem::discriminant(&other)),
     }

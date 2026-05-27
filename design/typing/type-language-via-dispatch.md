@@ -87,40 +87,92 @@ nested-parens part holding the kwargs.
 
 `classify_dispatch_shape`
 ([dispatch.rs](../../src/machine/execute/scheduler/dispatch.rs))
-doesn't grow a `SigiledTypeExpr` shape. Sigils unwrap at
-part-evaluation time: when a part holds
-`ExpressionPart::SigiledTypeExpr(inner)`, the dispatch driver
-recursively dispatches `inner` through the standard classifier. The
-inner expression's parts decide its shape — there's no separate
-type-context table.
+carries a `SigiledTypeExpr` variant whose handler
+(`fast_lane_sigiled_type_expr`) tail-replaces the slot with a
+`Dispatch` of the wrapped `KExpression`. The inner dispatch sees the
+same classifier — there is no separate type-context table — so the
+inner expression's parts decide its shape:
 
-The sigil boundary asserts the returned `KObject` is a type-side
-carrier (`KTypeValue`, `Module`, `Signature`, `UserType`,
-`KFunctor`). A value-side carrier in sigil position (number, instance
-struct, plain function) is an error surfaced at the boundary. This
-covers `TypeConstructorCall` shapes reached through a sigil — they
-construct value-side instances, so the boundary rejects them.
+- `Keyworded` for the keyworded surface (`:(LIST OF Number)`,
+  `:(MAP Str -> Number)`, `:(FN (x :Number) -> Bool)`,
+  `:(FUNCTOR (T :S) -> M)`) served by the registered `LIST OF` /
+  `MAP _ -> _` / `FN` / `FUNCTOR` overloads in
+  [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs).
+- `BareTypeLeaf` / `BareIdentifier` for single-name sigils
+  (`:(Number)`, `:(MyType)`).
+- `TypeConstructorCall` for a leaf-Type head with non-empty rest
+  (`:(MyStruct 1 2 3)`) — routes Struct / Tagged / Newtype heads
+  through their construction primitives.
+- `FunctionValueCall` for user-functor application
+  (`:(MyFunctor (T = IntOrd))`).
 
-The inner classifier walks unchanged. Keyworded inputs
-(`:(LIST OF Number)` → `[Keyword(LIST), Keyword(OF), Type(Number)]`)
-route through `Keyworded` to the registered `LIST OF` overload.
-Positional inputs the parser no longer folds (`:(List Number)` →
-`[Type(List), Type(Number)]`) route through `TypeCall` to
-`resolve_type_expr`, which produces the same `KType::List(Number)`
-carrier. Source annotations work unchanged through this fallback.
+The sigil boundary — "the returned carrier must be type-side
+(`KTypeValue`, `Module`, `Signature`, `UserType`, `KFunctor`)" — is
+enforced implicitly by the consuming slot's KType machinery rather
+than by a dedicated tail at the sigil. A value-side carrier (number,
+instance struct, plain function value) flowing out of `:(...)`
+reaches a `TypeExprRef` / `Type` / `AnyModule` / `AnySignature` slot
+and surfaces a standard `TypeMismatch`. The sigil handler itself does
+no extra check; the slot-type rails are the single source of truth.
+
+The legacy positional sigil shape (`:(List Number)` →
+`[Type(List), Type(Number)]`) now classifies as `TypeConstructorCall`
+inside the wrapper. Standalone parameterized-type elaboration is
+served by the keyworded overloads in every freshly-written
+annotation; the field-walker inside `typed_field_list` retains an
+inline `try_synth_legacy` path for legacy positional shapes embedded
+in `STRUCT` / `UNION` field schemas, because the elaborator there
+carries SCC threading context (current declaration name + threaded
+set) that the standalone dispatcher does not yet plumb (see
+[Open work](#open-work)).
+
+## Binder install: name-keyed vs bucket-keyed
+
+`LET`, `STRUCT`, `UNION`, `SIG`, and `MODULE` register a single name
+binding via a `binder_name` extractor and ride the name-keyed
+placeholder channel. `FN` and `FUNCTOR` register an *overload* in a
+function bucket via a `binder_bucket` extractor — and crucially,
+*not* a `binder_name`. The two channels are reflected at the
+submission walk as `BinderKey::Name(String)` and
+`BinderKey::Bucket(UntypedKey)` (see
+[`scheduler/submit.rs`](../../src/machine/execute/scheduler/submit.rs)),
+mutually exclusive per binder.
+
+The bucket-keyed channel admits *sibling* overloads under one head
+keyword. Two `FN (PICK xs :A) ...` / `FN (PICK xs :B) ...`
+declarations each install a distinct entry into the same
+`pending_overloads[bucket]` per-bucket vec; the earlier-index entry
+is the wake target for a consumer parking on the bucket, and the
+later-index siblings remain pending until their own finalize. On
+each producer's finalize, only its own entry is removed; if a parked
+consumer's first wake doesn't deliver an admitting overload, the
+consumer re-dispatches and either picks from the now-live
+`functions[bucket]` or re-parks on the next-earliest pending sibling
+(see [execution-model.md § Dispatch-time name
+placeholders](../execution-model.md#dispatch-time-name-placeholders)).
+A name-keyed install would collide on the second sibling — both
+`PICK` binders trying to claim `placeholders[PICK]` — which is why
+FN / FUNCTOR do not install on the name channel.
 
 ## Open work
 
-- [Type-language via dispatch (rollout)](../../roadmap/dispatch_fix/type-language-via-dispatch.md) —
-  parser change to emit `SigiledTypeExpr` uniformly (no shape
-  inspection), part-evaluation unwrap + type-carrier boundary check,
-  registration of `LIST` / `MAP` / `FN` / `FUNCTOR` keyworded
-  overloads, parallel tests for the new shapes. The existing
-  `TypeCall` arm serves as the positional fallback inside the
-  wrapper; migrating annotations to the keyworded form is an optional
-  follow-up.
 - [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
   load parameter names from the `:(FN ...)` / `:(FUNCTOR ...)` sigil
   surface into `KType::KFunction` / `KType::KFunctor` identity so a
   function-typed slot can enforce that callers use the declared
   parameter names.
+- [SCC-aware dispatcher for parameterized self-recursive
+  types](../../roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md) —
+  plumb the elaborator's threaded set + current-declaration context
+  into the dispatcher's bare-Type-leaf and sub-Dispatch paths so a
+  self-reference inside `:(LIST OF Tree)` inside `STRUCT Tree`'s body
+  short-circuits `Tree` to `RecursiveRef` rather than `UnboundName`.
+  Closes the field-walker / dispatcher split and retires the
+  `try_synth_legacy` inline path.
+- [User-defined TypeConstructor keyworded
+  application](../../roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md) —
+  give a user `LET Wrap = (TYPE_CONSTRUCTOR T)` a keyworded
+  application surface so `:(Wrap Number)` routes through dispatch
+  the same way `:(LIST OF Number)` does. Today only the four builtin
+  parameterized types (`LIST`, `MAP`, `FN`, `FUNCTOR`) have
+  keyworded overloads.

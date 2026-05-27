@@ -30,6 +30,17 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
             ExpressionPart::Identifier(s) => format!("t({})", s),
             ExpressionPart::Type(t) => format!("T({})", t.render()),
             ExpressionPart::Expression(e) => describe(e),
+            // Strip exactly one wrapping `[…]` from describe(e) — the inner expression
+            // is rendered as `[part1 part2 …]` but the sigil wrapper wants just the
+            // parts. `trim_start/end_matches` strips greedily so we slice instead.
+            ExpressionPart::SigiledTypeExpr(e) => {
+                let inner = describe(e);
+                let stripped = inner
+                    .strip_prefix('[')
+                    .and_then(|s| s.strip_suffix(']'))
+                    .unwrap_or(&inner);
+                format!(":({stripped})")
+            }
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items.iter().map(describe_part).collect();
                 format!("L[{}]", inner.join(" "))

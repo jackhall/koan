@@ -253,6 +253,59 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     );
 }
 
+/// Sibling FN/FUNCTOR binders sharing one inner-call bucket key each install
+/// their own `pending_overloads[bucket]` entry into a per-bucket Vec — the
+/// "index-gated bucket parking" pattern. A consumer's `resolve_dispatch` parks
+/// on the earliest-index visible entry; on that producer's finalize the entry
+/// is removed and the consumer re-dispatches against whatever is now visible
+/// (live `functions[bucket]` candidates or remaining pending siblings).
+#[test]
+fn sibling_pending_overloads_park_on_earliest_visible_entry() {
+    use crate::machine::model::types::{UntypedElement, UntypedKey};
+    use crate::machine::NodeId;
+    let arena = RuntimeArena::new();
+    let scope = run_root_bare(&arena);
+    let bucket: UntypedKey =
+        vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
+    // Two sibling FN binders, indices 3 and 4. Each installs its own pending
+    // entry; the second install must NOT be coalesced or rejected — both are
+    // distinct wake sources.
+    scope
+        .install_pending_overload(bucket.clone(), NodeId(101), BindingIndex::value(3))
+        .expect("first install");
+    scope
+        .install_pending_overload(bucket.clone(), NodeId(102), BindingIndex::value(4))
+        .expect("second install must not collide");
+    let entries = scope.bindings().pending_overloads().get(&bucket).cloned();
+    let entries = entries.expect("bucket should be populated");
+    assert_eq!(
+        entries.len(),
+        2,
+        "both sibling installs must coexist as distinct entries; got {:?}",
+        entries,
+    );
+
+    // Consumer at a chain-cutoff strictly greater than both indices: parks on
+    // the earliest-index visible entry (NodeId(101)).
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("PICK".into())),
+        Spanned::bare(ExpressionPart::Identifier("fwd".into())),
+    ]);
+    match scope.resolve_dispatch(&expr) {
+        ResolveOutcome::ParkOnProducers(ps) => {
+            assert_eq!(
+                ps,
+                vec![NodeId(101)],
+                "consumer must park on earliest-index visible pending entry",
+            );
+        }
+        other => panic!(
+            "expected ParkOnProducers([101]), got variant {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
+}
+
 /// `<Number> OP <Any>` vs `<Any> OP <Number>` against `5 OP 7` are incomparable: each is
 /// more specific in one slot and less in the other. `resolve_dispatch` reports
 /// `Ambiguous`; the integration path surfaces the same error via Scheduler::execute.

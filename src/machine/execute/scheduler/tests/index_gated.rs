@@ -202,10 +202,10 @@ fn overload_pre_filter_hides_later_sibling_overload() {
     let arena = RuntimeArena::new();
     let scope = run_scope(
         &arena,
-        "FN (DESCRIBE xs :(List Number)) -> Str = (\"numbers\")\n\
+        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")\n\
          LET xs = [1 2 3]\n\
          LET result = (DESCRIBE xs)\n\
-         FN (DESCRIBE xs :(List Str)) -> Str = (\"strings\")",
+         FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
     assert!(
         matches!(scope.lookup("result"), Some(KObject::KString(s)) if s == "numbers"),

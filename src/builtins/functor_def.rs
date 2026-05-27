@@ -200,17 +200,19 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // strict dispatch pass picks one; `Future(KTypeValue(_))` post-Combine
     // wakes admit only against `TypeExprRef`.
     //
-    // Binder-name hook is the same `fn_def::binder_name` extractor — both binders
-    // place the signature at `parts[1]` and the first `Keyword` in that
-    // signature names the registered function.
-    // FUNCTOR mirrors FN: both binder_name (name-based, for forward-reference name
-    // resolution) and binder_bucket (inner-call bucket key, for
-    // pending-overload dispatch parks). The bucket key is the same one a future
-    // call to the registered FUNCTOR overload would compute, so
-    // `resolve_dispatch`'s no-bucket fallback finds this slot and parks on it —
-    // the bare-arg call form `(MAKESET IntOrd)` to a still-finalizing FUNCTOR
-    // binder relies on this entry to avoid racing FIFO submission order into
-    // `DispatchFailed`.
+    // FUNCTOR mirrors FN: register a function by inner-call bucket key
+    // (UntypedKey). Both binders supply `binder_bucket` so a sibling bare-arg
+    // call to a still-finalizing FUNCTOR overload parks on this slot's bucket
+    // entry — `(MAKESET IntOrd)` to a `FUNCTOR (MAKESET Er :OrderedSig) ->
+    // (SIG_WITH …)` binder whose body is parked on a SIG-body Combine. Multiple
+    // sibling FUNCTOR overloads sharing one bucket key all install for it; the
+    // first to finalize writes `functions[bucket]` and the others' installs
+    // become idempotent no-ops.
+    //
+    // No `binder_name` install — same rationale as FN (see fn_def::register).
+    // FUNCTOR does not bind a single name to a value-side carrier; it registers
+    // a callable function in `functions[bucket]`. A name placeholder would
+    // Rebind across sibling overloads.
     register_builtin_full(
         scope,
         "FUNCTOR",
@@ -223,12 +225,13 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(super::fn_def::binder_name),
+        None,
         Some(super::fn_def::binder_bucket),
         false,
         // FUNCTOR is a nominal binder (D7 carve-out): siblings can refer to one
         // another regardless of source order — `FUNCTOR A` body can mention `B`
-        // declared after it on the same block.
+        // declared after it on the same block. The carve-out rides on
+        // `BindingIndex.nominal_binder`, not on the (absent) `binder_name`.
         true,
     );
     register_builtin_full(
@@ -243,12 +246,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(super::fn_def::binder_name),
+        None,
         Some(super::fn_def::binder_bucket),
         false,
-        // FUNCTOR is a nominal binder (D7 carve-out): siblings can refer to one
-        // another regardless of source order — `FUNCTOR A` body can mention `B`
-        // declared after it on the same block.
+        // See above.
         true,
     );
 }

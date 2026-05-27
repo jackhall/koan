@@ -25,7 +25,7 @@ fn functor_return_slot_number_rejects() {
     }
 }
 
-/// Resolved-arm rejection: a `:(Function (...) -> ...)` carrier is a plain
+/// Resolved-arm rejection: a `:(FN (...) -> ...)` carrier is a plain
 /// function type, disjoint from module/signature/functor. Re-uses the
 /// Resolved-arm walk against the elaborated `KType::KFunction`.
 #[test]
@@ -35,7 +35,7 @@ fn functor_return_slot_function_type_rejects() {
     let err = run_one_err(
         scope,
         parse_one(
-            "FUNCTOR (MAKEFN x :Number) -> :(Function (Number) -> Number) = \
+            "FUNCTOR (MAKEFN x :Number) -> :(FN (y :Number) -> Number) = \
                 (FN (INNER y :Number) -> Number = (y))",
         ),
     );

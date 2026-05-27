@@ -181,7 +181,7 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let exprs = parse("LET :(List Number) = 1").unwrap();
+    let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
         ids.push(sched.add_dispatch(e, scope));

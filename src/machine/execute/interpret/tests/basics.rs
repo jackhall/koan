@@ -98,7 +98,7 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
-        "FN (EMPTY) -> :(List Number) = ([])\nLET xs = (EMPTY)\n",
+        "FN (EMPTY) -> :(LIST OF Number) = ([])\nLET xs = (EMPTY)\n",
         &arena,
         captured,
     );

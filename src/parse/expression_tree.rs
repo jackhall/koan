@@ -1,9 +1,11 @@
 //! Top-level parser: runs the `quote-mask → whitespace-collapse → tokenize →
 //! tree-build` pipeline and returns a `KExpression`. The parse-stack and frame
 //! abstractions live in sibling modules ([`super::parse_stack`], [`super::frame`]);
-//! dict-pair state lives on [`super::dict_literal::DictFrame`] and type-expression
-//! folding lives on [`super::type_expr_frame::TypeExprFrame`] so framing arms here stay
-//! one-liners.
+//! dict-pair state lives on [`super::dict_literal::DictFrame`]. The `:(...)`
+//! type-expression frame ([`Frame::TypeExpr`](super::frame::Frame)) collects the
+//! inner expression verbatim and wraps it as `ExpressionPart::SigiledTypeExpr`
+//! — no parser-side shape folding; shape recognition is the dispatcher's job.
+//! Framing arms here stay one-liners.
 //!
 //! Phase 4: `Reader` now tracks an original-source `cursor: u32` alongside its byte
 //! position in the masked stream. JUMP markers snap the cursor; LITERAL markers leave it
@@ -31,7 +33,6 @@ use crate::parse::whitespace::collapse_whitespace;
 use super::dict_literal::DictFrame;
 use super::frame::{close_paren_to_part, Frame};
 use super::parse_stack::{close_collection, flush_token, open_collection, ParseStack};
-use super::type_expr_frame::TypeExprFrame;
 
 /// Width of the UTF-8 codepoint whose leading byte is `b`. Defaults to 1 on malformed
 /// continuation bytes so a corrupt input still terminates rather than spinning.
@@ -267,8 +268,11 @@ pub fn build_tree<'a>(
                 let span_start = reader.cursor;
                 reader.advance_byte();
                 if let Some(type_start) = pending_type_paren_cursor.take() {
+                    // `:(...)` opens a sigiled-type-expression frame that collects the
+                    // inner expression verbatim (no shape recognition). The dispatcher
+                    // routes the wrapped `KExpression` through its standard classifier.
                     stack.push_frame(Frame::TypeExpr {
-                        tef: TypeExprFrame::new(),
+                        expr: KExpression::new(Vec::new()),
                         span_start: type_start,
                     });
                 } else {

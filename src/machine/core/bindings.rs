@@ -75,10 +75,14 @@ pub enum Resolution<'a> {
 pub enum FunctionLookup<'a> {
     /// Visible candidates for this bucket at this scope. Non-empty.
     Bucket(Vec<&'a KFunction<'a>>),
-    /// No live bucket at this scope but a visible `pending_overloads` entry —
-    /// a sibling FN / FUNCTOR binder has dispatched a matching overload whose
-    /// body hasn't finalized. The producer's `NodeId` is the park target. See
-    /// [`Bindings::try_install_pending_overload`].
+    /// No live bucket at this scope but ≥1 visible `pending_overloads` entries —
+    /// one or more sibling FN / FUNCTOR binders have dispatched a matching
+    /// overload whose body hasn't finalized. The earliest-index visible
+    /// producer's `NodeId` is the park target. The consumer parks on it; on
+    /// finalize the entry is removed from the bucket (other siblings stay
+    /// pending), the wake fires, the consumer re-dispatches and either picks
+    /// from the now-live `functions[bucket]` OR re-parks on the next-earliest
+    /// pending sibling. See [`Bindings::try_install_pending_overload`].
     Pending(NodeId),
     /// No visible bucket and no visible pending overload at this scope.
     None,
@@ -129,8 +133,9 @@ impl BindingIndex {
 /// `types` (name → `&KType`), `data` (name → value), `functions`
 /// (untyped-signature bucket → overloads), `placeholders` (name → producer
 /// NodeId for forward-reference *name* resolution), and `pending_overloads`
-/// (UntypedKey → producer NodeId for forward-reference *dispatch* parking on
-/// not-yet-finalized FN / FUNCTOR overloads).
+/// (UntypedKey → Vec<(producer NodeId, BindingIndex)> for forward-reference
+/// *dispatch* parking on not-yet-finalized FN / FUNCTOR overloads — one entry
+/// per sibling binder sharing a bucket).
 ///
 /// The two placeholder maps are intentionally separate: `placeholders` is
 /// consulted by name (`Scope::resolve` → `Resolution::Placeholder`) and serves
@@ -157,14 +162,19 @@ pub struct Bindings<'a> {
     data: RefCell<HashMap<String, (&'a KObject<'a>, BindingIndex)>>,
     functions: RefCell<HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>>,
     placeholders: RefCell<HashMap<String, (NodeId, BindingIndex)>>,
-    /// Bucket-key → (producer NodeId, lexical index) for FN / FUNCTOR overloads
-    /// whose binder has dispatched but not finalized. Consulted by
-    /// `resolve_dispatch`'s no-bucket / no-eager-parts fallback so a bare-arg call
-    /// to an inflight overload parks on the producer instead of surfacing
-    /// `DispatchFailed`. Cleared in [`Bindings::try_apply`] at the same site where
-    /// the overload lands in `functions`, so the wake-and-retry sees the bucket
-    /// populated.
-    pending_overloads: RefCell<HashMap<UntypedKey, (NodeId, BindingIndex)>>,
+    /// Bucket-key → Vec<(producer NodeId, lexical index)> for FN / FUNCTOR
+    /// overloads whose binder has dispatched but not finalized. Multiple
+    /// sibling FN binders sharing one inner-call bucket key — `FN (PICK xs :A) ...`
+    /// then `FN (PICK xs :B) ...` — each install their own entry; the per-bucket
+    /// vec lets consumers see every pending sibling and park on the
+    /// earliest-index visible one. On finalize the matching entry (identified by
+    /// the binder's `BindingIndex`) is removed; other siblings stay pending and
+    /// remain wake sources for the next consumer.
+    ///
+    /// Consulted by `resolve_dispatch`'s no-bucket / no-eager-parts fallback so
+    /// a bare-arg call to an inflight overload parks on a producer instead of
+    /// surfacing `DispatchFailed`.
+    pending_overloads: RefCell<HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>>,
     /// In-flight named-type binders (STRUCT / named-UNION). Populated by
     /// struct_def / union before elaboration; consulted by the elaborator's
     /// `Resolution::Placeholder` arm to record dependency edges and run DFS
@@ -276,9 +286,20 @@ impl<'a> Bindings<'a> {
             }
         }
         drop(functions);
-        if let Some((producer, idx)) = self.pending_overloads.borrow().get(key).copied() {
-            if Self::visible(idx, chain_cutoff) {
-                return FunctionLookup::Pending(producer);
+        let pending = self.pending_overloads.borrow();
+        if let Some(entries) = pending.get(key) {
+            // Park on the earliest-index visible producer. The earliest is
+            // most likely to finalize first; on wake the consumer re-dispatches
+            // and either picks from the now-live `functions[bucket]` or
+            // re-parks on the next-earliest pending sibling. Mirroring the
+            // overload-bucket per-overload visibility filter, each entry's
+            // index is checked individually.
+            let earliest = entries
+                .iter()
+                .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
+                .min_by_key(|(_, idx)| idx.idx);
+            if let Some((producer, _)) = earliest {
+                return FunctionLookup::Pending(*producer);
             }
         }
         FunctionLookup::None
@@ -386,12 +407,16 @@ impl<'a> Bindings<'a> {
         self.placeholders.borrow()
     }
 
-    /// Read-only view of the bucket-key → (producer, lexical index) map.
+    /// Read-only view of the bucket-key → Vec<(producer, lexical index)> map.
     /// Test-only: production code reads pending overloads through
     /// [`Self::lookup_function`]'s `Pending` arm. See
-    /// [`Bindings::try_install_pending_overload`] for the writer.
+    /// [`Bindings::try_install_pending_overload`] for the writer. Each bucket's
+    /// Vec holds one entry per inflight sibling FN/FUNCTOR binder; the order is
+    /// install order (later-binder entries are appended).
     #[cfg(test)]
-    pub fn pending_overloads(&self) -> Ref<'_, HashMap<UntypedKey, (NodeId, BindingIndex)>> {
+    pub fn pending_overloads(
+        &self,
+    ) -> Ref<'_, HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>> {
         self.pending_overloads.borrow()
     }
 
@@ -613,16 +638,28 @@ impl<'a> Bindings<'a> {
     /// differing in later keywords get separate entries — keying by the full
     /// `UntypedKey` (rather than just the lead keyword) is the whole point.
     ///
-    /// Idempotent if re-entered with the same `(bucket, idx)`; rejects `Rebind`
-    /// on a different `idx`. If the bucket is already populated in `functions`
-    /// (the overload finalized concurrently), silently no-ops — the next
-    /// dispatch will hit the live bucket directly.
+    /// **Append, never deduplicate**: sibling FN/FUNCTOR binders sharing one
+    /// inner-call bucket key — `FN (PICK xs :A) -> ...` then
+    /// `FN (PICK xs :B) -> ...` — each install their own entry into the per-
+    /// bucket Vec at their own [`BindingIndex`]. A consumer parking on the
+    /// bucket picks the earliest-index visible entry; on that producer's
+    /// finalize the consumer re-dispatches and either picks from the now-live
+    /// `functions[bucket]` or re-parks on the next-earliest pending sibling.
+    /// This is the "index-gated bucket parking" pattern — every sibling
+    /// install is a valid distinct wake source, none sidesteps the others.
+    ///
+    /// Lenient when the bucket is already live in `functions` (the overload
+    /// finalized concurrently): the install is a no-op since dispatch will pick
+    /// directly from the live bucket. No deduplication against existing pending
+    /// entries — each install corresponds to a distinct binder slot.
     ///
     /// Panics on borrow conflict, mirroring [`Bindings::try_install_placeholder`].
     ///
     /// `index` is the producing binder's lexical position; consumers filter
     /// `pending_overloads` hits by this index in the same way the live `functions`
-    /// bucket filters per-overload.
+    /// bucket filters per-overload. The entry is removed from the Vec (matched
+    /// on `index`) in [`Bindings::try_apply`] when the producing binder lands
+    /// its function in `functions[bucket]`.
     pub fn try_install_pending_overload(
         &self,
         bucket: UntypedKey,
@@ -633,15 +670,7 @@ impl<'a> Bindings<'a> {
             return Ok(());
         }
         let mut pending = self.pending_overloads.borrow_mut();
-        if let Some((existing, _)) = pending.get(&bucket).copied() {
-            if existing == idx {
-                return Ok(());
-            }
-            return Err(KError::new(KErrorKind::Rebind {
-                name: format!("pending-overload bucket {bucket:?}"),
-            }));
-        }
-        pending.insert(bucket, (idx, index));
+        pending.entry(bucket).or_default().push((idx, index));
         Ok(())
     }
 
@@ -789,7 +818,10 @@ impl<'a> Bindings<'a> {
         drop(functions_handle);
         self.clear_placeholder_best_effort(name);
         if let Some(bucket) = cleared_overload_bucket {
-            self.clear_pending_overload_best_effort(&bucket);
+            // Remove only this binder's pending entry (matched on `index`);
+            // sibling binders sharing the bucket keep their entries so future
+            // consumers continue to find them as wake sources.
+            self.clear_pending_overload_best_effort(&bucket, index);
         }
         Ok(ApplyOutcome::Applied)
     }
@@ -805,12 +837,21 @@ impl<'a> Bindings<'a> {
     }
 
     /// Companion to [`Bindings::clear_placeholder_best_effort`] for the bucket-keyed
-    /// pending-overload table. Same tolerant pattern — a caller mid-read up the stack
-    /// is fine; the entry is purely a wakeable forward reference, and the bucket is
-    /// already populated by the time this runs.
-    fn clear_pending_overload_best_effort(&self, bucket: &UntypedKey) {
+    /// pending-overload table. Removes only the entry whose [`BindingIndex`] matches
+    /// `index` — sibling FN binders sharing a bucket each install their own entry,
+    /// and on finalize only the finalizing binder's entry should clear. Other
+    /// siblings stay pending so future consumers continue to find them as wake
+    /// sources. If `bucket` ends up empty after the removal, the map entry is
+    /// dropped to keep the structure tight. Same tolerant `try_borrow_mut`
+    /// pattern — a caller mid-read up the stack is fine.
+    fn clear_pending_overload_best_effort(&self, bucket: &UntypedKey, index: BindingIndex) {
         if let Ok(mut p) = self.pending_overloads.try_borrow_mut() {
-            p.remove(bucket);
+            if let Some(entries) = p.get_mut(bucket) {
+                entries.retain(|(_, idx)| *idx != index);
+                if entries.is_empty() {
+                    p.remove(bucket);
+                }
+            }
         }
     }
 }

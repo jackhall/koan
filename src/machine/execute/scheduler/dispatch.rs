@@ -5,7 +5,6 @@ use crate::machine::model::{KObject, Parseable};
 use crate::machine::{
     BindingIndex, Frame, KError, KErrorKind, NodeId, ResolveOutcome, Resolution, Scope,
 };
-use crate::machine::core::ResolveTypeExprOutcome;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
@@ -36,25 +35,26 @@ pub(super) enum DispatchShape {
     /// Single bare leaf `Type` part. Handler reads the `TypeExpr` out of
     /// `expr.parts[0]`.
     BareTypeLeaf,
-    /// Type-call shape: head (index 0) is a leaf `Type`, every other part is a leaf
-    /// `Type`. Handler synthesizes `TypeExpr { name: head.name, params: List(args) }`
-    /// and elaborates through `scope.resolve_type_expr`.
-    TypeCall,
     /// Type-constructor call: head (index 0) is a leaf `Type` and `parts[1..]`
-    /// contains at least one non-leaf-Type part (typically a single nested-parens
-    /// `Expression`, as in `MyStruct (x = 1, y = 2)`). Handler resolves the head
-    /// type-side and routes Struct / Tagged / Newtype / TypeConstructor heads
-    /// directly through their construction primitives; opaque / Module / unbound
-    /// heads fall through to the keyworded `type_call` builtin.
-    ///
-    /// Partitions the head-leaf-Type space against [`Self::TypeCall`]: leaf-only
-    /// args go to `TypeCall`; mixed-or-Expression args go here. The two never
-    /// overlap. Phase 2 of `scratch/plan-fast-lane-subsume.md`.
+    /// is non-empty. Handler resolves the head type-side and routes
+    /// Struct / Tagged / Newtype / TypeConstructor heads directly through their
+    /// construction primitives; opaque / Module / unbound heads fall through to
+    /// the keyworded `type_call` builtin. With the legacy positional
+    /// `(List Number)` / `(Dict K V)` shape deleted (the `TypeCall` arm is
+    /// gone), this variant covers every Type-headed multi-part call. Phase 2
+    /// of `scratch/plan-fast-lane-subsume.md`.
     TypeConstructorCall,
     /// Function-value call: head (index 0) is a lowercase `Identifier`, followed by
     /// ≥1 non-keyword parts. Handler resolves the head and falls back to the
     /// keyworded path when it doesn't bind to a `KFunction`.
     FunctionValueCall,
+    /// Single-part `:(...)` sigiled type-expression wrapper. Handler recursively
+    /// dispatches the inner `KExpression` and asserts the result is a type-side
+    /// carrier (`KTypeValue`, `Module`, `Signature`, `UserType`, `KFunctor`). The
+    /// recursive sub-dispatch sees the same classifier — `Keyworded` for new
+    /// `LIST OF` / `MAP _ -> _` / `FN` / `FUNCTOR` shapes, `TypeCall` for legacy
+    /// positional `:(List Number)`. See [design/typing/type-language-via-dispatch.md].
+    SigiledTypeExpr,
     /// A keyword appears anywhere in `expr.parts`, OR the expression doesn't fit any
     /// fast-lane shape (parameterized Type head, literal head, `Future` head, etc.).
     /// Drives the existing candidate-walk pipeline.
@@ -71,10 +71,10 @@ pub(super) enum DispatchShape {
 /// (literal, `Future`, parameterized Type) falls to `Keyworded` — the parser keeps
 /// those for the candidate path.
 ///
-/// Multi-part fast-lane: head is leaf `Type` *and* every other part is leaf `Type` →
-/// `TypeCall`. Head is lowercase `Identifier` → `FunctionValueCall`. Parameterized
-/// Type tokens like `(List<Number>)` are NOT a `TypeCall` shape; only the parens-form
-/// `(List Number)` with leaf-Type args qualifies (per plan §D4).
+/// Multi-part fast-lane: head is leaf `Type` → `TypeConstructorCall` (the legacy
+/// positional `(List Number)` shape is gone — type-language parameterization runs
+/// through the keyworded `LIST OF` / `MAP _ -> _` / `FN` / `FUNCTOR` overloads).
+/// Head is lowercase `Identifier` → `FunctionValueCall`.
 pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
     // 1. Any Keyword part anywhere ⇒ Keyworded. Head position is not special — D4's
     // "sweep first, branch on head second" ordering.
@@ -88,6 +88,9 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
                 DispatchShape::BareTypeLeaf
             }
+            // Sigiled type-expression wrapper — the dispatcher unwraps and re-runs
+            // classification on the inner expression. See [`Self::fast_lane_sigiled_type_expr`].
+            ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
             // Parenthesized literal, Future, parameterized Type, ListLiteral, ...:
             // not a fast-lane shape; the keyworded path surfaces today's Deferred /
             // Unmatched / DispatchFailed for these.
@@ -103,18 +106,12 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
     };
     match &head_part.value {
         ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-            // Head is a leaf `Type`. Two sub-cases:
-            //  - all leaf-Type args ⇒ `TypeCall` (the parameter-pack elaboration shape).
-            //  - any non-leaf arg (Expression body, ListLiteral, literal, etc.) ⇒
-            //    `TypeConstructorCall` (the construction shape).
-            if expr.parts[1..].iter().all(|p| matches!(
-                &p.value,
-                ExpressionPart::Type(inner) if matches!(inner.params, TypeParams::None),
-            )) {
-                DispatchShape::TypeCall
-            } else {
-                DispatchShape::TypeConstructorCall
-            }
+            // Head is a leaf `Type` → `TypeConstructorCall`. The legacy positional
+            // `(List Number)` shape (leaf-Type-only args) used to route through a
+            // separate `TypeCall` arm that elaborated `TypeExpr { params: List(_) }`;
+            // that arm is deleted now that the keyworded `LIST OF` / `MAP _ -> _` /
+            // `FN` / `FUNCTOR` overloads serve every parameterized-type form.
+            DispatchShape::TypeConstructorCall
         }
         ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
         _ => DispatchShape::Keyworded,
@@ -266,10 +263,11 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 }
 
 impl<'a> Scheduler<'a> {
-    /// Dispatch driver. Opens with [`classify_dispatch_shape`]; the four no-keyword
-    /// shapes (`BareIdentifier`, `BareTypeLeaf`, `TypeCall`, `FunctionValueCall`) run
-    /// their fast-lane handlers and never enter `resolve_dispatch_with_chain`. The
-    /// `Keyworded` arm — the only shape with candidates in `bindings.functions` — drives
+    /// Dispatch driver. Opens with [`classify_dispatch_shape`]; the no-keyword shapes
+    /// (`BareIdentifier`, `BareTypeLeaf`, `FunctionValueCall`, `TypeConstructorCall`,
+    /// `SigiledTypeExpr`) run their fast-lane handlers and never enter
+    /// `resolve_dispatch_with_chain`. The `Keyworded` arm — the only shape with
+    /// candidates in `bindings.functions` — drives
     /// the existing Phase 2-4 pipeline:
     ///
     /// 2. **`Scope::resolve_dispatch`** — one chain walk yielding a [`Resolved`],
@@ -301,10 +299,9 @@ impl<'a> Scheduler<'a> {
     ///    `Bind` slot. If no subs needed, bind the function directly and step to its
     ///    body.
     ///
-    /// Fast lane is one-pass: `BareTypeLeaf` and `TypeCall` don't fall back; their
-    /// failures surface directly. Only `FunctionValueCall` falls back to the
-    /// `Keyworded` path when the head doesn't resolve to a function — a keyword-headed
-    /// overload may still match.
+    /// Fast lane is one-pass: `BareTypeLeaf` doesn't fall back; its failure surfaces
+    /// directly. Only `FunctionValueCall` falls back to the `Keyworded` path when the
+    /// head doesn't resolve to a function — a keyword-headed overload may still match.
     ///
     /// See [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)
     /// for the bare-name short-circuit, placeholder install, and forward-name park rules
@@ -340,9 +337,6 @@ impl<'a> Scheduler<'a> {
                 };
                 return Ok(self.fast_lane_bare_type_leaf(&t, scope));
             }
-            DispatchShape::TypeCall => {
-                return Ok(self.fast_lane_type_call(&expr, scope));
-            }
             DispatchShape::FunctionValueCall => {
                 // Phase 1 of the call_by_name subsumption (see
                 // `roadmap/dispatch_fix/unified-walk.md`): the fast lane now handles
@@ -361,6 +355,17 @@ impl<'a> Scheduler<'a> {
                 // serves construction. Commits 2-3 add per-head-type arms; commits
                 // 4-6 migrate tests, trim `type_call.rs`, and relocate
                 // `dispatch_constructor`.
+            }
+            DispatchShape::SigiledTypeExpr => {
+                // `:(...)` is a parse-context marker. Unwrap the inner expression
+                // and dispatch it through the normal classifier. The sigil boundary
+                // (see `fast_lane_sigiled_type_expr`) asserts the result is a
+                // type-side carrier.
+                let inner = match expr.parts.into_iter().next() {
+                    Some(Spanned { value: ExpressionPart::SigiledTypeExpr(boxed), .. }) => *boxed,
+                    _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
+                };
+                return Ok(self.fast_lane_sigiled_type_expr(inner, scope, idx));
             }
             DispatchShape::Keyworded => {}
         }
@@ -710,64 +715,6 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Fast lane for `DispatchShape::TypeCall` — the parens-form `(List Number)` /
-    /// `(Dict KString Number)` / `(ConstructorApply T)` etc. with every arg a leaf
-    /// `Type` token. Synthesizes a parameterized `TypeExpr` and elaborates it through
-    /// `Scope::resolve_type_expr`. The result `KType` is wrapped as `KTypeValue` so
-    /// the carrier matches every other dispatch-phase type-side result.
-    ///
-    /// `Park` from the elaborator (a placeholder in the type-side bindings, or a
-    /// referenced user-type still in `pending_types`) surfaces as an installed park
-    /// edge plus a slot rebuild — the same shape `install_combined_park` produces for
-    /// Phase 3 parks. `Unbound` surfaces directly; no fall back to the keyworded path
-    /// because leaf-Type-only args have no candidate-machinery alternative.
-    fn fast_lane_type_call(
-        &mut self,
-        expr: &KExpression<'a>,
-        scope: &'a Scope<'a>,
-    ) -> NodeStep<'a> {
-        // Classifier guarantees expr.parts[0] is a leaf Type and every subsequent part
-        // is a leaf Type.
-        let head = match &expr.parts[0].value {
-            ExpressionPart::Type(t) => t,
-            _ => unreachable!("TypeCall shape implies leaf-Type head"),
-        };
-        let inner: Vec<TypeExpr> = expr.parts[1..]
-            .iter()
-            .map(|p| match &p.value {
-                ExpressionPart::Type(t) => t.clone(),
-                _ => unreachable!(
-                    "classify_dispatch_shape guarantees every TypeCall arg is a leaf Type",
-                ),
-            })
-            .collect();
-        let synth = TypeExpr {
-            name: head.name.clone(),
-            params: TypeParams::List(inner),
-            builtin_cache: std::cell::OnceCell::new(),
-        };
-        match scope.resolve_type_expr(&synth) {
-            ResolveTypeExprOutcome::Done(kt) => {
-                let obj = scope.arena.alloc(KObject::KTypeValue(kt.clone()));
-                NodeStep::Done(NodeOutput::Value(obj))
-            }
-            ResolveTypeExprOutcome::Unbound(msg) => NodeStep::Done(NodeOutput::Err(KError::new(
-                KErrorKind::UnboundName(msg),
-            ))),
-            ResolveTypeExprOutcome::Park(_producers) => {
-                // The elaborator reported a producer to wait on. Surface as a
-                // `ShapeError` for now — the unified walk's PR C will handle this
-                // through the cached-outcome park path; PR B's contract is "leaf-Type
-                // args never produce a Park" under today's elaborator, so this is a
-                // defensive arm rather than a hot path.
-                NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::ShapeError(format!(
-                    "type-call `{}` requires forward references to be resolved",
-                    synth.render()
-                )))))
-            }
-        }
-    }
-
     /// Fast lane for `DispatchShape::FunctionValueCall` — Identifier-headed calls of
     /// the surface form `f (...)` where `f` resolves to a `KFunction`, a `StructType`,
     /// or a `TaggedUnionType` carrier. Phase 1 of the `call_by_name` subsumption
@@ -881,6 +828,53 @@ impl<'a> Scheduler<'a> {
         }
     }
 
+    /// Fast lane for `DispatchShape::SigiledTypeExpr` — the `:(...)` parse-context
+    /// marker. Tail-replaces this slot with a `Dispatch` of the inner `KExpression`,
+    /// so the inner expression runs through the same classifier and produces the same
+    /// carrier shape any other dispatch site does.
+    ///
+    /// The inner classifier sees:
+    /// - `Keyworded` for new keyworded shapes (`:(LIST OF Number)`,
+    ///   `:(MAP Str -> Number)`, `:(FN (x :Number) -> Bool)`, `:(FUNCTOR (T :S) -> M)`)
+    ///   served by the registered `LIST OF` / `MAP _ -> _` / `FN` / `FUNCTOR` overloads
+    ///   (see [`crate::builtins::type_constructors`]).
+    /// - `TypeCall` for legacy positional inputs (`:(List Number)`,
+    ///   `:(Dict Str Number)`) served by `resolve_type_expr` — preserved for source
+    ///   compatibility with annotations that haven't migrated to the keyworded form.
+    /// - `BareTypeLeaf` for single-name sigils (`:(Number)`).
+    /// - `BareIdentifier` for sigiled identifier references that resolve to a
+    ///   type-side carrier through the standard bare-name path.
+    /// - `FunctionValueCall` for user-functor application
+    ///   (`:(MyFunctor (T = IntOrd))`) — the head `MyFunctor` resolves to a `KFunction`
+    ///   carrier and the value-side `FunctionValueCall` machinery handles the kwarg
+    ///   bind exactly as for any other function value.
+    ///
+    /// The sigil boundary — "the returned carrier must be type-side
+    /// (`KTypeValue` / `Module` / `Signature` / `UserType` / `KFunctor`)" — is
+    /// enforced by the consumer slot's KType check at Bind / Combine. A
+    /// value-side carrier (number, instance struct, plain function value) in a
+    /// sigil slot reaches a TypeExprRef / Type / Any{Module,Signature} slot
+    /// and surfaces a standard `TypeMismatch`. No dedicated boundary tail is
+    /// needed at the sigil itself; the existing slot-type machinery does the
+    /// job.
+    fn fast_lane_sigiled_type_expr(
+        &mut self,
+        inner: KExpression<'a>,
+        _scope: &'a Scope<'a>,
+        _idx: usize,
+    ) -> NodeStep<'a> {
+        // Tail-replace this slot with a Dispatch of the inner expression. No
+        // frame / function / block_entry — the sigil itself is scope-neutral; the
+        // inner expression carries whatever context it needs.
+        NodeStep::Replace {
+            work: NodeWork::dispatch(inner),
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        }
+    }
+
     /// Decode a constructor `BodyResult` returned by `struct_value::apply` /
     /// `tagged_union::apply` into a `NodeStep`. `Tail(expr)` rewrites the slot as a
     /// `Dispatch(expr)` re-dispatch through the construction primitive — same
@@ -967,6 +961,21 @@ impl<'a> Scheduler<'a> {
             match part.value {
                 ExpressionPart::Expression(boxed) => {
                     let sub_id = self.add(NodeWork::dispatch(*boxed), scope);
+                    subs.push((i, sub_id));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                }
+                // SigiledTypeExpr in an inner-slot position: sub-dispatch the wrapped
+                // expression. The sub-Dispatch enters `run_dispatch`'s SigiledTypeExpr
+                // arm (single-part wrap), tail-replaces with the inner dispatch, and the
+                // resulting type-side carrier splices back into this slot as a
+                // `Future(KObject)` for the receiving slot's type-check.
+                ExpressionPart::SigiledTypeExpr(boxed) => {
+                    // Wrap as a single-part KExpression so the sub-Dispatch sees the
+                    // SigiledTypeExpr shape rather than the raw inner parts.
+                    let wrapped = KExpression::new(vec![Spanned::bare(
+                        ExpressionPart::SigiledTypeExpr(boxed),
+                    )]);
+                    let sub_id = self.add(NodeWork::dispatch(wrapped), scope);
                     subs.push((i, sub_id));
                     new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
                 }

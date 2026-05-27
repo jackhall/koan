@@ -27,6 +27,7 @@ pub(crate) mod struct_value;
 pub(crate) mod tagged_union;
 mod try_with;
 mod type_call;
+mod type_constructors;
 mod type_ops;
 mod union;
 mod using_scope;
@@ -226,6 +227,7 @@ pub fn default_scope<'a>(
     val_decl::register(scope);
     ascribe::register(scope);
     type_ops::register(scope);
+    type_constructors::register(scope);
 
     scope
 }

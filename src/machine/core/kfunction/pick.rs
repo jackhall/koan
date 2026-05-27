@@ -54,9 +54,12 @@ impl<'a> KFunction<'a> {
                         has_lazy_slot = true;
                     }
                     (KType::KExpression, _) => return None,
-                    (_, ExpressionPart::Expression(_)) => {
+                    (_, ExpressionPart::Expression(_))
+                    | (_, ExpressionPart::SigiledTypeExpr(_)) => {
                         // Speculative: assume the eager-evaluated result will type-match at
                         // late dispatch. If not, dispatch will fail at that point.
+                        // SigiledTypeExpr rides the Expression path — sub-dispatch produces
+                        // a type-side Future the receiving slot's check then validates.
                         eager_indices.push(i);
                     }
                     (_, other) => {
@@ -139,7 +142,21 @@ impl<'a> KFunction<'a> {
                         continue;
                     }
                     if has_lazy_kexpr_slot
-                        && matches!(part_value, ExpressionPart::Expression(_))
+                        && matches!(
+                            part_value,
+                            ExpressionPart::Expression(_) | ExpressionPart::SigiledTypeExpr(_)
+                        )
+                        && !matches!(arg.ktype, KType::KExpression)
+                    {
+                        continue;
+                    }
+                    // SigiledTypeExpr in a non-KExpression slot always sub-dispatches —
+                    // the inner expression produces a type-side carrier, so admit
+                    // speculatively (the receiving slot's strict check runs against the
+                    // sub-dispatched Future). Symmetric with the Expression-arm
+                    // relaxation but unconditional: a sigil's only purpose is to
+                    // sub-dispatch, never to bind directly.
+                    if matches!(part_value, ExpressionPart::SigiledTypeExpr(_))
                         && !matches!(arg.ktype, KType::KExpression)
                     {
                         continue;

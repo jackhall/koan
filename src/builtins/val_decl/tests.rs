@@ -99,7 +99,7 @@ fn val_function_typed_slot() {
     let scope = run_root_silent(&arena);
     run(
         scope,
-        "SIG OrderedSig = ((VAL compare :(Function (Number Number) -> Number)))",
+        "SIG OrderedSig = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
     );
     let s = match scope.bindings().data().get("OrderedSig").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Signature(s))) => *s,

@@ -83,12 +83,13 @@ pub fn body<'a>(
     match outcome {
         FieldListOutcome::Done(fields) => finalize_union(scope, name, fields, bind_index),
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
-        FieldListOutcome::Park(producers) => defer_union_via_combine(
+        FieldListOutcome::Pending { park_producers, sub_dispatches } => defer_union_via_combine(
             scope,
             sched,
             name,
             schema_expr,
-            producers,
+            park_producers,
+            sub_dispatches,
             pending_guard,
             bind_index,
         ),
@@ -141,21 +142,46 @@ fn finalize_union<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // load-bearing inputs; bundling them in a
+                                     // struct would obscure the data flow.
 fn defer_union_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     name: String,
     schema_expr: KExpression<'a>,
-    producers: Vec<NodeId>,
+    park_producers: Vec<NodeId>,
+    sub_dispatches: Vec<(usize, KExpression<'a>)>,
     pending_guard: PendingBinderGuard<'a>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
+    use crate::machine::model::ast::ExpressionPart;
     let name_for_finish = name.clone();
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+    let park_count = park_producers.len();
+    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
+    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
+    for (slot_idx, sub_expr) in sub_dispatches {
+        let id = sched.add_dispatch(sub_expr, scope);
+        splice_layout.push((slot_idx, park_count + owned_subs.len()));
+        owned_subs.push(id);
+    }
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
         let _pending_guard = pending_guard;
+        let mut spliced_parts = schema_expr.parts.clone();
+        for &(slot_idx, results_pos) in &splice_layout {
+            let obj = results[results_pos];
+            if !matches!(obj, KObject::KTypeValue(_)) {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "UNION schema slot at part-index {slot_idx} expected a type expression, \
+                     got a {} value",
+                    obj.ktype().name(),
+                ))));
+            }
+            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
+        }
+        let spliced_schema = KExpression::new(spliced_parts);
         let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
         match parse_typed_field_list_via_elaborator(
-            &schema_expr,
+            &spliced_schema,
             "UNION schema",
             &mut elaborator,
         ) {
@@ -166,14 +192,12 @@ fn defer_union_via_combine<'a>(
                 KError::new(KErrorKind::ShapeError(msg))
                     .with_frame(Frame::bare("<union>", format!("UNION {} schema", name_for_finish))),
             ),
-            FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
+            FieldListOutcome::Pending { .. } => BodyResult::Err(KError::new(KErrorKind::ShapeError(
                 "UNION schema elaboration parked again after Combine wake".to_string(),
             ))),
         }
     });
-    // `producers` are sibling slots the schema parked on while elaborating;
-    // this Combine reads their values at finish-time but does NOT own them.
-    let combine_id = sched.add_combine(vec![], producers, scope, finish);
+    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 
