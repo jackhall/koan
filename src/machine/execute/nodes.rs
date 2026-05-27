@@ -41,6 +41,11 @@ pub(super) enum NodeStep<'a> {
         /// the index advance is applied to the freshly-pushed block-entry frame.
         /// Default `false` keeps today's behavior for non-CONS tail-replace paths.
         advance_index: bool,
+        /// Body-scope chain index for FN-body tail-replace (mirrors
+        /// [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
+        /// Read by `compute_replace_chain`'s FN-body arm to pass to
+        /// `assemble_body_chain`. Ignored on non-FN-body paths.
+        body_index: usize,
     },
 }
 

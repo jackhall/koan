@@ -107,6 +107,7 @@ impl LexicalFrame {
 pub fn assemble_body_chain<'a>(
     body_scope: &Scope<'a>,
     call_site_chain: Rc<LexicalFrame>,
+    body_index: usize,
 ) -> Rc<LexicalFrame> {
     let mut hits: Vec<(ScopeId, usize)> = Vec::new();
     let mut current = body_scope.outer;
@@ -123,5 +124,10 @@ pub fn assemble_body_chain<'a>(
     for (sid, idx) in hits {
         chain = Some(LexicalFrame::push(chain, sid, idx));
     }
-    LexicalFrame::push(chain, body_scope.id, 0)
+    // `body_index = 0` is the single-statement case: the FN body's lone statement
+    // sees only its own parameters (carved out via `nominal_binder: true`). For
+    // multi-statement bodies, the last statement enters at `N` (one past the
+    // earlier `1..N-1` siblings submitted via `enter_block`); its cutoff is `N`
+    // so all earlier siblings (`idx < N`) are visible.
+    LexicalFrame::push(chain, body_scope.id, body_index)
 }

@@ -108,6 +108,7 @@ impl<'a> Scheduler<'a> {
                     function: new_function,
                     block_entry,
                     advance_index,
+                    body_index,
                 } => {
                     let next_function = new_function.or(prev_function);
                     let new_chain = compute_replace_chain(
@@ -116,6 +117,7 @@ impl<'a> Scheduler<'a> {
                         new_function,
                         new_frame.as_deref(),
                         advance_index,
+                        body_index,
                     );
                     match new_frame {
                         Some(f) => {
@@ -216,6 +218,7 @@ impl<'a> Scheduler<'a> {
             function: None,
             block_entry: None,
             advance_index: false,
+            body_index: 0,
         }
     }
 }
@@ -245,6 +248,7 @@ fn compute_replace_chain<'a>(
     new_function: Option<&'a KFunction<'a>>,
     new_frame: Option<&crate::machine::core::CallArena>,
     advance_index: bool,
+    body_index: usize,
 ) -> Rc<LexicalFrame> {
     let Some(scope_id) = block_entry else {
         if !advance_index {
@@ -259,7 +263,7 @@ fn compute_replace_chain<'a>(
         );
     };
     match (new_function, new_frame) {
-        (Some(_f), Some(frame)) => assemble_body_chain(frame.scope(), prev_chain),
+        (Some(_f), Some(frame)) => assemble_body_chain(frame.scope(), prev_chain, body_index),
         _ => {
             let start = if advance_index { 1 } else { 0 };
             LexicalFrame::push(Some(prev_chain), scope_id, start)

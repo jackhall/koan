@@ -65,6 +65,15 @@ pub enum BodyResult<'a> {
         /// MATCH / TRY arms don't pair this flag with a block entry today, but the
         /// reinstall site composes both safely.
         advance_index: bool,
+        /// Body-scope chain index for an FN-body tail-replace (block_entry: Some +
+        /// function: Some). `0` (the default) for single-statement bodies — the
+        /// body's lone statement sees only its own parameters (carved out). For
+        /// multi-statement bodies where the FN-slot tail-replaces into the *last*
+        /// statement, this is `N` (one past the earlier `1..N-1` siblings submitted
+        /// via `enter_block` against the body scope), so the strict `b.idx < c`
+        /// predicate admits every earlier sibling. Ignored when `function` is `None`
+        /// (block-entry without an FN body — MATCH / TRY arms).
+        body_index: usize,
     },
     DeferTo(NodeId),
     Err(KError),
@@ -78,6 +87,7 @@ impl<'a> BodyResult<'a> {
             function: None,
             block_entry: None,
             advance_index: false,
+            body_index: 0,
         }
     }
 
@@ -94,6 +104,7 @@ impl<'a> BodyResult<'a> {
             function: None,
             block_entry: None,
             advance_index: true,
+            body_index: 0,
         }
     }
 
@@ -101,6 +112,21 @@ impl<'a> BodyResult<'a> {
         expr: KExpression<'a>,
         frame: Rc<CallArena>,
         function: &'a KFunction<'a>,
+    ) -> Self {
+        Self::tail_with_frame_at_index(expr, frame, function, 0)
+    }
+
+    /// FN-body tail-replace with an explicit `body_index` for the body-scope chain
+    /// frame. `0` matches single-statement bodies (today's default); `N` lets the
+    /// FN slot tail-replace into the *last* statement of an N-statement body whose
+    /// earlier `N-1` siblings were submitted via `enter_block` (chain indices
+    /// `1..N-1`). The last statement at index `N` then sees every earlier sibling
+    /// under the strict `b.idx < c` predicate.
+    pub fn tail_with_frame_at_index(
+        expr: KExpression<'a>,
+        frame: Rc<CallArena>,
+        function: &'a KFunction<'a>,
+        body_index: usize,
     ) -> Self {
         // FN body entry: capture the per-call child scope's id before moving `frame`
         // into the variant. The reinstall site (`compute_replace_chain` in
@@ -113,6 +139,7 @@ impl<'a> BodyResult<'a> {
             function: Some(function),
             block_entry: Some(body_scope_id),
             advance_index: false,
+            body_index,
         }
     }
 
@@ -131,6 +158,7 @@ impl<'a> BodyResult<'a> {
             function: None,
             block_entry: Some(scope_id),
             advance_index: false,
+            body_index: 0,
         }
     }
 

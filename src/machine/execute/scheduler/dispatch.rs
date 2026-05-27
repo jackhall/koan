@@ -395,6 +395,7 @@ impl<'a> Scheduler<'a> {
             function: None,
             block_entry: None,
             advance_index: false,
+            body_index: 0,
         }
     }
 
@@ -475,6 +476,7 @@ impl<'a> Scheduler<'a> {
                         function: None,
                         block_entry: None,
                         advance_index: false,
+                        body_index: 0,
                     })
                 }
                 // Unbound falls through so `value_lookup`'s body produces the structured

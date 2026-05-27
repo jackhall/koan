@@ -53,10 +53,10 @@ pub fn body<'a>(
             )));
         }
     };
-    // A body of bare sub-expressions (`((a) (b) (c))`) right-folds into a `CONS` chain
-    // so the scheduler sees a single tail-callable expression: TCO holds on the last
-    // statement; backward refs across statements work, forward refs do not.
-    let body_expr = super::cons::fold_multi_statement(body_expr);
+    // Multi-statement bodies (`((a) (b) (c))`) are split at FN-invoke time by
+    // `KFunction::invoke`: the first N-1 statements are submitted as siblings into
+    // the per-call body scope via `enter_block`, and the FN slot tail-replaces into
+    // the last statement, preserving TCO. No CONS-fold at construction time.
 
     // Parameter-name scan runs against the raw signature before elaboration so a
     // param type that's still parked on a placeholder still contributes its name.

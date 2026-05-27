@@ -50,6 +50,7 @@ pub fn body<'a>(
         function: None,
         block_entry: None,
         advance_index: false,
+        body_index: 0,
     }
 }
 
