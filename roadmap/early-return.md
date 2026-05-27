@@ -69,10 +69,11 @@ later" as flat statements and still get TCO.
 
 **Unblocks:** none tracked yet.
 
-RETURN composes most cleanly with the per-block body-submission model
-being designed in `scratch/plan-block-as-first-class.md` — without it,
-the FN body is still CONS-folded and the tail-position story conflates
-with the body-structure story. Not a hard prerequisite (the
-error-as-control-flow shape could be retrofitted onto today's CONS-
-folded bodies), but the FN-slot-as-block-driver direction in
-particular wants the block primitive in place first.
+FN / FUNCTOR / MATCH-arm / TRY-arm bodies now split into N statements
+at invoke time and tail-replace into the last one (see
+`design/execution-model.md` § Block submission). RETURN slots into
+that model as either the error-as-control-flow shape (the Combine over
+the body's N siblings catches a sentinel `EarlyReturn` error and
+decodes it into a Value or a Tail) or the FN-slot-as-block-driver
+shape (the FN slot owns statement iteration directly, so RETURN can
+replace it in place from any position).

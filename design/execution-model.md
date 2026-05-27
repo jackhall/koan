@@ -289,16 +289,16 @@ the type-side resolver and the bare-identifier value lookup respectively.
 inserting into `data` / `functions`, so the two tables are mutually
 exclusive at any moment.
 
-Per-scope statement indices flow through
-[`Scope::consume_statement_indices`](../src/machine/core/scope.rs): a
-monotonic counter that hands out fresh indices starting strictly above
-every previously-bound name. `Scheduler::enter_block` consumes from it
-when submitting a block's statements, so the REPL or a long-lived module
-scope that re-enters the same `Scope` gets a fresh window each time and
-previously-bound names stay visible (their indices sit below the new
-window). The `add_dispatch` auto-root path consumes from the counter too,
-so single-node test submissions outside `enter_block` get unique chain
-indices.
+Statement indices are per-`enter_block` call: each call to
+[`Scheduler::enter_block`](../src/machine/execute/scheduler.rs) mints
+chain frames at indices `1..N` for the N statements it submits. A REPL
+or test fixture that submits without an ambient chain (the
+[`Scheduler::add`](../src/machine/execute/scheduler/submit.rs) auto-root
+branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
+— a chain that mentions no real scope, so the visibility predicate's
+`index_for → None ⇒ complete` arm makes every binding in the target
+scope visible. This is what lets a REPL query read through to every
+prior bind without sharing an index space with them.
 
 The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) — is a
 four-phase linear pipeline: a bare-name short-circuit, the chain-walked
@@ -610,23 +610,29 @@ statements as dispatch nodes:
   ([`interpret`](../src/machine/execute/interpret.rs)) enter through
   `enter_block(root.id, exprs, root)` against an empty parent chain.
 - `MODULE` and `SIG` bodies enter through
-  [`plan_body_statements`](../src/machine/core/kfunction/scheduler_handle.rs),
+  [`enter_body_block`](../src/machine/core/kfunction/scheduler_handle.rs),
   which delegates to `enter_block`.
+- FN, FUNCTOR, MATCH-arm, and TRY-arm bodies split via the shared
+  [`split_body_statements`](../src/machine/core/kfunction/body.rs) helper
+  (same all-`Expression` rule that `enter_body_block` uses) — the first
+  N-1 statements submit as siblings into the body / arm scope at chain
+  indices `1..N-1`, and the FN-slot / MATCH-slot / TRY-slot tail-replaces
+  into the last statement at index `N` via
+  [`BodyResult::tail_with_frame_at_index`](../src/machine/core/kfunction/body.rs)
+  or [`BodyResult::tail_with_block_at_index`](../src/machine/core/kfunction/body.rs).
+  TCO is preserved on the last statement. Single-statement bodies pass
+  through at index 0.
 - FN bodies route through `KFunction::invoke` (see below — the chain
   shape is special because the call site's chain is not the body's
   lexical chain).
-- `MATCH` arms ([`match_case`](../src/builtins/match_case.rs)) and
-  `TRY` body + `WITH` arms ([`try_with`](../src/builtins/try_with.rs))
-  each become their own lexical block via
-  [`Scope::child_under`](../src/machine/core/scope.rs) and submit
-  through `enter_block` with the child scope.
 
 The "every dispatched node has a chain" invariant is a debug
 assertion in the strict
 [`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
 path; the public `add` path auto-roots a chain when no ambient one is
-present (so unit-test sites that submit a single node outside
-`enter_block` stay simple).
+present via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
+(so REPL-style submissions outside `enter_block` see every prior bind
+in the target scope).
 
 ### FN-body chain assembly
 
@@ -638,9 +644,11 @@ the FN's captured `outer` scope chain (the lexical-definition path
 set up by `CallArena::new`) and, for each enclosing scope, looks it
 up in the **call-site** chain via `LexicalFrame::index_for`. Hits
 become frames; the result is prepended with the body's own
-`(body_scope.id, 0)` head. Misses ("this enclosing lexical block is
-not on the call-site chain — it has already returned") drop out of
-the chain rather than adding frames.
+`(body_scope.id, body_index)` head — `body_index = 0` for single-
+statement bodies, `N` for the multi-statement tail-into-last path so
+the last statement's cutoff admits every earlier sibling. Misses
+("this enclosing lexical block is not on the call-site chain — it has
+already returned") drop out of the chain rather than adding frames.
 
 A tail-recursive FN therefore produces an identical-shape chain on
 every iteration; a non-tail recursive call does the same; mutual

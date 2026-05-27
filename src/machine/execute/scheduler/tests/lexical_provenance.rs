@@ -37,9 +37,8 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
     for (i, chain) in chains.iter().enumerate() {
         assert!(chain.parent.is_none(), "top-level frame i={i} must have parent: None");
         assert_eq!(chain.scope_id, root.id);
-        // Statement indices start at 1 (BindingIndex::BUILTIN occupies 0), then advance
-        // monotonically — see `Scope::consume_statement_indices`. Top-level statements
-        // here get 1, 2, 3.
+        // Statement indices start at 1 (BindingIndex::BUILTIN occupies 0) and reset
+        // per `enter_block` call. Top-level statements here get 1, 2, 3.
         assert_eq!(chain.index, i + 1);
     }
     // Distinct frames per statement (different Rc pointers).

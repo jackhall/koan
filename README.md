@@ -149,7 +149,6 @@ src/
     │   ├── fn_def.rs
     │   ├── fn_def/signature.rs   parameter-list parsing for FN
     │   ├── call_by_name.rs
-    │   ├── cons.rs
     │   ├── match_case.rs
     │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
     │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
