@@ -60,6 +60,22 @@ single-`Identifier` is short-circuited today in
 - *Drop tentative — decided.* `signature_admits_tentative` and the
   `PickPass::Empty → pick_tentative` arm in `resolve_dispatch` go away;
   the strict-Empty branches above replace them.
+- *Collapse the five `Bindings` raw-map accessors into three
+  visibility-aware lookups — open.* Today
+  [`Bindings::data`](../../src/machine/core/bindings.rs),
+  `.types()`, `.functions()`, `.placeholders()`, and
+  `.pending_overloads()` each return a raw `Ref<HashMap<…, (_, BindingIndex)>>`,
+  and 130+ call sites pattern-match `(o, _)` / `(kt, _)` /
+  `(f, _)` while the visibility filter is hand-rolled inside
+  `Scope::resolve_with_chain` / `resolve_type_with_chain`. Replace
+  with `Bindings::lookup_value(name, cutoff) -> Resolution`,
+  `Bindings::lookup_type(name, cutoff) -> Option<&KType>`, and
+  `Bindings::lookup_function(key, cutoff) -> FunctionResolution`
+  that walk data + placeholders / types / functions +
+  pending_overloads internally and apply the `visible` predicate.
+  Scope's ancestor walk then becomes "delegate to `Bindings::lookup_*`
+  per ancestor"; the unified walk reads three uniformly-shaped
+  outcomes rather than splicing four hand-rolled passes.
 
 ## Dependencies
 
