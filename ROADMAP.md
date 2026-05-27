@@ -126,6 +126,7 @@ functor-heavy collections both build on:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
+- [FN/FUNCTOR named identity](roadmap/type_language/fn-named-identity.md)
 
 ### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
 
@@ -136,6 +137,7 @@ shipped so far"); the remaining phase is the walk-unification and strict-only
 admission collapse:
 
 - [Unified walk + strict-only admission](roadmap/dispatch_fix/unified-walk.md)
+- [Type language via dispatch](roadmap/dispatch_fix/type-language-via-dispatch.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

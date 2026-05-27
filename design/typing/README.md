@@ -49,6 +49,11 @@ Module-system mechanics:
 - [scheduler.md](scheduler.md) — type inference and implicit search as
   ordinary `Dispatch` / `Bind` scheduler work, with no parallel
   `Infer` / `ImplicitSearch` node-kind track.
+- [type-language-via-dispatch.md](type-language-via-dispatch.md) — the
+  sigil `:(...)` as a parse-context marker; parameterized type
+  construction (`LIST`, `MAP`, `FN`, `Functor`) and user-defined
+  functor application registered as keyworded overloads sharing the
+  value-side candidate-bucket and binder-admission machinery.
 
 [open-work.md](open-work.md) carries the roadmap pointers for the
 module-system stages plus the cross-cutting standard-library,

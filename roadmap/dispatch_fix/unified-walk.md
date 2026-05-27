@@ -94,7 +94,10 @@ sibling dispatching before its sibling's binder slot pops still finds
 the placeholder and parks rather than hard-erroring under strict-only
 admission.
 
-**Unblocks:** none — leaf simplification.
+**Unblocks:**
+- [Type language via dispatch](type-language-via-dispatch.md) — the
+  unified candidate-walk substrate is the foundation that
+  sigiled-Keyworded type construction registers against.
 
 The shipped behavior collapses to one-paragraph dispatch semantics:
 innermost scope wins; ties within a scope by slot-specificity;
