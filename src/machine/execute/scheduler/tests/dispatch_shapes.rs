@@ -605,6 +605,67 @@ fn keyworded_unchanged() {
     );
 }
 
+// =====================================================================
+// Direct classifier assertions (Phase 2 commit 1 of the fast-lane subsumption).
+// These call `classify_dispatch_shape` and pattern-match the returned variant.
+// Unlike the routing tests above (which observe the dispatch counter), these
+// pin the classifier's branching itself — particularly the split between
+// `TypeCall` (head leaf-Type + all-leaf args) and `TypeConstructorCall` (head
+// leaf-Type + any non-leaf arg) introduced for Phase 2.
+// =====================================================================
+
+/// `(MyStruct (x = 1, y = 2))` — leaf-Type head, single nested-`Expression`
+/// body. Classifier must route to `TypeConstructorCall`, not `TypeCall` (the
+/// args aren't leaf Types) or `Keyworded` (no keyword in `parts`).
+#[test]
+fn classifier_struct_construct_routes_to_type_constructor_call() {
+    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    let expr = parse_one("MyStruct (x = 1, y = 2)");
+    assert!(
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
+        "expected TypeConstructorCall for `MyStruct (x = 1, y = 2)`",
+    );
+}
+
+/// `(Maybe (some 42))` — leaf-Type head, single nested-`Expression` body
+/// holding `(some 42)`. Same shape as the struct case — must route to
+/// `TypeConstructorCall`.
+#[test]
+fn classifier_tagged_construct_routes_to_type_constructor_call() {
+    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    let expr = parse_one("Maybe (some 42)");
+    assert!(
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
+        "expected TypeConstructorCall for `Maybe (some 42)`",
+    );
+}
+
+/// `(Bar (x))` — leaf-Type head, nested-`Expression` body that wraps a single
+/// identifier (the newtype-construction shape). Routes to
+/// `TypeConstructorCall`.
+#[test]
+fn classifier_newtype_construct_routes_to_type_constructor_call() {
+    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    let expr = parse_one("Bar (x)");
+    assert!(
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
+        "expected TypeConstructorCall for `Bar (x)`",
+    );
+}
+
+/// `(List Number)` — leaf-Type head, every arg a leaf Type. Stays on
+/// `TypeCall` after the Phase 2 split: the partition is "leaf-only args ⇒
+/// TypeCall, any non-leaf arg ⇒ TypeConstructorCall", and `Number` is leaf.
+#[test]
+fn classifier_type_call_partition_preserved() {
+    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    let expr = parse_one("(List Number)");
+    assert!(
+        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeCall),
+        "leaf-Type head + leaf-Type args must stay on TypeCall after the split",
+    );
+}
+
 /// Mixed shapes where the head is a fast-lane shape (leaf `Type` or `Identifier`)
 /// but a keyword appears later in the parts list. The classifier's step-1 sweep
 /// catches these and routes to `Keyworded`. Pins the D4 contract: "sweep first,

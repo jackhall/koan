@@ -40,6 +40,17 @@ pub(super) enum DispatchShape {
     /// `Type`. Handler synthesizes `TypeExpr { name: head.name, params: List(args) }`
     /// and elaborates through `scope.resolve_type_expr`.
     TypeCall,
+    /// Type-constructor call: head (index 0) is a leaf `Type` and `parts[1..]`
+    /// contains at least one non-leaf-Type part (typically a single nested-parens
+    /// `Expression`, as in `MyStruct (x = 1, y = 2)`). Handler resolves the head
+    /// type-side and routes Struct / Tagged / Newtype / TypeConstructor heads
+    /// directly through their construction primitives; opaque / Module / unbound
+    /// heads fall through to the keyworded `type_call` builtin.
+    ///
+    /// Partitions the head-leaf-Type space against [`Self::TypeCall`]: leaf-only
+    /// args go to `TypeCall`; mixed-or-Expression args go here. The two never
+    /// overlap. Phase 2 of `scratch/plan-fast-lane-subsume.md`.
+    TypeConstructorCall,
     /// Function-value call: head (index 0) is a lowercase `Identifier`, followed by
     /// ≥1 non-keyword parts. Handler resolves the head and falls back to the
     /// keyworded path when it doesn't bind to a `KFunction`.
@@ -91,10 +102,20 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
         return DispatchShape::Keyworded;
     };
     match &head_part.value {
-        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None)
-            && expr.parts[1..].iter().all(|p| matches!(&p.value,
-                ExpressionPart::Type(inner) if matches!(inner.params, TypeParams::None))) =>
-            DispatchShape::TypeCall,
+        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+            // Head is a leaf `Type`. Two sub-cases:
+            //  - all leaf-Type args ⇒ `TypeCall` (the parameter-pack elaboration shape).
+            //  - any non-leaf arg (Expression body, ListLiteral, literal, etc.) ⇒
+            //    `TypeConstructorCall` (the construction shape).
+            if expr.parts[1..].iter().all(|p| matches!(
+                &p.value,
+                ExpressionPart::Type(inner) if matches!(inner.params, TypeParams::None),
+            )) {
+                DispatchShape::TypeCall
+            } else {
+                DispatchShape::TypeConstructorCall
+            }
+        }
         ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
         _ => DispatchShape::Keyworded,
     }
@@ -331,6 +352,15 @@ impl<'a> Scheduler<'a> {
                 // to Keyworded for this shape; the `call_by_name` builtin that
                 // formerly served the fall-through has been deleted.
                 return Ok(self.fast_lane_function_value_call(&expr, scope, idx));
+            }
+            DispatchShape::TypeConstructorCall => {
+                // Phase 2 commit 1 of the fast-lane subsumption
+                // (`scratch/plan-fast-lane-subsume.md`): the variant is added to the
+                // classifier and routed here, but the handler is intentionally empty
+                // — we fall through to Keyworded so the `type_call` builtin still
+                // serves construction. Commits 2-3 add per-head-type arms; commits
+                // 4-6 migrate tests, trim `type_call.rs`, and relocate
+                // `dispatch_constructor`.
             }
             DispatchShape::Keyworded => {}
         }
