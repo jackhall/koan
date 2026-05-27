@@ -1,10 +1,13 @@
 //! Tests for `machine::core`, split by surface:
 //!
+//! - [`bindings_lookup`] — the per-scope `lookup_value` / `lookup_type` /
+//!   `lookup_function` surface that the index-gated resolver walks.
 //! - [`queue`] — pending-queue drain / borrow-conflict requeue invariants.
 //! - [`register`] — bind_value / register_function shadowing, dedup, overload.
 //! - [`dispatch`] — resolve_dispatch outcomes plus unit-level dispatch routing.
 //! - [`types`] — register_type / resolve_type scope-chain walk.
 
+mod bindings_lookup;
 mod dispatch;
 mod queue;
 mod register;

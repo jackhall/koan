@@ -7,12 +7,23 @@ use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::machine::model::values::KObject;
 use super::arena::RuntimeArena;
 use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
+pub use super::bindings::Resolution;
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
 
 /// Visibility predicate: is `b` visible from a reference at `chain`?
+///
+/// Canonical reference for the index-gated visibility rule. Production reads
+/// no longer call this directly — they go through
+/// [`crate::machine::core::Bindings::lookup_value`] /
+/// [`crate::machine::core::Bindings::lookup_type`] /
+/// [`crate::machine::core::Bindings::lookup_function`], which translate
+/// `Option<&LexicalFrame>` into a per-scope `chain_cutoff: Option<usize>`
+/// (via [`LexicalFrame::index_for`]) and apply the predicate inside the
+/// lookup. The free function survives as the predicate's documented home and
+/// for downstream PRs (B/C) that may want a freestanding visibility decision.
 ///
 /// - `chain = None` (test fixtures, builtin registration paths) ⇒ see everything;
 ///   the gate is disabled.
@@ -26,6 +37,7 @@ use super::scope_id::ScopeId;
 ///
 /// Builtins (`BindingIndex::BUILTIN`) sit at index 0 and are visible to every user
 /// statement: top-level user statement at index 1 has cutoff `1`, and `0 < 1`.
+#[allow(dead_code)]
 pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&LexicalFrame>) -> bool {
     let Some(chain) = chain else {
         return true;
@@ -53,26 +65,6 @@ impl<'a> KFuture<'a> {
             bundle: self.bundle.deep_clone(),
         }
     }
-}
-
-/// Result of `Scope::resolve`. `Placeholder` carries the producer `NodeId` the consumer
-/// should park on (a binder dispatched the name but its body hasn't finalized).
-///
-/// Invariant: `data` and `placeholders` never both hold the same name in one scope —
-/// `bind_value` removes the placeholder before inserting into `data`. Resolution stops at
-/// the first scope on the chain that has either.
-///
-/// Index-gated resolution splits the not-found cases:
-/// - [`Resolution::UnboundName`] — no binding visible at this consumer's chain position.
-///   Structural absence: either the name is misspelled, or the binding lives at a later
-///   sibling that hasn't been ordered yet (the visibility gate hides it).
-/// - [`Resolution::Placeholder`] — a binder placeholder is visible and not yet finalized;
-///   the consumer parks on the producer `NodeId`.
-/// - [`Resolution::Value`] — the binding is finalized and visible.
-pub enum Resolution<'a> {
-    Value(&'a KObject<'a>),
-    Placeholder(NodeId),
-    UnboundName,
 }
 
 /// Lexical environment. `functions` (inside [`Bindings`]) buckets overloads by their
@@ -309,7 +301,10 @@ impl<'a> Scope<'a> {
             // The forwarded write carries the call-site `index` unchanged: the bind
             // belongs in the call site's lexical block, at the call site's statement
             // position, not the module's. See D2 in plan-index-gated-resolution.md.
-            if self.bindings.get().data().contains_key(&name) {
+            if matches!(
+                self.bindings.get().lookup_value(&name, None),
+                Some(Resolution::Value(_))
+            ) {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "USING: local bind `{name}` collides with a surfaced module member; \
                      rename it to avoid silently shadowing the module's `{name}`",
@@ -511,19 +506,8 @@ impl<'a> Scope<'a> {
     ) -> Resolution<'a> {
         self.ancestors()
             .find_map(|scope| {
-                if let Some((obj, idx)) = scope.bindings().data().get(name).copied() {
-                    if visible(scope.id, idx, chain) {
-                        return Some(Resolution::Value(obj));
-                    }
-                }
-                if let Some((id, idx)) =
-                    scope.bindings().placeholders().get(name).copied()
-                {
-                    if visible(scope.id, idx, chain) {
-                        return Some(Resolution::Placeholder(id));
-                    }
-                }
-                None
+                let cutoff = chain.and_then(|c| c.index_for(scope.id));
+                scope.bindings().lookup_value(name, cutoff)
             })
             .unwrap_or(Resolution::UnboundName)
     }
@@ -579,13 +563,8 @@ impl<'a> Scope<'a> {
         chain: Option<&LexicalFrame>,
     ) -> Option<&'a crate::machine::model::types::KType<'a>> {
         self.ancestors().find_map(|scope| {
-            scope.bindings().types().get(name).and_then(|(kt, idx)| {
-                if visible(scope.id, *idx, chain) {
-                    Some(*kt)
-                } else {
-                    None
-                }
-            })
+            let cutoff = chain.and_then(|c| c.index_for(scope.id));
+            scope.bindings().lookup_type(name, cutoff)
         })
     }
 

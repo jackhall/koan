@@ -262,8 +262,9 @@ binder has registered.
 The mechanism lives in two pieces.
 
 A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
-inside the [`Bindings`](../src/machine/core/scope.rs) façade on
-`Scope`, alongside `data` and `functions`. When a binder is submitted, its
+inside the [`Bindings`](../src/machine/core/bindings.rs) façade on
+`Scope`, alongside `data`, `types`, `functions`, and `pending_overloads`.
+When a binder is submitted, its
 [`binder_name`](../src/machine/core/kfunction/body.rs) hook (a per-`KFunction`
 extractor of type [`BinderNameFn`](../src/machine/core/kfunction/body.rs) that
 pulls the to-be-bound name structurally out of the expression's parts)
@@ -279,22 +280,45 @@ later-arriving call expression can park on a not-yet-finalized overload.
 The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`)
 opt in via [`register_builtin_with_binder`](../src/machine/core/kfunction.rs);
 everything else stays placeholder-free.
-[`Scope::resolve_with_chain`](../src/machine/core/scope.rs) walks `data`
-then `placeholders` in each scope on the ancestor chain, filters every hit
-through the [`visible`](../src/machine/core/scope.rs) predicate (the
-`idx < cutoff` / `nominal_binder` rule), and returns one of three shapes:
-`Resolution::Value(&KObject)` for a finalized visible binding,
-`Resolution::Placeholder(NodeId)` for a still-running visible producer, or
-`Resolution::UnboundName` when no visible binding exists. The
-`Scope::resolve` shorthand (no chain argument) reads as "see everything" and
-is reserved for test fixtures and builtin-registration paths; production
-dispatch always threads the consumer's `LexicalFrame` chain through. The
-chain-aware [`resolve_type_with_chain`](../src/machine/core/scope.rs) and
-[`lookup_with_chain`](../src/machine/core/scope.rs) carry the same gate to
-the type-side resolver and the bare-identifier value lookup respectively.
-`bind_value` and `register_function` remove their own placeholder before
-inserting into `data` / `functions`, so the two tables are mutually
-exclusive at any moment.
+
+Production reads go through three visibility-aware lookups on the façade:
+[`Bindings::lookup_value`](../src/machine/core/bindings.rs) /
+[`Bindings::lookup_type`](../src/machine/core/bindings.rs) /
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs). Each takes
+a `chain_cutoff: Option<usize>` — the consumer's lexical index within
+*this* scope as computed by
+[`LexicalFrame::index_for`](../src/machine/core/lexical_frame.rs) — and
+applies the [`visible`](../src/machine/core/scope.rs) predicate
+(`b.nominal_binder || b.idx < c`) per entry. `lookup_value` consults
+`data` then `placeholders` and returns `Resolution::Value(&KObject)` for
+a finalized visible binding, `Resolution::Placeholder(NodeId)` for a
+still-running visible producer, or `None` (the caller surfaces
+`Resolution::UnboundName` on chain exhaustion). `lookup_function`
+consults `functions[key]` first, filtered per-overload by visibility,
+and falls through to `pending_overloads[key]` only when no live bucket
+admits — returning `FunctionLookup::Bucket(Vec<&KFunction>)` (non-empty,
+pre-filtered), `FunctionLookup::Pending(NodeId)` (an in-flight FN /
+FUNCTOR binder's producer to park on), or `FunctionLookup::None`. The
+dispatcher records the innermost `Pending` arm during its ancestor walk
+and parks on it only if no bucket admits anywhere, so the bucket /
+pending-overload pair surfaces from one traversal rather than two. The raw map accessors (`data` / `types` /
+`functions` / `placeholders` / `pending_overloads`) are gated
+`#[cfg(test)]`; production sites that genuinely sweep all members
+(`MODULE` member mirroring, signature shape-check, REPL reflection)
+consume the value-yielding `iter_data` / `iter_types` / `iter_functions`,
+which release the underlying borrow at the iterator boundary.
+
+[`Scope::resolve_with_chain`](../src/machine/core/scope.rs) and
+[`resolve_type_with_chain`](../src/machine/core/scope.rs) delegate
+per-ancestor to `lookup_value` / `lookup_type`, mapping the consumer's
+`LexicalFrame` chain to each ancestor scope's `chain_cutoff` and returning
+the first visible hit. The `Scope::resolve` shorthand (no chain argument)
+reads as "see everything" and is reserved for test fixtures and
+builtin-registration paths; production dispatch always threads the
+consumer's `LexicalFrame` chain through. `bind_value` and
+`register_function` remove their own placeholder before inserting into
+`data` / `functions`, so the two tables are mutually exclusive at any
+moment.
 
 ### Submission-time binder install and recursive sub-Dispatch
 
@@ -731,10 +755,12 @@ returned", visibility unconstrained). The
 [`visible`](../src/machine/core/scope.rs) predicate consumes it as
 `b.nominal_binder || b.idx < cutoff`; the value-side
 `Scope::resolve_with_chain`, the type-side `resolve_type_with_chain`, the
-bare-identifier `lookup_with_chain`, the function-bucket
-`OverloadBucket::pick`, and the `pending_overload_producer` scanner all
-filter through it. The gate is `chain = None`-bypassed for test fixtures
-and builtin-registration paths.
+bare-identifier `lookup_with_chain`, and the per-scope
+[`Bindings::lookup_value`](../src/machine/core/bindings.rs) /
+`lookup_type` / `lookup_function` lookups (the last covering both the
+overload-bucket filter and the in-flight `pending_overloads` fall-through
+in one pass) all filter through it. The gate is `chain = None`-bypassed
+for test fixtures and builtin-registration paths.
 
 ## Open work
 

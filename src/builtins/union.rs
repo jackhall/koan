@@ -6,7 +6,7 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    Scope, SchedulerHandle,
+    Resolution, Scope, SchedulerHandle,
 };
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
@@ -104,8 +104,8 @@ fn finalize_union<'a>(
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`. See
     // `finalize_struct` for the symmetric rationale.
     let bindings = scope.bindings();
-    if bindings.types().get(&name).is_some() {
-        if let Some((existing, _)) = bindings.data().get(&name).copied() {
+    if bindings.lookup_type(&name, None).is_some() {
+        if let Some(Resolution::Value(existing)) = bindings.lookup_value(&name, None) {
             return BodyResult::Value(existing);
         }
     }

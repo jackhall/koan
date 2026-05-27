@@ -18,8 +18,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::NodeId;
 
-use super::bindings::BindingIndex;
-use super::scope::{Resolution, Scope};
+use super::bindings::{FunctionLookup, Resolution};
+use super::scope::Scope;
 
 /// Picked function plus the per-slot classification the dispatch driver needs for
 /// auto-wrap, replay-park, and eager-sub scheduling. Sole carrier of the disjoint
@@ -84,57 +84,59 @@ impl<'a> Scope<'a> {
         // on (forward refs), plus the first genuinely-unbound tie name.
         let mut park_producers: Vec<NodeId> = Vec::new();
         let mut unbound_name: Option<String> = None;
+        // Innermost pending-overload producer recorded during the walk, surfaced
+        // post-walk only if no bucket admits anywhere. Folding the previous
+        // separate `pending_overload_producer` walk into the main ancestor pass
+        // saves a second traversal; PR A keeps the post-walk decision shape
+        // unchanged.
+        let mut pending_producer: Option<NodeId> = None;
         let picked = self.ancestors().find_map(|scope| -> Option<ResolveOutcome<'a>> {
-            // Per-step guard drops at the closure boundary so the chain walk never
-            // accumulates live read borrows on `bindings().functions()`.
-            let functions_guard = scope.bindings().functions();
-            let raw = functions_guard.get(&key)?.as_slice();
-            // Pre-filter overloads by per-overload visibility. A consumer between two
-            // overloads in the same bucket sees only the earlier; a later-sibling
-            // overload is hidden from this consumer's reference. The `nominal_binder`
-            // carve-out doesn't apply here — FN bodies are value-style gated.
-            let visible_candidates: Vec<(&'a KFunction<'a>, BindingIndex)> = raw
-                .iter()
-                .filter(|(_, idx)| crate::machine::core::scope::visible(scope.id, *idx, chain))
-                .copied()
-                .collect();
-            if visible_candidates.is_empty() {
-                return None;
-            }
-            let bucket = OverloadBucket { candidates: &visible_candidates };
-            match bucket.pick_strict(expr, dispatch_scope, chain) {
-                PickPass::Picked(f) => Some(ResolveOutcome::Resolved(build_resolved(f, expr))),
-                // A strict tie whose deciding argument is still an unevaluated literal /
-                // sub-expression may resolve once evaluated: a typed `Future(List …)`
-                // re-dispatch is element-aware (`accepts_part`) where the bare literal is
-                // shape-only and ties. Defer rather than hard-erroring — `run_bind`
-                // re-dispatches the rewritten `Future(_)` expression, which carries no eager
-                // parts, so a genuine tie surfaces as `Ambiguous` on that second pass.
-                PickPass::Tie(n) if expr_has_eager_part(expr) => {
-                    let _ = n;
-                    Some(ResolveOutcome::Deferred)
+            let cutoff = chain.and_then(|c| c.index_for(scope.id));
+            match scope.bindings().lookup_function(&key, cutoff) {
+                FunctionLookup::None => None,
+                FunctionLookup::Pending(producer) => {
+                    if pending_producer.is_none() {
+                        pending_producer = Some(producer);
+                    }
+                    None
                 }
-                PickPass::Tie(n) => Some(ResolveOutcome::Ambiguous(n)),
-                PickPass::Empty => match bucket.pick_tentative(expr) {
-                    PickPass::Picked(f) => {
-                        Some(ResolveOutcome::Resolved(build_resolved(f, expr)))
-                    }
-                    // A tentative tie admits ≥2 overloads only via the blind bare-name
-                    // relaxation. If a tying bare name is a still-pending forward reference,
-                    // remember its producer and keep walking; once nothing matches anywhere,
-                    // parking on it and re-dispatching lets the strict-pass peek disambiguate
-                    // off the bound type.
-                    PickPass::Tie(_) => {
-                        if park_producers.is_empty() && unbound_name.is_none() {
-                            let (placeholders, unbound) =
-                                classify_tie_bare_names(expr, dispatch_scope, chain);
-                            park_producers = placeholders;
-                            unbound_name = unbound;
+                FunctionLookup::Bucket(candidates) => {
+                    let bucket = OverloadBucket { candidates: &candidates };
+                    match bucket.pick_strict(expr, dispatch_scope, chain) {
+                        PickPass::Picked(f) => Some(ResolveOutcome::Resolved(build_resolved(f, expr))),
+                        // A strict tie whose deciding argument is still an unevaluated literal /
+                        // sub-expression may resolve once evaluated: a typed `Future(List …)`
+                        // re-dispatch is element-aware (`accepts_part`) where the bare literal is
+                        // shape-only and ties. Defer rather than hard-erroring — `run_bind`
+                        // re-dispatches the rewritten `Future(_)` expression, which carries no eager
+                        // parts, so a genuine tie surfaces as `Ambiguous` on that second pass.
+                        PickPass::Tie(n) if expr_has_eager_part(expr) => {
+                            let _ = n;
+                            Some(ResolveOutcome::Deferred)
                         }
-                        None
+                        PickPass::Tie(n) => Some(ResolveOutcome::Ambiguous(n)),
+                        PickPass::Empty => match bucket.pick_tentative(expr) {
+                            PickPass::Picked(f) => {
+                                Some(ResolveOutcome::Resolved(build_resolved(f, expr)))
+                            }
+                            // A tentative tie admits ≥2 overloads only via the blind bare-name
+                            // relaxation. If a tying bare name is a still-pending forward reference,
+                            // remember its producer and keep walking; once nothing matches anywhere,
+                            // parking on it and re-dispatching lets the strict-pass peek disambiguate
+                            // off the bound type.
+                            PickPass::Tie(_) => {
+                                if park_producers.is_empty() && unbound_name.is_none() {
+                                    let (placeholders, unbound) =
+                                        classify_tie_bare_names(expr, dispatch_scope, chain);
+                                    park_producers = placeholders;
+                                    unbound_name = unbound;
+                                }
+                                None
+                            }
+                            PickPass::Empty => None,
+                        },
                     }
-                    PickPass::Empty => None,
-                },
+                }
             }
         });
         if let Some(outcome) = picked {
@@ -152,58 +154,37 @@ impl<'a> Scope<'a> {
             return ResolveOutcome::Deferred;
         }
         // Keyword-headed dispatch with no matching bucket and no eager parts to
-        // re-dispatch through: if some sibling FN / FUNCTOR binder has installed
-        // a `pending_overloads[bucket_key]` entry for the *exact bucket* this call
-        // would dispatch into, park on that producer so the re-dispatch on wake
-        // picks up the now-registered overload. Without this, a bare-arg form
-        // like `(MAKESET IntOrd)` whose FUNCTOR sibling is still parked on a SIG
-        // body's Combine would race the FIFO submission order and surface
-        // `DispatchFailed` even though every ingredient is in flight.
+        // re-dispatch through: an inflight FN / FUNCTOR binder may have installed
+        // a `pending_overloads[key]` entry for the *exact bucket* this call would
+        // dispatch into. The walk above recorded the innermost such producer in
+        // `pending_producer` (inner-most wins, mirroring `Scope::resolve`); park
+        // on it so the re-dispatch on wake picks up the now-registered overload.
+        // Without this, a bare-arg form like `(MAKESET IntOrd)` whose FUNCTOR
+        // sibling is still parked on a SIG body's Combine would race the FIFO
+        // submission order and surface `DispatchFailed` even though every
+        // ingredient is in flight.
         //
         // Keying by the full `UntypedKey` (not just the lead keyword) keeps
         // overloads that share a head keyword but differ in later keywords
         // (`(MAKESET _)` vs `(MAKESET _ USING _)`) from colliding: the bare-arg
         // call's `untyped_key()` matches exactly one in-flight binder's
         // inner-call bucket.
-        if let Some(producer) = pending_overload_producer(&key, dispatch_scope, chain) {
+        if let Some(producer) = pending_producer {
             return ResolveOutcome::ParkOnProducers(vec![producer]);
         }
         ResolveOutcome::Unmatched
     }
 }
 
-/// Walk `scope.ancestors()` looking for a `pending_overloads[key]` entry — installed
-/// by an FN / FUNCTOR binder's `binder_bucket` hook for the inner-call bucket key
-/// of the to-be-registered overload. Returns the producer `NodeId` of the first
-/// matching binder slot (lexically inner-most wins, mirroring `Scope::resolve`).
-///
-/// Filters per-entry visibility against `chain` so a later-sibling pending overload
-/// is hidden from this consumer: the bare-arg call would have to wait on a producer
-/// that is, by the visibility rule, not yet in scope. `chain = None` disables the
-/// gate, matching the value-side resolver convention (test fixtures / builtin paths).
-fn pending_overload_producer<'a>(
-    key: &crate::machine::model::types::UntypedKey,
-    scope: &Scope<'a>,
-    chain: Option<&LexicalFrame>,
-) -> Option<NodeId> {
-    for scope in scope.ancestors() {
-        if let Some((producer, idx)) = scope.bindings().pending_overloads().get(key).copied() {
-            if crate::machine::core::scope::visible(scope.id, idx, chain) {
-                return Some(producer);
-            }
-        }
-    }
-    None
-}
-
-/// View over a single scope's overload bucket. Encapsulates the
+/// View over a single scope's pre-filtered overload bucket. Encapsulates the
 /// filter‑then‑[`ExpressionSignature::most_specific`] dance that runs twice per
 /// scope (strict pass, then tentative auto‑wrap pass).
 ///
-/// Candidates carry their per-overload [`BindingIndex`] — Phase 4 will pre-filter
-/// by visibility before the admit predicate runs.
+/// The slice holds only candidates already pre-filtered for visibility by
+/// [`crate::machine::core::Bindings::lookup_function`]; the per-overload
+/// `BindingIndex` is consumed there and no longer needed here.
 struct OverloadBucket<'a, 's> {
-    candidates: &'s [(&'a KFunction<'a>, crate::machine::core::BindingIndex)],
+    candidates: &'s [&'a KFunction<'a>],
 }
 
 impl<'a> OverloadBucket<'a, '_> {
@@ -234,7 +215,7 @@ impl<'a> OverloadBucket<'a, '_> {
         let survivors: Vec<&'a KFunction<'a>> = self
             .candidates
             .iter()
-            .map(|(f, _)| *f)
+            .copied()
             .filter(|f| admit(f, expr))
             .collect();
         let sigs: Vec<&ExpressionSignature> = survivors.iter().map(|f| &f.signature).collect();

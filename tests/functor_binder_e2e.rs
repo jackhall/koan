@@ -55,12 +55,11 @@ fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
 /// Walk the dispatch table for an FN / FUNCTOR overload whose first keyword
 /// matches `keyword`. Inline copy of `builtins::test_support::lookup_fn`
 /// (which is `pub(crate)`); the integration crate sees neither the helper
-/// nor `Bindings::functions` directly, so we go through the public
-/// `Scope::bindings` accessor.
+/// nor the raw `Bindings::functions` view (gated `#[cfg(test)]`), so we go
+/// through the public `Bindings::iter_functions` value-yielding iterator.
 fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
-    let funcs = scope.bindings().functions();
-    for bucket in funcs.values() {
-        for (f, _) in bucket {
+    for (_, bucket) in scope.bindings().iter_functions() {
+        for f in bucket {
             let first_kw = f.signature.elements.iter().find_map(|e| match e {
                 SignatureElement::Keyword(s) => Some(s.as_str()),
                 _ => None,
@@ -128,7 +127,7 @@ fn functor_binder_e2e_makeset_produces_module() {
     // The functor body's `(LET tag = 0)` lifted into the result module's
     // child scope — verifies the per-call body actually ran and the
     // produced module carries its declared member.
-    let tag = m.child_scope().bindings().data().get("tag").map(|(o, _)| *o);
+    let tag = m.child_scope().lookup("tag");
     assert!(
         matches!(tag, Some(KObject::Number(n)) if *n == 0.0),
         "IntSet's `tag` member should be 0, got {:?}",

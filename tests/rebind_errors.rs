@@ -124,6 +124,6 @@ fn cross_scope_shadowing_succeeds() {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("Mod should be a module"),
     };
-    let data = m.child_scope().bindings().data();
-    assert!(matches!(data.get("x").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 99.0));
+    let x = m.child_scope().lookup("x");
+    assert!(matches!(x, Some(KObject::Number(n)) if *n == 99.0));
 }

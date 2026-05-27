@@ -22,10 +22,13 @@ pub mod source;
 mod tests;
 
 pub use arena::{CallArena, RuntimeArena};
-pub use bindings::{ApplyOutcome, BindingIndex, Bindings, PendingBinderGuard, PendingTypeEntry};
+pub use bindings::{
+    ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
+    Resolution,
+};
 pub use kerror::{Frame, KError, KErrorKind};
 pub use lexical_frame::{assemble_body_chain, LexicalFrame};
 pub use resolve_dispatch::{ResolveOutcome, Resolved};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
-pub use scope::{KFuture, Resolution, Scope, ScopeKind};
+pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;

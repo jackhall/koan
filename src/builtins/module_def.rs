@@ -10,8 +10,8 @@
 //! captures the child scope into a [`Module`] value (`name`, `child_scope`, `type_members`
 //! initially empty), allocates it in the parent's arena, and binds it under the module's
 //! name in the parent. Members reachable as `Foo.<member>` go through ATTR's `KModule`
-//! overload (see `attr.rs`), which looks `<member>` up in the captured
-//! `child_scope.bindings().data()`.
+//! overload (see `attr.rs`), which resolves `<member>` against the captured
+//! `child_scope` via [`Bindings::lookup_value`](crate::machine::core::Bindings::lookup_value).
 //!
 //! The MODULE slot itself returns `BodyResult::DeferTo(combine_id)` so its terminal lifts
 //! off the Combine's terminal — the parent's `Foo` binding lands at Combine-finish time,
@@ -19,8 +19,8 @@
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Resolution,
+    Scope, SchedulerHandle,
 };
 use crate::machine::model::values::Module;
 
@@ -84,8 +84,10 @@ pub fn body<'a>(
         // entry point that needs to short-circuit. Pinned by
         // `module_finalize_is_idempotent_when_both_maps_populated`.
         let bindings = parent_scope.bindings();
-        if bindings.types().get(&name_for_finish).is_some() {
-            if let Some((existing, _)) = bindings.data().get(&name_for_finish).copied() {
+        if bindings.lookup_type(&name_for_finish, None).is_some() {
+            if let Some(Resolution::Value(existing)) =
+                bindings.lookup_value(&name_for_finish, None)
+            {
                 return BodyResult::Value(existing);
             }
         }
@@ -111,14 +113,15 @@ pub fn body<'a>(
         // the body-side concrete values flow through unascribed and `:!` (transparent)
         // paths.
         {
-            let types_guard = child_scope.bindings().types();
-            let data_guard = child_scope.bindings().data();
+            let bindings = child_scope.bindings();
+            let data_names: std::collections::HashSet<String> =
+                bindings.iter_data().into_iter().map(|(n, _)| n).collect();
             let mut tm = module.type_members.borrow_mut();
-            for (k, (kt, _)) in types_guard.iter() {
-                if data_guard.contains_key(k) {
+            for (name, kt) in bindings.iter_types() {
+                if data_names.contains(&name) {
                     continue;
                 }
-                tm.insert(k.clone(), (**kt).clone());
+                tm.insert(name, kt.clone());
             }
         }
         // Post-collapse: the module value rides `KTypeValue(KType::Module { module, frame })`.

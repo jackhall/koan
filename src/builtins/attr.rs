@@ -25,7 +25,9 @@
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::Module;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, Scope, SchedulerHandle,
+};
 
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -206,7 +208,7 @@ fn access_field<'a>(
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
         KObject::KTypeValue(KType::Signature(s)) => {
             let scope = s.decl_scope();
-            if let Some((obj, _)) = scope.bindings().data().get(field).copied() {
+            if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
                 return BodyResult::Value(obj);
             }
             if let Some(kt) = scope.resolve_type(field) {
@@ -269,7 +271,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
         );
     }
     let scope = m.child_scope();
-    if let Some((obj, _)) = scope.bindings().data().get(field).copied() {
+    if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
         return BodyResult::Value(obj);
     }
     if let Some(kt) = scope.resolve_type(field) {

@@ -128,10 +128,12 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
 
 /// Under index-gated resolution a forward call to a later-sibling FN is invisible
 /// to the consumer (FN is value-style gated, not a nominal binder). The
-/// dispatch's `pending_overload_producer` walk filters by the same visibility
-/// predicate, so the call surfaces `DispatchFailed` rather than parking on the
-/// not-yet-finalized overload — `execute` returns `Err` directly (matching the
-/// `?` propagation on a dispatch miss; see `Scheduler::run_dispatch`).
+/// dispatch's per-scope `Bindings::lookup_function` filters by the same
+/// visibility predicate (and the `pending_overloads` fall-through it covers
+/// inherits the same gate), so the call surfaces `DispatchFailed` rather than
+/// parking on the not-yet-finalized overload — `execute` returns `Err`
+/// directly (matching the `?` propagation on a dispatch miss; see
+/// `Scheduler::run_dispatch`).
 #[test]
 fn call_by_name_forward_function_reference_is_unbound() {
     let arena = RuntimeArena::new();

@@ -61,21 +61,21 @@ single-`Identifier` is short-circuited today in
   `PickPass::Empty → pick_tentative` arm in `resolve_dispatch` go away;
   the strict-Empty branches above replace them.
 - *Collapse the five `Bindings` raw-map accessors into three
-  visibility-aware lookups — open.* Today
-  [`Bindings::data`](../../src/machine/core/bindings.rs),
-  `.types()`, `.functions()`, `.placeholders()`, and
-  `.pending_overloads()` each return a raw `Ref<HashMap<…, (_, BindingIndex)>>`,
-  and 130+ call sites pattern-match `(o, _)` / `(kt, _)` /
-  `(f, _)` while the visibility filter is hand-rolled inside
-  `Scope::resolve_with_chain` / `resolve_type_with_chain`. Replace
-  with `Bindings::lookup_value(name, cutoff) -> Resolution`,
-  `Bindings::lookup_type(name, cutoff) -> Option<&KType>`, and
-  `Bindings::lookup_function(key, cutoff) -> FunctionResolution`
-  that walk data + placeholders / types / functions +
-  pending_overloads internally and apply the `visible` predicate.
-  Scope's ancestor walk then becomes "delegate to `Bindings::lookup_*`
-  per ancestor"; the unified walk reads three uniformly-shaped
-  outcomes rather than splicing four hand-rolled passes.
+  visibility-aware lookups — shipped.*
+  [`Bindings::lookup_value`](../../src/machine/core/bindings.rs),
+  `lookup_type`, and `lookup_function` each take a
+  `chain_cutoff: Option<usize>` and apply the `visible` predicate inside
+  the lookup. `lookup_function` returns
+  `FunctionLookup::{Bucket(Vec<&KFunction>), Pending(NodeId), None}`,
+  pre-filtered for per-overload visibility, and covers the bucket /
+  `pending_overloads` fall-through in one per-scope call so the
+  dispatcher's ancestor walk is single-pass — consumers no longer see
+  `BindingIndex` at the call site. `Scope::resolve_with_chain` /
+  `resolve_type_with_chain` and `resolve_dispatch`'s ancestor walk
+  delegate to the per-scope lookups; the five raw map accessors
+  (`data` / `types` / `functions` / `placeholders` / `pending_overloads`)
+  are gated `#[cfg(test)]`, and production sweeps go through the
+  value-yielding `iter_data` / `iter_types` / `iter_functions`.
 
 ## Dependencies
 

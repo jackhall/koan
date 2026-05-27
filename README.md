@@ -191,7 +191,7 @@ src/
         ├── core.rs            module surface for core/
         ├── core/
         │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
-        │   ├── bindings.rs    Bindings façade — four-map (data/functions/placeholders/types) with the validated try_apply write path and try_register_type for nominal type identity
+        │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
         │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
         │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
         │   ├── scope.rs       Scope, KFuture, plus Scope::resolve_dispatch and the Resolved / ResolveOutcome types

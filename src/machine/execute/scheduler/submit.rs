@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use crate::machine::{BindingIndex, CatchFinish, CombineFinish, KFunction, LexicalFrame, NodeId, Scope};
+use crate::machine::{
+    BindingIndex, CatchFinish, CombineFinish, FunctionLookup, KFunction, LexicalFrame, NodeId,
+    Scope,
+};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{KType, SignatureElement};
 
@@ -34,57 +37,57 @@ fn extract_binder_install<'a>(
     scope: &'a Scope<'a>,
 ) -> Option<BinderInstall> {
     let key = expr.untyped_key();
-    let mut current: Option<&Scope<'a>> = Some(scope);
-    while let Some(s) = current {
-        let functions_guard = s.bindings().functions();
-        if let Some(bucket) = functions_guard.get(&key) {
-            // Find the first overload whose `binder_name` extractor matches.
-            // Its `name` and `is_nominal_binder` win; the per-slot eager mask
-            // intersects over EVERY binder overload in the bucket — a slot is
-            // eager only if no overload tags it as `KExpression`.
-            let picked: Option<(&KFunction<'a>, String)> = bucket.iter().find_map(|(f, _)| {
-                f.binder_name
-                    .and_then(|extractor| extractor(expr).map(|name| (*f, name)))
-            });
-            let Some((picked_fn, name)) = picked else {
-                drop(functions_guard);
-                current = s.outer;
+    // Submission-time extraction runs before any chain is assembled for this
+    // dispatch (the caller is `add_with_chain`, which only computes the chain
+    // after this returns), so the lookup walk is visibility-unfiltered —
+    // `chain_cutoff = None` at every scope.
+    for s in scope.ancestors() {
+        let bucket = match s.bindings().lookup_function(&key, None) {
+            FunctionLookup::Bucket(b) => b,
+            FunctionLookup::Pending(_) | FunctionLookup::None => continue,
+        };
+        // Find the first overload whose `binder_name` extractor matches. Its
+        // `name` and `is_nominal_binder` win; the per-slot eager mask
+        // intersects over EVERY binder overload in the bucket — a slot is
+        // eager only if no overload tags it as `KExpression`.
+        let picked: Option<(&KFunction<'a>, String)> = bucket.iter().find_map(|f| {
+            f.binder_name
+                .and_then(|extractor| extractor(expr).map(|name| (*f, name)))
+        });
+        let Some((picked_fn, name)) = picked else {
+            continue;
+        };
+        // Build the eager mask: start from the picked overload's signature
+        // shape, then AND in every other binder overload in the bucket.
+        let mut mask: Vec<bool> = picked_fn
+            .signature
+            .elements
+            .iter()
+            .map(|el| match el {
+                SignatureElement::Argument(arg) => arg.ktype != KType::KExpression,
+                SignatureElement::Keyword(_) => false,
+            })
+            .collect();
+        for other in bucket.iter() {
+            if other.binder_name.is_none() {
                 continue;
-            };
-            // Build the eager mask: start from the picked overload's signature
-            // shape, then AND in every other binder overload in the bucket.
-            let mut mask: Vec<bool> = picked_fn
-                .signature
-                .elements
-                .iter()
-                .map(|el| match el {
-                    SignatureElement::Argument(arg) => arg.ktype != KType::KExpression,
-                    SignatureElement::Keyword(_) => false,
-                })
-                .collect();
-            for (other, _) in bucket.iter() {
-                if other.binder_name.is_none() {
-                    continue;
+            }
+            for (i, el) in other.signature.elements.iter().enumerate() {
+                if i >= mask.len() {
+                    break;
                 }
-                for (i, el) in other.signature.elements.iter().enumerate() {
-                    if i >= mask.len() {
-                        break;
-                    }
-                    if let SignatureElement::Argument(arg) = el {
-                        if arg.ktype == KType::KExpression {
-                            mask[i] = false;
-                        }
+                if let SignatureElement::Argument(arg) = el {
+                    if arg.ktype == KType::KExpression {
+                        mask[i] = false;
                     }
                 }
             }
-            return Some(BinderInstall {
-                name,
-                is_nominal_binder: picked_fn.is_nominal_binder,
-                eager_slot_mask: mask,
-            });
         }
-        drop(functions_guard);
-        current = s.outer;
+        return Some(BinderInstall {
+            name,
+            is_nominal_binder: picked_fn.is_nominal_binder,
+            eager_slot_mask: mask,
+        });
     }
     None
 }

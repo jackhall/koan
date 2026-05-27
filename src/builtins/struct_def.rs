@@ -5,7 +5,7 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    Scope, SchedulerHandle,
+    Resolution, Scope, SchedulerHandle,
 };
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
@@ -126,8 +126,8 @@ fn finalize_struct<'a>(
     // arm which tolerates a pre-installed identity, but cannot tolerate a
     // pre-installed carrier.
     let bindings = scope.bindings();
-    if bindings.types().get(&name).is_some() {
-        if let Some((existing, _)) = bindings.data().get(&name).copied() {
+    if bindings.lookup_type(&name, None).is_some() {
+        if let Some(Resolution::Value(existing)) = bindings.lookup_value(&name, None) {
             return BodyResult::Value(existing);
         }
     }

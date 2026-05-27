@@ -1,12 +1,13 @@
-//! The lexical binding façade: four co-mutating `RefCell` maps (`types`, `data`,
-//! `functions`, `placeholders`) plus the shared validated write paths
-//! ([`Bindings::try_apply`] for `data`/`functions`, [`Bindings::try_apply_type`] for
-//! `types`) that keep the dual-map invariant — every `data[name]` entry wrapping a
-//! `KFunction` lives in `functions[signature.untyped_key()]`. Nominal declarations
-//! (STRUCT / UNION / MODULE) go through [`Bindings::try_register_nominal`], a
-//! transactional dual-write into `types` + `data`.
+//! The lexical binding façade: five co-mutating `RefCell` maps (`types`, `data`,
+//! `functions`, `placeholders`, `pending_overloads`) plus the shared validated write
+//! paths ([`Bindings::try_apply`] for `data`/`functions`,
+//! [`Bindings::try_apply_type`] for `types`) that keep the dual-map invariant —
+//! every `data[name]` entry wrapping a `KFunction` lives in
+//! `functions[signature.untyped_key()]`. Nominal declarations (STRUCT / UNION /
+//! MODULE) go through [`Bindings::try_register_nominal`], a transactional
+//! dual-write into `types` + `data`.
 //!
-//! Borrow discipline across the four maps: `types → functions → data`, with `types`
+//! Borrow discipline across the maps: `types → functions → data`, with `types`
 //! only acquired when writing types. [`Scope`] embeds the façade by value so all
 //! interior borrows arbitrate against one another.
 //!
@@ -16,8 +17,16 @@
 //! start at `idx: 1`. The `nominal_binder` flag carves out STRUCT / UNION / SIG /
 //! FUNCTOR / MODULE so siblings on the same block can see one another's nominal
 //! identities regardless of source order (mutual recursion across nominal binders).
-//! [`Scope::resolve`] / [`Scope::resolve_type`] / overload-bucket picking apply the
-//! visibility filter; see [`crate::machine::core::lexical_frame::LexicalFrame`].
+//!
+//! Production reads go through three visibility-aware lookups owned by the façade —
+//! [`Bindings::lookup_value`] / [`Bindings::lookup_type`] /
+//! [`Bindings::lookup_function`] — which apply the per-entry visibility filter
+//! against a caller-supplied `chain_cutoff` (the consumer's index within this scope,
+//! computed via [`crate::machine::core::LexicalFrame::index_for`]). The raw map
+//! accessors (`data` / `types` / `functions` / `placeholders` / `pending_overloads`)
+//! are gated `#[cfg(test)]`; the value-yielding `iter_data` / `iter_types` /
+//! `iter_functions` cover the few production sites that genuinely sweep all
+//! members (module surface mirroring, signature shape-check, REPL reflection).
 
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
@@ -31,6 +40,49 @@ use super::kerror::{KError, KErrorKind};
 
 mod pending;
 pub use pending::{PendingBinderGuard, PendingTypeEntry, PendingTypes};
+
+/// Outcome of a value-side name lookup. Returned by [`Bindings::lookup_value`]
+/// and surfaced to consumers through [`crate::machine::core::Scope::resolve`]
+/// (which walks the ancestor chain and selects the first scope that returns
+/// `Some`). `Resolution::Placeholder` carries the producer `NodeId` the
+/// consumer should park on (a binder dispatched the name but its body hasn't
+/// finalized).
+///
+/// Invariant: within one scope, `data` and `placeholders` never both hold the
+/// same name — every successful write path clears any matching placeholder.
+///
+/// Index-gated resolution splits the not-found cases:
+/// - [`Resolution::UnboundName`] — no binding visible at this consumer's chain
+///   position. Structural absence: either the name is misspelled, or the
+///   binding lives at a later sibling that hasn't been ordered yet (the
+///   visibility gate hides it).
+/// - [`Resolution::Placeholder`] — a binder placeholder is visible and not yet
+///   finalized; the consumer parks on the producer `NodeId`.
+/// - [`Resolution::Value`] — the binding is finalized and visible.
+pub enum Resolution<'a> {
+    Value(&'a KObject<'a>),
+    Placeholder(NodeId),
+    UnboundName,
+}
+
+/// Outcome of a per-scope `lookup_function` call. Encapsulates today's
+/// "consult `functions` first; if absent, consult `pending_overloads`" pattern
+/// so callers see uniform shapes from one ancestor visit and never inspect raw
+/// maps. The visibility filter (per `chain_cutoff`) is applied inside the
+/// lookup; `Bucket` is non-empty (an all-filtered bucket surfaces as `None`),
+/// and `Pending` is returned only if no visible bucket but a visible
+/// pending-overload entry exists at this scope.
+pub enum FunctionLookup<'a> {
+    /// Visible candidates for this bucket at this scope. Non-empty.
+    Bucket(Vec<&'a KFunction<'a>>),
+    /// No live bucket at this scope but a visible `pending_overloads` entry —
+    /// a sibling FN / FUNCTOR binder has dispatched a matching overload whose
+    /// body hasn't finalized. The producer's `NodeId` is the park target. See
+    /// [`Bindings::try_install_pending_overload`].
+    Pending(NodeId),
+    /// No visible bucket and no visible pending overload at this scope.
+    None,
+}
 
 /// Lexical position of a binding's installing statement, paired with a `nominal_binder`
 /// flag that carves out STRUCT / UNION / SIG / FUNCTOR / MODULE declarations from the
@@ -142,6 +194,159 @@ impl<'a> Bindings<'a> {
         self.type_expr_memo.borrow().get(te).copied()
     }
 
+    /// Per-scope value-side lookup. Consults `data` first, then `placeholders`,
+    /// returning the first hit that satisfies the visibility predicate. The
+    /// invariant that `data` and `placeholders` never both hold the same name
+    /// at one scope means the `data`-first order picks the value when both
+    /// would otherwise compete.
+    ///
+    /// `chain_cutoff` is the consumer's lexical index within *this* scope as
+    /// computed by [`crate::machine::core::LexicalFrame::index_for`]. `None`
+    /// means "this scope is not on the consumer's chain (it is complete) — see
+    /// everything"; the unfiltered overload of `Scope::resolve` (test fixtures,
+    /// builtin registration paths) also passes `None`.
+    ///
+    /// Returns `None` if neither map has a *visible* entry. Distinguishing
+    /// `Resolution::UnboundName` (the consumer surfaces this on chain
+    /// exhaustion) from per-scope absence is the caller's job — `Scope`'s
+    /// resolver walk treats every `None` as "keep walking".
+    pub fn lookup_value(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<Resolution<'a>> {
+        if let Some((obj, idx)) = self.data.borrow().get(name).copied() {
+            if Self::visible(idx, chain_cutoff) {
+                return Some(Resolution::Value(obj));
+            }
+        }
+        if let Some((id, idx)) = self.placeholders.borrow().get(name).copied() {
+            if Self::visible(idx, chain_cutoff) {
+                return Some(Resolution::Placeholder(id));
+            }
+        }
+        None
+    }
+
+    /// Per-scope type-side lookup. Mirrors [`Self::lookup_value`] for the
+    /// `types` map. `None` denotes "no visible type binding at this scope";
+    /// the caller continues walking ancestors.
+    pub fn lookup_type(
+        &self,
+        name: &str,
+        chain_cutoff: Option<usize>,
+    ) -> Option<&'a KType<'a>> {
+        let types = self.types.borrow();
+        let (kt, idx) = types.get(name).copied()?;
+        if Self::visible(idx, chain_cutoff) {
+            Some(kt)
+        } else {
+            None
+        }
+    }
+
+    /// Per-scope dispatch-bucket lookup. Folds together today's
+    /// `functions` / `pending_overloads` reach-arounds:
+    ///
+    /// 1. Filter `functions[key]` by per-overload visibility. A non-empty
+    ///    result returns [`FunctionLookup::Bucket`].
+    /// 2. Otherwise, if `pending_overloads[key]` is visible, return
+    ///    [`FunctionLookup::Pending`] with the producer `NodeId`.
+    /// 3. Otherwise [`FunctionLookup::None`].
+    ///
+    /// The `Bucket` arm strips `BindingIndex` from each survivor — the per-
+    /// overload visibility filter has already run, and the dispatch picker
+    /// reads only the function reference. The `Pending` arm is the unified
+    /// home of what `pending_overload_producer` did per-scope before this
+    /// surface existed.
+    pub fn lookup_function(
+        &self,
+        key: &UntypedKey,
+        chain_cutoff: Option<usize>,
+    ) -> FunctionLookup<'a> {
+        let functions = self.functions.borrow();
+        if let Some(bucket) = functions.get(key) {
+            let visible: Vec<&'a KFunction<'a>> = bucket
+                .iter()
+                .filter(|(_, idx)| Self::visible(*idx, chain_cutoff))
+                .map(|(f, _)| *f)
+                .collect();
+            if !visible.is_empty() {
+                return FunctionLookup::Bucket(visible);
+            }
+        }
+        drop(functions);
+        if let Some((producer, idx)) = self.pending_overloads.borrow().get(key).copied() {
+            if Self::visible(idx, chain_cutoff) {
+                return FunctionLookup::Pending(producer);
+            }
+        }
+        FunctionLookup::None
+    }
+
+    /// Iterate every `(name, value)` pair in `data`, regardless of visibility.
+    /// Production callers that need a value-yielding sweep over the map
+    /// (`MODULE` member mirroring, signature shape-check, REPL-style
+    /// reflection) consume the iterator inside the `Bindings` borrow — the
+    /// returned iterator is bounded by `&self` and exposes no `Ref` to the
+    /// caller. For chain-gated single-name reads, prefer [`Self::lookup_value`].
+    pub fn iter_data(&self) -> Vec<(String, &'a KObject<'a>)> {
+        self.data
+            .borrow()
+            .iter()
+            .map(|(name, (obj, _))| (name.clone(), *obj))
+            .collect()
+    }
+
+    /// Iterate every `(name, &KType)` pair in `types`, regardless of
+    /// visibility. Same shape as [`Self::iter_data`]; for chain-gated single-
+    /// name reads, prefer [`Self::lookup_type`].
+    pub fn iter_types(&self) -> Vec<(String, &'a KType<'a>)> {
+        self.types
+            .borrow()
+            .iter()
+            .map(|(name, (kt, _))| (name.clone(), *kt))
+            .collect()
+    }
+
+    /// Iterate every `(UntypedKey, Vec<&KFunction>)` pair in `functions`,
+    /// regardless of per-overload visibility. The test-support reflection
+    /// helpers (`test_support::lookup_named_overload`) consume this; production
+    /// code consults [`Self::lookup_function`] instead for chain-gated picks.
+    pub fn iter_functions(&self) -> Vec<(UntypedKey, Vec<&'a KFunction<'a>>)> {
+        self.functions
+            .borrow()
+            .iter()
+            .map(|(key, bucket)| (key.clone(), bucket.iter().map(|(f, _)| *f).collect()))
+            .collect()
+    }
+
+    /// The `BindingIndex` of an installed placeholder, ignoring visibility.
+    /// Recovery-only helper: cycle-close in `model/types/resolver.rs` re-stamps
+    /// the same lexical position the placeholder install used, so the
+    /// downstream `register_nominal`'s idempotent arm matches. Production code
+    /// outside that one re-stamp path should read placeholders through
+    /// [`Self::lookup_value`]'s `Placeholder` arm.
+    pub fn placeholder_index(&self, name: &str) -> Option<BindingIndex> {
+        self.placeholders.borrow().get(name).map(|(_, idx)| *idx)
+    }
+
+    /// The visibility predicate the index-gated lookups apply per entry.
+    /// Mirrors [`crate::machine::core::scope::visible`] for the inside-the-
+    /// lookup case where the caller has already mapped chain →
+    /// `chain_cutoff: Option<usize>` for this scope.
+    ///
+    /// - `chain_cutoff = None` ⇒ scope is complete (or unfiltered fixture
+    ///   path) ⇒ everything visible.
+    /// - `chain_cutoff = Some(c)` ⇒ visible iff `b.nominal_binder || b.idx < c`
+    ///   (strict-lexical predecessor unless the binder is a nominal carve-out).
+    fn visible(b: BindingIndex, chain_cutoff: Option<usize>) -> bool {
+        match chain_cutoff {
+            None => true,
+            Some(c) => b.nominal_binder || b.idx < c,
+        }
+    }
+
     /// Insert `(te → kt)` into the resolution cache. Caller is responsible for
     /// arena-allocating `kt` and checking the finalize gate before writing.
     /// Monotonic: overwrites would indicate a violation of the immutable-binding
@@ -152,37 +357,49 @@ impl<'a> Bindings<'a> {
         memo.entry(te).or_insert(kt);
     }
 
-    /// Read-only view of the data map. Each entry pairs the carrier with the lexical
-    /// [`BindingIndex`] of the statement that installed it. Most call sites use only the
-    /// carrier — destructure as `|(obj, _)| obj`.
+    /// Read-only view of the data map. Test-only: production code reads
+    /// through [`Self::lookup_value`] / [`Self::iter_data`], which apply the
+    /// visibility predicate and don't expose `Ref<HashMap<...>>` to callers.
+    /// Each entry pairs the carrier with the lexical [`BindingIndex`] of the
+    /// statement that installed it.
+    #[cfg(test)]
     pub fn data(&self) -> Ref<'_, HashMap<String, (&'a KObject<'a>, BindingIndex)>> {
         self.data.borrow()
     }
 
-    /// Read-only view of the per-bucket overload list. Each overload carries its own
-    /// [`BindingIndex`] — overloads in the same bucket can sit at different lexical
-    /// positions, so visibility-filter siblings overload-by-overload rather than
-    /// bucket-by-bucket.
+    /// Read-only view of the per-bucket overload list. Test-only mirror of
+    /// [`Self::lookup_function`] / [`Self::iter_functions`]; each overload
+    /// carries its own [`BindingIndex`] so per-overload visibility tests can
+    /// inspect the lexical position directly.
+    #[cfg(test)]
     pub fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>> {
         self.functions.borrow()
     }
 
-    /// Read-only view of the dispatch-time name placeholder map. Each placeholder
-    /// carries the producer's `NodeId` (consumer parks on this for readiness) and the
-    /// [`BindingIndex`] of the producing statement (consumer filters this for visibility).
+    /// Read-only view of the dispatch-time name placeholder map. Test-only.
+    /// Each placeholder carries the producer's `NodeId` (consumer parks on
+    /// this for readiness) and the [`BindingIndex`] of the producing statement
+    /// (consumer filters this for visibility). Production code reads
+    /// placeholders through [`Self::lookup_value`]'s `Placeholder` arm.
+    #[cfg(test)]
     pub fn placeholders(&self) -> Ref<'_, HashMap<String, (NodeId, BindingIndex)>> {
         self.placeholders.borrow()
     }
 
-    /// Read-only view of the bucket-key → (producer, lexical index) map. See
+    /// Read-only view of the bucket-key → (producer, lexical index) map.
+    /// Test-only: production code reads pending overloads through
+    /// [`Self::lookup_function`]'s `Pending` arm. See
     /// [`Bindings::try_install_pending_overload`] for the writer.
+    #[cfg(test)]
     pub fn pending_overloads(&self) -> Ref<'_, HashMap<UntypedKey, (NodeId, BindingIndex)>> {
         self.pending_overloads.borrow()
     }
 
-    /// Read-only view of the types map. Each entry pairs the type with the lexical
-    /// [`BindingIndex`] of the statement that installed it. Builtins use
-    /// [`BindingIndex::BUILTIN`] (idx 0).
+    /// Read-only view of the types map. Test-only mirror of
+    /// [`Self::lookup_type`] / [`Self::iter_types`]; each entry pairs the type
+    /// with the lexical [`BindingIndex`] of the statement that installed it.
+    /// Builtins use [`BindingIndex::BUILTIN`] (idx 0).
+    #[cfg(test)]
     pub fn types(&self) -> Ref<'_, HashMap<String, (&'a KType<'a>, BindingIndex)>> {
         self.types.borrow()
     }
@@ -439,7 +656,8 @@ impl<'a> Bindings<'a> {
     /// conflict against itself.
     pub fn try_bulk_install_from(&self, src: &Bindings<'a>) -> Result<(), KError> {
         let snapshot: Vec<(String, &'a KObject<'a>, BindingIndex)> = src
-            .data()
+            .data
+            .borrow()
             .iter()
             .map(|(k, (v, idx))| (k.clone(), *v, *idx))
             .collect();

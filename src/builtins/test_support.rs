@@ -107,17 +107,16 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
 /// signature read it from the dispatch surface through this helper. Panics if no overload
 /// or more than one is found under `keyword`.
 pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
-    let funcs = scope.bindings().functions();
     let mut found: Option<&'a KFunction<'a>> = None;
-    for bucket in funcs.values() {
-        for (f, _) in bucket {
+    for (_, bucket) in scope.bindings().iter_functions() {
+        for f in bucket {
             let first_kw = f.signature.elements.iter().find_map(|e| match e {
                 SignatureElement::Keyword(s) => Some(s.as_str()),
                 _ => None,
             });
             if first_kw == Some(keyword) {
                 assert!(found.is_none(), "ambiguous: multiple overloads under `{keyword}`");
-                found = Some(*f);
+                found = Some(f);
             }
         }
     }
@@ -129,12 +128,13 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 /// (which can no longer be expressed as `data.get(keyword).is_none()` now that bare FN
 /// keywords never land in `data`).
 pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
-    let funcs = scope.bindings().functions();
-    funcs.values().flatten().any(|(f, _)| {
-        f.signature.elements.iter().find_map(|e| match e {
-            SignatureElement::Keyword(s) => Some(s.as_str()),
-            _ => None,
-        }) == Some(keyword)
+    scope.bindings().iter_functions().into_iter().any(|(_, bucket)| {
+        bucket.iter().any(|f| {
+            f.signature.elements.iter().find_map(|e| match e {
+                SignatureElement::Keyword(s) => Some(s.as_str()),
+                _ => None,
+            }) == Some(keyword)
+        })
     })
 }
 

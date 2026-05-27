@@ -47,6 +47,17 @@ What's shipped that the open items below build on:
   same outermost submission point, so nested binders' placeholders all install before
   any sibling can dispatch. The pre-submitted children ride through `NodeWork::Dispatch.pre_subs`
   into Phase 4, which reuses them instead of allocating fresh sub-Dispatches.
+- *Visibility-aware `Bindings` lookups.* Production reads go through
+  `Bindings::lookup_value` / `lookup_type` / `lookup_function`, each taking a
+  `chain_cutoff: Option<usize>` and applying the per-entry visibility predicate
+  inside the lookup. `lookup_function` returns a
+  `FunctionLookup::{Bucket, Pending, None}` shape pre-filtered for per-overload
+  visibility and folds the bucket / `pending_overloads` fall-through into the
+  single dispatch ancestor walk. The five raw `RefCell` map accessors
+  (`data` / `types` / `functions` / `placeholders` / `pending_overloads`) are
+  gated `#[cfg(test)]`; production sites that legitimately sweep all members
+  (module surface mirroring, signature shape-check, REPL reflection) use the
+  value-yielding `iter_data` / `iter_types` / `iter_functions`.
 
 ## Next items
 

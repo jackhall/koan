@@ -111,8 +111,8 @@ fn module_body_backward_value_reference_resolves() {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("Mod should be a module"),
     };
-    let data = m.child_scope().bindings().data();
-    assert!(matches!(data.get("y").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 1.0));
+    let y = m.child_scope().lookup("y");
+    assert!(matches!(y, Some(KObject::Number(n)) if *n == 1.0));
 }
 
 /// Multi-name in one expression: a single value-slot expression whose RHS references two
@@ -154,8 +154,8 @@ fn multi_name_backward_reference_resolves() {
 
 /// Forward function-name reference (call_by_name): a later-sibling `FN DOUBLE` is
 /// value-style gated (FN is not a nominal-binder carve-out), so `LET out = (DOUBLE 5)`
-/// at an earlier index cannot see the binder. The dispatch's
-/// `pending_overload_producer` walk filters by the same visibility predicate and
+/// at an earlier index cannot see the binder. The dispatch's per-scope
+/// `Bindings::lookup_function` filters by the same visibility predicate and
 /// surfaces `DispatchFailed` (or `UnboundName` depending on how far the dispatch
 /// reaches before the gate fires).
 #[test]

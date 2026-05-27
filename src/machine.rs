@@ -17,7 +17,7 @@ pub use core::kfunction::{
     SchedulerHandle,
 };
 pub use core::{
-    BindingIndex, Bindings, CallArena, Frame, KError, KErrorKind, KFuture, LexicalFrame,
-    ResolveOutcome, Resolution, Resolved, RuntimeArena, Scope, ScopeId, ScopeKind,
+    BindingIndex, Bindings, CallArena, Frame, FunctionLookup, KError, KErrorKind, KFuture,
+    LexicalFrame, ResolveOutcome, Resolution, Resolved, RuntimeArena, Scope, ScopeId, ScopeKind,
 };
 pub use execute::{Scheduler, interpret, interpret_with_writer, interpret_with_writer_path};

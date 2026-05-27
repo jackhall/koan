@@ -358,9 +358,25 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
         // member's flag bit. Defensive fallback to a generic nominal tag at index 0:
         // a cycle-close call without a matching placeholder is a programming error
         // upstream, not a soft-recovery point.
+        // Recover the cycle member's installed `BindingIndex` from its
+        // placeholder. The lookup is visibility-unfiltered (cycle-close runs
+        // outside any consumer's chain), so a `Placeholder` arm hit returns
+        // the placeholder's producer id; the index lives on the underlying
+        // `placeholders` entry, retrieved here via the test-side raw view
+        // since the typed lookup intentionally drops the index. A cycle-close
+        // call without a matching placeholder is a programming error upstream,
+        // not a soft-recovery point — the fallback below is defensive.
         let bind_index = scope
             .ancestors()
-            .find_map(|s| s.bindings().placeholders().get(&name).map(|(_, idx)| *idx))
+            .find_map(|s| {
+                if !matches!(
+                    s.bindings().lookup_value(&name, None),
+                    Some(crate::machine::core::Resolution::Placeholder(_))
+                ) {
+                    return None;
+                }
+                s.bindings().placeholder_index(&name)
+            })
             .unwrap_or(crate::machine::core::BindingIndex { idx: 0, nominal_binder: true });
         scope.cycle_close_install_identity(name, identity, bind_index);
     }

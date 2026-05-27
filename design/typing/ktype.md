@@ -324,20 +324,24 @@ there:
 ### Overload bucket visibility filter
 
 Function-bucket lookup pre-filters by per-overload visibility before the strict
-admit predicate runs. Each `Bindings::functions` entry carries a per-overload
+admit predicate runs. Each `functions` entry carries a per-overload
 [`BindingIndex`](../../src/machine/core/bindings.rs) — the lexical statement
 index at which the overload was registered, paired with a `nominal_binder` flag.
-[`OverloadBucket::pick`](../../src/machine/core/resolve_dispatch.rs) consults
-the consumer's [`LexicalFrame`](../../src/machine/core/lexical_frame.rs) chain
-and drops any overload whose `BindingIndex` is not visible — same strict
+[`Bindings::lookup_function`](../../src/machine/core/bindings.rs) consults
+the consumer's `chain_cutoff` (the per-scope translation of its
+[`LexicalFrame`](../../src/machine/core/lexical_frame.rs) chain) and drops any
+overload whose `BindingIndex` is not visible — same strict
 `idx < cutoff` predicate as [`Scope::resolve_with_chain`](../../src/machine/core/scope.rs).
 A consumer between two same-bucket overloads sees only the earlier; the
 later-sibling overload is hidden, and dispatch falls through to outer scopes
 unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
-does **not** apply to FN-bucket overloads — they're value-style gated. The
-sibling [`pending_overload_producer`](../../src/machine/core/resolve_dispatch.rs)
-applies the same per-entry visibility filter when scanning `pending_overloads`
-for a not-yet-registered binder to park on.
+does **not** apply to FN-bucket overloads — they're value-style gated.
+[`OverloadBucket::pick`](../../src/machine/core/resolve_dispatch.rs) receives
+the pre-filtered survivor list (a non-empty `FunctionLookup::Bucket` arm) and
+runs only the admit predicate over it. When no bucket admits at a given
+scope but a `pending_overloads[key]` entry is visible, the same lookup falls
+through to `FunctionLookup::Pending(NodeId)` and the dispatcher records the
+innermost such producer for a park-and-replay on wake.
 
 The result: an FN reference resolves under the same lexical-position rule as a
 value-LET reference. Forward calls between sibling FNs work through the
