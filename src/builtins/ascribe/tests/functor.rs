@@ -114,7 +114,6 @@ fn functor_application_is_generative() {
 /// admissibility-only path is what's pinned here.)
 #[test]
 fn functor_rejects_unascribed_module_argument() {
-    use crate::machine::execute::Scheduler;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -131,20 +130,23 @@ fn functor_rejects_unascribed_module_argument() {
     // The LET partition guard requires module/signature carriers to ride
     // Type-classified binders only — a lowercase alias would be rejected at the
     // LET site (see design/typing/elaboration.md § Binding-map partition).
-    // The eager-resolve path splices `Future(KModule(IntOrd, _))` directly into
-    // the wrap-slot, commits to the tentative pick from `resolve_dispatch`, and
-    // surfaces the mismatch through `bind` as a per-slot `TypeMismatch` terminal.
+    //
+    // PR C surface: cache-driven strict admission inspects `Unascribed`'s
+    // resolved carrier type against the `SatisfiesSignature` slot and rejects
+    // upfront (unascribed module doesn't satisfy the signature constraint).
+    // The MAKESET overload falls out, no other bucket admits, and the post-walk
+    // surfaces `DispatchFailed` — replacing the pre-PR-C bind-time
+    // `TypeMismatch` that flowed from tentative-admit. See PR C surface-change
+    // audit in `scratch/plan-unified-walk-pr-c.md`.
     run(scope, "LET Unascribed = IntOrd");
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
-        Ok(_) => panic!("MAKESET on unascribed module should fail dispatch"),
-        Err(e) => e,
-    };
+    sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
+    let err = sched
+        .execute()
+        .expect_err("expected DispatchFailed at execute boundary");
     assert!(
-        matches!(&err.kind, KErrorKind::TypeMismatch { .. }),
-        "expected TypeMismatch, got {err}",
+        matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed (PR C strict-only surface), got {err}",
     );
 }
 

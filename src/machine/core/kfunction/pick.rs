@@ -5,7 +5,7 @@
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
-use crate::machine::model::types::{Argument, KType, SignatureElement};
+use crate::machine::model::types::{KType, SignatureElement};
 
 use super::KFunction;
 
@@ -63,19 +63,20 @@ impl<'a> KFunction<'a> {
                         eager_indices.push(i);
                     }
                     (_, other) => {
-                        // Mirror `accepts_for_wrap`'s bare-name relaxation: a bare
-                        // Identifier or bare leaf-Type part in any slot whose declared
-                        // type isn't `Identifier` / `TypeExprRef` is auto-wrap-eligible.
-                        // The auto-wrap pass (`apply_auto_wrap`) rewrites the part into
-                        // a single-name sub-Dispatch that re-enters via the bare-name
-                        // short-circuit before late dispatch matches the lifted value.
-                        // Admitting the part here keeps the function's lazy candidacy
-                        // intact when a sibling `KExpression+Expression` slot is the
-                        // one driving laziness — without this, `SIG_WITH OrderedSig (...)`
-                        // would lose its lazy candidacy on the `sig: Signature` /
-                        // `Type(OrderedSig)` pairing and the `schedule_deps` None-arm
-                        // would sub-Dispatch the bindings group, defeating the lazy
-                        // contract for the `KExpression` slot.
+                        // Bare-name relaxation: a bare Identifier or bare leaf-Type
+                        // part in any slot whose declared type isn't `Identifier` /
+                        // `TypeExprRef` is auto-wrap-eligible. The PR C strict
+                        // admission's [`signature_admits_strict`] does the analogous
+                        // admission step against the bare-name outcome cache; here
+                        // we admit the part for *lazy-candidacy classification*
+                        // purposes. Admitting the part here keeps the function's
+                        // lazy candidacy intact when a sibling `KExpression+Expression`
+                        // slot is the one driving laziness — without this,
+                        // `SIG_WITH OrderedSig (...)` would lose its lazy candidacy
+                        // on the `sig: Signature` / `Type(OrderedSig)` pairing and
+                        // the post-pick eager loop would sub-Dispatch the bindings
+                        // group, defeating the lazy contract for the `KExpression`
+                        // slot.
                         if is_bare_name(other)
                             && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
                         {
@@ -89,85 +90,6 @@ impl<'a> KFunction<'a> {
             }
         }
         if has_lazy_slot { Some(eager_indices) } else { None }
-    }
-
-    /// Auto-wrap-permissive shape check. Speculatively admits two relaxations beyond the
-    /// strict matcher:
-    ///
-    /// - Bare-Identifier and bare leaf-Type parts in any slot whose declared type isn't
-    ///   `Identifier` or `TypeExprRef`. The auto-wrap pass rewrites these into single-name
-    ///   sub-Dispatches that re-enter via the bare-name short-circuit and route through
-    ///   the Identifier / TypeExprRef overload of `value_lookup`. Covers both
-    ///   `MAKESET some_var` (Identifier) and `MAKESET IntOrd` (Type-token).
-    /// - Parens-wrapped `Expression` parts in non-`KExpression` slots — *but only when*
-    ///   the signature also has at least one `KExpression` slot bound by an `Expression`
-    ///   part (i.e. the function is a [`Self::lazy_eager_indices`] candidate). The
-    ///   post-pick scheduler then routes the non-`KExpression` slot's `Expression`
-    ///   through `eager_indices` for sub-Dispatch while leaving the lazy
-    ///   `KExpression+Expression` pair untouched, and splices the resulting `Future(_)`
-    ///   back for strict re-matching. Covers shapes like `FN (...) -> Mo.Ty = (...)`
-    ///   where the return-type slot is `Expression([ATTR Mo Ty])` and FN's `signature`/
-    ///   `body` slots are also `Expression` parts. Functions without a `KExpression`
-    ///   slot (e.g. `LIST_OF Mo.Ty`, `PLUS (deep_call) OP 1`) ride the
-    ///   `resolve_dispatch::Deferred` path instead, where `schedule_eager_fallthrough`
-    ///   sub-Dispatches every `Expression` part uniformly — equivalent end state without
-    ///   the false-tentative-match noise that would otherwise show up here.
-    ///
-    /// All other slot/part pairings reuse the normal `Argument::matches` check.
-    pub fn accepts_for_wrap(&self, expr: &KExpression<'a>) -> bool {
-        let sig = &self.signature;
-        if sig.elements.len() != expr.parts.len() {
-            return false;
-        }
-        // Gates the Expression-in-non-KExpression-slot relaxation so non-lazy candidates
-        // keep their `Deferred` path.
-        let has_lazy_kexpr_slot = sig.elements.iter().zip(expr.parts.iter()).any(|(el, part)| {
-            matches!(
-                (el, &part.value),
-                (
-                    SignatureElement::Argument(Argument { ktype: KType::KExpression, .. }),
-                    ExpressionPart::Expression(_),
-                )
-            )
-        });
-        for (el, part) in sig.elements.iter().zip(expr.parts.iter()) {
-            let part_value = &part.value;
-            match (el, part_value) {
-                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) if s == t => {}
-                (SignatureElement::Keyword(_), _) => return false,
-                (SignatureElement::Argument(arg), part_value) => {
-                    if is_bare_name(part_value)
-                        && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
-                    {
-                        continue;
-                    }
-                    if has_lazy_kexpr_slot
-                        && matches!(
-                            part_value,
-                            ExpressionPart::Expression(_) | ExpressionPart::SigiledTypeExpr(_)
-                        )
-                        && !matches!(arg.ktype, KType::KExpression)
-                    {
-                        continue;
-                    }
-                    // SigiledTypeExpr in a non-KExpression slot always sub-dispatches —
-                    // the inner expression produces a type-side carrier, so admit
-                    // speculatively (the receiving slot's strict check runs against the
-                    // sub-dispatched Future). Symmetric with the Expression-arm
-                    // relaxation but unconditional: a sigil's only purpose is to
-                    // sub-dispatch, never to bind directly.
-                    if matches!(part_value, ExpressionPart::SigiledTypeExpr(_))
-                        && !matches!(arg.ktype, KType::KExpression)
-                    {
-                        continue;
-                    }
-                    if !arg.matches(part_value) {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
     }
 
     /// Per-slot classification of `expr` against `self`'s signature into the three index

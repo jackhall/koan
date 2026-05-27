@@ -18,6 +18,7 @@ pub use core::kfunction::{
 };
 pub use core::{
     BindingIndex, Bindings, CallArena, Frame, FunctionLookup, KError, KErrorKind, KFuture,
-    LexicalFrame, ResolveOutcome, Resolution, Resolved, RuntimeArena, Scope, ScopeId, ScopeKind,
+    LexicalFrame, NameOutcome, ResolveOutcome, Resolution, Resolved, RuntimeArena, Scope, ScopeId,
+    ScopeKind,
 };
 pub use execute::{Scheduler, interpret, interpret_with_writer, interpret_with_writer_path};

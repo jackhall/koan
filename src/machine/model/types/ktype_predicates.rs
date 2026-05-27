@@ -48,12 +48,26 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`; for parameterized
-    /// containers, refinement of any inner slot makes the whole type more specific (covariant in
-    /// element / key / value / arg / return positions). Strict — returns `false` for equal types.
+    /// Specificity ordering for `specificity_vs`. Concrete types outrank `Any`;
+    /// concrete types also outrank the unconstrained-name slot types
+    /// (`Identifier`, `TypeExprRef`), so an overload like
+    /// `ATTR <s:AnyUserType{Struct}>` beats its sibling
+    /// `ATTR <s:Identifier>` fallback when both admit. For parameterized
+    /// containers, refinement of any inner slot makes the whole type more
+    /// specific (covariant in element / key / value / arg / return positions).
+    /// Strict — returns `false` for equal types.
     pub fn is_more_specific_than(&self, other: &KType<'a>) -> bool {
         use KType::*;
         if matches!(other, Any) && !matches!(self, Any) {
+            return true;
+        }
+        // `Identifier` and `TypeExprRef` are unconstrained-name slot types
+        // (binder-decl-shaped, no value-side constraint). Any concrete carrier
+        // type is strictly more specific. The two name-slot types are mutually
+        // incomparable (each constrains the part shape differently).
+        if matches!(other, Identifier | TypeExprRef)
+            && !matches!(self, Identifier | TypeExprRef | Any)
+        {
             return true;
         }
         match (self, other) {

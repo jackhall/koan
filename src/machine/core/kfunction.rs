@@ -12,8 +12,9 @@
 //! - [`body`] — `BodyResult`, `BuiltinFn`, `BinderNameFn`, and the `Body` enum.
 //! - [`invoke`] — `KFunction::invoke` (the body-runner) that binds parameters into a
 //!   per-call child scope and returns a tail-call.
-//! - [`pick`] — dispatch-shape classification (`accepts_for_wrap`,
-//!   `classify_for_pick`, `ClassifiedSlots`) used by `resolve_dispatch`.
+//! - [`pick`] — per-slot classification (`classify_for_pick`, `ClassifiedSlots`,
+//!   `lazy_eager_indices`) consumed by the dispatch driver's post-pick fused
+//!   splice/park/eager walk.
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -214,7 +215,7 @@ impl<'a> KFunction<'a> {
     ///
     /// Sole caller is the dispatch scheduler's fast-lane `FunctionValueCall`
     /// handler — which calls `bind` on the reconstructed expression directly via
-    /// `schedule_deps_filtered`, bypassing `resolve_dispatch_with_chain`. The
+    /// `schedule_picked_eager`, bypassing `resolve_dispatch_with_chain`. The
     /// former `apply` wrapper that emitted a `BodyResult::Tail` for the deleted
     /// `call_by_name` builtin to re-dispatch through was removed in Phase 1 of
     /// `scratch/plan-fast-lane-subsume.md`.
@@ -272,10 +273,14 @@ mod tests {
         BodyResult::Value(marker(s, "any"))
     }
 
-    /// Walk the scope chain and return the first overload whose strict-or-tentative shape
-    /// matches `expr` — the chain-walk half of [`Scope::resolve_dispatch`], factored out
-    /// here so the migrated tests can assert on `f.classify_for_pick(&expr)` directly
-    /// without re-invoking the full resolution outcome.
+    /// Walk the scope chain and return the first overload whose bucket key matches `expr`
+    /// — a coarse, classifier-shape-only lookup. Each migrated test calls
+    /// `f.classify_for_pick(&expr)` on the result to assert the per-slot index buckets
+    /// directly, so the lookup only needs to land on *some* overload registered under
+    /// the right bucket key. The PR C dispatch driver's actual admission (cache-driven
+    /// strict against bare-name outcomes) is exercised end-to-end by the scheduler
+    /// tests; the tests in this mod cover the post-pick classification surface in
+    /// isolation.
     fn find_match<'a>(
         scope: &'a Scope<'a>,
         expr: &KExpression<'a>,
@@ -285,15 +290,14 @@ mod tests {
         while let Some(s) = current {
             let functions = s.bindings().functions();
             if let Some(bucket) = functions.get(&key) {
-                for (f, _) in bucket.iter() {
-                    if f.signature.matches(expr) {
-                        return Some(*f);
-                    }
+                // Prefer a strict-shape match when one exists; otherwise fall back to
+                // any overload registered under the bucket so the classification check
+                // still runs against a real `KFunction` shape.
+                if let Some((f, _)) = bucket.iter().find(|(f, _)| f.signature.matches(expr)) {
+                    return Some(*f);
                 }
-                for (f, _) in bucket.iter() {
-                    if f.accepts_for_wrap(expr) {
-                        return Some(*f);
-                    }
+                if let Some((f, _)) = bucket.iter().next() {
+                    return Some(*f);
                 }
             }
             current = s.outer;

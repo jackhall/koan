@@ -384,8 +384,8 @@ non-binder leaves and at lazy slots, bounded by AST depth.
 The collected `(slot_idx, sub_node_id)` pairs ride through into the
 parent's `NodeWork::Dispatch { expr, pre_subs }`
 ([`nodes.rs`](../src/machine/execute/nodes.rs)). When the parent runs,
-its Phase 4 `schedule_deps_filtered`
-([`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs)) consults
+the fused splice / park / eager-sub walk in
+[`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs) consults
 `pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
 a slot already pre-submitted reuses the existing `NodeId` (and replaces
 the part with an empty-`Identifier` placeholder for the eventual `Bind`
@@ -419,19 +419,64 @@ candidate machinery would do no useful work. The `Keyworded` variant
 falls into the chain-walked resolution plus eager name-resolve plus
 dep-schedule pipeline below.
 
-Phase 2 of the keyworded pipeline calls
-[`Scope::resolve_dispatch`](../src/machine/core/scope.rs) once and
-matches on its [`ResolveOutcome`](../src/machine/core/scope.rs):
-`Resolved(r)` continues into phase 3 with the tentatively picked function
-plus the per-slot index buckets `r.slots` carries (`wrap_indices`,
+The keyworded pipeline runs in four steps. Step 1 builds the bare-name
+outcome cache: one
+[`resolve_name_part`](../src/machine/execute/scheduler/dispatch.rs) call per
+bare-name part of `expr` (`Identifier` or leaf `Type`) into
+`bare_outcomes: Vec<Option<NameOutcome<'a>>>`, with `None` for non-bare-name
+parts. The cache is built with `consumer = None` so cycle detection is
+deferred to Step 4, where it runs only on slots the picked function
+classifies as references (a binder declaration slot like `x` in `LET x = …`
+has the dispatching slot as its own placeholder's producer, so an upfront
+cycle check would false-positive on declarations). Step 2 sweeps the cache
+for `NameOutcome::ProducerErrored`: a bare-name arg whose producer
+terminalized with an error can never resolve, so it propagates upfront with
+a `<wrap-resolve>` frame before any candidate work.
+
+Step 3 calls
+[`Scope::resolve_dispatch_with_chain`](../src/machine/core/scope.rs) once,
+passing the cache as `bare_outcomes: &[Option<NameOutcome<'a>>]`. Admission
+is strict-only: [`signature_admits_strict`](../src/machine/core/resolve_dispatch.rs)
+reads each bare-name slot's cached outcome rather than re-resolving it per
+scope. A `Resolved(obj)` cache entry admits iff
+[`KType::accepts_part`](../src/machine/model/types/ktype_predicates.rs)
+holds for the carried type — a bare name whose value has the wrong carrier
+type strict-rejects the overload, and the call surfaces as `DispatchFailed`
+rather than a bind-time `TypeMismatch`. `Parked` / `Unbound` cache entries
+admit via shape-only `arg.matches(part)`: the post-pick splice/park walk in
+Step 4 is the only place that produces precise per-slot `ParkOnProducers` /
+`UnboundName` diagnostics, so admission must not reject and lose them. The
+match on [`ResolveOutcome`](../src/machine/core/scope.rs) is:
+`Resolved(r)` continues into Step 4 with the strict-picked function plus
+the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `ref_name_indices`, `eager_indices`); `Ambiguous(n)` surfaces as an
 `AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
-`Deferred` (no match against the bare shape but the expression carries
-nested `Expression` / `ListLiteral` / `DictLiteral` parts whose evaluation
-may produce typed `Future(_)` parts that match) jumps to phase 4's lazy
-arm (`schedule_deps_filtered` with no eager filter and no picked function)
-and re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
-after subs resolve.
+`Deferred` (the candidate may match after sub-evaluation yields a typed
+`Future(_)`) routes to `schedule_eager_only`, which sub-Dispatches every
+eager-shaped part and re-dispatches via
+[`run_bind`](../src/machine/execute/scheduler/finish.rs) after subs resolve;
+`ParkOnProducers(_)` and `UnboundName(_)` come from the post-walk fallback
+below.
+
+The post-walk fallback inside `resolve_dispatch_with_chain` triggers when
+no scope's bucket admitted. It reads the cache by fixed precedence —
+**placeholders > eager > unbound > pending overload > Unmatched**:
+
+1. Any `NameOutcome::Parked(_)` ⇒ `ParkOnProducers` on the deduplicated
+   producer list. Wake re-dispatches; strict admission rebuilds the cache
+   against the now-bound type.
+2. Otherwise, if `expr` carries any eager (`Expression` / `SigiledTypeExpr`
+   / `ListLiteral` / `DictLiteral`) part ⇒ `Deferred`. Eager outranks
+   Unbound because an eager part's evaluation may itself surface the
+   precise diagnostic, and surfacing `UnboundName` here would pre-empt an
+   Expression-in-Type-slot dispatch (`(maybe) some 42`) whose head
+   evaluates to the schema after one sub-Dispatch.
+3. Otherwise, any `NameOutcome::Unbound(name)` ⇒ `UnboundName(name)`.
+4. Otherwise, an innermost-visible `pending_overloads[key]` entry
+   recorded during the walk ⇒ `ParkOnProducers(vec![producer])` (FN /
+   FUNCTOR sibling parked on its own Combine has installed the bucket;
+   wake re-dispatches against the now-registered overload).
+5. Otherwise ⇒ `Unmatched`.
 
 The rails the dispatch driver feeds:
 
@@ -484,8 +529,8 @@ The rails the dispatch driver feeds:
     is the whole user-facing surface). Three head-carrier shapes admit:
     `KFunction(f, _)` runs `KFunction::reconstruct_positional` to
     interleave the signature's `Keyword` elements between the
-    picked-by-name values and dispatches via `schedule_deps_filtered`
-    with `picked = Some(f)`; `StructType { .. }` and `TaggedUnionType
+    picked-by-name values and dispatches via `schedule_picked_eager`
+    with the picked function; `StructType { .. }` and `TaggedUnionType
     { .. }` route through `struct_value::apply` and `tagged_union::apply`
     respectively, each returning a `BodyResult::Tail` that rewrites the
     slot as a re-Dispatch through the corresponding construction
@@ -516,7 +561,7 @@ The rails the dispatch driver feeds:
   function *body* are unaffected because bodies re-dispatch per call
   against the body's lexical chain, by which point every sibling binder
   has registered.
-- **Placeholder install** (phase 2.5). If the picked function carries a
+- **Placeholder install** (Step 3.5). If the picked function carries a
   `binder_name` extractor, the driver installs `name → NodeId(idx)` into
   `placeholders` on the dispatching scope. If it carries a `binder_bucket`
   extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
@@ -532,39 +577,74 @@ The rails the dispatch driver feeds:
   different producer surfaces as a `Done(Err(_))` step so other slots
   keep draining; bucket-channel installs never Rebind (sibling appends
   are the intended shape).
-- **Eager name-resolve pass** (phase 3, carriers:
-  `Resolved.slots.wrap_indices` and `Resolved.slots.ref_name_indices`).
-  One walk over each index bucket calls the shared
-  [`resolve_name_part`](../src/machine/execute/scheduler/dispatch.rs)
-  helper against the dispatching scope. Both
-  `ExpressionPart::Identifier` and bare leaf `ExpressionPart::Type` (a
-  Type-token with no `<…>` parameters) are bare-name parts here and ride
-  identical rails; Type-tokens route through the shared
-  [`coerce_type_token_value`](../src/builtins/value_lookup.rs) seam so the
-  dispatch phase synthesizes the same `KTypeValue` / paired-carrier shape
-  the `value_lookup::body_type_expr` builtin produces. The helper returns a
-  [`NameOutcome`](../src/machine/execute/scheduler/dispatch.rs) ADT and the
-  caller branches on the variant:
+- **Fused splice / park / eager-sub walk** (Step 4). One iteration over
+  `expr.parts` co-handles the three per-slot rails the strict pick
+  carries: wrap-slot splice (`resolved.slots.wrap_indices`), ref-name-slot
+  park (`resolved.slots.ref_name_indices`), and eager sub-Dispatch
+  scheduling (filtered by `resolved.slots.eager_indices` when the picked
+  function is a lazy candidate, otherwise every eager-shaped part
+  schedules). Per part, exactly one arm fires.
 
-  - `Resolved(obj)` — for a `wrap_indices` slot, splice
-    `ExpressionPart::Future(obj)` into the slot in place. For a
-    `ref_name_indices` slot, no-op (literal-name slots keep the bare token).
-  - `Parked(producer)` — push onto a shared `producers_to_wait` list.
-  - `ProducerErrored(e)` — propagate via the shared
-    [`propagate_dep_error`](../src/machine/execute/scheduler/dispatch.rs)
-    helper with a `<wrap-resolve>` / `<replay-park>` frame.
-  - `Unbound(name)` — surface as a slot-terminal `UnboundName` (the
-    parent binder's Combine reads this through `read_result(dep)` and
-    short-circuits with the right framing).
-  - `Cycle(name)` — emit `KErrorKind::SchedulerDeadlock { pending: 1,
-    sample: "cycle in type alias …" }`. Catches `LET x = x` and
-    `LET Ty = Ty` uniformly without a special case in the elaborator.
+  Wrap and ref-name arms read the same `bare_outcomes[i]` cache the
+  resolver consumed in Step 3 — so each bare name is resolved once per
+  `run_dispatch` invocation, shared across admission and the walk.
+  Per-arm behavior:
 
-  After both buckets are walked, a single
-  `install_combined_park(producers_to_wait, …)` call installs every park
-  edge and rewrites the slot to a re-Dispatch on wake. Multi-name forward
-  references compose as one combined park rather than N independent
-  sub-Dispatches.
+  - **Wrap slot.** `Resolved(obj)` rewrites the slot to
+    `ExpressionPart::Future(obj)` in place. `Parked(p)` cycle-checks
+    via [`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs)
+    and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
+    `<name>`" }` on a self-park or pushes `p` onto the shared
+    `producers_to_wait` list. `Unbound(name)` surfaces a slot-terminal
+    `UnboundName` (the parent binder's Combine reads it through
+    `read_result(dep)` and short-circuits with the right framing — an
+    `Err` from `execute` would break that catch).
+    `Cycle` / `ProducerErrored` are unreachable here: the cache is built
+    with `consumer = None`, and the Step 2 sweep already short-circuited
+    `ProducerErrored`.
+  - **Ref-name slot.** Literal-name slots keep the bare token, so
+    `Resolved` and `Unbound` are no-ops. `Parked(p)` runs the same
+    cycle-check then push as the wrap arm. Only `Identifier` and leaf
+    `Type` parts park here; non-bare-name parts are skipped by
+    classification.
+  - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
+    parts wrap into a single-part `KExpression` and sub-Dispatch (the
+    sub-Dispatch enters `run_dispatch`'s `SigiledTypeExpr` arm and
+    tail-replaces with the inner dispatch); `ListLiteral` and `DictLiteral`
+    route through `schedule_list_literal` / `schedule_dict_literal` for the
+    aggregate Combine; any other shape rides through unchanged. Lazy
+    `Expression` parts in `KExpression` slots are filtered out by
+    `eager_indices` and the receiving builtin dispatches them itself.
+
+  **Park-precedence guard.** Sub-Dispatch and aggregate scheduling are
+  staged into a `PendingSub` vec rather than submitted eagerly during the
+  walk. After the loop, if `producers_to_wait` is non-empty the driver
+  calls `install_combined_park(producers_to_wait, new_expr, pre_subs,
+  idx)` — installing the park edges and rewriting this slot to re-Dispatch
+  on wake — **without** submitting any staged subs. Eager submission would
+  leak the sub-nodes on the re-Dispatch wake path, where the new
+  `run_dispatch` invocation would re-stage them.
+  Multi-name forward references compose as one combined park rather than
+  N independent sub-Dispatches.
+
+  If no producer parked, the driver applies each `PendingSub`: `Reuse(id)`
+  for slots already pre-submitted recursively at outermost-submission time
+  (see [Submission-time binder install and recursive
+  sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)),
+  `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
+  for the aggregate. With no subs to schedule the driver binds the picked
+  function directly via `invoke_to_step` (a wrap-slot-only call like
+  `MAKESET IntOrd` resolves bare names in Step 4, leaves no eager parts,
+  and binds in one step — no `Bind` detour). Otherwise it builds a
+  `NodeWork::Bind { expr, subs }` and lifts.
+
+  Dict and list literals (`classify_aggregate_part` in
+  [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
+  ride the same name-resolve rail when their `wrap_identifiers` plan-input
+  is set: bare-name entries call `resolve_name_part` directly and
+  materialize as `Slot::Static` (resolved) or `Slot::Park(i)` (parked
+  producer), with the Combine driving a single wake across all parked
+  siblings.
 
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's
@@ -572,22 +652,18 @@ The rails the dispatch driver feeds:
 [`KFunction::classify_for_pick`](../src/machine/core/kfunction.rs) is
 the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
 by value), so the disjointness invariant lives in one place rather than as
-comment-enforced rules across the scheduler driver.
-
-Phase 4 commits to the tentative pick from Phase 2 even when wrap-slots
-were spliced in Phase 3: `schedule_deps_filtered(expr, eager_indices,
-Some(picked), …)` schedules the remaining `Expression` / `ListLiteral` /
-`DictLiteral` parts as sub-nodes and builds a `Bind` slot against `picked`.
-A mismatch between the spliced carrier and `picked`'s strict slot type
-surfaces as `TypeMismatch` from `bind` (more specific than the generic
-`DispatchFailed` that a second `resolve_dispatch` would emit), saving a
-resolution walk per wrap-bearing dispatch on the success path. Dict and
-list literals (`classify_aggregate_part` in
-[`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
-ride the same eager rail when their `wrap_identifiers` plan-input is set:
-bare-name entries call `resolve_name_part` directly and materialize as
-`Slot::Static` (resolved) or `Slot::Park(i)` (parked producer), with the
-Combine driving a single wake across all parked siblings.
+comment-enforced rules across the scheduler driver. Cycle detection runs
+inside the fused walk (not in the cache build) so it sees the picked
+function's slot classification: a binder declaration slot — `x` in
+`LET x = …`, `Foo` in `STRUCT Foo (…)` — is owned by the binder, never
+classified as wrap or ref-name, and so never reaches the cycle-check arm.
+`DepGraph::would_create_cycle` walks the forward `notify_list` graph from
+the consumer; if the producer is reachable, the driver surfaces
+`SchedulerDeadlock` on the slot terminal instead of installing a park edge
+that would close the cycle. That catches the trivially-cyclic
+`LET Ty = Ty` / `LET x = x` shapes uniformly — both Identifier-LHS and
+Type-LHS cycles surface with the same error kind without a special case
+in the elaborator.
 
 The fast-lane handlers (`fast_lane_bare_identifier`,
 `fast_lane_function_value_call`) and the eager-resolve pass call
@@ -621,16 +697,11 @@ finish closure splices each result into
 `signature_expr.parts[slot_idx]` as `Future(KTypeValue(_))` before
 re-running the parameter-list walk against the spliced signature. STRUCT
 and UNION share the same elaborator-and-Combine shape for their
-field-type lists. The eager-resolve pass itself cycle-checks before
-installing each park edge:
-[`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs)
-walks the forward `notify_list` graph from the consumer and, if the
-producer is reachable, `resolve_name_part` returns `NameOutcome::Cycle`
-and the driver surfaces `SchedulerDeadlock` on the slot terminal instead
-of installing a park edge that would close the cycle. That catches the
-trivially-cyclic `LET Ty = Ty` / `LET x = x` shapes uniformly — both
-Identifier-LHS and Type-LHS cycles surface with the same error kind
-without a special case in the elaborator.
+field-type lists. The fused walk's per-park cycle check
+([`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs),
+covered above) handles the simple trivially-cyclic cases proactively; the
+elaborator's threaded-set carry-through handles the recursive-type cases
+during STRUCT / UNION body elaboration.
 
 A drain-end guard catches any cycle the proactive check doesn't: after
 [`execute`](../src/machine/execute/scheduler/execute.rs) empties its work
@@ -887,11 +958,3 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Unified walk + strict-only admission**
-  ([roadmap/dispatch_fix/unified-walk.md](../roadmap/dispatch_fix/unified-walk.md)).
-  Collapse W1 (function-candidate ancestor walk) and N×W3 (per bare-name slot
-  ancestor walks) into a single unified walk; replace strict-then-tentative
-  admission with strict-only, branching the Empty case explicitly on bare-name
-  resolution outcomes (`Deferred` / `ParkOnProducers` / `UnboundName`); carve
-  out no-keyword expressions (single token, type call, function-value call)
-  into a candidate-machinery-free fast lane.

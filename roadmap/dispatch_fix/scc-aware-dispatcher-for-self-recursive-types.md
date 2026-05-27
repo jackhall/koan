@@ -17,9 +17,10 @@ threaded set (`with_threaded`) and current-declaration context
 (`with_current_decl`) — which let the inline field-walker
 short-circuit `Tree` → `KType::RecursiveRef("Tree")` — never reach the
 standalone dispatcher. Consequently a self-reference like
-`:(LIST OF Tree)` reaches `bare_type_leaf`, looks up `Tree`, finds no
-finalized binding (the binder hasn't returned yet), and surfaces
-`UnboundName`.
+`:(LIST OF Tree)` resolves `Tree` to its still-pending placeholder, the
+sub-Dispatch parks on it, the STRUCT body's Combine parks on the
+sub-Dispatch, and the wake graph closes a cycle — surfacing as
+`SchedulerDeadlock` ("cycle in type alias `Tree`").
 
 The field-walker in
 [`typed_field_list`](../../src/machine/model/types/typed_field_list.rs)
@@ -52,10 +53,12 @@ test ignores pin the gap:
   [`make_capture`](../../src/machine/model/types/resolver.rs) and
   the resolver's positional-fold helpers become dead code at the
   same time.
-- Re-enables the four ignored tests across `struct_def`, `fn_def`,
-  and `type_ops/type_constructor` modules — `STRUCT Tree`'s recursive
-  field, FN's container-type arity validation, and user-defined
-  `TypeConstructor` round-trips through SIG / FN slots.
+- Re-enables the two ignored tests pinned above — `STRUCT Tree`'s
+  recursive field and FN's container-type arity validation. The
+  `type_ops/type_constructor` ignored pair (`fn_return_type_constructor_apply_root_scope`,
+  `monad_signature_smoke`) belongs to the
+  [user-defined TypeConstructor keyworded application](user-defined-typeconstructor-keyworded-application.md)
+  item and ships separately.
 
 **Directions.**
 

@@ -124,7 +124,7 @@ Three sites consume parameterized types, and each has its own behavior:
 | Site | What it does | Variance |
 | --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(List Any)` accepts any list because `Any.matches_value(_)` is always true; `:(Dict Str Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(List Number)` ≺ `:(List Any)`, `:(Dict Str Number)` ≺ `:(Dict Str Any)`, `:(Function (Number) -> Str)` ≺ `:(Function (Any) -> Any)`. |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(List Number)` ≺ `:(List Any)`, `:(Dict Str Number)` ≺ `:(Dict Str Any)`, `:(Function (Number) -> Str)` ≺ `:(Function (Any) -> Any)`. |
 | `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(Function (Number) -> Str)`, not `:(Function (Any) -> Str)`. |
 
 The combination is sound for dispatch even though `is_more_specific_than`
@@ -304,42 +304,67 @@ join an empty or heterogeneous literal memoizes) fills `:(List Any)` but not
 boundary.
 
 This makes element-only-differing overloads (`:(List Number)` vs `:(List Str)`)
-dispatchable across the forms a container argument takes:
+dispatchable across the forms a container argument takes. Admission is
+strict-only, driven by a per-`run_dispatch` `bare_outcomes` cache —
+[`signature_admits_strict`](../../src/machine/core/resolve_dispatch.rs)
+reads each bare-name slot's cached
+[`NameOutcome`](../../src/machine/core/resolve_dispatch.rs) once and
+admits accordingly. The forms:
 
 - **Evaluated argument** (`DESCRIBE (xs)`, a call result) — already a typed
-  `Future`; the carried-type check picks directly.
-- **Bare variable** (`DESCRIBE xs`) — the strict pass *peeks*: a bare `Identifier`
-  in a container slot resolves in the dispatch scope, and a name bound to a value is
-  admitted on that value's carried element type (`signature_admits_strict` in
-  [resolve_dispatch.rs](../../src/machine/core/resolve_dispatch.rs)). The peek
-  reuses the `Future` arm of `accepts_part` — `ExpressionPart::Future` holds a
-  reference, so no clone. Only container slots peek; binder (`Identifier` /
-  `TypeExprRef`) and lazy (`KExpression`) slots never do.
-- **Literal** (`DESCRIBE [1 2 3]`) — carries no binding to peek, so it admits both
-  overloads shape-only and the strict pass *ties*. The dispatch driver treats a
-  strict tie whose argument carries unevaluated eager parts as `Deferred` rather
-  than `AmbiguousDispatch`; the literal evaluates and the re-dispatch on the
-  resulting typed `Future` is element-aware. A tie that survives evaluation (e.g. an
-  empty list against two concrete-element overloads, both admitted vacuously)
-  carries no eager parts on the second pass and surfaces as `AmbiguousDispatch`.
+  `Future`; admission runs `arg.matches(part)` and `accepts_part` for the
+  carried-type check.
+- **Bare variable** (`DESCRIBE xs`) — the cache entry is
+  `NameOutcome::Resolved(obj)`. Admission tests
+  [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
+  against `ExpressionPart::Future(obj)` (the `Future` arm holds a reference,
+  no clone). A bare name whose value has the wrong carrier type
+  strict-rejects the overload; the call surfaces as `DispatchFailed` rather
+  than a bind-time `TypeMismatch`. Binder (`Identifier` / `TypeExprRef`) and
+  lazy (`KExpression`) slots skip the cache and admit shape-only — the slot
+  owns the name, so admission can't depend on whether `x` happens to be
+  bound or parked.
+- **Literal** (`DESCRIBE [1 2 3]`) — the cache entry is `None` (literals
+  aren't bare names) and admission runs `arg.matches(part)` shape-only.
+  Both element-typed overloads admit and the strict pass *ties*. The
+  dispatch driver treats a strict tie whose argument carries unevaluated
+  eager parts as `Deferred` rather than `AmbiguousDispatch`; the literal
+  evaluates and the re-dispatch on the resulting typed `Future` is
+  element-aware. A tie that survives evaluation (e.g. an empty list
+  against two concrete-element overloads, both admitted vacuously)
+  carries no eager parts on the second pass and surfaces as
+  `AmbiguousDispatch`.
 
-The peek reads only an already-bound value. A `Placeholder` (forward reference) or
-`Unbound` name isn't peeked, so it falls to the tentative pass — and the two diverge
-there:
+`Placeholder` (forward reference) and `Unbound` cache outcomes admit via
+shape-only `arg.matches(part)` rather than carrier-type check. The
+post-pick splice/park walk is the only place that produces precise per-slot
+`ParkOnProducers` / `UnboundName` diagnostics, so admission must not
+reject them. If no bucket admits anywhere, the resolver's post-walk
+fallback reads the cache by fixed precedence — placeholders > eager >
+unbound > pending overload > Unmatched — and surfaces the right
+`ResolveOutcome`:
 
-- A `Placeholder` name *will* bind, so when the tentative pass ties on one, dispatch
-  parks on the binder's producer and re-dispatches once it binds, where the now-bound
-  type lets the strict-pass peek pick (`ResolveOutcome::ParkOnProducers`, parked
-  through the same edges as the resolved-pick replay-park). This keeps dispatch
-  order-independent within the visibility window — `DESCRIBE xs` resolves to the
-  same overload whether or not `LET xs = …` had landed at first dispatch, provided
-  the binding is lexically visible to the reference (see
-  [Overload bucket visibility filter](#overload-bucket-visibility-filter)).
-- An `Unbound` name names nothing (no visible binding *and* no forward-declared
-  placeholder visible at the consumer's chain position), so a tentative tie over it
-  can never resolve. It surfaces as the precise `UnboundName` error
-  (`ResolveOutcome::UnboundName`), matching what the single-overload path reports
-  once its auto-wrapped name evaluates — not a generic dispatch miss.
+- A `Placeholder` name *will* bind, so the fallback surfaces
+  `ResolveOutcome::ParkOnProducers(producers)`. Dispatch parks on the
+  binder's producer and re-dispatches once it binds; the rebuilt cache
+  carries `Resolved(obj)` and strict admission picks. This keeps dispatch
+  order-independent within the visibility window — `DESCRIBE xs` resolves
+  to the same overload whether or not `LET xs = …` had landed at first
+  dispatch, provided the binding is lexically visible to the reference
+  (see [Overload bucket visibility filter](#overload-bucket-visibility-filter)).
+  Park parking goes through the same edges as the resolved-pick
+  replay-park.
+- An `Unbound` name names nothing (no visible binding *and* no
+  forward-declared placeholder visible at the consumer's chain position),
+  so the fallback surfaces `ResolveOutcome::UnboundName(name)` — the
+  precise error matching what the single-overload path reports for an
+  unresolved bare name, not a generic dispatch miss.
+
+Specificity ranks `is_more_specific_than` so that concrete carrier types
+beat the unconstrained-name slot types (`Identifier` / `TypeExprRef`). A
+call like `ATTR p z` where `p` resolves to a `Struct` admits both a
+concrete `ATTR <s:Struct>` overload and an `ATTR <s:Identifier>` fallback;
+the concrete overload wins by specificity without tying.
 
 ### Overload bucket visibility filter
 
@@ -371,15 +396,6 @@ each new overload remains gated on its own `BindingIndex`. A bare value-LET
 forward reference inside a sibling expression surfaces `UnboundName` directly:
 visibility is lexical, and the parking edges are reserved for visible-but-not-ready
 producers.
-
-## Open work
-
-- **Unified walk + strict-only admission**
-  ([roadmap/dispatch_fix/unified-walk.md](../../roadmap/dispatch_fix/unified-walk.md)).
-  Collapse the function-candidate ancestor walk and the per-bare-name slot
-  walks into one, replace strict-then-tentative with strict-only, and carve
-  out the no-keyword shapes into a candidate-machinery-free fast lane.
-  Specificity ranking becomes a per-scope tiebreak; innermost-scope wins.
 
 ## Known limitations
 

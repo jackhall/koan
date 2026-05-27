@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::{KKey, KObject, Serializable};
-use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope};
+use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId, Scope};
 use crate::machine::model::ast::ExpressionPart;
 
-use super::dispatch::{resolve_name_part, NameOutcome};
+use super::dispatch::resolve_name_part;
 use super::super::nodes::NodeWork;
 use super::Scheduler;
 

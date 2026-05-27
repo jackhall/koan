@@ -153,7 +153,7 @@ unify trivially with anything.
     parameters in order. After binding slot M, install M into a
     per-dispatch scope; re-elaborate slot N's `Deferred` type against
     that scope; admissibility-check slot N. Touches
-    `KFunction::accepts_for_wrap`, `Scope::resolve_dispatch`, and the
+    `signature_admits_strict`, `Scope::resolve_dispatch`, and the
     dispatch index's lookup keys.
   - *(b) Index-side projection.* Compute admissibility partially at
     definition (against everything that *can* be resolved) and complete

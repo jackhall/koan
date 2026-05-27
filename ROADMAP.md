@@ -46,7 +46,7 @@ What's shipped that the open items below build on:
   Dispatch's eager Expression-slot parts and submits them as sub-Dispatches at the
   same outermost submission point, so nested binders' placeholders all install before
   any sibling can dispatch. The pre-submitted children ride through `NodeWork::Dispatch.pre_subs`
-  into Phase 4, which reuses them instead of allocating fresh sub-Dispatches.
+  into the fused dispatch walk, which reuses them instead of allocating fresh sub-Dispatches.
 - *Visibility-aware `Bindings` lookups.* Production reads go through
   `Bindings::lookup_value` / `lookup_type` / `lookup_function`, each taking a
   `chain_cutoff: Option<usize>` and applying the per-entry visibility predicate
@@ -69,6 +69,21 @@ What's shipped that the open items below build on:
   `BinderKey::Bucket` (`FN` / `FUNCTOR`), and `pending_overloads` carries a
   per-bucket Vec so sibling FN / FUNCTOR overloads coexist as distinct
   wake sources with earliest-index-visible parking.
+- *Unified walk + strict-only admission.* Each `run_dispatch` builds a
+  per-call `bare_outcomes` cache (one `NameOutcome` per bare-name part)
+  shared between the resolver's strict admission and the fused
+  splice / park / eager-sub walk, so each bare name resolves exactly
+  once per call. Strict admission reads cached `Resolved` outcomes via
+  `KType::accepts_part`, while `Parked` and `Unbound` fall back to
+  shape-only admission so the post-pick walk can surface precise per-slot
+  diagnostics. When no bucket admits, a post-walk fallback reads the cache
+  by fixed precedence — placeholders > eager > unbound > pending overload
+  > Unmatched — and `is_more_specific_than` ranks concrete carriers above
+  the unconstrained-name slot types (`Identifier` / `TypeExprRef`) so an
+  `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback.
+  No-keyword shapes (`BareIdentifier`, `BareTypeLeaf`,
+  `TypeConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) ride
+  dedicated fast-lane handlers that never enter the candidate walk.
 
 ## Next items
 
@@ -143,13 +158,11 @@ functor-heavy collections both build on:
 
 Untangle dispatch into queue-order-independent name resolution plus a single
 unified ancestor walk per call site. The provenance-plumbing, index-gated
-resolution, recursive-binder-submission, and type-language-via-dispatch
-phases have shipped (see "What's shipped so far"); the remaining items pick
-up the SCC-context gap surfaced by routing the type language through the
-dispatcher, the user-functor application surface, and the walk-unification
-collapse:
+resolution, recursive-binder-submission, type-language-via-dispatch, and
+walk-unification phases have shipped (see "What's shipped so far"); the
+remaining items pick up the SCC-context gap surfaced by routing the type
+language through the dispatcher and the user-functor application surface:
 
-- [Unified walk + strict-only admission](roadmap/dispatch_fix/unified-walk.md)
 - [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
 
