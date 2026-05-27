@@ -197,38 +197,6 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     }
 }
 
-/// Stage 3.1 dual-write: `LET IntOrdA = (IntOrd :| OrderedSig)` writes the alias
-/// into `bindings.types` (via `register_nominal`) AND `bindings.data` at the same
-/// scope. The identity preserves the ORIGINAL module's `(scope_id, path)` rather
-/// than minting a fresh nominal — aliasing is type-equivalent.
-#[test]
-fn let_type_class_with_module_carrier_dual_writes() {
-    use crate::machine::RuntimeArena;
-    use crate::machine::model::KType;
-    use crate::builtins::test_support::run;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    run(
-        scope,
-        "MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = (VAL compare :Number)\n\
-         LET IntOrdA = (IntOrd :| OrderedSig)",
-    );
-    let types = scope.bindings().types();
-    let (kt, _) = types
-        .get("IntOrdA")
-        .expect("IntOrdA should be in bindings.types");
-    // Post-collapse: MODULE aliases dual-write `KType::Module { .. }` rather than
-    // the old `UserType { kind: Module, .. }` indirection.
-    assert!(matches!(**kt, KType::Module { .. }));
-    drop(types);
-    let data = scope.bindings().data();
-    let (obj, _) = data
-        .get("IntOrdA")
-        .expect("IntOrdA should be in bindings.data");
-    assert!(matches!(obj, KObject::KTypeValue(KType::Module { module: _, frame: _ })));
-}
-
 /// Stage 3.1 aliasing-preserves-identity: `LET Pt = Point` writes a `types[Pt]`
 /// entry that equals `types[Point]` field-wise — `Pt` and `Point` lower to the
 /// same `UserType` (same kind, scope_id, name="Point"). The alias binder name
@@ -374,8 +342,8 @@ fn let_type_class_in_sig_body_still_works() {
     );
 }
 
-/// LET partition guard (design/typing/elaboration.md § Binding home and the
-/// dual-map): `LET <name> = <m>` where `name` is value-classified (lowercase-
+/// LET partition guard (design/typing/elaboration.md § Binding-map partition):
+/// `LET <name> = <m>` where `name` is value-classified (lowercase-
 /// leading) and the RHS evaluates to a module value must reject at the LET
 /// site. Module / signature carriers belong on Type-classified identifiers
 /// only; this test pins the diagnostic so the partition rule has a regression

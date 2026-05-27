@@ -16,8 +16,9 @@ use super::{arg, err, register_builtin, sig};
 ///   `SatisfiesSignature`, `Module`, or `Signature`), recover the paired value-side carrier
 ///   via `scope.lookup` so downstream operators receive the expected `KSignature` /
 ///   `KModule` / `StructType` / `TaggedUnionType` part rather than a synthesized
-///   `KTypeValue`. Dual-write atomicity makes the paired-carrier lookup infallible under
-///   normal flow; the synthesis below covers the defensive case.
+///   `KTypeValue`. Nominal binders install the carrier atomically with the type
+///   identity, so the paired-carrier lookup is infallible under normal flow; the
+///   synthesis below covers the defensive case.
 /// - Otherwise (builtin leaves, `LET <Type-class> = <KTypeValue>` aliases) synthesize a
 ///   `KObject::KTypeValue(kt.clone())` carrier so the value sits in the same dispatch
 ///   transport every other body consumes.
@@ -36,12 +37,12 @@ pub fn coerce_type_token_value<'a>(
     let name = t.name.as_str();
     match scope.resolve_type_with_chain(name, chain) {
         Some(kt) => {
-            // Dual-write invariant: nominal identity types (`UserType`,
-            // `SatisfiesSignature`, `Module`, `Signature`) are paired with a value-side
-            // carrier at the same scope. Recover the carrier so downstream operators
-            // (`:|`, `:!`, ATTR-Module/Struct, `struct_construct`, `MODULE_TYPE_OF`)
-            // receive the expected `KSignature` / `KModule` / `StructType` /
-            // `TaggedUnionType` part rather than a synthesized `KTypeValue`.
+            // Nominal identity types (`UserType`, `SatisfiesSignature`, `Module`,
+            // `Signature`) are installed with a paired value-side carrier at the same
+            // scope. Recover the carrier so downstream operators (`:|`, `:!`,
+            // ATTR-Module/Struct, `struct_construct`, `MODULE_TYPE_OF`) receive the
+            // expected `KSignature` / `KModule` / `StructType` / `TaggedUnionType`
+            // part rather than a synthesized `KTypeValue`.
             if matches!(
                 kt,
                 KType::UserType { .. }
@@ -52,8 +53,8 @@ pub fn coerce_type_token_value<'a>(
                 if let Some(obj) = scope.lookup_with_chain(name, chain) {
                     return Ok(obj);
                 }
-                // Unreachable under dual-write atomicity; fall through to the
-                // KTypeValue synthesis below as a defensive recovery.
+                // Unreachable when finalize installed the paired carrier; fall
+                // through to the KTypeValue synthesis below as a defensive recovery.
             }
             Ok(scope.arena.alloc(KObject::KTypeValue(kt.clone())))
         }
@@ -351,7 +352,7 @@ mod tests {
     // Equivalence coverage for `coerce_type_token_value` — pins every coercion the
     // existing `body_type_expr` produces. Mirrors the body_type_expr tests above
     // (resolve-via-resolve_type, parameterized-shape rejection, unbound surface) plus a
-    // module-identity recovery case that exercises the dual-write path.
+    // paired-carrier recovery case that exercises the nominal-identity branch.
 
     #[test]
     fn coerce_type_token_value_builtin_synthesizes_ktypevalue() {
@@ -398,9 +399,9 @@ mod tests {
         }
     }
 
-    /// Dual-write recovery: a `KType::UserType { .. }` registered in `bindings.types`
-    /// paired with a value-side carrier in `bindings.data` returns the paired value, not
-    /// a synthesized `KTypeValue`.
+    /// Paired-carrier recovery: a `KType::UserType { .. }` registered in
+    /// `bindings.types` paired with a value-side carrier in `bindings.data` returns
+    /// the paired value, not a synthesized `KTypeValue`.
     #[test]
     fn coerce_type_token_value_recovers_paired_value() {
         use crate::machine::model::types::UserTypeKind;
@@ -424,11 +425,12 @@ mod tests {
     }
 
     /// Defensive paired-recovery fall-through: `bindings.types[name]` carries a nominal
-    /// identity (`UserType`) but `bindings.data[name]` is empty. Under dual-write
-    /// atomicity this is unreachable through normal flow — the test forces it by
-    /// `register_type` *without* a paired `bind_value`. The helper must not panic; it
-    /// falls through to synthesizing a fresh `KTypeValue(kt)` carrier so the dispatch
-    /// transport stays valid.
+    /// identity (`UserType`) but `bindings.data[name]` is empty. Nominal binders
+    /// install the paired carrier atomically with the type identity, so this is
+    /// unreachable through normal flow — the test forces it by `register_type`
+    /// *without* a paired `bind_value`. The helper must not panic; it falls through
+    /// to synthesizing a fresh `KTypeValue(kt)` carrier so the dispatch transport
+    /// stays valid.
     #[test]
     fn coerce_type_token_value_falls_through_when_paired_value_absent() {
         use crate::machine::model::types::UserTypeKind;
@@ -439,8 +441,8 @@ mod tests {
             scope_id: scope.id,
             name: "Orphan".to_string(),
         };
-        // types-side only — no paired `bind_value`. Exercises the "Unreachable under
-        // dual-write atomicity" fall-through.
+        // types-side only — no paired `bind_value`. Exercises the "paired carrier
+        // missing" defensive fall-through.
         scope.register_type("Orphan".into(), kt.clone(), BindingIndex::BUILTIN);
 
         let leaf = TypeExpr::leaf("Orphan".to_string());

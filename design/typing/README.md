@@ -20,14 +20,14 @@ Type-system mechanics:
   slot-specificity, and the limitations the static-typing work will close.
 - [elaboration.md](elaboration.md) — how a type name resolves to a
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
-  recognition, module-qualified names, the dual-map binding home that
+  recognition, module-qualified names, the binding-map partition that
   separates type-name lookups from value-name lookups, the
   `KObject::TypeNameRef` bare-leaf carrier, and the two-layer
   resolution memo that amortizes elaboration cost.
 - [user-types.md](user-types.md) — `KType::UserType` as the
   per-declaration identity for STRUCT, named UNION, MODULE, opaque
   ascription, and NEWTYPE. Covers specificity stratification with the
-  `AnyUserType` wildcard, finalize-time dual-write through
+  `AnyUserType` wildcard, finalize-time atomic install through
   `Scope::register_nominal`, cycle close for mutually recursive nominals,
   and the `NEWTYPE` keyword's `Wrapped` carrier with its newtype-over-newtype
   collapse invariant encoded in the field type.

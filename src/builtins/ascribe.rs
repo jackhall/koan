@@ -32,8 +32,8 @@ pub fn body_opaque<'a>(
     // Mirror the source module's bindings into the new scope by reference (values are
     // arena-allocated and immutable). The `try_bulk_install_from` helper snapshots
     // `src.data`, releases the source guard, and replays each entry through the shared
-    // `try_apply` so the `KFunction → functions` dual-map mirror happens exactly once per
-    // entry — no separate functions-loop needed.
+    // `try_apply` so the `KFunction → functions` mirror happens exactly once per entry
+    // — no separate functions-loop needed.
     let src = m.child_scope();
     if let Err(e) = new_scope.bindings().try_bulk_install_from(src.bindings()) {
         return BodyResult::Err(e);

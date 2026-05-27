@@ -45,7 +45,7 @@ pub enum KErrorKind {
     /// pre-stringified so `KError` doesn't need a `KType<'a>` lifetime parameter.
     TypeClassBindingExpectsType { name: String, got: String },
     /// A `TypeNameRef` carrier landed at the dispatch boundary's per-call
-    /// parameter dual-write (`type_identity_for`) but its `TypeExpr` couldn't
+    /// parameter install (`type_identity_for`) but its `TypeExpr` couldn't
     /// be elaborated in the FN's captured definition scope because some
     /// referenced type-binding is still pending finalization. Replaces today's
     /// silent skip — surfaces the precise context (parameter, surface form,

@@ -39,7 +39,7 @@ The module/signature variants follow the parallel stratification:
 `KType::Module { .. }` ≺ `KType::AnyModule` ≺ `Any`, and
 `KType::Signature(_)` ≺ `KType::AnySignature` ≺ `Any`.
 
-## Value carriers and dual-write
+## Value carriers and nominal install
 
 Value carriers — [`KObject::Struct`](../../src/machine/model/values/kobject.rs),
 [`KObject::Tagged`](../../src/machine/model/values/kobject.rs),
@@ -69,12 +69,12 @@ OrderedSig," the constraint form; value-position lookups want the
 identity-bearing signature carrier itself.
 
 `LET <Type-class> = <module/sig/struct-value>` (e.g.
-`LET IntOrdA = (IntOrd :| OrderedSig)`) also dual-writes, preserving the
-*original* carrier's identity rather than minting a fresh `scope_id` for the
-alias name — aliasing is type-equivalent, so a slot typed by the alias
-dispatches to the same overload as a slot typed by the original. Anonymous
-`UNION (...)` is not a valid surface — every tagged value carries a real
-per-declaration identity.
+`LET IntOrdA = (IntOrd :| OrderedSig)`) routes through the same
+`register_nominal` install, preserving the *original* carrier's identity
+rather than minting a fresh `scope_id` for the alias name — aliasing is
+type-equivalent, so a slot typed by the alias dispatches to the same overload
+as a slot typed by the original. Anonymous `UNION (...)` is not a valid
+surface — every tagged value carries a real per-declaration identity.
 
 ## Cycle close for mutually recursive nominals
 

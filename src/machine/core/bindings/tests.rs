@@ -1,5 +1,5 @@
 //! Unit coverage for the stage-1.2 `types` map and its `try_register_type` write
-//! primitive, plus the stage-1.3 `try_register_nominal` dual-write primitive.
+//! primitive, plus the stage-1.3 `try_register_nominal` atomic-install primitive.
 //! `try_register_type` is now live (stage 1.4 wired `Scope::register_type` onto it);
 //! `try_register_nominal` remains unused until stage 3 migrates STRUCT / UNION /
 //! MODULE finalize paths onto it. These tests directly exercise `Bindings` against
@@ -96,7 +96,7 @@ fn try_register_nominal_inserts_into_both_maps() {
         .try_register_nominal("Foo", kt, obj, BindingIndex::BUILTIN)
         .expect("try_register_nominal should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
-    // Dual-write: both maps hold the exact pointers we supplied.
+    // Atomic install: both maps hold the exact pointers we supplied.
     let (stored_kt, _) = *bindings.types().get("Foo").expect("Foo should be in types map");
     let (stored_obj, _) = *bindings.data().get("Foo").expect("Foo should be in data map");
     assert!(std::ptr::eq(stored_kt, kt));

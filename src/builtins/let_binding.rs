@@ -50,7 +50,7 @@ pub fn body<'a>(
             // letter, per design/typing/tokens.md) so the type-side binding map is the
             // single home for module values — closes the asymmetry that lets a
             // value-side binding hide a category-mismatched module behind a lowercase
-            // alias. See design/typing/elaboration.md § Binding home and the dual-map.
+            // alias. See design/typing/elaboration.md § Binding-map partition.
             let kind = match value {
                 KObject::KTypeValue(KType::Module { .. }) => Some("module"),
                 KObject::KTypeValue(KType::Signature(_)) => Some("signature"),
@@ -96,11 +96,12 @@ pub fn body<'a>(
                         got: value.ktype().name(),
                     }));
                 }
-                // Storage routing (unchanged): module / signature carriers dual-
-                // write through `nominal_identity`; pure-type `KTypeValue(kt)`
-                // carriers (Number, etc.) take the `register_type` path;
-                // `is_functor` KFunctions and other nominal-identity carriers
-                // (Struct / Tagged) fall through to the value-side binding.
+                // Storage routing (unchanged): module / signature carriers route
+                // through `nominal_identity` (which installs both type-side identity
+                // and value-side carrier); pure-type `KTypeValue(kt)` carriers
+                // (Number, etc.) take the `register_type` path; `is_functor`
+                // KFunctions and other nominal-identity carriers (Struct / Tagged)
+                // fall through to the value-side binding.
                 match value {
                     KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
                         nominal_identity = derive_nominal_identity(value);
@@ -144,7 +145,7 @@ pub fn body<'a>(
                 }
                 // Type-class LHS + value-routing. Module / signature carriers
                 // (`KTypeValue(KType::Module/Signature)`) take the `nominal_identity`
-                // path via `derive_nominal_identity` so they dual-write both
+                // path via `derive_nominal_identity` so they install both into
                 // `bindings.types` (for type-position lookups) AND `bindings.data`
                 // (for value-position lookups like `IntOrdView.compare`). Pure-type
                 // `KTypeValue(kt)` carriers (Number, List<Any>, etc.) take the
@@ -199,15 +200,18 @@ pub fn body<'a>(
         // alias is a let-style alias, not a fresh nominal type declaration.
         scope.register_type(name, kt, bind_index);
     } else if let Some(identity) = nominal_identity {
-        // Aliasing dual-write: `LET P2 = Point` writes `bindings.types[P2]` carrying
-        // the ORIGINAL carrier's identity (Point's `name`/`scope_id`), not a fresh
-        // identity minted from the alias name. This is what makes
-        // `(PICK x: P2)` and `(PICK x: Point)` dispatch to the same overload — aliasing
-        // preserves type identity rather than introducing a new nominal type.
+        // Identity-preserving alias: `LET P2 = Point` writes `bindings.types[P2]`
+        // carrying the ORIGINAL carrier's identity (Point's `name`/`scope_id`), not
+        // a fresh identity minted from the alias name. This is what makes
+        // `(PICK x: P2)` and `(PICK x: Point)` dispatch to the same overload —
+        // aliasing preserves type identity rather than introducing a new nominal
+        // type. `register_nominal` installs the paired value-side carrier in the
+        // same call.
         //
         // LET aliasing is still value-style gating — `nominal_binder` stays `false`. A
         // proper nominal binder (STRUCT / SIG / FUNCTOR / MODULE / named UNION) sets it
-        // at its own install site; an alias is the dual-map mirror of `LET x = expr`.
+        // at its own install site; an alias mirrors the value-side install of
+        // `LET x = expr`.
         if let Err(e) = scope.register_nominal(name, identity, allocated, bind_index) {
             return err(e);
         }
@@ -235,7 +239,7 @@ pub fn body<'a>(
 /// Recover the nominal identity carried by a type-language value `obj`. Returns
 /// `Some(identity)` for the four shapes that came from a STRUCT / UNION / MODULE / SIG
 /// declaration (or an alias of one); `None` for every other carrier shape — those keep
-/// flowing through `Scope::bind_value` and never dual-write to `bindings.types`.
+/// flowing through `Scope::bind_value` and never install a type-side identity.
 ///
 /// Post-collapse: MODULE/SIG carriers ride `KTypeValue(KType::Module/Signature)`; their
 /// identity IS the carried KType, so the alias preserves the original `&Module` /
@@ -288,7 +292,7 @@ fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
 ///
 /// Anything else surfaces `TypeClassBindingExpectsType`. See
 /// [design/typing/elaboration.md](../../design/typing/elaboration.md)
-/// (binding home and the dual-map) for the design rationale.
+/// (binding-map partition) for the design rationale.
 fn is_admissible_type_class_rhs<'a>(value: &KObject<'a>) -> bool {
     if matches!(value, KObject::KTypeValue(_)) {
         return true;

@@ -54,9 +54,9 @@ pub fn body_identifier<'a>(
     };
     // Value-side lookup first (the `p.x` shipping path). On a miss, fall back to the
     // type-side: a FUNCTOR's signature-typed parameter is bound *only* into
-    // `bindings.types` post-collapse (the dual-write into `bindings.data` was
-    // dropped — see `KFunction::invoke`'s per-call binding loop), so `Er.pure(x)`
-    // inside the functor body must reach the carried `&Module` through `resolve_type`.
+    // `bindings.types` post-collapse (the paired value-side install was dropped — see
+    // `KFunction::invoke`'s per-call binding loop), so `Er.pure(x)` inside the functor
+    // body must reach the carried `&Module` through `resolve_type`.
     if let Some(target) = scope.lookup(&s_name) {
         return access_field(scope, target, &field_name);
     }
@@ -118,7 +118,7 @@ pub fn body_type_lhs<'a>(
     // nominal *value*-side binding — `KObject::KModule` / `StructType` / `TaggedUnionType`
     // — that lives in `bindings.data`. The post-stage-1.5 `Scope::resolve_type` walks
     // `bindings.types`, where those nominal value carriers don't live until stage 3
-    // dual-writes a `KType::UserType` next to them.
+    // installs a `KType::UserType` next to them.
     let target = match scope.lookup(&s_name) {
         Some(obj) => obj,
         None => return err(KError::new(KErrorKind::UnboundName(s_name))),
@@ -250,7 +250,7 @@ fn access_field<'a>(
 ///    time). Stored as a `KType` directly — return it as a `KTypeValue`.
 /// 2. The child scope's `data` (`LET`/`FN`/`MODULE`/`STRUCT`/... value bindings under
 ///    the module body). Nominal binders like `MODULE Sub = (...)` and `STRUCT P = (...)`
-///    dual-write into both `data` and `bindings.types`; preferring `data` here means
+///    install into both `data` and `bindings.types`; preferring `data` here means
 ///    chained access `Outer.Inner.X` reads the inner *module value* from `data` rather
 ///    than its type identity (which `bindings.types` carries), so the next ATTR step
 ///    can recurse into the inner module's child scope.

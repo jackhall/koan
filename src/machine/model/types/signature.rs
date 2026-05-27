@@ -72,8 +72,8 @@ pub struct ExpressionSignature<'a> {
 /// `Deferred(DeferredReturn)` is the per-call case. The FN body's parameter-name scan
 /// (see [`crate::builtins::fn_def`]) detected at least one leaf matching a
 /// parameter; the captured surface form is held verbatim so the dispatch boundary can
-/// re-elaborate against the per-call scope where Stage A's dual-write has installed the
-/// parameter's type-language identity.
+/// re-elaborate against the per-call scope where Stage A's type-side install has
+/// registered the parameter's type-language identity.
 ///
 /// [1]: ../../../design/module-system.md#functors
 pub enum ReturnType<'a> {

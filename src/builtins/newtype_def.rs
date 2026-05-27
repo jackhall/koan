@@ -6,7 +6,8 @@
 //! Stage 4 of the type-identity arc. The declaration mints a per-declaration
 //! [`KType::UserType`] with `kind: UserTypeKind::Newtype { repr }` and writes only
 //! `bindings.types` — there is no value-side schema carrier (unlike STRUCT / UNION,
-//! which dual-write a schema carrier into `bindings.data`). The construction path
+//! which install a schema carrier in `bindings.data` alongside the type identity).
+//! The construction path
 //! produces a [`KObject::Wrapped`] tagging the inner value with the NEWTYPE
 //! identity; that carrier is the only way `KType::UserType { kind: Newtype, .. }`
 //! values reach user code today.
@@ -41,9 +42,11 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// [`KType::UserType`] with `kind: UserTypeKind::Newtype { repr }`, and writes the
 /// identity into `bindings.types` via [`crate::machine::core::Bindings::try_register_type`].
 ///
-/// Unlike STRUCT / named-UNION's [`crate::machine::core::Bindings::try_register_nominal`]
-/// dual-write, NEWTYPE writes *only* `types`. The declaration has no payload value
-/// to bind — there is no schema carrier paired with the identity. The construction
+/// Unlike STRUCT / named-UNION (which install via
+/// [`crate::machine::core::Bindings::try_register_nominal`], pairing a schema carrier
+/// with the type identity), NEWTYPE writes *only* `types`. The declaration has no
+/// payload value to bind — there is no schema carrier paired with the identity. The
+/// construction
 /// path keys on the identity alone (via [`Scope::resolve_type`]) and routes through
 /// [`newtype_construct`] in [`super::type_call`]'s `Newtype` arm.
 ///
@@ -245,8 +248,8 @@ mod tests {
 
     /// NEWTYPE declaration writes the per-declaration identity into `bindings.types`
     /// (with `kind: Newtype { repr: <resolved> }`) and writes *nothing* into
-    /// `bindings.data` — the declaration has no payload value to bind. Stage-3-style
-    /// dual-write does not apply to NEWTYPE.
+    /// `bindings.data` — the declaration has no payload value to bind. STRUCT / UNION
+    /// install a paired schema carrier in `data`; NEWTYPE deliberately does not.
     #[test]
     fn declare_mints_newtype_identity() {
         let arena = RuntimeArena::new();

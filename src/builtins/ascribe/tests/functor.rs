@@ -130,7 +130,7 @@ fn functor_rejects_unascribed_module_argument() {
     // auto-wrap pass triggers when the name appears in the SatisfiesSignature slot.
     // The LET partition guard requires module/signature carriers to ride
     // Type-classified binders only — a lowercase alias would be rejected at the
-    // LET site (see design/typing/elaboration.md § Binding home and the dual-map).
+    // LET site (see design/typing/elaboration.md § Binding-map partition).
     // The eager-resolve path splices `Future(KModule(IntOrd, _))` directly into
     // the wrap-slot, commits to the tentative pick from `resolve_dispatch`, and
     // surfaces the mismatch through `bind` as a per-slot `TypeMismatch` terminal.
@@ -322,7 +322,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
 /// Miri audit-slate: pins the opaque-ascription re-bind path under tree borrows.
 /// `body_opaque` allocates a fresh child scope, mirrors the source module's bindings
 /// into it via `try_bulk_install_from` (which replays each entry through `try_apply`
-/// so a `KFunction` entry exercises the `functions`-map dual-write mirror as well as
+/// so a `KFunction` entry exercises the `functions`-map mirror as well as
 /// the plain `data` write), and builds the resulting `Module` over the captured
 /// scope. The captured-reference shape is the per-call analogue of the
 /// `module_child_scope_transmute_does_not_dangle` site, so the slate needs an
@@ -333,7 +333,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     // The source module carries a plain `LET` plus a `LET = FN` so the
-    // `try_bulk_install_from` walk hits the `KFunction → functions` dual-map mirror
+    // `try_bulk_install_from` walk hits the `KFunction → functions` mirror
     // (`LET <name> = (FN ...)` is the canonical shape for module-member functions per
     // `module_member_function_via_let_fn` in `module_def.rs`) as well as the plain
     // `data` write path. The SIG only requires `compare`; `helper` is a non-required

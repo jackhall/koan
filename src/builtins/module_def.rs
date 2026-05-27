@@ -98,14 +98,14 @@ pub fn body<'a>(
         // table so abstract-type slots declared in the body surface to dispatch-time
         // sharing-constraint checks. `LET Elt = Number` inside a MODULE body writes
         // `bindings.types["Elt"] = KType::Number` *only* (the `register_type` path skips
-        // `data`); nominal sub-declarations like `MODULE Inner = ...` dual-write both
+        // `data`); nominal sub-declarations like `MODULE Inner = ...` install into both
         // `types` and `data` via `register_nominal`. The filter below picks only entries
         // that LIVE on the type side without a value-side counterpart — those are the
         // pure type-class bindings the module's surface treats as abstract-type members.
         // Nominal sub-declarations stay value-only-from-ATTR's-perspective (ATTR's
         // `type_members` lookup runs ahead of the `data` lookup, so a type_members
         // entry would shadow the value-side `KModule` carrier on chained `Outer.Inner.x`
-        // access — that ordering breaks unless we exclude the dual-bound names here).
+        // access — that ordering breaks unless we exclude the type+data names here).
         // Without this mirror the module's `type_members` stays empty and a FN-return-
         // type `(SIG_WITH SetSig ((Elt: Number)))` pin can't admit the returned module.
         // Opaque ascription overwrites the affected entries with freshly-minted
@@ -126,7 +126,7 @@ pub fn body<'a>(
         }
         // Post-collapse: the module value rides `KTypeValue(KType::Module { module, frame })`.
         // The carrier's `ktype()` reports the carried `KType::Module` directly, so the
-        // dual-write into `bindings.types` uses that same shape — no
+        // type-side install uses that same shape — no
         // `UserType { kind: Module, .. }` synthesis.
         let identity = KType::Module {
             module,

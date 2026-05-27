@@ -5,7 +5,7 @@
 //! 1. **Define** — `FUNCTOR (MAKESET Er :OrderedSig) -> SetSig = (MODULE Result
 //!    = ...)` registers a KFunction with `is_functor: true`.
 //! 2. **Apply** — `LET IntSet = (MAKESET IntOrd)` invokes the functor with a
-//!    signature-typed module argument; per-call type-side dual-write installs
+//!    signature-typed module argument; per-call type-side install registers
 //!    `Er`'s type-language identity into the body's child scope.
 //! 3. **Produce** — the body's `MODULE Result = (...)` returns a module value
 //!    that the LET RHS binds as `IntSet`. The Stage-5 allowlist routes the
@@ -89,7 +89,7 @@ fn functor_binder_e2e_makeset_produces_module() {
     // The natural FUNCTOR application form: `(MAKESET IntOrd)` works directly
     // when `IntOrd`'s carrier carries the declared signature in its
     // `compatible_sigs` set. The LET partition guard
-    // (design/typing/elaboration.md § Binding home and the dual-map) forces the
+    // (design/typing/elaboration.md § Binding-map partition) forces the
     // ascription rebind to use a Type-classified identifier
     // (`LET IntOrd = (IntOrdBase :! OrderedSig)`) so the module/signature
     // carrier never rides a value-classified alias; the dispatch admission then
@@ -116,7 +116,7 @@ fn functor_binder_e2e_makeset_produces_module() {
     // both bindings.types and bindings.data.
     let int_set_value = scope
         .lookup("IntSet")
-        .expect("IntSet should be value-bound (LET allowlist + nominal dual-write)");
+        .expect("IntSet should be value-bound (LET allowlist + nominal install)");
     let m = match int_set_value {
         KObject::KTypeValue(KType::Module { module, .. }) => *module,
         other => panic!(
@@ -134,10 +134,10 @@ fn functor_binder_e2e_makeset_produces_module() {
         tag.map(|o| o.ktype()),
     );
     // Type-side: `IntSet` is reachable as a type via `Scope::resolve_type`
-    // (the nominal dual-write installs the alias).
+    // (the nominal binder installs both the type identity and the carrier).
     let int_set_type = scope
         .resolve_type("IntSet")
-        .expect("IntSet should be reachable via resolve_type (dual-write)");
+        .expect("IntSet should be reachable via resolve_type");
     assert!(
         matches!(int_set_type, KType::Module { .. }),
         "IntSet's type entry should be a Module carrier",

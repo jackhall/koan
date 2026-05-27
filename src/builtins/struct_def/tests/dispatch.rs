@@ -127,23 +127,3 @@ fn wildcard_struct_slot_admits_any_struct_carrier() {
     }
 }
 
-/// STRUCT finalize dual-writes the identity into `bindings.types` AND the carrier
-/// into `bindings.data` via `register_nominal`. Both maps must hold matching entries
-/// for the same name after declaration.
-#[test]
-fn struct_dual_writes_to_types_and_data() {
-    use crate::machine::model::types::UserTypeKind;
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
-    let types = scope.bindings().types();
-    let (kt, _) = types.get("Point").expect("Point should be in bindings.types");
-    assert!(matches!(
-        **kt,
-        KType::UserType { kind: UserTypeKind::Struct, ref name, .. } if name == "Point"
-    ));
-    drop(types);
-    let data = scope.bindings().data();
-    let (obj, _) = data.get("Point").expect("Point should be in bindings.data");
-    assert!(matches!(obj, KObject::StructType { name, .. } if name == "Point"));
-}

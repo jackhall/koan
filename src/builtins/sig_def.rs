@@ -59,7 +59,7 @@ pub fn body<'a>(
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
         // Post-collapse: the signature value rides `KTypeValue(KType::Signature(s))`.
-        // The dual-write into `bindings.types` carries the *constraint* form
+        // The type-side identity carries the *constraint* form
         // `KType::SatisfiesSignature { sig_id, sig_path, .. }` rather than the
         // identity-bearing `KType::Signature(_)` — slot annotations `:OrderedSig` mean
         // "any module satisfying OrderedSig", not "this signature value itself."
@@ -189,31 +189,4 @@ mod tests {
         );
     }
 
-    /// Post-collapse: SIG finalize dual-writes the *constraint* form
-    /// `KType::SatisfiesSignature { sig_id, .. }` into `bindings.types` next to the
-    /// *value* form `KTypeValue(KType::Signature(_))` in `bindings.data`. The split
-    /// keeps slot annotation (`:OrderedSig` meaning "any module satisfying OrderedSig")
-    /// distinct from the value-side carrier (the signature itself as a first-class value),
-    /// which the pre-collapse SatisfiesSignature/MetaSignature split also encoded.
-    #[test]
-    fn sig_dual_writes_to_types_and_data() {
-        use crate::machine::model::types::KType;
-        let arena = RuntimeArena::new();
-        let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = (VAL x :Number)");
-        let types = scope.bindings().types();
-        let (kt, _) = types
-            .get("OrderedSig")
-            .expect("OrderedSig should be in bindings.types");
-        assert!(matches!(
-            **kt,
-            KType::SatisfiesSignature { ref sig_path, .. } if sig_path == "OrderedSig"
-        ));
-        drop(types);
-        let data = scope.bindings().data();
-        let (obj, _) = data
-            .get("OrderedSig")
-            .expect("OrderedSig should be in bindings.data");
-        assert!(matches!(obj, KObject::KTypeValue(KType::Signature(_))));
-    }
 }

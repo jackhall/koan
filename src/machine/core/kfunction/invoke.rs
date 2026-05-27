@@ -115,7 +115,7 @@ impl<'a> KFunction<'a> {
                     // `bindings.types`. ATTR-on-type (the `KTypeValue(KType::Module
                     // { .. })` / `KType::Signature(_)` arms in `attr.rs`) projects
                     // through the type-side carrier for `Er.pure(x)`-style references,
-                    // dissolving the previous dual-write into `bindings.data` that
+                    // dissolving the previous paired install into `bindings.data` that
                     // forced the `read_result` race at scheduler/node_store.rs:165-171.
                     //
                     // Value-typed parameters (Number, List<T>, struct types, ...)
@@ -201,7 +201,7 @@ impl<'a> KFunction<'a> {
                                 let kt = match elaborate_type_expr(&mut el, te) {
                                     ElabResult::Done(kt) => kt,
                                     // Park / Unbound here is a protocol break: the
-                                    // parameter-name dual-write and the fn_def carrier
+                                    // parameter-name install and the fn_def carrier
                                     // scan should jointly guarantee resolution. Assert
                                     // in debug; in release fall back to `Any` so the
                                     // body's own dispatch surfaces the real error.
@@ -371,7 +371,7 @@ fn signature_argument_by_name<'a>(
 /// | `TypeExprRef`                  | `TypeNameRef(t)`                                 | elaborated via `definition_scope.resolve_type_expr`   |
 ///
 /// `Ok(None)` means the carrier shape didn't match any row (programming error
-/// downstream of an `is_type_denoting`/`matches` disagreement; skip the dual-write).
+/// downstream of an `is_type_denoting`/`matches` disagreement; skip the type-side install).
 ///
 /// `Err(TypeIdentityPendingAtDispatch)` fires when a `TypeNameRef` elaborates against
 /// `definition_scope` (the FN's captured lexical environment) but the result still
@@ -414,8 +414,8 @@ pub(crate) fn type_identity_for<'a>(
                         pending_on,
                     }))
                 }
-                // Unbound: skip the dual-write; the body's own value-side dispatch
-                // will surface the real error.
+                // Unbound: skip the type-side install; the body's own value-side
+                // dispatch will surface the real error.
                 ResolveTypeExprOutcome::Unbound(_) => Ok(None),
             },
             _ => Ok(None),

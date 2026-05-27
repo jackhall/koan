@@ -2,8 +2,8 @@
 //! hit a `try_borrow_mut` collision (caller up the stack iterates `data` / `functions`)
 //! through here; the scheduler drains the queue between dispatch nodes via
 //! [`PendingQueue::drain`], replaying retries through the same validated [`Bindings`]
-//! write path as direct writes so the dual-map invariant extends to drained writes by
-//! construction.
+//! write path as direct writes so the function-mirror invariant extends to drained writes
+//! by construction.
 //!
 //! `PendingWrite` is module-private: adding a new write kind is a one-file change
 //! (variant + `defer_*` constructor + `drain` match arm), no longer threads through
@@ -46,8 +46,8 @@ enum PendingWrite<'a> {
 /// Queue of writes deferred when their `try_borrow_mut` collided. Owned by [`super::scope::Scope`]
 /// by value; `defer_value` / `defer_function` mirror the [`Bindings`] write surface, and
 /// `drain` takes `&Bindings<'a>` so retries route through the same validated write path as
-/// direct writes (the dual-map invariant — every `KFunction` in `data` is mirrored into
-/// the `functions` bucket — applies to drained retries by construction).
+/// direct writes (the function-mirror invariant — every `KFunction` in `data` is mirrored
+/// into the `functions` bucket — applies to drained retries by construction).
 pub struct PendingQueue<'a> {
     pending: RefCell<Vec<PendingWrite<'a>>>,
 }

@@ -212,7 +212,7 @@ the write through the embedded
 scheduler between dispatch nodes, which calls `PendingQueue::drain(&Bindings)`
 to replay each deferred write through the same validated `Bindings` write path
 as a direct insert. The hot path (no concurrent borrow) is one direct insert
-with the dual-map mirror folded in. Re-entrant writes queue silently and
+with the function-mirror write folded in. Re-entrant writes queue silently and
 become visible after the iterating borrow releases, with snapshot-iteration
 semantics for the iterator. Drain-time `Err` returns trip a `debug_assert!`
 in debug builds (by drain time these are invariant violations); release

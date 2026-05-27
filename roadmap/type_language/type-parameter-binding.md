@@ -95,10 +95,11 @@ unify trivially with anything.
   `(param_name, concrete)` into the per-call scope via
   `Scope::register_type` before deferred elaboration runs. `unify_slot`
   handles the argument-extraction case; the earlier-parameter case
-  routes through the existing dual-write path for type-denoting
-  parameter values.
-- *Per-call binding site — decided.* The invoke dual-write site, before
-  deferred-return elaboration — the seam `unify_slot` was built against.
+  routes through the existing per-call type-side install path for
+  type-denoting parameter values.
+- *Per-call binding site — decided.* The invoke per-call type-side install
+  site, before deferred-return elaboration — the seam `unify_slot` was
+  built against.
 - *Type-parameter declaration — decided.* Free type-params are declared
   explicitly via `LET TypeName = <bound>` at FN/module scope — the same
   arity-0 declarator that SIG bodies already use for abstract type slots
@@ -179,8 +180,9 @@ unify trivially with anything.
 **Requires:**
 
 None — the substrate (runtime carriers, `matches_value` admission arms,
-ascription stamping, `unify_slot` core, `ReturnType` carrier, dual-write
-for type-denoting parameters) is shipped; this item wires the existing
+ascription stamping, `unify_slot` core, `ReturnType` carrier, per-call
+type-side install for type-denoting parameters) is shipped; this item
+wires the existing
 machinery into the invoke path and widens parameter slots to admit the
 deferred-carrier shape.
 

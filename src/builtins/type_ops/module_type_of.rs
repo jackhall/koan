@@ -99,12 +99,12 @@ mod tests {
     /// arena churn — the per-call-arena reclamation + lift machinery have to keep storage
     /// live for both the module pointer and the dispatched type-op value. Mirrors the
     /// structure of
-    /// [`crate::builtins::fn_def::tests::functor::dual_write::functor_body_module_dispatch_does_not_dangle`]
+    /// [`crate::builtins::fn_def::tests::functor::per_call_type_side_bind::functor_body_module_dispatch_does_not_dangle`]
     /// but pins the type-op-in-per-call-arena path rather than the plain functor lift.
     ///
     /// Module-system functor-params Stage B: parameter migrated from the lowercase
     /// workaround (`elem`) to the documented Type-class form (`Er`). Stage A's
-    /// per-call dual-write makes the surface form work end-to-end through the
+    /// per-call type-side install makes the surface form work end-to-end through the
     /// signature-typed parameter path that previously parked on a missing top-level
     /// binding.
     #[test]

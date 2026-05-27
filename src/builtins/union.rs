@@ -120,10 +120,10 @@ fn finalize_union<'a>(
     let schema: HashMap<String, KType<'a>> = fields.into_iter().collect();
     let arena = scope.arena;
     // Per-declaration identity: same `*const _ as usize` scheme `finalize_struct` and
-    // `Module::scope_id()` use. Dual-write the identity into `bindings.types` next to
-    // the schema carrier in `bindings.data` so type-name resolution finds the union by
-    // name and dispatch on `(PICK x: Maybe)` lowers to the same `KType::UserType` the
-    // carrier's `ktype()` reports.
+    // `Module::scope_id()` use. `register_nominal` installs the identity into
+    // `bindings.types` alongside the schema carrier in `bindings.data` so type-name
+    // resolution finds the union by name and dispatch on `(PICK x: Maybe)` lowers to
+    // the same `KType::UserType` the carrier's `ktype()` reports.
     let scope_id = scope.id;
     let union_obj: &'a KObject<'a> = arena.alloc(KObject::TaggedUnionType {
         schema: Rc::new(schema),

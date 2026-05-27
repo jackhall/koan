@@ -635,7 +635,7 @@ impl<'a> Scheduler<'a> {
     /// Routes through `coerce_type_token_value` so the dispatch-phase carrier matches
     /// what `value_lookup::body_type_expr` would synthesize — `KTypeValue` for builtin
     /// leaves and aliases, paired carrier (`KSignature` / `KModule` / `StructType` /
-    /// `TaggedUnionType`) for nominal identities via the dual-write lookup.
+    /// `TaggedUnionType`) for nominal identities via the paired-carrier lookup.
     ///
     /// `UnboundName` surfaces directly here rather than falling back: bare leaf-Type
     /// dispatch has no candidate-machinery alternative, and the candidate path would

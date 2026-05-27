@@ -405,8 +405,8 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Transactional dual-write for nominal declarations (STRUCT, named UNION, MODULE,
-    /// SIG). Identity `kt` (a `KType::UserType` or `KType::SatisfiesSignature`) is inserted
+    /// Atomic install for nominal declarations (STRUCT, named UNION, MODULE, SIG).
+    /// Identity `kt` (a `KType::UserType` or `KType::SatisfiesSignature`) is inserted
     /// into [`Bindings::types`] and the runtime carrier `obj` (`StructType`,
     /// `TaggedUnionType`, `KModule`, `KSignature`) into [`Bindings::data`] atomically
     /// via [`Bindings::try_register_nominal`]. Returns the carrier on success so the

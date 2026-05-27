@@ -1,11 +1,11 @@
 //! The lexical binding façade: five co-mutating `RefCell` maps (`types`, `data`,
 //! `functions`, `placeholders`, `pending_overloads`) plus the shared validated write
 //! paths ([`Bindings::try_apply`] for `data`/`functions`,
-//! [`Bindings::try_apply_type`] for `types`) that keep the dual-map invariant —
-//! every `data[name]` entry wrapping a `KFunction` lives in
+//! [`Bindings::try_apply_type`] for `types`) that keep the function-mirror
+//! invariant — every `data[name]` entry wrapping a `KFunction` lives in
 //! `functions[signature.untyped_key()]`. Nominal declarations (STRUCT / UNION /
-//! MODULE) go through [`Bindings::try_register_nominal`], a transactional
-//! dual-write into `types` + `data`.
+//! MODULE) go through [`Bindings::try_register_nominal`], which atomically installs
+//! the identity into `types` alongside the carrier in `data`.
 //!
 //! Borrow discipline across the maps: `types → functions → data`, with `types`
 //! only acquired when writing types. [`Scope`] embeds the façade by value so all
@@ -141,7 +141,7 @@ impl BindingIndex {
 /// `(MAKESET _)` and `(MAKESET _ USING _)` from colliding when one ships before
 /// the other.
 ///
-/// [`Bindings::try_apply`] enforces the dual-map invariant — every `data[name]`
+/// [`Bindings::try_apply`] enforces the function-mirror invariant — every `data[name]`
 /// entry wrapping a `KFunction` lives in `functions[signature.untyped_key()]` — and
 /// unifies dedupe (`ptr::eq` fast-path then `signatures_exact_equal`) across the
 /// LET-binds-FN and `FN`-decl paths. [`Bindings::try_apply_type`] is the parallel
@@ -502,10 +502,10 @@ impl<'a> Bindings<'a> {
         self.try_apply_type(name, kt, index)
     }
 
-    /// Transactional dual-write for nominal declarations (STRUCT / UNION / MODULE):
-    /// inserts identity `kt` into `types[name]` and runtime carrier `obj` into
-    /// `data[name]` atomically. Borrow order is `types → data` (the `functions` map
-    /// is untouched — nominal carriers are not callable verbs).
+    /// Atomic install for nominal declarations (STRUCT / UNION / MODULE): inserts
+    /// identity `kt` into `types[name]` and runtime carrier `obj` into `data[name]`.
+    /// Borrow order is `types → data` (the `functions` map is untouched — nominal
+    /// carriers are not callable verbs).
     ///
     /// Contract:
     /// - Returns `Ok(Conflict)` if either `types` or `data` is borrowed elsewhere,

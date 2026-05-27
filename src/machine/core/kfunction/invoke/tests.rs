@@ -1,7 +1,7 @@
 //! Direct unit coverage for the `type_identity_for` helper. End-to-end coverage
-//! of the dual-write itself lives in
-//! [`crate::builtins::fn_def::tests::functor::dual_write`]; these tests pin
-//! the per-row mapping in isolation without the surrounding scheduler.
+//! of the per-call type-side bind itself lives in
+//! [`crate::builtins::fn_def::tests::functor::per_call_type_side_bind`]; these
+//! tests pin the per-row mapping in isolation without the surrounding scheduler.
 //!
 //! Post-collapse: module/signature carriers ride
 //! `KObject::KTypeValue(KType::Module/Signature)`; the per-call identity is the
@@ -105,7 +105,7 @@ fn type_identity_for_type_expr_ref_kt_carrier_yields_inner_ktype() {
 /// Mismatched carrier for a type-denoting declared `KType` returns `Ok(None)` —
 /// the dispatcher's `matches_value` filter already gated, so this path
 /// indicates an `is_type_denoting` / `matches_value` disagreement (skip the
-/// dual-write rather than panic).
+/// type-side install rather than panic).
 #[test]
 fn type_identity_for_carrier_mismatch_returns_none() {
     let arena = RuntimeArena::new();
