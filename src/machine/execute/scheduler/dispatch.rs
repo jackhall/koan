@@ -11,7 +11,7 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::dispatch_state::{DispatchState, EagerSubsTrack, KeywordedState};
+use super::dispatch_state::{BareNameParkTrack, DispatchState, EagerSubsTrack, KeywordedState};
 use super::Scheduler;
 
 /// Pre-walk classification of a `KExpression` into the four no-keyword fast-lane
@@ -1385,7 +1385,20 @@ impl<'a> Scheduler<'a> {
         let PartWalkResult { new_parts, producers_to_wait, staged_subs } = walk;
         let new_expr = KExpression::new(new_parts);
         if !producers_to_wait.is_empty() {
-            return Ok(self.install_combined_park(producers_to_wait, new_expr, pre_subs, idx));
+            // Park-precedence guard: the part walk already deferred submitting
+            // `staged_subs` to the scheduler (they're staged, not added), and the
+            // bare-name park installer drops them on the floor — re-Dispatch on
+            // wake re-runs the walk and re-stages them, so submitting now would
+            // leak nodes on the wake path. The legacy `install_combined_park`
+            // enforces the same precedence by virtue of being called before any
+            // `add(NodeWork::dispatch(_))`.
+            let _ = staged_subs;
+            return Ok(self.stateful_install_bare_name_park(
+                producers_to_wait,
+                new_expr,
+                pre_subs,
+                idx,
+            ));
         }
         // No park.
         if staged_subs.is_empty() {
@@ -1466,6 +1479,49 @@ impl<'a> Scheduler<'a> {
         self.stateful_install_eager_subs_track(new_expr, staged_subs, Vec::new(), scope, idx)
     }
 
+
+    /// Realize the bare-name park Track: install a `Notify` park edge from
+    /// each producer to this slot via `DepGraph::add_park_edge` (matching
+    /// the legacy `install_combined_park` shape — producers are sibling
+    /// forward references, not children of this slot, so the slot's
+    /// reclaim walk must not transit into them), then transition to
+    /// `Keyworded(WaitingBareNamePark)`. The cycle check ran inside
+    /// `keyworded_part_walk` at the time the producer was added to the
+    /// wait list, so this installer doesn't re-check.
+    ///
+    /// On track completion `stateful_keyworded_resume_bare_name_park`
+    /// re-runs `stateful_keyworded_initial` against `working_expr` and
+    /// `pre_subs`. The producers' now-bound values surface through the
+    /// rebuilt `bare_outcomes` cache and the wrap-slot splice fires
+    /// `Future(obj)` for them on the second pass.
+    fn stateful_install_bare_name_park(
+        &mut self,
+        producers: Vec<NodeId>,
+        working_expr: KExpression<'a>,
+        pre_subs: Vec<(usize, NodeId)>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        for p in &producers {
+            self.deps.add_park_edge(*p, NodeId(idx));
+        }
+        let track = BareNameParkTrack::new(working_expr, producers);
+        let init = super::dispatch_state::Initialized { pre_subs };
+        NodeStep::Replace {
+            work: NodeWork::Dispatch {
+                // Drop the entry expression — the state carries the
+                // partly-spliced `working_expr` from here on. The keyworded
+                // resume routes by state variant and never reads this
+                // field, but `NodeWork::Dispatch` still requires it
+                // structurally. Mirrors the eager-subs install shape.
+                expr: KExpression::new(Vec::new()),
+                state: DispatchState::Keyworded(KeywordedState::with_bare_name_park(init, track)),
+            },
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        }
+    }
 
     /// Realize the eager-subs Track: submit each `PendingSub` to the
     /// scheduler, install an Owned dep_edge from each sub to this slot so
@@ -1548,30 +1604,68 @@ impl<'a> Scheduler<'a> {
         })
     }
 
-    /// Resume entry for a `Keyworded` slot. With Step 4b only the
-    /// `eager_subs` track is installable, so the only re-entry shape is
-    /// "every sub finalized — splice the futures and complete." Later
-    /// sub-steps (4c bare-name park, 4d overload park) add their own
-    /// arms here.
+    /// Resume entry for a `Keyworded` slot. Step 4b installs the
+    /// `eager_subs` track; step 4c installs the `bare_name_park` track.
+    /// The two are mutually exclusive at install time — the part walk's
+    /// park-precedence guard installs the bare-name park *before* staging
+    /// any subs — so the resume routing tests `bare_name_park` first; a
+    /// `Some` there means we never reached the eager-subs staging. Step
+    /// 4d adds the overload-park arm.
     fn stateful_keyworded_resume(
         &mut self,
         state: KeywordedState<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let KeywordedState { init, eager_subs } = state;
-        // Drop the carry-through `pre_subs` explicitly — the eager-subs
-        // resume path consumes its own `subs` Vec from the track and has
-        // no use for the original `pre_subs` carry (the bind / re-resolve
-        // path doesn't re-Dispatch the slot). The destructure-and-discard
-        // here is the structural-embedding rule's contract: a future arm
-        // that needs `pre_subs` must rebuild it here from `init.pre_subs`.
+        let KeywordedState { init, eager_subs, bare_name_park } = state;
+        if let Some(track) = bare_name_park {
+            debug_assert!(
+                eager_subs.is_none(),
+                "bare_name_park and eager_subs are mutually exclusive at install time \
+                 (the part walk's park-precedence guard installs the bare-name park \
+                 before staging any subs); resume must never see both",
+            );
+            return self.stateful_keyworded_resume_bare_name_park(track, init, scope, idx);
+        }
+        // Eager-subs resume doesn't consume `pre_subs` — the bind /
+        // re-resolve path doesn't re-Dispatch the slot, so the
+        // carry-through is dropped here per the structural-embedding
+        // rule's destructure-and-discard contract.
         let _ = init;
         let track = eager_subs.expect(
             "Keyworded resume is only entered after a track is installed; \
-             Step 4b only installs `eager_subs`",
+             Steps 4b/4c install `eager_subs` or `bare_name_park`",
         );
         self.stateful_keyworded_resume_eager_subs(track, scope, idx)
+    }
+
+    /// Track-completion continuation for the `bare_name_park` track.
+    /// Every producer this slot parked on has terminalized (the slot
+    /// pops only on `pending_deps == 0`), so the bare names they backed
+    /// now resolve through `scope.resolve_with_chain` to a bound value.
+    /// Re-entering `stateful_keyworded_initial` rebuilds the
+    /// `bare_outcomes` cache against the now-bound scope, picks the
+    /// overload (Resolved-with-eager-subs on a typed bare name lands
+    /// the eager-subs track on this same slot; Resolved-with-no-parks
+    /// terminalizes one-shot), and proceeds. The legacy
+    /// `install_combined_park` had the same re-classify-on-wake
+    /// shape; the per-wake re-classify elimination falls out of
+    /// Step 5's cutover once every transition stays inside
+    /// `Keyworded`.
+    fn stateful_keyworded_resume_bare_name_park(
+        &mut self,
+        track: BareNameParkTrack<'a>,
+        init: super::dispatch_state::Initialized,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        // `dep_edges[idx]` carries the Notify entries from
+        // `add_park_edge`. They're harmless (Notify is skipped by
+        // `owned_children` at free time), and the legacy path leaves
+        // them in place across the re-Dispatch wake — we match.
+        let BareNameParkTrack { working_expr, producers, .. } = track;
+        let _ = producers;
+        self.stateful_keyworded_initial(working_expr, init.pre_subs, scope, idx)
     }
 
     /// Track-completion continuation for the `eager_subs` track. Reads each

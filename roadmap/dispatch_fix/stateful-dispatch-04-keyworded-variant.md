@@ -18,21 +18,31 @@ state-bearing Track machinery on the stateful path. The legacy
 mutating helpers stay alive only for the toggle-off `run_dispatch`
 path; their last caller goes away in step 6.
 
-Sub-steps 4a + 4b have landed: the one-shot path (Resolved with no
-parks and no eager subs) terminalizes directly via
-`Scheduler::stateful_keyworded_initial`, AND the Resolved-with-eager-
+Sub-steps 4a + 4b + 4c have landed: the one-shot path (Resolved with
+no parks and no eager subs) terminalizes directly via
+`Scheduler::stateful_keyworded_initial`; the Resolved-with-eager-
 subs and `Deferred` paths now install an `EagerSubsTrack` on
-`KeywordedState` rather than allocating a `NodeWork::Bind` hop. On
-track completion `stateful_keyworded_resume_eager_subs` reads each
-sub's terminal, splices `Future(obj)` into `working_expr.parts[i]`,
-frees the subs, and `stateful_keyworded_finish` re-resolves dispatch
-against the spliced expression — the re-resolve is authoritative
-even when the initial pre-eager pick succeeded, so an element-typed
-`Future(_)` that narrows the typed-slot admission surfaces
-`DispatchFailed` (non-match) rather than a bind-time `TypeMismatch`,
-matching the legacy `run_bind` surface. The `ParkOnProducers`
-branch still defers to `park_pending_and_redispatch` as a
-transitional state until 4c / 4d.
+`KeywordedState` rather than allocating a `NodeWork::Bind` hop; and
+the Resolved-with-parked-bare-names path now installs a
+`BareNameParkTrack` on `KeywordedState` (via
+`stateful_install_bare_name_park`) rather than rebuilding the slot
+as `DispatchState::initialized` through the legacy
+`install_combined_park`. On eager-subs completion
+`stateful_keyworded_resume_eager_subs` reads each sub's terminal,
+splices `Future(obj)` into `working_expr.parts[i]`, frees the subs,
+and `stateful_keyworded_finish` re-resolves dispatch against the
+spliced expression — the re-resolve is authoritative even when the
+initial pre-eager pick succeeded, so an element-typed `Future(_)`
+that narrows the typed-slot admission surfaces `DispatchFailed`
+(non-match) rather than a bind-time `TypeMismatch`, matching the
+legacy `run_bind` surface. On bare-name-park completion
+`stateful_keyworded_resume_bare_name_park` re-runs
+`stateful_keyworded_initial` against the carried `working_expr` and
+preserved `pre_subs`; the producers' now-bound values surface
+through the rebuilt `bare_outcomes` cache and the wrap-slot splice
+fires `Future(obj)` for them on the second pass. The
+`ParkOnProducers` branch still defers to
+`park_pending_and_redispatch` as a transitional state until 4d.
 
 **Problem.** After step 3, the five fast-lane `DispatchShape`
 variants run on the stateful driver under toggle-on, but

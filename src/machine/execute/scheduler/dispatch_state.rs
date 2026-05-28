@@ -22,6 +22,20 @@
 //! captured picked function (Resolved) or re-resolves dispatch against the
 //! spliced expression (Deferred).
 //!
+//! Step 4c lights up the `bare_name_park` track on `KeywordedState`:
+//! the Resolved-with-parked-bare-names path (a wrap or ref-name slot
+//! whose bare name resolved to `Parked(producer)` during the fused part
+//! walk) now installs the park edges and transitions to
+//! `Keyworded(WaitingBareNamePark)` instead of rebuilding the slot as
+//! `DispatchState::initialized` via the legacy `install_combined_park`.
+//! On track completion `stateful_keyworded_resume_bare_name_park`
+//! re-runs `stateful_keyworded_initial` against the carried
+//! `working_expr` and the preserved `pre_subs`. Re-classification is
+//! redundant for this path (the entry shape doesn't change across the
+//! wake), but Step 4 is the *variant-state* lighting step — the per-
+//! wake re-classify elimination falls out of Step 5's cutover once
+//! every transition stays inside `Keyworded`.
+//!
 //! Visibility: `nodes.rs` lives at `crate::machine::execute::nodes`,
 //! outside the `scheduler/` submodule. To let `NodeWork::Dispatch` name
 //! `DispatchState`, every public symbol here uses
@@ -80,6 +94,22 @@ pub(in crate::machine::execute) struct KeywordedState<'a> {
     /// stages eager subs and parks waiting on them, and the re-entry
     /// `stateful_keyworded_resume_eager_subs` consumes it.
     pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'a>>,
+    /// Bare-name park track installed by the Resolved-with-parked-bare-
+    /// names arm of `stateful_keyworded_initial` (the path the legacy
+    /// driver served via `install_combined_park`). `None` is the initial-
+    /// entry shape; the transition `Initialized → Keyworded` writes
+    /// `Some` when ≥1 wrap-slot or ref-name-slot bare name resolved to a
+    /// `NameOutcome::Parked(producer)`. Mutually exclusive with
+    /// `eager_subs` at install time — the part walk's park-precedence
+    /// guard installs the park *before* staging any subs (submitting
+    /// would leak nodes on the re-Dispatch wake path). On track
+    /// completion `stateful_keyworded_resume_bare_name_park` re-runs
+    /// `stateful_keyworded_initial` against the carried `working_expr`
+    /// and `pre_subs`; the producers are sibling forward references that
+    /// now resolve through `scope.resolve_with_chain`, so the rebuilt
+    /// `bare_outcomes` cache picks up their now-bound values and the
+    /// wrap-slot splice fires `Future(obj)` for them on the second pass.
+    pub(in crate::machine::execute) bare_name_park: Option<BareNameParkTrack<'a>>,
 }
 
 /// Track state for the eager-subs sub-Dispatches a `Keyworded` slot is
@@ -121,6 +151,35 @@ impl<'a> EagerSubsTrack<'a> {
         subs: Vec<(usize, NodeId)>,
     ) -> Self {
         Self { working_expr, subs, _ph: std::marker::PhantomData }
+    }
+}
+
+/// Track state for the bare-name forward references a `Keyworded` slot
+/// is parked on. Carries the partly-spliced `working_expr` (Resolved
+/// wrap slots have already been substituted for `Future(obj)`; Parked
+/// wrap and ref-name slots keep their original bare-name token) so the
+/// re-entry `stateful_keyworded_resume_bare_name_park` can re-run
+/// `stateful_keyworded_initial` against it. Producers are recorded for
+/// debug/invariant tracing only — the re-entry rebuilds `bare_outcomes`
+/// against the scope (which now sees the producers' bound values), so
+/// the resume path doesn't read the list.
+///
+/// Park edges are installed as `Notify` (via `add_park_edge`) matching
+/// the legacy `install_combined_park` shape: the producers are sibling
+/// forward references, not children of this slot, so the slot's reclaim
+/// walk must not transit into them.
+pub(in crate::machine::execute) struct BareNameParkTrack<'a> {
+    pub(in crate::machine::execute) working_expr: KExpression<'a>,
+    pub(in crate::machine::execute) producers: Vec<NodeId>,
+    _ph: std::marker::PhantomData<&'a KFunction<'a>>,
+}
+
+impl<'a> BareNameParkTrack<'a> {
+    pub(in crate::machine::execute) fn new(
+        working_expr: KExpression<'a>,
+        producers: Vec<NodeId>,
+    ) -> Self {
+        Self { working_expr, producers, _ph: std::marker::PhantomData }
     }
 }
 
@@ -187,7 +246,7 @@ impl<'a> SigilState<'a> {
 
 impl<'a> KeywordedState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, eager_subs: None }
+        Self { init, eager_subs: None, bare_name_park: None }
     }
 
     /// Build the parked-on-eager-subs shape. Used by the
@@ -199,6 +258,22 @@ impl<'a> KeywordedState<'a> {
         init: Initialized,
         track: EagerSubsTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: Some(track) }
+        Self { init, eager_subs: Some(track), bare_name_park: None }
+    }
+
+    /// Build the parked-on-bare-name-producers shape. Used by the
+    /// `Initialized → Keyworded(WaitingBareNamePark)` transition in
+    /// `stateful_keyworded_initial` when the part walk discovers ≥1
+    /// `NameOutcome::Parked(producer)` on a wrap or ref-name slot. `init`
+    /// carries the `pre_subs` forward across re-Dispatch (the resume
+    /// handler hands them back to `stateful_keyworded_initial` so the
+    /// binder recursive-submission optimization survives the wake), and
+    /// `track` carries the partly-spliced `working_expr` plus the producer
+    /// list for invariant tracing.
+    pub(in crate::machine::execute) fn with_bare_name_park(
+        init: Initialized,
+        track: BareNameParkTrack<'a>,
+    ) -> Self {
+        Self { init, eager_subs: None, bare_name_park: Some(track) }
     }
 }

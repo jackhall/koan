@@ -819,3 +819,46 @@ fn stateful_keyworded_eager_subs_reresolve_surfaces_dispatch_failed() {
         "expected DispatchFailed (non-match) from the keyworded re-resolve, got {error:?}",
     );
 }
+
+/// Step 4c acceptance: a Keyworded dispatch whose initial part walk
+/// resolves ≥1 wrap-slot or ref-name-slot bare name to
+/// `NameOutcome::Parked(producer)` installs the `bare_name_park` track
+/// on `KeywordedState` (replacing the legacy `install_combined_park`)
+/// and parks the slot. On producer terminalization the resume handler
+/// re-runs `stateful_keyworded_initial` against the carried
+/// `working_expr`, the rebuilt `bare_outcomes` cache sees the now-
+/// bound name, the wrap-slot splice fires, and dispatch terminalizes.
+///
+/// Program: `STRUCT Foo = (x :Number)` declares the nominal binder
+/// `Foo`; `LET fwd = Foo` references it as a bare name in LET's RHS
+/// slot. Submission order parks the LET's wrap slot on the STRUCT's
+/// placeholder; STRUCT finalization wakes the LET, the bare-name
+/// park track's resume re-resolves, and `fwd` lands in scope bound
+/// to the STRUCT carrier. Mirrors
+/// `forward_reference_parks_then_resolves_on_wake` under explicit
+/// toggle-on routing.
+#[test]
+fn stateful_keyworded_bare_name_park_resumes_through_state() {
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    // Submission order matters: `LET fwd = Foo` parks on the STRUCT's
+    // placeholder before STRUCT finalization. The `enter_block` /
+    // `add_dispatch` lockstep mirrors the legacy unified-walk test.
+    let exprs = crate::parse::parse(
+        "STRUCT Foo = (x :Number)\n\
+         LET fwd = Foo",
+    )
+    .expect("parse succeeds");
+    sched.enter_block(scope.id, exprs, scope);
+    sched
+        .execute()
+        .expect("bare-name forward ref must resolve through the stateful 4c track");
+    // The STRUCT install binds `Foo` to a StructType carrier; `fwd`
+    // aliases the same carrier after the park resume re-resolves.
+    match scope.lookup("fwd") {
+        Some(KObject::StructType { .. }) => {}
+        Some(other) => panic!("expected fwd to bind to StructType, got {}", other.summarize()),
+        None => panic!("LET fwd = Foo must bind `fwd` in scope after the park resume"),
+    }
+}
