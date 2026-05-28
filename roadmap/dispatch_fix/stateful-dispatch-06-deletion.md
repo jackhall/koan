@@ -103,6 +103,5 @@ the design tree.
 
 **Requires:**
 
-- [Stateful dispatch — Step 5: cutover](stateful-dispatch-05-cutover.md)
 
 **Unblocks:** none.

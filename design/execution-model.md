@@ -979,18 +979,17 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Stateful dispatch cutover** — every `DispatchShape` variant now runs
-  end-to-end on the stateful driver under toggle-on (the carrier shape,
-  routing toggle, `recent_wakes` wake-attribution side-channel, five
-  fast-lane variants, the `Keyworded` variant with its eager-subs /
-  bare-name-park / overload-park tracks, and the `FunctionValueCall`
-  fast lane with its eager-subs / head-placeholder tracks have all
-  landed; no stateful path spawns `NodeWork::Bind`). The remaining
-  work is flipping `use_stateful_dispatch` on by default and deleting
-  the legacy `run_dispatch` machinery —
-  [roadmap/dispatch_fix/stateful-dispatch-05-cutover.md](../roadmap/dispatch_fix/stateful-dispatch-05-cutover.md)
-  drives the default flip and
+- **Stateful dispatch legacy-deletion** — every `DispatchShape` variant
+  runs end-to-end on the stateful driver as the production default
+  (the carrier shape, routing toggle, `recent_wakes` wake-attribution
+  side-channel, five fast-lane variants, the `Keyworded` variant with
+  its eager-subs / bare-name-park / overload-park tracks, and the
+  `FunctionValueCall` fast lane with its eager-subs / head-placeholder
+  tracks have all landed; no stateful path spawns `NodeWork::Bind`).
+  The legacy `run_dispatch` body and the routing toggle remain only as
+  the emergency-rollback path —
   [roadmap/dispatch_fix/stateful-dispatch-06-deletion.md](../roadmap/dispatch_fix/stateful-dispatch-06-deletion.md)
   removes the legacy driver and its surviving mutators
   (`install_combined_park`, `park_pending_and_redispatch`,
-  `schedule_eager_only`, `schedule_picked_eager`).
+  `schedule_eager_only`, `schedule_picked_eager`) and migrates the
+  dispatcher's architectural narrative into this document.

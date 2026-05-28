@@ -85,19 +85,24 @@ What's shipped that the open items below build on:
   `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) ride
   dedicated fast-lane handlers that never enter the candidate walk.
 - *Stateful dispatch driver.* Every `DispatchShape` variant runs on the
-  state-bearing `run_dispatch_stateful` driver under toggle-on. The
-  carrier shape (`DispatchState` enum + per-variant structs), routing
-  toggle, `recent_wakes` wake-attribution side-channel, five fast-lane
-  variants, the `Keyworded` variant with its eager-subs /
-  bare-name-park / overload-park tracks, and the `FunctionValueCall`
-  fast lane with its eager-subs / head-placeholder tracks all carry
-  progress in the slot and advance by one edge per callback (no
-  per-wake reclassification, no `bare_outcomes` rebuild, no
-  `NodeWork::Bind` spawn on any stateful path — the last Bind caller
-  was the FunctionValueCall eager-subs branch this work folded onto
-  the same track-based shape the `Keyworded` eager-subs path uses).
-  The default-flip and legacy `run_dispatch` deletion are the
-  remaining open items.
+  state-bearing `run_dispatch_stateful` driver as the production
+  default. The carrier shape (`DispatchState` enum + per-variant
+  structs), routing toggle, `recent_wakes` wake-attribution side-
+  channel, five fast-lane variants, the `Keyworded` variant with its
+  eager-subs / bare-name-park / overload-park tracks, and the
+  `FunctionValueCall` fast lane with its eager-subs / head-placeholder
+  tracks all carry progress in the slot and advance by one edge per
+  callback (no per-wake reclassification, no `bare_outcomes` rebuild,
+  no `NodeWork::Bind` spawn on any stateful path — the last Bind
+  caller was the FunctionValueCall eager-subs branch this work folded
+  onto the same track-based shape the `Keyworded` eager-subs path
+  uses). The stateful resume / install-time short-circuit invocations
+  go through an `invoke_to_step_pinned` helper that holds a sibling
+  clone of `active_frame` across the call, recovering the
+  `strong_count >= 2` property legacy got from its intermediate Bind
+  slot's frame clone so `try_reset_for_tail` refuses the reset that
+  would otherwise deallocate the arena `scope` lives in. The legacy
+  `run_dispatch` deletion is the remaining open item.
 
 ## Next items
 

@@ -80,13 +80,13 @@ pub struct Scheduler<'a> {
     /// sub, USING-body) inherit the parent's chain without each call site naming it.
     pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
     /// Routes the `NodeWork::Dispatch` arm of `Scheduler::execute` between the
-    /// legacy `run_dispatch` driver (default, `false`) and the new
-    /// `run_dispatch_stateful` driver (`true`). Step 1 of the
-    /// stateful-dispatch refactor lands the toggle and the carrier shape;
-    /// the new driver is a classify-and-delegate stub until step 3+. Set at
-    /// construction time from `KOAN_STATEFUL_DISPATCH=1` (env var) or via
-    /// the [`Scheduler::with_stateful_dispatch`] builder. See
-    /// `roadmap/dispatch_fix/stateful-dispatch-01-scaffolding.md`.
+    /// `run_dispatch_stateful` driver (production default, `true`) and the
+    /// legacy `run_dispatch` driver (`false`). Step 5 of the stateful-dispatch
+    /// refactor flipped the default after every `DispatchShape` variant landed
+    /// on the stateful driver; the legacy body and the toggle itself stay
+    /// alive only as the emergency rollback path until step 6 deletes them.
+    /// Set at construction time from `KOAN_STATEFUL_DISPATCH=0` (env-var
+    /// rollback) or via the [`Scheduler::with_stateful_dispatch`] builder.
     pub(in crate::machine::execute::scheduler) use_stateful_dispatch: bool,
     /// Count of tail-reuse opportunities accepted by
     /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
@@ -103,21 +103,24 @@ impl<'a> Scheduler<'a> {
             store: NodeStore::new(),
             active_frame: None,
             active_chain: None,
-            // Env-var toggle for CI / whole-suite runs under the new driver
-            // without per-test edits. The builder method below is the
-            // per-test opt-in. Default: legacy path.
+            // Default: stateful driver. The env var is the emergency-rollback
+            // handle (`KOAN_STATEFUL_DISPATCH=0` reverts a single binary to
+            // the legacy path); the builder method below is the per-test
+            // opt-out used by the legacy-pinned divergence tests until step
+            // 6 deletes the toggle entirely.
             use_stateful_dispatch: std::env::var("KOAN_STATEFUL_DISPATCH")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false),
+                .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+                .unwrap_or(true),
             #[cfg(test)]
             tail_reuse_count: 0,
         }
     }
 
-    /// Flip the dispatch driver toggle on this scheduler. Test-only opt-in
-    /// for the stateful driver; production stays on the legacy path until
-    /// step 5 of the stateful-dispatch refactor flips the default. See
-    /// `roadmap/dispatch_fix/stateful-dispatch-05-cutover.md`.
+    /// Flip the dispatch driver toggle on this scheduler. The production
+    /// default is the stateful driver after step 5's cutover; this builder
+    /// stays alive as the per-test rollback handle for divergence pins
+    /// (e.g. the legacy `(v :Identifier)` fall-through). Step 6 of the
+    /// stateful-dispatch refactor deletes both this method and the toggle.
     pub fn with_stateful_dispatch(mut self, on: bool) -> Self {
         self.use_stateful_dispatch = on;
         self
