@@ -148,18 +148,28 @@ impl DepGraph {
         false
     }
 
-    /// Drains `notify_list[producer_idx]` and returns the consumers whose
-    /// `pending_deps` hit zero. Atomic across the wake-pending pair.
-    pub(super) fn drain_notify(&mut self, producer_idx: usize) -> Vec<usize> {
+    /// Drains `notify_list[producer_idx]` and returns every consumer paired
+    /// with a `hit_zero` flag indicating whether its `pending_deps` reached
+    /// zero on this decrement. Atomic across the wake-pending pair (Inv-A
+    /// still holds — the decrement is in-method).
+    ///
+    /// Callers fan-out: `Scheduler::finalize` always pushes the producer to
+    /// the consumer's `recent_wakes` side-channel, and additionally stamps a
+    /// pending Lift + pushes onto the woken run-set when `hit_zero` is true.
+    /// Step 2 of the stateful-dispatch refactor (see
+    /// `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`) widened
+    /// this return type from `Vec<usize>` so the caller can drive both the
+    /// side-channel append (per consumer) and the queue push (per
+    /// counter-zero consumer) off a single drain.
+    pub(super) fn drain_notify(&mut self, producer_idx: usize) -> Vec<(usize, bool)> {
         let notifees = std::mem::take(&mut self.notify_list[producer_idx]);
-        let mut woken = Vec::new();
+        let mut out = Vec::with_capacity(notifees.len());
         for consumer in notifees {
             self.pending_deps[consumer] -= 1;
-            if self.pending_deps[consumer] == 0 {
-                woken.push(consumer);
-            }
+            let hit_zero = self.pending_deps[consumer] == 0;
+            out.push((consumer, hit_zero));
         }
-        woken
+        out
     }
 
     /// Drains `dep_edges[idx]` (so a repeat free is a no-op) and yields only

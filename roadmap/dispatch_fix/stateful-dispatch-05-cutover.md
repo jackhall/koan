@@ -44,8 +44,9 @@ costing the production hot path on every wake.
   confirm no leaks on the new combined-park-as-state paths.
   Particular attention: the `pre_subs` carry-through during the
   `Initialized → Keyworded` transition, and the
-  `recent_wakes` outer Vec retention pattern from
-  [step 2](stateful-dispatch-02-recent-wakes.md). Update
+  `recent_wakes` outer Vec retention pattern documented in
+  [execution-model.md § Push/notify dependency edges](../../design/execution-model.md#pushnotify-dependency-edges).
+  Update
   [`observe/miri_slate.md`](../../observe/miri_slate.md) per the
   documentation skill's slate-duration logging rule.
 

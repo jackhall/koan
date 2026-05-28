@@ -1128,6 +1128,15 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
+        // Step 2 drains the wake side-channel on entry so producers
+        // that fired since the slot's last poll don't accumulate across
+        // re-park. The per-variant handlers introduced in step 3+ read
+        // these wakes to pick per-edge callbacks; step 2's classify-
+        // and-delegate stub discards the list. The drain still runs
+        // unconditionally so the side-channel never grows stale —
+        // `take_recent_wakes` resets the slot's Vec to empty in O(1).
+        // See `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`.
+        let _wakes = self.store.take_recent_wakes(NodeId(idx));
         // Step 1 contract: a Dispatch slot enters the stateful driver in
         // `Initialized`. The park-rebuild sites all reconstruct as
         // `Initialized`, so per-variant states are not yet reachable; the
@@ -1182,13 +1191,13 @@ impl<'a> Scheduler<'a> {
 mod tests {
     use super::resolve_name_part;
     use crate::machine::NameOutcome;
-    use super::super::super::nodes::NodeWork;
+    use super::super::super::nodes::{LiftState, NodeOutput, NodeWork};
     use crate::builtins::default_scope;
     use crate::machine::core::source::Spanned;
     use crate::machine::execute::Scheduler;
     use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, RuntimeArena};
+    use crate::machine::{BindingIndex, NodeId, RuntimeArena};
 
     /// Resolved-Identifier path: bare Identifier in scope.bindings.data returns
     /// `NameOutcome::Resolved(&obj)` pointing at the bound carrier.
@@ -1313,5 +1322,90 @@ mod tests {
         // not what this test guards — just that the program terminalized
         // without the toggle dropping its state.
         assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
+    }
+
+    /// Step 2 of the stateful-dispatch refactor: the `recent_wakes`
+    /// side-channel is `Dispatch`-only. A non-`Dispatch` consumer (here
+    /// a `Lift(Pending(producer))` slot) parked on a `Dispatch`
+    /// producer must drain to an empty Vec — `push_recent_wake` filters
+    /// non-Dispatch work via the same peek-discriminator pattern as
+    /// `stamp_lift_ready`. The Lift's stamp-then-enqueue path stays
+    /// intact (asserted indirectly through full-suite parity).
+    #[test]
+    fn recent_wakes_empty_for_non_dispatch_consumer() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let producer = sched.add_dispatch(
+            KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_p".into()))]),
+            scope,
+        );
+        // Lift consumer parked on the Dispatch producer. We use the
+        // submission path to install both the slot and a park edge —
+        // identical shape to the fast-lane bare-identifier short-circuit
+        // that produces this Lift carrier in practice.
+        let consumer = sched.add(
+            NodeWork::Lift(LiftState::Pending(producer)),
+            scope,
+        );
+        // The Lift was installed via `add` which already wired the
+        // Owned read-dep; finalize must drain the notify edge. Drive
+        // finalize directly with a synthetic Value so the test is
+        // independent of the producer's expression body.
+        let value = arena.alloc(KObject::Number(1.0));
+        sched.finalize(producer.index(), NodeOutput::Value(value));
+        // Non-Dispatch consumer: `push_recent_wake` no-ops, so the
+        // side-channel stays empty.
+        assert!(sched.store.take_recent_wakes(consumer).is_empty());
+    }
+
+    /// Step 2: a `Dispatch` consumer parked on a `Dispatch` producer
+    /// records the producer's `NodeId` in `recent_wakes` when the
+    /// producer finalizes. The drained list is what step 3+ will key
+    /// per-edge callbacks off; step 2's `run_dispatch_stateful` still
+    /// discards it (the classify-and-delegate stub falls through to
+    /// the legacy driver).
+    #[test]
+    fn recent_wakes_records_producer_for_dispatch_consumer() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let producer = sched.add_dispatch(
+            KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_p".into()))]),
+            scope,
+        );
+        let consumer = sched.add_dispatch(
+            KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_c".into()))]),
+            scope,
+        );
+        // Park the consumer on the producer with a `Notify` edge — the
+        // shape `install_combined_park` would install on a forward-
+        // reference re-Dispatch wake path.
+        sched.deps.add_park_edge(producer, consumer);
+        // Finalize the producer with a synthetic Value. The notify-walk
+        // drains the edge and fans out: side-channel append for every
+        // consumer plus queue push for counter-zero consumers.
+        let value = arena.alloc(KObject::Number(1.0));
+        sched.finalize(producer.index(), NodeOutput::Value(value));
+        let wakes = sched.store.take_recent_wakes(consumer);
+        assert_eq!(wakes, vec![producer]);
+        // Repeat-drain is empty: `take_recent_wakes` resets the Vec on
+        // each call.
+        assert!(sched.store.take_recent_wakes(consumer).is_empty());
+    }
+
+    /// Sanity: a `NodeId` constructed via `add_dispatch` indexes the
+    /// freshly-grown `recent_wakes` slot — drain on a never-woken
+    /// Dispatch returns empty.
+    #[test]
+    fn recent_wakes_drain_default_empty() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new();
+        let id: NodeId = sched.add_dispatch(
+            KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
+            scope,
+        );
+        assert!(sched.store.take_recent_wakes(id).is_empty());
     }
 }

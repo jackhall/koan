@@ -80,6 +80,20 @@ so the "every terminal write fires the notify" rule is type-enforced
 rather than restated at each call site. Consumers arrive on the run-set
 only when actually ready; there is no poll-and-requeue.
 
+A second fan-out runs alongside the counter-decrement. Each drained
+consumer whose work is `NodeWork::Dispatch` (any `DispatchState`
+variant) gets the producer's `NodeId` appended to its
+`recent_wakes: Vec<NodeId>` side-channel before the counter is
+inspected. `Bind` / `Combine` / `Catch` / `Lift` consumers skip the
+append — they run a fixed closure on counter-zero and have no
+per-edge wake attribution to track. The stateful dispatch driver
+drains its slot's `recent_wakes` on entry to pick per-edge callbacks
+keyed by producer `NodeId`; the legacy `run_dispatch` discards the
+drained list, which is the no-op path when the routing toggle is off.
+`DepGraph::drain_notify` returns the per-consumer `hit_zero` flag so
+the fan-out (always-append plus conditional stamp-and-enqueue) runs
+off a single drain.
+
 The run-set has two priority bands managed by
 [`WorkQueues`](../src/machine/execute/scheduler/work_queues.rs). Internal
 work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
@@ -175,15 +189,22 @@ fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Slot-table state lives in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
-sub-struct on `Scheduler` that owns three private vectors — `nodes:
+sub-struct on `Scheduler` that owns four private vectors — `nodes:
 Vec<Option<Node<'a>>>` (active node payloads), `results:
-Vec<Option<NodeOutput<'a>>>` (terminal results), and `free_list: Vec<usize>`
-(recyclable indices) — and the slot lifecycle that moves each index through
-them: `alloc_slot → take_for_run → reinstall* → finalize → free_one`. Each
-transition is a single atomic mutator body, so the recycle-vs-extend choice,
-the take/reinstall pairing, the terminal write, and reclamation are each
-encapsulated; no call site outside `NodeStore` can grow `nodes` without
-`results` or land a `NodeOutput` without firing the notify-walk.
+Vec<Option<NodeOutput<'a>>>` (terminal results), `free_list: Vec<usize>`
+(recyclable indices), and `recent_wakes: Vec<Vec<NodeId>>` (per-consumer
+side-channel of producers that have fired since the slot's last poll,
+populated only for `NodeWork::Dispatch` consumers) — and the slot
+lifecycle that moves each index through them: `alloc_slot → take_for_run
+→ reinstall* → finalize → free_one`. Each transition is a single atomic
+mutator body, so the recycle-vs-extend choice, the take/reinstall
+pairing, the terminal write, and reclamation are each encapsulated; no
+call site outside `NodeStore` can grow `nodes` without `results` or land
+a `NodeOutput` without firing the notify-walk. `recent_wakes[idx]` is
+cleared in O(1) by `free_one` (inner Vec capacity retained for the next
+owner) and extended in lockstep with `nodes` by `alloc_slot`'s extend
+arm, so every live `NodeId` indexes a valid inner Vec without a separate
+growth pattern.
 Dependency bookkeeping lives alongside it in a single
 [`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
 that bundles three parallel vectors — `notify_list: Vec<Vec<NodeId>>` (each
@@ -960,9 +981,10 @@ for test fixtures and builtin-registration paths.
   randomness) need a uniform carrier that threads through the same node graph.
 - **Stateful dispatch node** — a parallel-implementation refactor of the
   dispatch driver, sequenced into six numbered work items chained through
-  Requires / Unblocks edges. The carrier shape and routing toggle landed
-  as scaffolding; the next active step is
-  [roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md](../roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md).
+  Requires / Unblocks edges. The carrier shape, routing toggle, and the
+  `recent_wakes` wake-attribution side-channel landed as scaffolding; the
+  next active step is
+  [roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md](../roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md).
   `run_dispatch` re-runs from scratch on every wake; the dispatch slot
   would carry its progress (shape, `bare_outcomes`, picked function,
   working expression, per-track pending counters) and advance by one

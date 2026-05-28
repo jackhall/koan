@@ -74,6 +74,17 @@ pub(super) struct NodeStore<'a> {
     /// extending `slots`, so transient-node reclamation gives constant
     /// scheduler memory across tail-recursive bodies.
     free_list: Vec<NodeId>,
+    /// Per-consumer side-channel: producers that have fired since this
+    /// slot's last poll. Populated by `push_recent_wake` from the
+    /// notify-walk in `Scheduler::finalize` only when the consumer's
+    /// work is a `NodeWork::Dispatch` (any `DispatchState` variant);
+    /// drained by `take_recent_wakes` on entry to
+    /// `run_dispatch_stateful`. Indexed by `NodeId` in lockstep with
+    /// `slots`; grown by `alloc_slot` (extend arm) and cleared by
+    /// `free_one` (so recycled slots inherit an empty Vec while
+    /// retaining capacity from the prior owner's wake pattern).
+    /// Step 2 of `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`.
+    recent_wakes: SlotVec<Vec<NodeId>>,
 }
 
 impl<'a> NodeStore<'a> {
@@ -81,6 +92,7 @@ impl<'a> NodeStore<'a> {
         Self {
             slots: SlotVec::new(),
             free_list: Vec::new(),
+            recent_wakes: SlotVec::new(),
         }
     }
 
@@ -92,11 +104,17 @@ impl<'a> NodeStore<'a> {
         match self.free_list.pop() {
             Some(id) => {
                 self.slots[id] = SlotState::PreRun(node);
+                // `recent_wakes[id]` was cleared by `free_one` when the
+                // previous owner was reclaimed; the inner Vec is already
+                // empty (capacity retained for the new owner).
                 id
             }
             None => {
                 let id = NodeId(self.slots.len());
                 self.slots.push(SlotState::PreRun(node));
+                // Grow the wake side-channel in lockstep with `slots` so
+                // every live `NodeId` indexes a valid inner Vec.
+                self.recent_wakes.push(Vec::new());
                 id
             }
         }
@@ -151,8 +169,14 @@ impl<'a> NodeStore<'a> {
 
     /// Reclaim a single slot. Idempotent on already-`Free` slots when
     /// paired with the cascade-free walk's `is_reclaimed` guard.
+    ///
+    /// Clears the wake side-channel in O(1); inner Vec capacity is
+    /// retained so a slot recycled through `alloc_slot` inherits the
+    /// prior allocation. Pairs with the `notify_list[id]` /
+    /// `dep_edges[id]` free-time clears in `DepGraph`.
     pub(super) fn free_one(&mut self, id: NodeId) {
         self.slots[id] = SlotState::Free;
+        self.recent_wakes[id].clear();
         self.free_list.push(id);
     }
 
@@ -265,6 +289,38 @@ impl<'a> NodeStore<'a> {
                 *state = LiftState::Ready(stamped);
             }
         }
+    }
+
+    /// Notify-walk side-channel: record that `producer` has just
+    /// terminalized into the consumer slot's `recent_wakes`. No-op
+    /// unless `consumer` is in `PreRun` and carries `NodeWork::Dispatch`
+    /// (any `DispatchState` variant) — `Bind` / `Combine` / `Catch`
+    /// run a fixed closure on counter-zero and don't need per-edge
+    /// wake attribution, so they skip the append.
+    ///
+    /// Mirrors the peek-then-mutate shape of `stamp_lift_ready` so the
+    /// scheduler-level loop body in `Scheduler::finalize` stays uniform
+    /// across the two notify-time transitions.
+    pub(super) fn push_recent_wake(&mut self, consumer: NodeId, producer: NodeId) {
+        let is_dispatch_prerun = matches!(
+            &self.slots[consumer],
+            SlotState::PreRun(node) if matches!(&node.work, NodeWork::Dispatch { .. }),
+        );
+        if !is_dispatch_prerun {
+            return;
+        }
+        self.recent_wakes[consumer].push(producer);
+    }
+
+    /// Drain `recent_wakes[consumer]` and return the producers that
+    /// fired since the slot's last poll. The slot's Vec resets to
+    /// `Vec::new()` — capacity retention happens between owners at
+    /// `free_one` time, not across a single owner's polls. Called by
+    /// `run_dispatch_stateful` on entry; non-`Dispatch` work paths
+    /// never call it (the side-channel stays empty for them by
+    /// construction in `push_recent_wake`).
+    pub(super) fn take_recent_wakes(&mut self, consumer: NodeId) -> Vec<NodeId> {
+        std::mem::take(&mut self.recent_wakes[consumer])
     }
 
     // --- Test-only helpers for synthetic-state setup. ---

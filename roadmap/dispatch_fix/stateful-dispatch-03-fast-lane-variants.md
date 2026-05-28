@@ -109,7 +109,6 @@ state-machine envelope before tackling `Keyworded`.
 
 **Requires:**
 
-- [Stateful dispatch — Step 2: `recent_wakes` side-channel](stateful-dispatch-02-recent-wakes.md)
 
 **Unblocks:**
 

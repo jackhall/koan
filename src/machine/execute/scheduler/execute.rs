@@ -180,19 +180,42 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
-    /// Each woken consumer whose work is `Lift(Pending(idx))` is stamped to
-    /// `Lift(Ready(producer_output))` before enqueue, so the matching `run_lift` pop
-    /// has the terminal in hand and never reads `results[idx]`.
+    /// Drains the producer's notify list and fans out per consumer:
     ///
-    /// Invariant: every consumer drained here is parked with a non-zero counter; freed
-    /// slots are scrubbed from every producer's `notify_list` before the producer drains.
+    /// 1. Always push the producer into the consumer's `recent_wakes`
+    ///    side-channel (a no-op unless the consumer is a `PreRun`
+    ///    `NodeWork::Dispatch` — see `NodeStore::push_recent_wake`).
+    ///    Step 2 of `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`
+    ///    feeds the wake signal so the stateful dispatch driver can
+    ///    pick per-edge callbacks; step 3+ consumes it.
+    /// 2. When the consumer's `pending_deps` hit zero, stamp a pending
+    ///    `Lift` to `Ready(_)` (cloning the producer's terminal) and
+    ///    enqueue the consumer. The two-pass stamp-then-push split is
+    ///    preserved so every stamp lands before any queue push (a
+    ///    later stamp re-reading the slot must observe the prior
+    ///    transition).
+    ///
+    /// Invariant: every consumer drained here is parked with a non-zero
+    /// counter; freed slots are scrubbed from every producer's
+    /// `notify_list` before the producer drains.
     pub(super) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
-        let woken = self.deps.drain_notify(idx);
-        for consumer in &woken {
-            self.store.stamp_lift_ready(NodeId(*consumer), id);
+        let drained = self.deps.drain_notify(idx);
+        let mut woken: Vec<usize> = Vec::new();
+        for (consumer, hit_zero) in drained {
+            // Side-channel append fires for every drained consumer; the
+            // `NodeStore` discriminator filters out non-Dispatch slots
+            // so the bookkeeping stays scoped to consumers that actually
+            // need per-edge wake attribution.
+            self.store.push_recent_wake(NodeId(consumer), id);
+            if hit_zero {
+                self.store.stamp_lift_ready(NodeId(consumer), id);
+                woken.push(consumer);
+            }
         }
+        // Queue push happens strictly after every stamp has landed,
+        // matching the previous two-loop shape.
         for consumer in woken {
             self.queues.push_woken(consumer);
         }

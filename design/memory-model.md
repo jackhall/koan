@@ -240,11 +240,15 @@ edges](execution-model.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
 sub-struct that owns `nodes: Vec<Option<Node<'a>>>`, `results:
-Vec<Option<NodeOutput<'a>>>`, and `free_list: Vec<usize>` behind the slot
+Vec<Option<NodeOutput<'a>>>`, `free_list: Vec<usize>`, and
+`recent_wakes: Vec<Vec<NodeId>>` (the per-consumer wake-attribution
+side-channel scoped to `NodeWork::Dispatch` consumers) behind the slot
 lifecycle `alloc_slot → take_for_run → reinstall* → finalize → free_one`. The
-three vectors share an index space; `alloc_slot` is the only path that picks
-an index, `finalize` is the only path that lands a terminal `NodeOutput`,
-and `free_one` is the only path that clears `results[idx]` and pushes onto
+slot-indexed vectors share an index space; `alloc_slot` is the only path that
+picks an index, `finalize` is the only path that lands a terminal `NodeOutput`,
+and `free_one` is the only path that clears `results[idx]`, clears
+`recent_wakes[idx]` (retaining the inner Vec's capacity for the next owner —
+the side-channel's amortized-allocation pattern), and pushes onto
 `free_list`. Dependency bookkeeping lives alongside it in a
 [`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
 that bundles three `Vec`-shaped fields: `notify_list: Vec<Vec<NodeId>>`
