@@ -1509,7 +1509,7 @@ impl<'a> Scheduler<'a> {
                     Err(e) => {
                         let frame = Frame::from_expr("<bind>", &working_expr);
                         return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                            &e,
+                            e,
                             Some(frame),
                         ))));
                     }
@@ -1596,7 +1596,7 @@ impl<'a> Scheduler<'a> {
             if let Err(e) = self.read_result(*sub_id) {
                 let frame = Frame::from_expr("<bind>", &working_expr);
                 return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                    &e,
+                    e,
                     Some(frame),
                 ))));
             }
