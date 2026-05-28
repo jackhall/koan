@@ -228,6 +228,35 @@ fn bare_name_of<'a>(part: &ExpressionPart<'a>) -> Option<String> {
     }
 }
 
+/// One staged submission queued by [`Scheduler::keyworded_part_walk`]. The walk
+/// collects these into a staging Vec so the park-precedence guard runs before
+/// any sub-node hits the scheduler (otherwise a producer-parked dispatch would
+/// leak the eager sub-nodes on the re-Dispatch wake path). The four variants
+/// match the four schedulable shapes the walk recognizes: a recorded sub-Dispatch
+/// reuse (binder recursive submission), a fresh `Dispatch` (`Expression` /
+/// `SigiledTypeExpr` part), or a list / dict aggregate.
+pub(in crate::machine::execute) enum PendingSub<'a> {
+    Reuse(NodeId),
+    Dispatch(KExpression<'a>),
+    ListLit(Vec<ExpressionPart<'a>>),
+    DictLit(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
+}
+
+/// Result of a successful [`Scheduler::keyworded_part_walk`]. The fields land in
+/// the legacy `run_dispatch` Step 4 fused walk and in the stateful Keyworded
+/// driver's one-shot path; both consume the same three buckets identically.
+///
+/// - `new_parts`: post-splice parts with `Future(obj)` substituted for resolved
+///   wrap slots and bare placeholder strings substituted for scheduled subs.
+/// - `producers_to_wait`: producers the slot must park on before the picked
+///   function can bind. Deduplicated.
+/// - `staged_subs`: per-index submissions, applied only after the park check.
+pub(in crate::machine::execute) struct PartWalkResult<'a> {
+    pub new_parts: Vec<Spanned<ExpressionPart<'a>>>,
+    pub producers_to_wait: Vec<NodeId>,
+    pub staged_subs: Vec<(usize, PendingSub<'a>)>,
+}
+
 /// Pull the inner parts of a `f (...)` call out of `expr.parts[1..]`. The
 /// `FunctionValueCall` classifier guarantees an Identifier head and ≥1 non-keyword
 /// body part; this checks the body is exactly a single nested-parens
@@ -261,6 +290,177 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 }
 
 impl<'a> Scheduler<'a> {
+    /// Build the per-part `bare_outcomes` cache consulted by strict admission
+    /// and the fused splice/park walk. One `resolve_name_part` per bare-name
+    /// part (`Identifier` or leaf `Type`); non-bare-name parts get `None`. Built
+    /// with `consumer = None` so cycle detection is deferred to the splice walk
+    /// (which runs the check only on slots the picked function classifies as
+    /// references) — see Step 4 of [`Self::run_dispatch`] for the rationale.
+    pub(in crate::machine::execute) fn build_bare_outcomes(
+        &self,
+        parts: &[Spanned<ExpressionPart<'a>>],
+        scope: &'a Scope<'a>,
+    ) -> Vec<Option<NameOutcome<'a>>> {
+        parts
+            .iter()
+            .map(|p| match &p.value {
+                ExpressionPart::Identifier(_) => Some(resolve_name_part(scope, &p.value, self, None)),
+                ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+                    Some(resolve_name_part(scope, &p.value, self, None))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Fused splice / park / eager-sub walk over `parts`. Per part, exactly one
+    /// arm fires:
+    /// - Pre-sub splice (binder recursive submission): reuse the recorded NodeId.
+    /// - Wrap slot: read `bare_outcomes[i]` — Resolved ⇒ rewrite to `Future(obj)`;
+    ///   Parked ⇒ cycle-check then push producer; Unbound ⇒ slot-terminal
+    ///   `UnboundName`.
+    /// - Ref-name slot: read `bare_outcomes[i]` — Parked ⇒ cycle-check then push
+    ///   producer; Resolved / Unbound ⇒ no-op (literal-name slot keeps the bare
+    ///   token; the receiving builtin resolves it).
+    /// - Eager-sub slot: stage a sub-Dispatch (`Expression` / `SigiledTypeExpr`)
+    ///   or aggregate (`ListLiteral` / `DictLiteral`). Filtered by
+    ///   `slots.eager_indices` when the picked function is a lazy candidate.
+    ///
+    /// Pure: no scheduler submission, no park-edge installation. Caller decides
+    /// on the result whether to install a combined park (when
+    /// `producers_to_wait` is non-empty) or submit the staged subs.
+    ///
+    /// `Err(KError)` here surfaces a *slot terminal* error (cycle / unbound
+    /// wrap), not a scheduler-level error — callers wrap it as
+    /// `NodeStep::Done(NodeOutput::Err(_))`.
+    pub(in crate::machine::execute) fn keyworded_part_walk(
+        &mut self,
+        parts: Vec<Spanned<ExpressionPart<'a>>>,
+        pre_subs: &[(usize, NodeId)],
+        bare_outcomes: &[Option<NameOutcome<'a>>],
+        slots: &crate::machine::core::kfunction::ClassifiedSlots,
+        idx: usize,
+    ) -> Result<PartWalkResult<'a>, KError> {
+        let wrap_set = &slots.wrap_indices;
+        let ref_name_set = &slots.ref_name_indices;
+        let eager_filter = slots.eager_indices.as_deref();
+        let mut new_parts: Vec<Spanned<ExpressionPart<'a>>> = Vec::with_capacity(parts.len());
+        let mut producers_to_wait: Vec<NodeId> = Vec::new();
+        let mut staged_subs: Vec<(usize, PendingSub<'a>)> = Vec::new();
+        for (i, part) in parts.into_iter().enumerate() {
+            let span = part.span;
+            // Pre-sub splice (binder recursive submission): reuse the NodeId.
+            if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {
+                staged_subs.push((i, PendingSub::Reuse(sub_id)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                continue;
+            }
+            // Wrap slot: splice Resolved → Future, park Parked, surface Unbound.
+            // Cycle detection runs here (the cache is built with `consumer = None`):
+            // a `Parked(p)` outcome where `would_create_cycle(p, idx)` is a wake
+            // cycle; surface `SchedulerDeadlock` rather than installing the
+            // cycle-creating park edge.
+            if wrap_set.contains(&i) {
+                match &bare_outcomes[i] {
+                    Some(NameOutcome::Resolved(obj)) => {
+                        new_parts.push(Spanned { value: ExpressionPart::Future(obj), span });
+                    }
+                    Some(NameOutcome::Parked(p)) => {
+                        if self.deps.would_create_cycle(*p, NodeId(idx)) {
+                            let name = bare_name_of(&part.value).unwrap_or_default();
+                            return Err(KError::new(KErrorKind::SchedulerDeadlock {
+                                pending: 1,
+                                sample: format!("cycle in type alias `{name}`"),
+                            }));
+                        }
+                        if !producers_to_wait.contains(p) {
+                            producers_to_wait.push(*p);
+                        }
+                        new_parts.push(Spanned { value: part.value, span });
+                    }
+                    Some(NameOutcome::Unbound(name)) => {
+                        // Pre-PR-C surface: an unbound wrap-slot name is a slot
+                        // terminal (`BodyResult::Err(UnboundName)`), not a
+                        // propagated scheduler error. Parent slots catch that
+                        // terminal through their Combine's dep-error short-circuit;
+                        // surfacing as `Err` from `execute` would break that catch.
+                        return Err(KError::new(KErrorKind::UnboundName(name.clone())));
+                    }
+                    Some(NameOutcome::Cycle(_)) => {
+                        unreachable!("cache built with consumer=None never yields Cycle");
+                    }
+                    Some(NameOutcome::ProducerErrored(_)) => {
+                        unreachable!("ProducerErrored short-circuited upfront");
+                    }
+                    None => {
+                        debug_assert!(false, "wrap_indices implies bare-name part");
+                        new_parts.push(Spanned { value: part.value, span });
+                    }
+                }
+                continue;
+            }
+            // Ref-name slot: literal-name slots keep the bare token; only the park
+            // outcome matters here. Same cycle-detection guard as the wrap-slot arm.
+            if ref_name_set.contains(&i) {
+                let park_eligible = matches!(&part.value, ExpressionPart::Identifier(_))
+                    || matches!(
+                        &part.value,
+                        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None)
+                    );
+                if park_eligible {
+                    if let Some(NameOutcome::Parked(p)) = &bare_outcomes[i] {
+                        if self.deps.would_create_cycle(*p, NodeId(idx)) {
+                            let name = bare_name_of(&part.value).unwrap_or_default();
+                            return Err(KError::new(KErrorKind::SchedulerDeadlock {
+                                pending: 1,
+                                sample: format!("cycle in type alias `{name}`"),
+                            }));
+                        }
+                        if !producers_to_wait.contains(p) {
+                            producers_to_wait.push(*p);
+                        }
+                    }
+                }
+                new_parts.push(Spanned { value: part.value, span });
+                continue;
+            }
+            // Eager-sub slot: stage a sub-Dispatch (or aggregate). Filtered by
+            // `eager_filter` when the picked function is a lazy candidate.
+            let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
+            if in_eager_filter {
+                match part.value {
+                    ExpressionPart::Expression(boxed) => {
+                        staged_subs.push((i, PendingSub::Dispatch(*boxed)));
+                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                        continue;
+                    }
+                    ExpressionPart::SigiledTypeExpr(boxed) => {
+                        let wrapped = KExpression::new(vec![Spanned::bare(
+                            ExpressionPart::SigiledTypeExpr(boxed),
+                        )]);
+                        staged_subs.push((i, PendingSub::Dispatch(wrapped)));
+                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                        continue;
+                    }
+                    ExpressionPart::ListLiteral(items) => {
+                        staged_subs.push((i, PendingSub::ListLit(items)));
+                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                        continue;
+                    }
+                    ExpressionPart::DictLiteral(pairs) => {
+                        staged_subs.push((i, PendingSub::DictLit(pairs)));
+                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                        continue;
+                    }
+                    other => new_parts.push(Spanned { value: other, span }),
+                }
+            } else {
+                new_parts.push(Spanned { value: part.value, span });
+            }
+        }
+        Ok(PartWalkResult { new_parts, producers_to_wait, staged_subs })
+    }
+
     /// Dispatch driver. Opens with [`classify_dispatch_shape`]; the no-keyword shapes
     /// (`BareIdentifier`, `BareTypeLeaf`, `FunctionValueCall`, `ConstructorCall`,
     /// `SigiledTypeExpr`) run their fast-lane handlers and never enter
@@ -369,19 +569,7 @@ impl<'a> Scheduler<'a> {
         // `x → idx` placeholder; running cycle detection upfront would surface a
         // false-positive `SchedulerDeadlock` because the declaration slot looks
         // like a self-park before we know it's a declaration.
-        let bare_outcomes: Vec<Option<NameOutcome<'a>>> = expr
-            .parts
-            .iter()
-            .map(|p| match &p.value {
-                ExpressionPart::Identifier(_) => {
-                    Some(resolve_name_part(scope, &p.value, self, None))
-                }
-                ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-                    Some(resolve_name_part(scope, &p.value, self, None))
-                }
-                _ => None,
-            })
-            .collect();
+        let bare_outcomes = self.build_bare_outcomes(&expr.parts, scope);
 
         // Step 2: upfront short-circuit for `ProducerErrored`. A bare-name arg whose
         // producer has already terminalized with `Err` can never resolve; surface the
@@ -477,165 +665,26 @@ impl<'a> Scheduler<'a> {
             }
         }
 
-        // Step 4: fused walk over `expr.parts`. Per part, exactly one arm fires:
-        // - Pre-sub splice (binder recursive submission): reuse the recorded NodeId.
-        // - Wrap slot (`resolved.slots.wrap_indices`): read `bare_outcomes[i]` —
-        //   Resolved ⇒ rewrite to `Future(obj)`; Parked ⇒ push producer; Unbound ⇒
-        //   surface `UnboundName` as a slot terminal.
-        // - Ref-name slot (`resolved.slots.ref_name_indices`): read `bare_outcomes[i]`
-        //   — Parked ⇒ push producer; Resolved / Unbound ⇒ no-op (literal-name slot
-        //   keeps the bare token; the receiving builtin resolves it).
-        // - Eager-sub slot: schedule a sub-Dispatch (Expression / SigiledTypeExpr)
-        //   or aggregate (ListLiteral / DictLiteral). Filtered by
-        //   `resolved.slots.eager_indices` when the picked function is a lazy
-        //   candidate; otherwise every eager-shaped part schedules.
-        //
-        // Park-precedence guard: collect subs into a staging vec first. If any
-        // producer parked, install the combined park *before* submitting the subs to
-        // the scheduler — submitting would leak nodes on the re-Dispatch wake path.
-        let wrap_set = &resolved.slots.wrap_indices;
-        let ref_name_set = &resolved.slots.ref_name_indices;
-        let eager_filter = resolved.slots.eager_indices.as_deref();
-        let mut new_parts: Vec<Spanned<ExpressionPart<'a>>> =
-            Vec::with_capacity(expr.parts.len());
-        let mut producers_to_wait: Vec<NodeId> = Vec::new();
-        // Pending subs: queued submissions, applied only after the park check.
-        // `PendingSub` discriminates the four schedulable shapes so we don't run
-        // `self.add(...)` until producers_to_wait is finalized.
-        enum PendingSub<'a> {
-            Reuse(NodeId),
-            Dispatch(KExpression<'a>),
-            ListLit(Vec<ExpressionPart<'a>>),
-            DictLit(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
-        }
-        let mut staged_subs: Vec<(usize, PendingSub<'a>)> = Vec::new();
-        for (i, part) in expr.parts.into_iter().enumerate() {
-            let span = part.span;
-            // Pre-sub splice (binder recursive submission): reuse the NodeId.
-            if let Some(&(_, sub_id)) = pre_subs.iter().find(|(j, _)| *j == i) {
-                staged_subs.push((i, PendingSub::Reuse(sub_id)));
-                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                continue;
-            }
-            // Wrap slot: splice Resolved → Future, park Parked, surface Unbound.
-            // Cycle detection runs here (the cache is built with `consumer = None`):
-            // a `Parked(p)` outcome where `would_create_cycle(p, idx)` is a wake
-            // cycle (e.g. `LET y = y` where `y`'s value slot self-parks on the LET
-            // slot itself); surface `SchedulerDeadlock` rather than installing the
-            // cycle-creating park edge.
-            if wrap_set.contains(&i) {
-                match &bare_outcomes[i] {
-                    Some(NameOutcome::Resolved(obj)) => {
-                        new_parts.push(Spanned { value: ExpressionPart::Future(obj), span });
-                    }
-                    Some(NameOutcome::Parked(p)) => {
-                        if self.deps.would_create_cycle(*p, NodeId(idx)) {
-                            let name = bare_name_of(&part.value).unwrap_or_default();
-                            return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
-                                KErrorKind::SchedulerDeadlock {
-                                    pending: 1,
-                                    sample: format!("cycle in type alias `{name}`"),
-                                },
-                            ))));
-                        }
-                        if !producers_to_wait.contains(p) {
-                            producers_to_wait.push(*p);
-                        }
-                        new_parts.push(Spanned { value: part.value, span });
-                    }
-                    Some(NameOutcome::Unbound(name)) => {
-                        // Match the pre-PR-C surface: an unbound wrap-slot name was a
-                        // slot terminal (`BodyResult::Err(UnboundName)`), not a
-                        // propagated scheduler error. Parent slots (MODULE / FN / LET
-                        // binders) catch that terminal through their Combine's
-                        // dep-error short-circuit; surfacing as `Err` from `execute`
-                        // would break that catch.
-                        return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
-                            KErrorKind::UnboundName(name.clone()),
-                        ))));
-                    }
-                    Some(NameOutcome::Cycle(_)) => {
-                        // Cache was built with `consumer = None`, so `Cycle` is never
-                        // produced; defensive arm only.
-                        unreachable!("cache built with consumer=None never yields Cycle");
-                    }
-                    Some(NameOutcome::ProducerErrored(_)) => {
-                        unreachable!("ProducerErrored short-circuited upfront in Step 2");
-                    }
-                    None => {
-                        debug_assert!(false, "wrap_indices implies bare-name part");
-                        new_parts.push(Spanned { value: part.value, span });
-                    }
-                }
-                continue;
-            }
-            // Ref-name slot: literal-name slots keep the bare token; only the park
-            // outcome matters here. Same cycle-detection guard as the wrap-slot arm.
-            if ref_name_set.contains(&i) {
-                let park_eligible = matches!(
-                    &part.value,
-                    ExpressionPart::Identifier(_)
-                ) || matches!(
-                    &part.value,
-                    ExpressionPart::Type(t) if matches!(t.params, TypeParams::None)
-                );
-                if park_eligible {
-                    if let Some(NameOutcome::Parked(p)) = &bare_outcomes[i] {
-                        if self.deps.would_create_cycle(*p, NodeId(idx)) {
-                            let name = bare_name_of(&part.value).unwrap_or_default();
-                            return Ok(NodeStep::Done(NodeOutput::Err(KError::new(
-                                KErrorKind::SchedulerDeadlock {
-                                    pending: 1,
-                                    sample: format!("cycle in type alias `{name}`"),
-                                },
-                            ))));
-                        }
-                        if !producers_to_wait.contains(p) {
-                            producers_to_wait.push(*p);
-                        }
-                    }
-                }
-                new_parts.push(Spanned { value: part.value, span });
-                continue;
-            }
-            // Eager-sub slot: schedule a sub-Dispatch (or aggregate). Filtered by
-            // `eager_filter` when the picked function is a lazy candidate.
-            let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
-            if in_eager_filter {
-                match part.value {
-                    ExpressionPart::Expression(boxed) => {
-                        staged_subs.push((i, PendingSub::Dispatch(*boxed)));
-                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                        continue;
-                    }
-                    ExpressionPart::SigiledTypeExpr(boxed) => {
-                        let wrapped = KExpression::new(vec![Spanned::bare(
-                            ExpressionPart::SigiledTypeExpr(boxed),
-                        )]);
-                        staged_subs.push((i, PendingSub::Dispatch(wrapped)));
-                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                        continue;
-                    }
-                    ExpressionPart::ListLiteral(items) => {
-                        staged_subs.push((i, PendingSub::ListLit(items)));
-                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                        continue;
-                    }
-                    ExpressionPart::DictLiteral(pairs) => {
-                        staged_subs.push((i, PendingSub::DictLit(pairs)));
-                        new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                        continue;
-                    }
-                    other => new_parts.push(Spanned { value: other, span }),
-                }
-            } else {
-                new_parts.push(Spanned { value: part.value, span });
-            }
-        }
+        // Step 4: fused walk over `expr.parts`. The helper handles per-part
+        // splice / park / eager-sub staging and returns the three buckets
+        // (`new_parts`, `producers_to_wait`, `staged_subs`); the slot-terminal
+        // cycle / unbound cases come back as `Err(KError)` which wraps as
+        // `NodeStep::Done(NodeOutput::Err(_))`. Park-precedence guard: collect
+        // subs into the staging vec first; if any producer parked, install the
+        // combined park *before* submitting the subs to the scheduler —
+        // submitting would leak nodes on the re-Dispatch wake path.
+        let walk = match self.keyworded_part_walk(
+            expr.parts,
+            &pre_subs,
+            &bare_outcomes,
+            &resolved.slots,
+            idx,
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
+        };
+        let PartWalkResult { new_parts, producers_to_wait, staged_subs } = walk;
         let new_expr = KExpression::new(new_parts);
-        // Park precedence: if any producer parked, install the combined park before
-        // submitting any subs (otherwise the re-Dispatch on wake would re-stage them
-        // and the original sub-nodes would leak).
         if !producers_to_wait.is_empty() {
             return Ok(self.install_combined_park(producers_to_wait, new_expr, pre_subs, idx));
         }
