@@ -88,11 +88,15 @@ What's shipped that the open items below build on:
   state-bearing `run_dispatch_stateful` driver under toggle-on. The
   carrier shape (`DispatchState` enum + per-variant structs), routing
   toggle, `recent_wakes` wake-attribution side-channel, five fast-lane
-  variants, and the `Keyworded` variant with its eager-subs /
-  bare-name-park / overload-park tracks all carry progress in the slot
-  and advance by one edge per callback (no per-wake reclassification,
-  no `bare_outcomes` rebuild, no `NodeWork::Bind` hop on the keyworded
-  path). The default-flip and legacy `run_dispatch` deletion are the
+  variants, the `Keyworded` variant with its eager-subs /
+  bare-name-park / overload-park tracks, and the `FunctionValueCall`
+  fast lane with its eager-subs / head-placeholder tracks all carry
+  progress in the slot and advance by one edge per callback (no
+  per-wake reclassification, no `bare_outcomes` rebuild, no
+  `NodeWork::Bind` spawn on any stateful path — the last Bind caller
+  was the FunctionValueCall eager-subs branch this work folded onto
+  the same track-based shape the `Keyworded` eager-subs path uses).
+  The default-flip and legacy `run_dispatch` deletion are the
   remaining open items.
 
 ## Next items
@@ -175,10 +179,6 @@ language through the dispatcher and the user-functor application surface:
 
 - [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
-- [Fast-lane Bind inlining](roadmap/dispatch_fix/fast-lane-bind-inlining.md) — follow-up to
-  Stateful dispatch Step 4: extends the Track-based eager-subs inlining pattern to the
-  remaining fast-lane `FunctionValueCall` Bind spawn so no `DispatchShape` variant
-  builds a Bind slot.
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

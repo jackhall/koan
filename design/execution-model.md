@@ -982,8 +982,10 @@ for test fixtures and builtin-registration paths.
 - **Stateful dispatch cutover** — every `DispatchShape` variant now runs
   end-to-end on the stateful driver under toggle-on (the carrier shape,
   routing toggle, `recent_wakes` wake-attribution side-channel, five
-  fast-lane variants, and the `Keyworded` variant with its eager-subs /
-  bare-name-park / overload-park tracks have all landed). The remaining
+  fast-lane variants, the `Keyworded` variant with its eager-subs /
+  bare-name-park / overload-park tracks, and the `FunctionValueCall`
+  fast lane with its eager-subs / head-placeholder tracks have all
+  landed; no stateful path spawns `NodeWork::Bind`). The remaining
   work is flipping `use_stateful_dispatch` on by default and deleting
   the legacy `run_dispatch` machinery —
   [roadmap/dispatch_fix/stateful-dispatch-05-cutover.md](../roadmap/dispatch_fix/stateful-dispatch-05-cutover.md)
@@ -991,4 +993,4 @@ for test fixtures and builtin-registration paths.
   [roadmap/dispatch_fix/stateful-dispatch-06-deletion.md](../roadmap/dispatch_fix/stateful-dispatch-06-deletion.md)
   removes the legacy driver and its surviving mutators
   (`install_combined_park`, `park_pending_and_redispatch`,
-  `schedule_eager_only`).
+  `schedule_eager_only`, `schedule_picked_eager`).

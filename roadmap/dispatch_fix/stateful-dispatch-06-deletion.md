@@ -104,8 +104,5 @@ the design tree.
 **Requires:**
 
 - [Stateful dispatch — Step 5: cutover](stateful-dispatch-05-cutover.md)
-- [Fast-lane Bind inlining](fast-lane-bind-inlining.md) — deletes
-  `schedule_picked_eager` / `PendingSub`, which the fast-lane
-  `FunctionValueCall` path still uses today.
 
 **Unblocks:** none.
