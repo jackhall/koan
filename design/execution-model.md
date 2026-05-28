@@ -958,3 +958,11 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Stateful dispatch node** — a parallel-implementation refactor of the
+  dispatch driver, sequenced into six numbered work items beginning with
+  [roadmap/dispatch_fix/stateful-dispatch-01-scaffolding.md](../roadmap/dispatch_fix/stateful-dispatch-01-scaffolding.md)
+  and chained through Requires / Unblocks edges. `run_dispatch` re-runs
+  from scratch on every wake; the dispatch slot would carry its progress
+  (shape, `bare_outcomes`, picked function, working expression, per-track
+  pending counters) and advance by one edge per callback. `pre_subs`
+  folds into the per-variant state.

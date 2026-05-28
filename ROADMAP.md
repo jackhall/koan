@@ -165,6 +165,14 @@ language through the dispatcher and the user-functor application surface:
 
 - [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
+- Stateful dispatch node — a parallel-implementation refactor of the dispatch
+  driver, sequenced into six numbered work items that ship in order:
+  - [Step 1: scaffolding](roadmap/dispatch_fix/stateful-dispatch-01-scaffolding.md)
+  - [Step 2: `recent_wakes` side-channel](roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md)
+  - [Step 3: fast-lane variants](roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md)
+  - [Step 4: `Keyworded` variant](roadmap/dispatch_fix/stateful-dispatch-04-keyworded-variant.md)
+  - [Step 5: cutover](roadmap/dispatch_fix/stateful-dispatch-05-cutover.md)
+  - [Step 6: deletion](roadmap/dispatch_fix/stateful-dispatch-06-deletion.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
