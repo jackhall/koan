@@ -101,6 +101,55 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     sched.execute().expect("scheduler should succeed");
 }
 
+// =====================================================================
+// Legacy-pinned helpers
+//
+// Step 3 of the stateful-dispatch refactor (commit 3d, ConstructorCall)
+// drops NEWTYPE / TypeConstructor head support from the stateful driver
+// (`stateful_constructor_call` surfaces `TypeMismatch` for those heads).
+// Tests that exercise NEWTYPE constructor calls (`(Distance (3.0))`,
+// `(Boxed (p))`, etc.) pin to the legacy driver via these helpers so the
+// toggle-on suite stays green; step 4+ revisits whether those heads need
+// stateful coverage.
+// =====================================================================
+
+/// Build a Scheduler pinned to the legacy `run_dispatch` driver regardless of
+/// the `KOAN_STATEFUL_DISPATCH` env var. Used by [`run_legacy`],
+/// [`run_one_legacy`], and [`run_one_err_legacy`].
+pub(crate) fn sched_legacy<'a>() -> Scheduler<'a> {
+    Scheduler::new().with_stateful_dispatch(false)
+}
+
+/// Legacy-pinned counterpart to [`run`]. Each top-level statement runs on
+/// `run_dispatch` so NEWTYPE / TypeConstructor head support is preserved.
+pub(crate) fn run_legacy<'a>(scope: &'a Scope<'a>, source: &str) {
+    let exprs = parse(source).expect("parse should succeed");
+    let mut sched = sched_legacy();
+    for expr in exprs {
+        sched.add_dispatch(expr, scope);
+    }
+    sched.execute().expect("scheduler should succeed");
+}
+
+/// Legacy-pinned counterpart to [`run_one`].
+pub(crate) fn run_one_legacy<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
+    let mut sched = sched_legacy();
+    let id = sched.add_dispatch(expr, scope);
+    sched.execute().expect("scheduler should succeed");
+    sched.read(id)
+}
+
+/// Legacy-pinned counterpart to [`run_one_err`].
+pub(crate) fn run_one_err_legacy<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
+    let mut sched = sched_legacy();
+    let id = sched.add_dispatch(expr, scope);
+    sched.execute().expect("scheduler should not surface errors directly");
+    match sched.read_result(id) {
+        Ok(_) => panic!("expected error"),
+        Err(e) => e.clone(),
+    }
+}
+
 /// Fetch the single bare-`FN` overload whose signature's first keyword is `keyword`,
 /// searching the `functions` dispatch buckets. Bare FN keywords no longer mirror into
 /// `data` (only `LET f = (FN …)` does), so tests that inspect a registered function's

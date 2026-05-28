@@ -1192,12 +1192,19 @@ impl<'a> Scheduler<'a> {
                 );
                 Ok(self.fast_lane_function_value_call(&expr, scope, idx))
             }
-            // Remaining variants still ride the legacy driver in step 3a–3c.
-            // Commit 3d wires `ConstructorCall`; step 4 wires
-            // `SigiledTypeExpr` and `Keyworded`.
-            DispatchShape::ConstructorCall
-            | DispatchShape::SigiledTypeExpr
-            | DispatchShape::Keyworded => {
+            DispatchShape::ConstructorCall => {
+                // Same non-binder reasoning as `FunctionValueCall` — a leaf-Type
+                // head with nested-parens body is never produced by a binder.
+                debug_assert!(
+                    init.pre_subs.is_empty(),
+                    "ConstructorCall is non-binder — submit-time recursion cannot \
+                     populate pre_subs for this shape",
+                );
+                Ok(self.stateful_constructor_call(expr, scope, idx))
+            }
+            // Remaining variants still ride the legacy driver after step 3.
+            // Step 4 wires `SigiledTypeExpr` and `Keyworded`.
+            DispatchShape::SigiledTypeExpr | DispatchShape::Keyworded => {
                 self.run_dispatch(expr, init.pre_subs, scope, idx)
             }
         }
@@ -1237,6 +1244,93 @@ impl<'a> Scheduler<'a> {
             Resolution::UnboundName => NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::UnboundName(name),
             ))),
+        }
+    }
+
+    /// Stateful-driver handler for `DispatchShape::ConstructorCall` (leaf-Type
+    /// head + nested-parens body). Resolves the head type-side through
+    /// [`coerce_type_token_value`] and routes:
+    ///
+    /// - `StructType` head → [`struct_value::apply`] → `schedule_constructor_tail`.
+    /// - `TaggedUnionType` head → [`tagged_union::apply`] → `schedule_constructor_tail`.
+    /// - Any other resolved carrier → `TypeMismatch { arg: "verb", expected:
+    ///   "type constructor" }`. Newtype / TypeConstructor (`Result`, etc.) heads
+    ///   that the legacy keyworded `type_call` builtin still serves on the
+    ///   toggle-off path land here too — that's an intentional scope-down for
+    ///   the stateful driver, per
+    ///   [`roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md`].
+    /// - `Err(UnboundName)` from the type-side resolution → re-surface
+    ///   `KErrorKind::UnboundName(name)` directly (same contract as
+    ///   `BareIdentifier`).
+    ///
+    /// **Forward-reference park.** A type-side name with a visible
+    /// `Placeholder` (a forward `STRUCT Foo = …` reference before finalize)
+    /// installs a combined park edge and rebuilds the slot as a fresh
+    /// `Dispatch` so the now-finalized carrier reaches `coerce_type_token_value`
+    /// on wake. The park check runs against the type-side `resolve_with_chain`
+    /// because `coerce_type_token_value` returns an `UnboundName` error
+    /// (rather than surfacing the placeholder) when the binder hasn't
+    /// finalized — we must intercept the placeholder before that miss.
+    ///
+    /// **Inner-args shape.** Same admission as `extract_named_call_inner`:
+    /// `expr.parts[1..]` must be exactly `[Spanned(Expression(inner))]`. Any
+    /// other shape surfaces `DispatchFailed` (no positional call shape for
+    /// type constructors).
+    fn stateful_constructor_call(
+        &mut self,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        // Classifier guarantees parts[0] is a leaf `Type` and parts[1..] is
+        // non-empty. Clone the head out so we can move `expr` later for the
+        // park rebuild and the DispatchFailed surface.
+        let head_t = match &expr.parts[0].value {
+            ExpressionPart::Type(t) => t.clone(),
+            _ => unreachable!("ConstructorCall shape implies leaf Type head"),
+        };
+        // Inner-parts admission first. Matches `extract_named_call_inner` —
+        // anything other than a single nested-parens body surfaces
+        // `DispatchFailed`.
+        let inner_parts = match extract_named_call_inner(&expr) {
+            Ok(parts) => parts,
+            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+        };
+        let chain = self.active_chain.as_deref();
+        // Forward-reference park: the type-side resolution returns
+        // `UnboundName` (not `Placeholder`) for a not-yet-finalized binder,
+        // so we must check the value-side `resolve_with_chain` first. A
+        // value-side `Value` for a Type name is unusual (paired carriers
+        // exist for STRUCT / UNION but they finalize together with the
+        // type binding); on a `Value` hit we still fall through to the
+        // type-side `coerce_type_token_value` path which is the
+        // authoritative carrier producer for ConstructorCall.
+        match scope.resolve_with_chain(&head_t.name, chain) {
+            Resolution::Placeholder(producer) => {
+                return self.install_combined_park(vec![producer], expr, Vec::new(), idx);
+            }
+            Resolution::Value(_) | Resolution::UnboundName => {
+                // Fall through to the type-side resolution below.
+            }
+        }
+        match coerce_type_token_value(scope, &head_t, chain) {
+            Ok(obj) => match obj {
+                KObject::StructType { .. } => {
+                    self.schedule_constructor_tail(struct_value::apply(obj, inner_parts))
+                }
+                KObject::TaggedUnionType { .. } => {
+                    self.schedule_constructor_tail(tagged_union::apply(obj, inner_parts))
+                }
+                other => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                    arg: "verb".to_string(),
+                    expected: "type constructor".to_string(),
+                    got: other.summarize(),
+                }))),
+            },
+            Err(KError { kind: KErrorKind::UnboundName(n), .. }) => NodeStep::Done(
+                NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))),
+            ),
+            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }
 }

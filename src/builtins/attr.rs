@@ -326,7 +326,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{
+        parse_one, run, run_legacy, run_one, run_one_err, run_one_err_legacy, run_one_legacy,
+        run_root_silent,
+    };
     use crate::machine::model::KObject;
     use crate::machine::{KErrorKind, RuntimeArena};
 
@@ -437,35 +440,45 @@ mod tests {
     /// struct's field without forcing every accessor to redo. The new ATTR `Newtype`
     /// overload routes through `access_field`'s `Wrapped` arm, which recurses one level
     /// into `inner: KObject::Struct`.
+    ///
+    /// Legacy-pinned: NEWTYPE constructor calls (`(Boxed (p))`) route through the
+    /// keyworded `type_call` builtin on the legacy driver. Step 3d of the
+    /// stateful-dispatch refactor scopes NEWTYPE constructor heads out of the
+    /// stateful driver's `ConstructorCall` handler (surfaces `TypeMismatch`);
+    /// the dropped capability is intentional per
+    /// `roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md`.
+    /// Pin to legacy so the toggle-on suite stays green.
     #[test]
     fn access_field_falls_through_wrapped_struct() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(
+        run_legacy(
             scope,
             "STRUCT Point = (x :Number, y :Number)\n\
              NEWTYPE Boxed = Point\n\
              LET p = (Point (x = 1, y = 2))\n\
              LET b = (Boxed (p))",
         );
-        assert!(matches!(run_one(scope, parse_one("b.x")), KObject::Number(n) if *n == 1.0));
-        assert!(matches!(run_one(scope, parse_one("b.y")), KObject::Number(n) if *n == 2.0));
+        assert!(matches!(run_one_legacy(scope, parse_one("b.x")), KObject::Number(n) if *n == 1.0));
+        assert!(matches!(run_one_legacy(scope, parse_one("b.y")), KObject::Number(n) if *n == 2.0));
     }
 
     /// `d.x` on a NEWTYPE-over-Number surfaces as `TypeMismatch` — `access_field`'s
     /// `Wrapped` arm recurses into `inner: KObject::Number`, which hits the existing
     /// non-Struct / non-Module `other` arm. Pins that wrapping a scalar doesn't grow
     /// fields out of thin air.
+    ///
+    /// Legacy-pinned: see `access_field_falls_through_wrapped_struct`.
     #[test]
     fn access_field_rejects_wrapped_non_struct() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(
+        run_legacy(
             scope,
             "NEWTYPE Distance = Number\n\
              LET d = (Distance (3.0))",
         );
-        let err = run_one_err(scope, parse_one("d.x"));
+        let err = run_one_err_legacy(scope, parse_one("d.x"));
         match &err.kind {
             KErrorKind::TypeMismatch { arg, expected, got } => {
                 assert_eq!(arg, "s");
@@ -480,18 +493,20 @@ mod tests {
     /// struct's type (`Point`) and the missing field (`z`). Confirms the fall-through
     /// preserves the inner struct's error attribution — the diagnostic isn't lost in
     /// the wrapper.
+    ///
+    /// Legacy-pinned: see `access_field_falls_through_wrapped_struct`.
     #[test]
     fn access_field_falls_through_wrapped_with_missing_field() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(
+        run_legacy(
             scope,
             "STRUCT Point = (x :Number, y :Number)\n\
              NEWTYPE Boxed = Point\n\
              LET p = (Point (x = 1, y = 2))\n\
              LET b = (Boxed (p))",
         );
-        let err = run_one_err(scope, parse_one("b.z"));
+        let err = run_one_err_legacy(scope, parse_one("b.z"));
         assert!(
             matches!(&err.kind, KErrorKind::ShapeError(msg)
                 if msg.contains("Point") && msg.contains("`z`")),
