@@ -36,6 +36,18 @@
 //! wake re-classify elimination falls out of Step 5's cutover once
 //! every transition stays inside `Keyworded`.
 //!
+//! Step 5 (Commit A) lights up the `eager_subs` track on
+//! `FnValueState`, folding the fast-lane `FunctionValueCall` variant's
+//! last `NodeWork::Bind` spawn (the legacy `schedule_picked_eager`
+//! with-subs branch) onto the stateful driver.
+//! `FnValueEagerSubsTrack` carries the picked `KFunction` from the head
+//! `Resolution::Value` arm and binds it directly at completion —
+//! `FunctionValueCall` is non-overload-set so re-resolving on
+//! completion would yield the same pick. Commit B migrates the
+//! `Resolution::Placeholder` head park to a sibling
+//! `head_placeholder` track; after both commits land, `run_bind` and
+//! `NodeWork::Bind` have no callers on the toggle-on path.
+//!
 //! Step 4d lights up the `overload_park` track on `KeywordedState`:
 //! the `ResolveOutcome::ParkOnProducers` arm of
 //! `stateful_keyworded_initial` and the post-eager-subs re-resolve in
@@ -94,7 +106,10 @@ pub(in crate::machine::execute) struct CtorState<'a> {
 
 pub(in crate::machine::execute) struct FnValueState<'a> {
     pub(in crate::machine::execute) init: Initialized,
-    _ph: std::marker::PhantomData<&'a ()>,
+    /// Eager-subs track installed by `stateful_install_fn_value_eager_subs_track`.
+    /// `None` is the initial-entry shape; the transition writes `Some` when the
+    /// fast lane stages eager subs and parks waiting on them.
+    pub(in crate::machine::execute) eager_subs: Option<FnValueEagerSubsTrack<'a>>,
 }
 
 pub(in crate::machine::execute) struct SigilState<'a> {
@@ -249,6 +264,43 @@ impl<'a> OverloadParkTrack<'a> {
     }
 }
 
+/// Track state for the eager-subs sub-Dispatches a `FunctionValueCall`
+/// slot is parked on. Mirrors `EagerSubsTrack`'s shape — same `(part_idx,
+/// sub_id)` Owned-dep model and `working_expr` splice contract — but
+/// carries the picked `KFunction` from the head `Resolution::Value`
+/// arm. `FunctionValueCall` is non-overload-set (the head resolves to a
+/// single `KFunction` value carrier, not a candidate bucket), so a
+/// typed `Future(_)` revealed by an eager sub can't narrow to a more
+/// specific pick — the resume binds `picked` directly without re-
+/// running `resolve_dispatch`. This is the same bind shape the legacy
+/// `schedule_picked_eager`'s zero-subs branch already uses; the
+/// with-subs branch's `run_bind` re-resolve was an artifact of the
+/// shared Bind machinery, not a semantic requirement.
+///
+/// `working_expr` carries every part that was *not* an eager sub plus
+/// an `Identifier("")` placeholder at every sub index — the splice
+/// shape the keyworded `EagerSubsTrack` uses, so the post-completion
+/// `picked.bind(working_expr)` sees the same input the legacy
+/// `run_bind` would.
+pub(in crate::machine::execute) struct FnValueEagerSubsTrack<'a> {
+    pub(in crate::machine::execute) working_expr: KExpression<'a>,
+    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
+    /// The picked function set at install time from the head
+    /// `Resolution::Value(KFunction)` arm. Bound directly on resume —
+    /// no re-resolve.
+    pub(in crate::machine::execute) picked: &'a KFunction<'a>,
+}
+
+impl<'a> FnValueEagerSubsTrack<'a> {
+    pub(in crate::machine::execute) fn new(
+        working_expr: KExpression<'a>,
+        subs: Vec<(usize, NodeId)>,
+        picked: &'a KFunction<'a>,
+    ) -> Self {
+        Self { working_expr, subs, picked }
+    }
+}
+
 /// One variant per `DispatchShape`, plus the pre-classification
 /// `Initialized` birth state. Every Dispatch slot enters the driver in
 /// `Initialized`; the stateful driver classifies and transitions to the
@@ -264,15 +316,20 @@ impl<'a> OverloadParkTrack<'a> {
 // keeps the enum lean at the cost of one allocation per parked Keyworded
 // slot (a rare path — fast-lane variants never construct `Keyworded`, and
 // the one-shot Keyworded path terminalizes without installing a track).
-// Step 5/6 cutover may consolidate the three Options into a single
-// `Option<KeywordedTrack>` enum, at which point the box could come back
-// out; doing so now would churn the 4a–4c sub-step boundaries.
+// `FunctionValueCall` is boxed for the same reason: `FnValueState` carries
+// an `Option<FnValueEagerSubsTrack>` field today (Commit A) and gains a
+// sibling `Option<FnValueHeadPlaceholderTrack>` in Commit B. Boxing keeps
+// the enum lean across both commits; if clippy stays quiet without it
+// post-Commit B the box can come back out.
+// Step 5/6 cutover may consolidate the per-variant Options into a single
+// `Option<…Track>` enum per variant, at which point both boxes could come
+// back out; doing so now would churn the 4a–4c sub-step boundaries.
 pub(in crate::machine::execute) enum DispatchState<'a> {
     Initialized(Initialized),
     BareIdentifier(BareIdState<'a>),
     BareTypeLeaf(BareTypeState<'a>),
     ConstructorCall(CtorState<'a>),
-    FunctionValueCall(FnValueState<'a>),
+    FunctionValueCall(Box<FnValueState<'a>>),
     SigiledTypeExpr(SigilState<'a>),
     Keyworded(Box<KeywordedState<'a>>),
 }
@@ -285,30 +342,39 @@ impl<'a> DispatchState<'a> {
         DispatchState::Initialized(Initialized { pre_subs })
     }
 
-    /// Expression carried by the state itself for parked `Keyworded` slots.
-    /// The Track installers drop `NodeWork::Dispatch.expr` to an empty
-    /// placeholder once the slot transitions to `Keyworded`, so the drain-
-    /// end cycle-detection guard (`NodeStore::unresolved`) prefers this
-    /// state-carried expression when summarizing a parked Keyworded sample.
-    /// `None` for every non-Keyworded variant (their `expr` field is the
-    /// source-of-truth) and for the one-shot Keyworded path (terminates
+    /// Expression carried by the state itself for parked `Keyworded` or
+    /// `FunctionValueCall` slots. The Track installers drop
+    /// `NodeWork::Dispatch.expr` to an empty placeholder once the slot
+    /// transitions to a parked variant, so the drain-end cycle-detection
+    /// guard (`NodeStore::unresolved`) prefers this state-carried
+    /// expression when summarizing a parked sample. `None` for every
+    /// other variant (their `expr` field is the source-of-truth) and for
+    /// the one-shot Keyworded / FunctionValueCall paths (terminate
     /// without installing a track, so no parked sample exists).
     pub(in crate::machine::execute) fn parked_carrier_expr(
         &self,
     ) -> Option<&KExpression<'a>> {
-        let DispatchState::Keyworded(ks) = self else {
-            return None;
-        };
-        if let Some(track) = &ks.overload_park {
-            return Some(&track.expr);
+        match self {
+            DispatchState::Keyworded(ks) => {
+                if let Some(track) = &ks.overload_park {
+                    return Some(&track.expr);
+                }
+                if let Some(track) = &ks.bare_name_park {
+                    return Some(&track.working_expr);
+                }
+                if let Some(track) = &ks.eager_subs {
+                    return Some(&track.working_expr);
+                }
+                None
+            }
+            DispatchState::FunctionValueCall(fs) => {
+                if let Some(track) = &fs.eager_subs {
+                    return Some(&track.working_expr);
+                }
+                None
+            }
+            _ => None,
         }
-        if let Some(track) = &ks.bare_name_park {
-            return Some(&track.working_expr);
-        }
-        if let Some(track) = &ks.eager_subs {
-            return Some(&track.working_expr);
-        }
-        None
     }
 }
 
@@ -337,7 +403,21 @@ impl<'a> CtorState<'a> {
 
 impl<'a> FnValueState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, _ph: std::marker::PhantomData }
+        Self { init, eager_subs: None }
+    }
+
+    /// Build the parked-on-eager-subs shape. Used by the
+    /// `Initialized → FunctionValueCall(WaitingEagerSubs)` transition in
+    /// `stateful_install_fn_value_eager_subs_track`. `init` is the just-
+    /// consumed birth state (its `pre_subs` is always empty for
+    /// FunctionValueCall — the variant is non-binder so submit-time
+    /// recursion never fires); `track` carries the staged subs the slot
+    /// now parks on plus the picked function bound at resume.
+    pub(in crate::machine::execute) fn with_eager_subs(
+        init: Initialized,
+        track: FnValueEagerSubsTrack<'a>,
+    ) -> Self {
+        Self { init, eager_subs: Some(track) }
     }
 }
 
