@@ -1179,11 +1179,23 @@ impl<'a> Scheduler<'a> {
                 };
                 Ok(self.stateful_bare_identifier(name, scope, idx))
             }
-            // Remaining variants still ride the legacy driver in step 3a/3b.
-            // Each subsequent commit (3c, 3d) replaces one arm here with a
-            // real per-variant handler.
+            DispatchShape::FunctionValueCall => {
+                // Submit-time recursion only fires for binder-shaped expressions
+                // (LET / FN / FUNCTOR / STRUCT / UNION / SIG / MODULE binders), all
+                // of which classify as `Keyworded`. A `FunctionValueCall` (Identifier
+                // head + nested-parens body) is never produced by a binder, so
+                // `pre_subs` is empty here.
+                debug_assert!(
+                    init.pre_subs.is_empty(),
+                    "FunctionValueCall is non-binder — submit-time recursion cannot \
+                     populate pre_subs for this shape",
+                );
+                Ok(self.fast_lane_function_value_call(&expr, scope, idx))
+            }
+            // Remaining variants still ride the legacy driver in step 3a–3c.
+            // Commit 3d wires `ConstructorCall`; step 4 wires
+            // `SigiledTypeExpr` and `Keyworded`.
             DispatchShape::ConstructorCall
-            | DispatchShape::FunctionValueCall
             | DispatchShape::SigiledTypeExpr
             | DispatchShape::Keyworded => {
                 self.run_dispatch(expr, init.pre_subs, scope, idx)
