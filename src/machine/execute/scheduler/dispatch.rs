@@ -9,10 +9,7 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::dispatch_state::{
-    BareIdState, BareTypeState, DispatchState, FnValueState, Initialized, KeywordedState,
-    SigilState, CtorState,
-};
+use super::dispatch_state::DispatchState;
 use super::Scheduler;
 
 /// Pre-walk classification of a `KExpression` into the four no-keyword fast-lane
@@ -1112,12 +1109,12 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Stateful dispatch driver. Step 1 of the stateful-dispatch refactor:
-    /// classify the slot's shape, transition `Initialized → <variant>`,
-    /// then delegate to the legacy `run_dispatch` for the actual step. No
-    /// behavior change — the per-variant transition exists only to exercise
-    /// the carrier wiring later steps fill in. Steps 3+ replace each
-    /// variant's delegation with a real per-variant handler.
+    /// Stateful dispatch driver. Classifies the slot's shape and routes to
+    /// the matching per-variant handler. Step 3 lights up the fast-lane
+    /// variants (`BareTypeLeaf`, `BareIdentifier`, `FunctionValueCall`,
+    /// `ConstructorCall`) on the stateful driver; `SigiledTypeExpr` and
+    /// `Keyworded` continue to delegate to the legacy `run_dispatch` until
+    /// step 4 wires them through too.
     ///
     /// Reached only when `self.use_stateful_dispatch` is `true` — see the
     /// `NodeWork::Dispatch` arm of [`Scheduler::execute`].
@@ -1131,8 +1128,9 @@ impl<'a> Scheduler<'a> {
         // Step 2 drains the wake side-channel on entry so producers
         // that fired since the slot's last poll don't accumulate across
         // re-park. The per-variant handlers introduced in step 3+ read
-        // these wakes to pick per-edge callbacks; step 2's classify-
-        // and-delegate stub discards the list. The drain still runs
+        // these wakes to pick per-edge callbacks; the fast-lane variants
+        // lit up here all terminalize (or single-producer-park) in one
+        // poll so they don't yet consult `_wakes`. The drain still runs
         // unconditionally so the side-channel never grows stale —
         // `take_recent_wakes` resets the slot's Vec to empty in O(1).
         // See `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`.
@@ -1140,50 +1138,46 @@ impl<'a> Scheduler<'a> {
         // Step 1 contract: a Dispatch slot enters the stateful driver in
         // `Initialized`. The park-rebuild sites all reconstruct as
         // `Initialized`, so per-variant states are not yet reachable; the
-        // `_ => unreachable!` arm guards the invariant until step 2/3 wires
-        // up re-entry from a parked per-variant state.
+        // `_ => unreachable!` arm guards the invariant until later steps
+        // wire up re-entry from a parked per-variant state.
         let init = match state {
             DispatchState::Initialized(i) => i,
             _ => unreachable!(
-                "stateful dispatch step 1: only Initialized is reachable; \
-                 per-variant states are introduced in step 3+"
+                "stateful dispatch step 3: only Initialized is reachable; \
+                 re-entry from a parked per-variant state arrives in step 4+"
             ),
         };
-        // Classify and transition. The per-variant state structs are empty
-        // in step 1, but constructing them now exercises the variant-
-        // transition shape later steps depend on. The `_classified`
-        // binding is intentionally unused — it documents the transition
-        // wiring later steps fill in (when each arm delegates to a real
-        // per-variant handler instead of falling through to
-        // `run_dispatch`).
-        //
-        // `pre_subs.clone()` here pays one Vec clone per stateful dispatch
-        // entry; step 1 accepts this cost because the legacy delegate
-        // below still needs the original. Step 3+ moves `init` into the
-        // per-variant state and the clone goes away.
-        let _classified: DispatchState<'a> = match classify_dispatch_shape(&expr) {
-            DispatchShape::BareIdentifier => DispatchState::BareIdentifier(
-                BareIdState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
-            ),
-            DispatchShape::BareTypeLeaf => DispatchState::BareTypeLeaf(
-                BareTypeState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
-            ),
-            DispatchShape::ConstructorCall => DispatchState::ConstructorCall(
-                CtorState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
-            ),
-            DispatchShape::FunctionValueCall => DispatchState::FunctionValueCall(
-                FnValueState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
-            ),
-            DispatchShape::SigiledTypeExpr => DispatchState::SigiledTypeExpr(
-                SigilState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
-            ),
-            DispatchShape::Keyworded => DispatchState::Keyworded(
-                KeywordedState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
-            ),
-        };
-        // All variants delegate to the legacy driver in step 1. `pre_subs`
-        // rides through unchanged from the original `Initialized`.
-        self.run_dispatch(expr, init.pre_subs, scope, idx)
+        // Classify once at entry and route per-variant. The fast-lane
+        // handlers introduced here each terminalize (or single-producer-park)
+        // in one poll; the remaining variants (`SigiledTypeExpr`,
+        // `Keyworded`) delegate to the legacy `run_dispatch` for now.
+        match classify_dispatch_shape(&expr) {
+            DispatchShape::BareTypeLeaf => {
+                // Single-part by classifier; `pre_subs` cannot have been
+                // populated by submit-time recursion (no nested
+                // sub-expressions to pre-submit).
+                debug_assert!(
+                    init.pre_subs.is_empty(),
+                    "BareTypeLeaf is single-part — submit-time recursion cannot \
+                     populate pre_subs for this shape",
+                );
+                let t = match &expr.parts[0].value {
+                    ExpressionPart::Type(t) => t.clone(),
+                    _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
+                };
+                Ok(self.fast_lane_bare_type_leaf(&t, scope))
+            }
+            // Remaining variants still ride the legacy driver in step 3a.
+            // Each subsequent commit (3b–3d) replaces one arm here with a
+            // real per-variant handler.
+            DispatchShape::BareIdentifier
+            | DispatchShape::ConstructorCall
+            | DispatchShape::FunctionValueCall
+            | DispatchShape::SigiledTypeExpr
+            | DispatchShape::Keyworded => {
+                self.run_dispatch(expr, init.pre_subs, scope, idx)
+            }
+        }
     }
 }
 
