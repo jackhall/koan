@@ -1880,7 +1880,7 @@ impl<'a> Scheduler<'a> {
         match scope.resolve_dispatch(&working_expr) {
             ResolveOutcome::Resolved(r) => {
                 let future = r.function.bind(working_expr)?;
-                Ok(self.invoke_to_step(future, scope, idx))
+                Ok(self.invoke_to_step_pinned(future, scope, idx))
             }
             ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
@@ -2082,7 +2082,7 @@ impl<'a> Scheduler<'a> {
             // sub short-circuited at install time. Bind `picked`
             // directly without installing a track.
             return match picked.bind(working_expr) {
-                Ok(future) => Ok(self.invoke_to_step(future, scope, idx)),
+                Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             };
         }
@@ -2237,7 +2237,7 @@ impl<'a> Scheduler<'a> {
             self.free(d);
         }
         match picked.bind(working_expr) {
-            Ok(future) => Ok(self.invoke_to_step(future, scope, idx)),
+            Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
             Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
         }
     }

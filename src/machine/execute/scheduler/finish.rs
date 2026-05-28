@@ -220,4 +220,24 @@ impl<'a> Scheduler<'a> {
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }
+
+    /// `invoke_to_step` with a sibling clone of `self.active_frame` pinned
+    /// across the call. Used by the stateful resume / install-time short-circuit
+    /// sites where the dispatch slot holds the only `Rc<CallArena>` for the
+    /// arena `scope` lives in — without the pin, `KFunction::invoke` would
+    /// successfully take the frame for tail-reuse and `try_reset_for_tail`
+    /// would deallocate the arena while `scope`'s tree-borrows protector is
+    /// still live (UB). Legacy's `run_dispatch`/`schedule_picked_eager` paths
+    /// avoided the seam structurally by spawning a sibling Bind slot whose
+    /// frame clone kept `strong_count >= 2`; Step 4b's resume collapses that
+    /// slot, so the pin restores the same property locally.
+    pub(super) fn invoke_to_step_pinned(
+        &mut self,
+        future: KFuture<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        let _frame_pin = self.active_frame.clone();
+        self.invoke_to_step(future, scope, idx)
+    }
 }
