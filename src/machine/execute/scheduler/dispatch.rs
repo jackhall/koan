@@ -11,7 +11,9 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::dispatch_state::{BareNameParkTrack, DispatchState, EagerSubsTrack, KeywordedState};
+use super::dispatch_state::{
+    BareNameParkTrack, DispatchState, EagerSubsTrack, KeywordedState, OverloadParkTrack,
+};
 use super::Scheduler;
 
 /// Pre-walk classification of a `KExpression` into the four no-keyword fast-lane
@@ -1198,7 +1200,7 @@ impl<'a> Scheduler<'a> {
         let init = match state {
             DispatchState::Initialized(i) => i,
             DispatchState::Keyworded(ks) => {
-                return self.stateful_keyworded_resume(ks, scope, idx);
+                return self.stateful_keyworded_resume(*ks, scope, idx);
             }
             _ => unreachable!(
                 "fast-lane stateful variants terminalize in one poll; \
@@ -1330,10 +1332,11 @@ impl<'a> Scheduler<'a> {
                 return Err(KError::new(KErrorKind::UnboundName(name)));
             }
             // Deferred folds onto `KeywordedState.eager_subs` (function = None)
-            // in 4b; ParkOnProducers folds onto the bare-name / overload park
-            // tracks in 4c / 4d. Both defer to legacy for now; legacy's
-            // `Deferred` and `ParkOnProducers` paths run a fresh resolve, so
-            // the toggle-on path matches today's behavior exactly.
+            // in 4b. ParkOnProducers folds onto `KeywordedState.overload_park`
+            // in 4d (both the bare-name-Placeholder and the
+            // pending-overload-entry sub-cases — `resolve_dispatch_with_chain`
+            // surfaces them through the same return variant, so the install
+            // path is shared).
             ResolveOutcome::Deferred => {
                 debug_assert!(
                     pre_subs.is_empty(),
@@ -1343,7 +1346,7 @@ impl<'a> Scheduler<'a> {
                 return self.stateful_install_eager_only(expr, scope, idx);
             }
             ResolveOutcome::ParkOnProducers(producers) => {
-                return Ok(self.park_pending_and_redispatch(producers, expr, pre_subs, idx));
+                return Ok(self.stateful_install_overload_park(producers, expr, pre_subs, idx));
             }
         };
         // Step 3.5: install dispatch-time placeholders. Both carry the
@@ -1514,7 +1517,86 @@ impl<'a> Scheduler<'a> {
                 // field, but `NodeWork::Dispatch` still requires it
                 // structurally. Mirrors the eager-subs install shape.
                 expr: KExpression::new(Vec::new()),
-                state: DispatchState::Keyworded(KeywordedState::with_bare_name_park(init, track)),
+                state: DispatchState::Keyworded(Box::new(
+                    KeywordedState::with_bare_name_park(init, track),
+                )),
+            },
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        }
+    }
+
+    /// Realize the overload-park Track: filter `producers` for cycles
+    /// and already-errored terminals (mirroring the legacy
+    /// `park_pending_and_redispatch` guards), install a `Notify` park
+    /// edge from each surviving producer via `DepGraph::add_park_edge`,
+    /// and transition to `Keyworded(WaitingOverloadPark)`. Two
+    /// `resolve_dispatch_with_chain` outcomes fold into this installer:
+    /// bare-name `Placeholder`s the strict walk couldn't admit, and an
+    /// innermost-visible `pending_overloads[key]` entry an FN /
+    /// FUNCTOR sibling installed.
+    ///
+    /// An empty filtered list (every producer either errored or would
+    /// close a cycle) surfaces the standard `DispatchFailed` —
+    /// installing no park edge and falling through would deadlock the
+    /// drain-end cycle-detection guard.
+    ///
+    /// On track completion `stateful_keyworded_resume_overload_park`
+    /// re-runs `stateful_keyworded_initial` against the carried `expr`
+    /// and preserved `pre_subs`. The producers' finalized state (an
+    /// overload now registered in `bindings.functions`, or a bound bare
+    /// name) feeds the rebuilt resolve.
+    fn stateful_install_overload_park(
+        &mut self,
+        producers: Vec<NodeId>,
+        expr: KExpression<'a>,
+        pre_subs: Vec<(usize, NodeId)>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        let mut to_wait: Vec<NodeId> = Vec::new();
+        for p in producers {
+            if self.is_result_ready(p) {
+                // Terminal while its placeholder is still set ⇒ the
+                // producer errored (success clears the placeholder);
+                // propagate rather than park on a dead slot. Same
+                // `<dispatch-park>` frame the legacy
+                // `park_pending_and_redispatch` uses.
+                if let Err(e) = self.read_result(p) {
+                    let frame = Frame::from_expr("<dispatch-park>", &expr);
+                    return NodeStep::Done(NodeOutput::Err(
+                        propagate_dep_error(e, Some(frame)),
+                    ));
+                }
+            } else if !self.deps.would_create_cycle(p, NodeId(idx))
+                && !to_wait.contains(&p)
+            {
+                to_wait.push(p);
+            }
+        }
+        if to_wait.is_empty() {
+            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+                expr: expr.summarize(),
+                reason: "no matching function".to_string(),
+            })));
+        }
+        for p in &to_wait {
+            self.deps.add_park_edge(*p, NodeId(idx));
+        }
+        let track = OverloadParkTrack::new(expr, to_wait);
+        let init = super::dispatch_state::Initialized { pre_subs };
+        NodeStep::Replace {
+            work: NodeWork::Dispatch {
+                // Drop the entry expression — the state carries `expr`
+                // from here on. The keyworded resume routes by state
+                // variant and never reads this field, but
+                // `NodeWork::Dispatch` still requires it structurally.
+                // Mirrors the bare-name-park / eager-subs install shape.
+                expr: KExpression::new(Vec::new()),
+                state: DispatchState::Keyworded(Box::new(
+                    KeywordedState::with_overload_park(init, track),
+                )),
             },
             frame: None,
             function: None,
@@ -1595,7 +1677,9 @@ impl<'a> Scheduler<'a> {
                 // field, but `NodeWork::Dispatch` still requires it
                 // structurally.
                 expr: KExpression::new(Vec::new()),
-                state: DispatchState::Keyworded(KeywordedState::with_eager_subs(init, track)),
+                state: DispatchState::Keyworded(Box::new(
+                    KeywordedState::with_eager_subs(init, track),
+                )),
             },
             frame: None,
             function: None,
@@ -1605,19 +1689,32 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Resume entry for a `Keyworded` slot. Step 4b installs the
-    /// `eager_subs` track; step 4c installs the `bare_name_park` track.
-    /// The two are mutually exclusive at install time — the part walk's
-    /// park-precedence guard installs the bare-name park *before* staging
-    /// any subs — so the resume routing tests `bare_name_park` first; a
-    /// `Some` there means we never reached the eager-subs staging. Step
-    /// 4d adds the overload-park arm.
+    /// `eager_subs` track; step 4c installs the `bare_name_park` track;
+    /// step 4d installs the `overload_park` track. The three are
+    /// mutually exclusive at install time — `overload_park` fires when
+    /// `resolve_dispatch_with_chain` returns `ParkOnProducers` *before*
+    /// the part walk runs (so neither sibling has staged), and the part
+    /// walk's park-precedence guard installs `bare_name_park` *before*
+    /// staging any subs (so `eager_subs` cannot coexist with it). The
+    /// resume routing tests each track in install order: `overload_park`,
+    /// then `bare_name_park`, then `eager_subs`.
     fn stateful_keyworded_resume(
         &mut self,
         state: KeywordedState<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let KeywordedState { init, eager_subs, bare_name_park } = state;
+        let KeywordedState { init, eager_subs, bare_name_park, overload_park } = state;
+        if let Some(track) = overload_park {
+            debug_assert!(
+                eager_subs.is_none() && bare_name_park.is_none(),
+                "overload_park is mutually exclusive with eager_subs and bare_name_park \
+                 at install time (overload_park installs from the `ParkOnProducers` arm \
+                 of `resolve_dispatch_with_chain`, before the part walk could stage \
+                 either sibling track); resume must never see them coexisting",
+            );
+            return self.stateful_keyworded_resume_overload_park(track, init, scope, idx);
+        }
         if let Some(track) = bare_name_park {
             debug_assert!(
                 eager_subs.is_none(),
@@ -1634,7 +1731,7 @@ impl<'a> Scheduler<'a> {
         let _ = init;
         let track = eager_subs.expect(
             "Keyworded resume is only entered after a track is installed; \
-             Steps 4b/4c install `eager_subs` or `bare_name_park`",
+             Steps 4b/4c/4d install `eager_subs`, `bare_name_park`, or `overload_park`",
         );
         self.stateful_keyworded_resume_eager_subs(track, scope, idx)
     }
@@ -1666,6 +1763,40 @@ impl<'a> Scheduler<'a> {
         let BareNameParkTrack { working_expr, producers, .. } = track;
         let _ = producers;
         self.stateful_keyworded_initial(working_expr, init.pre_subs, scope, idx)
+    }
+
+    /// Track-completion continuation for the `overload_park` track.
+    /// Every producer the install filtered into `to_wait` has
+    /// terminalized (the slot pops only on `pending_deps == 0`), so a
+    /// forward-overload sibling has registered its function in
+    /// `bindings.functions` (or a bare-name placeholder has cleared to
+    /// a bound value). Re-entering `stateful_keyworded_initial`
+    /// rebuilds `bare_outcomes`, re-runs
+    /// `resolve_dispatch_with_chain` against the now-populated bucket,
+    /// and proceeds. The legacy `park_pending_and_redispatch` had the
+    /// same re-classify-on-wake shape; the per-wake re-classify
+    /// elimination falls out of Step 5's cutover.
+    ///
+    /// If the wake didn't actually produce a matching overload (a
+    /// later-sibling registered a different bucket key, or the
+    /// re-resolve still finds another forward overload registered
+    /// after this slot installed its park), the rebuilt resolve fires
+    /// `ParkOnProducers` again and the re-entry installs a fresh
+    /// `overload_park` track on the next-earliest sibling — matching
+    /// the legacy behavior.
+    fn stateful_keyworded_resume_overload_park(
+        &mut self,
+        track: OverloadParkTrack<'a>,
+        init: super::dispatch_state::Initialized,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        // Same Notify-edge contract as the bare-name resume:
+        // `dep_edges[idx]` keeps the entries across the re-Dispatch
+        // wake; `owned_children` skips them at free time.
+        let OverloadParkTrack { expr, producers, .. } = track;
+        let _ = producers;
+        self.stateful_keyworded_initial(expr, init.pre_subs, scope, idx)
     }
 
     /// Track-completion continuation for the `eager_subs` track. Reads each
@@ -1753,7 +1884,7 @@ impl<'a> Scheduler<'a> {
                 }))
             }
             ResolveOutcome::ParkOnProducers(producers) => {
-                Ok(self.park_pending_and_redispatch(producers, working_expr, Vec::new(), idx))
+                Ok(self.stateful_install_overload_park(producers, working_expr, Vec::new(), idx))
             }
             ResolveOutcome::UnboundName(name) => Err(KError::new(KErrorKind::UnboundName(name))),
         }

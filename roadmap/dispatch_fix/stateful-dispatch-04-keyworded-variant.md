@@ -18,16 +18,21 @@ state-bearing Track machinery on the stateful path. The legacy
 mutating helpers stay alive only for the toggle-off `run_dispatch`
 path; their last caller goes away in step 6.
 
-Sub-steps 4a + 4b + 4c have landed: the one-shot path (Resolved with
-no parks and no eager subs) terminalizes directly via
+Sub-steps 4a + 4b + 4c + 4d have landed: the one-shot path (Resolved
+with no parks and no eager subs) terminalizes directly via
 `Scheduler::stateful_keyworded_initial`; the Resolved-with-eager-
 subs and `Deferred` paths now install an `EagerSubsTrack` on
-`KeywordedState` rather than allocating a `NodeWork::Bind` hop; and
-the Resolved-with-parked-bare-names path now installs a
+`KeywordedState` rather than allocating a `NodeWork::Bind` hop; the
+Resolved-with-parked-bare-names path now installs a
 `BareNameParkTrack` on `KeywordedState` (via
 `stateful_install_bare_name_park`) rather than rebuilding the slot
 as `DispatchState::initialized` through the legacy
-`install_combined_park`. On eager-subs completion
+`install_combined_park`; and the `ResolveOutcome::ParkOnProducers`
+arm of `stateful_keyworded_initial` (plus the post-eager-subs
+re-resolve in `stateful_keyworded_finish`) now installs an
+`OverloadParkTrack` on `KeywordedState` (via
+`stateful_install_overload_park`) rather than calling the legacy
+`park_pending_and_redispatch`. On eager-subs completion
 `stateful_keyworded_resume_eager_subs` reads each sub's terminal,
 splices `Future(obj)` into `working_expr.parts[i]`, frees the subs,
 and `stateful_keyworded_finish` re-resolves dispatch against the
@@ -40,9 +45,23 @@ legacy `run_bind` surface. On bare-name-park completion
 `stateful_keyworded_initial` against the carried `working_expr` and
 preserved `pre_subs`; the producers' now-bound values surface
 through the rebuilt `bare_outcomes` cache and the wrap-slot splice
-fires `Future(obj)` for them on the second pass. The
-`ParkOnProducers` branch still defers to
-`park_pending_and_redispatch` as a transitional state until 4d.
+fires `Future(obj)` for them on the second pass. On overload-park
+completion `stateful_keyworded_resume_overload_park` re-runs
+`stateful_keyworded_initial` against the carried `expr` and
+preserved `pre_subs`; the producers' now-finalized state (an
+overload registered in `bindings.functions`, or a resolved bare
+name) feeds the rebuilt resolve. The legacy
+`park_pending_and_redispatch` / `install_combined_park` remain
+alive only for the toggle-off `run_dispatch` driver and the
+`run_bind` re-park; their last callers go away in step 6. With the
+third track field added, the `Keyworded` variant of `DispatchState`
+is boxed (`Keyworded(Box<KeywordedState<'a>>)`) so the `NodeWork` /
+`NodeStep` / `Node` / `SlotState` cascade stays under clippy's
+`large_enum_variant` threshold; the box pays one allocation per
+parked Keyworded slot (a rare path) and Step 5/6 cutover may
+consolidate the three `Option<Track>` fields into a single
+`Option<KeywordedTrack>` enum at which point the box can come back
+out.
 
 **Problem.** After step 3, the five fast-lane `DispatchShape`
 variants run on the stateful driver under toggle-on, but
@@ -125,18 +144,43 @@ rewrite. None of that machinery is yet state-bearing.
     track-installation time, same surface today's fused walk
     uses. Re-admission continuation re-attempts strict
     admission against the now-bound types.
-  - **(4d) Overload park track.** `overload_park: Some(Track {
-    producer })` for the `ResolveOutcome::ParkOnProducers` arm
-    that today fires when an innermost-visible
-    `pending_overloads[key]` is recorded. Track-completion
-    continuation re-runs
-    [`resolve_dispatch_with_chain`](../../src/machine/core/scope.rs)
-    against the now-registered overload, re-parking on the
-    next-earliest sibling if its pick doesn't admit. The
-    legacy `park_pending_and_redispatch` call site in
-    [`finish.rs:64`](../../src/machine/execute/scheduler/finish.rs)
-    needs a stateful equivalent — investigate during this
-    sub-step.
+  - **(4d) Overload park track. Shipped.** `OverloadParkTrack`
+    lives on `KeywordedState`; the `ResolveOutcome::ParkOnProducers`
+    arm of `stateful_keyworded_initial` and the post-eager-subs
+    re-resolve in `stateful_keyworded_finish` install it through
+    `stateful_install_overload_park` and park the slot on the
+    surviving producers as `Notify` dep_edges. The same install
+    serves both `ParkOnProducers` sub-cases —
+    `resolve_dispatch_with_chain` surfaces bare-name `Placeholder`s
+    and innermost-visible `pending_overloads[key]` entries through
+    the same return variant, so one installer covers both. The
+    install filters producers for cycles and already-errored
+    terminals (mirroring the legacy `park_pending_and_redispatch`
+    guards) before installing the park edges; an empty filtered
+    list surfaces `DispatchFailed`. On track completion
+    `stateful_keyworded_resume_overload_park` re-runs
+    `stateful_keyworded_initial` against the carried `expr` and
+    preserved `pre_subs`; if the rebuilt resolve fires
+    `ParkOnProducers` again (a later sibling now-visible at the
+    bucket but still in flight), the re-entry installs a fresh
+    `overload_park` on the next-earliest sibling — matching the
+    legacy re-park behavior. The `finish.rs:64` call site in
+    `run_bind` stays as-is: the bind's re-Dispatch goes through
+    `Initialized → classify → Keyworded → stateful_keyworded_initial`
+    on wake, where the new stateful installer takes over on any
+    subsequent `ParkOnProducers`. Step 6 folds the
+    `Bind → Dispatch` transition directly into the stateful state
+    machine. With the third `Option<Track>` field added,
+    `KeywordedState` exceeded clippy's `large_enum_variant`
+    threshold for the `NodeWork` / `NodeStep` / `Node` /
+    `SlotState` cascade, so `DispatchState::Keyworded` is now
+    boxed (`Keyworded(Box<KeywordedState<'a>>)`); the box pays one
+    allocation per parked Keyworded slot (a rare path — the
+    fast-lane variants never construct `Keyworded`, and the
+    one-shot Keyworded path terminalizes without installing a
+    track). Step 5/6 may consolidate the three `Option<Track>`
+    fields into a single `Option<KeywordedTrack>` enum at which
+    point the box can come back out.
   - **(4e) Cycle-detection guard confirmation.** The drain-end
     guard in
     [`execute`](../../src/machine/execute/scheduler/execute.rs)

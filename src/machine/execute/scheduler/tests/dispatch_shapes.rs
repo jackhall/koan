@@ -820,6 +820,50 @@ fn stateful_keyworded_eager_subs_reresolve_surfaces_dispatch_failed() {
     );
 }
 
+/// Step 4d acceptance: a Keyworded dispatch whose `resolve_dispatch_with_chain`
+/// returns `ParkOnProducers` (either ≥1 bare-name `Placeholder` the strict
+/// walk couldn't admit, or an innermost-visible `pending_overloads[key]`
+/// entry an FN sibling installed) now installs the `overload_park` track
+/// on `KeywordedState` rather than rebuilding the slot as
+/// `DispatchState::initialized` via the legacy
+/// `park_pending_and_redispatch`. On track-completion the resume handler
+/// re-runs `stateful_keyworded_initial` against the carried `expr` /
+/// `pre_subs`; the producers' now-bound state (a finalized overload, a
+/// resolved bare name) feeds the rebuilt resolve and dispatch terminalizes.
+///
+/// Program mirrors `fn_bare_arg_call_parks_on_pending_overload_bucket`
+/// under explicit toggle-on routing: the FN's typed parameter `arg :Wrap`
+/// forward-references the STRUCT, so the FN's bucket entry installs but
+/// the FN slot stays in flight until STRUCT `Wrap` finalizes. While the
+/// FN is in flight, `LET out = (LIFT_BARE w)` dispatches the call shape
+/// and `resolve_dispatch_with_chain` surfaces `ParkOnProducers([fn_node_id])`
+/// — the FN's bucket entry is `Pending(fn_node_id)`. The LET parks on
+/// the FN; STRUCT finalization wakes the FN; the FN finalizes its
+/// overload registration and wakes the LET; the LET's resume re-resolves
+/// and binds.
+#[test]
+fn stateful_keyworded_overload_park_resumes_through_state() {
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let exprs = crate::parse::parse(
+        "FN (LIFT_BARE arg :Wrap) -> Number = (7)\n\
+         STRUCT Wrap = (n :Number)\n\
+         LET w = (Wrap (n = 9))\n\
+         LET out = (LIFT_BARE w)",
+    )
+    .expect("parse succeeds");
+    sched.enter_block(scope.id, exprs, scope);
+    sched
+        .execute()
+        .expect("overload-park forward ref must resolve through the stateful 4d track");
+    assert!(
+        matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
+        "expected `out` to be 7.0 via the stateful overload-park track; got {}",
+        scope.lookup("out").map_or("None".to_string(), |o| o.summarize()),
+    );
+}
+
 /// Step 4c acceptance: a Keyworded dispatch whose initial part walk
 /// resolves ≥1 wrap-slot or ref-name-slot bare name to
 /// `NameOutcome::Parked(producer)` installs the `bare_name_park` track

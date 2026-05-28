@@ -36,6 +36,23 @@
 //! wake re-classify elimination falls out of Step 5's cutover once
 //! every transition stays inside `Keyworded`.
 //!
+//! Step 4d lights up the `overload_park` track on `KeywordedState`:
+//! the `ResolveOutcome::ParkOnProducers` arm of
+//! `stateful_keyworded_initial` and the post-eager-subs re-resolve in
+//! `stateful_keyworded_finish` now install the park edges and
+//! transition to `Keyworded(WaitingOverloadPark)` instead of rebuilding
+//! the slot as `DispatchState::initialized` via the legacy
+//! `park_pending_and_redispatch`. Two return shapes from
+//! `resolve_dispatch_with_chain` fold into this arm: bare-name
+//! placeholders the strict walk couldn't admit, and an innermost-
+//! visible `pending_overloads[key]` entry an FN / FUNCTOR sibling
+//! installed for the same bucket. The track carries the original
+//! `expr` (unspliced — the walk hadn't run yet) and the filtered
+//! producer list. On completion `stateful_keyworded_resume_overload_park`
+//! re-runs `stateful_keyworded_initial` against the carried `expr` and
+//! preserved `pre_subs`, picking up the now-bound overload (or the
+//! now-resolved bare name).
+//!
 //! Visibility: `nodes.rs` lives at `crate::machine::execute::nodes`,
 //! outside the `scheduler/` submodule. To let `NodeWork::Dispatch` name
 //! `DispatchState`, every public symbol here uses
@@ -110,6 +127,25 @@ pub(in crate::machine::execute) struct KeywordedState<'a> {
     /// `bare_outcomes` cache picks up their now-bound values and the
     /// wrap-slot splice fires `Future(obj)` for them on the second pass.
     pub(in crate::machine::execute) bare_name_park: Option<BareNameParkTrack<'a>>,
+    /// Overload park track installed by the `ResolveOutcome::ParkOnProducers`
+    /// arm of `stateful_keyworded_initial` (and the post-eager-subs
+    /// re-resolve in `stateful_keyworded_finish`). The path the legacy
+    /// driver served via `park_pending_and_redispatch`. `None` is the
+    /// initial-entry shape; the transition `Initialized → Keyworded`
+    /// writes `Some` when `resolve_dispatch_with_chain` returned
+    /// `ParkOnProducers` — either because ≥1 bare-name arg resolved to
+    /// a still-pending forward-reference `Placeholder` and no bucket
+    /// admitted, or because an innermost-visible
+    /// `pending_overloads[key]` entry an FN / FUNCTOR sibling recorded
+    /// is in flight. Mutually exclusive with `eager_subs` and
+    /// `bare_name_park` at install time — the resolve fails *before*
+    /// the part walk runs, so neither sibling track has been staged.
+    /// On track completion `stateful_keyworded_resume_overload_park`
+    /// re-runs `stateful_keyworded_initial` against the carried `expr`
+    /// and `pre_subs`; the producers' now-bound state (a finalized
+    /// overload registered in `bindings.functions`, or a bound bare
+    /// name) feeds the rebuilt resolve.
+    pub(in crate::machine::execute) overload_park: Option<OverloadParkTrack<'a>>,
 }
 
 /// Track state for the eager-subs sub-Dispatches a `Keyworded` slot is
@@ -183,6 +219,36 @@ impl<'a> BareNameParkTrack<'a> {
     }
 }
 
+/// Track state for the forward-reference overload producers a
+/// `Keyworded` slot is parked on when
+/// `resolve_dispatch_with_chain` returned `ParkOnProducers` before the
+/// part walk ran. Carries the *original* `expr` (no splice has happened
+/// yet) so the resume entry can hand it straight back to
+/// `stateful_keyworded_initial`. Producers are recorded for debug /
+/// invariant tracing only — the re-entry rebuilds `bare_outcomes` and
+/// re-runs `resolve_dispatch_with_chain` against the scope (which now
+/// sees the producers' finalized state), so the resume path doesn't
+/// read the list.
+///
+/// Park edges are installed as `Notify` (via `add_park_edge`), matching
+/// the legacy `park_pending_and_redispatch` shape: the producers are
+/// sibling forward references, not children of this slot, so the
+/// slot's reclaim walk must not transit into them.
+pub(in crate::machine::execute) struct OverloadParkTrack<'a> {
+    pub(in crate::machine::execute) expr: KExpression<'a>,
+    pub(in crate::machine::execute) producers: Vec<NodeId>,
+    _ph: std::marker::PhantomData<&'a KFunction<'a>>,
+}
+
+impl<'a> OverloadParkTrack<'a> {
+    pub(in crate::machine::execute) fn new(
+        expr: KExpression<'a>,
+        producers: Vec<NodeId>,
+    ) -> Self {
+        Self { expr, producers, _ph: std::marker::PhantomData }
+    }
+}
+
 /// One variant per `DispatchShape`, plus the pre-classification
 /// `Initialized` birth state. Every Dispatch slot enters the driver in
 /// `Initialized`; the stateful driver classifies and transitions to the
@@ -190,6 +256,17 @@ impl<'a> BareNameParkTrack<'a> {
 /// delegates straight back to the legacy `run_dispatch` from every variant
 /// so the carrier shape can land without any behavior change; later steps
 /// replace each variant's delegation with a real handler.
+// `Keyworded` is boxed because `KeywordedState` carries three independent
+// `Option<Track>` fields (eager-subs / bare-name-park / overload-park), one
+// of which is `Some` at any park-install time. Inlining would push every
+// `DispatchState`-carrying type (`NodeWork::Dispatch`, `NodeStep::Replace`,
+// `Node`, `SlotState`) past clippy's `large_enum_variant` threshold; boxing
+// keeps the enum lean at the cost of one allocation per parked Keyworded
+// slot (a rare path — fast-lane variants never construct `Keyworded`, and
+// the one-shot Keyworded path terminalizes without installing a track).
+// Step 5/6 cutover may consolidate the three Options into a single
+// `Option<KeywordedTrack>` enum, at which point the box could come back
+// out; doing so now would churn the 4a–4c sub-step boundaries.
 pub(in crate::machine::execute) enum DispatchState<'a> {
     Initialized(Initialized),
     BareIdentifier(BareIdState<'a>),
@@ -197,7 +274,7 @@ pub(in crate::machine::execute) enum DispatchState<'a> {
     ConstructorCall(CtorState<'a>),
     FunctionValueCall(FnValueState<'a>),
     SigiledTypeExpr(SigilState<'a>),
-    Keyworded(KeywordedState<'a>),
+    Keyworded(Box<KeywordedState<'a>>),
 }
 
 impl<'a> DispatchState<'a> {
@@ -246,7 +323,7 @@ impl<'a> SigilState<'a> {
 
 impl<'a> KeywordedState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, eager_subs: None, bare_name_park: None }
+        Self { init, eager_subs: None, bare_name_park: None, overload_park: None }
     }
 
     /// Build the parked-on-eager-subs shape. Used by the
@@ -258,7 +335,7 @@ impl<'a> KeywordedState<'a> {
         init: Initialized,
         track: EagerSubsTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: Some(track), bare_name_park: None }
+        Self { init, eager_subs: Some(track), bare_name_park: None, overload_park: None }
     }
 
     /// Build the parked-on-bare-name-producers shape. Used by the
@@ -274,6 +351,22 @@ impl<'a> KeywordedState<'a> {
         init: Initialized,
         track: BareNameParkTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: None, bare_name_park: Some(track) }
+        Self { init, eager_subs: None, bare_name_park: Some(track), overload_park: None }
+    }
+
+    /// Build the parked-on-overload-producers shape. Used by the
+    /// `Initialized → Keyworded(WaitingOverloadPark)` transition in
+    /// `stateful_keyworded_initial` (and the post-eager-subs
+    /// re-resolve in `stateful_keyworded_finish`) when
+    /// `resolve_dispatch_with_chain` returned `ParkOnProducers` before
+    /// the part walk could run. `init` carries `pre_subs` forward across
+    /// re-Dispatch (so the binder recursive-submission optimization
+    /// survives the wake); `track` carries the original `expr` plus the
+    /// filtered producer list for invariant tracing.
+    pub(in crate::machine::execute) fn with_overload_park(
+        init: Initialized,
+        track: OverloadParkTrack<'a>,
+    ) -> Self {
+        Self { init, eager_subs: None, bare_name_park: None, overload_park: Some(track) }
     }
 }
