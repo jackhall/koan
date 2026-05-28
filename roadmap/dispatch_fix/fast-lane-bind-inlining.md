@@ -1,9 +1,11 @@
 # Fast-lane Bind inlining
 
-Apply the [Step 4 `KeywordedState`](stateful-dispatch-04-keyworded-variant.md)
-Track-based eager-subs inlining pattern to the remaining fast-lane
-variants that still build a `NodeWork::Bind` slot for their eager
-sub-Dispatches. After this item ships, no `DispatchShape` variant
+Apply the `KeywordedState` Track-based eager-subs inlining pattern (an
+`EagerSubsTrack` on the dispatch slot's state — submit eager subs as
+`Owned` dep-edges, park the slot directly, splice `Future(obj)` into the
+working expression at track completion, bind inline) to the remaining
+fast-lane variants that still build a `NodeWork::Bind` slot for their
+eager sub-Dispatches. After this item ships, no `DispatchShape` variant
 spawns a Bind slot — `run_bind` and `NodeWork::Bind` become dead and
 can be removed alongside the legacy `run_dispatch` deletion in
 [Step 6](stateful-dispatch-06-deletion.md).
@@ -86,7 +88,6 @@ The remaining Bind callers after Step 4 are therefore
 
 **Requires:**
 
-- [Stateful dispatch — Step 4: `Keyworded` variant](stateful-dispatch-04-keyworded-variant.md)
 
 **Unblocks:**
 

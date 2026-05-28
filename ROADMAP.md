@@ -84,6 +84,16 @@ What's shipped that the open items below build on:
   No-keyword shapes (`BareIdentifier`, `BareTypeLeaf`,
   `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) ride
   dedicated fast-lane handlers that never enter the candidate walk.
+- *Stateful dispatch driver.* Every `DispatchShape` variant runs on the
+  state-bearing `run_dispatch_stateful` driver under toggle-on. The
+  carrier shape (`DispatchState` enum + per-variant structs), routing
+  toggle, `recent_wakes` wake-attribution side-channel, five fast-lane
+  variants, and the `Keyworded` variant with its eager-subs /
+  bare-name-park / overload-park tracks all carry progress in the slot
+  and advance by one edge per callback (no per-wake reclassification,
+  no `bare_outcomes` rebuild, no `NodeWork::Bind` hop on the keyworded
+  path). The default-flip and legacy `run_dispatch` deletion are the
+  remaining open items.
 
 ## Next items
 

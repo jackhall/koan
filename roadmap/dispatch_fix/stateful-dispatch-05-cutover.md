@@ -81,7 +81,6 @@ costing the production hot path on every wake.
 
 **Requires:**
 
-- [Stateful dispatch — Step 4: `Keyworded` variant](stateful-dispatch-04-keyworded-variant.md)
 
 **Unblocks:**
 

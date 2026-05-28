@@ -68,9 +68,10 @@ the design tree.
 - **Call-site sweep — decided.**
   [`scheduler/finish.rs:64`](../../src/machine/execute/scheduler/finish.rs)'s
   `park_pending_and_redispatch` call must move to a stateful
-  equivalent — investigated during
-  [step 4](stateful-dispatch-04-keyworded-variant.md), confirm
-  the migration here. Any other call site of the deleted helpers
+  equivalent. The shape was investigated during the Keyworded
+  variant work (the legacy mutator stayed alive for the
+  `run_bind` re-park surface); confirm the migration here. Any
+  other call site of the deleted helpers
   surfaces through `cargo build` failures; resolve each by
   routing to the stateful equivalent or removing if dead.
 

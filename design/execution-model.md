@@ -979,16 +979,16 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Stateful dispatch node** — a parallel-implementation refactor of the
-  dispatch driver, sequenced into six numbered work items chained through
-  Requires / Unblocks edges. The carrier shape, routing toggle, the
-  `recent_wakes` wake-attribution side-channel, and four of five
-  fast-lane variants (`BareTypeLeaf`, `BareIdentifier`,
-  `FunctionValueCall`, `ConstructorCall`) on the stateful driver have
-  landed; `SigiledTypeExpr` and `Keyworded` still delegate to the legacy
-  `run_dispatch` and ship in
-  [roadmap/dispatch_fix/stateful-dispatch-04-keyworded-variant.md](../roadmap/dispatch_fix/stateful-dispatch-04-keyworded-variant.md).
-  `run_dispatch` re-runs from scratch on every wake; the dispatch slot
-  would carry its progress (shape, `bare_outcomes`, picked function,
-  working expression, per-track pending counters) and advance by one
-  edge per callback. `pre_subs` folds into the per-variant state.
+- **Stateful dispatch cutover** — every `DispatchShape` variant now runs
+  end-to-end on the stateful driver under toggle-on (the carrier shape,
+  routing toggle, `recent_wakes` wake-attribution side-channel, five
+  fast-lane variants, and the `Keyworded` variant with its eager-subs /
+  bare-name-park / overload-park tracks have all landed). The remaining
+  work is flipping `use_stateful_dispatch` on by default and deleting
+  the legacy `run_dispatch` machinery —
+  [roadmap/dispatch_fix/stateful-dispatch-05-cutover.md](../roadmap/dispatch_fix/stateful-dispatch-05-cutover.md)
+  drives the default flip and
+  [roadmap/dispatch_fix/stateful-dispatch-06-deletion.md](../roadmap/dispatch_fix/stateful-dispatch-06-deletion.md)
+  removes the legacy driver and its surviving mutators
+  (`install_combined_park`, `park_pending_and_redispatch`,
+  `schedule_eager_only`).
