@@ -165,6 +165,10 @@ language through the dispatcher and the user-functor application surface:
 
 - [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
+- [Fast-lane Bind inlining](roadmap/dispatch_fix/fast-lane-bind-inlining.md) — follow-up to
+  Stateful dispatch Step 4: extends the Track-based eager-subs inlining pattern to the
+  remaining fast-lane `FunctionValueCall` Bind spawn so no `DispatchShape` variant
+  builds a Bind slot.
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

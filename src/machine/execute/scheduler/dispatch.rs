@@ -1258,11 +1258,155 @@ impl<'a> Scheduler<'a> {
                 );
                 Ok(self.stateful_constructor_call(expr, scope, idx))
             }
-            // Remaining variants still ride the legacy driver after step 3.
-            // Step 4 wires `SigiledTypeExpr` and `Keyworded`.
-            DispatchShape::SigiledTypeExpr | DispatchShape::Keyworded => {
+            DispatchShape::Keyworded => {
+                self.stateful_keyworded_initial(expr, init.pre_subs, scope, idx)
+            }
+            // `SigiledTypeExpr` still rides the legacy driver after Step 4a.
+            // It folds onto the stateful driver in 4d (per the Step 4 plan).
+            DispatchShape::SigiledTypeExpr => {
                 self.run_dispatch(expr, init.pre_subs, scope, idx)
             }
+        }
+    }
+
+    /// Stateful-driver handler for `DispatchShape::Keyworded`. Step 4a routes
+    /// the *one-shot* (Resolved, no parks, no eager subs) terminate directly,
+    /// inlining the placeholder install and the `function.bind` call without
+    /// going through any per-variant state. The Resolved-with-parks and
+    /// Resolved-with-eager-subs sub-cases install the combined park / build
+    /// the Bind slot exactly the way the legacy `run_dispatch` does — there's
+    /// no behavioral split. `Deferred` and `ParkOnProducers` still defer to
+    /// the legacy driver (4b folds `Deferred` into an eager-subs Track on
+    /// `KeywordedState`; 4c folds the bare-name park; 4d folds the overload
+    /// park).
+    ///
+    /// Why this isn't a thin pre-walk that delegates to `run_dispatch` for
+    /// every non-trivial case: doing so would re-enter
+    /// `resolve_dispatch_with_chain` a second time on the same slot, which
+    /// trips the toggle-on dispatch-counter tests by inflating the per-call
+    /// count. The Resolved-* sub-cases reuse the already-built `bare_outcomes`
+    /// and `resolved` carrier and pay the resolve cost exactly once.
+    ///
+    /// The walk consumes `expr.parts` (via `into_iter`); we keep a clone of
+    /// `expr` only for the `Deferred` / `ParkOnProducers` legacy fall-back
+    /// arms, which the legacy `run_dispatch` handles differently from the
+    /// Resolved path.
+    fn stateful_keyworded_initial(
+        &mut self,
+        expr: KExpression<'a>,
+        pre_subs: Vec<(usize, NodeId)>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let bare_outcomes = self.build_bare_outcomes(&expr.parts, scope);
+        // ProducerErrored short-circuit: a bare-name arg whose producer has
+        // already terminalized with `Err` can never resolve; surface the error
+        // with a `<wrap-resolve>` frame before the candidate walk.
+        for outcome in bare_outcomes.iter().flatten() {
+            if let NameOutcome::ProducerErrored(e) = outcome {
+                let frame = Frame::from_expr("<wrap-resolve>", &expr);
+                return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame)))));
+            }
+        }
+        let chain = self.active_chain.as_deref();
+        let outcome = scope.resolve_dispatch_with_chain(&expr, chain, &bare_outcomes);
+        let resolved = match outcome {
+            ResolveOutcome::Resolved(r) => r,
+            ResolveOutcome::Ambiguous(n) => {
+                return Err(KError::new(KErrorKind::AmbiguousDispatch {
+                    expr: expr.summarize(),
+                    candidates: n,
+                }));
+            }
+            ResolveOutcome::Unmatched => {
+                return Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: expr.summarize(),
+                    reason: "no matching function".to_string(),
+                }));
+            }
+            ResolveOutcome::UnboundName(name) => {
+                return Err(KError::new(KErrorKind::UnboundName(name)));
+            }
+            // Deferred folds onto `KeywordedState.eager_subs` (function = None)
+            // in 4b; ParkOnProducers folds onto the bare-name / overload park
+            // tracks in 4c / 4d. Both defer to legacy for now; legacy's
+            // `Deferred` and `ParkOnProducers` paths run a fresh resolve, so
+            // the toggle-on path matches today's behavior exactly.
+            ResolveOutcome::Deferred => {
+                debug_assert!(
+                    pre_subs.is_empty(),
+                    "Deferred resolve_dispatch implies no binder pick at submit time; \
+                     `pre_subs` must be empty here",
+                );
+                return Ok(self.schedule_eager_only(expr, scope, idx));
+            }
+            ResolveOutcome::ParkOnProducers(producers) => {
+                return Ok(self.park_pending_and_redispatch(producers, expr, pre_subs, idx));
+            }
+        };
+        // Step 3.5: install dispatch-time placeholders. Both carry the
+        // dispatching slot's lexical index and the picked function's
+        // `is_nominal_binder` flag. Mirrors `run_dispatch`'s Step 3.5.
+        let lex_index = self
+            .active_chain
+            .as_ref()
+            .expect("dispatching slot must have an active chain")
+            .index;
+        let bind_index = BindingIndex {
+            idx: lex_index,
+            nominal_binder: resolved.function.is_nominal_binder,
+        };
+        if let Some(name) = resolved.placeholder_name.as_ref() {
+            if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index) {
+                return Ok(NodeStep::Done(NodeOutput::Err(e)));
+            }
+        }
+        if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
+            if let Err(e) =
+                scope.install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
+            {
+                return Ok(NodeStep::Done(NodeOutput::Err(e)));
+            }
+        }
+        // Step 4: part walk. Slot-terminal errors (cycle / unbound wrap) come
+        // back as `Err(KError)`.
+        let walk = match self.keyworded_part_walk(
+            expr.parts,
+            &pre_subs,
+            &bare_outcomes,
+            &resolved.slots,
+            idx,
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
+        };
+        let PartWalkResult { new_parts, producers_to_wait, staged_subs } = walk;
+        let new_expr = KExpression::new(new_parts);
+        if !producers_to_wait.is_empty() {
+            return Ok(self.install_combined_park(producers_to_wait, new_expr, pre_subs, idx));
+        }
+        // No park — submit the staged subs and build a Bind slot (or bind
+        // directly when there are none). One-shot path: empty `staged_subs`
+        // skips the Bind allocation and hands the picked function its
+        // bound future straight away.
+        let mut subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
+        for (i, pending) in staged_subs {
+            let node_id = match pending {
+                PendingSub::Reuse(id) => id,
+                PendingSub::Dispatch(sub_expr) => self.add(NodeWork::dispatch(sub_expr), scope),
+                PendingSub::ListLit(items) => self.schedule_list_literal(items, scope),
+                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs, scope),
+            };
+            subs.push((i, node_id));
+        }
+        if subs.is_empty() {
+            match resolved.function.bind(new_expr) {
+                Ok(future) => Ok(self.invoke_to_step(future, scope, idx)),
+                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+            }
+        } else {
+            let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
+            Ok(self.defer_to_lift(idx, bind_id))
         }
     }
 

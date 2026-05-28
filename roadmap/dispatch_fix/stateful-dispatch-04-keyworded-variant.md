@@ -6,6 +6,30 @@ every part, rebuilds the `bare_outcomes` cache, and re-runs strict
 admission on every wake. After this step, `Keyworded` carries its
 progress in the slot and advances by one edge per callback.
 
+**Strategy: reimplement, don't reuse.** The stateful path is a
+complete reimplementation of the keyworded dispatch behavior, not a
+wrapper around `run_dispatch`. The stateful driver never delegates
+to `run_dispatch`. Pure helpers that read state without mutating it
+(`build_bare_outcomes`, `keyworded_part_walk`) are shared between
+the two drivers; mutating helpers (`install_combined_park`,
+`park_pending_and_redispatch`, `schedule_eager_only`, the `Bind`
+slot construction) are replaced sub-step by sub-step with
+state-bearing Track machinery on the stateful path. The legacy
+mutating helpers stay alive only for the toggle-off `run_dispatch`
+path; their last caller goes away in step 6.
+
+Sub-step 4a has landed: the one-shot path (Resolved with no parks
+and no eager subs) terminalizes directly on the stateful driver
+via `Scheduler::stateful_keyworded_initial` in
+[`run_dispatch_stateful`](../../src/machine/execute/scheduler/dispatch.rs).
+The stateful entry runs every `ResolveOutcome` branch directly —
+the `Deferred` / `ParkOnProducers` branches still invoke today's
+`schedule_eager_only` / `park_pending_and_redispatch` /
+`install_combined_park` mutating helpers as a transitional state
+until 4b/4c/4d reimplement those code paths as Track installs on
+`KeywordedState`. `KeywordedState` carries no fields yet; that
+lands with the tracks.
+
 **Problem.** After step 3, the five fast-lane `DispatchShape`
 variants run on the stateful driver under toggle-on, but
 `Keyworded` still delegates to the legacy `run_dispatch`. The
@@ -46,19 +70,34 @@ rewrite. None of that machinery is yet state-bearing.
 - **Sub-step order — decided: increasing scope, never regressing.**
   Each sub-step lands as a separate PR or commit; toggle-on
   `cargo test` advances strictly green at each boundary.
-  - **(4a) One-shot path (no parks).** `Initialized → Keyworded
-    → terminal in a single poll` for the resolved-immediately
-    case (today's hot path). Today's steps 1–4 of `run_dispatch`
-    port into `KeywordedState::enter`; if no producer parked and
-    no eager subs were spawned, terminalize directly. Validates
-    most of the keyworded suite without any track machinery.
-  - **(4b) Eager-subs track.** `eager_subs: Some(Track {
-    remaining, splice_indices })`. On wake, drain
-    `recent_wakes`, splice each fired producer's terminal as
-    `Future(obj)` into `working_expr.parts[i]`, decrement
-    `remaining`. On zero, fire the continuation: build the
-    `Bind` slot (today's `NodeWork::Bind { expr, subs }`) or
-    bind directly via `invoke_to_step` for the no-subs case.
+  - **(4a) One-shot path (no parks). Shipped.** Implemented as
+    `Scheduler::stateful_keyworded_initial` in
+    [`dispatch.rs`](../../src/machine/execute/scheduler/dispatch.rs),
+    routed from `run_dispatch_stateful`'s `Keyworded` arm. The
+    handler runs each `ResolveOutcome` branch directly and
+    terminalizes when no producer parked and no eager subs needed
+    scheduling. `build_bare_outcomes` and `keyworded_part_walk`
+    were factored out as pure helpers and are shared with
+    `run_dispatch`. The Resolved-with-parks / Resolved-with-eager-subs
+    sub-cases and the `Deferred` / `ParkOnProducers` branches still
+    call the existing `install_combined_park` /
+    `park_pending_and_redispatch` / `schedule_eager_only` mutating
+    helpers — those calls are the transitional state 4b/4c/4d
+    reimplement as Track installs on `KeywordedState`.
+    `KeywordedState` carries no fields yet; that lands with the
+    tracks.
+  - **(4b) Eager-subs track + Deferred fold.** Replaces the
+    stateful path's calls to `schedule_eager_only` and the
+    inline `NodeWork::Bind { expr, subs }` construction. On
+    wake, drain `recent_wakes`, splice each fired producer's
+    terminal as `Future(obj)` into `working_expr.parts[i]`,
+    decrement the track. On track completion, re-resolve dispatch
+    against the spliced expression (folding in the `Deferred`
+    branch with `function = None`) and call
+    `function.bind(working_expr)` + `invoke_to_step` inline. No
+    `Bind` slot allocation on the stateful path — the keyworded
+    re-resolve replaces what today's `run_bind` does, eliminating
+    the per-call Bind hop the legacy driver pays.
   - **(4c) Bare-name park track.** `bare_name_park: Some(Track
     { producers, splice_indices })`. Equivalent of today's
     `install_combined_park` folded into the variant's state.
@@ -142,6 +181,7 @@ rewrite. None of that machinery is yet state-bearing.
 **Unblocks:**
 
 - [Stateful dispatch — Step 5: cutover](stateful-dispatch-05-cutover.md)
+- [Fast-lane Bind inlining](fast-lane-bind-inlining.md)
 
 Composes with — but does not block —
 [SCC-aware dispatcher for parameterized self-recursive

@@ -646,6 +646,44 @@ fn classifier_legacy_positional_collapses_to_type_constructor_call() {
     );
 }
 
+/// Stateful Keyworded one-shot terminate: `LET x = 7` classifies as `Keyworded`
+/// (lead keyword `LET`), the picked LET overload's resolve produces a
+/// `Resolved` with no parks and no eager subs, and `stateful_keyworded_initial`
+/// drives the slot to a terminal in one poll. Under the stateful toggle, the
+/// program runs to completion and `x` lands in scope — proving the one-shot
+/// path doesn't drop work and doesn't re-enter the legacy `run_dispatch`'s
+/// resolve a second time.
+///
+/// The counter assertion pins the resolve-once contract: the LET binder's
+/// outer dispatch fast-lanes through the stateful Keyworded path with exactly
+/// one entry into `resolve_dispatch_with_chain`. The value-side sub
+/// `(7)` is a Number literal so dispatch fast-lanes through `BareTypeLeaf` /
+/// the value-pass primitive without re-entering the resolver. Under the
+/// legacy driver the count is the same — the new path matches behavior, not
+/// just outcome.
+#[test]
+fn stateful_keyworded_one_shot_terminates_without_legacy() {
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let exprs = crate::parse::parse("LET x = 7").expect("parse succeeds");
+    reset_resolve_dispatch_entry_count();
+    for e in exprs {
+        sched.add_dispatch(e, scope);
+    }
+    sched.execute().expect("`LET x = 7` runs cleanly under the stateful toggle");
+    assert!(
+        matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 7.0),
+        "LET x = 7 must bind x to 7.0 under the stateful Keyworded one-shot path",
+    );
+    let count = resolve_dispatch_entry_count();
+    assert!(
+        count >= 1,
+        "Keyworded LET dispatch must enter resolve_dispatch_with_chain at least \
+         once on the stateful driver; counter was {count}",
+    );
+}
+
 /// Mixed shapes where the head is a fast-lane shape (leaf `Type` or `Identifier`)
 /// but a keyword appears later in the parts list. The classifier's step-1 sweep
 /// catches these and routes to `Keyworded`. Pins the D4 contract: "sweep first,
