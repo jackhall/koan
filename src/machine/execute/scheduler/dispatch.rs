@@ -1167,16 +1167,64 @@ impl<'a> Scheduler<'a> {
                 };
                 Ok(self.fast_lane_bare_type_leaf(&t, scope))
             }
-            // Remaining variants still ride the legacy driver in step 3a.
-            // Each subsequent commit (3b–3d) replaces one arm here with a
+            DispatchShape::BareIdentifier => {
+                debug_assert!(
+                    init.pre_subs.is_empty(),
+                    "BareIdentifier is single-part — submit-time recursion cannot \
+                     populate pre_subs for this shape",
+                );
+                let name = match &expr.parts[0].value {
+                    ExpressionPart::Identifier(n) => n.clone(),
+                    _ => unreachable!("BareIdentifier shape implies single Identifier part"),
+                };
+                Ok(self.stateful_bare_identifier(name, scope, idx))
+            }
+            // Remaining variants still ride the legacy driver in step 3a/3b.
+            // Each subsequent commit (3c, 3d) replaces one arm here with a
             // real per-variant handler.
-            DispatchShape::BareIdentifier
-            | DispatchShape::ConstructorCall
+            DispatchShape::ConstructorCall
             | DispatchShape::FunctionValueCall
             | DispatchShape::SigiledTypeExpr
             | DispatchShape::Keyworded => {
                 self.run_dispatch(expr, init.pre_subs, scope, idx)
             }
+        }
+    }
+
+    /// Stateful-driver handler for `DispatchShape::BareIdentifier`. Mirrors
+    /// the legacy [`Self::fast_lane_bare_identifier`] shape but surfaces
+    /// `UnboundName` directly instead of falling through to the keyworded
+    /// `value_lookup::body_identifier` path — Step 3b of the
+    /// stateful-dispatch refactor (`roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md`)
+    /// makes that fall-through structural: the contract for a bare
+    /// identifier with no binding and no visible placeholder is
+    /// `KErrorKind::UnboundName(name)`.
+    fn stateful_bare_identifier(
+        &mut self,
+        name: String,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        match scope.resolve_with_chain(&name, self.active_chain.as_deref()) {
+            Resolution::Value(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+            Resolution::Placeholder(producer) => {
+                // Notify edge, not Owned: the producer is a sibling slot
+                // this Lift only parks on for a wake — same shape the legacy
+                // fast-lane uses (see `fast_lane_bare_identifier`). The Lift
+                // carrier holds the result so the slot terminalizes on the
+                // producer's value (or error) directly.
+                self.deps.add_park_edge(producer, NodeId(idx));
+                NodeStep::Replace {
+                    work: NodeWork::Lift(LiftState::Pending(producer)),
+                    frame: None,
+                    function: None,
+                    block_entry: None,
+                    body_index: 0,
+                }
+            }
+            Resolution::UnboundName => NodeStep::Done(NodeOutput::Err(KError::new(
+                KErrorKind::UnboundName(name),
+            ))),
         }
     }
 }
