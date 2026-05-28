@@ -9,6 +9,7 @@ use crate::machine::model::{KType, SignatureElement};
 
 use super::super::nodes::{Node, NodeWork, work_park_producers};
 use super::dep_graph::work_owned_edges;
+use super::dispatch_state::DispatchState;
 use super::Scheduler;
 
 /// Submission-time binder-install info. Walks `scope` and its outer chain looking
@@ -258,18 +259,30 @@ impl<'a> Scheduler<'a> {
         // owned-deps of the Bind that Phase 4 spawns), `work_owned_edges` returns
         // the same edges either way.
         let work = match work {
-            NodeWork::Dispatch { expr, pre_subs: prior } => {
+            NodeWork::Dispatch { expr, state: prior_state } => {
                 // The submission entry points (`add_dispatch`, `add_with_chain` via
                 // `add_dispatch_with_chain`, `literal`/`finish` re-Dispatches) all
-                // construct `Dispatch` with empty `pre_subs`. A non-empty `prior`
-                // would indicate a re-submission of an already-prepared Dispatch,
-                // which the current callers never do.
+                // construct `Dispatch` in `Initialized` state with empty
+                // `pre_subs`. A non-`Initialized` state at this submission rewrite
+                // would mean a per-variant slot is being re-submitted through
+                // `add_with_chain`, which the current callers never do; a
+                // non-empty `pre_subs` inside `Initialized` would mean an already-
+                // prepared Dispatch is being re-submitted.
+                let prior_pre_subs = match prior_state {
+                    DispatchState::Initialized(i) => i.pre_subs,
+                    _ => unreachable!(
+                        "add_with_chain only receives Dispatch in Initialized state"
+                    ),
+                };
                 debug_assert!(
-                    prior.is_empty(),
+                    prior_pre_subs.is_empty(),
                     "add_with_chain only receives Dispatch with empty pre_subs",
                 );
-                let _ = prior;
-                NodeWork::Dispatch { expr, pre_subs }
+                let _ = prior_pre_subs;
+                NodeWork::Dispatch {
+                    expr,
+                    state: DispatchState::initialized(pre_subs),
+                }
             }
             other => other,
         };

@@ -5,6 +5,7 @@ use crate::machine::{Frame, KError, KErrorKind, KFunction, LexicalFrame, NodeId}
 
 use super::super::lift::lift_kobject;
 use super::super::nodes::{LiftState, Node, NodeOutput, NodeStep, NodeWork};
+use super::dispatch_state::DispatchState;
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
@@ -34,8 +35,26 @@ impl<'a> Scheduler<'a> {
             // the previous slot's. Cloning is cheap (Rc bump).
             let prev_active_chain = self.active_chain.replace(prev_chain_carrier.clone());
             let step = match work {
-                NodeWork::Dispatch { expr, pre_subs } => {
-                    self.run_dispatch(expr, pre_subs, scope, idx)?
+                NodeWork::Dispatch { expr, state } => {
+                    if self.use_stateful_dispatch {
+                        self.run_dispatch_stateful(expr, state, scope, idx)?
+                    } else {
+                        // Legacy path. The legacy driver never produces a
+                        // non-Initialized state, and the park-rebuild sites in
+                        // `dispatch.rs` (`install_combined_park`,
+                        // `park_pending_and_redispatch`) both rebuild as
+                        // `Initialized`, so this match is exhaustive in practice.
+                        // The `unreachable!` arm guards against a future
+                        // regression that would silently drop a per-variant
+                        // payload on the floor.
+                        let pre_subs = match state {
+                            DispatchState::Initialized(i) => i.pre_subs,
+                            _ => unreachable!(
+                                "legacy run_dispatch only sees Initialized state"
+                            ),
+                        };
+                        self.run_dispatch(expr, pre_subs, scope, idx)?
+                    }
                 }
                 NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
                 NodeWork::Combine { deps, park_count, finish } => {

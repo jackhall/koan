@@ -87,9 +87,10 @@ signal the woken slot can't pick the right callback.
 
 ## Dependencies
 
-**Requires:**
-
-- [Stateful dispatch — Step 1: scaffolding](stateful-dispatch-01-scaffolding.md)
+**Requires:** none. The step-1 scaffolding (carrier shape, routing
+toggle, classify-and-delegate stub) shipped as code in
+[`src/machine/execute/scheduler/dispatch_state.rs`](../../src/machine/execute/scheduler/dispatch_state.rs)
+and the `Scheduler::use_stateful_dispatch` toggle.
 
 **Unblocks:**
 

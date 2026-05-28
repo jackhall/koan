@@ -7,6 +7,8 @@ use crate::machine::{
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 
+use super::scheduler::dispatch_state::DispatchState;
+
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
 pub(super) enum NodeOutput<'a> {
@@ -55,17 +57,26 @@ pub(super) enum NodeStep<'a> {
 /// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a fixed set
 /// of dep slots and runs a host closure over their resolved values.
 pub(super) enum NodeWork<'a> {
-    /// Resolve and schedule a single expression. `pre_subs` carries any
-    /// recursively pre-submitted sub-Dispatches keyed by their slot index in
-    /// `expr.parts`; populated by submit-time recursion for binder-shaped
-    /// expressions (so a nested binder's placeholders install at the
-    /// outermost submission point — see
-    /// `roadmap/dispatch_fix/nested-binder-submission.md`), empty otherwise.
-    /// Phase 4 of `run_dispatch` reuses these instead of allocating fresh
-    /// sub-Dispatches for the named slots.
+    /// Resolve and schedule a single expression. `state` carries the
+    /// dispatch slot's per-variant cached state, with `Initialized` as the
+    /// universal birth state and one variant per `DispatchShape` for the
+    /// stateful driver to transition into on first classification.
+    /// `state.init.pre_subs` carries any recursively pre-submitted sub-
+    /// Dispatches keyed by their slot index in `expr.parts`; populated by
+    /// submit-time recursion for binder-shaped expressions (so a nested
+    /// binder's placeholders install at the outermost submission point —
+    /// see `roadmap/dispatch_fix/nested-binder-submission.md`), empty
+    /// otherwise. Phase 4 of `run_dispatch` reuses these instead of
+    /// allocating fresh sub-Dispatches for the named slots.
+    ///
+    /// In step 1 of the stateful-dispatch refactor, every Dispatch slot
+    /// reaches `Scheduler::execute` in `state == Initialized` (the legacy
+    /// driver never produces a non-Initialized state, and the park-rebuild
+    /// sites in `dispatch.rs` always reconstruct as `Initialized`). Later
+    /// steps add per-variant re-entry states.
     Dispatch {
         expr: KExpression<'a>,
-        pre_subs: Vec<(usize, NodeId)>,
+        state: DispatchState<'a>,
     },
     Bind {
         expr: KExpression<'a>,
@@ -93,10 +104,17 @@ pub(super) enum NodeWork<'a> {
 }
 
 impl<'a> NodeWork<'a> {
-    /// `Dispatch` with an empty `pre_subs`. The common construction path —
-    /// only the submit-time binder walk populates `pre_subs`.
+    /// `Dispatch` in the `Initialized` birth state with empty `pre_subs`.
+    /// The common construction path — only the submit-time binder walk
+    /// populates `pre_subs` (via the `add_with_chain` rewrite arm in
+    /// `submit.rs`). Park-rebuild sites in `dispatch.rs` go through
+    /// [`DispatchState::initialized`] directly so they can carry the
+    /// preserved `pre_subs` across re-Dispatch.
     pub(super) fn dispatch(expr: KExpression<'a>) -> Self {
-        NodeWork::Dispatch { expr, pre_subs: Vec::new() }
+        NodeWork::Dispatch {
+            expr,
+            state: DispatchState::initialized(Vec::new()),
+        }
     }
 }
 

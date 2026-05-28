@@ -14,6 +14,10 @@ use work_queues::WorkQueues;
 
 mod dep_graph;
 mod dispatch;
+/// Carrier shape ridden by every `NodeWork::Dispatch`. Visible up to
+/// `crate::machine::execute` because `nodes.rs` (a sibling of
+/// `scheduler.rs`) names `DispatchState` in `NodeWork::Dispatch`.
+pub(in crate::machine::execute) mod dispatch_state;
 mod execute;
 mod finish;
 mod literal;
@@ -75,6 +79,15 @@ pub struct Scheduler<'a> {
     /// internal binder sub-dispatches (CONS-head, FN signature subs, NEWTYPE value
     /// sub, USING-body) inherit the parent's chain without each call site naming it.
     pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
+    /// Routes the `NodeWork::Dispatch` arm of `Scheduler::execute` between the
+    /// legacy `run_dispatch` driver (default, `false`) and the new
+    /// `run_dispatch_stateful` driver (`true`). Step 1 of the
+    /// stateful-dispatch refactor lands the toggle and the carrier shape;
+    /// the new driver is a classify-and-delegate stub until step 3+. Set at
+    /// construction time from `KOAN_STATEFUL_DISPATCH=1` (env var) or via
+    /// the [`Scheduler::with_stateful_dispatch`] builder. See
+    /// `roadmap/dispatch_fix/stateful-dispatch-01-scaffolding.md`.
+    pub(in crate::machine::execute::scheduler) use_stateful_dispatch: bool,
     /// Count of tail-reuse opportunities accepted by
     /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
     /// path returns `Some`/`None` without touching this field's gate.
@@ -90,9 +103,24 @@ impl<'a> Scheduler<'a> {
             store: NodeStore::new(),
             active_frame: None,
             active_chain: None,
+            // Env-var toggle for CI / whole-suite runs under the new driver
+            // without per-test edits. The builder method below is the
+            // per-test opt-in. Default: legacy path.
+            use_stateful_dispatch: std::env::var("KOAN_STATEFUL_DISPATCH")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
             #[cfg(test)]
             tail_reuse_count: 0,
         }
+    }
+
+    /// Flip the dispatch driver toggle on this scheduler. Test-only opt-in
+    /// for the stateful driver; production stays on the legacy path until
+    /// step 5 of the stateful-dispatch refactor flips the default. See
+    /// `roadmap/dispatch_fix/stateful-dispatch-05-cutover.md`.
+    pub fn with_stateful_dispatch(mut self, on: bool) -> Self {
+        self.use_stateful_dispatch = on;
+        self
     }
 
     #[cfg(test)]

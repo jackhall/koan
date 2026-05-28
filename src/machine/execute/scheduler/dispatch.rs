@@ -9,6 +9,10 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
+use super::dispatch_state::{
+    BareIdState, BareTypeState, DispatchState, FnValueState, Initialized, KeywordedState,
+    SigilState, TyCtorState,
+};
 use super::Scheduler;
 
 /// Pre-walk classification of a `KExpression` into the four no-keyword fast-lane
@@ -737,8 +741,17 @@ impl<'a> Scheduler<'a> {
         // that wakes and re-runs must still see its pre-submitted children to
         // avoid double-submission in Phase 4. See
         // `roadmap/dispatch_fix/nested-binder-submission.md`.
+        //
+        // Re-Dispatch rebuilds the carrier in `Initialized` — the slot re-enters
+        // the driver as if it were a fresh submission, modulo the preserved
+        // `pre_subs`. Step 1 of the stateful-dispatch refactor keeps this
+        // re-classify-on-wake behavior; later steps cache the classified shape
+        // in a per-variant state so wakes can skip re-classification.
         NodeStep::Replace {
-            work: NodeWork::Dispatch { expr, pre_subs },
+            work: NodeWork::Dispatch {
+                expr,
+                state: DispatchState::initialized(pre_subs),
+            },
             frame: None,
             function: None,
             block_entry: None,
@@ -1098,6 +1111,71 @@ impl<'a> Scheduler<'a> {
             self.defer_to_lift(idx, bind_id)
         }
     }
+
+    /// Stateful dispatch driver. Step 1 of the stateful-dispatch refactor:
+    /// classify the slot's shape, transition `Initialized → <variant>`,
+    /// then delegate to the legacy `run_dispatch` for the actual step. No
+    /// behavior change — the per-variant transition exists only to exercise
+    /// the carrier wiring later steps fill in. Steps 3+ replace each
+    /// variant's delegation with a real per-variant handler.
+    ///
+    /// Reached only when `self.use_stateful_dispatch` is `true` — see the
+    /// `NodeWork::Dispatch` arm of [`Scheduler::execute`].
+    pub(super) fn run_dispatch_stateful(
+        &mut self,
+        expr: KExpression<'a>,
+        state: DispatchState<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        // Step 1 contract: a Dispatch slot enters the stateful driver in
+        // `Initialized`. The park-rebuild sites all reconstruct as
+        // `Initialized`, so per-variant states are not yet reachable; the
+        // `_ => unreachable!` arm guards the invariant until step 2/3 wires
+        // up re-entry from a parked per-variant state.
+        let init = match state {
+            DispatchState::Initialized(i) => i,
+            _ => unreachable!(
+                "stateful dispatch step 1: only Initialized is reachable; \
+                 per-variant states are introduced in step 3+"
+            ),
+        };
+        // Classify and transition. The per-variant state structs are empty
+        // in step 1, but constructing them now exercises the variant-
+        // transition shape later steps depend on. The `_classified`
+        // binding is intentionally unused — it documents the transition
+        // wiring later steps fill in (when each arm delegates to a real
+        // per-variant handler instead of falling through to
+        // `run_dispatch`).
+        //
+        // `pre_subs.clone()` here pays one Vec clone per stateful dispatch
+        // entry; step 1 accepts this cost because the legacy delegate
+        // below still needs the original. Step 3+ moves `init` into the
+        // per-variant state and the clone goes away.
+        let _classified: DispatchState<'a> = match classify_dispatch_shape(&expr) {
+            DispatchShape::BareIdentifier => DispatchState::BareIdentifier(
+                BareIdState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
+            ),
+            DispatchShape::BareTypeLeaf => DispatchState::BareTypeLeaf(
+                BareTypeState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
+            ),
+            DispatchShape::TypeConstructorCall => DispatchState::TypeConstructorCall(
+                TyCtorState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
+            ),
+            DispatchShape::FunctionValueCall => DispatchState::FunctionValueCall(
+                FnValueState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
+            ),
+            DispatchShape::SigiledTypeExpr => DispatchState::SigiledTypeExpr(
+                SigilState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
+            ),
+            DispatchShape::Keyworded => DispatchState::Keyworded(
+                KeywordedState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
+            ),
+        };
+        // All variants delegate to the legacy driver in step 1. `pre_subs`
+        // rides through unchanged from the original `Initialized`.
+        self.run_dispatch(expr, init.pre_subs, scope, idx)
+    }
 }
 
 #[cfg(test)]
@@ -1210,5 +1288,30 @@ mod tests {
             NameOutcome::Cycle(name) => assert_eq!(name, "self_ref"),
             _ => panic!("expected NameOutcome::Cycle"),
         }
+    }
+
+    /// Builder-toggle smoke test: `with_stateful_dispatch(true)` routes the
+    /// dispatch arm through `run_dispatch_stateful` without requiring the
+    /// `KOAN_STATEFUL_DISPATCH` env var. The trivial program `LET x = 1`
+    /// runs to a value under the new driver — proving the classify-and-
+    /// delegate stub doesn't lose any state crossing the toggle boundary.
+    /// This is step 1's "cheap insurance against the env-var read silently
+    /// failing" — not a behavioral acceptance criterion (toggle-on whole-
+    /// suite parity is the acceptance gate).
+    #[test]
+    fn builder_toggle_routes_through_stateful_driver() {
+        let arena = RuntimeArena::new();
+        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let mut sched = Scheduler::new().with_stateful_dispatch(true);
+        assert!(sched.use_stateful_dispatch);
+        let exprs = crate::parse::parse("LET x = 1").expect("parse succeeds");
+        for e in exprs {
+            sched.add_dispatch(e, scope);
+        }
+        sched.execute().expect("LET x = 1 runs cleanly under the stateful toggle");
+        // LET binds; the value lands in the scope, the slot's terminal is
+        // not what this test guards — just that the program terminalized
+        // without the toggle dropping its state.
+        assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
     }
 }

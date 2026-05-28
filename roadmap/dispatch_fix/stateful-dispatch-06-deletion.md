@@ -4,8 +4,10 @@ Delete the legacy `run_dispatch`, the rewrite paths it relied on
 (`install_combined_park`, `park_pending_and_redispatch`,
 `schedule_eager_only`, `schedule_picked_eager`, `PendingSub`), and
 the `Scheduler::use_stateful_dispatch` toggle. Migrate the
-architectural narrative from
-[step 1](stateful-dispatch-01-scaffolding.md)'s decisions into
+architectural narrative carried in
+[`dispatch_state.rs`](../../src/machine/execute/scheduler/dispatch_state.rs)'s
+module-header comment (variant-per-shape envelope, `Initialized`
+embedding rule, per-variant struct layout) into
 `design/execution-model.md` as shipped behavior.
 
 **Problem.** After step 5, production dispatch runs on the stateful
@@ -73,14 +75,15 @@ the design tree.
   routing to the stateful equivalent or removing if dead.
 
 - **Documentation migration — decided.** The architectural
-  narrative from
-  [step 1's Directions](stateful-dispatch-01-scaffolding.md) —
-  `DispatchState` shape, the `Initialized` embedding rule,
-  hybrid drive-forward partition, `recent_wakes` side-channel —
-  moves into `design/execution-model.md`'s § run_dispatch
-  section as the description of the shipped dispatcher. The
-  `## Open work` entry that pointed at this chain is removed.
-  Run the documentation skill before applying the doc edits.
+  narrative reified in
+  [`dispatch_state.rs`](../../src/machine/execute/scheduler/dispatch_state.rs)'s
+  module-header comment — `DispatchState` shape, the `Initialized`
+  embedding rule, hybrid drive-forward partition, `recent_wakes`
+  side-channel — moves into `design/execution-model.md`'s
+  § run_dispatch section as the description of the shipped
+  dispatcher. The `## Open work` entry that pointed at this chain
+  is removed. Run the documentation skill before applying the doc
+  edits.
 
 - **`rm-roadmap` chain — decided.** As each step in the chain
   ships, run

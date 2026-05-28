@@ -9,11 +9,12 @@ progress in the slot and advances by one edge per callback.
 **Problem.** After step 3, the five fast-lane `DispatchShape`
 variants run on the stateful driver under toggle-on, but
 `Keyworded` still delegates to the legacy `run_dispatch`. The
-keyworded path is where the redundancy named in
-[step 1's Problem](stateful-dispatch-01-scaffolding.md) actually
-hurts: it's the variant with the `bare_outcomes` cache, strict
-admission, post-walk wrap/ref-name/eager-sub splice, and the
-combined-park rewrite. None of that machinery is yet state-bearing.
+keyworded path is where the per-wake redundancy
+(re-classifying the shape, rebuilding the `bare_outcomes` cache,
+re-running strict admission, re-walking every part) actually hurts:
+it's the variant with the `bare_outcomes` cache, strict admission,
+post-walk wrap/ref-name/eager-sub splice, and the combined-park
+rewrite. None of that machinery is yet state-bearing.
 
 **Impact.**
 
@@ -87,8 +88,7 @@ combined-park rewrite. None of that machinery is yet state-bearing.
     `KeywordedState` correctly. Add a regression test if the
     existing slate doesn't already cover this carrier shape.
 
-- **Inline vs through-loop discipline — decided: per [step 1's
-  drive-forward partition](stateful-dispatch-01-scaffolding.md).**
+- **Inline vs through-loop discipline — decided.**
   Per-edge state updates (counter decrement, slot splice) run
   inline during the producer's notify-walk in `Scheduler::
   finalize`. Track continuations (admission re-attempt,
@@ -101,8 +101,9 @@ combined-park rewrite. None of that machinery is yet state-bearing.
   peek) on consumer pop in `run_dispatch_stateful`. A stale wake
   re-firing a continuation is a real risk if drained lazily.
 
-- **`pre_subs` ownership across transition — decided per [step 1's
-  embedding rule](stateful-dispatch-01-scaffolding.md).**
+- **`pre_subs` ownership across transition — decided.** Per the
+  `Initialized`-embedding rule reified in
+  [`dispatch_state.rs`](../../src/machine/execute/scheduler/dispatch_state.rs):
   `KeywordedState { init: prev_initialized, … }` carries the
   `pre_subs` Vec structurally. The submission-time install in
   `add_with_chain` populates it; the `Initialized → Keyworded`
@@ -122,7 +123,8 @@ combined-park rewrite. None of that machinery is yet state-bearing.
     scheduled at a different time. Sequence the inline updates
     so the dispatch on pop sees consistent state.
   - **Iteration likely.** `Keyworded` is the most complex
-    variant. The named-field track layout (per [step 1](stateful-dispatch-01-scaffolding.md))
+    variant. The named-field track layout (per the carrier shape
+    in [`dispatch_state.rs`](../../src/machine/execute/scheduler/dispatch_state.rs))
     may need revision — the variant boundary keeps any such
     revision local.
 

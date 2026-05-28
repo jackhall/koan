@@ -10,10 +10,9 @@ toggle until [step 6](stateful-dispatch-06-deletion.md) deletes it.
 `cargo test` is green on both drivers. But production still
 runs on the legacy `run_dispatch`: the toggle defaults to `false`
 so toggle-off (the production default) bypasses the new path.
-Until the default flips, the redundancy named in
-[step 1's Problem](stateful-dispatch-01-scaffolding.md) — re-walking
-parts, rebuilding `bare_outcomes`, re-running admission per wake —
-keeps costing the production hot path on every wake.
+Until the default flips, the per-wake redundancy — re-walking
+parts, rebuilding `bare_outcomes`, re-running admission — keeps
+costing the production hot path on every wake.
 
 **Impact.**
 
