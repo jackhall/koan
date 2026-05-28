@@ -12,8 +12,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypePara
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::dispatch_state::{
-    BareNameParkTrack, DispatchState, EagerSubsTrack, FnValueEagerSubsTrack, FnValueState,
-    KeywordedState, OverloadParkTrack,
+    BareNameParkTrack, DispatchState, EagerSubsTrack, FnValueEagerSubsTrack,
+    FnValueHeadPlaceholderTrack, FnValueState, KeywordedState, OverloadParkTrack,
 };
 use super::Scheduler;
 
@@ -1901,12 +1901,19 @@ impl<'a> Scheduler<'a> {
 
     /// Stateful fast lane for `DispatchShape::FunctionValueCall` —
     /// parallel to legacy [`Self::fast_lane_function_value_call`].
-    /// Commit A of Step 5's fast-lane Bind inlining: routes the
-    /// `KFunction` carrier through the stateful eager-subs Track
-    /// installer rather than the legacy `schedule_picked_eager` Bind-
-    /// slot construction. The `Resolution::Placeholder` arm still
-    /// delegates to the legacy `install_combined_park` head park
-    /// pending Commit B's `FnValueHeadPlaceholderTrack` migration.
+    /// Step 5's fast-lane Bind inlining: routes the `KFunction`
+    /// carrier through the stateful eager-subs Track installer (Commit
+    /// A) rather than the legacy `schedule_picked_eager` Bind-slot
+    /// construction, and the `Resolution::Placeholder` head park
+    /// through the stateful head-placeholder Track installer (Commit
+    /// B) rather than the legacy `install_combined_park`.
+    ///
+    /// **Forward-reference park** (`Placeholder(producer)`) installs an
+    /// `add_park_edge` (Notify shape — producer is a sibling) and
+    /// transitions the slot to `FunctionValueCall(WaitingHeadPlaceholder)`.
+    /// On wake the resume re-runs this fast lane against the carried
+    /// expression so the now-bound carrier reaches the
+    /// `Resolution::Value` arm.
     ///
     /// **Unbound head** surfaces `UnboundName(name)` directly — same
     /// as the legacy fast lane.
@@ -1925,14 +1932,7 @@ impl<'a> Scheduler<'a> {
         match scope.resolve_with_chain(&head, chain) {
             Resolution::Value(obj) => self.stateful_dispatch_callable_value(expr, obj, scope, idx),
             Resolution::Placeholder(producer_id) => {
-                // Commit B migrates this to `stateful_install_fn_value_head_park`.
-                // For Commit A the legacy combined-park is still the only
-                // stateful caller of `install_combined_park`; the migration
-                // sites that need the helper after this work are
-                // `stateful_constructor_call` and the toggle-off
-                // `fast_lane_function_value_call`, both unrelated to the
-                // FunctionValueCall fast-lane Bind inlining work.
-                Ok(self.install_combined_park(vec![producer_id], expr, Vec::new(), idx))
+                Ok(self.stateful_install_fn_value_head_park(producer_id, expr, idx))
             }
             Resolution::UnboundName => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::UnboundName(head),
@@ -2115,26 +2115,82 @@ impl<'a> Scheduler<'a> {
         })
     }
 
-    /// Resume entry for a `FunctionValueCall` slot. Commit A installs
-    /// only the `eager_subs` track; Commit B adds the sibling
-    /// `head_placeholder` track and extends this resume's routing.
+    /// Realize the FunctionValueCall head-placeholder Track: install a
+    /// `Notify` park edge from the producer to this slot via
+    /// `DepGraph::add_park_edge` (matching the legacy
+    /// `install_combined_park` shape — the producer is a sibling
+    /// forward reference, not a child of this slot, so the slot's
+    /// reclaim walk must not transit into it), then transition to
+    /// `FunctionValueCall(WaitingHeadPlaceholder)`.
+    ///
+    /// On track completion `stateful_fn_value_resume_head_placeholder`
+    /// re-runs `stateful_fast_lane_function_value_call` against the
+    /// carried `expr`. The producer is now bound, so head resolution
+    /// succeeds on the second pass.
+    fn stateful_install_fn_value_head_park(
+        &mut self,
+        producer: NodeId,
+        expr: KExpression<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        self.deps.add_park_edge(producer, NodeId(idx));
+        let track = FnValueHeadPlaceholderTrack::new(expr, producer);
+        // FunctionValueCall is non-binder; `pre_subs` is always empty,
+        // and the resume path's re-entry through the fast lane never
+        // reads it. Construct `Initialized` fresh per the structural-
+        // embedding rule's destructure-and-discard contract.
+        let init = super::dispatch_state::Initialized { pre_subs: Vec::new() };
+        NodeStep::Replace {
+            work: NodeWork::Dispatch {
+                // Drop the entry expression — the state carries `expr`
+                // from here on. Mirrors the keyworded park-track
+                // install shape.
+                expr: KExpression::new(Vec::new()),
+                state: DispatchState::FunctionValueCall(Box::new(
+                    FnValueState::with_head_placeholder(init, track),
+                )),
+            },
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        }
+    }
+
+    /// Resume entry for a `FunctionValueCall` slot. Routes by install
+    /// order: `eager_subs` first, then `head_placeholder` (mutually
+    /// exclusive at install time — head resolution succeeds before the
+    /// part walk runs, so `eager_subs` install implies the head
+    /// resolved to `Value(KFunction)`; conversely `head_placeholder`
+    /// install fires from the `Resolution::Placeholder` arm before any
+    /// sub could stage).
     fn stateful_fn_value_resume(
         &mut self,
         state: FnValueState<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let FnValueState { init, eager_subs } = state;
+        let FnValueState { init, eager_subs, head_placeholder } = state;
         // FunctionValueCall is non-binder; `pre_subs` is always empty,
         // and the resume paths don't re-Dispatch through any path that
         // re-reads it. Drop per the structural-embedding rule's
         // destructure-and-discard contract.
         let _ = init;
-        let track = eager_subs.expect(
+        if let Some(track) = eager_subs {
+            debug_assert!(
+                head_placeholder.is_none(),
+                "eager_subs and head_placeholder are mutually exclusive at install \
+                 time (head_placeholder fires from `Resolution::Placeholder` before \
+                 the part walk could stage any subs; eager_subs install implies the \
+                 head resolved to `Value(KFunction)`); resume must never see both",
+            );
+            return self.stateful_fn_value_resume_eager_subs(track, scope, idx);
+        }
+        let track = head_placeholder.expect(
             "FunctionValueCall resume is only entered after a track is installed; \
-             Commit A of Step 5 installs `eager_subs`",
+             Step 5 installs `eager_subs` or `head_placeholder`",
         );
-        self.stateful_fn_value_resume_eager_subs(track, scope, idx)
+        self.stateful_fn_value_resume_head_placeholder(track, scope, idx)
     }
 
     /// Track-completion continuation for the FunctionValueCall
@@ -2184,6 +2240,32 @@ impl<'a> Scheduler<'a> {
             Ok(future) => Ok(self.invoke_to_step(future, scope, idx)),
             Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
         }
+    }
+
+    /// Track-completion continuation for the FunctionValueCall
+    /// `head_placeholder` track. Re-runs the stateful fast lane
+    /// against the carried (unspliced) expression. The producer is
+    /// now bound, so the second-pass `scope.resolve_with_chain` lands
+    /// in the `Resolution::Value` arm (or, in the rare case that the
+    /// producer re-resolved to a fresh `Placeholder` from a sibling
+    /// forward chain, installs a fresh head park — matching the
+    /// legacy `install_combined_park` re-wake shape).
+    ///
+    /// Mirrors `stateful_keyworded_resume_bare_name_park` /
+    /// `stateful_keyworded_resume_overload_park`'s shape: the Notify
+    /// dep_edge stays in `dep_edges[idx]` across the wake (it's
+    /// skipped by `owned_children` at free time), and the resume
+    /// hands the carried expression straight back to the initial
+    /// classifier.
+    fn stateful_fn_value_resume_head_placeholder(
+        &mut self,
+        track: FnValueHeadPlaceholderTrack<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let FnValueHeadPlaceholderTrack { expr, producer, .. } = track;
+        let _ = producer;
+        self.stateful_fast_lane_function_value_call(expr, scope, idx)
     }
 
     /// Stateful-driver handler for `DispatchShape::BareIdentifier`. Mirrors

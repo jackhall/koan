@@ -36,17 +36,21 @@
 //! wake re-classify elimination falls out of Step 5's cutover once
 //! every transition stays inside `Keyworded`.
 //!
-//! Step 5 (Commit A) lights up the `eager_subs` track on
-//! `FnValueState`, folding the fast-lane `FunctionValueCall` variant's
+//! Step 5 lights up two tracks on `FnValueState`. Commit A's
+//! `eager_subs` track folds the fast-lane `FunctionValueCall` variant's
 //! last `NodeWork::Bind` spawn (the legacy `schedule_picked_eager`
-//! with-subs branch) onto the stateful driver.
+//! with-subs branch) onto the stateful driver:
 //! `FnValueEagerSubsTrack` carries the picked `KFunction` from the head
 //! `Resolution::Value` arm and binds it directly at completion —
 //! `FunctionValueCall` is non-overload-set so re-resolving on
-//! completion would yield the same pick. Commit B migrates the
-//! `Resolution::Placeholder` head park to a sibling
-//! `head_placeholder` track; after both commits land, `run_bind` and
-//! `NodeWork::Bind` have no callers on the toggle-on path.
+//! completion would yield the same pick. Commit B's `head_placeholder`
+//! track folds the `Resolution::Placeholder` head park (legacy
+//! `install_combined_park`) onto the same envelope:
+//! `FnValueHeadPlaceholderTrack` carries the original (unspliced)
+//! expression and re-runs the stateful fast lane on resume. After both
+//! commits land, the stateful FunctionValueCall fast lane is free of
+//! legacy mutator calls; `run_bind` and `NodeWork::Bind` have no
+//! callers on the toggle-on path.
 //!
 //! Step 4d lights up the `overload_park` track on `KeywordedState`:
 //! the `ResolveOutcome::ParkOnProducers` arm of
@@ -108,8 +112,17 @@ pub(in crate::machine::execute) struct FnValueState<'a> {
     pub(in crate::machine::execute) init: Initialized,
     /// Eager-subs track installed by `stateful_install_fn_value_eager_subs_track`.
     /// `None` is the initial-entry shape; the transition writes `Some` when the
-    /// fast lane stages eager subs and parks waiting on them.
+    /// fast lane stages eager subs and parks waiting on them. Mutually exclusive
+    /// with `head_placeholder` at install time (head resolution succeeds before
+    /// the part walk runs).
     pub(in crate::machine::execute) eager_subs: Option<FnValueEagerSubsTrack<'a>>,
+    /// Head-placeholder park track installed by the `Resolution::Placeholder`
+    /// arm of `stateful_fast_lane_function_value_call`. `None` is the initial
+    /// shape; writes `Some` when the head name resolved to a forward-reference
+    /// `Placeholder(producer)`. Mutually exclusive with `eager_subs` (head
+    /// resolution failure precedes the part walk).
+    pub(in crate::machine::execute) head_placeholder:
+        Option<FnValueHeadPlaceholderTrack<'a>>,
 }
 
 pub(in crate::machine::execute) struct SigilState<'a> {
@@ -301,6 +314,37 @@ impl<'a> FnValueEagerSubsTrack<'a> {
     }
 }
 
+/// Track state for the head-placeholder park a `FunctionValueCall`
+/// slot is parked on when the head name resolved to a forward-
+/// reference `Resolution::Placeholder(producer)`. Carries the
+/// *original* (unspliced) call expression so the resume can re-run
+/// `stateful_fast_lane_function_value_call` against it once the
+/// producer is bound. Matches `OverloadParkTrack`'s carry-original-
+/// expr shape.
+///
+/// The producer is recorded for debug / invariant tracing only — the
+/// resume reads scope (which now sees the producer's bound value), not
+/// the producer list.
+///
+/// Park edges are installed as `Notify` (via `add_park_edge`) matching
+/// the legacy `install_combined_park` shape: the producer is a sibling
+/// forward reference, not a child of this slot, so the slot's reclaim
+/// walk must not transit into it.
+pub(in crate::machine::execute) struct FnValueHeadPlaceholderTrack<'a> {
+    pub(in crate::machine::execute) expr: KExpression<'a>,
+    pub(in crate::machine::execute) producer: NodeId,
+    _ph: std::marker::PhantomData<&'a KFunction<'a>>,
+}
+
+impl<'a> FnValueHeadPlaceholderTrack<'a> {
+    pub(in crate::machine::execute) fn new(
+        expr: KExpression<'a>,
+        producer: NodeId,
+    ) -> Self {
+        Self { expr, producer, _ph: std::marker::PhantomData }
+    }
+}
+
 /// One variant per `DispatchShape`, plus the pre-classification
 /// `Initialized` birth state. Every Dispatch slot enters the driver in
 /// `Initialized`; the stateful driver classifies and transitions to the
@@ -317,10 +361,12 @@ impl<'a> FnValueEagerSubsTrack<'a> {
 // slot (a rare path — fast-lane variants never construct `Keyworded`, and
 // the one-shot Keyworded path terminalizes without installing a track).
 // `FunctionValueCall` is boxed for the same reason: `FnValueState` carries
-// an `Option<FnValueEagerSubsTrack>` field today (Commit A) and gains a
-// sibling `Option<FnValueHeadPlaceholderTrack>` in Commit B. Boxing keeps
-// the enum lean across both commits; if clippy stays quiet without it
-// post-Commit B the box can come back out.
+// two independent `Option<Track>` fields (eager-subs / head-placeholder),
+// one of which is `Some` at any park-install time. Boxing keeps the enum
+// lean at the cost of one allocation per parked FunctionValueCall slot
+// (a rare path — the one-shot FunctionValueCall path terminalizes without
+// installing a track). If clippy stays quiet without it the box can come
+// back out.
 // Step 5/6 cutover may consolidate the per-variant Options into a single
 // `Option<…Track>` enum per variant, at which point both boxes could come
 // back out; doing so now would churn the 4a–4c sub-step boundaries.
@@ -371,6 +417,9 @@ impl<'a> DispatchState<'a> {
                 if let Some(track) = &fs.eager_subs {
                     return Some(&track.working_expr);
                 }
+                if let Some(track) = &fs.head_placeholder {
+                    return Some(&track.expr);
+                }
                 None
             }
             _ => None,
@@ -403,7 +452,7 @@ impl<'a> CtorState<'a> {
 
 impl<'a> FnValueState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, eager_subs: None }
+        Self { init, eager_subs: None, head_placeholder: None }
     }
 
     /// Build the parked-on-eager-subs shape. Used by the
@@ -417,7 +466,21 @@ impl<'a> FnValueState<'a> {
         init: Initialized,
         track: FnValueEagerSubsTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: Some(track) }
+        Self { init, eager_subs: Some(track), head_placeholder: None }
+    }
+
+    /// Build the parked-on-head-placeholder shape. Used by the
+    /// `Initialized → FunctionValueCall(WaitingHeadPlaceholder)`
+    /// transition in `stateful_install_fn_value_head_park`. `init` is
+    /// the just-consumed birth state (again `pre_subs` is empty —
+    /// non-binder); `track` carries the original (unspliced) expression
+    /// the resume re-runs the fast lane against once the producer is
+    /// bound.
+    pub(in crate::machine::execute) fn with_head_placeholder(
+        init: Initialized,
+        track: FnValueHeadPlaceholderTrack<'a>,
+    ) -> Self {
+        Self { init, eager_subs: None, head_placeholder: Some(track) }
     }
 }
 
