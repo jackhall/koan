@@ -18,17 +18,21 @@ state-bearing Track machinery on the stateful path. The legacy
 mutating helpers stay alive only for the toggle-off `run_dispatch`
 path; their last caller goes away in step 6.
 
-Sub-step 4a has landed: the one-shot path (Resolved with no parks
-and no eager subs) terminalizes directly on the stateful driver
-via `Scheduler::stateful_keyworded_initial` in
-[`run_dispatch_stateful`](../../src/machine/execute/scheduler/dispatch.rs).
-The stateful entry runs every `ResolveOutcome` branch directly —
-the `Deferred` / `ParkOnProducers` branches still invoke today's
-`schedule_eager_only` / `park_pending_and_redispatch` /
-`install_combined_park` mutating helpers as a transitional state
-until 4b/4c/4d reimplement those code paths as Track installs on
-`KeywordedState`. `KeywordedState` carries no fields yet; that
-lands with the tracks.
+Sub-steps 4a + 4b have landed: the one-shot path (Resolved with no
+parks and no eager subs) terminalizes directly via
+`Scheduler::stateful_keyworded_initial`, AND the Resolved-with-eager-
+subs and `Deferred` paths now install an `EagerSubsTrack` on
+`KeywordedState` rather than allocating a `NodeWork::Bind` hop. On
+track completion `stateful_keyworded_resume_eager_subs` reads each
+sub's terminal, splices `Future(obj)` into `working_expr.parts[i]`,
+frees the subs, and `stateful_keyworded_finish` re-resolves dispatch
+against the spliced expression — the re-resolve is authoritative
+even when the initial pre-eager pick succeeded, so an element-typed
+`Future(_)` that narrows the typed-slot admission surfaces
+`DispatchFailed` (non-match) rather than a bind-time `TypeMismatch`,
+matching the legacy `run_bind` surface. The `ParkOnProducers`
+branch still defers to `park_pending_and_redispatch` as a
+transitional state until 4c / 4d.
 
 **Problem.** After step 3, the five fast-lane `DispatchShape`
 variants run on the stateful driver under toggle-on, but
@@ -86,18 +90,24 @@ rewrite. None of that machinery is yet state-bearing.
     reimplement as Track installs on `KeywordedState`.
     `KeywordedState` carries no fields yet; that lands with the
     tracks.
-  - **(4b) Eager-subs track + Deferred fold.** Replaces the
-    stateful path's calls to `schedule_eager_only` and the
-    inline `NodeWork::Bind { expr, subs }` construction. On
-    wake, drain `recent_wakes`, splice each fired producer's
-    terminal as `Future(obj)` into `working_expr.parts[i]`,
-    decrement the track. On track completion, re-resolve dispatch
-    against the spliced expression (folding in the `Deferred`
-    branch with `function = None`) and call
-    `function.bind(working_expr)` + `invoke_to_step` inline. No
-    `Bind` slot allocation on the stateful path — the keyworded
-    re-resolve replaces what today's `run_bind` does, eliminating
-    the per-call Bind hop the legacy driver pays.
+  - **(4b) Eager-subs track + Deferred fold. Shipped.**
+    `EagerSubsTrack` lives on `KeywordedState`; the Resolved-with-
+    eager-subs and `Deferred` arms install it through
+    `stateful_install_eager_subs_track` and park the slot on its
+    subs as Owned dep_edges. On track completion
+    `stateful_keyworded_resume_eager_subs` reads each terminal,
+    splices `Future(obj)` into `working_expr.parts[i]`, frees the
+    subs, and `stateful_keyworded_finish` re-resolves dispatch
+    against the spliced expression — the re-resolve is
+    authoritative even when the initial pre-eager pick succeeded,
+    so an element-typed `Future(_)` that narrows the typed-slot
+    admission surfaces `DispatchFailed` (non-match) rather than a
+    bind-time `TypeMismatch`. No `Bind` slot allocation on the
+    stateful path — the keyworded re-resolve replaces what
+    today's `run_bind` does, eliminating the per-call Bind hop
+    the legacy driver pays. Per-edge inline splice was deferred
+    in favor of at-pop splice (the slot pops exactly once with
+    `pending_deps == 0`, so all subs are terminal at resume time).
   - **(4c) Bare-name park track.** `bare_name_park: Some(Track
     { producers, splice_indices })`. Equivalent of today's
     `install_combined_park` folded into the variant's state.

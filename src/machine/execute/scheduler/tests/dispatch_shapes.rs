@@ -727,3 +727,95 @@ fn keyworded_unchanged_with_keyword_in_body() {
         resolve_dispatch_entry_count(),
     );
 }
+
+/// Step 4b acceptance: a Keyworded dispatch whose initial resolve picks
+/// an overload but whose value-cell parts need sub-Dispatch evaluation
+/// (the Resolved-with-eager-subs arm) terminates correctly under the
+/// stateful driver. Pins that the `KeywordedState::WaitingEagerSubs`
+/// state installed in `stateful_install_eager_subs_track` resumes,
+/// re-resolves, and binds without re-entering the legacy `run_dispatch`
+/// / `run_bind` path.
+///
+/// Program: `LET y = (FIRST [1 2 3])`. The LET binder picks at initial
+/// resolve (LET is a single-overload binder); the RHS `(FIRST [1 2 3])`
+/// is an eager sub-Dispatch (`PendingSub::Dispatch`). After the sub
+/// resolves to `1`, the resume handler splices `Future(1)` into the LET
+/// expression and re-resolves — same overload, then `bind` + invoke.
+#[test]
+fn stateful_keyworded_eager_subs_resumes_through_state() {
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    crate::builtins::test_support::run(
+        scope,
+        "FN (FIRST xs :(LIST OF Number)) -> Number = (1)",
+    );
+    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
+    for e in exprs {
+        sched.add_dispatch(e, scope);
+    }
+    sched.execute().expect("LET with eager-sub RHS runs cleanly on the stateful driver");
+    assert!(
+        matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0),
+        "LET y = (FIRST [1 2 3]) must bind y to 1.0 via the stateful eager-subs track",
+    );
+}
+
+/// Step 4b acceptance: a `Deferred` outcome at initial resolve installs
+/// the eager-subs track with no captured function, and the resume
+/// handler's re-resolve picks the overload after the spliced sub
+/// supplies the discriminating type. Two overloads tie on the
+/// bare-arg shape; the typed `Future(List<Number>)` lands the
+/// `:(LIST OF Number)` arm.
+#[test]
+fn stateful_keyworded_deferred_resolves_after_eager_subs() {
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    crate::builtins::test_support::run(
+        scope,
+        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
+    );
+    crate::builtins::test_support::run(
+        scope,
+        "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
+    );
+    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let exprs = crate::parse::parse("LET out = (DESCRIBE [1 2 3])").expect("parse succeeds");
+    for e in exprs {
+        sched.add_dispatch(e, scope);
+    }
+    sched.execute().expect("DESCRIBE with eager-sub list resolves cleanly on the stateful driver");
+    match scope.lookup("out") {
+        Some(KObject::KString(s)) => assert_eq!(s.as_str(), "numbers"),
+        Some(other) => panic!("expected KString(\"numbers\"), got {}", other.summarize()),
+        None => panic!("LET out = ... must bind `out` in scope"),
+    }
+}
+
+/// Step 4b acceptance: `Resolved` with eager subs whose element type
+/// does not satisfy the speculatively-picked overload surfaces as
+/// `DispatchFailed` at re-resolve (non-match) rather than a bind-time
+/// `TypeMismatch`. Pins the "re-resolve is authoritative" contract
+/// reified in `EagerSubsTrack`'s doc and matches the legacy
+/// `run_bind` surface. Mirrors the existing
+/// `fn_typed_list_param_wrong_element_type_finds_no_match` under
+/// explicit toggle-on routing.
+#[test]
+fn stateful_keyworded_eager_subs_reresolve_surfaces_dispatch_failed() {
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    crate::builtins::test_support::run(
+        scope,
+        "FN (HEAD xs :(LIST OF Number)) -> Number = (1)",
+    );
+    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
+    let error = sched.execute().expect_err(
+        "stateful driver's eager-subs re-resolve must reject List<Str> against \
+         a :(LIST OF Number)-only overload as a non-match",
+    );
+    assert!(
+        matches!(error.kind, crate::machine::KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed (non-match) from the keyworded re-resolve, got {error:?}",
+    );
+}

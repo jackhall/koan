@@ -14,6 +14,14 @@
 //! carrier (and without churning every pattern site in `execute.rs` /
 //! `submit.rs` / `dispatch.rs`).
 //!
+//! Step 4b lights up the `eager_subs` track on `KeywordedState`: the
+//! Resolved-with-eager-subs and `Deferred` paths now park the slot directly
+//! on its eager subs (no intervening `NodeWork::Bind` allocation) and the
+//! re-entry routes through `stateful_keyworded_resume_eager_subs`, which
+//! splices the resolved futures into `working_expr` and either binds the
+//! captured picked function (Resolved) or re-resolves dispatch against the
+//! spliced expression (Deferred).
+//!
 //! Visibility: `nodes.rs` lives at `crate::machine::execute::nodes`,
 //! outside the `scheduler/` submodule. To let `NodeWork::Dispatch` name
 //! `DispatchState`, every public symbol here uses
@@ -22,6 +30,8 @@
 //!
 //! See `roadmap/dispatch_fix/stateful-dispatch-01-scaffolding.md`.
 
+use crate::machine::core::kfunction::KFunction;
+use crate::machine::model::ast::KExpression;
 use crate::machine::NodeId;
 
 /// Universal birth state of a Dispatch slot — the shape before
@@ -63,7 +73,55 @@ pub(in crate::machine::execute) struct SigilState<'a> {
 
 pub(in crate::machine::execute) struct KeywordedState<'a> {
     pub(in crate::machine::execute) init: Initialized,
-    _ph: std::marker::PhantomData<&'a ()>,
+    /// Eager-subs track installed by the Resolved-with-subs or `Deferred`
+    /// arm of `stateful_keyworded_initial`. `None` is the initial-entry
+    /// shape (the universal birth state has no tracks installed); the
+    /// transition `Initialized → Keyworded` writes `Some` when the slot
+    /// stages eager subs and parks waiting on them, and the re-entry
+    /// `stateful_keyworded_resume_eager_subs` consumes it.
+    pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'a>>,
+}
+
+/// Track state for the eager-subs sub-Dispatches a `Keyworded` slot is
+/// parked on. Each `(part_idx, sub_id)` is the slot index in
+/// `working_expr.parts` that the sub's resolved value will be spliced
+/// into (as `ExpressionPart::Future(obj)`) at track completion, plus
+/// the sub NodeId itself — the Owned dep this slot installed at park-
+/// install time.
+///
+/// The track does NOT carry the picked function from the initial
+/// resolve. Both the Resolved-with-eager-subs and `Deferred` arms
+/// install the same track shape; on completion the resume handler
+/// re-resolves dispatch against the spliced `working_expr` and uses
+/// the re-resolve's pick. This matches legacy `run_bind`'s authority
+/// surface — element-type mismatches a typed `Future(_)` reveals are
+/// surfaced as `DispatchFailed` (non-match) rather than a bind-time
+/// `TypeMismatch`, per the "element type is part of what an overload
+/// matches, so a non-satisfying container is a non-match rather than
+/// a committed-then-failed bind" contract.
+///
+/// `working_expr` carries every part that was *not* a sub (literals,
+/// keywords, already-spliced wrap slots) plus an
+/// `Identifier("")` placeholder at every sub index — the same shape
+/// today's `NodeWork::Bind.expr` uses, so the post-completion
+/// re-resolve sees the same input the legacy `run_bind` would.
+pub(in crate::machine::execute) struct EagerSubsTrack<'a> {
+    pub(in crate::machine::execute) working_expr: KExpression<'a>,
+    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
+    /// PhantomData here keeps the `'a` parameter alive without binding
+    /// a now-unused field. Later sub-steps (4c bare-name park, 4d
+    /// overload park) repurpose the lifetime; placing the marker now
+    /// localizes the future churn.
+    _ph: std::marker::PhantomData<&'a KFunction<'a>>,
+}
+
+impl<'a> EagerSubsTrack<'a> {
+    pub(in crate::machine::execute) fn new(
+        working_expr: KExpression<'a>,
+        subs: Vec<(usize, NodeId)>,
+    ) -> Self {
+        Self { working_expr, subs, _ph: std::marker::PhantomData }
+    }
 }
 
 /// One variant per `DispatchShape`, plus the pre-classification
@@ -129,6 +187,18 @@ impl<'a> SigilState<'a> {
 
 impl<'a> KeywordedState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, _ph: std::marker::PhantomData }
+        Self { init, eager_subs: None }
+    }
+
+    /// Build the parked-on-eager-subs shape. Used by the
+    /// `Initialized → Keyworded(WaitingEagerSubs)` transition in
+    /// `stateful_keyworded_initial` — `init` is the just-consumed birth
+    /// state (its `pre_subs` was read into the part walk), `track` carries
+    /// the staged subs the slot now parks on.
+    pub(in crate::machine::execute) fn with_eager_subs(
+        init: Initialized,
+        track: EagerSubsTrack<'a>,
+    ) -> Self {
+        Self { init, eager_subs: Some(track) }
     }
 }

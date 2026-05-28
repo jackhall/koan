@@ -747,7 +747,9 @@ digraph {
     "koan::machine::execute::scheduler::dispatch" -> "koan::machine::model::types::ktraits" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::scheduler::dispatch" -> "koan::machine::model::types::ktype" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::scheduler::dispatch" -> "koan::machine::model::values::kobject" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::machine::execute::scheduler::dispatch_state" -> "koan::machine::core::kfunction" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::scheduler::dispatch_state" -> "koan::machine::core::kfunction::scheduler_handle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
+    "koan::machine::execute::scheduler::dispatch_state" -> "koan::machine::model::ast" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::scheduler::execute" -> "koan::machine::core::kerror" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::scheduler::execute" -> "koan::machine::core::kfunction" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge
     "koan::machine::execute::scheduler::execute" -> "koan::machine::core::kfunction::scheduler_handle" [label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge

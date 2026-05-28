@@ -11,7 +11,7 @@ use crate::machine::core::kfunction::BodyResult;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::dispatch_state::DispatchState;
+use super::dispatch_state::{DispatchState, EagerSubsTrack, KeywordedState};
 use super::Scheduler;
 
 /// Pre-walk classification of a `KExpression` into the four no-keyword fast-lane
@@ -1183,24 +1183,26 @@ impl<'a> Scheduler<'a> {
     ) -> Result<NodeStep<'a>, KError> {
         // Step 2 drains the wake side-channel on entry so producers
         // that fired since the slot's last poll don't accumulate across
-        // re-park. The per-variant handlers introduced in step 3+ read
-        // these wakes to pick per-edge callbacks; the fast-lane variants
-        // lit up here all terminalize (or single-producer-park) in one
-        // poll so they don't yet consult `_wakes`. The drain still runs
-        // unconditionally so the side-channel never grows stale —
-        // `take_recent_wakes` resets the slot's Vec to empty in O(1).
+        // re-park. Step 4b's resume handler reads the `subs` Vec from the
+        // installed `EagerSubsTrack` directly rather than the wakes side-
+        // channel — at pop time `pending_deps` is zero, so every recorded
+        // sub is terminal. The drain still runs unconditionally so the
+        // side-channel never grows stale —`take_recent_wakes` resets the
+        // slot's Vec to empty in O(1).
         // See `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`.
         let _wakes = self.store.take_recent_wakes(NodeId(idx));
-        // Step 1 contract: a Dispatch slot enters the stateful driver in
-        // `Initialized`. The park-rebuild sites all reconstruct as
-        // `Initialized`, so per-variant states are not yet reachable; the
-        // `_ => unreachable!` arm guards the invariant until later steps
-        // wire up re-entry from a parked per-variant state.
+        // Initial entry vs re-entry from a parked per-variant state. The
+        // fast-lane variants (Steps 3a–3d) all terminalize in one poll, so
+        // their states are never re-entered; only `Keyworded` carries the
+        // 4b eager-subs track that can re-enter on track completion.
         let init = match state {
             DispatchState::Initialized(i) => i,
+            DispatchState::Keyworded(ks) => {
+                return self.stateful_keyworded_resume(ks, scope, idx);
+            }
             _ => unreachable!(
-                "stateful dispatch step 3: only Initialized is reachable; \
-                 re-entry from a parked per-variant state arrives in step 4+"
+                "fast-lane stateful variants terminalize in one poll; \
+                 only Keyworded re-enters from a parked track in step 4+"
             ),
         };
         // Classify once at entry and route per-variant. The fast-lane
@@ -1338,7 +1340,7 @@ impl<'a> Scheduler<'a> {
                     "Deferred resolve_dispatch implies no binder pick at submit time; \
                      `pre_subs` must be empty here",
                 );
-                return Ok(self.schedule_eager_only(expr, scope, idx));
+                return self.stateful_install_eager_only(expr, scope, idx);
             }
             ResolveOutcome::ParkOnProducers(producers) => {
                 return Ok(self.park_pending_and_redispatch(producers, expr, pre_subs, idx));
@@ -1385,28 +1387,281 @@ impl<'a> Scheduler<'a> {
         if !producers_to_wait.is_empty() {
             return Ok(self.install_combined_park(producers_to_wait, new_expr, pre_subs, idx));
         }
-        // No park — submit the staged subs and build a Bind slot (or bind
-        // directly when there are none). One-shot path: empty `staged_subs`
-        // skips the Bind allocation and hands the picked function its
-        // bound future straight away.
-        let mut subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
+        // No park.
+        if staged_subs.is_empty() {
+            // One-shot path: bind directly without allocating a tracking
+            // slot. Spliced `Future(&'a KObject)` references survive
+            // `results[dep] = None` because the objects live in arenas tied
+            // to lexical scope.
+            return match resolved.function.bind(new_expr) {
+                Ok(future) => Ok(self.invoke_to_step(future, scope, idx)),
+                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+            };
+        }
+        // Eager-subs Track: submit each sub, install Owned edges, and
+        // transition this slot to `Keyworded(WaitingEagerSubs)`. The
+        // resume handler re-resolves dispatch against the spliced
+        // expression and binds on track completion — no intervening
+        // `NodeWork::Bind` allocation. The initial pick's function is
+        // not carried into the track: re-resolve is authoritative so
+        // an element-typed `Future(_)` that narrows the typed-slot
+        // admission surfaces `DispatchFailed` (non-match) rather than
+        // a bind-time `TypeMismatch` (see `EagerSubsTrack`'s doc).
+        let _ = resolved; // discard the speculative pick.
+        self.stateful_install_eager_subs_track(new_expr, staged_subs, pre_subs, scope, idx)
+    }
+
+    /// Stateful equivalent of the legacy `schedule_eager_only` —
+    /// `ResolveOutcome::Deferred` arm. No picked function (function = None),
+    /// no eager filter, no `bare_outcomes` consultation. Schedule every
+    /// `Expression` / `SigiledTypeExpr` / `ListLiteral` / `DictLiteral` part
+    /// as a sub-Dispatch (or aggregate) and park the slot on them via
+    /// `KeywordedState::WaitingEagerSubs`. On track completion the resume
+    /// handler re-resolves dispatch against the spliced expression, folding
+    /// in what `run_bind` does on the legacy path (`function = None` means
+    /// "the call shape needs a fresh resolve once the subs land").
+    ///
+    /// `Deferred ⇒ at least one eager part`, so the empty-subs branch would
+    /// be a `resolve_dispatch` invariant break — `debug_assert!` would catch
+    /// it but the real protection is the caller's surface contract.
+    fn stateful_install_eager_only(
+        &mut self,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let mut new_parts = Vec::with_capacity(expr.parts.len());
+        let mut staged_subs: Vec<(usize, PendingSub<'a>)> = Vec::new();
+        for (i, part) in expr.parts.into_iter().enumerate() {
+            let span = part.span;
+            match part.value {
+                ExpressionPart::Expression(boxed) => {
+                    staged_subs.push((i, PendingSub::Dispatch(*boxed)));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                }
+                ExpressionPart::SigiledTypeExpr(boxed) => {
+                    let wrapped = KExpression::new(vec![Spanned::bare(
+                        ExpressionPart::SigiledTypeExpr(boxed),
+                    )]);
+                    staged_subs.push((i, PendingSub::Dispatch(wrapped)));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                }
+                ExpressionPart::ListLiteral(items) => {
+                    staged_subs.push((i, PendingSub::ListLit(items)));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                }
+                ExpressionPart::DictLiteral(pairs) => {
+                    staged_subs.push((i, PendingSub::DictLit(pairs)));
+                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+                }
+                other => new_parts.push(Spanned { value: other, span }),
+            }
+        }
+        debug_assert!(
+            !staged_subs.is_empty(),
+            "stateful_install_eager_only invoked from Deferred arm; \
+             resolve_dispatch contract requires at least one eager part",
+        );
+        let new_expr = KExpression::new(new_parts);
+        self.stateful_install_eager_subs_track(new_expr, staged_subs, Vec::new(), scope, idx)
+    }
+
+
+    /// Realize the eager-subs Track: submit each `PendingSub` to the
+    /// scheduler, install an Owned dep_edge from each sub to this slot so
+    /// the slot parks until the last sub finalizes, and transition to
+    /// `KeywordedState::WaitingEagerSubs`. The submission-time
+    /// `is_result_ready(sub)` check splices already-terminal subs inline
+    /// (their value lands as `Future(obj)` in `working_expr.parts[i]`
+    /// directly) — only the not-yet-terminal subs end up in the parked
+    /// `subs` Vec and contribute to `pending_deps`. The all-terminal-at-
+    /// install short-circuit avoids re-entering the dispatch loop just to
+    /// pop the slot back out.
+    ///
+    /// `function = Some` is the Resolved-with-eager-subs arm (the resume
+    /// handler binds the captured function); `function = None` is the
+    /// `ResolveOutcome::Deferred` arm (the resume handler re-resolves
+    /// dispatch against the spliced expression).
+    fn stateful_install_eager_subs_track(
+        &mut self,
+        mut working_expr: KExpression<'a>,
+        staged_subs: Vec<(usize, PendingSub<'a>)>,
+        pre_subs: Vec<(usize, NodeId)>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let mut pending_subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
-            let node_id = match pending {
+            let sub_id = match pending {
                 PendingSub::Reuse(id) => id,
                 PendingSub::Dispatch(sub_expr) => self.add(NodeWork::dispatch(sub_expr), scope),
                 PendingSub::ListLit(items) => self.schedule_list_literal(items, scope),
                 PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs, scope),
             };
-            subs.push((i, node_id));
-        }
-        if subs.is_empty() {
-            match resolved.function.bind(new_expr) {
-                Ok(future) => Ok(self.invoke_to_step(future, scope, idx)),
-                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+            if self.is_result_ready(sub_id) {
+                // Already-terminal sub (typically a `Reuse` of a pre_sub the
+                // scheduler picked up before this slot's first poll, or an
+                // aggregate Combine that finished synchronously). Short-
+                // circuit on dep-error matching `run_bind`'s `<bind>` frame
+                // so the surface is identical across drivers; otherwise
+                // splice the future and eagerly free the sub.
+                match self.read_result(sub_id) {
+                    Err(e) => {
+                        let frame = Frame::from_expr("<bind>", &working_expr);
+                        return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
+                            &e,
+                            Some(frame),
+                        ))));
+                    }
+                    Ok(value) => {
+                        working_expr.parts[i].value = ExpressionPart::Future(value);
+                        self.free(sub_id.index());
+                    }
+                }
+            } else {
+                self.deps.add_owned_edge(sub_id, NodeId(idx));
+                pending_subs.push((i, sub_id));
             }
-        } else {
-            let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
-            Ok(self.defer_to_lift(idx, bind_id))
+        }
+        if pending_subs.is_empty() {
+            // All subs were terminal at install time and were spliced
+            // inline. Run the completion path directly so we don't park
+            // for one re-entry only to do the same work.
+            return self.stateful_keyworded_finish(working_expr, scope, idx);
+        }
+        let track = EagerSubsTrack::new(working_expr, pending_subs);
+        let init = super::dispatch_state::Initialized { pre_subs };
+        Ok(NodeStep::Replace {
+            work: NodeWork::Dispatch {
+                // Drop the entry expression — the state carries the
+                // evolving `working_expr` from here on. The keyworded
+                // resume routes by state variant and never reads this
+                // field, but `NodeWork::Dispatch` still requires it
+                // structurally.
+                expr: KExpression::new(Vec::new()),
+                state: DispatchState::Keyworded(KeywordedState::with_eager_subs(init, track)),
+            },
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        })
+    }
+
+    /// Resume entry for a `Keyworded` slot. With Step 4b only the
+    /// `eager_subs` track is installable, so the only re-entry shape is
+    /// "every sub finalized — splice the futures and complete." Later
+    /// sub-steps (4c bare-name park, 4d overload park) add their own
+    /// arms here.
+    fn stateful_keyworded_resume(
+        &mut self,
+        state: KeywordedState<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let KeywordedState { init, eager_subs } = state;
+        // Drop the carry-through `pre_subs` explicitly — the eager-subs
+        // resume path consumes its own `subs` Vec from the track and has
+        // no use for the original `pre_subs` carry (the bind / re-resolve
+        // path doesn't re-Dispatch the slot). The destructure-and-discard
+        // here is the structural-embedding rule's contract: a future arm
+        // that needs `pre_subs` must rebuild it here from `init.pre_subs`.
+        let _ = init;
+        let track = eager_subs.expect(
+            "Keyworded resume is only entered after a track is installed; \
+             Step 4b only installs `eager_subs`",
+        );
+        self.stateful_keyworded_resume_eager_subs(track, scope, idx)
+    }
+
+    /// Track-completion continuation for the `eager_subs` track. Reads each
+    /// sub's terminal, splices `Future(value)` into `working_expr.parts[i]`,
+    /// frees the sub, and either binds the captured picked function
+    /// (Resolved arm) or re-resolves dispatch against the spliced expression
+    /// (Deferred arm: `function == None`). Mirrors `run_bind`'s dep-error
+    /// short-circuit (`<bind>` frame) for surface parity across drivers.
+    ///
+    /// Eager-free on the success path matches the legacy `run_bind`'s
+    /// `reclaim_deps`: clear the slot's dep_edges then free each sub. On
+    /// the error path the dep_edges stay around for chain-free at slot
+    /// drop — same as the legacy contract.
+    fn stateful_keyworded_resume_eager_subs(
+        &mut self,
+        track: EagerSubsTrack<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let EagerSubsTrack { mut working_expr, subs, .. } = track;
+        for (_, sub_id) in &subs {
+            if let Err(e) = self.read_result(*sub_id) {
+                let frame = Frame::from_expr("<bind>", &working_expr);
+                return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
+                    &e,
+                    Some(frame),
+                ))));
+            }
+        }
+        let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
+        for (part_idx, dep_id) in subs {
+            let value = self.read(dep_id);
+            working_expr.parts[part_idx].value = ExpressionPart::Future(value);
+        }
+        // Success-path eager free — mirrors `run_bind`'s `reclaim_deps`.
+        // `dep_edges[idx]` at this point holds only the Owned entries we
+        // installed in `stateful_install_eager_subs_track`; clearing is
+        // sound (no Notify edges to drop).
+        self.deps.clear_dep_edges(idx);
+        for d in dep_indices {
+            self.free(d);
+        }
+        self.stateful_keyworded_finish(working_expr, scope, idx)
+    }
+
+    /// Re-resolve completion shared between the parked-track resume and the
+    /// all-subs-terminal-at-install short-circuit in
+    /// `stateful_install_eager_subs_track`. The keyworded re-resolve replaces
+    /// what `run_bind` does on the legacy driver — there's no `NodeWork::Bind`
+    /// allocation on the stateful path. Mirrors `run_bind`'s outcome shape:
+    /// `Resolved` → bind + invoke, `Deferred` / `Unmatched` → `DispatchFailed`,
+    /// `ParkOnProducers` → re-park (empty `pre_subs`, matching the legacy
+    /// post-Bind re-park contract).
+    ///
+    /// Re-resolving is authoritative even when the initial pre-eager-resolve
+    /// already picked an overload: an element-typed `Future(_)` that narrows
+    /// a typed-slot admission rules the speculative pick out, so we surface
+    /// `DispatchFailed` (non-match) rather than committing and surfacing a
+    /// bind-time `TypeMismatch`. See `EagerSubsTrack`'s doc.
+    ///
+    /// `Err(KError)` (rather than `NodeStep::Done(NodeOutput::Err(_))`) for
+    /// dispatch-failure cases mirrors the legacy `run_bind` surface — the
+    /// execute loop's `?` bubbles the failure to the caller of
+    /// `Scheduler::execute`. A bind-time `KError` from the picked function's
+    /// admission likewise bubbles.
+    fn stateful_keyworded_finish(
+        &mut self,
+        working_expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        match scope.resolve_dispatch(&working_expr) {
+            ResolveOutcome::Resolved(r) => {
+                let future = r.function.bind(working_expr)?;
+                Ok(self.invoke_to_step(future, scope, idx))
+            }
+            ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
+                expr: working_expr.summarize(),
+                candidates: n,
+            })),
+            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
+                Err(KError::new(KErrorKind::DispatchFailed {
+                    expr: working_expr.summarize(),
+                    reason: "no matching function".to_string(),
+                }))
+            }
+            ResolveOutcome::ParkOnProducers(producers) => {
+                Ok(self.park_pending_and_redispatch(producers, working_expr, Vec::new(), idx))
+            }
+            ResolveOutcome::UnboundName(name) => Err(KError::new(KErrorKind::UnboundName(name))),
         }
     }
 
