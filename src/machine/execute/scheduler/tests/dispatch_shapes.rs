@@ -102,7 +102,7 @@ fn bare_type_leaf_short_circuits() {
 }
 
 // `type_call_short_circuits` removed: the legacy `TypeCall` arm + its fast lane
-// are deleted. `(List Number)` now classifies as `TypeConstructorCall` (head is
+// are deleted. `(List Number)` now classifies as `ConstructorCall` (head is
 // a leaf `Type`, body is non-empty) and falls through to the keyworded path,
 // where no overload matches and the call surfaces `DispatchFailed`. The
 // keyworded `LIST OF Number` form is the supported way to parameterize List.
@@ -588,51 +588,51 @@ fn keyworded_unchanged() {
 // These call `classify_dispatch_shape` and pattern-match the returned variant.
 // Unlike the routing tests above (which observe the dispatch counter), these
 // pin the classifier's branching itself — particularly the split between
-// `TypeCall` (head leaf-Type + all-leaf args) and `TypeConstructorCall` (head
+// `TypeCall` (head leaf-Type + all-leaf args) and `ConstructorCall` (head
 // leaf-Type + any non-leaf arg) introduced for Phase 2.
 // =====================================================================
 
 /// `(MyStruct (x = 1, y = 2))` — leaf-Type head, single nested-`Expression`
-/// body. Classifier must route to `TypeConstructorCall`, not `TypeCall` (the
+/// body. Classifier must route to `ConstructorCall`, not `TypeCall` (the
 /// args aren't leaf Types) or `Keyworded` (no keyword in `parts`).
 #[test]
 fn classifier_struct_construct_routes_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("MyStruct (x = 1, y = 2)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
-        "expected TypeConstructorCall for `MyStruct (x = 1, y = 2)`",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        "expected ConstructorCall for `MyStruct (x = 1, y = 2)`",
     );
 }
 
 /// `(Maybe (some 42))` — leaf-Type head, single nested-`Expression` body
 /// holding `(some 42)`. Same shape as the struct case — must route to
-/// `TypeConstructorCall`.
+/// `ConstructorCall`.
 #[test]
 fn classifier_tagged_construct_routes_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Maybe (some 42)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
-        "expected TypeConstructorCall for `Maybe (some 42)`",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        "expected ConstructorCall for `Maybe (some 42)`",
     );
 }
 
 /// `(Bar (x))` — leaf-Type head, nested-`Expression` body that wraps a single
 /// identifier (the newtype-construction shape). Routes to
-/// `TypeConstructorCall`.
+/// `ConstructorCall`.
 #[test]
 fn classifier_newtype_construct_routes_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Bar (x)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
-        "expected TypeConstructorCall for `Bar (x)`",
+        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        "expected ConstructorCall for `Bar (x)`",
     );
 }
 
 /// `(List Number)` — leaf-Type head, every arg a leaf Type. Post-`TypeCall`
-/// deletion this collapses to `TypeConstructorCall` (every leaf-Type-headed
+/// deletion this collapses to `ConstructorCall` (every leaf-Type-headed
 /// multi-part call routes through one classifier variant). The keyworded
 /// `LIST OF` overload is the supported way to elaborate `List<Number>`.
 #[test]
@@ -640,8 +640,8 @@ fn classifier_legacy_positional_collapses_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("(List Number)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::TypeConstructorCall),
-        "leaf-Type head + leaf-Type args must collapse to TypeConstructorCall \
+        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        "leaf-Type head + leaf-Type args must collapse to ConstructorCall \
          after the TypeCall arm is removed",
     );
 }

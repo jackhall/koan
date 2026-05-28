@@ -11,7 +11,7 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypePara
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::dispatch_state::{
     BareIdState, BareTypeState, DispatchState, FnValueState, Initialized, KeywordedState,
-    SigilState, TyCtorState,
+    SigilState, CtorState,
 };
 use super::Scheduler;
 
@@ -47,7 +47,7 @@ pub(super) enum DispatchShape {
     /// `(List Number)` / `(Dict K V)` shape deleted (the `TypeCall` arm is
     /// gone), this variant covers every Type-headed multi-part call. Phase 2
     /// of `scratch/plan-fast-lane-subsume.md`.
-    TypeConstructorCall,
+    ConstructorCall,
     /// Function-value call: head (index 0) is a lowercase `Identifier`, followed by
     /// ≥1 non-keyword parts. Handler resolves the head and falls back to the
     /// keyworded path when it doesn't bind to a `KFunction`.
@@ -75,7 +75,7 @@ pub(super) enum DispatchShape {
 /// (literal, `Future`, parameterized Type) falls to `Keyworded` — the parser keeps
 /// those for the candidate path.
 ///
-/// Multi-part fast-lane: head is leaf `Type` → `TypeConstructorCall` (the legacy
+/// Multi-part fast-lane: head is leaf `Type` → `ConstructorCall` (the legacy
 /// positional `(List Number)` shape is gone — type-language parameterization runs
 /// through the keyworded `LIST OF` / `MAP _ -> _` / `FN` / `FUNCTOR` overloads).
 /// Head is lowercase `Identifier` → `FunctionValueCall`.
@@ -110,12 +110,12 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
     };
     match &head_part.value {
         ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-            // Head is a leaf `Type` → `TypeConstructorCall`. The legacy positional
+            // Head is a leaf `Type` → `ConstructorCall`. The legacy positional
             // `(List Number)` shape (leaf-Type-only args) used to route through a
             // separate `TypeCall` arm that elaborated `TypeExpr { params: List(_) }`;
             // that arm is deleted now that the keyworded `LIST OF` / `MAP _ -> _` /
             // `FN` / `FUNCTOR` overloads serve every parameterized-type form.
-            DispatchShape::TypeConstructorCall
+            DispatchShape::ConstructorCall
         }
         ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
         _ => DispatchShape::Keyworded,
@@ -263,7 +263,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 
 impl<'a> Scheduler<'a> {
     /// Dispatch driver. Opens with [`classify_dispatch_shape`]; the no-keyword shapes
-    /// (`BareIdentifier`, `BareTypeLeaf`, `FunctionValueCall`, `TypeConstructorCall`,
+    /// (`BareIdentifier`, `BareTypeLeaf`, `FunctionValueCall`, `ConstructorCall`,
     /// `SigiledTypeExpr`) run their fast-lane handlers and never enter
     /// `resolve_dispatch_with_chain`. The `Keyworded` arm — the only shape with
     /// candidates in `bindings.functions` — drives the strict-only pipeline:
@@ -340,7 +340,7 @@ impl<'a> Scheduler<'a> {
             DispatchShape::FunctionValueCall => {
                 return Ok(self.fast_lane_function_value_call(&expr, scope, idx));
             }
-            DispatchShape::TypeConstructorCall => {
+            DispatchShape::ConstructorCall => {
                 // Phase 2 commit 1 of the fast-lane subsumption
                 // (`scratch/plan-fast-lane-subsume.md`): the variant is added to the
                 // classifier and routed here, but the handler is intentionally empty
@@ -1168,8 +1168,8 @@ impl<'a> Scheduler<'a> {
             DispatchShape::BareTypeLeaf => DispatchState::BareTypeLeaf(
                 BareTypeState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
             ),
-            DispatchShape::TypeConstructorCall => DispatchState::TypeConstructorCall(
-                TyCtorState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
+            DispatchShape::ConstructorCall => DispatchState::ConstructorCall(
+                CtorState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),
             ),
             DispatchShape::FunctionValueCall => DispatchState::FunctionValueCall(
                 FnValueState::from_init(Initialized { pre_subs: init.pre_subs.clone() }),

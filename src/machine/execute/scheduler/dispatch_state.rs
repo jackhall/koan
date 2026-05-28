@@ -46,7 +46,7 @@ pub(in crate::machine::execute) struct BareTypeState<'a> {
     _ph: std::marker::PhantomData<&'a ()>,
 }
 
-pub(in crate::machine::execute) struct TyCtorState<'a> {
+pub(in crate::machine::execute) struct CtorState<'a> {
     pub(in crate::machine::execute) init: Initialized,
     _ph: std::marker::PhantomData<&'a ()>,
 }
@@ -77,7 +77,7 @@ pub(in crate::machine::execute) enum DispatchState<'a> {
     Initialized(Initialized),
     BareIdentifier(BareIdState<'a>),
     BareTypeLeaf(BareTypeState<'a>),
-    TypeConstructorCall(TyCtorState<'a>),
+    ConstructorCall(CtorState<'a>),
     FunctionValueCall(FnValueState<'a>),
     SigiledTypeExpr(SigilState<'a>),
     Keyworded(KeywordedState<'a>),
@@ -109,7 +109,7 @@ impl<'a> BareTypeState<'a> {
     }
 }
 
-impl<'a> TyCtorState<'a> {
+impl<'a> CtorState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
         Self { init, _ph: std::marker::PhantomData }
     }

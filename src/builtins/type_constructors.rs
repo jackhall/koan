@@ -13,7 +13,7 @@
 //!
 //! The legacy positional sigil shape `:(List Number)` still parses (every
 //! `:(...)` emits `ExpressionPart::SigiledTypeExpr` regardless of shape); the
-//! dispatcher's `TypeConstructorCall` arm handles the leaf-Type-headed case.
+//! dispatcher's `ConstructorCall` arm handles the leaf-Type-headed case.
 //! Inside STRUCT/UNION field schemas, the field-walker's `try_synth_legacy`
 //! path elaborates legacy positional shapes inline because it carries the
 //! SCC threading context the standalone dispatcher does not yet plumb — see

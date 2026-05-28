@@ -5,7 +5,7 @@
 //! `ExpressionPart::SigiledTypeExpr(inner)` whose inner `KExpression`'s parts mirror
 //! whatever appeared between the parens (leaf Types, keywords like `->`, nested
 //! parens, etc.). Shape recognition (positional `:(List Number)` →
-//! `TypeConstructorCall` arm; keyworded `:(LIST OF Number)` → `Keyworded` arm;
+//! `ConstructorCall` arm; keyworded `:(LIST OF Number)` → `Keyworded` arm;
 //! user-functor `:(MyFunctor (T = IntOrd))` → `FunctionValueCall` arm) is the
 //! dispatcher's job. These tests only assert what the parser produces — they do
 //! not run dispatch.
