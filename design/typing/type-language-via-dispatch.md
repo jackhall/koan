@@ -100,7 +100,7 @@ inner expression's parts decide its shape:
   [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs).
 - `BareTypeLeaf` / `BareIdentifier` for single-name sigils
   (`:(Number)`, `:(MyType)`).
-- `TypeConstructorCall` for a leaf-Type head with non-empty rest
+- `ConstructorCall` for a leaf-Type head with non-empty rest
   (`:(MyStruct 1 2 3)`) — routes Struct / Tagged / Newtype heads
   through their construction primitives.
 - `FunctionValueCall` for user-functor application
@@ -116,7 +116,7 @@ and surfaces a standard `TypeMismatch`. The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 
 The legacy positional sigil shape (`:(List Number)` →
-`[Type(List), Type(Number)]`) now classifies as `TypeConstructorCall`
+`[Type(List), Type(Number)]`) now classifies as `ConstructorCall`
 inside the wrapper. Standalone parameterized-type elaboration is
 served by the keyworded overloads in every freshly-written
 annotation; the field-walker inside `typed_field_list` retains an

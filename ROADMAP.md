@@ -82,7 +82,7 @@ What's shipped that the open items below build on:
   the unconstrained-name slot types (`Identifier` / `TypeExprRef`) so an
   `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback.
   No-keyword shapes (`BareIdentifier`, `BareTypeLeaf`,
-  `TypeConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) ride
+  `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) ride
   dedicated fast-lane handlers that never enter the candidate walk.
 
 ## Next items

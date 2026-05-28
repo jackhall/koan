@@ -17,7 +17,7 @@ mod functor_def;
 mod let_binding;
 mod match_case;
 mod module_def;
-mod newtype_def;
+pub(crate) mod newtype_def;
 mod print;
 mod quote;
 mod result;

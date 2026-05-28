@@ -1,7 +1,9 @@
+use crate::builtins::newtype_def::newtype_construct;
 use crate::builtins::value_lookup::coerce_type_token_value;
-use crate::builtins::{struct_value, tagged_union};
+use crate::builtins::{dispatch_constructor, struct_value, tagged_union};
+use crate::machine::model::types::UserTypeKind;
 use crate::machine::core::source::Spanned;
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::{KObject, KType, Parseable};
 use crate::machine::{
     BindingIndex, Frame, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, Resolution, Scope,
 };
@@ -963,10 +965,10 @@ impl<'a> Scheduler<'a> {
                 }
             }
             KObject::StructType { .. } => {
-                self.schedule_constructor_tail(struct_value::apply(head_obj, inner_parts))
+                self.schedule_constructor_body(struct_value::apply(head_obj, inner_parts), idx)
             }
             KObject::TaggedUnionType { .. } => {
-                self.schedule_constructor_tail(tagged_union::apply(head_obj, inner_parts))
+                self.schedule_constructor_body(tagged_union::apply(head_obj, inner_parts), idx)
             }
             other => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
@@ -1024,13 +1026,22 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Decode a constructor `BodyResult` returned by `struct_value::apply` /
-    /// `tagged_union::apply` into a `NodeStep`. `Tail(expr)` rewrites the slot as a
-    /// `Dispatch(expr)` re-dispatch through the construction primitive — same
-    /// `BodyResult::Tail` decode the `run_combine` / `invoke_to_step` paths use, but
-    /// without a `frame` / `function` / `block_entry` (constructors are scope-neutral
-    /// builtin tails). `Value` / `DeferTo` are unreachable for these constructor
-    /// `apply` helpers but handled defensively to avoid a future-bug-hidden-by-panic.
-    fn schedule_constructor_tail(&mut self, body: BodyResult<'a>) -> NodeStep<'a> {
+    /// `tagged_union::apply` / `newtype_construct` / `dispatch_constructor` into a
+    /// `NodeStep`. The three terminal-decode shapes all appear here:
+    ///
+    /// - `Tail(expr)` rewrites this slot as a `Dispatch(expr)` re-dispatch through
+    ///   the construction primitive — same `BodyResult::Tail` decode the
+    ///   `run_combine` / `invoke_to_step` paths use, but without a `frame` /
+    ///   `function` / `block_entry` (constructors are scope-neutral builtin tails).
+    /// - `Value(v)` terminalizes this slot directly.
+    /// - `DeferTo(combine_id)` lifts this slot's terminal off the Combine the
+    ///   construction primitive registered. `newtype_construct` returns this shape
+    ///   (the value sub-expression is scheduled through `add_dispatch` and a
+    ///   `Combine` wraps it after type-checking); routes through
+    ///   [`Self::defer_to_lift`] to install the Owned read-dep and rewrite the
+    ///   slot as a `Lift`.
+    /// - `Err(e)` surfaces the construction error directly.
+    fn schedule_constructor_body(&mut self, body: BodyResult<'a>, idx: usize) -> NodeStep<'a> {
         match body {
             BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
                 NodeStep::Replace {
@@ -1042,11 +1053,7 @@ impl<'a> Scheduler<'a> {
                 }
             }
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::DeferTo(_) => NodeStep::Done(NodeOutput::Err(KError::new(
-                KErrorKind::ShapeError(
-                    "constructor apply returned DeferTo (scheduler invariant break)".to_string(),
-                ),
-            ))),
+            BodyResult::DeferTo(combine_id) => self.defer_to_lift(idx, combine_id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
     }
@@ -1248,29 +1255,39 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Stateful-driver handler for `DispatchShape::ConstructorCall` (leaf-Type
-    /// head + nested-parens body). Resolves the head type-side through
-    /// [`coerce_type_token_value`] and routes:
+    /// head + nested-parens body). Resolves the head identity type-side and
+    /// routes by `KType::UserType { kind, .. }`:
     ///
-    /// - `StructType` head → [`struct_value::apply`] → `schedule_constructor_tail`.
-    /// - `TaggedUnionType` head → [`tagged_union::apply`] → `schedule_constructor_tail`.
-    /// - Any other resolved carrier → `TypeMismatch { arg: "verb", expected:
-    ///   "type constructor" }`. Newtype / TypeConstructor (`Result`, etc.) heads
-    ///   that the legacy keyworded `type_call` builtin still serves on the
-    ///   toggle-off path land here too — that's an intentional scope-down for
-    ///   the stateful driver, per
-    ///   [`roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md`].
-    /// - `Err(UnboundName)` from the type-side resolution → re-surface
-    ///   `KErrorKind::UnboundName(name)` directly (same contract as
-    ///   `BareIdentifier`).
+    /// - `Struct` / `Tagged` → recover the value-side schema carrier via
+    ///   `coerce_type_token_value` and apply through
+    ///   [`struct_value::apply`] / [`tagged_union::apply`], decoded by
+    ///   `schedule_constructor_body`.
+    /// - `Newtype { .. }` → [`newtype_construct`] with the arena-resident
+    ///   `&'a KType` identity. Returns a `BodyResult::DeferTo(combine_id)`
+    ///   wrapping the inner value sub-expression and a type-check Combine;
+    ///   the decoder calls [`Self::defer_to_lift`] to install the Owned
+    ///   read-dep and rewrite this slot as a `Lift`.
+    /// - `TypeConstructor { .. }` → look the value-side schema carrier up
+    ///   through `scope.lookup_with_chain` and dispatch via
+    ///   [`dispatch_constructor`]. A builtin parameterized type registered
+    ///   at prelude (`Result`) installs that paired carrier alongside the
+    ///   type identity; an opaque per-call `TypeConstructor` (SIG / functor
+    ///   ascription) installs only the identity, in which case the lookup
+    ///   misses and we surface `TypeMismatch { expected: "constructible Type" }`.
+    /// - `Module { .. }` and any other identity → `TypeMismatch { expected:
+    ///   "constructible Type", got: identity.name() }`. MODULE-as-constructor
+    ///   (functor application) is future work; both drivers reject the same
+    ///   way today.
+    /// - `resolve_type` miss → `UnboundName(name)` directly.
     ///
     /// **Forward-reference park.** A type-side name with a visible
     /// `Placeholder` (a forward `STRUCT Foo = …` reference before finalize)
     /// installs a combined park edge and rebuilds the slot as a fresh
-    /// `Dispatch` so the now-finalized carrier reaches `coerce_type_token_value`
-    /// on wake. The park check runs against the type-side `resolve_with_chain`
-    /// because `coerce_type_token_value` returns an `UnboundName` error
-    /// (rather than surfacing the placeholder) when the binder hasn't
-    /// finalized — we must intercept the placeholder before that miss.
+    /// `Dispatch` so the now-finalized carrier reaches the type-side
+    /// resolution on wake. The park check runs against the value-side
+    /// `resolve_with_chain` because the type-side `resolve_type` returns
+    /// `None` (rather than surfacing the placeholder) when the binder
+    /// hasn't finalized — we must intercept the placeholder before that miss.
     ///
     /// **Inner-args shape.** Same admission as `extract_named_call_inner`:
     /// `expr.parts[1..]` must be exactly `[Spanned(Expression(inner))]`. Any
@@ -1297,14 +1314,11 @@ impl<'a> Scheduler<'a> {
             Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
         };
         let chain = self.active_chain.as_deref();
-        // Forward-reference park: the type-side resolution returns
-        // `UnboundName` (not `Placeholder`) for a not-yet-finalized binder,
-        // so we must check the value-side `resolve_with_chain` first. A
-        // value-side `Value` for a Type name is unusual (paired carriers
-        // exist for STRUCT / UNION but they finalize together with the
-        // type binding); on a `Value` hit we still fall through to the
-        // type-side `coerce_type_token_value` path which is the
-        // authoritative carrier producer for ConstructorCall.
+        // Forward-reference park: the type-side resolution returns `None` (not
+        // `Placeholder`) for a not-yet-finalized binder, so we must check the
+        // value-side `resolve_with_chain` first. A value-side `Value` hit for a
+        // Type name is the paired-carrier shape (STRUCT / UNION install both
+        // atomically); fall through to the type-side resolution below either way.
         match scope.resolve_with_chain(&head_t.name, chain) {
             Resolution::Placeholder(producer) => {
                 return self.install_combined_park(vec![producer], expr, Vec::new(), idx);
@@ -1313,24 +1327,105 @@ impl<'a> Scheduler<'a> {
                 // Fall through to the type-side resolution below.
             }
         }
-        match coerce_type_token_value(scope, &head_t, chain) {
-            Ok(obj) => match obj {
-                KObject::StructType { .. } => {
-                    self.schedule_constructor_tail(struct_value::apply(obj, inner_parts))
+        // Identity-first: resolve `&'a KType<'a>` directly so the `Newtype`
+        // arm can hand the arena-resident reference to `newtype_construct`
+        // (the `KTypeValue` synthesis in `coerce_type_token_value` clones the
+        // KType, which doesn't survive across the Combine closure's `'a` bound).
+        let identity = match scope.resolve_type_with_chain(&head_t.name, chain) {
+            Some(kt) => kt,
+            None => {
+                return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
+                    head_t.name.clone(),
+                ))));
+            }
+        };
+        match identity {
+            KType::UserType { kind: UserTypeKind::Struct, .. }
+            | KType::UserType { kind: UserTypeKind::Tagged, .. } => {
+                // Paired-carrier recovery: STRUCT / UNION finalize installs the
+                // value-side schema in `data` alongside the type identity.
+                // `coerce_type_token_value` resolves both sides and prefers the
+                // paired carrier for `UserType` identities — we lean on it
+                // rather than duplicating the lookup here. A non-Struct /
+                // non-Tagged carrier from `coerce_type_token_value` on a
+                // Struct / Tagged identity would be a finalize bug; surface
+                // the standard not-constructible error rather than panicking.
+                let carrier = match coerce_type_token_value(scope, &head_t, chain) {
+                    Ok(obj) => obj,
+                    Err(KError { kind: KErrorKind::UnboundName(n), .. }) => {
+                        return NodeStep::Done(NodeOutput::Err(KError::new(
+                            KErrorKind::UnboundName(n),
+                        )));
+                    }
+                    Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+                };
+                let body = match carrier {
+                    KObject::StructType { .. } => struct_value::apply(carrier, inner_parts),
+                    KObject::TaggedUnionType { .. } => tagged_union::apply(carrier, inner_parts),
+                    other => {
+                        debug_assert!(
+                            false,
+                            "STRUCT/UNION `{}` registered its type identity but no \
+                             matching value-side schema carrier (got `{}`)",
+                            head_t.name,
+                            other.summarize(),
+                        );
+                        return NodeStep::Done(NodeOutput::Err(KError::new(
+                            KErrorKind::TypeMismatch {
+                                arg: "verb".to_string(),
+                                expected: "constructible Type".to_string(),
+                                got: identity.name(),
+                            },
+                        )));
+                    }
+                };
+                self.schedule_constructor_body(body, idx)
+            }
+            KType::UserType { kind: UserTypeKind::Newtype { .. }, .. } => {
+                // NEWTYPE installs only the type identity in `bindings.types`;
+                // no value-side schema carrier. `newtype_construct` schedules
+                // the value sub-expression through `SchedulerHandle::add_dispatch`
+                // and registers a `Combine` whose finish closure validates the
+                // resolved inner value against `repr` and produces the final
+                // `KObject::Wrapped`. The returned `BodyResult::DeferTo(combine_id)`
+                // routes through `schedule_constructor_body`'s `DeferTo` arm,
+                // which lifts this slot's terminal off the Combine.
+                let body = newtype_construct(scope, self, identity, inner_parts);
+                self.schedule_constructor_body(body, idx)
+            }
+            KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. } => {
+                // A builtin parameterized type registered at prelude (`Result`)
+                // installs a schema carrier in `data` alongside the type identity,
+                // like STRUCT/UNION — route through it. An *opaque* TypeConstructor
+                // minted per-call for SIG/functor ascription installs only the
+                // identity; for those `lookup` misses and we surface the standard
+                // not-constructible error.
+                match scope
+                    .lookup_with_chain(&head_t.name, chain)
+                    .and_then(|c| dispatch_constructor(c, inner_parts))
+                {
+                    Some(body) => self.schedule_constructor_body(body, idx),
+                    None => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                        arg: "verb".to_string(),
+                        expected: "constructible Type".to_string(),
+                        got: identity.name(),
+                    }))),
                 }
-                KObject::TaggedUnionType { .. } => {
-                    self.schedule_constructor_tail(tagged_union::apply(obj, inner_parts))
-                }
-                other => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-                    arg: "verb".to_string(),
-                    expected: "type constructor".to_string(),
-                    got: other.summarize(),
-                }))),
-            },
-            Err(KError { kind: KErrorKind::UnboundName(n), .. }) => NodeStep::Done(
-                NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))),
-            ),
-            Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+            }
+            // MODULE-as-constructor (functor application) lands with the
+            // functor-binder roadmap item. Today a Module identity resolved
+            // type-side has no construction semantics; both drivers reject
+            // the same way. `KType::Module { .. }` post-collapse — the old
+            // `UserType { kind: Module, .. }` indirection is gone.
+            //
+            // Any other resolved identity (builtin leaf, `LET <Type> = <KTypeValue>`
+            // alias, etc.) lands here too: a non-`UserType` identity is not a
+            // type *constructor*.
+            _ => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "constructible Type".to_string(),
+                got: identity.name(),
+            }))),
         }
     }
 }

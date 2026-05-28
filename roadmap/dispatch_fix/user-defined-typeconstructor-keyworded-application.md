@@ -14,7 +14,7 @@ like `LET Wrap = (TYPE_CONSTRUCTOR T)` has no parallel registration.
 A sigil application `:(Wrap Number)` parses as
 `SigiledTypeExpr([Type(Wrap), Type(Number)])`, sub-Dispatches the
 inner expression, and lands in the dispatcher's
-`TypeConstructorCall` arm — which routes
+`ConstructorCall` arm — which routes
 `StructType` / `TaggedUnionType` / `Newtype` heads through their
 construction primitives but has no path for a
 `UserType { kind: TypeConstructor { .. } }` head. The user-defined
@@ -54,7 +54,7 @@ Two test ignores pin the gap:
   *Recommended: (a).* The positional shape matches what users
   already expect from the builtin keyworded overloads they've seen
   for `LIST OF` / `MAP` — and it lines up with the
-  `TypeConstructorCall` classifier arm that handles the rest of
+  `ConstructorCall` classifier arm that handles the rest of
   the leaf-Type-headed multi-part call space. (b) trades discovery
   cost for naming flexibility users likely don't need yet.
 - **Auto-registration site — decided per (a):

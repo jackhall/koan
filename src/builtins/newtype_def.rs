@@ -240,9 +240,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{
-        parse_one, run_legacy, run_one, run_one_err_legacy, run_one_legacy, run_root_silent,
-        sched_legacy,
+        parse_one, run, run_one, run_one_err, run_root_silent,
     };
+    use crate::machine::execute::Scheduler;
     use crate::machine::{KErrorKind, RuntimeArena};
     use crate::machine::model::types::UserTypeKind;
     use crate::machine::model::{KObject, KType};
@@ -281,20 +281,14 @@ mod tests {
 
     /// `Distance(3.0)` returns a `Wrapped` whose `ktype()` reports the `Distance`
     /// identity and whose `inner` is the bare `Number`. The surface NEWTYPE call goes
-    /// through `type_call`'s `Newtype` arm into `newtype_construct`'s Combine.
-    ///
-    /// Legacy-pinned: NEWTYPE constructor heads are out of scope on the stateful
-    /// driver per step 3d of the stateful-dispatch refactor
-    /// (`roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md`);
-    /// `stateful_constructor_call` surfaces `TypeMismatch` for Newtype heads
-    /// instead of routing through `newtype_construct`. Keep coverage on the
-    /// legacy driver until step 4+ decides whether to restore stateful coverage.
+    /// through the dispatch driver's `ConstructorCall` Newtype arm into
+    /// `newtype_construct`'s Combine.
     #[test]
     fn construct_wraps_repr_matching_value() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_legacy(scope, "NEWTYPE Distance = Number");
-        let result = run_one_legacy(scope, parse_one("Distance (3.0)"));
+        run(scope, "NEWTYPE Distance = Number");
+        let result = run_one(scope, parse_one("Distance (3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -313,14 +307,12 @@ mod tests {
 
     /// `Distance("hi")` (Number repr, Str value) surfaces as `TypeMismatch` — the
     /// Combine's finish closure rejects when `value.ktype()` doesn't match `repr`.
-    ///
-    /// Legacy-pinned: see `construct_wraps_repr_matching_value`.
     #[test]
     fn construct_rejects_non_matching_repr() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_legacy(scope, "NEWTYPE Distance = Number");
-        let err = run_one_err_legacy(scope, parse_one("Distance (\"hi\")"));
+        run(scope, "NEWTYPE Distance = Number");
+        let err = run_one_err(scope, parse_one("Distance (\"hi\")"));
         assert!(
             matches!(&err.kind, KErrorKind::TypeMismatch { expected, got, .. }
                 if expected == "Number" && got == "Str"),
@@ -331,14 +323,12 @@ mod tests {
     /// Newtype-over-newtype collapse: `NEWTYPE Foo = Number; NEWTYPE Bar = Foo`;
     /// constructing `Bar(Foo(3.0))` produces a single-layer `Wrapped { type_id: Bar,
     /// inner: Number(3.0) }`. Pins the construction-time collapse invariant.
-    ///
-    /// Legacy-pinned: see `construct_wraps_repr_matching_value`.
     #[test]
     fn newtype_over_newtype_collapses() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_legacy(scope, "NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
-        let result = run_one_legacy(scope, parse_one("Bar (Foo (3.0))"));
+        run(scope, "NEWTYPE Foo = Number\nNEWTYPE Bar = Foo");
+        let result = run_one(scope, parse_one("Bar (Foo (3.0))"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -366,34 +356,31 @@ mod tests {
     /// candidate, so the scope chain runs out without a match. Same shape as
     /// `fn_def::tests::param_type::fn_typed_param_rejects_mismatched_call`; use the
     /// scheduler directly (not `run_one_err`, which expects a per-slot Err result).
-    ///
-    /// Legacy-pinned: `(Distance (3.0))` is a NEWTYPE constructor call — see
-    /// `construct_wraps_repr_matching_value`.
     #[test]
     fn dispatch_distinguishes_distance_from_number() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_legacy(
+        run(
             scope,
             "NEWTYPE Distance = Number\n\
              FN (TAKES_NUM x :Number) -> Str = (\"num\")\n\
              FN (TAKES_DIST x :Distance) -> Str = (\"dist\")",
         );
         // Distance-typed slot accepts a Distance value.
-        let r1 = run_one_legacy(scope, parse_one("TAKES_DIST (Distance (3.0))"));
+        let r1 = run_one(scope, parse_one("TAKES_DIST (Distance (3.0))"));
         match r1 {
             KObject::KString(s) => assert_eq!(s, "dist"),
             other => panic!("expected \"dist\", got {:?}", other.ktype()),
         }
         // Number-typed slot accepts a raw Number.
-        let r2 = run_one_legacy(scope, parse_one("TAKES_NUM (3.0)"));
+        let r2 = run_one(scope, parse_one("TAKES_NUM (3.0)"));
         match r2 {
             KObject::KString(s) => assert_eq!(s, "num"),
             other => panic!("expected \"num\", got {:?}", other.ktype()),
         }
         // Number-typed slot rejects a Distance — surfaces as a dispatch failure
         // (no matching overload).
-        let mut sched1 = sched_legacy();
+        let mut sched1 = Scheduler::new();
         sched1.add_dispatch(parse_one("TAKES_NUM (Distance (3.0))"), scope);
         let err = sched1
             .execute()
@@ -403,7 +390,7 @@ mod tests {
             "expected DispatchFailed on Number-slot Distance, got {err}",
         );
         // Distance-typed slot rejects a raw Number — symmetric.
-        let mut sched2 = sched_legacy();
+        let mut sched2 = Scheduler::new();
         sched2.add_dispatch(parse_one("TAKES_DIST (3.0)"), scope);
         let err2 = sched2
             .execute()
@@ -418,14 +405,12 @@ mod tests {
     /// inside the Combine's dispatched dep, then wraps. Pins the non-trivial-dispatch
     /// path — the Combine waits on the dep's terminalization before the finish
     /// closure runs.
-    ///
-    /// Legacy-pinned: see `construct_wraps_repr_matching_value`.
     #[test]
     fn construct_with_identifier_value() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_legacy(scope, "NEWTYPE Distance = Number\nLET x = 3.0");
-        let result = run_one_legacy(scope, parse_one("Distance (x)"));
+        run(scope, "NEWTYPE Distance = Number\nLET x = 3.0");
+        let result = run_one(scope, parse_one("Distance (x)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {
@@ -440,14 +425,12 @@ mod tests {
 
     /// `Distance ()` (zero-argument type-call) surfaces as `ArityMismatch { expected:
     /// 1, got: 0 }`. Pins the pre-dispatch arity guard in `newtype_construct`.
-    ///
-    /// Legacy-pinned: see `construct_wraps_repr_matching_value`.
     #[test]
     fn construct_arity_zero_rejects() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_legacy(scope, "NEWTYPE Distance = Number");
-        let err = run_one_err_legacy(scope, parse_one("Distance ()"));
+        run(scope, "NEWTYPE Distance = Number");
+        let err = run_one_err(scope, parse_one("Distance ()"));
         assert!(
             matches!(&err.kind, KErrorKind::ArityMismatch { expected: 1, got: 0 }),
             "expected ArityMismatch(1, 0) on Distance(), got {err}",
@@ -460,18 +443,16 @@ mod tests {
     /// today (per TUTORIAL.md § "No arithmetic, comparison, or logical operators"),
     /// so a user-fn call stands in for the "non-trivial dispatch in the value
     /// position" shape the plan calls out.
-    ///
-    /// Legacy-pinned: see `construct_wraps_repr_matching_value`.
     #[test]
     fn construct_with_operator_value() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run_legacy(
+        run(
             scope,
             "NEWTYPE Distance = Number\n\
              FN (MAKE_NUM x :Number) -> Number = (x)",
         );
-        let result = run_one_legacy(scope, parse_one("Distance (MAKE_NUM 3.0)"));
+        let result = run_one(scope, parse_one("Distance (MAKE_NUM 3.0)"));
         match result {
             KObject::Wrapped { inner, type_id } => {
                 match **type_id {

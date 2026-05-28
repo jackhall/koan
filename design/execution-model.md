@@ -432,7 +432,7 @@ opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
 expression's parts for any `Keyword` first and, if none, branches on the head
 token's shape, producing one of six `DispatchShape` variants. The five
 no-keyword variants (`BareIdentifier`, `BareTypeLeaf`,
-`TypeConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) run their own
+`ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) run their own
 fast-lane handlers and never enter `Scope::resolve_dispatch_with_chain`:
 there are no candidates in `bindings.functions` for these shapes, so the
 candidate machinery would do no useful work. The `Keyworded` variant
@@ -506,7 +506,7 @@ The rails the dispatch driver feeds:
   ⇒ `Keyworded`; single-part `Identifier` ⇒ `BareIdentifier`; single-part
   leaf `Type` ⇒ `BareTypeLeaf`; single-part `SigiledTypeExpr` ⇒
   `SigiledTypeExpr`; multi-part with leaf-`Type` head ⇒
-  `TypeConstructorCall`; multi-part with `Identifier` head ⇒
+  `ConstructorCall`; multi-part with `Identifier` head ⇒
   `FunctionValueCall`; everything else ⇒ `Keyworded`. The "sweep first,
   branch on head second" ordering matters: a mixed shape like `(f IF x)`
   goes to `Keyworded` because only the candidate machinery knows how to
@@ -525,7 +525,7 @@ The rails the dispatch driver feeds:
     matches what `value_lookup::body_type_expr` would synthesize. Failures
     surface directly; there is no candidate-machinery alternative for a
     bare leaf type.
-  - `TypeConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
+  - `ConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
     `fast_lane_type_constructor_call` resolves the head Type token and
     routes `StructType` / `TaggedUnionType` / `Newtype` / `TypeConstructor`
     carriers through their construction primitives via a `Tail` rewrite.
@@ -533,7 +533,7 @@ The rails the dispatch driver feeds:
     `type_call` builtin. The legacy positional sigil shape
     (`:(List Number)`) classifies here as well — the dispatcher's
     `SigiledTypeExpr` handler sub-dispatches the inner expression, which
-    then lands in `TypeConstructorCall` and routes through the same
+    then lands in `ConstructorCall` and routes through the same
     construction primitives.
   - `SigiledTypeExpr` (single-part `:(...)` wrapper) —
     `fast_lane_sigiled_type_expr` tail-replaces the slot with a `Dispatch`
@@ -981,10 +981,13 @@ for test fixtures and builtin-registration paths.
   randomness) need a uniform carrier that threads through the same node graph.
 - **Stateful dispatch node** — a parallel-implementation refactor of the
   dispatch driver, sequenced into six numbered work items chained through
-  Requires / Unblocks edges. The carrier shape, routing toggle, and the
-  `recent_wakes` wake-attribution side-channel landed as scaffolding; the
-  next active step is
-  [roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md](../roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md).
+  Requires / Unblocks edges. The carrier shape, routing toggle, the
+  `recent_wakes` wake-attribution side-channel, and four of five
+  fast-lane variants (`BareTypeLeaf`, `BareIdentifier`,
+  `FunctionValueCall`, `ConstructorCall`) on the stateful driver have
+  landed; `SigiledTypeExpr` and `Keyworded` still delegate to the legacy
+  `run_dispatch` and ship in
+  [roadmap/dispatch_fix/stateful-dispatch-04-keyworded-variant.md](../roadmap/dispatch_fix/stateful-dispatch-04-keyworded-variant.md).
   `run_dispatch` re-runs from scratch on every wake; the dispatch slot
   would carry its progress (shape, `bare_outcomes`, picked function,
   working expression, per-track pending counters) and advance by one
