@@ -219,9 +219,15 @@ impl<'a> NodeStore<'a> {
             if let SlotState::PreRun(node) = slot {
                 count += 1;
                 match &node.work {
-                    NodeWork::Dispatch { expr, .. } | NodeWork::Bind { expr, .. }
-                        if expr_sample.is_none() =>
-                    {
+                    NodeWork::Dispatch { expr, state } if expr_sample.is_none() => {
+                        // Parked `Keyworded` slots null out `expr` once a
+                        // Track installs; the working expression lives on
+                        // the state. Prefer the state-carried carrier when
+                        // present, fall back to `expr` otherwise.
+                        let carrier = state.parked_carrier_expr().unwrap_or(expr);
+                        expr_sample = Some(carrier.summarize());
+                    }
+                    NodeWork::Bind { expr, .. } if expr_sample.is_none() => {
                         expr_sample = Some(expr.summarize());
                     }
                     NodeWork::Combine { .. } if fallback_sample.is_none() => {

@@ -906,3 +906,88 @@ fn stateful_keyworded_bare_name_park_resumes_through_state() {
         None => panic!("LET fwd = Foo must bind `fwd` in scope after the park resume"),
     }
 }
+
+/// Step 4e acceptance: the drain-end cycle-detection guard in
+/// [`Scheduler::execute`] reads the parked Keyworded slot's carrier
+/// expression from `KeywordedState` (not from the empty placeholder
+/// `NodeWork::Dispatch.expr` left behind by the Track installers).
+///
+/// Each install site (`stateful_install_eager_subs_track`,
+/// `stateful_install_bare_name_park`, `stateful_install_overload_park`)
+/// drops the entry `expr` to `KExpression::new(Vec::new())` once the
+/// transition `Initialized → Keyworded(...)` lands — the state carries
+/// the live `working_expr` (or original `expr` for overload-park). The
+/// `DispatchState::parked_carrier_expr` accessor surfaces that carrier
+/// for `NodeStore::unresolved` to render as the deadlock `sample`.
+///
+/// Unit-tested here against each track variant: with only the empty
+/// `NodeWork::Dispatch.expr` available the sample would render as `""`;
+/// the accessor must instead return the state-carried expression.
+#[test]
+fn stateful_keyworded_parked_carrier_expr_reads_state() {
+    use super::super::dispatch_state::{
+        BareNameParkTrack, DispatchState, EagerSubsTrack, Initialized, KeywordedState,
+        OverloadParkTrack,
+    };
+
+    fn carrier_expr<'a>() -> KExpression<'a> {
+        // `(LIFT_BARE arg)` — a recognizable keyworded sample distinct from
+        // any other test's expressions, so a regression that drops the
+        // carrier and falls back to the empty `NodeWork::Dispatch.expr`
+        // shows up as a `""` summary, not a coincidentally-matching
+        // sibling expression.
+        KExpression::new(vec![
+            Spanned::bare(ExpressionPart::Keyword("LIFT_BARE".into())),
+            Spanned::bare(ExpressionPart::Identifier("arg".into())),
+        ])
+    }
+    let expected = carrier_expr().summarize();
+
+    let with_eager_subs = DispatchState::Keyworded(Box::new(KeywordedState::with_eager_subs(
+        Initialized { pre_subs: Vec::new() },
+        EagerSubsTrack::new(carrier_expr(), Vec::new()),
+    )));
+    assert_eq!(
+        with_eager_subs.parked_carrier_expr().map(Parseable::summarize),
+        Some(expected.clone()),
+        "eager-subs track must surface `working_expr` as the parked sample",
+    );
+
+    let with_bare_name = DispatchState::Keyworded(Box::new(KeywordedState::with_bare_name_park(
+        Initialized { pre_subs: Vec::new() },
+        BareNameParkTrack::new(carrier_expr(), Vec::new()),
+    )));
+    assert_eq!(
+        with_bare_name.parked_carrier_expr().map(Parseable::summarize),
+        Some(expected.clone()),
+        "bare-name-park track must surface `working_expr` as the parked sample",
+    );
+
+    let with_overload = DispatchState::Keyworded(Box::new(KeywordedState::with_overload_park(
+        Initialized { pre_subs: Vec::new() },
+        OverloadParkTrack::new(carrier_expr(), Vec::new()),
+    )));
+    assert_eq!(
+        with_overload.parked_carrier_expr().map(Parseable::summarize),
+        Some(expected),
+        "overload-park track must surface its original `expr` as the parked sample",
+    );
+
+    // Non-Keyworded variants — and the one-shot Keyworded path that
+    // terminalizes without installing a track — never park, so the
+    // accessor surfaces `None` and the drain-end guard falls back to
+    // the slot's `NodeWork::Dispatch.expr` field.
+    let untracked = DispatchState::Keyworded(Box::new(KeywordedState::from_init(Initialized {
+        pre_subs: Vec::new(),
+    })));
+    assert!(
+        untracked.parked_carrier_expr().is_none(),
+        "Keyworded with no installed track must surface None (fall back to NodeWork expr)",
+    );
+    assert!(
+        DispatchState::initialized(Vec::new())
+            .parked_carrier_expr()
+            .is_none(),
+        "Initialized must surface None (fall back to NodeWork expr)",
+    );
+}

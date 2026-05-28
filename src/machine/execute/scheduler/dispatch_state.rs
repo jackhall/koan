@@ -284,6 +284,32 @@ impl<'a> DispatchState<'a> {
     pub(in crate::machine::execute) fn initialized(pre_subs: Vec<(usize, NodeId)>) -> Self {
         DispatchState::Initialized(Initialized { pre_subs })
     }
+
+    /// Expression carried by the state itself for parked `Keyworded` slots.
+    /// The Track installers drop `NodeWork::Dispatch.expr` to an empty
+    /// placeholder once the slot transitions to `Keyworded`, so the drain-
+    /// end cycle-detection guard (`NodeStore::unresolved`) prefers this
+    /// state-carried expression when summarizing a parked Keyworded sample.
+    /// `None` for every non-Keyworded variant (their `expr` field is the
+    /// source-of-truth) and for the one-shot Keyworded path (terminates
+    /// without installing a track, so no parked sample exists).
+    pub(in crate::machine::execute) fn parked_carrier_expr(
+        &self,
+    ) -> Option<&KExpression<'a>> {
+        let DispatchState::Keyworded(ks) = self else {
+            return None;
+        };
+        if let Some(track) = &ks.overload_park {
+            return Some(&track.expr);
+        }
+        if let Some(track) = &ks.bare_name_park {
+            return Some(&track.working_expr);
+        }
+        if let Some(track) = &ks.eager_subs {
+            return Some(&track.working_expr);
+        }
+        None
+    }
 }
 
 // The per-variant constructors below exist so the stateful driver in
