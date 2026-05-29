@@ -1,7 +1,9 @@
-//! Tri-vector dependency-graph state pulled out of `Scheduler<'a>`: the
-//! `notify_list` / `pending_deps` / `dep_edges` triple. See
+//! Per-slot dependency-graph state pulled out of `Scheduler<'a>`. Each slot's
+//! [`DepRow`] holds the three coordinated fields (`notify`, `pending`,
+//! `edges`) that share the slot index — keeping them in one row makes Inv-A
+//! (wake-pending coherence) structural rather than enforced. See
 //! [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants)
-//! for the Inv-A / Inv-B / Inv-C contract these vectors uphold.
+//! for the Inv-A / Inv-B / Inv-C contract.
 
 use crate::machine::NodeId;
 use super::super::nodes::{NodeWork, work_deps};
@@ -32,72 +34,87 @@ pub(super) fn work_owned_edges<'a>(work: &NodeWork<'a>) -> Vec<DepEdge> {
     }
 }
 
+/// The three coordinated per-slot fields. Mutations go through the row, so
+/// `notify` / `pending` / `edges` cannot desync at the row level — Inv-A
+/// holds by construction.
+#[derive(Default)]
+pub(super) struct DepRow {
+    /// Forward wake edges from this producer to its consumers.
+    notify: Vec<usize>,
+    /// Not-yet-observed deps for this consumer; zero routes via
+    /// `WorkQueues::push_woken`.
+    pending: usize,
+    /// Backward edges from this consumer to its producers; `free` recurses
+    /// only into `Owned`.
+    edges: Vec<DepEdge>,
+}
+
 pub(super) struct DepGraph {
-    /// Forward wake edges: producer -> consumers.
-    notify_list: Vec<Vec<usize>>,
-    /// Not-yet-observed deps per consumer; zero routes via `WorkQueues::push_woken`.
-    pending_deps: Vec<usize>,
-    /// Backward edges per consumer; `free` recurses only into `Owned`.
-    dep_edges: Vec<Vec<DepEdge>>,
+    rows: Vec<DepRow>,
 }
 
 impl DepGraph {
     pub(super) fn new() -> Self {
-        Self {
-            notify_list: Vec::new(),
-            pending_deps: Vec::new(),
-            dep_edges: Vec::new(),
-        }
+        Self { rows: Vec::new() }
     }
 
-    /// Atomic init of all three vectors for a freshly allocated slot
-    /// (recycle or extend). `pending_producers` is the caller-filtered subset
-    /// of `owned_edges` whose producers are not yet terminal, so `DepGraph`
-    /// stays oblivious to results storage. Returns the installed pending count.
+    /// Atomic init of the consumer's row (recycle or extend) plus the
+    /// per-producer notify backlinks. `pending_producers` is the
+    /// caller-filtered subset of `owned_edges` whose producers are not yet
+    /// terminal, so `DepGraph` stays oblivious to results storage. Returns
+    /// the installed pending count.
     pub(super) fn install_for_slot(
         &mut self,
         consumer: NodeId,
         owned_edges: Vec<DepEdge>,
         pending_producers: &[NodeId],
     ) -> usize {
-        if consumer.index() < self.notify_list.len() {
-            self.notify_list[consumer.index()].clear();
-            self.pending_deps[consumer.index()] = pending_producers.len();
-            self.dep_edges[consumer.index()] = owned_edges;
+        let pending = pending_producers.len();
+        if consumer.index() < self.rows.len() {
+            let row = &mut self.rows[consumer.index()];
+            row.notify.clear();
+            row.pending = pending;
+            row.edges = owned_edges;
         } else {
-            self.notify_list.push(Vec::new());
-            self.pending_deps.push(pending_producers.len());
-            self.dep_edges.push(owned_edges);
+            self.rows.push(DepRow {
+                notify: Vec::new(),
+                pending,
+                edges: owned_edges,
+            });
         }
         for p in pending_producers {
-            self.notify_list[p.index()].push(consumer.index());
+            self.rows[p.index()].notify.push(consumer.index());
         }
-        pending_producers.len()
+        pending
     }
 
-    /// Atomic +1 across all three vectors. Caller guarantees `producer` is
-    /// not yet terminal.
+    /// Atomic +1 on the consumer's pending count, edges list, and the
+    /// producer's notify list. Caller guarantees `producer` is not yet
+    /// terminal.
     pub(super) fn add_owned_edge(
         &mut self,
         producer: NodeId,
         consumer: NodeId,
     ) {
-        self.notify_list[producer.index()].push(consumer.index());
-        self.pending_deps[consumer.index()] += 1;
-        self.dep_edges[consumer.index()].push(DepEdge::Owned(producer));
+        self.rows[producer.index()].notify.push(consumer.index());
+        let row = &mut self.rows[consumer.index()];
+        row.pending += 1;
+        row.edges.push(DepEdge::Owned(producer));
     }
 
-    /// Atomic +1 across all three vectors; the backward entry is
-    /// `Notify(producer)` so `free` skips past it. Caller guarantees
-    /// `producer` is not yet terminal.
+    /// Atomic +1 across the producer's notify list and the consumer's
+    /// pending count + edges; the backward entry is `Notify(producer)` so
+    /// `free` skips past it. Caller guarantees `producer` is not yet
+    /// terminal.
     pub(super) fn add_park_edge(
         &mut self,
         producer: NodeId,
         consumer: NodeId,
     ) {
-        self.notify_list[producer.index()].push(consumer.index());
-        self.pending_deps[consumer.index()] += 1;
-        self.dep_edges[consumer.index()].push(DepEdge::Notify(producer));
+        self.rows[producer.index()].notify.push(consumer.index());
+        let row = &mut self.rows[consumer.index()];
+        row.pending += 1;
+        row.edges.push(DepEdge::Notify(producer));
     }
 
     /// True iff `producer` is forward-reachable from `consumer` — i.e.
@@ -114,7 +131,7 @@ impl DepGraph {
             if !visited.insert(node) {
                 continue;
             }
-            for &next in &self.notify_list[node] {
+            for &next in &self.rows[node].notify {
                 if next == producer.index() {
                     return true;
                 }
@@ -124,60 +141,59 @@ impl DepGraph {
         false
     }
 
-    /// Drains `notify_list[producer_idx]` and returns every consumer paired
-    /// with a `hit_zero` flag indicating whether its `pending_deps` reached
-    /// zero on this decrement. Atomic across the wake-pending pair (Inv-A
-    /// still holds — the decrement is in-method). The `hit_zero` channel lets
-    /// the caller append to a side-channel for every consumer while only
-    /// enqueueing counter-zero ones, off a single drain.
+    /// Drains the producer's notify list and returns every consumer paired
+    /// with a `hit_zero` flag indicating whether its pending count reached
+    /// zero on this decrement. The `hit_zero` channel lets the caller append
+    /// to a side-channel for every consumer while only enqueueing
+    /// counter-zero ones, off a single drain.
     pub(super) fn drain_notify(&mut self, producer_idx: usize) -> Vec<(usize, bool)> {
-        let notifees = std::mem::take(&mut self.notify_list[producer_idx]);
+        let notifees = std::mem::take(&mut self.rows[producer_idx].notify);
         let mut out = Vec::with_capacity(notifees.len());
         for consumer in notifees {
-            self.pending_deps[consumer] -= 1;
-            let hit_zero = self.pending_deps[consumer] == 0;
-            out.push((consumer, hit_zero));
+            let row = &mut self.rows[consumer];
+            row.pending -= 1;
+            out.push((consumer, row.pending == 0));
         }
         out
     }
 
-    /// Drains `dep_edges[idx]` (so a repeat free is a no-op) and yields only
+    /// Drains the slot's edges (so a repeat free is a no-op) and yields only
     /// `Owned` children; `Notify` edges are dropped so the reclaim walk
     /// cannot transit into the producer's subtree.
     pub(super) fn owned_children(&mut self, idx: usize) -> impl Iterator<Item = NodeId> {
-        let edges = std::mem::take(&mut self.dep_edges[idx]);
+        let edges = std::mem::take(&mut self.rows[idx].edges);
         edges.into_iter().filter_map(|e| match e {
             DepEdge::Owned(id) => Some(id),
             DepEdge::Notify(_) => None,
         })
     }
 
-    /// Eager-free on the success path. Inv-C ensures `notify_list[idx]` is
-    /// already drained by the time the caller hits this.
+    /// Eager-free on the success path. Inv-C ensures the slot's notify list
+    /// is already drained by the time the caller hits this.
     pub(super) fn clear_dep_edges(&mut self, idx: usize) {
-        self.dep_edges[idx].clear();
+        self.rows[idx].edges.clear();
     }
 
     pub(super) fn pending_count(&self, idx: usize) -> usize {
-        self.pending_deps[idx]
+        self.rows[idx].pending
     }
 
     pub(super) fn is_dep_edges_empty(&self, idx: usize) -> bool {
-        self.dep_edges[idx].is_empty()
+        self.rows[idx].edges.is_empty()
     }
 
     #[cfg(test)]
     pub(super) fn dep_edges_at(&self, idx: usize) -> &[DepEdge] {
-        &self.dep_edges[idx]
+        &self.rows[idx].edges
     }
 
     #[cfg(test)]
     pub(super) fn set_dep_edges(&mut self, idx: usize, edges: Vec<DepEdge>) {
-        self.dep_edges[idx] = edges;
+        self.rows[idx].edges = edges;
     }
 
     #[cfg(test)]
     pub(super) fn notify_list_iter(&self) -> impl Iterator<Item = (usize, &Vec<usize>)> {
-        self.notify_list.iter().enumerate()
+        self.rows.iter().enumerate().map(|(i, row)| (i, &row.notify))
     }
 }
