@@ -1035,6 +1035,127 @@ def cmd_signals(args: argparse.Namespace) -> int:
     return 0
 
 
+def _src_to_module(rel_path: str) -> str | None:
+    """Map a repo-relative src/*.rs path to its cargo-modules module path.
+
+    `src/lib.rs` is the crate root (`koan`); `src/foo/mod.rs` is `koan::foo`;
+    everything else is the file path with `/` -> `::` and the `.rs` suffix
+    stripped."""
+    if not rel_path.startswith("src/") or not rel_path.endswith(".rs"):
+        return None
+    stem = rel_path[len("src/"):-len(".rs")]
+    if stem == "lib":
+        return "koan"
+    if stem.endswith("/mod"):
+        stem = stem[:-len("/mod")]
+    return "koan::" + stem.replace("/", "::")
+
+
+def _parse_dot_edges(dot_path: Path) -> set[frozenset[str]]:
+    """Pull every directed edge out of a cargo-modules DOT file and return it as
+    an undirected set of frozenset({a, b}) — the gap view doesn't care which
+    direction the `uses` arrow points."""
+    text = dot_path.read_text(encoding="utf-8")
+    edges: set[frozenset[str]] = set()
+    for m in re.finditer(r'"([^"]+)"\s*->\s*"([^"]+)"', text):
+        a, b = m.group(1), m.group(2)
+        if a != b:
+            edges.add(frozenset((a, b)))
+    return edges
+
+
+def cmd_gap(args: argparse.Namespace) -> int:
+    """Surface src-file pairs the design docs co-cite but the cargo-modules
+    graph doesn't structurally couple.
+
+    Companion to `modgraph` and `signals`: modgraph scores a proposed module
+    tree on structural cost; this view hunts for *candidates* — concepts
+    visible in the prose that the code-graph doesn't yet reflect. High gap =
+    "docs see this, the module graph doesn't" = candidate seam. Low gap = docs
+    and structure agree, no hidden seam.
+
+    Score: `(docs_co_citing + phrases_shared) / (1 + structural_edges)`,
+    where `structural_edges` counts direct cargo-modules edges between the
+    two files' modules (either direction) plus their parent-child relation."""
+    import itertools
+    from collections import Counter
+
+    docs = iter_doc_files()
+    srcs = iter_src_files()
+
+    doc_refs = {rel(d): refs for d in docs if (refs := _src_refs_in_doc(d))}
+
+    pair_docs: Counter[frozenset[str]] = Counter()
+    for refs in doc_refs.values():
+        for a, b in itertools.combinations(sorted(refs), 2):
+            pair_docs[frozenset((a, b))] += 1
+
+    pair_phrases: Counter[frozenset[str]] = Counter()
+    ngram_files: dict[str, set[str]] = defaultdict(set)
+    for f in docs + srcs:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        prose = _comment_lines(text, f.suffix == ".rs")
+        prose = LINK_RE.sub(r"\1", prose).replace("`", " ")
+        words = re.findall(r"[a-z]{3,}", prose.lower())
+        for i in range(len(words) - args.ngram + 1):
+            window = words[i : i + args.ngram]
+            if sum(1 for w in window if w not in _STOP_WORDS and len(w) >= 6) < 2:
+                continue
+            ngram_files[" ".join(window)].add(rel(f))
+    for ng, paths in ngram_files.items():
+        srcs_in_phrase = [p for p in paths if p.startswith("src/")]
+        if len(srcs_in_phrase) < 2:
+            continue
+        for a, b in itertools.combinations(sorted(srcs_in_phrase), 2):
+            pair_phrases[frozenset((a, b))] += 1
+
+    edges = _parse_dot_edges(Path(args.edges))
+
+    def structural_weight(a: str, b: str) -> int:
+        ma, mb = _src_to_module(a), _src_to_module(b)
+        if ma is None or mb is None:
+            return 0
+        w = 1 if frozenset((ma, mb)) in edges else 0
+        # parent/child in module tree is implicit structural coupling
+        if ma.startswith(mb + "::") or mb.startswith(ma + "::"):
+            w += 1
+        return w
+
+    rows: list[dict] = []
+    for pair, doc_count in pair_docs.items():
+        if doc_count < args.min_docs:
+            continue
+        a, b = sorted(pair)
+        phrase_count = pair_phrases.get(pair, 0)
+        edge_w = structural_weight(a, b)
+        gap = (doc_count + phrase_count) / (1 + edge_w)
+        rows.append({
+            "a": a, "b": b,
+            "docs": doc_count, "phrases": phrase_count,
+            "edges": edge_w, "gap": round(gap, 3),
+        })
+    rows.sort(key=lambda r: (-r["gap"], -r["docs"], r["a"], r["b"]))
+    rows = rows[: args.top]
+
+    if args.json:
+        import json
+        print(json.dumps({"gap": rows}, indent=2))
+        return 0
+
+    print(f"## doc/code gap (top {args.top}, min-docs={args.min_docs})")
+    print(f"## score = (docs + phrases) / (1 + structural_edges)")
+    for r in rows:
+        print(f"  gap={r['gap']:6.2f}  docs={r['docs']:2d}  "
+              f"phrases={r['phrases']:2d}  edges={r['edges']:1d}   "
+              f"{r['a']}  +  {r['b']}")
+    if not rows:
+        print("  (none)")
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Run all four audits in one pass. The first three (links, deps, orphans)
     are gates: if any of them flag an issue, we exit non-zero. The source-tree
@@ -1150,6 +1271,24 @@ def main(argv: list[str] | None = None) -> int:
                            help="min share of mentions one doc must hold to be "
                                 "considered the concept's owner (default: 0.5)")
     p_signals.set_defaults(func=cmd_signals)
+
+    p_gap = sub.add_parser(
+        "gap",
+        help="rank src-file pairs by doc-coupling minus structural-coupling — "
+             "concepts the design docs see that the cargo-modules graph doesn't",
+    )
+    p_gap.add_argument("--edges", default="observe/modules.dot",
+                       help="cargo-modules DOT graph (default: observe/modules.dot)")
+    p_gap.add_argument("--min-docs", type=int, default=2,
+                       help="min docs co-citing a pair (default: 2)")
+    p_gap.add_argument("--ngram", type=int, default=5,
+                       help="phrase length in words for shared-phrase scoring "
+                            "(default: 5)")
+    p_gap.add_argument("--top", type=int, default=30,
+                       help="rows to emit (default: 30)")
+    p_gap.add_argument("--json", action="store_true",
+                       help="emit JSON instead of human-readable text")
+    p_gap.set_defaults(func=cmd_gap)
 
     args = parser.parse_args(argv)
     return args.func(args)

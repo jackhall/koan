@@ -46,6 +46,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parent.parent
+
 MODULE_TOKEN = re.compile(r'"([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]+)*)"')
 
 
@@ -315,9 +317,10 @@ def relpath_to_module(relpath: str, package: str = "koan") -> str | None:
 # ---------- move resolution ----------
 
 class MoveSpec:
-    def __init__(self, old_path: str, new_module: str):
+    def __init__(self, old_path: str, new_module: str, is_delete: bool = False):
         self.old_path = old_path
         self.new_module = new_module
+        self.is_delete = is_delete
         # filled in by resolve_moves()
         self.source_module: str = ""
         self.source_file: str = ""
@@ -333,6 +336,13 @@ def parse_move(s: str) -> MoveSpec:
     if not old or not new:
         raise argparse.ArgumentTypeError(f"empty side in move {s!r}")
     return MoveSpec(old, new)
+
+
+def parse_delete(s: str) -> MoveSpec:
+    s = s.strip()
+    if not s:
+        raise argparse.ArgumentTypeError("--delete expects an item path")
+    return MoveSpec(s, new_module="", is_delete=True)
 
 
 def resolve_moves(moves: list[MoveSpec],
@@ -401,7 +411,7 @@ def diff_edges(docs: dict[str, dict],
             mv = moved_syms.get(sym)
             if mv is None:
                 continue
-            if mv.new_module != mod:
+            if not mv.is_delete and mv.new_module != mod:
                 add.add((mod, mv.new_module))
             moved_seen.add(sym_owner.get(sym, ""))
         for old_mod in moved_seen:
@@ -422,29 +432,50 @@ _EDGE_RE = re.compile(r'^\s*"([^"]+)"\s*->\s*"([^"]+)"\s*;')
 def render_dot_diff(original_dot: str,
                     add: set[tuple[str, str]],
                     remove: set[tuple[str, str]],
-                    new_modules: set[str]) -> str:
-    """Surgical edit of the cargo-modules DOT: drop edges in `remove`, keep
-    everything else, append `add` edges plus stubs for fresh modules."""
+                    new_modules: set[str],
+                    delete_modules: set[str] = frozenset()) -> str:
+    """Surgical edit of the cargo-modules DOT: drop edges in `remove`, plus
+    drop every node/edge touching a module in `delete_modules` (used when a
+    `--delete-file` orphans the whole module), keep everything else, append
+    `add` edges plus stubs for fresh modules."""
     lines = original_dot.splitlines()
     out: list[str] = []
     closing_brace_idx = -1
     seen_nodes: set[str] = set()
+    # Any edge whose source OR destination is a deleted module is dropped,
+    # and the deleted module's own node-declaration line is filtered out.
+    edge_any_re = re.compile(r'\s*"([^"]+)"\s*->\s*"([^"]+)"')
+    node_decl_re = re.compile(r'^\s*"([^"]+)"\s*\[')
     for line in lines:
-        m = _EDGE_RE.match(line)
-        if m:
-            src, dst = m.group(1), m.group(2)
+        em = edge_any_re.match(line)
+        if em:
+            src, dst = em.group(1), em.group(2)
+            if src in delete_modules or dst in delete_modules:
+                continue
             seen_nodes.add(src)
             seen_nodes.add(dst)
             if (src, dst) in remove:
+                continue
+        else:
+            nm = node_decl_re.match(line)
+            if nm and nm.group(1) in delete_modules:
                 continue
         if line.strip() == "}":
             closing_brace_idx = len(out)
         out.append(line)
     extra: list[str] = []
+    # Match cargo-modules' edge attributes so modgraph's EDGE_RE (which
+    # requires [label="uses"]) and direct_children (which derives the tree
+    # from owns edges + node names) both see the new module.
+    uses_attrs = '[label="uses", color="#7f7f7f", style="dashed"] [constraint=false]; // "uses" edge'
+    owns_attrs = '[label="owns", color="#000000", style="solid"] [constraint=true]; // "owns" edge'
     for nm in sorted(new_modules - seen_nodes):
         extra.append(f'    "{nm}" [label="{nm}"];')
+        parent = nm.rsplit("::", 1)[0] if "::" in nm else None
+        if parent:
+            extra.append(f'    "{parent}" -> "{nm}" {owns_attrs}')
     for src, dst in sorted(add):
-        extra.append(f'    "{src}" -> "{dst}";')
+        extra.append(f'    "{src}" -> "{dst}" {uses_attrs}')
     if closing_brace_idx >= 0:
         out[closing_brace_idx:closing_brace_idx] = extra
     else:
@@ -579,6 +610,8 @@ def write_item_mirror(src_root: Path, mirror_root: Path,
 
         dst_blobs: dict[Path, list[str]] = defaultdict(list)
         for mv, _start, _end, blob in extracted:
+            if mv.is_delete:
+                continue
             dst_rel = mv.new_module.split("::")[1:]
             dst_path = mirror_root.joinpath(*dst_rel).with_suffix(".rs")
             dst_blobs[dst_path].extend(blob)
@@ -589,9 +622,13 @@ def write_item_mirror(src_root: Path, mirror_root: Path,
 
 
 def cmd_item(args: argparse.Namespace) -> int:
-    if not args.move:
-        print("error: at least one --move required", file=sys.stderr)
+    deletes = getattr(args, "delete_specs", []) or []
+    delete_files = [Path(p) for p in getattr(args, "delete_files", []) or []]
+    if not args.move and not deletes and not delete_files:
+        print("error: at least one --move, --delete, or --delete-file required",
+              file=sys.stderr)
         return 2
+    args.move = list(args.move) + deletes
 
     docs = parse_scip(args.scip)
     errors = resolve_moves(args.move, docs)
@@ -602,18 +639,45 @@ def cmd_item(args: argparse.Namespace) -> int:
 
     add, remove = diff_edges(docs, args.move)
     original_dot = args.edges.read_text(encoding="utf-8")
-    new_modules = {mv.new_module for mv in args.move}
+    new_modules = {mv.new_module for mv in args.move if not mv.is_delete}
+
+    delete_modules: set[str] = set()
+    for f in delete_files:
+        rel = str(f) if not f.is_absolute() else str(f.relative_to(REPO))
+        if not rel.startswith("src/"):
+            print(f"error: --delete-file must point under src/, got {rel}",
+                  file=sys.stderr)
+            return 1
+        mod = relpath_to_module(rel)
+        if mod is None:
+            print(f"error: --delete-file {rel} has no module path",
+                  file=sys.stderr)
+            return 1
+        delete_modules.add(mod)
+
     args.output_edges.write_text(
-        render_dot_diff(original_dot, add, remove, new_modules),
+        render_dot_diff(original_dot, add, remove, new_modules, delete_modules),
         encoding="utf-8",
     )
     write_item_mirror(args.src_root, args.output_src, args.move)
 
+    for f in delete_files:
+        rel = f if not f.is_absolute() else f.relative_to(REPO)
+        rel_under_src = str(rel)[len("src/"):]
+        mirror_path = args.output_src / rel_under_src
+        if mirror_path.exists():
+            mirror_path.unlink()
+
     print(f"wrote {args.output_edges}")
     print(f"mirrored src tree to {args.output_src}")
     for mv in args.move:
-        print(f"  moved {mv.old_path}  ({mv.source_file}:{mv.def_line})  "
-              f"-> {mv.new_module}")
+        if mv.is_delete:
+            print(f"  deleted {mv.old_path}  ({mv.source_file}:{mv.def_line})")
+        else:
+            print(f"  moved {mv.old_path}  ({mv.source_file}:{mv.def_line})  "
+                  f"-> {mv.new_module}")
+    for f in delete_files:
+        print(f"  deleted file {f}")
     return 0
 
 
@@ -664,6 +728,24 @@ def main() -> int:
                     default=[], metavar="OLD=NEW",
                     help="move item OLD (full koan-path) into module NEW. "
                          "Repeatable.")
+    pi.add_argument("--delete", action="append", type=parse_delete,
+                    default=[], dest="delete_specs", metavar="ITEM",
+                    help="delete item ITEM from its source file. "
+                         "Item is removed from the mirrored src tree and "
+                         "from the rewritten DOT — no destination module is "
+                         "created, and `M -> source_module` uses-edges are "
+                         "dropped iff M referenced only deleted items from "
+                         "that module. Repeatable. Use to model pure dead-"
+                         "code removal (which `--move` cannot).")
+    pi.add_argument("--delete-file", action="append", default=[],
+                    dest="delete_files", metavar="PATH",
+                    help="delete the entire file at PATH (repo-relative, "
+                         "must be under src/). Mirror removes the file, and "
+                         "the DOT drops the corresponding module node plus "
+                         "every edge touching it. Use to model orphaning a "
+                         "wrapper module after `--move` migrates its items "
+                         "elsewhere — `--move` shrinks the file but can't "
+                         "remove the module node or its leftover scaffolding.")
     pi.set_defaults(func=cmd_item)
 
     args = ap.parse_args()

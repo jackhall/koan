@@ -4,7 +4,7 @@
 Reads a cargo-modules DOT file, recursively walks the module tree from
 `--root`, and reports per node:
   index(m)   = cross_edges(m) + alpha * feedback_weight(m) + beta
-  size(m)    = gamma * raw_loc(m) * log(1 + raw_loc(m) / pivot)
+  size(m)    = gamma * eff_loc(m) * log(1 + eff_loc(m) / pivot)
 The aggregate is reported as a single normalised number — the per-root-loc
 score, split into three components:
   per-loc    = (Σ (cross + α·fb)(m) · loc(m)        ← coupling
@@ -15,14 +15,21 @@ edges at each wrapper), nesting (wrapper layers themselves), or per-file
 (large files). The absolute totals are intentionally not surfaced — only
 the per-loc number is calibrated to compare against prior runs.
 
-Two LOC measures are used. Production LOC (`own_loc` / `subtree_loc`)
+Three LOC measures are used. Production LOC (`own_loc` / `subtree_loc`)
 filters out test files and `#[cfg(test)] mod` blocks and is what the
 structural terms (coupling, nesting) weight by — it captures the load-
 bearing code surface a refactor reshuffles. Raw LOC (`raw_loc`) counts
 every non-blank line in the file, including tests, doc comments, and
-inline comments, and is what the per-file size penalty uses — a 1000-line
-test-heavy file is 1000 lines of context for any reader (human or model),
-even if only 300 of those lines are production code.
+inline comments. Effective LOC (`eff_loc`) extends raw LOC with reader-
+effort beyond the file itself: `eff_loc = raw_loc + δ·prose_loc +
+κ·hop_count`, where `prose_loc` is the file's uniform share of every
+design/roadmap/README markdown doc that links to it, and `hop_count` is
+the number of outbound `*.md` links the file embeds in its own comments.
+The per-file size penalty weights `eff_loc`, so the size term reflects
+total comprehension cost — code, attributed prose, and redirect hops —
+not just code surface. A 1000-line file the docs cover heavily costs
+more to understand than a 1000-line file the docs don't mention; the
+size term captures that.
 
 `cross_edges` and `feedback_weight` are computed at every interior node
 against the one-group-per-child partition of its children. For N ≤ 6
@@ -52,13 +59,17 @@ passthrough wrapper is undetectable.
 3000-line leaf scores zero while any split incurs structural cost, so
 the metric strictly rewards inaction. The charge `γ · L · log(1 + L/T)`
 is sub-linear in L for L ≪ T (small files are nearly free) and turns
-super-linear as L ≫ T. Defaults (γ=50, T=250) make 2-way splits of
-400+ LOC leaves break even against the wrapper β·loc cost, 3-way splits
-of 300+ leaves clearly win, and the size term lands at ~8% of the total
-score on the koan tree — enough signal to call out fat files without
-overriding cohesive groupings. Applied to every module's own file
-(leaves and parents alike), so fat `mod.rs` files above small children
-are also penalised.
+super-linear as L ≫ T. Defaults (γ=50, T=325) place the pivot ~1.34×
+above the median leaf eff_loc on the koan tree, so the median file
+sits at the knee of the log curve. In eff_loc terms, 2-way splits of
+~520 LOC leaves break even against the wrapper β·loc cost and 3-way
+splits of ~390 LOC leaves clearly win. The size term lands at ~30% of
+total on `koan::machine` (~32% on the whole crate) — large because the
+comprehension-aware eff_loc treats per-file reading cost as a first-
+class signal. Applied to every module's own file (leaves and parents
+alike), so fat `mod.rs` files above small children are also penalised.
+(T was 250 before eff_loc was introduced — see commit history for the
+prior calibration.)
 
 Usage:
   python3 tools/modgraph.py --edges <dot-file> --root koan
@@ -354,13 +365,135 @@ def own_file_loc_raw(module: str, src_root: Path) -> int:
     return file_loc_raw(f) if f is not None else 0
 
 
-def size_charge(raw_loc: int, gamma: float, pivot: float) -> float:
-    """Soft log-shaped penalty per file: γ·L·log(1 + L/T). L is raw LOC
-    (tests + comments included) — the size term measures per-file context
-    cost, where every line a reader has to load counts."""
-    if raw_loc <= 0 or gamma <= 0.0 or pivot <= 0.0:
+def owner_credit(prose_loc: float, epsilon: float, owner_pivot: float) -> float:
+    """Reward concentrating a documented concept into a named owner file.
+    Symmetric in shape to the size charge — ε·L·log(1+L/P_o) — but
+    subtracted from the size term, capped at the size term's value (so
+    `size_charge` never goes below zero). Sub-linear below P_o (small
+    concepts aren't worth their own module), super-linear above it (the
+    heavily-documented concept deserves a name)."""
+    if prose_loc <= 0 or epsilon <= 0.0 or owner_pivot <= 0.0:
         return 0.0
-    return gamma * raw_loc * math.log(1.0 + raw_loc / pivot)
+    return epsilon * prose_loc * math.log(1.0 + prose_loc / owner_pivot)
+
+
+def size_charge(eff_loc: float, gamma: float, pivot: float) -> float:
+    """Soft log-shaped penalty per file: γ·L·log(1 + L/T). L is the
+    *effective* reader LOC — raw code/comment lines plus uniformly-
+    attributed prose from any design/roadmap doc that mentions this file,
+    plus a per-hop charge for every outbound `*.md` link the file embeds.
+    The structural terms (coupling, nesting) still weight by production
+    LOC; the size term reflects total reading effort to comprehend the
+    file in isolation."""
+    if eff_loc <= 0 or gamma <= 0.0 or pivot <= 0.0:
+        return 0.0
+    return gamma * eff_loc * math.log(1.0 + eff_loc / pivot)
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MD_GLOBS = ("*.md", "design/**/*.md", "roadmap/**/*.md")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+
+
+def _doc_raw_loc(path: Path) -> int:
+    """Non-blank lines in a markdown file — the prose-LOC measure attributed
+    out to the src files the doc mentions."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return 0
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
+def _doc_to_src_files(doc: Path, redirect: dict[Path, Path] | None = None) -> set[Path]:
+    """Set of paths *relative to the repo's canonical `src/`* that `doc`
+    markdown-links to. Returns `Path` objects of the form `machine/core/
+    scope.rs` — caller joins these against whatever src_root they're
+    scoring, so the attribution still applies when scoring a `/tmp/...`
+    mirror produced by `modgraph_rewrite.py`. Test files excluded.
+
+    `redirect` is an optional `{old_rel: new_rel}` map: doc-link targets
+    matching a key are rewritten to the corresponding value before the
+    set is built. Used by `--prose-redirect` to simulate doc
+    consolidation alongside a code-level seam — e.g. if `lookup.md` is
+    written as the canonical owner of the `core::lookup` protocol and
+    the prior co-citers (scope.rs, bindings.rs, ktype_predicates.rs)
+    no longer carry the protocol's prose, redirect them all to
+    `core/lookup.rs`."""
+    try:
+        text = doc.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    out: set[Path] = set()
+    canonical_src = (REPO_ROOT / "src").resolve()
+    for m in _MD_LINK_RE.finditer(text):
+        target = m.group(2).split("#", 1)[0].split("?", 1)[0]
+        if not target or target.startswith(("http://", "https://", "mailto:")):
+            continue
+        resolved = (doc.parent / target).resolve()
+        try:
+            rel = resolved.relative_to(canonical_src)
+        except ValueError:
+            continue
+        if resolved.suffix == ".rs" and "/tests" not in str(rel) and not _is_test_file(resolved):
+            if redirect and rel in redirect:
+                rel = redirect[rel]
+            out.add(rel)
+    return out
+
+
+def _src_hop_count(path: Path) -> int:
+    """Count outbound markdown-doc links (`[...](something.md)`) in this src
+    file's comments — each one is a reader hop into prose."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return 0
+    hops = 0
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("//"):
+            continue
+        for m in _MD_LINK_RE.finditer(stripped):
+            target = m.group(2).split("#", 1)[0].split("?", 1)[0]
+            if target.endswith(".md"):
+                hops += 1
+    return hops
+
+
+def build_prose_attribution(
+    src_root: Path,
+    redirect: dict[Path, Path] | None = None,
+) -> tuple[dict[Path, float], dict[Path, int]]:
+    """Walk all design/roadmap/top-level markdown files, attribute each
+    doc's raw LOC *uniformly* across every src file it links to, and count
+    each src file's outbound `*.md` hops. Returns (attributed_prose,
+    hop_count), both keyed by *path relative to the repo's canonical
+    `src/`* (e.g. `machine/core/scope.rs`). Keying on canonical-relative
+    paths lets the same attribution apply when scoring a `/tmp/...` src
+    mirror produced by `modgraph_rewrite.py`. Files with zero entries
+    are omitted (callers use `.get(p, 0)`)."""
+    prose: dict[Path, float] = defaultdict(float)
+    hops: dict[Path, int] = {}
+    for pat in MD_GLOBS:
+        for doc in REPO_ROOT.glob(pat):
+            files = _doc_to_src_files(doc, redirect)
+            if not files:
+                continue
+            attribution = _doc_raw_loc(doc) / len(files)
+            for f in files:
+                prose[f] += attribution
+    src_root_abs = src_root.resolve()
+    for rs in src_root_abs.rglob("*.rs"):
+        if _is_test_file(rs):
+            continue
+        h = _src_hop_count(rs)
+        if h:
+            try:
+                hops[rs.relative_to(src_root_abs)] = h
+            except ValueError:
+                continue
+    return prose, hops
 
 
 def subtree_loc(module: str, modules: set[str], src_root: Path) -> int:
@@ -405,11 +538,18 @@ def fractal_report(
     gamma: float,
     pivot: float,
     exact_threshold: int,
+    delta: float,
+    kappa: float,
+    epsilon: float,
+    owner_pivot: float,
+    prose_redirect: dict[Path, Path] | None = None,
+    reference_loc: int | None = None,
 ) -> Score:
     """Walk the subtree, print the per-module report, and return the
     per-root-loc Score breakdown."""
     modules = discover_modules(edges)
     root_loc = subtree_loc(root, modules, src_root)
+    prose_attribution, hop_count = build_prose_attribution(src_root, prose_redirect)
 
     def walk(module: str, depth: int) -> Score:
         indent = "  " * depth
@@ -417,9 +557,23 @@ def fractal_report(
         loc = subtree_loc(module, modules, src_root)
         own_loc = own_file_loc(module, src_root)
         raw_loc = own_file_loc_raw(module, src_root)
-        size = size_charge(raw_loc, gamma, pivot)
+        own_file = module_to_file(module, src_root)
+        if own_file is not None:
+            try:
+                rel_key = own_file.resolve().relative_to(src_root.resolve())
+            except ValueError:
+                rel_key = None
+        else:
+            rel_key = None
+        prose_loc = prose_attribution.get(rel_key, 0.0) if rel_key is not None else 0.0
+        hops = hop_count.get(rel_key, 0) if rel_key is not None else 0
+        eff_loc = raw_loc + delta * prose_loc + kappa * hops
+        gross_size = size_charge(eff_loc, gamma, pivot)
+        credit = owner_credit(prose_loc, epsilon, owner_pivot)
+        size = max(0.0, gross_size - credit)
         size_tail = (
-            f"   own {own_loc:>4} (raw {raw_loc:>4})  size {size:>6.1f}"
+            f"   own {own_loc:>4} (raw {raw_loc:>4}, eff {eff_loc:>6.1f})  size {size:>6.1f}"
+            + (f" (−{credit:.1f} owner)" if credit > 0 else "")
             if (own_loc or raw_loc) else ""
         )
         head = f"{indent}{module:<60} loc {loc:>6}"
@@ -439,10 +593,14 @@ def fractal_report(
         return sum((walk(f"{module}::{c}", depth + 1) for c in children), here)
 
     totals = walk(root, 0)
-    per = totals.per(root_loc)
+    divisor = reference_loc if reference_loc else root_loc
+    per = totals.per(divisor)
     print()
-    if root_loc:
-        print(f"per root-loc (loc({root}) = {root_loc}, γ={gamma}, T={pivot:g}):  "
+    if divisor:
+        tag = (f"loc({root}) = {root_loc}"
+               if reference_loc is None
+               else f"ref-loc = {reference_loc} (current loc({root}) = {root_loc})")
+        print(f"per root-loc ({tag}, γ={gamma}, T={pivot:g}):  "
               f"{per.total:.2f}   "
               f"(coupling {per.coupling:.2f}, nesting {per.nesting:.2f}, size {per.size:.2f})")
     else:
@@ -451,8 +609,9 @@ def fractal_report(
 
 
 BASELINE_HEADER = (
-    "# columns: date  short-sha  per-loc  coupling  nesting  size\n"
-    "# (all four numeric columns are per root-loc)\n"
+    "# columns: date  short-sha  per-loc  coupling  nesting  size  root-loc\n"
+    "# (the four scoring columns are per root-loc; root-loc is the absolute\n"
+    "#  subtree LOC, read back as --reference-loc when scoring candidates)\n"
     "# managed by tools/modgraph.py --baseline; newest first, capped to 5 entries\n"
 )
 BASELINE_LIMIT = 5
@@ -486,7 +645,27 @@ def _parse_baseline_line(line: str) -> tuple[str, str, float] | None:
         return None
 
 
-def update_baseline(path: Path, score: Score) -> None:
+def _read_baseline_root_loc(path: Path) -> int | None:
+    """Return the top entry's `root-loc` column from a baseline file, or None
+    if the file is missing, empty, or pre-dates the column. Used to auto-set
+    `--reference-loc` when comparing candidates against a stored baseline."""
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) < 7:
+            return None
+        try:
+            return int(parts[6])
+        except ValueError:
+            return None
+    return None
+
+
+def update_baseline(path: Path, score: Score, root_loc: int) -> None:
     """Prune stale entries, prepend today's measurement, write the file, and
     print a one-line delta against the prior top entry.
 
@@ -522,7 +701,8 @@ def update_baseline(path: Path, score: Score) -> None:
 
     prior = _parse_baseline_line(kept[0]) if kept else None
     kept.insert(0, f"{today} {sha_field} {per_loc:.2f} "
-                   f"{score.coupling:.2f} {score.nesting:.2f} {score.size:.2f}")
+                   f"{score.coupling:.2f} {score.nesting:.2f} {score.size:.2f} "
+                   f"{root_loc}")
     path.write_text(BASELINE_HEADER + "\n".join(kept[:BASELINE_LIMIT]) + "\n")
 
     if prior is None:
@@ -552,9 +732,54 @@ def main() -> int:
     ap.add_argument("--gamma", type=float, default=50.0,
                     help="per-file size charge weight; "
                          "size(m) = γ·own_loc·log(1+own_loc/T) (default 50.0)")
-    ap.add_argument("--size-pivot", type=float, default=250.0,
+    ap.add_argument("--size-pivot", type=float, default=325.0,
                     help="LOC pivot T in the size charge; files much smaller than T "
-                         "are near-free, files much larger turn super-linear (default 200)")
+                         "are near-free, files much larger turn super-linear "
+                         "(default 325, calibrated against the eff_loc distribution — "
+                         "previous value 250 was raw-loc-only)")
+    ap.add_argument("--delta", type=float, default=1.0,
+                    help="prose-attribution weight δ in effective LOC "
+                         "(default 1.0 — one attributed prose line ≈ one code line "
+                         "of reader effort). Each design/roadmap/README markdown "
+                         "doc has its raw LOC split uniformly across the src files "
+                         "it links to; that share is multiplied by δ and folded "
+                         "into the size charge. Set 0 to disable.")
+    ap.add_argument("--prose-redirect", action="append", default=[],
+                    metavar="OLD=NEW",
+                    help="rewrite doc-link targets in the prose-attribution "
+                         "pass — `OLD` and `NEW` are paths relative to src/. "
+                         "Simulates doc consolidation alongside a code-level "
+                         "seam: any prose currently attributed to OLD is "
+                         "attributed to NEW instead. Repeatable. Example: "
+                         "--prose-redirect machine/core/scope.rs=machine/core/lookup.rs")
+    ap.add_argument("--kappa", type=float, default=10.0,
+                    help="per-hop redirect cost κ in effective LOC (default 10). "
+                         "Each `[...](*.md)` link a src file embeds adds κ to its "
+                         "effective LOC. Models the cost of leaving the file to "
+                         "read a doc and returning.")
+    ap.add_argument("--epsilon", type=float, default=20.0,
+                    help="owner-credit weight ε (default 20, calibrated against "
+                         "the koan tree — clipping cliff starts ~50). Each file's "
+                         "attributed prose loc earns a credit ε·L·log(1+L/P_o) "
+                         "subtracted from its size charge. Rewards concentrating "
+                         "a documented concept into a named owner module — "
+                         "depending on `core::lookup` is cheaper for the reader "
+                         "than depending on a generic foundation when the protocol "
+                         "is documented. ε < γ keeps the credit a discount, not "
+                         "a payment. Set 0 to disable.")
+    ap.add_argument("--owner-pivot", type=float, default=100.0,
+                    help="prose-loc pivot P_o in the owner credit (default 100). "
+                         "Concepts smaller than P_o don't deserve their own module; "
+                         "above P_o the credit grows super-linearly.")
+    ap.add_argument("--reference-loc", type=int, default=None, metavar="N",
+                    help="normalise the per-root-loc aggregate by N instead of "
+                         "the live root subtree's LOC. Use this when comparing a "
+                         "candidate against a baseline — pass the baseline's "
+                         "root_loc so both runs share a divisor. Without it, "
+                         "deleting dead code that has below-average cost density "
+                         "looks like a regression (denominator shrinks faster "
+                         "than numerator); fixing the divisor makes any total-"
+                         "cost reduction show as a per-loc improvement.")
     ap.add_argument("--exact-threshold", type=int, default=6,
                     help="use exact search for N <= this many groups (default 6)")
     ap.add_argument("--baseline", type=Path, metavar="FILE",
@@ -566,13 +791,33 @@ def main() -> int:
     args = ap.parse_args()
 
     edges = load_edges(args.edges)
+    prose_redirect: dict[Path, Path] = {}
+    for spec in args.prose_redirect:
+        if "=" not in spec:
+            raise SystemExit(f"--prose-redirect expects OLD=NEW, got {spec!r}")
+        old, new = spec.split("=", 1)
+        prose_redirect[Path(old)] = Path(new)
+
+    # Auto-derive --reference-loc from the baseline file when the user passes
+    # --baseline but not --reference-loc — that's the candidate-vs-baseline
+    # comparison case, where we want both runs to share a divisor.
+    reference_loc = args.reference_loc
+    if reference_loc is None and args.baseline is not None:
+        reference_loc = _read_baseline_root_loc(args.baseline)
+
+    modules = discover_modules(edges)
+    root_loc = subtree_loc(args.root, modules, args.src_root)
     score = fractal_report(
         edges, args.root, args.src_root,
         args.alpha, args.beta, args.beta_children_pivot, args.gamma, args.size_pivot,
         args.exact_threshold,
+        args.delta, args.kappa,
+        args.epsilon, args.owner_pivot,
+        prose_redirect or None,
+        reference_loc,
     )
     if args.baseline is not None:
-        update_baseline(args.baseline, score)
+        update_baseline(args.baseline, score, root_loc)
     return 0
 
 
