@@ -1,14 +1,15 @@
 //! Keyworded dispatch shape — state and transitions co-located.
 //!
 //! The Keyworded shape is the catch-all (any keyword present, or a
-//! head that isn't a fast-lane shape). Three Track variants on
-//! [`KeywordedState`] capture the three distinct park reasons:
-//! `overload_park` (resolve returned `ParkOnProducers` before the part
-//! walk ran), `bare_name_park` (the part walk discovered ≥1 unresolved
-//! bare-name producer), `eager_subs` (≥1 eager sub-expression is
-//! pending). The three are mutually exclusive at install time; the
-//! resume routing in [`KeywordedState::resume`] tests them in install
-//! order.
+//! head that isn't a fast-lane shape). [`KeywordedState`] carries a
+//! single [`ParkTrack`] (or `None` for the initial-entry shape) whose
+//! three variants capture the three distinct park reasons:
+//! [`ParkTrack::Overload`] (resolve returned `ParkOnProducers` before
+//! the part walk ran), [`ParkTrack::BareName`] (the part walk
+//! discovered ≥1 unresolved bare-name producer), and
+//! [`ParkTrack::EagerSubs`] (≥1 eager sub-expression is pending). The
+//! enum encodes mutual exclusivity at the type level; the resume
+//! routing in [`KeywordedState::resume`] is a single `match`.
 
 use std::marker::PhantomData;
 
@@ -28,23 +29,42 @@ use super::{
 
 pub(in crate::machine::execute) struct KeywordedState<'a> {
     pub(in crate::machine::execute) init: Initialized,
-    /// Eager-subs track installed by the Resolved-with-subs or `Deferred`
-    /// arm of [`KeywordedState::initial`]. `None` is the initial-entry
-    /// shape; the transition `Initialized → Keyworded` writes `Some`
-    /// when the slot stages eager subs and parks waiting on them.
-    pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'a>>,
-    /// Bare-name park track installed by the Resolved-with-parked-bare-
-    /// names arm of [`KeywordedState::initial`]. Mutually exclusive
-    /// with `eager_subs` at install time — the part walk's
-    /// park-precedence guard installs the park *before* staging any
-    /// subs (submitting would leak nodes on the re-Dispatch wake path).
-    pub(in crate::machine::execute) bare_name_park: Option<BareNameParkTrack<'a>>,
-    /// Overload park track installed by the `ResolveOutcome::ParkOnProducers`
-    /// arm of [`KeywordedState::initial`] (and the post-eager-subs
-    /// re-resolve in [`KeywordedState::finish`]). Mutually exclusive
-    /// with `eager_subs` and `bare_name_park` at install time — the
-    /// resolve fails *before* the part walk runs.
-    pub(in crate::machine::execute) overload_park: Option<OverloadParkTrack<'a>>,
+    /// Park reason carried by a `Keyworded` slot that has parked.
+    /// `None` is the initial-entry shape; the transition
+    /// `Initialized → Keyworded` writes `Some` when the slot stages
+    /// eager subs or parks on producers.
+    pub(in crate::machine::execute) track: Option<ParkTrack<'a>>,
+}
+
+/// Reason a `Keyworded` slot is parked. The three variants are mutually
+/// exclusive by construction:
+/// - [`ParkTrack::Overload`] — `ResolveOutcome::ParkOnProducers` arm of
+///   [`KeywordedState::initial`] (and the post-eager-subs re-resolve in
+///   [`KeywordedState::finish`]). The resolve fails *before* the part
+///   walk runs.
+/// - [`ParkTrack::BareName`] — the part walk discovered ≥1 unresolved
+///   bare-name producer. The park-precedence guard installs the park
+///   *before* staging any subs (submitting would leak nodes on the
+///   re-Dispatch wake path).
+/// - [`ParkTrack::EagerSubs`] — Resolved-with-subs or `Deferred` arm of
+///   [`KeywordedState::initial`] staged ≥1 eager sub.
+pub(in crate::machine::execute) enum ParkTrack<'a> {
+    Overload(OverloadParkTrack<'a>),
+    BareName(BareNameParkTrack<'a>),
+    EagerSubs(EagerSubsTrack<'a>),
+}
+
+impl<'a> ParkTrack<'a> {
+    /// Working expression carried by the track. Surfaced through
+    /// [`crate::machine::execute::scheduler::dispatch::DispatchState::parked_carrier_expr`]
+    /// so the drain-end cycle-detection guard can render a parked sample.
+    pub(in crate::machine::execute) fn carrier_expr(&self) -> &KExpression<'a> {
+        match self {
+            ParkTrack::Overload(t) => &t.expr,
+            ParkTrack::BareName(t) => &t.working_expr,
+            ParkTrack::EagerSubs(t) => &t.working_expr,
+        }
+    }
 }
 
 /// Track state for the bare-name forward references a `Keyworded`
@@ -93,28 +113,28 @@ impl<'a> OverloadParkTrack<'a> {
 
 impl<'a> KeywordedState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, eager_subs: None, bare_name_park: None, overload_park: None }
+        Self { init, track: None }
     }
 
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
         track: EagerSubsTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: Some(track), bare_name_park: None, overload_park: None }
+        Self { init, track: Some(ParkTrack::EagerSubs(track)) }
     }
 
     pub(in crate::machine::execute) fn with_bare_name_park(
         init: Initialized,
         track: BareNameParkTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: None, bare_name_park: Some(track), overload_park: None }
+        Self { init, track: Some(ParkTrack::BareName(track)) }
     }
 
     pub(in crate::machine::execute) fn with_overload_park(
         init: Initialized,
         track: OverloadParkTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: None, bare_name_park: None, overload_park: Some(track) }
+        Self { init, track: Some(ParkTrack::Overload(track)) }
     }
 
     /// Entry from the dispatch router for the Keyworded shape. Routes
@@ -230,39 +250,27 @@ impl<'a> KeywordedState<'a> {
         Self::install_eager_subs_track(sched, new_expr, staged_subs, pre_subs, scope, idx)
     }
 
-    /// Resume entry. The three tracks are mutually exclusive at install
-    /// time; routing tests them in install order: `overload_park`, then
-    /// `bare_name_park`, then `eager_subs`.
+    /// Resume entry. The enum-typed `track` makes mutual exclusivity a
+    /// type-system fact; the match is exhaustive across park reasons.
     pub(super) fn resume(
         self,
         sched: &mut Scheduler<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let KeywordedState { init, eager_subs, bare_name_park, overload_park } = self;
-        if let Some(track) = overload_park {
-            debug_assert!(
-                eager_subs.is_none() && bare_name_park.is_none(),
-                "overload_park is mutually exclusive with eager_subs and bare_name_park",
-            );
-            let OverloadParkTrack { expr, producers, .. } = track;
-            let _ = producers;
-            return Self::initial(sched, expr, init.pre_subs, scope, idx);
-        }
-        if let Some(track) = bare_name_park {
-            debug_assert!(
-                eager_subs.is_none(),
-                "bare_name_park and eager_subs are mutually exclusive",
-            );
-            let BareNameParkTrack { working_expr, producers, .. } = track;
-            let _ = producers;
-            return Self::initial(sched, working_expr, init.pre_subs, scope, idx);
-        }
-        let _ = init;
-        let track = eager_subs.expect(
+        let KeywordedState { init, track } = self;
+        let track = track.expect(
             "Keyworded resume is only entered after a track is installed",
         );
-        sched.resume_eager_subs(track, scope, idx)
+        match track {
+            ParkTrack::Overload(OverloadParkTrack { expr, .. }) => {
+                Self::initial(sched, expr, init.pre_subs, scope, idx)
+            }
+            ParkTrack::BareName(BareNameParkTrack { working_expr, .. }) => {
+                Self::initial(sched, working_expr, init.pre_subs, scope, idx)
+            }
+            ParkTrack::EagerSubs(track) => sched.resume_eager_subs(track, scope, idx),
+        }
     }
 
     /// Re-resolve completion shared between the parked-track resume and

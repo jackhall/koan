@@ -334,18 +334,7 @@ impl<'a> DispatchState<'a> {
         &self,
     ) -> Option<&KExpression<'a>> {
         match self {
-            DispatchState::Keyworded(ks) => {
-                if let Some(track) = &ks.overload_park {
-                    return Some(&track.expr);
-                }
-                if let Some(track) = &ks.bare_name_park {
-                    return Some(&track.working_expr);
-                }
-                if let Some(track) = &ks.eager_subs {
-                    return Some(&track.working_expr);
-                }
-                None
-            }
+            DispatchState::Keyworded(ks) => ks.track.as_ref().map(|t| t.carrier_expr()),
             DispatchState::FunctionValueCall(fs) => {
                 if let Some(track) = &fs.eager_subs {
                     return Some(&track.working_expr);
