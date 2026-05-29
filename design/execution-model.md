@@ -112,12 +112,14 @@ call site.
 The scheduler dispatches each expression by mutating an **owned working
 copy** of it. `run_dispatch` extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `Identifier`),
-spawns it as a sub-Dispatch, and parks the parent as
-`NodeWork::Bind { expr: rewritten_expr, subs }`. When the subs terminalize,
-`run_bind` writes each result back into the parent: `expr.parts[part_idx]
-= ExpressionPart::Future(value)`. The assembled `Future`-laden expression
-then goes through `resolve_dispatch` as if it had been written with
-literals.
+spawns it as a sub-Dispatch, and parks the parent on its own slot via an
+`EagerSubsTrack` carried on `KeywordedState` or `FnValueState`. The
+parent's `NodeWork::Dispatch` stays in place; only its `DispatchState`
+transitions. When the subs terminalize, `Scheduler::resume_eager_subs`
+writes each result back into the track's `working_expr`:
+`working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The
+assembled `Future`-laden expression then goes through `resolve_dispatch`
+as if it had been written with literals.
 
 Source-of-truth ASTs are never mutated. The working copy is cloned from
 its source at slot-submission time — `KFunction::invoke` clones the FN
@@ -170,23 +172,28 @@ memory** constant too.
 
 `Tail` reuses the outermost slot but bodies typically have internal
 sub-expressions — the predicate of an `IF`/`MATCH` guard, the argument
-expressions of a recursive call, list/dict literal elements. Each spawns a
-sub-`Dispatch` and a parent `Bind`/`Combine` slot. Without reclamation those
-slots accumulate per body iteration, so realistic recursive code is O(n)
-scheduler memory even when its data footprint is O(1).
+expressions of a recursive call, list/dict literal elements. Each spawns
+a sub-`Dispatch`; the consumer is either the parent `Dispatch` slot
+itself (parked via an eager-subs track on its `DispatchState`) or, for
+list/dict aggregates and combinator builtins like `TRY`, a `Combine` /
+`Catch` slot. Without reclamation those slots accumulate per body
+iteration, so realistic recursive code is O(n) scheduler memory even
+when its data footprint is O(1).
 
-Reclamation runs at the end of `run_bind` / `run_combine`. Once a Bind has
-read its dep results and spliced them into `expr.parts` as `Future(value)`
-(or a Combine's finish closure has produced its result), the dep slots are
-unreachable: a sub-Dispatch is owned by exactly one Bind / Combine, recorded
-in the consumer's `dep_edges` entry as a `DepEdge::Owned(NodeId)`.
-Free walks recursively, recycling each dep's own dep tree, and stops at any
-still-live slot via `NodeStore::is_live` — so a free that dives into another
-in-flight user-fn call leaves that subtree for that call's own reclamation.
+Reclamation runs at the end of `Scheduler::resume_eager_subs` (track
+completion), `run_combine`, and `run_catch`. Once the consumer has read
+its dep results and either spliced them into `working_expr.parts` as
+`Future(value)` (eager-subs track) or handed them to its finish closure
+(Combine / Catch), the dep slots are unreachable: a sub-Dispatch is
+owned by exactly one consumer, recorded in the consumer's `dep_edges`
+entry as a `DepEdge::Owned(NodeId)`. Free walks recursively, recycling
+each dep's own dep tree, and stops at any still-live slot via
+`NodeStore::is_live` — so a free that dives into another in-flight
+user-fn call leaves that subtree for that call's own reclamation.
 
 The net effect: recursive bodies whose only persistent state is the call
 result run in O(1) scheduler memory across iterations, with the per-iteration
-fanout (the body's transient sub-Dispatches/Binds) recycled through a
+fanout (the body's transient sub-Dispatches) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Slot-table state lives in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
@@ -667,8 +674,11 @@ The rails the dispatch driver feeds:
   for the aggregate. With no subs to schedule the driver binds the picked
   function directly via `invoke_to_step` (a wrap-slot-only call like
   `MAKESET IntOrd` resolves bare names in Step 4, leaves no eager parts,
-  and binds in one step — no `Bind` detour). Otherwise it builds a
-  `NodeWork::Bind { expr, subs }` and lifts.
+  and binds in one step — no eager-subs-track detour). Otherwise it
+  installs an `EagerSubsTrack` on the slot's `KeywordedState` and parks
+  through `replace_with_parked_dispatch`; on track completion
+  `Scheduler::resume_eager_subs` re-resolves the spliced `working_expr`
+  and binds via `invoke_to_step_pinned`.
 
   Dict and list literals (`classify_aggregate_part` in
   [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
@@ -953,13 +963,15 @@ recursive tree-walker can't get cheaply.
   one `Rc<CallArena>` plus six `typed_arena::Arena::new()` pools.
 - **Per dep-result splice.** O(1) write into `expr.parts`.
 - **Per terminal.** Single `notify_list` drain. The cost scales with
-  the producer's dependent count, which is typically 1 (the parent
-  Bind/Combine) but unbounded in principle (forward-reference parks).
+  the producer's dependent count, which is typically 1 (the consumer
+  parked on it through an eager-subs track or a Combine) but unbounded
+  in principle (forward-reference parks).
 
 ### What amortizes
 
 - **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
-  during `run_bind` / `run_combine` / `run_catch`, and `add()` pulls
+  during `resume_eager_subs` / `run_combine` / `run_catch`, and `add()`
+  pulls
   from the free-list before extending the underlying vectors. A
   steady-state recursive body reuses the same slot indices across
   iterations; `body_subexpression_slots_recycle_across_calls` pins the
