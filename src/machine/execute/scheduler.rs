@@ -13,11 +13,12 @@ use node_store::NodeStore;
 use work_queues::WorkQueues;
 
 mod dep_graph;
-mod dispatch;
-/// Carrier shape ridden by every `NodeWork::Dispatch`. Visible up to
-/// `crate::machine::execute` because `nodes.rs` (a sibling of
-/// `scheduler.rs`) names `DispatchState` in `NodeWork::Dispatch`.
-pub(in crate::machine::execute) mod dispatch_state;
+/// The dispatch driver. State carriers (`DispatchState`,
+/// per-shape `*State` / `*Track`) live with their transitions in
+/// shape submodules and are reachable up to `crate::machine::execute`
+/// because `nodes.rs` (a sibling of `scheduler.rs`) names
+/// `DispatchState` in `NodeWork::Dispatch`.
+pub(in crate::machine::execute) mod dispatch;
 mod execute;
 mod finish;
 mod literal;

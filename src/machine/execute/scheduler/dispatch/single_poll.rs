@@ -1,0 +1,251 @@
+//! Single-poll dispatch shapes — bare identifier, bare leaf type,
+//! constructor call, sigiled type expression. All four terminalize
+//! (or single-producer-park) in one poll and never re-enter, so the
+//! state types are minimal markers and the handlers are free
+//! functions.
+
+use std::marker::PhantomData;
+
+use crate::builtins::newtype_def::newtype_construct;
+use crate::builtins::value_lookup::coerce_type_token_value;
+use crate::builtins::{dispatch_constructor, struct_value, tagged_union};
+use crate::machine::core::kfunction::BodyResult;
+use crate::machine::core::source::Spanned;
+use crate::machine::model::Parseable;
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::types::UserTypeKind;
+use crate::machine::model::{KObject, KType};
+use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
+
+use super::super::Scheduler;
+use super::super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
+use super::{extract_named_call_inner, keyworded::KeywordedState, Initialized};
+
+pub(in crate::machine::execute) struct BareIdState<'a> {
+    pub(in crate::machine::execute) init: Initialized,
+    _ph: PhantomData<&'a ()>,
+}
+
+pub(in crate::machine::execute) struct BareTypeState<'a> {
+    pub(in crate::machine::execute) init: Initialized,
+    _ph: PhantomData<&'a ()>,
+}
+
+pub(in crate::machine::execute) struct CtorState<'a> {
+    pub(in crate::machine::execute) init: Initialized,
+    _ph: PhantomData<&'a ()>,
+}
+
+pub(in crate::machine::execute) struct SigilState<'a> {
+    pub(in crate::machine::execute) init: Initialized,
+    _ph: PhantomData<&'a ()>,
+}
+
+impl<'a> BareIdState<'a> {
+    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
+        Self { init, _ph: PhantomData }
+    }
+}
+
+impl<'a> BareTypeState<'a> {
+    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
+        Self { init, _ph: PhantomData }
+    }
+}
+
+impl<'a> CtorState<'a> {
+    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
+        Self { init, _ph: PhantomData }
+    }
+}
+
+impl<'a> SigilState<'a> {
+    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
+        Self { init, _ph: PhantomData }
+    }
+}
+
+/// Handler for `DispatchShape::BareIdentifier`. Surfaces `UnboundName`
+/// directly for a bare identifier with no binding and no visible
+/// placeholder, rather than falling through to the keyworded
+/// `value_lookup::body_identifier` path.
+pub(super) fn bare_identifier<'a>(
+    sched: &mut Scheduler<'a>,
+    name: String,
+    scope: &'a Scope<'a>,
+    idx: usize,
+) -> NodeStep<'a> {
+    match scope.resolve_with_chain(&name, sched.active_chain.as_deref()) {
+        Resolution::Value(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+        Resolution::Placeholder(producer) => {
+            // Notify edge, not Owned: the producer is a sibling slot
+            // this Lift only parks on for a wake.
+            sched.deps.add_park_edge(producer, NodeId(idx));
+            NodeStep::Replace {
+                work: NodeWork::Lift(LiftState::Pending(producer)),
+                frame: None,
+                function: None,
+                block_entry: None,
+                body_index: 0,
+            }
+        }
+        Resolution::UnboundName => {
+            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(name))))
+        }
+    }
+}
+
+/// Fast lane for `DispatchShape::BareTypeLeaf`. Routes through
+/// `coerce_type_token_value` so the carrier matches the
+/// `value_lookup::body_type_expr` synthesis.
+pub(super) fn bare_type_leaf<'a>(
+    sched: &mut Scheduler<'a>,
+    t: &TypeExpr,
+    scope: &'a Scope<'a>,
+) -> NodeStep<'a> {
+    let chain = sched.active_chain.as_deref();
+    match coerce_type_token_value(scope, t, chain) {
+        Ok(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+        Err(KError { kind: KErrorKind::UnboundName(n), .. }) => {
+            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
+        }
+        Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+    }
+}
+
+/// Handler for `DispatchShape::SigiledTypeExpr`. Tail-replaces this
+/// slot with a Dispatch of the inner expression.
+pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
+    let inner = match expr.parts.into_iter().next() {
+        Some(Spanned { value: ExpressionPart::SigiledTypeExpr(boxed), .. }) => *boxed,
+        _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
+    };
+    NodeStep::Replace {
+        work: NodeWork::dispatch(inner),
+        frame: None,
+        function: None,
+        block_entry: None,
+        body_index: 0,
+    }
+}
+
+/// Handler for `DispatchShape::ConstructorCall` (leaf-Type head +
+/// nested-parens body). Resolves the head identity type-side and
+/// routes by `KType::UserType { kind, .. }`. See the per-arm doc
+/// inline.
+///
+/// A forward-reference `Placeholder` on the head name routes through
+/// `KeywordedState::install_overload_park` (single-producer is fine
+/// — the installer dedupes/cycle-filters internally) so the resume
+/// rebuilds via `KeywordedState::initial`.
+pub(super) fn constructor_call<'a>(
+    sched: &mut Scheduler<'a>,
+    expr: KExpression<'a>,
+    scope: &'a Scope<'a>,
+    idx: usize,
+) -> NodeStep<'a> {
+    let head_t = match &expr.parts[0].value {
+        ExpressionPart::Type(t) => t.clone(),
+        _ => unreachable!("ConstructorCall shape implies leaf Type head"),
+    };
+    let inner_parts = match extract_named_call_inner(&expr) {
+        Ok(parts) => parts,
+        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+    };
+    let chain = sched.active_chain.as_deref();
+    match scope.resolve_with_chain(&head_t.name, chain) {
+        Resolution::Placeholder(producer) => {
+            return KeywordedState::install_overload_park(
+                sched,
+                vec![producer],
+                expr,
+                Vec::new(),
+                idx,
+            );
+        }
+        Resolution::Value(_) | Resolution::UnboundName => {}
+    }
+    let identity = match scope.resolve_type_with_chain(&head_t.name, chain) {
+        Some(kt) => kt,
+        None => {
+            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
+                head_t.name.clone(),
+            ))));
+        }
+    };
+    match identity {
+        KType::UserType { kind: UserTypeKind::Struct, .. }
+        | KType::UserType { kind: UserTypeKind::Tagged, .. } => {
+            let carrier = match coerce_type_token_value(scope, &head_t, chain) {
+                Ok(obj) => obj,
+                Err(KError { kind: KErrorKind::UnboundName(n), .. }) => {
+                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
+                        n,
+                    ))));
+                }
+                Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+            };
+            let body = match carrier {
+                KObject::StructType { .. } => struct_value::apply(carrier, inner_parts),
+                KObject::TaggedUnionType { .. } => tagged_union::apply(carrier, inner_parts),
+                other => {
+                    debug_assert!(
+                        false,
+                        "STRUCT/UNION `{}` registered its type identity but no \
+                         matching value-side schema carrier (got `{}`)",
+                        head_t.name,
+                        other.summarize(),
+                    );
+                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                        arg: "verb".to_string(),
+                        expected: "constructible Type".to_string(),
+                        got: identity.name(),
+                    })));
+                }
+            };
+            schedule_constructor_body(sched, body, idx)
+        }
+        KType::UserType { kind: UserTypeKind::Newtype { .. }, .. } => {
+            let body = newtype_construct(scope, sched, identity, inner_parts);
+            schedule_constructor_body(sched, body, idx)
+        }
+        KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. } => match scope
+            .lookup_with_chain(&head_t.name, chain)
+            .and_then(|c| dispatch_constructor(c, inner_parts))
+        {
+            Some(body) => schedule_constructor_body(sched, body, idx),
+            None => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+                arg: "verb".to_string(),
+                expected: "constructible Type".to_string(),
+                got: identity.name(),
+            }))),
+        },
+        _ => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
+            arg: "verb".to_string(),
+            expected: "constructible Type".to_string(),
+            got: identity.name(),
+        }))),
+    }
+}
+
+/// Decode a constructor `BodyResult` into a `NodeStep`. Shared with
+/// `fn_value::dispatch_callable_value` for Struct / Tagged head
+/// construction.
+pub(super) fn schedule_constructor_body<'a>(
+    sched: &mut Scheduler<'a>,
+    body: BodyResult<'a>,
+    idx: usize,
+) -> NodeStep<'a> {
+    match body {
+        BodyResult::Tail { expr, frame, function, block_entry, body_index } => NodeStep::Replace {
+            work: NodeWork::dispatch(expr),
+            frame,
+            function,
+            block_entry,
+            body_index,
+        },
+        BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
+        BodyResult::DeferTo(combine_id) => sched.defer_to_lift(idx, combine_id),
+        BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+    }
+}

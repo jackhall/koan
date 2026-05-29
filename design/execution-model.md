@@ -747,7 +747,7 @@ diagnostic points at code the reader can act on.
 ### `DispatchState` — per-variant state envelope
 
 Every `NodeWork::Dispatch` slot carries a
-[`DispatchState`](../src/machine/execute/scheduler/dispatch_state.rs) value
+[`DispatchState`](../src/machine/execute/scheduler/dispatch.rs) value
 that records where the slot is in the per-shape state machine. The enum
 has one variant per `DispatchShape` plus a pre-classification birth
 state:

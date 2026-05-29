@@ -9,7 +9,7 @@ use crate::machine::model::{KType, SignatureElement};
 
 use super::super::nodes::{Node, NodeWork, work_park_producers};
 use super::dep_graph::work_owned_edges;
-use super::dispatch_state::DispatchState;
+use super::dispatch::DispatchState;
 use super::Scheduler;
 
 /// Submission-time binder-install info. Walks `scope` and its outer chain looking

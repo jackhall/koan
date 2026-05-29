@@ -923,10 +923,10 @@ fn stateful_keyworded_bare_name_park_resumes_through_state() {
 /// the accessor must instead return the state-carried expression.
 #[test]
 fn stateful_keyworded_parked_carrier_expr_reads_state() {
-    use super::super::dispatch_state::{
-        BareNameParkTrack, DispatchState, EagerSubsTrack, Initialized, KeywordedState,
-        OverloadParkTrack,
+    use super::super::dispatch::keyworded::{
+        BareNameParkTrack, KeywordedState, OverloadParkTrack,
     };
+    use super::super::dispatch::{DispatchState, EagerSubsTrack, Initialized};
 
     fn carrier_expr<'a>() -> KExpression<'a> {
         // `(LIFT_BARE arg)` — a recognizable keyworded sample distinct from

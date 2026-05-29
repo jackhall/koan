@@ -56,14 +56,16 @@ impl<'a> Scheduler<'a> {
                 }));
             }
             // A bare name in the rebuilt expression is still a pending forward
-            // reference: route through the stateful overload-park track installer
-            // so the resume rebuilds via `stateful_keyworded_initial` rather than
-            // the deleted legacy re-Dispatch path.
+            // reference: route through the keyworded overload-park track installer
+            // so the resume rebuilds via `KeywordedState::initial` rather than the
+            // deleted legacy re-Dispatch path.
             ResolveOutcome::ParkOnProducers(producers) => {
                 // `Bind` deps resolved; re-Dispatch carries no `pre_subs` (the
                 // recursive-submission optimization fires only at the original
                 // outermost `add_with_chain`, not at bind-time re-resolve).
-                return Ok(self.stateful_install_overload_park(producers, expr, Vec::new(), idx));
+                return Ok(super::dispatch::keyworded::KeywordedState::install_overload_park(
+                    self, producers, expr, Vec::new(), idx,
+                ));
             }
             ResolveOutcome::UnboundName(name) => {
                 return Err(KError::new(KErrorKind::UnboundName(name)));
