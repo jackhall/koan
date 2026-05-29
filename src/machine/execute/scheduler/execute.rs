@@ -22,17 +22,16 @@ impl<'a> Scheduler<'a> {
             let work = node.work;
             let prev_function = node.function;
             let prev_chain_carrier = node.chain;
-            // Move the slot's frame into `active_frame` (no clone) so the Rc lives in
-            // exactly one place during the step. Builtins read it through
-            // `SchedulerHandle::current_frame`; tail-reuse takes it via
-            // `try_take_reusable_frame_for_tail`. After the step we mem::replace it
-            // back out — if the step consumed it for reuse, the slot's frame is now
-            // `None` and the new frame arrives via `NodeStep::Replace`.
-            let prev_active = std::mem::replace(&mut self.active_frame, node.frame);
-            // Mirror the frame save/restore for the lexical chain so sub-slots
-            // submitted via `Scheduler::add` inherit this slot's chain rather than
-            // the previous slot's. Cloning is cheap (Rc bump).
-            let prev_active_chain = self.active_chain.replace(prev_chain_carrier.clone());
+            // Install the slot's frame + chain via the guard. `enter_slot_step`
+            // mem-replaces them in (no extra clones beyond the one chain Rc bump
+            // for `active_chain`) and parks the previous values inside the guard.
+            // Builtins read the active frame through `SchedulerHandle::current_frame`;
+            // tail-reuse takes it via `try_take_reusable_frame_for_tail`. On exit,
+            // `exit_slot_step` swaps the originals back and returns the post-step
+            // frame — `Some(_)` if the step left the slot's frame intact, `None` if
+            // the step consumed it for tail-reuse (the new frame then arrives via
+            // `NodeStep::Replace`).
+            let guard = self.enter_slot_step(node.frame, prev_chain_carrier.clone());
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     self.run_dispatch(expr, state, scope, idx)?
@@ -44,8 +43,7 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Catch { from, finish } => self.run_catch(from, finish, scope, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
-            let prev_frame = std::mem::replace(&mut self.active_frame, prev_active);
-            self.active_chain = prev_active_chain;
+            let prev_frame = self.exit_slot_step(guard);
             let prev_chain = prev_chain_carrier;
             // Drain re-entrant writes while `scope` is still live; match arms below may
             // drop the frame it's anchored to. See design/memory-model.md.
