@@ -79,6 +79,17 @@ pub struct Scheduler<'a> {
     /// internal binder sub-dispatches (CONS-head, FN signature subs, NEWTYPE value
     /// sub, USING-body) inherit the parent's chain without each call site naming it.
     pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
+    /// Per-slot reserve frame installed for the duration of the running slot's
+    /// step. Read by `invoke_to_step_pinned`'s reserve-swap arm: when `Some`,
+    /// the helper takes it, pins `active_frame` aside, installs the reserve as
+    /// the new `active_frame`, and lets `try_take_reusable_frame_for_tail`
+    /// consume it (its strong count is 1 — the slot's `frame` field carries the
+    /// pinned local, the reserve was uniquely held). The Replace arm rotates
+    /// the post-step frame into the reinstalled `Node`'s `reserve_frame` for
+    /// the next iteration. `None` between slot steps; `enter_slot_step` /
+    /// `exit_slot_step` save and restore around the step. See
+    /// `roadmap/dispatch_fix/ping-pong-reserve-frame.md`.
+    pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
     /// Count of tail-reuse opportunities accepted by
     /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
     /// path returns `Some`/`None` without touching this field's gate.
@@ -101,39 +112,62 @@ pub struct Scheduler<'a> {
 pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
     prev_frame: Option<Rc<CallArena>>,
     prev_chain: Option<Rc<LexicalFrame>>,
+    /// Saves the scheduler's previous `active_reserve` so a nested slot run
+    /// (today: combinator finish closures) doesn't accidentally inherit the
+    /// outer slot's reserve frame. The Replace arm reads the returned
+    /// post-step reserve from `exit_slot_step` to decide whether to drop or
+    /// carry forward.
+    prev_reserve: Option<Rc<CallArena>>,
 }
 
 impl<'a> Scheduler<'a> {
-    /// Install `node_frame` as `active_frame` and `node_chain` as `active_chain`
-    /// for the duration of one slot's step. Returns a guard the caller must
-    /// hand to [`Scheduler::exit_slot_step`] when the step returns. The
-    /// `node_chain` Rc is cloned at exactly one point (here) — the caller may
-    /// retain its own clone for the Replace arm without bumping the count a
-    /// second time.
+    /// Install `node_frame` as `active_frame`, `node_chain` as `active_chain`,
+    /// and `node_reserve` as `active_reserve` for the duration of one slot's
+    /// step. Returns a guard the caller must hand to
+    /// [`Scheduler::exit_slot_step`] when the step returns. The `node_chain`
+    /// Rc is cloned at exactly one point (here) — the caller may retain its
+    /// own clone for the Replace arm without bumping the count a second time.
+    /// `node_reserve` (the slot's `Node::reserve_frame`) is consumed by
+    /// `invoke_to_step_pinned` when present; passing it through the guard
+    /// keeps the reserve scoped to exactly this step and isolates nested slot
+    /// runs from each other.
     pub(in crate::machine::execute::scheduler) fn enter_slot_step(
         &mut self,
         node_frame: Option<Rc<CallArena>>,
+        node_reserve: Option<Rc<CallArena>>,
         node_chain: Rc<LexicalFrame>,
     ) -> SlotStepGuard {
         let prev_frame = std::mem::replace(&mut self.active_frame, node_frame);
         let prev_chain = self.active_chain.replace(node_chain);
-        SlotStepGuard { prev_frame, prev_chain }
+        let prev_reserve = std::mem::replace(&mut self.active_reserve, node_reserve);
+        SlotStepGuard { prev_frame, prev_chain, prev_reserve }
     }
 
-    /// Restore the previous `active_frame`/`active_chain` saved by
-    /// [`Scheduler::enter_slot_step`] and return the post-step frame. The
-    /// returned `Option<Rc<CallArena>>` is `Some(frame)` if the step left the
-    /// node's frame intact (Done with a frame, or Replace that didn't consume
-    /// it via tail-reuse) and `None` if the step took it via
-    /// `try_take_reusable_frame_for_tail` (tail-reuse path). Callers read it
-    /// to drive Done's lift/finalize and Replace's rotation.
+    /// Restore the previous `active_frame`/`active_chain`/`active_reserve`
+    /// saved by [`Scheduler::enter_slot_step`] and return
+    /// `(post_step_frame, post_step_reserve)` — the values the Replace and
+    /// Done arms read inline.
+    ///
+    /// `post_step_frame` is `Some(frame)` if the step left the slot's frame
+    /// intact (Done with a frame, or Replace that didn't consume it via
+    /// tail-reuse) and `None` if the step took it via
+    /// `try_take_reusable_frame_for_tail`.
+    ///
+    /// `post_step_reserve` is what's left of `active_reserve` after the step.
+    /// Typically `None` because `invoke_to_step_pinned` consumes the reserve
+    /// when present; carries through unchanged when the step didn't run an
+    /// invoke (e.g. binds/combines that don't go through the pinned helper).
+    /// The Replace arm reads this to decide rotation: with a new frame, the
+    /// post-step reserve is two iterations old and gets dropped; with no new
+    /// frame (carry-through), it rides along on the reinstalled node.
     pub(in crate::machine::execute::scheduler) fn exit_slot_step(
         &mut self,
         guard: SlotStepGuard,
-    ) -> Option<Rc<CallArena>> {
+    ) -> (Option<Rc<CallArena>>, Option<Rc<CallArena>>) {
         let post_step_frame = std::mem::replace(&mut self.active_frame, guard.prev_frame);
         self.active_chain = guard.prev_chain;
-        post_step_frame
+        let post_step_reserve = std::mem::replace(&mut self.active_reserve, guard.prev_reserve);
+        (post_step_frame, post_step_reserve)
     }
 
     pub fn new() -> Self {
@@ -143,6 +177,7 @@ impl<'a> Scheduler<'a> {
             store: NodeStore::new(),
             active_frame: None,
             active_chain: None,
+            active_reserve: None,
             #[cfg(test)]
             tail_reuse_count: 0,
         }

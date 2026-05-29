@@ -310,7 +310,7 @@ impl<'a> Scheduler<'a> {
         let no_park = work_park_producers(&work).is_empty();
         let id = self
             .store
-            .alloc_slot(Node { work, scope, frame, function: None, chain });
+            .alloc_slot(Node { work, scope, frame, reserve_frame: None, function: None, chain });
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
         for p in &pending_park {
             self.deps.add_park_edge(*p, id);

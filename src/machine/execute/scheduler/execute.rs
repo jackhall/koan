@@ -22,16 +22,25 @@ impl<'a> Scheduler<'a> {
             let work = node.work;
             let prev_function = node.function;
             let prev_chain_carrier = node.chain;
-            // Install the slot's frame + chain via the guard. `enter_slot_step`
-            // mem-replaces them in (no extra clones beyond the one chain Rc bump
-            // for `active_chain`) and parks the previous values inside the guard.
-            // Builtins read the active frame through `SchedulerHandle::current_frame`;
-            // tail-reuse takes it via `try_take_reusable_frame_for_tail`. On exit,
-            // `exit_slot_step` swaps the originals back and returns the post-step
-            // frame — `Some(_)` if the step left the slot's frame intact, `None` if
-            // the step consumed it for tail-reuse (the new frame then arrives via
-            // `NodeStep::Replace`).
-            let guard = self.enter_slot_step(node.frame, prev_chain_carrier.clone());
+            // Install the slot's frame + chain + reserve via the guard.
+            // `enter_slot_step` mem-replaces them in (no extra clones beyond the
+            // one chain Rc bump for `active_chain`) and parks the previous values
+            // inside the guard. Builtins read the active frame through
+            // `SchedulerHandle::current_frame`; tail-reuse takes it via
+            // `try_take_reusable_frame_for_tail`. `invoke_to_step_pinned`
+            // consumes `active_reserve` when present, swapping the reserve into
+            // `active_frame` so the resumed body's first tail-call reuses the
+            // reserve's arena instead of allocating a fresh one. On exit,
+            // `exit_slot_step` swaps the originals back and returns
+            // `(post_step_frame, post_step_reserve)` — the frame is `Some(_)` if
+            // the step left it intact, `None` if tail-reuse consumed it; the
+            // reserve is whatever's left after the step's invoke (typically
+            // `None` after a reserve-consuming invoke).
+            let guard = self.enter_slot_step(
+                node.frame,
+                node.reserve_frame,
+                prev_chain_carrier.clone(),
+            );
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     self.run_dispatch(expr, state, scope, idx)?
@@ -43,7 +52,7 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Catch { from, finish } => self.run_catch(from, finish, scope, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
-            let prev_frame = self.exit_slot_step(guard);
+            let (prev_frame, post_step_reserve) = self.exit_slot_step(guard);
             let prev_chain = prev_chain_carrier;
             // Drain re-entrant writes while `scope` is still live; match arms below may
             // drop the frame it's anchored to. See design/memory-model.md.
@@ -119,23 +128,43 @@ impl<'a> Scheduler<'a> {
                     );
                     match new_frame {
                         Some(f) => {
-                            // Drop the previous frame; the new frame's child scope's
-                            // `outer` is the captured scope, not the previous frame's.
-                            // `'a`-anchoring lives in `reinstall_with_frame`'s SAFETY.
-                            drop(prev_frame);
+                            // Rotate the ping-pong reserve. The post-step reserve
+                            // (if any) is two iterations old by construction — its
+                            // protector chain is long-gone, but it is also
+                            // superseded by the post-step frame we're about to
+                            // park, so drop it. Rotate `prev_frame` (today's
+                            // post-step frame) into the new reserve; it may be
+                            // `None` if the step's invoke took it via tail-reuse
+                            // (the reserve will re-warm at the next new-frame
+                            // Replace). The new frame `f` becomes `slot.frame`
+                            // and its child scope's `outer` is the captured
+                            // scope, not the previous frame's. `'a`-anchoring
+                            // lives in `reinstall_with_frame`'s SAFETY.
+                            drop(post_step_reserve);
+                            let new_reserve = prev_frame;
                             self.store.reinstall_with_frame(
                                 id,
                                 f,
+                                new_reserve,
                                 new_work,
                                 next_function,
                                 new_chain,
                             );
                         }
                         None => {
+                            // No new frame: the step rewrote work in place and
+                            // the slot keeps its existing frame. Carry the
+                            // (possibly-`None`) post-step reserve through so
+                            // it's still available to the next iteration's
+                            // invoke. This is the cross-shape Replace arm where
+                            // a stateful Dispatch tail-replaces into a fresh
+                            // Initialized Dispatch — the reserve survives until
+                            // it's either consumed or rotated.
                             self.store.reinstall(id, Node {
                                 work: new_work,
                                 scope,
                                 frame: prev_frame,
+                                reserve_frame: post_step_reserve,
                                 function: next_function,
                                 chain: new_chain,
                             });

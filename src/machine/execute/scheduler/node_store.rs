@@ -149,6 +149,7 @@ impl<'a> NodeStore<'a> {
         &mut self,
         id: NodeId,
         frame: Rc<CallArena>,
+        reserve_frame: Option<Rc<CallArena>>,
         work: NodeWork<'a>,
         function: Option<&'a KFunction<'a>>,
         chain: Rc<LexicalFrame>,
@@ -157,7 +158,7 @@ impl<'a> NodeStore<'a> {
             std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope())
         };
         self.slots[id] =
-            SlotState::PreRun(Node { work, scope, frame: Some(frame), function, chain });
+            SlotState::PreRun(Node { work, scope, frame: Some(frame), reserve_frame, function, chain });
     }
 
     /// Terminal write: the only path that produces `Done`. Callers must
