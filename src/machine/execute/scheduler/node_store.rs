@@ -112,16 +112,10 @@ impl<'a> NodeStore<'a> {
         self.slots[id] = SlotState::PreRun(node);
     }
 
-    /// Replace the node payload with a fresh per-call frame, re-anchoring
-    /// the frame's per-call [`Scope`] to `'a` so callers don't have to.
-    ///
-    /// SAFETY: `frame` is about to be stored in `self.slots[id]`, whose live
-    /// span equals `'a`. Re-anchoring `frame.scope()` from its receiver-bound
-    /// borrow to `'a` is witnessed by the store itself: the `Rc<CallArena>`
-    /// stays in the same node payload as the `&'a Scope<'a>` it produces, so
-    /// the arena heap-pinning that backs `scope_ptr` outlives every read
-    /// through this `'a` reference. Any previous frame in `self.slots[id]`
-    /// must have been removed by a prior `take_for_run`.
+    /// Replace the node payload with a fresh per-call frame, re-anchoring the frame's
+    /// per-call [`Scope`] to `'a` so callers don't have to. See [memory-model.md § Arena
+    /// lifetime erasure](../../../../design/memory-model.md#arena-lifetime-erasure) for
+    /// the store-witnesses-the-re-anchor argument.
     pub(super) fn reinstall_with_frame(
         &mut self,
         id: NodeId,
@@ -131,6 +125,9 @@ impl<'a> NodeStore<'a> {
         function: Option<&'a KFunction<'a>>,
         chain: Rc<LexicalFrame>,
     ) {
+        // SAFETY: `frame` is about to land in `self.slots[id]`, whose span equals `'a`.
+        // The `Rc<CallArena>` co-located in the same node payload outlives every read
+        // through this `'a` reference, and any prior frame was removed by `take_for_run`.
         let scope: &'a Scope<'a> = unsafe {
             std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope())
         };

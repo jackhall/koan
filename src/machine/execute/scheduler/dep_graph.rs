@@ -1,21 +1,7 @@
-//! Tri-vector dependency-graph state pulled out of `Scheduler<'a>`. The three
-//! parallel vectors — `notify_list`, `pending_deps`, `dep_edges` — share an
-//! index space with `Scheduler::nodes` and uphold three invariants:
-//!
-//! **Inv-A (wake-pending coherence).** For every consumer slot `c`,
-//! `pending_deps[c] == |{ p : c appears in notify_list[p] }|`. Every mutating
-//! method updates `notify_list`, `pending_deps`, and `dep_edges` in a single
-//! atomic body so the two fields cannot desync.
-//!
-//! **Inv-B (free-cascade source).** `dep_edges[c]` lists every Owned sub-slot
-//! `c` must cascade-reclaim. Park edges are tagged `Notify` and filtered out
-//! of `free`'s walk via `owned_children`. Independent of Inv-A.
-//!
-//! **Inv-C (lazy notify-scrub on free).** A slot `c` is only freed once
-//! every producer's `drain_notify` has run and removed `c` from
-//! `notify_list[*]`. The `freed_slot_does_not_appear_in_other_notify_lists`
-//! test pins this; `free` relies on Inv-A and Inv-C still holding rather than
-//! scrubbing itself.
+//! Tri-vector dependency-graph state pulled out of `Scheduler<'a>`: the
+//! `notify_list` / `pending_deps` / `dep_edges` triple. See
+//! [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants)
+//! for the Inv-A / Inv-B / Inv-C contract these vectors uphold.
 
 use crate::machine::NodeId;
 use super::super::nodes::{NodeWork, work_deps};

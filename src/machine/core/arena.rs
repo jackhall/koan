@@ -7,21 +7,13 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{KObject, Module, Signature};
 use super::scope::Scope;
-/// Run-lifetime allocator. Lives for one program run.
+/// Run-lifetime allocator. Lives for one program run. Sub-arenas store `T<'static>`
+/// (phantom); each `alloc*` re-anchors to the caller's `'a` on the way out.
 ///
-/// **Lifetime erasure.** Sub-arenas store `T<'static>`; each `alloc*` takes input at the
-/// caller's `'a` and returns `&'a T<'a>`. The `'static` is phantom so `RuntimeArena` itself
-/// carries no lifetime parameter. SAFETY of the transmutes:
-/// - Lifetimes are zero-sized, so `T<'a>` and `T<'static>` have identical layout.
-/// - `alloc*` returns `&'a` tied to the input borrow; no `'static` reference is observable.
-/// - On drop, no stored value's `Drop` impl follows lifetime-parameterized references;
-///   auto-derived drops only touch *owned* contents.
-///
-/// `KObject` and `KType` go through the single cycle-gated [`alloc`](RuntimeArena::alloc)
-/// entry via [`CycleGated`]; `KFunction` / `Scope` / `Module` / `Signature` use un-gated
-/// `alloc_*` methods because none of them can hold a self-targeting `Rc<CallArena>`.
-///
-/// See [memory-model.md § Cycle gate](../../../design/memory-model.md#cycle-gate-on-alloc_object).
+/// See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
+/// for the transmute soundness argument and
+/// [§ Cycle gate](../../../design/memory-model.md#cycle-gate-on-alloc_object) for
+/// the `Rc<CallArena>` redirect that `alloc` enforces.
 pub struct RuntimeArena {
     objects: Arena<KObject<'static>>,
     functions: Arena<KFunction<'static>>,
@@ -279,20 +271,14 @@ pub fn true_singleton<'a>() -> &'a KObject<'a> { project(&TRUE_HOLDER) }
 
 pub fn false_singleton<'a>() -> &'a KObject<'a> { project(&FALSE_HOLDER) }
 
-/// One user-fn call's allocation frame. Owns its own `RuntimeArena` for the per-call child
-/// `Scope`, parameter clones, and any in-body allocations. Reference-counted so an
-/// escaping closure can extend the frame's life past slot finalize; with no extra Rc the
-/// arena drops at finalize.
+/// One user-fn call's allocation frame. `Rc`-pinned so an escaping closure can extend
+/// the frame's life past slot finalize. Field order is load-bearing: `arena` drops before
+/// `outer_frame`, so inner pointers die before the outer storage they may reference.
 ///
-/// `outer_frame` keeps the parent frame's `Rc<CallArena>` alive when the child's `outer`
-/// points into a per-call arena. `None` when the parent is run-root (which outlives every
-/// per-call frame, so no chain Rc is needed and TCO recursion stays bounded).
-///
-/// SAFETY: `CallArena` is only heap-pinned via `Rc`, so `arena`'s heap address is stable
-/// for the Rc's life and `scope_ptr` (into `arena.scopes`) stays valid alongside it.
-/// Accessors re-attach lifetimes anchored to `&self`. Field declaration order keeps
-/// `arena` before `outer_frame` so the auto-derived `Drop` tears down this arena before
-/// releasing the parent Rc — inner pointers die before the outer storage they may reference.
+/// See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
+/// for the heap-pinning / drop-order invariants and
+/// [§ Per-call-frame chaining](../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames)
+/// for when `outer_frame` is needed.
 pub struct CallArena {
     arena: RuntimeArena,
     scope_ptr: *const Scope<'static>,
@@ -351,22 +337,14 @@ impl CallArena {
 
     pub fn arena(&self) -> &RuntimeArena { &self.arena }
 
-    /// Reset this frame in place for a tail-call iteration: drop the old `RuntimeArena`
-    /// storage, install a fresh empty `RuntimeArena` with `new_outer.arena` as the
-    /// escape target, re-allocate a child `Scope` linking `new_outer`, and update
-    /// `scope_ptr`. `outer_frame` is cleared (user-fn calls always use a captured
-    /// lexical outer; per-call outers route through [`CallArena::new`] instead).
+    /// Reset this frame in place for a tail-call iteration: drop the old arena storage,
+    /// install a fresh `RuntimeArena` escaping into `new_outer.arena`, re-allocate the
+    /// child `Scope` under `new_outer`. Returns `false` (untouched) when `Rc::get_mut`
+    /// fails — any other live `Rc` foreclosing in-place reuse.
     ///
-    /// Returns `false` (and leaves the frame untouched) when `Rc::get_mut` fails —
-    /// i.e. when any other `Rc` to this frame has escaped (closure capture, live
-    /// sub-Dispatch, etc.), so a reuse would be visible to that escaped reference
-    /// and break snapshot semantics.
-    ///
-    /// SAFETY: callers must guarantee that at the moment of call, no live reference into
-    /// the old `arena` or old child `Scope` is held outside this `Rc`. The `Rc::get_mut`
-    /// gate is the structural witness: if any other `Rc` to this frame still exists, reset
-    /// is refused; if none does, by the dep-edges-cleared TCO invariant the only references
-    /// into the arena lived in slots already terminalized and freed.
+    /// See [memory-model.md § Tail-step frame reuse](../../../design/memory-model.md#tail-step-frame-reuse)
+    /// for the two structural invariants (no-escape, no-live-external-refs) that make
+    /// the in-place reset sound.
     pub fn try_reset_for_tail<'p>(
         self: &mut Rc<Self>,
         new_outer: &'p Scope<'p>,

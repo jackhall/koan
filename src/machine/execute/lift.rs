@@ -8,13 +8,10 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
 /// an `Rc<CallArena>` to anchor any descendant that borrows into the dying arena.
 ///
-/// Per-arm rules and the `functions_is_empty` fast-path soundness argument are in
+/// Per-arm rules, the `functions_is_empty` fast-path soundness argument, and the
+/// KFuture-escape future-invariant clause live in
 /// [memory-model.md § Closure escape](../../../design/memory-model.md#closure-escape-per-call-arenas--rc)
 /// and [§ Fast path](../../../design/memory-model.md#fast-path).
-///
-/// Caveat the design doc doesn't yet cover: the fast path is sound *today* only because
-/// KFutures don't escape as values. Once they do, this gate must add a
-/// no-unanchored-KFuture-descendant clause (the slow path's KFuture arm is already correct).
 #[cfg(test)]
 pub fn lift_kobject_for_test<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> KObject<'b> {
     lift_kobject(v, dying_frame)

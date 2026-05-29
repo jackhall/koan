@@ -43,16 +43,11 @@ pub(super) enum NodeStep<'a> {
     },
 }
 
-/// What a scheduler node will run.
-///
-/// `Lift` exists because the push/notify model assumes a single producer slot per result.
-/// When a `Dispatch` defers to a `Bind`/`Combine` for sub-deps, it spawns the worker into
-/// a new slot and rewrites its own slot to `Lift(Pending(worker))` so the result still
-/// surfaces under the original slot index. The notify-walk stamps `Pending → Ready` with
-/// the producer's terminal output at wake time.
-///
-/// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a fixed set
-/// of dep slots and runs a host closure over their resolved values.
+/// What a scheduler node will run. `Lift` exists because the push/notify model
+/// assumes a single producer slot per result — see [design/execution-model.md §
+/// Lift: push/notify single-producer model](../../../design/execution-model.md#lift-pushnotify-single-producer-model).
+/// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a
+/// fixed set of dep slots and runs a host closure over their resolved values.
 pub(super) enum NodeWork<'a> {
     /// Resolve and schedule a single expression. `state` carries the
     /// dispatch slot's per-variant cached state, with `Initialized` as the

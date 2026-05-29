@@ -12,22 +12,16 @@ use super::dep_graph::work_owned_edges;
 use super::dispatch::DispatchState;
 use super::Scheduler;
 
-/// Submission-time binder-install info. The picked overload's
-/// `is_nominal_binder` flag rides through so the install stamps the D7
-/// visibility carve-out on the [`BindingIndex`].
-///
-/// `eager_slot_mask[i]` is true only for slots *unanimously* tagged
-/// non-`KExpression` by every binder overload in the bucket — lazy slots
-/// cannot be pre-submitted because dispatch may resolve to a lazy overload.
+/// Submission-time binder-install info — see [design/execution-model.md
+/// § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)
+/// for the D7 carve-out and the per-bucket eager-slot mask rules.
 struct BinderInstall {
     key: BinderKey,
     is_nominal_binder: bool,
     eager_slot_mask: Vec<bool>,
 }
 
-/// The two install channels a binder may use. Mutually exclusive at the
-/// binder-definition level — `LET`/`STRUCT`/`UNION`/`SIG`/`MODULE` bind one
-/// name; `FN`/`FUNCTOR` register a function via inner-call bucket key.
+/// The two install channels a binder may use, mutually exclusive per binder.
 enum BinderKey {
     Name(String),
     Bucket(crate::machine::model::types::UntypedKey),
@@ -159,11 +153,8 @@ impl<'a> Scheduler<'a> {
                 "every dispatched node has a chain — submission outside enter_block / \
                  ambient active_chain is a bug",
             );
-        // For binder-shaped Dispatches: recursively submit each eager
-        // Expression-shaped argument slot now, so any nested binder's own
-        // placeholder installs at this outermost submission point. The
-        // collected `pre_subs` rides through into `NodeWork::Dispatch` so
-        // Phase 4 reuses them instead of allocating fresh sub-Dispatches.
+        // Nested binder pre-submission — see [design/execution-model.md
+        // § Submission-time binder install and recursive sub-Dispatch](../../../../design/execution-model.md#submission-time-binder-install-and-recursive-sub-dispatch).
         let placeholder_install: Option<BinderInstall> = match &work {
             NodeWork::Dispatch { expr, .. } => extract_binder_install(expr, scope),
             _ => None,

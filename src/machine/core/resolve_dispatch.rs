@@ -138,11 +138,8 @@ impl<'a> Scope<'a> {
         if let Some(outcome) = picked {
             return outcome;
         }
-        // Post-walk strict-Empty fallback derived from the cache. Precedence:
-        // Placeholders > eager parts > Unbound > pending-overload > Unmatched.
-        // Eager outranks Unbound so an Expression-in-Type-slot dispatch like
-        // `(maybe) some 42` doesn't pre-empt the sub-Dispatch that would yield
-        // the schema.
+        // Post-walk strict-Empty fallback derived from the cache. See
+        // [design/typing/scheduler.md § Post-walk dispatch fallback precedence](../../../design/typing/scheduler.md#post-walk-dispatch-fallback-precedence).
         let mut placeholders: Vec<NodeId> = Vec::new();
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::Parked(p) = outcome {
@@ -205,22 +202,8 @@ enum PickPass<'a> {
     Empty,
 }
 
-/// Strict admission against the `bare_outcomes` cache.
-///
-/// Admission rules per cache entry on a bare-name part:
-/// - `Resolved(obj)` — admit iff [`KType::accepts_part`] accepts `Future(obj)`;
-///   a wrong carried type strict-rejects rather than tentative-admitting into
-///   a bind-time TypeMismatch.
-/// - `Parked` / `Unbound` — admit via shape-only `arg.matches(part)` so the
-///   splice/park walk can surface the precise per-slot diagnostic;
-///   strict-rejecting would lose it.
-/// - `ProducerErrored` — defensive reject (upfront sweep short-circuited).
-/// - `Cycle` — unreachable (cache built with `consumer = None`).
-/// - `None` (non-bare-name part) — fall back to `arg.matches(part)`.
-///
-/// Binder declaration slots (`KType::Identifier`, `KType::TypeExprRef`) skip
-/// the cache: the slot owns the name, so admission must be shape-only
-/// regardless of whether the name happens to be bound elsewhere.
+/// Strict admission against the `bare_outcomes` cache. Rule table at
+/// [design/typing/elaboration.md § Strict admission rules](../../../design/typing/elaboration.md#strict-admission-rules).
 fn signature_admits_strict<'a>(
     sig: &ExpressionSignature<'a>,
     expr: &KExpression<'a>,

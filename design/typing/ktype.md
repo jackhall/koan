@@ -254,6 +254,29 @@ verb slot. Slots that want only a bare name (STRUCT/UNION) check the elaborated
 shape on the inner value; the validation lives at the consuming builtin rather
 than at the slot kind.
 
+### `TypeNameRef` — surface form survives bind
+
+When a `TypeExprRef`-slot value's surface `TypeExpr` can't be lowered to a
+concrete `KType` at `ExpressionPart::resolve_for` time — a bare-leaf name not in
+[`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)'s
+builtin table (`Point`, `IntOrd`, `MyList`, or just an unknown name like
+`SomeWeirdName`) — the bind-time carrier is
+[`KObject::TypeNameRef(TypeExpr)`](../../src/machine/model/values/kobject.rs)
+rather than `KTypeValue(_)`. This carrier preserves the parser-side `TypeExpr`
+**verbatim**: scope-aware elaboration (see
+[`Scope::resolve_type_expr`](../../src/machine/core/scope.rs)) happens later
+against the captured scope, but the **surface form survives bind unchanged**.
+
+The guarantee this gives consumers: diagnostics can quote the user's
+identifier exactly as written, not the elaborated canonical form. A FN
+declared `FN (DOIT) -> SomeWeirdName = (1)` whose return-type name never
+binds surfaces a `ShapeError` mentioning `SomeWeirdName` verbatim, not a
+synthesized rewrite. The same applies to user-bound aliases like `MyT` —
+the carrier remembers `MyT` as written, and only at the resolution boundary
+does it elaborate to the underlying type. Pinned by
+`fn_return_type_surface_name_preserved_in_error` in
+[`src/builtins/fn_def/tests/return_type.rs`](../../src/builtins/fn_def/tests/return_type.rs).
+
 ## Function signatures
 
 `FN` syntax requires both per-parameter types and a return type:

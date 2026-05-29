@@ -69,3 +69,40 @@ before its dependents fire), not tighten-after-the-fact (a type tightens
 after its dependents have already run). The implicit-search work in
 [open-work.md](open-work.md) is the most plausible motivation for a
 tighten-after-the-fact scheduler primitive.
+
+## Post-walk dispatch fallback precedence
+
+When [`Scope::resolve_dispatch_with_chain`](../../src/machine/core/resolve_dispatch.rs)
+walks every visible scope without any bucket admitting strictly, it falls
+through to a cache-driven post-walk fallback that picks one of five
+outcomes by fixed precedence:
+
+**Placeholders > eager parts > Unbound > pending overload > Unmatched.**
+
+1. **Placeholders** — any `NameOutcome::Parked(_)` in the `bare_outcomes`
+   cache ⇒ `ResolveOutcome::ParkOnProducers` on the deduplicated producer
+   list. Wake re-dispatches; strict admission rebuilds the cache against
+   the now-bound type.
+2. **Eager parts** — otherwise, if `expr` carries any eager-shaped part
+   (`Expression` / `SigiledTypeExpr` / `ListLiteral` / `DictLiteral`) ⇒
+   `Deferred`. The driver sub-Dispatches the eager parts and re-resolves
+   against the spliced expression.
+3. **Unbound** — otherwise, any `NameOutcome::Unbound(name)` ⇒
+   `UnboundName(name)`.
+4. **Pending overload** — otherwise, an innermost-visible
+   `pending_overloads[key]` recorded during the walk ⇒
+   `ParkOnProducers(vec![producer])` (a sibling FN / FUNCTOR parked on
+   its own Combine has installed the bucket; wake re-dispatches against
+   the now-registered overload).
+5. **Unmatched** — otherwise, `ResolveOutcome::Unmatched`.
+
+**Why eager outranks Unbound.** An Expression-in-Type-slot dispatch like
+`(maybe) some 42` has a head that *does* resolve, but only after one
+sub-Dispatch evaluates `(maybe)` to the schema. Surfacing `UnboundName`
+on the unresolved sibling would pre-empt that sub-Dispatch and report
+the wrong diagnostic. Eager evaluation may also itself surface the
+precise per-slot error, so it gets first refusal.
+
+The companion driver-side view of this precedence — what each outcome
+routes to in the dispatch pipeline — lives at
+[execution-model.md § post-walk fallback](../execution-model.md#dispatch).

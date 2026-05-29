@@ -123,6 +123,53 @@ by construction. The escape pointer is stable for the per-call arena's life
 because `CallArena::new` heap-pins the outer arena via `Rc`, and the outer
 always outlives this inner per the lexical-scoping invariant.
 
+## Arena lifetime erasure
+
+Every sub-arena inside [`RuntimeArena`](../src/machine/core/arena.rs) stores
+`T<'static>` rather than `T<'a>` — the `'static` is phantom so `RuntimeArena`
+itself carries no lifetime parameter. Each `alloc*` method takes input at the
+caller's `'a`, `mem::transmute`s into `'static` for storage, then re-transmutes
+the returned `&mut` back to `&'a T<'a>` on the way out. The transmutes are
+sound because:
+
+- Lifetimes are zero-sized, so `T<'a>` and `T<'static>` have identical layout.
+- `alloc*` returns an `&'a` tied to the input borrow; no `'static` reference
+  ever escapes.
+- On drop, no stored value's `Drop` impl follows a lifetime-parameterized
+  reference — auto-derived `Drop` only touches owned contents. Sub-arenas
+  drop together at `RuntimeArena` drop, so any cross-sub-arena `&` is dead
+  by the time anyone could observe it.
+
+`KObject` and `KType` go through the single cycle-gated [`alloc`](../src/machine/core/arena.rs)
+entry via the `CycleGated` trait; `KFunction`, `Scope`, `Module`, and `Signature`
+use un-gated `alloc_*` methods because none of them can hold a self-targeting
+`Rc<CallArena>`.
+
+A [`CallArena`](../src/machine/core/arena.rs) bundles a `RuntimeArena`, a
+`*const Scope<'static>` into it, and an `Option<Rc<CallArena>>` for the
+parent-frame chain. Two invariants make the ownership unit coherent:
+
+- **Heap-pinning via `Rc`.** `CallArena::new` only ever exposes the frame
+  as `Rc<CallArena>`, so the inner arena's heap address is stable for the
+  Rc's life and `scope_ptr` (a raw pointer into `arena.scopes`) stays
+  valid alongside it. Accessors re-attach lifetimes anchored to `&self`.
+- **Field declaration order encodes drop order.** `arena` is declared
+  before `outer_frame` so the auto-derived `Drop` tears down this frame's
+  arena *before* releasing the parent Rc. Inner pointers die before the
+  outer storage they may reference, ruling out a dangling `outer` during
+  drop.
+
+Storing the slot's per-call frame in the scheduler's slot table requires
+one more re-anchor: the slot-table type uses `'a` (the run lifetime), but
+`Rc<CallArena>::scope()` returns `&'p Scope<'p>` bounded by the local
+receiver. [`NodeStore::reinstall_with_frame`](../src/machine/execute/scheduler/node_store.rs)
+performs that re-anchor under the witness "the `Rc<CallArena>` stays in
+the same `Node` payload as the `&'a Scope<'a>` it produced": as long as
+the slot owns the Rc, the arena heap-pinning that backs `scope_ptr`
+outlives every read through the `'a` reference. Any previous frame in
+the slot must have been removed by a prior `take_for_run`, so there is
+no shadow alias being silently overwritten.
+
 ## Per-call-frame chaining for builtin-built frames
 
 A user-fn call's per-call frame is anchored by lexical scoping: the new frame's
@@ -232,6 +279,29 @@ recursive loop is one `RuntimeArena` per iteration (the inner arena
 `try_reset_for_tail` installs); the `CallArena` shell and its `Rc` reuse
 across iterations after the first two-iteration warmup.
 
+### MATCH frame lifetime under tail recursion
+
+When a user-fn recurses through a `MATCH` arm, the recursive call sits inside
+the MATCH-built per-call frame, not the user-fn's own frame. MATCH clones
+the user-fn's frame Rc onto its own frame's `outer_frame` (per
+[per-call-frame chaining](#per-call-frame-chaining-for-builtin-built-frames)
+above), so the user-fn frame's `strong_count` is `> 1` for the duration
+of the arm body. The TCO Replace at the recursive call therefore refuses
+in-place reset on that step and routes through `CallArena::new` — the
+chained `Rc` is a real alias. Cross-step reuse resumes one iteration later
+once the MATCH frame is itself replaced by the next tail step and its
+`outer_frame` Rc drops.
+
+The bound the
+[`chained_user_fn_tail_calls_reuse_one_slot`](../src/builtins/fn_def/tests/arena.rs)
+and [`match_driven_tail_recursion_completes`](../src/builtins/fn_def/tests/arena.rs)
+tests pin is: the user-fn frame is alive across exactly one MATCH-arm
+iteration at a time, and the call-chain (`AA -> BB -> CC -> DD -> PRINT`)
+collapses to one scheduler slot via the `Tail` rewrite even when reset
+refuses on individual MATCH-arm steps. Without the chained Rc, the
+recursive arm body's `outer` pointer into the dying frame would dangle
+on TCO Replace.
+
 ## Fast path
 
 If a dying arena allocated zero `KFunction`s
@@ -240,6 +310,17 @@ can point into it, and `lift_kobject` collapses to a plain `deep_clone`. Owned
 variants (`Number`, `KString`, `Bool`, `Null`) `deep_clone` unconditionally —
 mildly wasteful for the "value already in dest arena" case, which the design
 accepts in exchange for not maintaining full arena-provenance tracking.
+
+The fast path's `functions_is_empty` gate is sufficient *because* KFutures
+do not escape as values today: every borrow into the dying arena that the
+slow path checks (KFunction captured-scope, KFuture-embedded function ref
+and parsed-expression `Future(&KObject)` parts, Module child-scope) traces
+back to a KFunction, so "no KFunction allocated here" implies "no descendant
+borrows into here." Once KFutures become first-class values that can ride
+through `Future(&KObject)` parts independently of any KFunction, the gate
+must add a no-unanchored-KFuture-descendant clause; the slow path's KFuture
+arm already carries the membership-walk machinery the fast path would defer
+to.
 
 ## Re-entrant scope writes
 

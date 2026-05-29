@@ -9,12 +9,8 @@ use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
     /// Success-path eager free; the error path leaves deps for chain-free
-    /// at slot drop. `dep_edges[idx].clear()` is sound here: Combine /
-    /// Catch slots at reclaim time hold only `Owned` edges (their
-    /// `deps` / `from`, all spawned by this slot). Notify edges land
-    /// only on Dispatch slots via the bare-name short-circuit /
-    /// replay-park in `run_dispatch`, never on Combine / Catch, so
-    /// clearing the list cannot drop a wake intent.
+    /// at slot drop. Inv-B is what makes `dep_edges[idx].clear()` sound
+    /// here — see [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants).
     fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
         self.deps.clear_dep_edges(idx);
         for d in dep_indices {
@@ -99,16 +95,10 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Consume the stamped Lift state. By the time the slot pops, the notify-walk
-    /// in `Scheduler::finalize` has transitioned `Pending → Ready`, so this match
-    /// performs no result-table lookup and the `&KObject<'a>` inside `Value` is the
-    /// same reference the producer wrote — not a clone. The execute loop's Done arm
-    /// handles frame-aware deep-cloning into the outer arena.
-    ///
-    /// The `Pending` arm is a wake-misfire panic that localizes to the notify graph:
-    /// reaching it means a Lift slot was enqueued without its `from` finalizing,
-    /// which would indicate a bug in `Scheduler::finalize`'s stamp or `DepGraph`'s
-    /// pending-deps accounting — not in any read-side caller.
+    /// Consume the stamped Lift state. By pop time the notify-walk has
+    /// transitioned `Pending → Ready`; the `Pending` arm is a wake-misfire
+    /// panic. See [design/execution-model.md § Lift: push/notify single-producer
+    /// model](../../../../design/execution-model.md#lift-pushnotify-single-producer-model).
     pub(super) fn run_lift(state: LiftState<'a>) -> NodeOutput<'a> {
         match state {
             LiftState::Ready(output) => output,

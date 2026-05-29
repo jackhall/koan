@@ -103,8 +103,8 @@ fn fn_with_forward_user_bound_return_type_works() {
     assert_eq!(bytes, b"7\n");
 }
 
-/// When the return-type carrier is `KObject::TypeNameRef`, the surface form survives
-/// bind so diagnostics render the user's identifier verbatim.
+/// Pins the surface-form-survives-bind guarantee on `KObject::TypeNameRef` —
+/// see [ktype.md § TypeNameRef](../../../../design/typing/ktype.md#typenameref--surface-form-survives-bind).
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
     let arena = RuntimeArena::new();

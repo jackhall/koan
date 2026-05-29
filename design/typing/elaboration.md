@@ -174,7 +174,28 @@ reader, by contrast, is types-only.
 Every `KType` flowing through dispatch is fully elaborated — there is no
 surface-name carrier variant inside `KType` itself.
 
-## Type-expression resolution memo
+## Strict admission rules
+
+[`signature_admits_strict`](../../src/machine/core/resolve_dispatch.rs)
+admits a candidate signature against an expression by walking slot/part
+pairs and consulting the per-`run_dispatch` `bare_outcomes` cache. The
+admission rule per cache entry on a bare-name part:
+
+| Cache entry              | Admission rule                                                                   |
+|--------------------------|----------------------------------------------------------------------------------|
+| `Resolved(obj)`          | Admit iff [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs) accepts `Future(obj)`. A wrong carried type strict-rejects rather than tentative-admitting into a bind-time `TypeMismatch`. |
+| `Parked` / `Unbound`     | Admit via shape-only `arg.matches(part)`. The post-pick splice/park walk is the only place that produces precise per-slot `ParkOnProducers` / `UnboundName` diagnostics, so admission must not reject and lose them. |
+| `ProducerErrored`        | Defensive reject. The upfront sweep short-circuits this case before resolution; reaching admission means a producer error slipped past, so refuse. |
+| `Cycle`                  | Unreachable. The cache is built with `consumer = None`, so cycle detection never fires during admission. |
+| `None` (non-bare part)   | Fall back to shape-only `arg.matches(part)`.                                     |
+
+**Binder declaration slots bypass the cache.** A slot typed `KType::Identifier`
+or `KType::TypeExprRef` owns the name (`x` in `LET x = …`, `Ty` in
+`STRUCT Ty = …`), so admission must be shape-only regardless of whether
+the name happens to be bound elsewhere. A `SigiledTypeExpr` part still
+admits speculatively in such a slot — it sub-dispatches to a type-side
+carrier downstream. The same shape-only-on-binder-slot rule covers
+`KExpression` slots: the slot owns its body, not a name lookup.
 
 Two complementary caches amortize the elaboration cost rather than one cell
 on the carrier:

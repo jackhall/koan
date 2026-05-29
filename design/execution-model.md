@@ -107,6 +107,54 @@ band a push lands in) and the priority rule (which band a pop drains first)
 are both enforced by the wrapper's method surface rather than restated at each
 call site.
 
+## Dependency graph invariants
+
+[`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs)'s three
+parallel vectors — `notify_list`, `pending_deps`, `dep_edges` — share an
+index space with `NodeStore::nodes` and uphold three invariants:
+
+- **Inv-A (wake-pending coherence).** For every consumer slot `c`,
+  `pending_deps[c] == |{ p : c appears in notify_list[p] }|`. Every
+  mutating method on `DepGraph` updates `notify_list`, `pending_deps`,
+  and `dep_edges` in a single atomic body so the two fields cannot
+  desync.
+- **Inv-B (free-cascade source).** `dep_edges[c]` lists every `Owned`
+  sub-slot `c` must cascade-reclaim. Park edges are tagged `Notify` and
+  filtered out of `free`'s walk via `owned_children`. Independent of
+  Inv-A.
+- **Inv-C (lazy notify-scrub on free).** A slot `c` is only freed once
+  every producer's `drain_notify` has run and removed `c` from
+  `notify_list[*]`. The
+  `freed_slot_does_not_appear_in_other_notify_lists` test pins this;
+  `free` relies on Inv-A and Inv-C still holding rather than scrubbing
+  itself.
+
+Inv-B is what makes the eager `dep_edges[idx].clear()` in
+`Scheduler::reclaim_deps` sound at `Combine` / `Catch` success: those
+slots at reclaim time hold only `Owned` edges (their `deps` / `from`,
+all spawned by the slot). `Notify` edges land only on `Dispatch` slots
+via the bare-name short-circuit / replay-park in `run_dispatch`, never
+on `Combine` / `Catch`, so clearing the list cannot drop a wake intent.
+
+## Lift: push/notify single-producer model
+
+[`NodeWork::Lift`](../src/machine/execute/nodes.rs) exists because the
+push/notify model assumes a single producer slot per result. When a
+`Dispatch` defers to a `Bind` / `Combine` for sub-deps, it spawns the
+worker into a new slot and rewrites its own slot to
+`Lift(LiftState::Pending(worker))` so the result still surfaces under
+the original slot index. The notify-walk stamps `Pending → Ready` with
+the producer's terminal output at wake time, and `run_lift` on pop just
+unwraps the stamped `NodeOutput` — no result-table lookup.
+
+The `Pending → Ready` transition is the sole responsibility of
+`Scheduler::finalize`. By the time a Lift slot pops, the notify-walk
+has already stamped its `LiftState` to `Ready`, so the `Pending` arm of
+`run_lift`'s match is a wake-misfire panic that localizes to the
+notify graph: reaching it means a Lift was enqueued without its `from`
+finalizing — a bug in `Scheduler::finalize`'s stamp or `DepGraph`'s
+pending-deps accounting, not in any read-side caller.
+
 ## Working-copy splice
 
 The scheduler dispatches each expression by mutating an **owned working
@@ -280,13 +328,24 @@ carries the lexical statement index it was registered at, and a consumer at
 chain cutoff `c` sees only bindings with index `i < c` plus any binding
 flagged `nominal_binder` (the D7 carve-out for `STRUCT` / named `UNION` /
 `SIG` / `FUNCTOR` / `MODULE`, whose declared names cross the cutoff so
-mutual-recursive nominal references work). A *keyword-headed* function call
-(`ID 7`) resolves through the `functions` bucket, which applies the same
-per-overload visibility filter: a later-sibling overload registered after
-this consumer's statement is hidden, and dispatch falls through to outer
-scopes. Forward calls from a function body are unaffected — bodies re-dispatch
-per call against the body's lexical chain, by which point every sibling
-binder has registered.
+mutual-recursive nominal references work). The D7 carve-out rides through
+submission via the picked overload's `is_nominal_binder` flag — the
+[`BinderKey`](../src/machine/execute/scheduler/submit.rs) install stamps
+the corresponding `BindingIndex { idx, nominal_binder }` so the eventual
+finalize and any submission-time placeholder install share the same
+visibility identity.
+
+`LET` is value-style gated (strict `b.idx < c`), so a forward reference to
+a later-sibling `LET` is invisible and surfaces `UnboundName` rather than
+parking. `FN` is also value-style gated — not a nominal binder — so a
+forward call to a later-sibling `FN` overload is invisible under the gate
+and surfaces `DispatchFailed` rather than parking on the not-yet-finalized
+overload. A *keyword-headed* function call (`ID 7`) resolves through the
+`functions` bucket, which applies the same per-overload visibility filter:
+a later-sibling overload registered after this consumer's statement is
+hidden, and dispatch falls through to outer scopes. Forward calls from a
+function *body* are unaffected — bodies re-dispatch per call against the
+body's lexical chain, by which point every sibling binder has registered.
 
 The mechanism lives in two pieces, each routed through a separate install
 channel keyed by the binder's shape.
@@ -379,6 +438,19 @@ consumer's `LexicalFrame` chain through. `bind_value` and
 `register_function` remove their own placeholder before inserting into
 `data` / `functions`, so the two tables are mutually exclusive at any
 moment.
+
+### Miri Lift-park lifetime contract
+
+The bare-name short-circuit and replay-park routes both park through
+`Lift(LiftState::Pending(producer))` (see [Lift: push/notify single-producer
+model](#lift-pushnotify-single-producer-model) for the stamping protocol).
+When the parked Lift pops with `LiftState::Ready(NodeOutput::Value(obj))`,
+the `&KObject<'a>` it carries is the **producer's reference**, not a
+clone — the notify-walk stamped the producer's terminal pointer directly
+into the Lift's state. The producer's arena therefore must outlive every
+wake-and-re-run cycle of every consumer parked through this Lift. The
+`lift_park_minimal_program_for_miri` and `replay_park_minimal_program_for_miri`
+tests pin the contract under Miri tree borrows.
 
 ### Submission-time binder install and recursive sub-Dispatch
 
@@ -1070,6 +1142,26 @@ path; the public `add` path auto-roots a chain when no ambient one is
 present via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 (so REPL-style submissions outside `enter_block` see every prior bind
 in the target scope).
+
+### Multi-statement FN body split
+
+A user-fn body of the shape `((s_0) (s_1) ... (s_{N-1}))` is split at
+[`KFunction::invoke`](../src/machine/core/kfunction.rs) time. The first
+`N-1` statements submit as **sibling sub-slots** in the per-call body
+scope at chain indices `1..N-1`, and the FN's slot **tail-replaces into
+`s_{N-1}`** at index `N` — so TCO is preserved on the terminal statement.
+Single-statement bodies pass through at index 0 (no split needed).
+
+Effect ordering between siblings is **topological** (sub-slot scheduling),
+not strict source-order: a sibling reads through the index gate
+(`b.idx < c`) and can read any earlier sibling's binding, but the
+scheduler is free to interleave their executions when their dependency
+sets allow it. Backward references across siblings work — a `LET b =
+(a)` at index `i` sees a `LET a = …` at index `j < i` — because the
+visibility predicate admits the earlier sibling's binding at the
+consumer's cutoff. `match_case` arms and `TRY` arms ride the same split
+through `BodyResult::tail_with_frame_at_index` /
+`tail_with_block_at_index` (see [Single entry point: `Scheduler::enter_block`](#single-entry-point-schedulerenter_block) above).
 
 ### FN-body chain assembly
 

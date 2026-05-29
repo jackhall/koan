@@ -54,10 +54,9 @@ fn chained_tail_calls_reuse_frames() {
     );
 }
 
-/// Recursive tail-call through a `MATCH` arm. The user-fn's frame is cloned
-/// onto the MATCH-built frame's `outer_frame`, so its `strong_count` is > 1
-/// when the arm body redispatches — reuse must refuse on that step but resume
-/// once the MATCH frame is dropped at the next tail rewrite.
+/// Recursive tail-call through a `MATCH` arm. Pins the refcount-driven reuse
+/// refusal one step out, resume one step later; see
+/// [memory-model.md § MATCH frame lifetime under tail recursion](../../../../design/memory-model.md#match-frame-lifetime-under-tail-recursion).
 #[test]
 fn match_driven_tail_recursion_completes() {
     let arena = RuntimeArena::new();

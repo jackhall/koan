@@ -32,9 +32,8 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     assert!(matches!(sched.read(id), KObject::Number(n) if *n == 42.0));
 }
 
-/// Index-gated resolution hides a later-sibling LET from an earlier sibling's
-/// reference (strict `b.idx < c`, value-style gated), so the consumer surfaces
-/// `UnboundName` rather than parking.
+/// Index-gated LET visibility — see [design/execution-model.md § Dispatch-time
+/// name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
 #[test]
 fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
@@ -121,9 +120,8 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 3.0));
 }
 
-/// FN is value-style gated (not a nominal binder), so a forward call to a
-/// later-sibling FN is invisible under the gate and surfaces `DispatchFailed`
-/// rather than parking on the not-yet-finalized overload.
+/// FN is value-style gated — see [design/execution-model.md § Dispatch-time
+/// name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
 #[test]
 fn forward_keyword_function_reference_is_unbound() {
     let arena = RuntimeArena::new();
@@ -161,9 +159,8 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
 }
 
-/// Miri audit-slate: pins the bare-name-short-circuit Lift-park lifetime
-/// contract. The `&KObject<'a>` Lift returns is the producer's reference, not a
-/// clone, so the arena must outlive the wake and re-run.
+/// Miri audit-slate: Lift-park lifetime contract — see [design/execution-model.md
+/// § Miri Lift-park lifetime contract](../../../../design/execution-model.md#miri-lift-park-lifetime-contract).
 #[test]
 fn lift_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();
