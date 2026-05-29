@@ -665,7 +665,7 @@ fn classifier_legacy_positional_collapses_to_type_constructor_call() {
 fn stateful_keyworded_one_shot_terminates_without_legacy() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let mut sched = Scheduler::new();
     let exprs = crate::parse::parse("LET x = 7").expect("parse succeeds");
     reset_resolve_dispatch_entry_count();
     for e in exprs {
@@ -749,7 +749,7 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
         scope,
         "FN (FIRST xs :(LIST OF Number)) -> Number = (1)",
     );
-    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let mut sched = Scheduler::new();
     let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
     for e in exprs {
         sched.add_dispatch(e, scope);
@@ -779,7 +779,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
         scope,
         "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
     );
-    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let mut sched = Scheduler::new();
     let exprs = crate::parse::parse("LET out = (DESCRIBE [1 2 3])").expect("parse succeeds");
     for e in exprs {
         sched.add_dispatch(e, scope);
@@ -808,7 +808,7 @@ fn stateful_keyworded_eager_subs_reresolve_surfaces_dispatch_failed() {
         scope,
         "FN (HEAD xs :(LIST OF Number)) -> Number = (1)",
     );
-    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let mut sched = Scheduler::new();
     sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
     let error = sched.execute().expect_err(
         "stateful driver's eager-subs re-resolve must reject List<Str> against \
@@ -823,13 +823,11 @@ fn stateful_keyworded_eager_subs_reresolve_surfaces_dispatch_failed() {
 /// Step 4d acceptance: a Keyworded dispatch whose `resolve_dispatch_with_chain`
 /// returns `ParkOnProducers` (either ≥1 bare-name `Placeholder` the strict
 /// walk couldn't admit, or an innermost-visible `pending_overloads[key]`
-/// entry an FN sibling installed) now installs the `overload_park` track
-/// on `KeywordedState` rather than rebuilding the slot as
-/// `DispatchState::initialized` via the legacy
-/// `park_pending_and_redispatch`. On track-completion the resume handler
-/// re-runs `stateful_keyworded_initial` against the carried `expr` /
-/// `pre_subs`; the producers' now-bound state (a finalized overload, a
-/// resolved bare name) feeds the rebuilt resolve and dispatch terminalizes.
+/// entry an FN sibling installed) installs the `overload_park` track on
+/// `KeywordedState`. On track-completion the resume handler re-runs
+/// `stateful_keyworded_initial` against the carried `expr` / `pre_subs`;
+/// the producers' now-bound state (a finalized overload, a resolved bare
+/// name) feeds the rebuilt resolve and dispatch terminalizes.
 ///
 /// Program mirrors `fn_bare_arg_call_parks_on_pending_overload_bucket`
 /// under explicit toggle-on routing: the FN's typed parameter `arg :Wrap`
@@ -845,7 +843,7 @@ fn stateful_keyworded_eager_subs_reresolve_surfaces_dispatch_failed() {
 fn stateful_keyworded_overload_park_resumes_through_state() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let mut sched = Scheduler::new();
     let exprs = crate::parse::parse(
         "FN (LIFT_BARE arg :Wrap) -> Number = (7)\n\
          STRUCT Wrap = (n :Number)\n\
@@ -867,8 +865,8 @@ fn stateful_keyworded_overload_park_resumes_through_state() {
 /// Step 4c acceptance: a Keyworded dispatch whose initial part walk
 /// resolves ≥1 wrap-slot or ref-name-slot bare name to
 /// `NameOutcome::Parked(producer)` installs the `bare_name_park` track
-/// on `KeywordedState` (replacing the legacy `install_combined_park`)
-/// and parks the slot. On producer terminalization the resume handler
+/// on `KeywordedState` and parks the slot. On producer terminalization
+/// the resume handler
 /// re-runs `stateful_keyworded_initial` against the carried
 /// `working_expr`, the rebuilt `bare_outcomes` cache sees the now-
 /// bound name, the wrap-slot splice fires, and dispatch terminalizes.
@@ -885,7 +883,7 @@ fn stateful_keyworded_overload_park_resumes_through_state() {
 fn stateful_keyworded_bare_name_park_resumes_through_state() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let mut sched = Scheduler::new();
     // Submission order matters: `LET fwd = Foo` parks on the STRUCT's
     // placeholder before STRUCT finalization. The `enter_block` /
     // `add_dispatch` lockstep mirrors the legacy unified-walk test.

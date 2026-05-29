@@ -5,12 +5,10 @@
 //!
 //! `apply` is the entry point both surface forms invoke: the type-token call via
 //! [`type_call`](super::type_call), and the identifier-bound LET-alias call via
-//! the dispatch scheduler's `fast_lane_function_value_call` (post Phase 1 of
-//! `scratch/plan-fast-lane-subsume.md`; the former `call_by_name` builtin that
-//! served the second path was deleted). `apply` synthesizes a tail expression
-//! that re-dispatches through the construction-primitive builtin defined here,
-//! whose typed slots let the scheduler resolve sub-expression value-parts before
-//! construction runs.
+//! the dispatch scheduler's stateful FunctionValueCall fast lane. `apply`
+//! synthesizes a tail expression that re-dispatches through the
+//! construction-primitive builtin defined here, whose typed slots let the
+//! scheduler resolve sub-expression value-parts before construction runs.
 //!
 //! The primitive builtin has no keyword in its signature — three typed slots
 //! (`Type`, `Identifier`, `Any`) are specific enough to claim its dispatch bucket

@@ -31,38 +31,6 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 }
 
 
-/// Register the `Identifier` overload AFTER the `Any` overload. Specificity-based
-/// dispatch should still pick `Identifier` for an identifier-shaped input.
-///
-/// **Driver split.** This test exercises the legacy `run_dispatch` BareIdentifier
-/// fall-through to the keyworded candidate pipeline — a bare identifier with
-/// no binding falls through and matches the `(v :Identifier)` overload bucket,
-/// binding `v` to the raw `"foo"` token. The stateful driver (Step 3b,
-/// `roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md`)
-/// surfaces `UnboundName("foo")` directly from `stateful_bare_identifier` —
-/// no fall-through. We pin the legacy contract via an explicit
-/// `with_stateful_dispatch(false)` so the assertion holds regardless of how
-/// the env-var toggle is set in the test process. Step 4+ revisits whether
-/// `(v :Identifier)` overload registration survives the stateful migration.
-#[test]
-fn dispatch_picks_identifier_over_any_regardless_of_registration_order() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    register_builtin(scope, "any_first", one_slot_sig("v", KType::Any), body_marker_any);
-    register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
-
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
-    let mut sched = Scheduler::new().with_stateful_dispatch(false);
-    let id = sched.add_dispatch(expr, scope);
-    sched.execute().unwrap();
-    let result = sched.read(id);
-    assert!(
-        matches!(result, KObject::KString(s) if s == "identifier"),
-        "Identifier overload should win on an identifier input, got {:?}",
-        summarize_marker(result),
-    );
-}
-
 /// Inner scope's `Any` overload shadows the outer scope's more-specific `Number`
 /// overload — pure lexical shadowing, innermost match wins regardless of specificity
 /// at outer levels.
@@ -87,13 +55,11 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     );
 }
 
-/// Stateful-driver counterpart to
-/// `dispatch_picks_identifier_over_any_regardless_of_registration_order`.
-/// Step 3b of the stateful-dispatch refactor surfaces `UnboundName(name)`
-/// directly for a bare-identifier slot with no value, no placeholder, and
-/// no visible binding — no fall-through to the `(v :Identifier)` overload
-/// the test above exercises on the legacy driver. Same scope setup so the
-/// only delta is the driver toggle.
+/// A bare-identifier slot with no value, no placeholder, and no visible
+/// binding surfaces `UnboundName(name)` directly out of
+/// `stateful_bare_identifier` — no fall-through to a `(v :Identifier)`
+/// overload bucket. Pins the post-cutover contract: bare-name dispatch
+/// is name-resolution-only, not a candidate walk.
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
@@ -103,7 +69,7 @@ fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
 
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
-    let mut sched = Scheduler::new().with_stateful_dispatch(true);
+    let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().unwrap();
     let err = match sched.read_result(id) {

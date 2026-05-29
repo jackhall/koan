@@ -95,7 +95,8 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
                 DispatchShape::BareTypeLeaf
             }
             // Sigiled type-expression wrapper — the dispatcher unwraps and re-runs
-            // classification on the inner expression. See [`Self::fast_lane_sigiled_type_expr`].
+            // classification on the inner expression. See the
+            // `DispatchShape::SigiledTypeExpr` arm of `run_dispatch`.
             ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
             // Parenthesized literal, Future, parameterized Type, ListLiteral, ...:
             // not a fast-lane shape; the keyworded path surfaces today's Deferred /
@@ -246,8 +247,8 @@ pub(in crate::machine::execute) enum PendingSub<'a> {
 }
 
 /// Result of a successful [`Scheduler::keyworded_part_walk`]. The fields land in
-/// the legacy `run_dispatch` Step 4 fused walk and in the stateful Keyworded
-/// driver's one-shot path; both consume the same three buckets identically.
+/// the stateful Keyworded driver's one-shot path; the three buckets feed
+/// the splice / park / eager-sub install respectively.
 ///
 /// - `new_parts`: post-splice parts with `Future(obj)` substituted for resolved
 ///   wrap slots and bare placeholder strings substituted for scheduled subs.
@@ -464,442 +465,6 @@ impl<'a> Scheduler<'a> {
         Ok(PartWalkResult { new_parts, producers_to_wait, staged_subs })
     }
 
-    /// Dispatch driver. Opens with [`classify_dispatch_shape`]; the no-keyword shapes
-    /// (`BareIdentifier`, `BareTypeLeaf`, `FunctionValueCall`, `ConstructorCall`,
-    /// `SigiledTypeExpr`) run their fast-lane handlers and never enter
-    /// `resolve_dispatch_with_chain`. The `Keyworded` arm — the only shape with
-    /// candidates in `bindings.functions` — drives the strict-only pipeline:
-    ///
-    /// 1. **Build the bare-name cache.** One `resolve_name_part` per bare-name part
-    ///    (`Identifier` or leaf `Type`) into `bare_outcomes: Vec<Option<NameOutcome>>`
-    ///    — non-bare-name parts get `None`. Built with `consumer = None` so cycle
-    ///    detection is deferred to Step 4 (where it runs only on slots the picked
-    ///    function classifies as references). Shared with the resolver's strict
-    ///    admission *and* the fused splice/park walk below, so each bare name
-    ///    resolves exactly once per `run_dispatch` invocation.
-    /// 2. **Upfront short-circuit.** Sweep `bare_outcomes` for `ProducerErrored`;
-    ///    these trump any overload choice and surface a `<wrap-resolve>`-framed
-    ///    propagation directly. (No `Cycle` sweep — cycle detection is in Step 4.)
-    /// 3. **`Scope::resolve_dispatch_with_chain`** — one chain walk yielding a
-    ///    [`Resolved`], `Ambiguous(n)`, `Deferred`, `ParkOnProducers`, `UnboundName`,
-    ///    or `Unmatched`. Admission is strict-only and reads `bare_outcomes`; the
-    ///    post-walk fallback (placeholders > eager > unbound > pending overload >
-    ///    Unmatched) also reads it. A keyword-headed call to a not-yet-registered
-    ///    function with no eager parts and no Parked / Unbound bare-name args still
-    ///    consults `pending_overloads` by the full bucket key as a last-step fallback.
-    ///    3.5: **Placeholder install** — if the picked function carried a
-    ///    `binder_name` extractor, install its dispatch-time name placeholder against
-    ///    this slot's `NodeId`. Same for `pending_overload_bucket`.
-    /// 4. **Fused splice / park / eager-sub walk.** One iteration over `expr.parts`
-    ///    that reads `bare_outcomes[i]` for wrap-slot splice (Resolved ⇒ rewrite to
-    ///    `Future(obj)`; Parked ⇒ cycle-check then push producer; Unbound ⇒
-    ///    surface `UnboundName` as a slot terminal) and ref-name-slot park (Parked
-    ///    ⇒ cycle-check then push producer), and the part's shape for the
-    ///    eager-sub schedule (Expression / SigiledTypeExpr /
-    ///    ListLiteral / DictLiteral). Index buckets are disjoint by
-    ///    [`ClassifiedSlots`](crate::machine::core::kfunction::ClassifiedSlots). If
-    ///    any producer parked, install one combined park before submitting any subs;
-    ///    otherwise either bind directly (no subs) or build a `Bind` slot.
-    ///
-    /// Fast lane is one-pass: `BareTypeLeaf` doesn't fall back; its failure surfaces
-    /// directly. Only `FunctionValueCall` falls back to the `Keyworded` path when the
-    /// head doesn't resolve to a function — a keyword-headed overload may still match.
-    ///
-    /// See [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)
-    /// for the bare-name short-circuit, placeholder install, and forward-name park rules
-    /// referenced above.
-    pub(super) fn run_dispatch(
-        &mut self,
-        expr: KExpression<'a>,
-        pre_subs: Vec<(usize, NodeId)>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
-        // Fast lane: classify before any walk. The five no-keyword shapes route around
-        // `resolve_dispatch_with_chain` entirely (no candidates to consider for them);
-        // `Keyworded` falls into the cache-driven pipeline below.
-        match classify_dispatch_shape(&expr) {
-            DispatchShape::BareIdentifier => {
-                // Classifier guarantees expr.parts is single-element Identifier.
-                let name = match &expr.parts[0].value {
-                    ExpressionPart::Identifier(n) => n.clone(),
-                    _ => unreachable!("BareIdentifier shape implies single Identifier part"),
-                };
-                if let Some(step) = self.fast_lane_bare_identifier(&name, scope, idx) {
-                    return Ok(step);
-                }
-                // Unbound bare identifier falls through to the keyworded path so
-                // `value_lookup::body_identifier` produces the structured `UnboundName`
-                // surface (preserves today's contract).
-            }
-            DispatchShape::BareTypeLeaf => {
-                let t = match &expr.parts[0].value {
-                    ExpressionPart::Type(t) => t.clone(),
-                    _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
-                };
-                return Ok(self.fast_lane_bare_type_leaf(&t, scope));
-            }
-            DispatchShape::FunctionValueCall => {
-                return Ok(self.fast_lane_function_value_call(&expr, scope, idx));
-            }
-            DispatchShape::ConstructorCall => {
-                // Phase 2 commit 1 of the fast-lane subsumption
-                // (`scratch/plan-fast-lane-subsume.md`): the variant is added to the
-                // classifier and routed here, but the handler is intentionally empty
-                // — we fall through to Keyworded so the `type_call` builtin still
-                // serves construction. Commits 2-3 add per-head-type arms; commits
-                // 4-6 migrate tests, trim `type_call.rs`, and relocate
-                // `dispatch_constructor`.
-            }
-            DispatchShape::SigiledTypeExpr => {
-                let inner = match expr.parts.into_iter().next() {
-                    Some(Spanned { value: ExpressionPart::SigiledTypeExpr(boxed), .. }) => *boxed,
-                    _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
-                };
-                return Ok(self.fast_lane_sigiled_type_expr(inner, scope, idx));
-            }
-            DispatchShape::Keyworded => {}
-        }
-
-        // Step 1: build the bare-name outcome cache. Non-bare-name parts get `None`;
-        // strict admission falls back to `arg.matches(part)` for them. Cache lives
-        // through Step 3 (strict admission) and Step 4 (fused splice/park/eager walk).
-        //
-        // `consumer = None`: cycle detection is **deferred** to the fused walk in
-        // Step 4, where it runs only on wrap / ref-name slots (slots the picked
-        // function says are references). A binder declaration slot like `x` in
-        // `LET x = …` has the dispatching slot as the producer of its own
-        // `x → idx` placeholder; running cycle detection upfront would surface a
-        // false-positive `SchedulerDeadlock` because the declaration slot looks
-        // like a self-park before we know it's a declaration.
-        let bare_outcomes = self.build_bare_outcomes(&expr.parts, scope);
-
-        // Step 2: upfront short-circuit for `ProducerErrored`. A bare-name arg whose
-        // producer has already terminalized with `Err` can never resolve; surface the
-        // error with a `<wrap-resolve>` frame before the candidate walk. (No `Cycle`
-        // sweep — cycle detection is deferred to Step 4 by the `consumer = None`
-        // above.)
-        for outcome in bare_outcomes.iter().flatten() {
-            if let NameOutcome::ProducerErrored(e) = outcome {
-                let frame = Frame::from_expr("<wrap-resolve>", &expr);
-                return Ok(NodeStep::Done(NodeOutput::Err(
-                    propagate_dep_error(e, Some(frame)),
-                )));
-            }
-        }
-
-        // Step 3: chain-gated, cache-driven dispatch resolution.
-        let chain = self.active_chain.as_deref();
-        let resolved = match scope.resolve_dispatch_with_chain(&expr, chain, &bare_outcomes) {
-            ResolveOutcome::Resolved(r) => r,
-            ResolveOutcome::Ambiguous(n) => {
-                return Err(KError::new(KErrorKind::AmbiguousDispatch {
-                    expr: expr.summarize(),
-                    candidates: n,
-                }));
-            }
-            ResolveOutcome::Unmatched => {
-                return Err(KError::new(KErrorKind::DispatchFailed {
-                    expr: expr.summarize(),
-                    reason: "no matching function".to_string(),
-                }));
-            }
-            ResolveOutcome::Deferred => {
-                // No overload picks against the bare shape, but the expression carries
-                // eager parts whose evaluation may surface matching types. Schedule
-                // every Expression-shaped part as a sub-Dispatch; the receiving
-                // `run_bind` re-dispatches after the subs resolve. `pre_subs` is
-                // empty by construction: recursive submission only runs when a binder
-                // is picked at submit time, and Deferred means no overload picked.
-                debug_assert!(
-                    pre_subs.is_empty(),
-                    "Deferred resolve_dispatch implies no binder pick at submit time; \
-                     `pre_subs` must be empty here",
-                );
-                return Ok(self.schedule_eager_only(expr, scope, idx));
-            }
-            ResolveOutcome::ParkOnProducers(producers) => {
-                // No bucket admitted; ≥1 bare-name arg parks on a forward-reference
-                // placeholder (or an in-flight FN/FUNCTOR sibling's pending_overloads
-                // entry). Re-dispatch on wake, when strict admission rebuilds the
-                // cache against the now-bound type.
-                return Ok(self.park_pending_and_redispatch(producers, expr, pre_subs, idx));
-            }
-            ResolveOutcome::UnboundName(name) => {
-                return Err(KError::new(KErrorKind::UnboundName(name)));
-            }
-        };
-
-        // Step 3.5: install dispatch-time placeholders for the binder slot.
-        // Two parallel installs:
-        // - `placeholder_name` -> name-keyed `placeholders[name]`, consulted by
-        //   `Scope::resolve` for forward-reference *name* resolution. Set by every
-        //   binder builtin's `binder_name` hook (LET, FN, FUNCTOR, STRUCT, UNION, SIG,
-        //   MODULE).
-        // - `pending_overload_bucket` -> bucket-keyed `pending_overloads[key]`,
-        //   consulted by `resolve_dispatch`'s no-bucket fallback for forward-reference
-        //   *dispatch* parks. Set only by FN / FUNCTOR's `binder_bucket` hook (the
-        //   binders that register a callable function). Keying by the full inner-call
-        //   bucket — not the lead keyword — keeps overloads with shared heads but
-        //   different keyword shapes from colliding on the park edge.
-        // Both installs carry the executing slot's lexical index and the picked
-        // function's `is_nominal_binder` flag — the submission-time install in
-        // `submit::add_with_chain` used the same pair, so the placeholder→bind
-        // transition keeps a consistent visibility tag.
-        let lex_index = self
-            .active_chain
-            .as_ref()
-            .expect("dispatching slot must have an active chain")
-            .index;
-        let bind_index = BindingIndex {
-            idx: lex_index,
-            nominal_binder: resolved.function.is_nominal_binder,
-        };
-        if let Some(name) = resolved.placeholder_name.as_ref() {
-            if let Err(e) = scope.install_placeholder(name.clone(), NodeId(idx), bind_index) {
-                return Ok(NodeStep::Done(NodeOutput::Err(e)));
-            }
-        }
-        if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
-            if let Err(e) =
-                scope.install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
-            {
-                return Ok(NodeStep::Done(NodeOutput::Err(e)));
-            }
-        }
-
-        // Step 4: fused walk over `expr.parts`. The helper handles per-part
-        // splice / park / eager-sub staging and returns the three buckets
-        // (`new_parts`, `producers_to_wait`, `staged_subs`); the slot-terminal
-        // cycle / unbound cases come back as `Err(KError)` which wraps as
-        // `NodeStep::Done(NodeOutput::Err(_))`. Park-precedence guard: collect
-        // subs into the staging vec first; if any producer parked, install the
-        // combined park *before* submitting the subs to the scheduler —
-        // submitting would leak nodes on the re-Dispatch wake path.
-        let walk = match self.keyworded_part_walk(
-            expr.parts,
-            &pre_subs,
-            &bare_outcomes,
-            &resolved.slots,
-            idx,
-        ) {
-            Ok(w) => w,
-            Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
-        };
-        let PartWalkResult { new_parts, producers_to_wait, staged_subs } = walk;
-        let new_expr = KExpression::new(new_parts);
-        if !producers_to_wait.is_empty() {
-            return Ok(self.install_combined_park(producers_to_wait, new_expr, pre_subs, idx));
-        }
-        // No park — submit the staged subs and build a Bind slot (or bind directly).
-        let mut subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
-        for (i, pending) in staged_subs {
-            let node_id = match pending {
-                PendingSub::Reuse(id) => id,
-                PendingSub::Dispatch(expr) => self.add(NodeWork::dispatch(expr), scope),
-                PendingSub::ListLit(items) => self.schedule_list_literal(items, scope),
-                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs, scope),
-            };
-            subs.push((i, node_id));
-        }
-        if subs.is_empty() {
-            // No subs: bind the picked function directly. Spliced `Future(&'a KObject)`
-            // references survive `results[dep] = None` because the objects live in
-            // arenas tied to lexical scope.
-            match resolved.function.bind(new_expr) {
-                Ok(future) => Ok(self.invoke_to_step(future, scope, idx)),
-                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-            }
-        } else {
-            let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
-            Ok(self.defer_to_lift(idx, bind_id))
-        }
-    }
-
-    /// Eager-only schedule used by the `Deferred` arm of `run_dispatch`. No picked
-    /// function, no eager filter, no `bare_outcomes` consultation: bare names ride
-    /// the re-dispatch after the subs land. Schedule every `Expression` /
-    /// `SigiledTypeExpr` / `ListLiteral` / `DictLiteral` part as a sub-Dispatch (or
-    /// aggregate) and build a `Bind` slot.
-    ///
-    /// `Deferred ⇒ at least one eager part`, so the empty-subs branch would be a
-    /// `resolve_dispatch` invariant break — `debug_assert!` would catch it but the
-    /// real protection is the caller's surface contract.
-    fn schedule_eager_only(
-        &mut self,
-        expr: KExpression<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        let mut new_parts = Vec::with_capacity(expr.parts.len());
-        let mut subs: Vec<(usize, NodeId)> = Vec::new();
-        for (i, part) in expr.parts.into_iter().enumerate() {
-            let span = part.span;
-            match part.value {
-                ExpressionPart::Expression(boxed) => {
-                    let sub_id = self.add(NodeWork::dispatch(*boxed), scope);
-                    subs.push((i, sub_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::SigiledTypeExpr(boxed) => {
-                    let wrapped = KExpression::new(vec![Spanned::bare(
-                        ExpressionPart::SigiledTypeExpr(boxed),
-                    )]);
-                    let sub_id = self.add(NodeWork::dispatch(wrapped), scope);
-                    subs.push((i, sub_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::ListLiteral(items) => {
-                    let agg_id = self.schedule_list_literal(items, scope);
-                    subs.push((i, agg_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    let agg_id = self.schedule_dict_literal(pairs, scope);
-                    subs.push((i, agg_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                other => new_parts.push(Spanned { value: other, span }),
-            }
-        }
-        let new_expr = KExpression::new(new_parts);
-        debug_assert!(
-            !subs.is_empty(),
-            "schedule_eager_only invoked from Deferred arm; resolve_dispatch contract \
-             requires at least one eager part"
-        );
-        let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
-        self.defer_to_lift(idx, bind_id)
-    }
-
-    /// Install park edges from `idx` onto each producer in `producers` and rebuild this
-    /// slot as a re-Dispatch of `expr`. Shared between Phase 3's combined park, Phase 2's
-    /// `ParkOnProducers` arm (via `park_pending_and_redispatch`), and the bind-time
-    /// `ParkOnProducers` path. Caller has already filtered through `would_create_cycle`
-    /// and producer-error propagation; this just installs the edges and the Replace step.
-    fn install_combined_park(
-        &mut self,
-        producers: Vec<NodeId>,
-        expr: KExpression<'a>,
-        pre_subs: Vec<(usize, NodeId)>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        for p in &producers {
-            self.deps.add_park_edge(*p, NodeId(idx));
-        }
-        // Preserve `pre_subs` across re-Dispatch: the recursive submission only
-        // happens at the *original* `add_with_chain`, so a parked binder dispatch
-        // that wakes and re-runs must still see its pre-submitted children to
-        // avoid double-submission in Phase 4. See
-        // `roadmap/dispatch_fix/nested-binder-submission.md`.
-        //
-        // Re-Dispatch rebuilds the carrier in `Initialized` — the slot re-enters
-        // the driver as if it were a fresh submission, modulo the preserved
-        // `pre_subs`. Step 1 of the stateful-dispatch refactor keeps this
-        // re-classify-on-wake behavior; later steps cache the classified shape
-        // in a per-variant state so wakes can skip re-classification.
-        NodeStep::Replace {
-            work: NodeWork::Dispatch {
-                expr,
-                state: DispatchState::initialized(pre_subs),
-            },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        }
-    }
-
-    /// Park `idx` on each still-pending producer and rebuild it as a re-Dispatch of `expr`.
-    /// Shares the producer-error / cycle / install guards with the fused splice/park walk
-    /// in `run_dispatch`: a producer that already terminalized with an error propagates
-    /// (parking on a dead slot would deadlock); one that would close a cycle is skipped;
-    /// if no parkable producer remains, the call is a genuine no-match. On wake the
-    /// re-Dispatch rebuilds the bare-name cache so strict admission can read the now-bound
-    /// type. Drives the [`ResolveOutcome::ParkOnProducers`] path from both `run_dispatch`
-    /// and `run_bind`.
-    pub(super) fn park_pending_and_redispatch(
-        &mut self,
-        producers: Vec<NodeId>,
-        expr: KExpression<'a>,
-        pre_subs: Vec<(usize, NodeId)>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        let mut to_wait: Vec<NodeId> = Vec::new();
-        for p in producers {
-            if self.is_result_ready(p) {
-                // Terminal while its placeholder is still set ⇒ the producer errored
-                // (success clears the placeholder); propagate rather than park on a dead
-                // slot.
-                if let Err(e) = self.read_result(p) {
-                    let frame = Frame::from_expr("<dispatch-park>", &expr);
-                    return NodeStep::Done(NodeOutput::Err(
-                        propagate_dep_error(e, Some(frame)),
-                    ));
-                }
-            } else if !self.deps.would_create_cycle(p, NodeId(idx))
-                && !to_wait.contains(&p) {
-                    to_wait.push(p);
-                }
-        }
-        if to_wait.is_empty() {
-            return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
-                expr: expr.summarize(),
-                reason: "no matching function".to_string(),
-            })));
-        }
-        self.install_combined_park(to_wait, expr, pre_subs, idx)
-    }
-
-    /// Fast lane for `DispatchShape::BareIdentifier`. Resolves the name against the
-    /// dispatching scope. `Some(step)` fires on `Value` (terminate with the bound value)
-    /// or `Placeholder` (install park edge, rewrite the slot to a `Lift`). `Unbound`
-    /// returns `None`, letting the caller fall through to the keyworded path so
-    /// `value_lookup::body_identifier` produces the structured `UnboundName` error.
-    ///
-    /// The Lift transition is unique to this single-bare-name short-circuit (no other
-    /// phase rewrites the slot to a Lift on park) — combined-park phases call
-    /// [`Self::install_combined_park`] instead, which keeps the slot as a Dispatch and
-    /// re-runs the full pipeline on wake.
-    ///
-    /// This is the post-classifier home for the old `try_short_circuit` — folded into
-    /// the shape-driven dispatch routing per the unified-walk roadmap.
-    fn fast_lane_bare_identifier(
-        &mut self,
-        name: &str,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> Option<NodeStep<'a>> {
-        // Chain-gated: a later-sibling binding is invisible to this consumer, so
-        // a name that lexically does not yet exist falls through to the standard
-        // dispatch / `UnboundName` path rather than short-circuiting on a hidden
-        // value.
-        match scope.resolve_with_chain(name, self.active_chain.as_deref()) {
-            Resolution::Value(obj) => Some(NodeStep::Done(NodeOutput::Value(obj))),
-            Resolution::Placeholder(producer_id) => {
-                // Notify edge, not Owned: the producer is a sibling slot this Lift only
-                // parks on for a wake — it is not part of this slot's reclaim subtree.
-                // `add_park_edge` installs the forward wake on `notify_list[producer]`
-                // and bumps `pending_deps[idx]` in the same atomic body; `free` skips
-                // past Notify edges via `owned_children`. Producer-not-terminal
-                // precondition: `Resolution::Placeholder` is only returned between
-                // submission and terminalization of the placeholder's slot, so
-                // `producer_id` is not yet terminal here.
-                self.deps.add_park_edge(producer_id, NodeId(idx));
-                Some(NodeStep::Replace {
-                    work: NodeWork::Lift(LiftState::Pending(producer_id)),
-                    frame: None,
-                    function: None,
-                    block_entry: None,
-                    body_index: 0,
-                })
-            }
-            // Unbound falls through so `value_lookup`'s body produces the structured
-            // `UnboundName` error.
-            Resolution::UnboundName => None,
-        }
-    }
-
     /// Fast lane for `DispatchShape::BareTypeLeaf` (`(Number)`, `(IntOrd)`, etc.).
     /// Routes through `coerce_type_token_value` so the dispatch-phase carrier matches
     /// what `value_lookup::body_type_expr` would synthesize — `KTypeValue` for builtin
@@ -921,159 +486,6 @@ impl<'a> Scheduler<'a> {
                 NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
             }
             Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        }
-    }
-
-    /// Fast lane for `DispatchShape::FunctionValueCall` — Identifier-headed calls of
-    /// the surface form `f (...)` where `f` resolves to a `KFunction`, a `StructType`,
-    /// or a `TaggedUnionType` carrier. Phase 1 of the `call_by_name` subsumption
-    /// (`roadmap/dispatch_fix/unified-walk.md`): this handler now covers every outcome
-    /// the deleted `call_by_name` builtin used to serve.
-    ///
-    /// **Admission rule for the call shape.** `expr.parts[1..]` must be exactly
-    /// `[Spanned(Expression(inner))]` — a single nested-parens body. Named-argument
-    /// calls are the only valid `FunctionValueCall` surface; koan has no `f 1 2`
-    /// positional call syntax for function values. Anything else (bare positional
-    /// arg, multiple parts) surfaces `DispatchFailed`, matching the keyworded-path
-    /// surface the `call_by_name` typed-slot bind used to produce.
-    ///
-    /// **Head resolution branches (four admission types per D1.1 of the plan):**
-    /// - `KFunction(f, _)` → reconstruct the positional expression via
-    ///   [`KFunction::reconstruct_positional`] (interleaves signature `Keyword`
-    ///   elements between picked-by-name argument values) and dispatch through
-    ///   `schedule_picked_eager` with the picked function. Any error from
-    ///   reconstruction (`MissingArg`, `ShapeError` for malformed / unknown / duplicate)
-    ///   surfaces directly as `NodeOutput::Err`.
-    /// - `StructType { .. }` → [`struct_value::apply`] returns a `BodyResult::Tail`
-    ///   re-dispatching through the `struct_construct` primitive. Tail expressions
-    ///   become a `NodeWork::Dispatch` replacement on this slot, identical to how
-    ///   `run_combine` / `invoke_to_step` decode `BodyResult::Tail`.
-    /// - `TaggedUnionType { .. }` → same shape via [`tagged_union::apply`] → the
-    ///   `tagged_union_construct` primitive.
-    /// - Anything else (`KNumber`, `KString`, `Bool`, instance `Struct`, `Module`, …)
-    ///   → `TypeMismatch { arg: "verb", expected: "KFunction or Type", got }` — same
-    ///   wording the deleted `call_by_name` body produced.
-    ///
-    /// **Forward-reference park** (`Placeholder(producer)`) installs a combined park
-    /// and rebuilds this slot as a re-Dispatch; on wake the fast lane re-runs against
-    /// the now-bound carrier.
-    ///
-    /// **Unbound head** surfaces `UnboundName(name)` directly — D1.2: no more
-    /// fall-through to Keyworded for this shape.
-    fn fast_lane_function_value_call(
-        &mut self,
-        expr: &KExpression<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        // Classifier guarantees expr.parts[0] is a lowercase Identifier.
-        let head = match &expr.parts[0].value {
-            ExpressionPart::Identifier(n) => n.clone(),
-            _ => unreachable!("FunctionValueCall shape implies Identifier head"),
-        };
-        let chain = self.active_chain.as_deref();
-        match scope.resolve_with_chain(&head, chain) {
-            Resolution::Value(obj) => self.dispatch_callable_value(expr, obj, scope, idx),
-            Resolution::Placeholder(producer_id) => {
-                // Forward-reference park: install a park edge and rebuild this slot as
-                // a re-Dispatch so the now-bound carrier reaches the fast lane on
-                // wake. Uses the same combined-park machinery as Phase 3.
-                self.install_combined_park(vec![producer_id], expr.clone(), Vec::new(), idx)
-            }
-            Resolution::UnboundName => NodeStep::Done(NodeOutput::Err(KError::new(
-                KErrorKind::UnboundName(head),
-            ))),
-        }
-    }
-
-    /// Branch on the resolved head carrier of a `FunctionValueCall`. Split out from
-    /// [`Self::fast_lane_function_value_call`] so the head-resolution match arm stays
-    /// readable; per D1.1 of `scratch/plan-fast-lane-subsume.md` only three carrier
-    /// shapes admit, and everything else surfaces a `TypeMismatch` with the wording
-    /// the deleted `call_by_name` body produced.
-    fn dispatch_callable_value(
-        &mut self,
-        expr: &KExpression<'a>,
-        head_obj: &'a KObject<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        // Extract the inner parts from the single-nested-parens body. Anything else
-        // is not a koan call shape — surface `DispatchFailed` to match today's
-        // keyworded-path bind-error surface.
-        let inner_parts = match extract_named_call_inner(expr) {
-            Ok(parts) => parts,
-            Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
-        };
-        match head_obj {
-            KObject::KFunction(f, _) => {
-                // D1.4: error precedence (missing → unknown → malformed) is enforced
-                // by `reconstruct_positional`; propagate its `Err(KError)` directly
-                // rather than running a separate admission check first. The bind step
-                // re-validates types per arg.
-                match f.reconstruct_positional(inner_parts) {
-                    Ok(rebuilt) => self.schedule_picked_eager(rebuilt, f, scope, idx),
-                    Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-                }
-            }
-            KObject::StructType { .. } => {
-                self.schedule_constructor_body(struct_value::apply(head_obj, inner_parts), idx)
-            }
-            KObject::TaggedUnionType { .. } => {
-                self.schedule_constructor_body(tagged_union::apply(head_obj, inner_parts), idx)
-            }
-            other => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "verb".to_string(),
-                expected: "KFunction or Type".to_string(),
-                got: other.summarize(),
-            }))),
-        }
-    }
-
-    /// Fast lane for `DispatchShape::SigiledTypeExpr` — the `:(...)` parse-context
-    /// marker. Tail-replaces this slot with a `Dispatch` of the inner `KExpression`,
-    /// so the inner expression runs through the same classifier and produces the same
-    /// carrier shape any other dispatch site does.
-    ///
-    /// The inner classifier sees:
-    /// - `Keyworded` for new keyworded shapes (`:(LIST OF Number)`,
-    ///   `:(MAP Str -> Number)`, `:(FN (x :Number) -> Bool)`, `:(FUNCTOR (T :S) -> M)`)
-    ///   served by the registered `LIST OF` / `MAP _ -> _` / `FN` / `FUNCTOR` overloads
-    ///   (see [`crate::builtins::type_constructors`]).
-    /// - `TypeCall` for legacy positional inputs (`:(List Number)`,
-    ///   `:(Dict Str Number)`) served by `resolve_type_expr` — preserved for source
-    ///   compatibility with annotations that haven't migrated to the keyworded form.
-    /// - `BareTypeLeaf` for single-name sigils (`:(Number)`).
-    /// - `BareIdentifier` for sigiled identifier references that resolve to a
-    ///   type-side carrier through the standard bare-name path.
-    /// - `FunctionValueCall` for user-functor application
-    ///   (`:(MyFunctor (T = IntOrd))`) — the head `MyFunctor` resolves to a `KFunction`
-    ///   carrier and the value-side `FunctionValueCall` machinery handles the kwarg
-    ///   bind exactly as for any other function value.
-    ///
-    /// The sigil boundary — "the returned carrier must be type-side
-    /// (`KTypeValue` / `Module` / `Signature` / `UserType` / `KFunctor`)" — is
-    /// enforced by the consumer slot's KType check at Bind / Combine. A
-    /// value-side carrier (number, instance struct, plain function value) in a
-    /// sigil slot reaches a TypeExprRef / Type / Any{Module,Signature} slot
-    /// and surfaces a standard `TypeMismatch`. No dedicated boundary tail is
-    /// needed at the sigil itself; the existing slot-type machinery does the
-    /// job.
-    fn fast_lane_sigiled_type_expr(
-        &mut self,
-        inner: KExpression<'a>,
-        _scope: &'a Scope<'a>,
-        _idx: usize,
-    ) -> NodeStep<'a> {
-        // Tail-replace this slot with a Dispatch of the inner expression. No
-        // frame / function / block_entry — the sigil itself is scope-neutral; the
-        // inner expression carries whatever context it needs.
-        NodeStep::Replace {
-            work: NodeWork::dispatch(inner),
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
         }
     }
 
@@ -1110,94 +522,38 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Phase 4. Schedule eager sub-Dispatches for `Expression` / `ListLiteral` /
-    /// Schedule eager sub-Dispatches for a reconstructed-positional expression and
-    /// build a `Bind` slot (or bind directly if no eager parts schedule). Used by the
-    /// `fast_lane_function_value_call` arm to dispatch a kwarg-reconstructed
-    /// expression against a `KFunction` head. No eager filter (every Expression /
-    /// SigiledTypeExpr / ListLiteral / DictLiteral part schedules) and no
-    /// bare-name cache consultation — the reconstructed expression's bare names
-    /// (if any) ride the standard sub-Dispatch wrap-slot path.
-    fn schedule_picked_eager(
-        &mut self,
-        expr: KExpression<'a>,
-        picked: &'a crate::machine::core::kfunction::KFunction<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        let mut new_parts = Vec::with_capacity(expr.parts.len());
-        let mut subs: Vec<(usize, NodeId)> = Vec::new();
-        for (i, part) in expr.parts.into_iter().enumerate() {
-            let span = part.span;
-            match part.value {
-                ExpressionPart::Expression(boxed) => {
-                    let sub_id = self.add(NodeWork::dispatch(*boxed), scope);
-                    subs.push((i, sub_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::SigiledTypeExpr(boxed) => {
-                    let wrapped = KExpression::new(vec![Spanned::bare(
-                        ExpressionPart::SigiledTypeExpr(boxed),
-                    )]);
-                    let sub_id = self.add(NodeWork::dispatch(wrapped), scope);
-                    subs.push((i, sub_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::ListLiteral(items) => {
-                    let agg_id = self.schedule_list_literal(items, scope);
-                    subs.push((i, agg_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    let agg_id = self.schedule_dict_literal(pairs, scope);
-                    subs.push((i, agg_id));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                other => new_parts.push(Spanned { value: other, span }),
-            }
-        }
-        let new_expr = KExpression::new(new_parts);
-        if subs.is_empty() {
-            match picked.bind(new_expr) {
-                Ok(future) => self.invoke_to_step(future, scope, idx),
-                Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-            }
-        } else {
-            let bind_id = self.add(NodeWork::Bind { expr: new_expr, subs }, scope);
-            self.defer_to_lift(idx, bind_id)
-        }
-    }
-
     /// Stateful dispatch driver. Classifies the slot's shape and routes to
-    /// the matching per-variant handler. Step 3 lights up the fast-lane
-    /// variants (`BareTypeLeaf`, `BareIdentifier`, `FunctionValueCall`,
-    /// `ConstructorCall`) on the stateful driver; `SigiledTypeExpr` and
-    /// `Keyworded` continue to delegate to the legacy `run_dispatch` until
-    /// step 4 wires them through too.
+    /// the matching per-variant handler. Fast-lane variants
+    /// (`BareTypeLeaf`, `BareIdentifier`, `FunctionValueCall`,
+    /// `ConstructorCall`, `SigiledTypeExpr`) terminalize (or
+    /// single-producer-park) in one poll; the `Keyworded` shape and the
+    /// FnValue track may re-enter from a parked per-variant state, which
+    /// is routed via the `DispatchState::Keyworded` /
+    /// `DispatchState::FunctionValueCall` resume arms below.
     ///
-    /// Reached only when `self.use_stateful_dispatch` is `true` — see the
-    /// `NodeWork::Dispatch` arm of [`Scheduler::execute`].
-    pub(super) fn run_dispatch_stateful(
+    /// Called from the `NodeWork::Dispatch` arm of
+    /// [`Scheduler::execute`]; this is the only dispatch driver.
+    pub(super) fn run_dispatch(
         &mut self,
         expr: KExpression<'a>,
         state: DispatchState<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        // Step 2 drains the wake side-channel on entry so producers
-        // that fired since the slot's last poll don't accumulate across
-        // re-park. Step 4b's resume handler reads the `subs` Vec from the
-        // installed `EagerSubsTrack` directly rather than the wakes side-
-        // channel — at pop time `pending_deps` is zero, so every recorded
-        // sub is terminal. The drain still runs unconditionally so the
-        // side-channel never grows stale —`take_recent_wakes` resets the
-        // slot's Vec to empty in O(1).
-        // See `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`.
+        // Drain the wake side-channel on entry so producers that fired
+        // since the slot's last poll don't accumulate across re-park.
+        // The keyworded / FunctionValueCall resume handlers read the
+        // `subs` Vec from the installed track directly rather than the
+        // wakes side-channel — at pop time `pending_deps` is zero, so
+        // every recorded sub is terminal. The drain still runs
+        // unconditionally so the side-channel never grows stale —
+        // `take_recent_wakes` resets the slot's Vec to empty in O(1).
         let _wakes = self.store.take_recent_wakes(NodeId(idx));
-        // Initial entry vs re-entry from a parked per-variant state. The
-        // fast-lane variants (Steps 3a–3d) all terminalize in one poll, so
-        // their states are never re-entered; only `Keyworded` carries the
-        // 4b eager-subs track that can re-enter on track completion.
+        // Initial entry vs re-entry from a parked per-variant state.
+        // Fast-lane variants all terminalize in one poll, so their
+        // states are never re-entered; only `Keyworded` and
+        // `FunctionValueCall` carry tracks that re-enter on track
+        // completion.
         let init = match state {
             DispatchState::Initialized(i) => i,
             DispatchState::Keyworded(ks) => {
@@ -1209,14 +565,13 @@ impl<'a> Scheduler<'a> {
             _ => unreachable!(
                 "remaining fast-lane stateful variants (BareIdentifier, BareTypeLeaf, \
                  ConstructorCall, SigiledTypeExpr) terminalize in one poll; \
-                 only Keyworded (Step 4) and FunctionValueCall (Step 5) re-enter from \
-                 a parked track"
+                 only Keyworded and FunctionValueCall re-enter from a parked track"
             ),
         };
         // Classify once at entry and route per-variant. The fast-lane
-        // handlers introduced here each terminalize (or single-producer-park)
-        // in one poll; the remaining variants (`SigiledTypeExpr`,
-        // `Keyworded`) delegate to the legacy `run_dispatch` for now.
+        // handlers each terminalize (or single-producer-park) in one poll;
+        // only `Keyworded` and `FunctionValueCall` carry per-variant tracks
+        // that can re-enter via the resume arms above.
         match classify_dispatch_shape(&expr) {
             DispatchShape::BareTypeLeaf => {
                 // Single-part by classifier; `pre_subs` cannot have been
@@ -1274,36 +629,55 @@ impl<'a> Scheduler<'a> {
             DispatchShape::Keyworded => {
                 self.stateful_keyworded_initial(expr, init.pre_subs, scope, idx)
             }
-            // `SigiledTypeExpr` still rides the legacy driver after Step 4a.
-            // It folds onto the stateful driver in 4d (per the Step 4 plan).
             DispatchShape::SigiledTypeExpr => {
-                self.run_dispatch(expr, init.pre_subs, scope, idx)
+                // SigiledTypeExpr is single-part by classifier; `pre_subs` cannot
+                // have been populated by submit-time recursion.
+                debug_assert!(
+                    init.pre_subs.is_empty(),
+                    "SigiledTypeExpr is single-part — submit-time recursion cannot \
+                     populate pre_subs for this shape",
+                );
+                // Tail-replace this slot with a Dispatch of the inner expression.
+                // No frame / function / block_entry — the sigil itself is
+                // scope-neutral; the inner expression carries its own context.
+                let inner = match expr.parts.into_iter().next() {
+                    Some(Spanned { value: ExpressionPart::SigiledTypeExpr(boxed), .. }) => *boxed,
+                    _ => unreachable!(
+                        "SigiledTypeExpr shape implies single SigiledTypeExpr part"
+                    ),
+                };
+                Ok(NodeStep::Replace {
+                    work: NodeWork::dispatch(inner),
+                    frame: None,
+                    function: None,
+                    block_entry: None,
+                    body_index: 0,
+                })
             }
         }
     }
 
-    /// Stateful-driver handler for `DispatchShape::Keyworded`. Step 4a routes
-    /// the *one-shot* (Resolved, no parks, no eager subs) terminate directly,
-    /// inlining the placeholder install and the `function.bind` call without
-    /// going through any per-variant state. The Resolved-with-parks and
-    /// Resolved-with-eager-subs sub-cases install the combined park / build
-    /// the Bind slot exactly the way the legacy `run_dispatch` does — there's
-    /// no behavioral split. `Deferred` and `ParkOnProducers` still defer to
-    /// the legacy driver (4b folds `Deferred` into an eager-subs Track on
-    /// `KeywordedState`; 4c folds the bare-name park; 4d folds the overload
-    /// park).
+    /// Stateful-driver handler for `DispatchShape::Keyworded`. Routes the
+    /// *one-shot* (Resolved, no parks, no eager subs) case to a direct
+    /// terminate that inlines the placeholder install and the
+    /// `function.bind` call without going through any per-variant state.
+    /// The Resolved-with-parks and Resolved-with-eager-subs sub-cases
+    /// install the bare-name-park / eager-subs Track on
+    /// `KeywordedState`; `Deferred` folds into the eager-subs Track with
+    /// no captured function; `ParkOnProducers` installs the overload-park
+    /// Track. All re-entry routes through the resume handlers in
+    /// `stateful_keyworded_resume`.
     ///
-    /// Why this isn't a thin pre-walk that delegates to `run_dispatch` for
-    /// every non-trivial case: doing so would re-enter
-    /// `resolve_dispatch_with_chain` a second time on the same slot, which
-    /// trips the toggle-on dispatch-counter tests by inflating the per-call
-    /// count. The Resolved-* sub-cases reuse the already-built `bare_outcomes`
-    /// and `resolved` carrier and pay the resolve cost exactly once.
+    /// Why this isn't a thin pre-walk that delegates: doing so would
+    /// re-enter `resolve_dispatch_with_chain` a second time on the same
+    /// slot, inflating the per-call resolve count. The Resolved-* sub-
+    /// cases reuse the already-built `bare_outcomes` and `resolved`
+    /// carrier and pay the resolve cost exactly once.
     ///
-    /// The walk consumes `expr.parts` (via `into_iter`); we keep a clone of
-    /// `expr` only for the `Deferred` / `ParkOnProducers` legacy fall-back
-    /// arms, which the legacy `run_dispatch` handles differently from the
-    /// Resolved path.
+    /// The walk consumes `expr.parts` (via `into_iter`); we keep a clone
+    /// of `expr` only for the `Deferred` / `ParkOnProducers` arms, which
+    /// install per-variant tracks rather than rebuilding the slot as a
+    /// fresh `Initialized` re-Dispatch.
     fn stateful_keyworded_initial(
         &mut self,
         expr: KExpression<'a>,
@@ -1401,9 +775,7 @@ impl<'a> Scheduler<'a> {
             // `staged_subs` to the scheduler (they're staged, not added), and the
             // bare-name park installer drops them on the floor — re-Dispatch on
             // wake re-runs the walk and re-stages them, so submitting now would
-            // leak nodes on the wake path. The legacy `install_combined_park`
-            // enforces the same precedence by virtue of being called before any
-            // `add(NodeWork::dispatch(_))`.
+            // leak nodes on the wake path.
             let _ = staged_subs;
             return Ok(self.stateful_install_bare_name_park(
                 producers_to_wait,
@@ -1436,15 +808,14 @@ impl<'a> Scheduler<'a> {
         self.stateful_install_eager_subs_track(new_expr, staged_subs, pre_subs, scope, idx)
     }
 
-    /// Stateful equivalent of the legacy `schedule_eager_only` —
-    /// `ResolveOutcome::Deferred` arm. No picked function (function = None),
-    /// no eager filter, no `bare_outcomes` consultation. Schedule every
-    /// `Expression` / `SigiledTypeExpr` / `ListLiteral` / `DictLiteral` part
-    /// as a sub-Dispatch (or aggregate) and park the slot on them via
-    /// `KeywordedState::WaitingEagerSubs`. On track completion the resume
-    /// handler re-resolves dispatch against the spliced expression, folding
-    /// in what `run_bind` does on the legacy path (`function = None` means
-    /// "the call shape needs a fresh resolve once the subs land").
+    /// Eager-only Track installer for the `ResolveOutcome::Deferred` arm.
+    /// No picked function, no eager filter, no `bare_outcomes` consultation:
+    /// schedule every `Expression` / `SigiledTypeExpr` / `ListLiteral` /
+    /// `DictLiteral` part as a sub-Dispatch (or aggregate) and park the slot
+    /// on them via `KeywordedState::WaitingEagerSubs`. On track completion
+    /// the resume handler re-resolves dispatch against the spliced expression
+    /// — Deferred means "the call shape needs a fresh resolve once the subs
+    /// land".
     ///
     /// `Deferred ⇒ at least one eager part`, so the empty-subs branch would
     /// be a `resolve_dispatch` invariant break — `debug_assert!` would catch
@@ -1491,12 +862,10 @@ impl<'a> Scheduler<'a> {
         self.stateful_install_eager_subs_track(new_expr, staged_subs, Vec::new(), scope, idx)
     }
 
-
     /// Realize the bare-name park Track: install a `Notify` park edge from
-    /// each producer to this slot via `DepGraph::add_park_edge` (matching
-    /// the legacy `install_combined_park` shape — producers are sibling
-    /// forward references, not children of this slot, so the slot's
-    /// reclaim walk must not transit into them), then transition to
+    /// each producer to this slot via `DepGraph::add_park_edge` (producers
+    /// are sibling forward references, not children of this slot, so the
+    /// slot's reclaim walk must not transit into them), then transition to
     /// `Keyworded(WaitingBareNamePark)`. The cycle check ran inside
     /// `keyworded_part_walk` at the time the producer was added to the
     /// wait list, so this installer doesn't re-check.
@@ -1538,10 +907,9 @@ impl<'a> Scheduler<'a> {
     }
 
     /// Realize the overload-park Track: filter `producers` for cycles
-    /// and already-errored terminals (mirroring the legacy
-    /// `park_pending_and_redispatch` guards), install a `Notify` park
-    /// edge from each surviving producer via `DepGraph::add_park_edge`,
-    /// and transition to `Keyworded(WaitingOverloadPark)`. Two
+    /// and already-errored terminals, install a `Notify` park edge from
+    /// each surviving producer via `DepGraph::add_park_edge`, and
+    /// transition to `Keyworded(WaitingOverloadPark)`. Two
     /// `resolve_dispatch_with_chain` outcomes fold into this installer:
     /// bare-name `Placeholder`s the strict walk couldn't admit, and an
     /// innermost-visible `pending_overloads[key]` entry an FN /
@@ -1557,7 +925,7 @@ impl<'a> Scheduler<'a> {
     /// and preserved `pre_subs`. The producers' finalized state (an
     /// overload now registered in `bindings.functions`, or a bound bare
     /// name) feeds the rebuilt resolve.
-    fn stateful_install_overload_park(
+    pub(super) fn stateful_install_overload_park(
         &mut self,
         producers: Vec<NodeId>,
         expr: KExpression<'a>,
@@ -1569,9 +937,8 @@ impl<'a> Scheduler<'a> {
             if self.is_result_ready(p) {
                 // Terminal while its placeholder is still set ⇒ the
                 // producer errored (success clears the placeholder);
-                // propagate rather than park on a dead slot. Same
-                // `<dispatch-park>` frame the legacy
-                // `park_pending_and_redispatch` uses.
+                // propagate rather than park on a dead slot, with a
+                // `<dispatch-park>` frame for surface attribution.
                 if let Err(e) = self.read_result(p) {
                     let frame = Frame::from_expr("<dispatch-park>", &expr);
                     return NodeStep::Done(NodeOutput::Err(
@@ -1697,10 +1064,9 @@ impl<'a> Scheduler<'a> {
         })
     }
 
-    /// Resume entry for a `Keyworded` slot. Step 4b installs the
-    /// `eager_subs` track; step 4c installs the `bare_name_park` track;
-    /// step 4d installs the `overload_park` track. The three are
-    /// mutually exclusive at install time — `overload_park` fires when
+    /// Resume entry for a `Keyworded` slot. The three Keyworded tracks
+    /// (`eager_subs`, `bare_name_park`, `overload_park`) are mutually
+    /// exclusive at install time: `overload_park` fires when
     /// `resolve_dispatch_with_chain` returns `ParkOnProducers` *before*
     /// the part walk runs (so neither sibling has staged), and the part
     /// walk's park-precedence guard installs `bare_name_park` *before*
@@ -1740,7 +1106,7 @@ impl<'a> Scheduler<'a> {
         let _ = init;
         let track = eager_subs.expect(
             "Keyworded resume is only entered after a track is installed; \
-             Steps 4b/4c/4d install `eager_subs`, `bare_name_park`, or `overload_park`",
+             the install sites set `eager_subs`, `bare_name_park`, or `overload_park`",
         );
         self.stateful_keyworded_resume_eager_subs(track, scope, idx)
     }
@@ -1753,11 +1119,7 @@ impl<'a> Scheduler<'a> {
     /// `bare_outcomes` cache against the now-bound scope, picks the
     /// overload (Resolved-with-eager-subs on a typed bare name lands
     /// the eager-subs track on this same slot; Resolved-with-no-parks
-    /// terminalizes one-shot), and proceeds. The legacy
-    /// `install_combined_park` had the same re-classify-on-wake
-    /// shape; the per-wake re-classify elimination falls out of
-    /// Step 5's cutover once every transition stays inside
-    /// `Keyworded`.
+    /// terminalizes one-shot), and proceeds.
     fn stateful_keyworded_resume_bare_name_park(
         &mut self,
         track: BareNameParkTrack<'a>,
@@ -1767,8 +1129,8 @@ impl<'a> Scheduler<'a> {
     ) -> Result<NodeStep<'a>, KError> {
         // `dep_edges[idx]` carries the Notify entries from
         // `add_park_edge`. They're harmless (Notify is skipped by
-        // `owned_children` at free time), and the legacy path leaves
-        // them in place across the re-Dispatch wake — we match.
+        // `owned_children` at free time) and stay in place across the
+        // re-Dispatch wake.
         let BareNameParkTrack { working_expr, producers, .. } = track;
         let _ = producers;
         self.stateful_keyworded_initial(working_expr, init.pre_subs, scope, idx)
@@ -1782,17 +1144,14 @@ impl<'a> Scheduler<'a> {
     /// a bound value). Re-entering `stateful_keyworded_initial`
     /// rebuilds `bare_outcomes`, re-runs
     /// `resolve_dispatch_with_chain` against the now-populated bucket,
-    /// and proceeds. The legacy `park_pending_and_redispatch` had the
-    /// same re-classify-on-wake shape; the per-wake re-classify
-    /// elimination falls out of Step 5's cutover.
+    /// and proceeds.
     ///
     /// If the wake didn't actually produce a matching overload (a
     /// later-sibling registered a different bucket key, or the
     /// re-resolve still finds another forward overload registered
     /// after this slot installed its park), the rebuilt resolve fires
     /// `ParkOnProducers` again and the re-entry installs a fresh
-    /// `overload_park` track on the next-earliest sibling — matching
-    /// the legacy behavior.
+    /// `overload_park` track on the next-earliest sibling.
     fn stateful_keyworded_resume_overload_park(
         &mut self,
         track: OverloadParkTrack<'a>,
@@ -1812,13 +1171,12 @@ impl<'a> Scheduler<'a> {
     /// sub's terminal, splices `Future(value)` into `working_expr.parts[i]`,
     /// frees the sub, and either binds the captured picked function
     /// (Resolved arm) or re-resolves dispatch against the spliced expression
-    /// (Deferred arm: `function == None`). Mirrors `run_bind`'s dep-error
-    /// short-circuit (`<bind>` frame) for surface parity across drivers.
+    /// (Deferred arm: `function == None`). On dep-error, surfaces the
+    /// `<bind>` frame to match the keyworded `run_bind` driver's surface.
     ///
-    /// Eager-free on the success path matches the legacy `run_bind`'s
-    /// `reclaim_deps`: clear the slot's dep_edges then free each sub. On
-    /// the error path the dep_edges stay around for chain-free at slot
-    /// drop — same as the legacy contract.
+    /// Eager-free on the success path: clear the slot's dep_edges then
+    /// free each sub. On the error path the dep_edges stay around for
+    /// chain-free at slot drop.
     fn stateful_keyworded_resume_eager_subs(
         &mut self,
         track: EagerSubsTrack<'a>,
@@ -1853,12 +1211,10 @@ impl<'a> Scheduler<'a> {
 
     /// Re-resolve completion shared between the parked-track resume and the
     /// all-subs-terminal-at-install short-circuit in
-    /// `stateful_install_eager_subs_track`. The keyworded re-resolve replaces
-    /// what `run_bind` does on the legacy driver — there's no `NodeWork::Bind`
-    /// allocation on the stateful path. Mirrors `run_bind`'s outcome shape:
-    /// `Resolved` → bind + invoke, `Deferred` / `Unmatched` → `DispatchFailed`,
-    /// `ParkOnProducers` → re-park (empty `pre_subs`, matching the legacy
-    /// post-Bind re-park contract).
+    /// `stateful_install_eager_subs_track`. Outcome shape: `Resolved` →
+    /// bind + invoke, `Deferred` / `Unmatched` → `DispatchFailed`,
+    /// `ParkOnProducers` → re-park (empty `pre_subs`, since the eager
+    /// subs have already terminalized).
     ///
     /// Re-resolving is authoritative even when the initial pre-eager-resolve
     /// already picked an overload: an element-typed `Future(_)` that narrows
@@ -1867,10 +1223,9 @@ impl<'a> Scheduler<'a> {
     /// bind-time `TypeMismatch`. See `EagerSubsTrack`'s doc.
     ///
     /// `Err(KError)` (rather than `NodeStep::Done(NodeOutput::Err(_))`) for
-    /// dispatch-failure cases mirrors the legacy `run_bind` surface — the
-    /// execute loop's `?` bubbles the failure to the caller of
-    /// `Scheduler::execute`. A bind-time `KError` from the picked function's
-    /// admission likewise bubbles.
+    /// dispatch-failure cases — the execute loop's `?` bubbles the failure
+    /// to the caller of `Scheduler::execute`. A bind-time `KError` from the
+    /// picked function's admission likewise bubbles.
     fn stateful_keyworded_finish(
         &mut self,
         working_expr: KExpression<'a>,
@@ -1899,14 +1254,11 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Stateful fast lane for `DispatchShape::FunctionValueCall` —
-    /// parallel to legacy [`Self::fast_lane_function_value_call`].
-    /// Step 5's fast-lane Bind inlining: routes the `KFunction`
-    /// carrier through the stateful eager-subs Track installer (Commit
-    /// A) rather than the legacy `schedule_picked_eager` Bind-slot
-    /// construction, and the `Resolution::Placeholder` head park
-    /// through the stateful head-placeholder Track installer (Commit
-    /// B) rather than the legacy `install_combined_park`.
+    /// Stateful fast lane for `DispatchShape::FunctionValueCall`. Routes
+    /// the `KFunction` carrier through the eager-subs Track installer and
+    /// the `Resolution::Placeholder` head park through the head-placeholder
+    /// Track installer — both inline into the slot's `DispatchState` rather
+    /// than spawning a separate `NodeWork::Bind`.
     ///
     /// **Forward-reference park** (`Placeholder(producer)`) installs an
     /// `add_park_edge` (Notify shape — producer is a sibling) and
@@ -1915,8 +1267,7 @@ impl<'a> Scheduler<'a> {
     /// expression so the now-bound carrier reaches the
     /// `Resolution::Value` arm.
     ///
-    /// **Unbound head** surfaces `UnboundName(name)` directly — same
-    /// as the legacy fast lane.
+    /// **Unbound head** surfaces `UnboundName(name)` directly.
     fn stateful_fast_lane_function_value_call(
         &mut self,
         expr: KExpression<'a>,
@@ -1940,13 +1291,12 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Stateful branch on the resolved head carrier of a
-    /// `FunctionValueCall`. Parallel to legacy
-    /// [`Self::dispatch_callable_value`]; differs only in routing the
-    /// `KFunction` arm through `stateful_install_fn_value_eager_subs_track`
-    /// instead of `schedule_picked_eager`. Struct / Tagged construction
-    /// stays on `schedule_constructor_body` (those return `Tail` shapes,
-    /// not Bind, and don't need eager scheduling at this level).
+    /// Branch on the resolved head carrier of a `FunctionValueCall`.
+    /// Routes the `KFunction` arm through
+    /// `stateful_install_fn_value_eager_subs_track`; Struct / Tagged
+    /// construction stays on `schedule_constructor_body` (those return
+    /// `Tail` shapes, not Bind, and don't need eager scheduling at this
+    /// level).
     fn stateful_dispatch_callable_value(
         &mut self,
         expr: KExpression<'a>,
@@ -2013,8 +1363,8 @@ impl<'a> Scheduler<'a> {
         let mut new_parts = Vec::with_capacity(expr.parts.len());
         let mut pending_subs: Vec<(usize, NodeId)> = Vec::new();
         // First pass: stage every part. Schedules sub-Dispatches /
-        // aggregates eagerly (matching legacy `schedule_picked_eager`),
-        // emitting an `Identifier("")` placeholder at each eager slot.
+        // aggregates eagerly, emitting an `Identifier("")` placeholder
+        // at each eager slot.
         for (i, part) in expr.parts.into_iter().enumerate() {
             let span = part.span;
             let sub_id = match part.value {
@@ -2077,10 +1427,9 @@ impl<'a> Scheduler<'a> {
         }
         let working_expr = KExpression::new(new_parts);
         if pending_subs.is_empty() {
-            // Either no eager parts at all (matches the legacy
-            // `schedule_picked_eager`'s `subs.is_empty()` arm) or every
-            // sub short-circuited at install time. Bind `picked`
-            // directly without installing a track.
+            // Either no eager parts at all or every sub short-circuited
+            // at install time. Bind `picked` directly without installing
+            // a track.
             return match picked.bind(working_expr) {
                 Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
@@ -2089,7 +1438,7 @@ impl<'a> Scheduler<'a> {
         // FunctionValueCall is non-binder; submit-time recursion
         // never populated `pre_subs`, so the carrier carries an
         // empty `Initialized`. Drop the assertion here — the caller
-        // (`run_dispatch_stateful`'s classify arm) already asserted
+        // (`run_dispatch`'s classify arm) already asserted
         // it before routing to this installer; the structural-
         // embedding rule's destructure-and-discard contract is
         // satisfied by constructing `Initialized` fresh.
@@ -2117,10 +1466,9 @@ impl<'a> Scheduler<'a> {
 
     /// Realize the FunctionValueCall head-placeholder Track: install a
     /// `Notify` park edge from the producer to this slot via
-    /// `DepGraph::add_park_edge` (matching the legacy
-    /// `install_combined_park` shape — the producer is a sibling
-    /// forward reference, not a child of this slot, so the slot's
-    /// reclaim walk must not transit into it), then transition to
+    /// `DepGraph::add_park_edge` (the producer is a sibling forward
+    /// reference, not a child of this slot, so the slot's reclaim walk
+    /// must not transit into it), then transition to
     /// `FunctionValueCall(WaitingHeadPlaceholder)`.
     ///
     /// On track completion `stateful_fn_value_resume_head_placeholder`
@@ -2188,7 +1536,7 @@ impl<'a> Scheduler<'a> {
         }
         let track = head_placeholder.expect(
             "FunctionValueCall resume is only entered after a track is installed; \
-             Step 5 installs `eager_subs` or `head_placeholder`",
+             the install sites set `eager_subs` or `head_placeholder`",
         );
         self.stateful_fn_value_resume_head_placeholder(track, scope, idx)
     }
@@ -2204,9 +1552,7 @@ impl<'a> Scheduler<'a> {
     ///
     /// No re-resolve: `FunctionValueCall` is non-overload-set, so a
     /// typed `Future(_)` revealed by an eager sub can't narrow to a
-    /// more specific pick. The bind shape this lands on is the same
-    /// one the legacy `schedule_picked_eager`'s zero-subs branch
-    /// already uses.
+    /// more specific pick — bind `picked` directly.
     fn stateful_fn_value_resume_eager_subs(
         &mut self,
         track: FnValueEagerSubsTrack<'a>,
@@ -2248,8 +1594,7 @@ impl<'a> Scheduler<'a> {
     /// now bound, so the second-pass `scope.resolve_with_chain` lands
     /// in the `Resolution::Value` arm (or, in the rare case that the
     /// producer re-resolved to a fresh `Placeholder` from a sibling
-    /// forward chain, installs a fresh head park — matching the
-    /// legacy `install_combined_park` re-wake shape).
+    /// forward chain, installs a fresh head park).
     ///
     /// Mirrors `stateful_keyworded_resume_bare_name_park` /
     /// `stateful_keyworded_resume_overload_park`'s shape: the Notify
@@ -2268,14 +1613,10 @@ impl<'a> Scheduler<'a> {
         self.stateful_fast_lane_function_value_call(expr, scope, idx)
     }
 
-    /// Stateful-driver handler for `DispatchShape::BareIdentifier`. Mirrors
-    /// the legacy [`Self::fast_lane_bare_identifier`] shape but surfaces
-    /// `UnboundName` directly instead of falling through to the keyworded
-    /// `value_lookup::body_identifier` path — Step 3b of the
-    /// stateful-dispatch refactor (`roadmap/dispatch_fix/stateful-dispatch-03-fast-lane-variants.md`)
-    /// makes that fall-through structural: the contract for a bare
-    /// identifier with no binding and no visible placeholder is
-    /// `KErrorKind::UnboundName(name)`.
+    /// Handler for `DispatchShape::BareIdentifier`. Surfaces `UnboundName`
+    /// directly for a bare identifier with no binding and no visible
+    /// placeholder, rather than falling through to the keyworded
+    /// `value_lookup::body_identifier` path.
     fn stateful_bare_identifier(
         &mut self,
         name: String,
@@ -2286,9 +1627,8 @@ impl<'a> Scheduler<'a> {
             Resolution::Value(obj) => NodeStep::Done(NodeOutput::Value(obj)),
             Resolution::Placeholder(producer) => {
                 // Notify edge, not Owned: the producer is a sibling slot
-                // this Lift only parks on for a wake — same shape the legacy
-                // fast-lane uses (see `fast_lane_bare_identifier`). The Lift
-                // carrier holds the result so the slot terminalizes on the
+                // this Lift only parks on for a wake. The Lift carrier
+                // holds the result so the slot terminalizes on the
                 // producer's value (or error) directly.
                 self.deps.add_park_edge(producer, NodeId(idx));
                 NodeStep::Replace {
@@ -2372,7 +1712,11 @@ impl<'a> Scheduler<'a> {
         // atomically); fall through to the type-side resolution below either way.
         match scope.resolve_with_chain(&head_t.name, chain) {
             Resolution::Placeholder(producer) => {
-                return self.install_combined_park(vec![producer], expr, Vec::new(), idx);
+                // Forward-reference park: route through the stateful overload-park
+                // track installer (single-producer is fine — the installer
+                // dedupes/cycle-filters internally) so the resume rebuilds via
+                // `stateful_keyworded_initial`.
+                return self.stateful_install_overload_park(vec![producer], expr, Vec::new(), idx);
             }
             Resolution::Value(_) | Resolution::UnboundName => {
                 // Fall through to the type-side resolution below.
@@ -2593,37 +1937,11 @@ mod tests {
         }
     }
 
-    /// Builder-toggle smoke test: `with_stateful_dispatch(true)` routes the
-    /// dispatch arm through `run_dispatch_stateful` without requiring the
-    /// `KOAN_STATEFUL_DISPATCH` env var. The trivial program `LET x = 1`
-    /// runs to a value under the new driver — proving the classify-and-
-    /// delegate stub doesn't lose any state crossing the toggle boundary.
-    /// This is step 1's "cheap insurance against the env-var read silently
-    /// failing" — not a behavioral acceptance criterion (toggle-on whole-
-    /// suite parity is the acceptance gate).
-    #[test]
-    fn builder_toggle_routes_through_stateful_driver() {
-        let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
-        let mut sched = Scheduler::new().with_stateful_dispatch(true);
-        assert!(sched.use_stateful_dispatch);
-        let exprs = crate::parse::parse("LET x = 1").expect("parse succeeds");
-        for e in exprs {
-            sched.add_dispatch(e, scope);
-        }
-        sched.execute().expect("LET x = 1 runs cleanly under the stateful toggle");
-        // LET binds; the value lands in the scope, the slot's terminal is
-        // not what this test guards — just that the program terminalized
-        // without the toggle dropping its state.
-        assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
-    }
-
-    /// Step 2 of the stateful-dispatch refactor: the `recent_wakes`
-    /// side-channel is `Dispatch`-only. A non-`Dispatch` consumer (here
-    /// a `Lift(Pending(producer))` slot) parked on a `Dispatch`
-    /// producer must drain to an empty Vec — `push_recent_wake` filters
-    /// non-Dispatch work via the same peek-discriminator pattern as
-    /// `stamp_lift_ready`. The Lift's stamp-then-enqueue path stays
+    /// The `recent_wakes` side-channel is `Dispatch`-only. A non-`Dispatch`
+    /// consumer (here a `Lift(Pending(producer))` slot) parked on a
+    /// `Dispatch` producer must drain to an empty Vec — `push_recent_wake`
+    /// filters non-Dispatch work via the same peek-discriminator pattern
+    /// as `stamp_lift_ready`. The Lift's stamp-then-enqueue path stays
     /// intact (asserted indirectly through full-suite parity).
     #[test]
     fn recent_wakes_empty_for_non_dispatch_consumer() {
@@ -2653,12 +1971,10 @@ mod tests {
         assert!(sched.store.take_recent_wakes(consumer).is_empty());
     }
 
-    /// Step 2: a `Dispatch` consumer parked on a `Dispatch` producer
-    /// records the producer's `NodeId` in `recent_wakes` when the
-    /// producer finalizes. The drained list is what step 3+ will key
-    /// per-edge callbacks off; step 2's `run_dispatch_stateful` still
-    /// discards it (the classify-and-delegate stub falls through to
-    /// the legacy driver).
+    /// A `Dispatch` consumer parked on a `Dispatch` producer records the
+    /// producer's `NodeId` in `recent_wakes` when the producer finalizes.
+    /// The drained list is the side channel the per-variant resume entries
+    /// key off when waking from a track-install.
     #[test]
     fn recent_wakes_records_producer_for_dispatch_consumer() {
         let arena = RuntimeArena::new();
@@ -2673,8 +1989,8 @@ mod tests {
             scope,
         );
         // Park the consumer on the producer with a `Notify` edge — the
-        // shape `install_combined_park` would install on a forward-
-        // reference re-Dispatch wake path.
+        // shape the stateful park-track installers use for forward-
+        // reference re-Dispatch wakes.
         sched.deps.add_park_edge(producer, consumer);
         // Finalize the producer with a synthetic Value. The notify-walk
         // drains the edge and fans out: side-channel append for every

@@ -213,12 +213,9 @@ impl<'a> KFunction<'a> {
     /// its declared position. Bind / dispatch against the returned expression mirrors
     /// what the original keyword-bearing call site would have produced.
     ///
-    /// Sole caller is the dispatch scheduler's fast-lane `FunctionValueCall`
-    /// handler — which calls `bind` on the reconstructed expression directly via
-    /// `schedule_picked_eager`, bypassing `resolve_dispatch_with_chain`. The
-    /// former `apply` wrapper that emitted a `BodyResult::Tail` for the deleted
-    /// `call_by_name` builtin to re-dispatch through was removed in Phase 1 of
-    /// `scratch/plan-fast-lane-subsume.md`.
+    /// Sole caller is the dispatch scheduler's stateful FunctionValueCall fast
+    /// lane, which calls `bind` on the reconstructed expression directly and
+    /// bypasses `resolve_dispatch_with_chain`.
     ///
     /// Validation precedence (first wins): malformed pair shape (`ShapeError` from
     /// `NamedPairs::parse`) → missing arg (`MissingArg`) → unknown arg

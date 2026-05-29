@@ -1,10 +1,8 @@
 //! Struct construction primitives, paralleling [`tagged_union`](super::tagged_union) for
 //! product types. `apply` is the entry point both surface forms invoke: the
 //! type-token call via [`type_call`](super::type_call), and the identifier-bound
-//! LET-alias call via the dispatch scheduler's `fast_lane_function_value_call`
-//! (post Phase 1 of `scratch/plan-fast-lane-subsume.md`; the former
-//! `call_by_name` builtin that served the second path was deleted). `apply`
-//! synthesizes a tail expression that re-dispatches through the
+//! LET-alias call via the dispatch scheduler's stateful FunctionValueCall fast
+//! lane. `apply` synthesizes a tail expression that re-dispatches through the
 //! construction-primitive builtin defined here.
 //!
 //! Unlike the tagged-union primitive (3 fixed slots: schema/tag/value), struct construction

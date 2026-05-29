@@ -79,7 +79,7 @@ pub(super) struct NodeStore<'a> {
     /// notify-walk in `Scheduler::finalize` only when the consumer's
     /// work is a `NodeWork::Dispatch` (any `DispatchState` variant);
     /// drained by `take_recent_wakes` on entry to
-    /// `run_dispatch_stateful`. Indexed by `NodeId` in lockstep with
+    /// `run_dispatch`. Indexed by `NodeId` in lockstep with
     /// `slots`; grown by `alloc_slot` (extend arm) and cleared by
     /// `free_one` (so recycled slots inherit an empty Vec while
     /// retaining capacity from the prior owner's wake pattern).
@@ -322,7 +322,7 @@ impl<'a> NodeStore<'a> {
     /// fired since the slot's last poll. The slot's Vec resets to
     /// `Vec::new()` — capacity retention happens between owners at
     /// `free_one` time, not across a single owner's polls. Called by
-    /// `run_dispatch_stateful` on entry; non-`Dispatch` work paths
+    /// `run_dispatch` on entry; non-`Dispatch` work paths
     /// never call it (the side-channel stays empty for them by
     /// construction in `push_recent_wake`).
     pub(super) fn take_recent_wakes(&mut self, consumer: NodeId) -> Vec<NodeId> {

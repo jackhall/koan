@@ -55,13 +55,15 @@ impl<'a> Scheduler<'a> {
                     reason: "no matching function".to_string(),
                 }));
             }
-            // A bare name in the rebuilt expression is still a pending forward reference:
-            // park on its producer and re-dispatch, mirroring the `run_dispatch` path.
+            // A bare name in the rebuilt expression is still a pending forward
+            // reference: route through the stateful overload-park track installer
+            // so the resume rebuilds via `stateful_keyworded_initial` rather than
+            // the deleted legacy re-Dispatch path.
             ResolveOutcome::ParkOnProducers(producers) => {
                 // `Bind` deps resolved; re-Dispatch carries no `pre_subs` (the
                 // recursive-submission optimization fires only at the original
                 // outermost `add_with_chain`, not at bind-time re-resolve).
-                return Ok(self.park_pending_and_redispatch(producers, expr, Vec::new(), idx));
+                return Ok(self.stateful_install_overload_park(producers, expr, Vec::new(), idx));
             }
             ResolveOutcome::UnboundName(name) => {
                 return Err(KError::new(KErrorKind::UnboundName(name)));
@@ -227,10 +229,8 @@ impl<'a> Scheduler<'a> {
     /// arena `scope` lives in — without the pin, `KFunction::invoke` would
     /// successfully take the frame for tail-reuse and `try_reset_for_tail`
     /// would deallocate the arena while `scope`'s tree-borrows protector is
-    /// still live (UB). Legacy's `run_dispatch`/`schedule_picked_eager` paths
-    /// avoided the seam structurally by spawning a sibling Bind slot whose
-    /// frame clone kept `strong_count >= 2`; Step 4b's resume collapses that
-    /// slot, so the pin restores the same property locally.
+    /// still live (UB). The pin keeps `strong_count >= 2` across the invoke,
+    /// foreclosing the tail-reuse.
     pub(super) fn invoke_to_step_pinned(
         &mut self,
         future: KFuture<'a>,

@@ -114,12 +114,5 @@ skip.
 
 **Requires:**
 
-- [Stateful dispatch — Step 6: deletion](stateful-dispatch-06-deletion.md) —
-  Step 6's deletion of the `use_stateful_dispatch` toggle and the
-  legacy `run_dispatch` body removes the dispatch-arm fork in
-  `Scheduler::execute`, so the reserve-field rotation lands in one
-  branch rather than two. Also simplifies the rationale: the reserve
-  is a stateful-driver concept and explaining it as "stateful-only"
-  ages poorly while the toggle still exists.
 
 **Unblocks:** none.

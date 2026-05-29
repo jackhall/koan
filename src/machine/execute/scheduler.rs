@@ -79,15 +79,6 @@ pub struct Scheduler<'a> {
     /// internal binder sub-dispatches (CONS-head, FN signature subs, NEWTYPE value
     /// sub, USING-body) inherit the parent's chain without each call site naming it.
     pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
-    /// Routes the `NodeWork::Dispatch` arm of `Scheduler::execute` between the
-    /// `run_dispatch_stateful` driver (production default, `true`) and the
-    /// legacy `run_dispatch` driver (`false`). Step 5 of the stateful-dispatch
-    /// refactor flipped the default after every `DispatchShape` variant landed
-    /// on the stateful driver; the legacy body and the toggle itself stay
-    /// alive only as the emergency rollback path until step 6 deletes them.
-    /// Set at construction time from `KOAN_STATEFUL_DISPATCH=0` (env-var
-    /// rollback) or via the [`Scheduler::with_stateful_dispatch`] builder.
-    pub(in crate::machine::execute::scheduler) use_stateful_dispatch: bool,
     /// Count of tail-reuse opportunities accepted by
     /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
     /// path returns `Some`/`None` without touching this field's gate.
@@ -103,27 +94,9 @@ impl<'a> Scheduler<'a> {
             store: NodeStore::new(),
             active_frame: None,
             active_chain: None,
-            // Default: stateful driver. The env var is the emergency-rollback
-            // handle (`KOAN_STATEFUL_DISPATCH=0` reverts a single binary to
-            // the legacy path); the builder method below is the per-test
-            // opt-out used by the legacy-pinned divergence tests until step
-            // 6 deletes the toggle entirely.
-            use_stateful_dispatch: std::env::var("KOAN_STATEFUL_DISPATCH")
-                .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
-                .unwrap_or(true),
             #[cfg(test)]
             tail_reuse_count: 0,
         }
-    }
-
-    /// Flip the dispatch driver toggle on this scheduler. The production
-    /// default is the stateful driver after step 5's cutover; this builder
-    /// stays alive as the per-test rollback handle for divergence pins
-    /// (e.g. the legacy `(v :Identifier)` fall-through). Step 6 of the
-    /// stateful-dispatch refactor deletes both this method and the toggle.
-    pub fn with_stateful_dispatch(mut self, on: bool) -> Self {
-        self.use_stateful_dispatch = on;
-        self
     }
 
     #[cfg(test)]

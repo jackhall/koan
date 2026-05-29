@@ -86,13 +86,14 @@ variant) gets the producer's `NodeId` appended to its
 `recent_wakes: Vec<NodeId>` side-channel before the counter is
 inspected. `Bind` / `Combine` / `Catch` / `Lift` consumers skip the
 append — they run a fixed closure on counter-zero and have no
-per-edge wake attribution to track. The stateful dispatch driver
-drains its slot's `recent_wakes` on entry to pick per-edge callbacks
-keyed by producer `NodeId`; the legacy `run_dispatch` discards the
-drained list, which is the no-op path when the routing toggle is off.
-`DepGraph::drain_notify` returns the per-consumer `hit_zero` flag so
-the fan-out (always-append plus conditional stamp-and-enqueue) runs
-off a single drain.
+per-edge wake attribution to track. The dispatch driver drains its
+slot's `recent_wakes` on entry so the side-channel never grows stale
+across re-park; the keyworded and `FunctionValueCall` resume handlers
+read the installed track's `subs` Vec directly rather than the wakes
+side-channel — at pop time `pending_deps` is zero, so every recorded
+sub is terminal. `DepGraph::drain_notify` returns the per-consumer
+`hit_zero` flag so the fan-out (always-append plus conditional
+stamp-and-enqueue) runs off a single drain.
 
 The run-set has two priority bands managed by
 [`WorkQueues`](../src/machine/execute/scheduler/work_queues.rs). Internal
@@ -410,10 +411,13 @@ the fused splice / park / eager-sub walk in
 `pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
 a slot already pre-submitted reuses the existing `NodeId` (and replaces
 the part with an empty-`Identifier` placeholder for the eventual `Bind`
-splice) rather than allocating a fresh sub-Dispatch. The re-Dispatch
-paths in [`install_combined_park`](../src/machine/execute/scheduler/dispatch.rs)
-and [`park_pending_and_redispatch`](../src/machine/execute/scheduler/dispatch.rs)
-preserve `pre_subs` across the rewrite so a park-and-wake cycle does
+splice) rather than allocating a fresh sub-Dispatch. The
+`stateful_install_bare_name_park` and `stateful_install_overload_park`
+installers carry `pre_subs` into the `KeywordedState.init.pre_subs`
+field of the parked state, and the matching resume handlers
+(`stateful_keyworded_resume_bare_name_park` /
+`stateful_keyworded_resume_overload_park`) hand it back to
+`stateful_keyworded_initial` on wake — so a park-and-wake cycle does
 not re-allocate the pre-submitted children.
 
 Statement indices are per-`enter_block` call: each call to
@@ -473,9 +477,9 @@ the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `ref_name_indices`, `eager_indices`); `Ambiguous(n)` surfaces as an
 `AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
 `Deferred` (the candidate may match after sub-evaluation yields a typed
-`Future(_)`) routes to `schedule_eager_only`, which sub-Dispatches every
-eager-shaped part and re-dispatches via
-[`run_bind`](../src/machine/execute/scheduler/finish.rs) after subs resolve;
+`Future(_)`) routes to `stateful_install_eager_only`, which sub-Dispatches
+every eager-shaped part, installs the eager-subs track on this slot, and
+re-resolves dispatch against the spliced expression at track completion;
 `ParkOnProducers(_)` and `UnboundName(_)` come from the post-walk fallback
 below.
 
@@ -514,7 +518,7 @@ The rails the dispatch driver feeds:
 
   Each fast-lane variant has its own handler:
 
-  - `BareIdentifier` (`(some_var)`) — `fast_lane_bare_identifier` consults
+  - `BareIdentifier` (`(some_var)`) — `stateful_bare_identifier` consults
     `Scope::resolve_with_chain` against the consumer's `LexicalFrame`:
     `Value` returns inline, `Placeholder` rewrites the slot's work to
     `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
@@ -526,7 +530,7 @@ The rails the dispatch driver feeds:
     surface directly; there is no candidate-machinery alternative for a
     bare leaf type.
   - `ConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
-    `fast_lane_type_constructor_call` resolves the head Type token and
+    `stateful_constructor_call` resolves the head Type token and
     routes `StructType` / `TaggedUnionType` / `Newtype` / `TypeConstructor`
     carriers through their construction primitives via a `Tail` rewrite.
     Opaque / Module / unbound heads fall through to the keyworded
@@ -535,14 +539,14 @@ The rails the dispatch driver feeds:
     `SigiledTypeExpr` handler sub-dispatches the inner expression, which
     then lands in `ConstructorCall` and routes through the same
     construction primitives.
-  - `SigiledTypeExpr` (single-part `:(...)` wrapper) —
-    `fast_lane_sigiled_type_expr` tail-replaces the slot with a `Dispatch`
+  - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `run_dispatch`
+    arm tail-replaces the slot with a `Dispatch`
     of the wrapped `KExpression`, so the inner expression runs through the
     same classifier and produces the same carrier shape any other dispatch
     site does. See
     [type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
     for the full type-language dispatch contract.
-  - `FunctionValueCall` (`f (x = 7)`) — `fast_lane_function_value_call`
+  - `FunctionValueCall` (`f (x = 7)`) — `stateful_fast_lane_function_value_call`
     resolves the `Identifier` head and handles every admission outcome
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
     nested-parens part (the *only* call shape — koan has no `f 1 2`
@@ -550,18 +554,22 @@ The rails the dispatch driver feeds:
     is the whole user-facing surface). Three head-carrier shapes admit:
     `KFunction(f, _)` runs `KFunction::reconstruct_positional` to
     interleave the signature's `Keyword` elements between the
-    picked-by-name values and dispatches via `schedule_picked_eager`
-    with the picked function; `StructType { .. }` and `TaggedUnionType
+    picked-by-name values and routes through
+    `stateful_dispatch_callable_value`, which either binds and invokes
+    one-shot or installs the eager-subs track via
+    `stateful_install_fn_value_eager_subs_track` when the spliced call
+    carries unresolved eager parts; `StructType { .. }` and `TaggedUnionType
     { .. }` route through `struct_value::apply` and `tagged_union::apply`
     respectively, each returning a `BodyResult::Tail` that rewrites the
     slot as a re-Dispatch through the corresponding construction
     primitive. Any other carrier (number, string, instance struct,
     module, …) surfaces `TypeMismatch { arg: "verb", expected:
     "KFunction or Type", got }` directly. A `Placeholder` head installs
-    a combined park; an unbound head surfaces `UnboundName(name)`
-    directly — this shape never falls through to `Keyworded`. Reconstruction
-    errors from `KFunction::reconstruct_positional` (missing /
-    unknown / duplicate-named args, malformed pair shapes) surface as
+    the head-placeholder park via `stateful_install_fn_value_head_park`;
+    an unbound head surfaces `UnboundName(name)` directly — this shape
+    never falls through to `Keyworded`. Reconstruction errors from
+    `KFunction::reconstruct_positional` (missing / unknown /
+    duplicate-named args, malformed pair shapes) surface as
     `NodeOutput::Err` with the same structured wording the keyworded
     path produces.
 
@@ -640,9 +648,12 @@ The rails the dispatch driver feeds:
   **Park-precedence guard.** Sub-Dispatch and aggregate scheduling are
   staged into a `PendingSub` vec rather than submitted eagerly during the
   walk. After the loop, if `producers_to_wait` is non-empty the driver
-  calls `install_combined_park(producers_to_wait, new_expr, pre_subs,
-  idx)` — installing the park edges and rewriting this slot to re-Dispatch
-  on wake — **without** submitting any staged subs. Eager submission would
+  calls `stateful_install_bare_name_park` — installing the park edges as
+  `Notify` (via `add_park_edge`), transitioning the slot to
+  `KeywordedState` with the bare-name-park track set, and dropping
+  `NodeWork::Dispatch.expr` to a placeholder so the state-carried
+  `working_expr` becomes the source of truth on wake — **without**
+  submitting any staged subs. Eager submission would
   leak the sub-nodes on the re-Dispatch wake path, where the new
   `run_dispatch` invocation would re-stage them.
   Multi-name forward references compose as one combined park rather than
@@ -686,8 +697,8 @@ that would close the cycle. That catches the trivially-cyclic
 Type-LHS cycles surface with the same error kind without a special case
 in the elaborator.
 
-The fast-lane handlers (`fast_lane_bare_identifier`,
-`fast_lane_function_value_call`) and the eager-resolve pass call
+The fast-lane handlers (`stateful_bare_identifier`,
+`stateful_fast_lane_function_value_call`) and the eager-resolve pass call
 `DepGraph::add_park_edge`, which records a `DepEdge::Notify(producer)` in
 the consumer's `dep_edges` entry alongside the `DepEdge::Owned(child)`
 entries that mark sub-slots the consumer owns. `add_park_edge` and its
@@ -732,6 +743,142 @@ node parked on a dependency that can no longer fire — and returns
 the top-level result read panic on an unresolved slot. `sample` is the
 source expression of the first parked `Dispatch`/`Bind` node, so the
 diagnostic points at code the reader can act on.
+
+### `DispatchState` — per-variant state envelope
+
+Every `NodeWork::Dispatch` slot carries a
+[`DispatchState`](../src/machine/execute/scheduler/dispatch_state.rs) value
+that records where the slot is in the per-shape state machine. The enum
+has one variant per `DispatchShape` plus a pre-classification birth
+state:
+
+```text
+DispatchState ::= Initialized(Initialized)
+                | BareIdentifier(BareIdState)
+                | BareTypeLeaf(BareTypeState)
+                | ConstructorCall(CtorState)
+                | FunctionValueCall(Box<FnValueState>)
+                | SigiledTypeExpr(SigilState)
+                | Keyworded(Box<KeywordedState>)
+```
+
+Every per-variant struct embeds the `Initialized` birth state by value
+as its `init` field, so any state-carried data (today only `pre_subs`
+from the recursive-binder-submission optimization) rides along
+structurally without each variant restating the field. The submission
+walk hands `Initialized { pre_subs }` to the slot at install time;
+`run_dispatch` reads the field on first entry, classifies via
+`classify_dispatch_shape`, and transitions to the matching per-variant
+struct via a `from_init` / `with_*` constructor that consumes the
+birth state. Variants that don't yet carry borrowed state hold the
+lifetime with a `PhantomData<&'a _>` marker so additional fields can be
+added without churning every pattern site in `execute.rs` /
+`submit.rs` / `dispatch.rs`.
+
+The five fast-lane variants (`BareIdentifier`, `BareTypeLeaf`,
+`ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) terminalize
+or single-producer-park in one poll, so their state structs carry no
+post-classification tracks. The two variants that can park on a fan-in
+of producers — `Keyworded` and `FunctionValueCall` — carry an
+`Option<Track>` field per park shape; the `with_*` constructors install
+exactly one. The variants are boxed because their multi-track shapes
+would otherwise push every `DispatchState`-carrying type
+(`NodeWork::Dispatch`, `NodeStep::Replace`, `Node`, `SlotState`) past
+clippy's `large_enum_variant` threshold; boxing costs one allocation
+per parked slot — a rare path, since the fast-lane variants never
+construct these and one-shot paths terminalize without installing a
+track.
+
+`Keyworded` carries three mutually-exclusive park tracks, installed by
+named installers in [`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs):
+
+- **`eager_subs: Option<EagerSubsTrack>`** — installed by
+  `stateful_install_eager_subs_track` (Resolved-with-eager-subs and
+  `Deferred` arms of `stateful_keyworded_initial`). The track carries
+  the partly-spliced `working_expr` (every non-sub part plus an
+  `Identifier("")` placeholder at every sub index) and the
+  `Vec<(part_idx, sub_id)>` Owned-dep list. Both install arms share
+  the same track shape — the resume handler
+  `stateful_keyworded_resume_eager_subs` re-resolves dispatch against
+  the spliced expression and uses the re-resolve's pick, so neither
+  arm needs to carry a function reference forward. Re-resolve is
+  authoritative: an element-typed `Future(_)` that narrows a
+  typed-slot admission rules a speculative initial pick out, and the
+  call surfaces `DispatchFailed` (non-match) rather than committing
+  and surfacing a bind-time `TypeMismatch`.
+- **`bare_name_park: Option<BareNameParkTrack>`** — installed by
+  `stateful_install_bare_name_park` when the part walk discovers ≥1
+  `NameOutcome::Parked(producer)` on a wrap or ref-name slot. Park
+  edges are installed as `Notify` (via `add_park_edge`) — the
+  producers are sibling forward references, not children of this
+  slot, so the slot's reclaim walk must not transit into them. The
+  resume handler `stateful_keyworded_resume_bare_name_park` re-enters
+  `stateful_keyworded_initial` against the carried `working_expr`;
+  the bare names now resolve through `scope.resolve_with_chain` to
+  bound values, so the rebuilt `bare_outcomes` picks them up and the
+  wrap-slot splice fires `Future(obj)` on the second pass.
+- **`overload_park: Option<OverloadParkTrack>`** — installed by
+  `stateful_install_overload_park` when
+  `resolve_dispatch_with_chain` returns `ParkOnProducers` before the
+  part walk runs — either because a bare-name arg resolved to a
+  still-pending `Placeholder`, or because an innermost-visible
+  `pending_overloads[key]` entry from a sibling FN / FUNCTOR binder
+  is in flight. The track carries the original (unspliced)
+  expression, which `stateful_keyworded_resume_overload_park` hands
+  back to `stateful_keyworded_initial` on wake to rebuild
+  `bare_outcomes` and re-run the resolve against the now-populated
+  bucket.
+
+`FunctionValueCall` carries two mutually-exclusive park tracks:
+
+- **`eager_subs: Option<FnValueEagerSubsTrack>`** — installed by
+  `stateful_install_fn_value_eager_subs_track` from
+  `stateful_dispatch_callable_value`'s `KFunction` head arm when the
+  reconstructed call carries unresolved eager parts. Mirrors
+  `EagerSubsTrack`'s splice and Owned-dep shape, but carries the
+  picked `KFunction` from the head `Resolution::Value` arm directly:
+  `FunctionValueCall` is non-overload-set (the head resolves to a
+  single carrier, not a candidate bucket), so a typed `Future(_)` an
+  eager sub reveals can't narrow to a more specific pick, and the
+  resume binds `picked` without re-running `resolve_dispatch`.
+- **`head_placeholder: Option<FnValueHeadPlaceholderTrack>`** —
+  installed by `stateful_install_fn_value_head_park` when the head
+  identifier resolves to `Resolution::Placeholder(producer)`. The
+  track carries the original (unspliced) call expression; on wake,
+  `stateful_fn_value_resume_head_placeholder` re-runs the
+  fast lane against it, and `scope.resolve_with_chain` now lands in
+  the `Resolution::Value` arm.
+
+**Track exclusivity is enforced at install time, not just by
+construction.** Each track installer in `dispatch.rs` is the only call
+site that writes its corresponding `Option<Track>` field, and the
+install conditions are sequenced so at most one fires per slot per
+poll: `overload_park` installs from a resolve failure *before* the part
+walk runs, so neither sibling track has been staged; the bare-name
+park installs *before* eager subs because the part walk's
+park-precedence guard runs before any sub gets staged (eager
+submission on the park path would leak sub-nodes on the re-Dispatch
+wake). The resume routing in `stateful_keyworded_resume` /
+`stateful_fn_value_resume` reads the tracks in install-precedence order
+(`overload_park` first, then `bare_name_park`, then `eager_subs` for
+Keyworded; `eager_subs` then `head_placeholder` for FunctionValueCall)
+and `debug_assert`s mutual absence at every step, so the install-time
+invariant is checked on every wake.
+
+The state is `pub(in crate::machine::execute)` rather than `pub(super)`
+because `nodes.rs` (which carries the `NodeWork::Dispatch { state }`
+variant) lives at `crate::machine::execute::nodes`, outside the
+`scheduler/` submodule. The wider visibility is the minimum needed for
+`NodeWork` to name `DispatchState`; no caller outside the execute tree
+sees the carrier.
+
+The drain-end cycle-detection guard (`NodeStore::unresolved`)
+summarizes parked slots from the state-carried expression rather than
+`NodeWork::Dispatch.expr`. The Track installers drop the `Dispatch.expr`
+field to an empty placeholder once the slot transitions to a parked
+variant, so `DispatchState::parked_carrier_expr` walks each variant's
+`Option<Track>` fields in install-precedence order to return the
+expression the user-facing diagnostic should sample.
 
 ## `KObject` and the model/core boundary
 
@@ -979,17 +1126,3 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Stateful dispatch legacy-deletion** — every `DispatchShape` variant
-  runs end-to-end on the stateful driver as the production default
-  (the carrier shape, routing toggle, `recent_wakes` wake-attribution
-  side-channel, five fast-lane variants, the `Keyworded` variant with
-  its eager-subs / bare-name-park / overload-park tracks, and the
-  `FunctionValueCall` fast lane with its eager-subs / head-placeholder
-  tracks have all landed; no stateful path spawns `NodeWork::Bind`).
-  The legacy `run_dispatch` body and the routing toggle remain only as
-  the emergency-rollback path —
-  [roadmap/dispatch_fix/stateful-dispatch-06-deletion.md](../roadmap/dispatch_fix/stateful-dispatch-06-deletion.md)
-  removes the legacy driver and its surviving mutators
-  (`install_combined_park`, `park_pending_and_redispatch`,
-  `schedule_eager_only`, `schedule_picked_eager`) and migrates the
-  dispatcher's architectural narrative into this document.

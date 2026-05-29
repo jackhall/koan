@@ -257,16 +257,13 @@ impl<'a> ExpressionSignature<'a> {
     /// lookup — `(a = 1, b = 2)` and `(b = 2, a = 1)` both satisfy `(a :Number
     /// PICK b :Number)`.
     ///
-    /// Originally used by `fast_lane_function_value_call` as a gating check before
-    /// calling `reconstruct_positional`; since Phase 1 of
-    /// `scratch/plan-fast-lane-subsume.md` deleted the keyworded `call_by_name`
-    /// fall-through, the fast lane calls `reconstruct_positional` directly and
-    /// surfaces its structured `KError` instead of pre-checking with this. The
-    /// helper remains in the public API for downstream callers and as a cheap
-    /// shape probe; the dispatch scheduler no longer consults it on the named-arg
-    /// surface. There is no companion positional `matches_*` admission — koan has
-    /// no `f 1 2` call syntax for function values, so the named-arg shape is the
-    /// whole user-facing surface.
+    /// The dispatch scheduler's FunctionValueCall fast lane calls
+    /// `reconstruct_positional` directly and surfaces its structured `KError`,
+    /// rather than pre-checking with this helper; the helper remains in the
+    /// public API for downstream callers and as a cheap shape probe. There is
+    /// no companion positional `matches_*` admission — koan has no `f 1 2` call
+    /// syntax for function values, so the named-arg shape is the whole
+    /// user-facing surface.
     pub fn matches_without_keywords(&self, args: &KExpression<'a>) -> bool {
         let mut pairs = match NamedPairs::parse(args, "function call") {
             Ok(p) => p,
