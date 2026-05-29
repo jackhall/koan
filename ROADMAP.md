@@ -184,6 +184,7 @@ language through the dispatcher and the user-functor application surface:
 
 - [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
+- [Ping-pong reserve frame for stateful eager-subs resumes](roadmap/dispatch_fix/ping-pong-reserve-frame.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

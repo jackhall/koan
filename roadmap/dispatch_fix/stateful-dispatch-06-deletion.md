@@ -104,4 +104,8 @@ the design tree.
 **Requires:**
 
 
-**Unblocks:** none.
+**Unblocks:**
+
+- [Ping-pong reserve frame for stateful eager-subs resumes](ping-pong-reserve-frame.md) —
+  the reserve-field rotation lands in one dispatch-arm branch
+  after Step 6 deletes the routing toggle.
