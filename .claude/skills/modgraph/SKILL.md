@@ -1,6 +1,6 @@
 ---
 name: modgraph
-description: Use this skill when scoring module-structure changes in the koan repo against the live dep graph — measuring whether a proposed sub-module reshuffle, a rename, or a file split actually reduces complexity before committing to it. Pairs `cargo modules` (DOT export), `tools/modgraph.py` (recursive fractal scoring with structural + per-file size terms), and `tools/modgraph_rewrite.py` (apply renames to DOT + mirror `src/` for what-if scoring).
+description: Use this skill when scoring module-structure changes in the koan repo against the live dep graph — measuring whether a proposed sub-module reshuffle, a rename, a file split, or an item extraction actually reduces complexity before committing to it. Pairs `cargo modules` (DOT export), `tools/modgraph.py` (recursive fractal scoring with structural + per-file size terms), and `tools/modgraph_rewrite.py` (`module` subcommand for whole-module renames, `item` subcommand for SCIP-driven item-level extractions; both produce a DOT + mirrored `src/` for what-if scoring).
 ---
 
 # modgraph
@@ -40,12 +40,12 @@ Each row prints `nest N.N` next to `index N.N` (the rolled-up structural cost) a
 
 For tracked baselines (used by the `verify` skill), pass `--baseline <file>` — modgraph prunes unreachable-SHA entries (branch checkout / hard reset / rebase drop), prepends today's measurement, trims to 5, and prints a delta line. Dirty-snapshot `+` entries are retained so a pre-commit hook (which always sees a staged-but-not-yet-committed tree) doesn't erase the trend log. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
 
-### 3. Score a *refactor* (renames, not moves)
+### 3. Score a *refactor* (module renames)
 
-`tools/modgraph_rewrite.py` applies `OLD=NEW` renames to the DOT graph and mirrors `src/` to a parallel tree, so you can re-run modgraph against a hypothetical layout without touching real files:
+`tools/modgraph_rewrite.py module` rewrites the DOT graph and mirrors `src/` so you can re-run modgraph against a hypothetical layout without touching real files:
 
 ```sh
-python3 tools/modgraph_rewrite.py \
+python3 tools/modgraph_rewrite.py module \
     --edges /tmp/koan.dot \
     --output-edges /tmp/koan_proposed.dot \
     --output-src /tmp/koan_proposed_src \
@@ -58,7 +58,22 @@ python3 tools/modgraph.py --edges /tmp/koan_proposed.dot --root koan \
 
 Each `--rename OLD=NEW` rebinds module paths matching `OLD` or starting with `OLD::`; both DOT tokens and the mirrored `src/` filenames update. Renames apply against the original path only — chains (`A=B`, `B=C`) must be expressed as the final target. For long lists, use `--rename-file <path>` (one `OLD=NEW` per line, `#` for comments).
 
-The score before/after gap is what to optimize: a rename is worth doing only if `--root koan` drops by more than rounding noise.
+### 4. Score a *refactor* (item extraction)
+
+When the seam is "pull these specific items out into a new module" (not a whole-module rename), use `tools/modgraph_rewrite.py item`. It reads a SCIP code-index from `rust-analyzer`, resolves item references at function/method granularity, and surgically rewrites the DOT plus mirrored `src/`:
+
+```sh
+rust-analyzer scip . --output /tmp/koan.scip
+python3 tools/modgraph_rewrite.py item \
+    --scip /tmp/koan.scip --edges /tmp/koan.dot --src-root src \
+    --output-edges /tmp/koan_proposed.dot \
+    --output-src /tmp/koan_proposed_src \
+    --move koan::machine::core::scope::Scope::register_nominal=koan::machine::core::nominal
+```
+
+Item paths follow Rust-canonical spelling (`Module::Struct::method`). Requires `rust-analyzer` on PATH (`rustup component add rust-analyzer` or rely on `rust-toolchain.toml`).
+
+The score before/after gap is what to optimize under either mode: a rewrite is worth doing only if `--root koan` drops by more than rounding noise.
 
 ## Pitfalls
 

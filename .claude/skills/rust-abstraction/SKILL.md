@@ -1,6 +1,6 @@
 ---
 name: rust-abstraction
-description: Use when deciding whether a long Rust file in the koan repo has an extractable seam — and what *shape* the extraction should take. File-level companion to `modgraph` (complexity scoring). Reach for it when asked "can this be simplified?", "are there seams here?", "what should come out of this file?".
+description: Use when deciding whether a long Rust file in the koan repo has an extractable seam — and what *shape* the extraction should take. File-level companion to `modgraph` (complexity scoring) and `doc-abstraction` (cross-doc concept surfacing); seams proposed here can be scored with `modgraph item`. Reach for it when asked "can this be simplified?", "are there seams here?", "what should come out of this file?".
 ---
 
 # rust-abstraction

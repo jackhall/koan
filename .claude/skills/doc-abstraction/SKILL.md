@@ -1,6 +1,6 @@
 ---
 name: doc-abstraction
-description: Use when extracting refactor candidates by reading design docs and source comments — finding concepts that span 3+ docs or source files without a single owner. Cross-doc companion to `rust-abstraction` (file-level) and `modgraph` (graph scoring).
+description: Use when extracting refactor candidates by reading design docs and source comments — finding concepts that span 3+ docs or source files without a single owner. Cross-doc companion to `rust-abstraction` (file-level) and `modgraph` (graph scoring); candidates surfaced here typically feed into one of those for scoring.
 ---
 
 # doc-abstraction
