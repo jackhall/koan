@@ -5,6 +5,9 @@ use std::process::ExitCode;
 
 use koan::machine::interpret_with_writer_path;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
 /// stdin, then parse, dispatch, and execute it via `interpret_with_writer_path` so error
 /// frames can render real `path:line:col` locations.
