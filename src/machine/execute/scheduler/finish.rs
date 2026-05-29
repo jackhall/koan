@@ -255,7 +255,8 @@ impl<'a> Scheduler<'a> {
     /// `strong_count >= 2` across the invoke, foreclosing the tail-reuse on
     /// the slot's only frame Rc.
     ///
-    /// See `roadmap/dispatch_fix/ping-pong-reserve-frame.md` for the rotation
+    /// See [design/memory-model.md § Ping-pong reserve frame on stateful
+    /// resume paths](../../../../design/memory-model.md) for the rotation
     /// design and `recursive_tagged_match_no_uaf` for the Miri witness.
     pub(super) fn invoke_to_step_pinned(
         &mut self,

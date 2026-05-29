@@ -145,7 +145,8 @@ pub(super) struct Node<'a> {
     /// Drops naturally when the slot terminalizes; the Replace arm in
     /// `execute.rs` rotates `prev_frame` into this field on each new-frame
     /// Replace, superseding the prior (2-iter-old) reserve. See
-    /// `roadmap/dispatch_fix/ping-pong-reserve-frame.md`.
+    /// [design/memory-model.md § Ping-pong reserve frame on stateful resume
+    /// paths](../../../design/memory-model.md).
     pub(super) reserve_frame: Option<Rc<CallArena>>,
     /// Set in lockstep with `frame`. Read on Done to enforce the declared return type
     /// and to append a `Frame` to errors for the call-stack trace.

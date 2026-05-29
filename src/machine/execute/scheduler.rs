@@ -88,7 +88,8 @@ pub struct Scheduler<'a> {
     /// the post-step frame into the reinstalled `Node`'s `reserve_frame` for
     /// the next iteration. `None` between slot steps; `enter_slot_step` /
     /// `exit_slot_step` save and restore around the step. See
-    /// `roadmap/dispatch_fix/ping-pong-reserve-frame.md`.
+    /// [design/memory-model.md § Ping-pong reserve frame on stateful resume
+    /// paths](../../../design/memory-model.md).
     pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
     /// Count of tail-reuse opportunities accepted by
     /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
@@ -97,18 +98,21 @@ pub struct Scheduler<'a> {
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
 
-/// RAII-shaped save/restore wrapper around the per-step `active_frame` and
-/// `active_chain` swap that brackets each iteration of [`Scheduler::execute`].
+/// RAII-shaped save/restore wrapper around the per-step `active_frame`,
+/// `active_chain`, and `active_reserve` swap that brackets each iteration of
+/// [`Scheduler::execute`].
 ///
-/// `enter_slot_step` installs the running slot's `frame` and `chain` into the
-/// scheduler's ambient slots, parking the previous values in the guard.
-/// `exit_slot_step` mem-replaces the originals back in and hands the caller the
-/// post-step frame (which may differ from the entered frame if the step took it
-/// via `try_take_reusable_frame_for_tail`).
+/// `enter_slot_step` installs the running slot's `frame`, `chain`, and
+/// reserve into the scheduler's ambient slots, parking the previous values
+/// in the guard. `exit_slot_step` mem-replaces the originals back in and
+/// hands the caller the post-step frame and reserve (the frame may differ
+/// from the entered frame if the step took it via
+/// `try_take_reusable_frame_for_tail`; the reserve is typically `None`
+/// after a reserve-consuming invoke).
 ///
-/// This is the bookkeeping spine the ping-pong reserve frame will extend (see
-/// `roadmap/dispatch_fix/ping-pong-reserve-frame.md`); a future PR adds
-/// `prev_reserve` here and threads it through the same enter/exit pair.
+/// This is the bookkeeping spine for the ping-pong reserve frame rotation
+/// (see [design/memory-model.md § Ping-pong reserve frame on stateful
+/// resume paths](../../../design/memory-model.md)).
 pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
     prev_frame: Option<Rc<CallArena>>,
     prev_chain: Option<Rc<LexicalFrame>>,

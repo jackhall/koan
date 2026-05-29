@@ -98,7 +98,12 @@ What's shipped that the open items below build on:
   `invoke_to_step_pinned` helper that holds a sibling clone of
   `active_frame` across the call so `try_reset_for_tail`'s
   uniqueness check refuses the reset that would otherwise deallocate
-  the arena `scope` lives in.
+  the arena `scope` lives in. A per-slot reserve frame ping-pongs
+  across `NodeStep::Replace` so iteration 3+ of a recursive
+  eager-subs resume swaps a two-iteration-old reserve into
+  `active_frame` and tail-reuses *it* instead of allocating fresh
+  — recovering the per-iteration `CallArena` shell allocation the
+  pin-only shape would otherwise pay.
 
 ## Next items
 
@@ -180,7 +185,6 @@ language through the dispatcher and the user-functor application surface:
 
 - [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
-- [Ping-pong reserve frame for stateful eager-subs resumes](roadmap/dispatch_fix/ping-pong-reserve-frame.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
