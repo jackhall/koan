@@ -30,7 +30,6 @@ Look for these if there are no cheap fixes. One strong signal is enough; three w
 Your goal is to make the code easier to read and safer to edit. Try to encapsulate data and invariants.
 
 - **No empty wrappers.** If `Foo::new(thing).do_x()` just renames `Thing::do_x(thing)`, reject it. The test: *can you state in one sentence what the new type guarantees?* If not, it's a wrapper.
-- **Multi-file `impl` blocks are fine.** A method that belongs in a sibling file by *concern* but reads better as `f.method()` than `pick::method(&f, ...)` — keep it as a method, lift it via `impl<'a> Foo<'a>` in the new file.
 
 ## Workflow
 

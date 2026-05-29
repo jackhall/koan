@@ -11,12 +11,9 @@ use super::super::Scheduler;
 
 #[test]
 fn free_reclaims_owned_subtree() {
-    // Synthetic state:
-    //   slot 0: parent Bind with subs [1]
-    //   slot 1: Lift-shim dispatch owning bind 2
-    //   slot 2: nested Bind with subs [3], result Value
-    //   slot 3: leaf Dispatch with Value
-    // After `free(1)`: slots 1, 2, 3 reclaimed; slot 0 untouched.
+    // Synthetic state: four Dispatch slots wired as a linear Owned chain
+    //   s0 ─Owned→ s1 ─Owned→ s2 ─Owned→ s3
+    // After `free(s1)`: s1, s2, s3 reclaimed; s0 untouched.
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();

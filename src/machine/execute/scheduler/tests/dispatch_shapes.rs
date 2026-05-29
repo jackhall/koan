@@ -101,12 +101,6 @@ fn bare_type_leaf_short_circuits() {
     );
 }
 
-// `type_call_short_circuits` removed: the legacy `TypeCall` arm + its fast lane
-// are deleted. `(List Number)` now classifies as `ConstructorCall` (head is
-// a leaf `Type`, body is non-empty) and falls through to the keyworded path,
-// where no overload matches and the call surfaces `DispatchFailed`. The
-// keyworded `LIST OF Number` form is the supported way to parameterize List.
-
 /// User-facing named-arg path. `LET f = (FN (DOUBLE x :Number) -> Number = (x))`
 /// registers a function whose signature is `[Keyword("DOUBLE"), Argument(x :Number)]`.
 /// Calling `f (x = 7)` routes through the fast lane's *named-arg admission*: the
@@ -646,44 +640,6 @@ fn classifier_legacy_positional_collapses_to_type_constructor_call() {
     );
 }
 
-/// Stateful Keyworded one-shot terminate: `LET x = 7` classifies as `Keyworded`
-/// (lead keyword `LET`), the picked LET overload's resolve produces a
-/// `Resolved` with no parks and no eager subs, and `stateful_keyworded_initial`
-/// drives the slot to a terminal in one poll. Under the stateful toggle, the
-/// program runs to completion and `x` lands in scope — proving the one-shot
-/// path doesn't drop work and doesn't re-enter the legacy `run_dispatch`'s
-/// resolve a second time.
-///
-/// The counter assertion pins the resolve-once contract: the LET binder's
-/// outer dispatch fast-lanes through the stateful Keyworded path with exactly
-/// one entry into `resolve_dispatch_with_chain`. The value-side sub
-/// `(7)` is a Number literal so dispatch fast-lanes through `BareTypeLeaf` /
-/// the value-pass primitive without re-entering the resolver. Under the
-/// legacy driver the count is the same — the new path matches behavior, not
-/// just outcome.
-#[test]
-fn stateful_keyworded_one_shot_terminates_without_legacy() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
-    let exprs = crate::parse::parse("LET x = 7").expect("parse succeeds");
-    reset_resolve_dispatch_entry_count();
-    for e in exprs {
-        sched.add_dispatch(e, scope);
-    }
-    sched.execute().expect("`LET x = 7` runs cleanly under the stateful toggle");
-    assert!(
-        matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 7.0),
-        "LET x = 7 must bind x to 7.0 under the stateful Keyworded one-shot path",
-    );
-    let count = resolve_dispatch_entry_count();
-    assert!(
-        count >= 1,
-        "Keyworded LET dispatch must enter resolve_dispatch_with_chain at least \
-         once on the stateful driver; counter was {count}",
-    );
-}
-
 /// Mixed shapes where the head is a fast-lane shape (leaf `Type` or `Identifier`)
 /// but a keyword appears later in the parts list. The classifier's step-1 sweep
 /// catches these and routes to `Keyworded`. Pins the D4 contract: "sweep first,
@@ -791,136 +747,19 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     }
 }
 
-/// Step 4b acceptance: `Resolved` with eager subs whose element type
-/// does not satisfy the speculatively-picked overload surfaces as
-/// `DispatchFailed` at re-resolve (non-match) rather than a bind-time
-/// `TypeMismatch`. Pins the "re-resolve is authoritative" contract
-/// reified in `EagerSubsTrack`'s doc. Mirrors the existing
-/// `fn_typed_list_param_wrong_element_type_finds_no_match` under
-/// explicit toggle-on routing.
+/// Unit-tested against each Keyworded track variant: the drain-end
+/// cycle-detection guard in [`Scheduler::execute`] reads the parked
+/// slot's carrier expression from `KeywordedState` (not from the empty
+/// placeholder `NodeWork::Dispatch.expr` left behind by the install
+/// sites `install_eager_subs_track`, `install_bare_name_park`,
+/// `install_overload_park` — each drops the entry `expr` to
+/// `KExpression::new(Vec::new())` and leaves the live `working_expr`
+/// on the state). With only the empty `NodeWork::Dispatch.expr`
+/// available the deadlock sample would render as `""`; the
+/// `DispatchState::parked_carrier_expr` accessor must instead surface
+/// the state-carried expression.
 #[test]
-fn stateful_keyworded_eager_subs_reresolve_surfaces_dispatch_failed() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    crate::builtins::test_support::run(
-        scope,
-        "FN (HEAD xs :(LIST OF Number)) -> Number = (1)",
-    );
-    let mut sched = Scheduler::new();
-    sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
-    let error = sched.execute().expect_err(
-        "stateful driver's eager-subs re-resolve must reject List<Str> against \
-         a :(LIST OF Number)-only overload as a non-match",
-    );
-    assert!(
-        matches!(error.kind, crate::machine::KErrorKind::DispatchFailed { .. }),
-        "expected DispatchFailed (non-match) from the keyworded re-resolve, got {error:?}",
-    );
-}
-
-/// Step 4d acceptance: a Keyworded dispatch whose `resolve_dispatch_with_chain`
-/// returns `ParkOnProducers` (either ≥1 bare-name `Placeholder` the strict
-/// walk couldn't admit, or an innermost-visible `pending_overloads[key]`
-/// entry an FN sibling installed) installs the `overload_park` track on
-/// `KeywordedState`. On track-completion the resume handler re-runs
-/// `stateful_keyworded_initial` against the carried `expr` / `pre_subs`;
-/// the producers' now-bound state (a finalized overload, a resolved bare
-/// name) feeds the rebuilt resolve and dispatch terminalizes.
-///
-/// Program mirrors `fn_bare_arg_call_parks_on_pending_overload_bucket`
-/// under explicit toggle-on routing: the FN's typed parameter `arg :Wrap`
-/// forward-references the STRUCT, so the FN's bucket entry installs but
-/// the FN slot stays in flight until STRUCT `Wrap` finalizes. While the
-/// FN is in flight, `LET out = (LIFT_BARE w)` dispatches the call shape
-/// and `resolve_dispatch_with_chain` surfaces `ParkOnProducers([fn_node_id])`
-/// — the FN's bucket entry is `Pending(fn_node_id)`. The LET parks on
-/// the FN; STRUCT finalization wakes the FN; the FN finalizes its
-/// overload registration and wakes the LET; the LET's resume re-resolves
-/// and binds.
-#[test]
-fn stateful_keyworded_overload_park_resumes_through_state() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
-    let exprs = crate::parse::parse(
-        "FN (LIFT_BARE arg :Wrap) -> Number = (7)\n\
-         STRUCT Wrap = (n :Number)\n\
-         LET w = (Wrap (n = 9))\n\
-         LET out = (LIFT_BARE w)",
-    )
-    .expect("parse succeeds");
-    sched.enter_block(scope.id, exprs, scope);
-    sched
-        .execute()
-        .expect("overload-park forward ref must resolve through the stateful 4d track");
-    assert!(
-        matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
-        "expected `out` to be 7.0 via the stateful overload-park track; got {}",
-        scope.lookup("out").map_or("None".to_string(), |o| o.summarize()),
-    );
-}
-
-/// Step 4c acceptance: a Keyworded dispatch whose initial part walk
-/// resolves ≥1 wrap-slot or ref-name-slot bare name to
-/// `NameOutcome::Parked(producer)` installs the `bare_name_park` track
-/// on `KeywordedState` and parks the slot. On producer terminalization
-/// the resume handler
-/// re-runs `stateful_keyworded_initial` against the carried
-/// `working_expr`, the rebuilt `bare_outcomes` cache sees the now-
-/// bound name, the wrap-slot splice fires, and dispatch terminalizes.
-///
-/// Program: `STRUCT Foo = (x :Number)` declares the nominal binder
-/// `Foo`; `LET fwd = Foo` references it as a bare name in LET's RHS
-/// slot. Submission order parks the LET's wrap slot on the STRUCT's
-/// placeholder; STRUCT finalization wakes the LET, the bare-name
-/// park track's resume re-resolves, and `fwd` lands in scope bound
-/// to the STRUCT carrier. Mirrors
-/// `forward_reference_parks_then_resolves_on_wake` under explicit
-/// toggle-on routing.
-#[test]
-fn stateful_keyworded_bare_name_park_resumes_through_state() {
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    let mut sched = Scheduler::new();
-    // Submission order matters: `LET fwd = Foo` parks on the STRUCT's
-    // placeholder before STRUCT finalization. The `enter_block` /
-    // `add_dispatch` lockstep mirrors the legacy unified-walk test.
-    let exprs = crate::parse::parse(
-        "STRUCT Foo = (x :Number)\n\
-         LET fwd = Foo",
-    )
-    .expect("parse succeeds");
-    sched.enter_block(scope.id, exprs, scope);
-    sched
-        .execute()
-        .expect("bare-name forward ref must resolve through the stateful 4c track");
-    // The STRUCT install binds `Foo` to a StructType carrier; `fwd`
-    // aliases the same carrier after the park resume re-resolves.
-    match scope.lookup("fwd") {
-        Some(KObject::StructType { .. }) => {}
-        Some(other) => panic!("expected fwd to bind to StructType, got {}", other.summarize()),
-        None => panic!("LET fwd = Foo must bind `fwd` in scope after the park resume"),
-    }
-}
-
-/// Step 4e acceptance: the drain-end cycle-detection guard in
-/// [`Scheduler::execute`] reads the parked Keyworded slot's carrier
-/// expression from `KeywordedState` (not from the empty placeholder
-/// `NodeWork::Dispatch.expr` left behind by the Track installers).
-///
-/// Each install site (`stateful_install_eager_subs_track`,
-/// `stateful_install_bare_name_park`, `stateful_install_overload_park`)
-/// drops the entry `expr` to `KExpression::new(Vec::new())` once the
-/// transition `Initialized → Keyworded(...)` lands — the state carries
-/// the live `working_expr` (or original `expr` for overload-park). The
-/// `DispatchState::parked_carrier_expr` accessor surfaces that carrier
-/// for `NodeStore::unresolved` to render as the deadlock `sample`.
-///
-/// Unit-tested here against each track variant: with only the empty
-/// `NodeWork::Dispatch.expr` available the sample would render as `""`;
-/// the accessor must instead return the state-carried expression.
-#[test]
-fn stateful_keyworded_parked_carrier_expr_reads_state() {
+fn keyworded_parked_carrier_expr_reads_state() {
     use super::super::dispatch::keyworded::{
         BareNameParkTrack, KeywordedState, OverloadParkTrack,
     };
