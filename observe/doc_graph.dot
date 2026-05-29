@@ -31,6 +31,7 @@ digraph docs {
   "ROADMAP.md" -> "roadmap/predicate_typing/modular-implicits.md";
   "ROADMAP.md" -> "roadmap/predicate_typing/syntax-tuning.md";
   "ROADMAP.md" -> "roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md";
+  "ROADMAP.md" -> "roadmap/refactor/dispatch-scheduler-facade.md";
   "ROADMAP.md" -> "roadmap/refactor/nominal-dual-write-protocol.md";
   "ROADMAP.md" -> "roadmap/type_language/fn-named-identity.md";
   "ROADMAP.md" -> "roadmap/type_language/kfunction-deferred-ret-precision.md";
@@ -205,6 +206,7 @@ digraph docs {
   "roadmap/predicate_typing/modular-implicits.md" -> "roadmap/type_language/val-slot-attr-retagging.md";
   "roadmap/predicate_typing/syntax-tuning.md" -> "design/typing/functors.md";
   "roadmap/predicate_typing/syntax-tuning.md" -> "roadmap/predicate_typing/modular-implicits.md";
+  "roadmap/refactor/dispatch-scheduler-facade.md" -> "roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md";
   "roadmap/refactor/nominal-dual-write-protocol.md" -> "design/error-handling.md";
   "roadmap/refactor/nominal-dual-write-protocol.md" -> "design/typing/elaboration.md";
   "roadmap/refactor/nominal-dual-write-protocol.md" -> "design/typing/functors.md";

@@ -197,11 +197,13 @@ language through the dispatcher and the user-functor application surface:
 ### Refactor — [roadmap/refactor/](roadmap/refactor/)
 
 Structural cleanups surfaced by the `modgraph` + `doclinks gap`
-analysis. The remaining two items are source-level — collapse the
-keyword-free dispatch surface, and concentrate the nominal dual-write
+analysis. The remaining items are source-level — collapse the
+keyword-free dispatch surface, narrow the scheduler's internal
+surface to the dispatcher, and concentrate the nominal dual-write
 protocol:
 
 - [Collapse all keyword-free dispatch into `dispatch.rs`](roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md)
+- [Hoist dispatcher out of scheduler behind a typed facade](roadmap/refactor/dispatch-scheduler-facade.md)
 - [Concentrate the nominal dual-write protocol in `core::nominal`](roadmap/refactor/nominal-dual-write-protocol.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
