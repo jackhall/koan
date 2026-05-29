@@ -22,15 +22,10 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Run a `Combine` slot: short-circuit on the first errored dep with
-    /// the standard `<combine>` frame, then call `finish` over the dep
-    /// values and decode the returned `BodyResult` (Value, Tail, or Err)
-    /// into a `NodeStep` using the same dispatch as `invoke_to_step`.
-    /// Only the `deps[park_count..]`
-    /// owned-sub suffix is eagerly freed on the success path; the `[..park_count]`
-    /// park-producer prefix is kept alive (those slots are sibling producers the
-    /// Combine merely read at finish-time). The error path leaves the Combine's
-    /// edges in `dep_edges[idx]` for chain-free at slot drop.
+    /// Only the `deps[park_count..]` owned-sub suffix is eagerly freed on the
+    /// success path; the `[..park_count]` park-producer prefix is kept alive
+    /// (sibling producers the Combine merely read at finish-time). The error
+    /// path leaves edges in `dep_edges[idx]` for chain-free at slot drop.
     pub(super) fn run_combine(
         &mut self,
         deps: Vec<NodeId>,
@@ -39,9 +34,8 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
-        // The closure carries its own framing context (e.g. "<list>", "<dict>") via its
-        // capture; the Combine machinery only handles dep-error propagation, which uses
-        // the generic "<combine>" frame.
+        // The finish closure carries its own framing (e.g. "<list>", "<dict>");
+        // this generic frame is used only for dep-error propagation.
         let make_frame = || Frame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
@@ -50,8 +44,7 @@ impl<'a> Scheduler<'a> {
                 ));
             }
         }
-        // Pre-collect refs so `finish` (which holds `&mut self` via the trait object)
-        // doesn't reborrow `self` for reads.
+        // Pre-collect refs so `finish` (which takes `&mut self`) doesn't reborrow for reads.
         let values: Vec<&'a KObject<'a>> = deps.iter().map(|d| self.read(*d)).collect();
         let owned_indices: Vec<usize> =
             deps[park_count..].iter().map(|d| d.index()).collect();
@@ -73,10 +66,8 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Run a `Catch` slot: read `from`'s terminal as a `Result`, hand it to `finish`, and
-    /// decode the returned `BodyResult` the same way `run_combine` does. Unlike Combine,
-    /// an errored `from` does not short-circuit; the finish closure decides whether to
-    /// recover (TRY-WITH's per-arm dispatch) or re-raise. `from` is freed on both paths.
+    /// Unlike Combine, an errored `from` does not short-circuit; the finish
+    /// closure decides whether to recover or re-raise. `from` is freed on both paths.
     pub(super) fn run_catch(
         &mut self,
         from: NodeId,
@@ -86,9 +77,8 @@ impl<'a> Scheduler<'a> {
     ) -> NodeStep<'a> {
         let result: Result<&'a KObject<'a>, KError> = match self.read_result(from) {
             Ok(v) => Ok(v),
-            // Frameless propagation: TRY-WITH's per-arm dispatch reads this `Err` and
-            // attaches its own frame at the recovery site, so adding one here would
-            // double-frame the error.
+            // Frameless: the recovery-site dispatch attaches its own frame; adding
+            // one here would double-frame.
             Err(e) => Err(propagate_dep_error(e, None)),
         };
         let body = finish(scope, self, result);
@@ -128,17 +118,13 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// `BodyResult::Tail` rewrites the current slot's work in place — this is what gives
-    /// recursion constant scheduler memory. `BodyResult::DeferTo(id)` rewrites to a Lift
-    /// off `id`, so the slot's terminal becomes whatever `id` produces; matches
-    /// `defer_to_lift`'s post-Bind shape but for body-driven combinator planning (MODULE
-    /// and SIG body wrap-up via `add_combine`).
+    /// `Tail` rewrites the current slot's work in place (constant scheduler
+    /// memory for recursion). `DeferTo(id)` rewrites to a Lift off `id`.
     ///
-    /// `idx` is the executing slot. Needed so the `DeferTo` arm can install an
-    /// `Owned` edge for `id` via `defer_to_lift` (which calls `DepGraph::add_owned_edge`)
-    /// before returning the `Replace` — without that install, the Replace gate's
-    /// `pending_count(idx)` read sees zero and re-enqueues the Lift before the
-    /// producer runs.
+    /// `idx` is required so the `DeferTo` arm can install an `Owned` edge for
+    /// `id` via `defer_to_lift` before returning the `Replace`; without that
+    /// install, the Replace gate's `pending_count(idx)` reads zero and
+    /// re-enqueues the Lift before the producer runs.
     pub(super) fn invoke_to_step(
         &mut self,
         future: KFuture<'a>,
@@ -203,12 +189,6 @@ impl<'a> Scheduler<'a> {
         idx: usize,
     ) -> NodeStep<'a> {
         if let Some(reserve) = self.active_reserve.take() {
-            // `local_pin` anchors the slot's frame (and therefore `scope`)
-            // across the invoke; the reserve takes its place as `active_frame`
-            // so tail-reuse consumes the reserve, not the slot's only frame
-            // Rc. Restored after the invoke so the post-step swap in
-            // `execute.rs` reads `active_frame == slot.frame` and can rotate
-            // for the next iteration.
             let local_pin = self.active_frame.clone();
             self.active_frame = Some(reserve);
             let step = self.invoke_to_step(future, scope, idx);

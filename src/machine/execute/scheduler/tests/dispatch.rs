@@ -1,9 +1,6 @@
-//! Overload routing rules end-to-end through the scheduler.
-//!
-//! Markers and bodies for the dispatch_* tests: each registered builtin returns a
-//! distinct labeled string so the test can assert which overload won by inspecting the
-//! scheduler's terminal value. Counterpart `resolve_dispatch`-only assertions live in
-//! `machine::core::tests::dispatch`.
+//! Overload routing rules end-to-end through the scheduler. Each registered builtin
+//! returns a distinct labeled marker so a test can identify which overload won.
+//! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
@@ -55,11 +52,9 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     );
 }
 
-/// A bare-identifier slot with no value, no placeholder, and no visible
-/// binding surfaces `UnboundName(name)` directly out of
-/// `stateful_bare_identifier` — no fall-through to a `(v :Identifier)`
-/// overload bucket. Pins the post-cutover contract: bare-name dispatch
-/// is name-resolution-only, not a candidate walk.
+/// Bare-name dispatch is name-resolution-only: an unbound identifier surfaces
+/// `UnboundName(name)` directly rather than falling through to a `(v :Identifier)`
+/// overload bucket.
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
@@ -96,7 +91,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
-            SignatureElement::Keyword("foo".into()), // lowercase — should be coerced
+            SignatureElement::Keyword("foo".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
                 ktype: KType::Number,
@@ -105,8 +100,6 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     };
     register_builtin(scope, "FOO", sig, body_lowercase);
 
-    // The source-side caller writes `FOO 1` (uppercase), which must match the coerced
-    // `FOO <v>` registration.
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),

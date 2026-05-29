@@ -1,8 +1,8 @@
 //! Dispatch shape router, classifier, and shared spine.
 //!
-//! The dispatch driver enters at [`Scheduler::run_dispatch`], which
-//! classifies the slot via [`classify_dispatch_shape`] and routes to
-//! one of the five shape handlers:
+//! [`Scheduler::run_dispatch`] classifies the slot via
+//! [`classify_dispatch_shape`] and routes to one of the five shape
+//! handlers:
 //!
 //! - **Keyworded** (any keyword present, or a head that isn't a
 //!   fast-lane shape) → [`keyworded::KeywordedState`]
@@ -11,14 +11,8 @@
 //! - **BareIdentifier**, **BareTypeLeaf**, **ConstructorCall**,
 //!   **SigiledTypeExpr** → [`single_poll`] handlers
 //!
-//! State and transitions live with their shape. This file keeps the
-//! cross-shape glue: the [`DispatchState`] enum (one variant per shape
-//! plus the universal `Initialized` birth state), the helpers that
-//! multiple shapes call (`install_eager_subs`,
-//! `replace_with_parked_dispatch`, `resume_eager_subs`), and the
-//! pure resolution helpers (`classify_dispatch_shape`,
-//! `resolve_name_part`, `extract_named_call_inner`,
-//! `propagate_dep_error`, `stage_all_eager_parts`).
+//! State and transitions live with their shape; this file keeps the
+//! cross-shape glue.
 
 use crate::machine::core::coerce_type_token_value;
 use crate::machine::core::kfunction::KFunction;
@@ -44,9 +38,7 @@ use keyworded::KeywordedState;
 use single_poll::{BareIdState, BareTypeState, CtorState, SigilState};
 
 /// Pre-walk classification of a `KExpression` into the four no-keyword
-/// fast-lane shapes plus the catch-all keyword-bearing shape. Driven
-/// by [`classify_dispatch_shape`] at the top of
-/// [`Scheduler::run_dispatch`].
+/// fast-lane shapes plus the catch-all keyword-bearing shape.
 pub(super) enum DispatchShape {
     BareIdentifier,
     BareTypeLeaf,
@@ -63,9 +55,9 @@ pub(super) enum DispatchShape {
     Keyworded,
 }
 
-/// One-pass classifier. Sweeps every part for `Keyword` first so a
-/// mixed shape like `(f IF x)` goes to `Keyworded`. Only when the
-/// no-keyword precondition is established do we branch on head shape.
+/// Sweeps every part for `Keyword` first so a mixed shape like
+/// `(f IF x)` goes to `Keyworded`; only with the no-keyword
+/// precondition established do we branch on head shape.
 pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
     if expr.parts.iter().any(|p| matches!(&p.value, ExpressionPart::Keyword(_))) {
         return DispatchShape::Keyworded;
@@ -93,13 +85,8 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
 }
 
 /// Resolve a bare-name `ExpressionPart` (Identifier or leaf Type)
-/// against `scope`. Consumed by the per-`run_dispatch` `bare_outcomes`
-/// cache build and the dict/list literal planner's name-keyed Slot
-/// resolution.
-///
-/// `consumer = Some(idx)` enables the cycle check; `consumer = None`
-/// skips it (used by `classify_aggregate_part` during dict/list
-/// literal planning).
+/// against `scope`. `consumer = Some(idx)` enables the cycle check;
+/// `consumer = None` skips it.
 pub(super) fn resolve_name_part<'a>(
     scope: &'a Scope<'a>,
     part: &ExpressionPart<'a>,
@@ -131,9 +118,7 @@ pub(super) fn resolve_name_part<'a>(
         Resolution::Value(obj) if is_type.is_none() => {
             return NameOutcome::Resolved(obj);
         }
-        Resolution::Value(_) | Resolution::UnboundName => {
-            // Fall through for Type parts and Identifier Unbound.
-        }
+        Resolution::Value(_) | Resolution::UnboundName => {}
     }
     match is_type {
         Some(t) => match coerce_type_token_value(scope, t, chain) {
@@ -145,9 +130,8 @@ pub(super) fn resolve_name_part<'a>(
     }
 }
 
-/// Best-effort name extraction for a bare-name `ExpressionPart` —
-/// used to render the `cycle in type alias <name>` sample in
-/// `SchedulerDeadlock`.
+/// Best-effort name extraction for a bare-name `ExpressionPart`,
+/// used to render the `cycle in type alias <name>` deadlock sample.
 pub(super) fn bare_name_of<'a>(part: &ExpressionPart<'a>) -> Option<String> {
     match part {
         ExpressionPart::Identifier(n) => Some(n.clone()),
@@ -172,10 +156,8 @@ pub(in crate::machine::execute) struct PartWalkResult<'a> {
 }
 
 /// Pull the inner parts of a `f (...)` call out of `expr.parts[1..]`.
-/// The `FunctionValueCall` classifier guarantees an Identifier head
-/// and ≥1 non-keyword body part; this checks the body is exactly a
-/// single nested-parens (`ExpressionPart::Expression`) and clones its
-/// inner parts.
+/// `FunctionValueCall` only guarantees ≥1 non-keyword body part; the
+/// body must be exactly one nested-parens or this is a non-match.
 pub(super) fn extract_named_call_inner<'a>(
     expr: &KExpression<'a>,
 ) -> Result<Vec<Spanned<ExpressionPart<'a>>>, KError> {
@@ -189,9 +171,8 @@ pub(super) fn extract_named_call_inner<'a>(
     Ok(inner.parts.clone())
 }
 
-/// Centralized dep-error propagation: clone the terminal error and
-/// attach a caller-chosen frame. `frame = None` is the frameless
-/// variant used by `run_catch`.
+/// Clone a dep's terminal error and attach a caller-chosen frame.
+/// `frame = None` is the frameless variant.
 pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
     let cloned = e.clone_for_propagation();
     match frame {
@@ -201,8 +182,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 }
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
-/// off `working_expr`. Shared by every eager-subs install / resume
-/// site.
+/// off `working_expr`.
 fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> NodeStep<'a> {
     let frame = Frame::from_expr("<bind>", working_expr);
     NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
@@ -210,8 +190,7 @@ fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> NodeStep<'a
 
 /// Walk raw parts emitting an `Identifier("")` placeholder at every
 /// eager slot and a parallel staged-subs Vec; non-eager parts pass
-/// through unchanged. Shared by the Keyworded `Deferred` arm and the
-/// FunctionValueCall fast lane.
+/// through unchanged.
 pub(super) fn stage_all_eager_parts<'a>(
     parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> (Vec<Spanned<ExpressionPart<'a>>>, Vec<(usize, PendingSub<'a>)>) {
@@ -317,19 +296,16 @@ pub(in crate::machine::execute) enum DispatchState<'a> {
 impl<'a> DispatchState<'a> {
     /// Construct the universal birth state. Every submission and
     /// re-park site goes through this constructor so `pre_subs` is the
-    /// only field any caller names. PhantomData markers are touched
-    /// here as a hidden invariant: `_ph` is the unit-typed lifetime
-    /// witness on the empty shape variants.
+    /// only field any caller names.
     pub(in crate::machine::execute) fn initialized(pre_subs: Vec<(usize, NodeId)>) -> Self {
         DispatchState::Initialized(Initialized { pre_subs })
     }
 
     /// Expression carried by the state itself for parked `Keyworded`
-    /// or `FunctionValueCall` slots. The Track installers drop
-    /// `NodeWork::Dispatch.expr` to an empty placeholder once the slot
-    /// transitions to a parked variant, so the drain-end
-    /// cycle-detection guard (`NodeStore::unresolved`) prefers this
-    /// state-carried expression when summarizing a parked sample.
+    /// or `FunctionValueCall` slots. Track installers drop
+    /// `NodeWork::Dispatch.expr` to an empty placeholder on park, so
+    /// the drain-end deadlock summary needs this fallback to render a
+    /// parked sample.
     pub(in crate::machine::execute) fn parked_carrier_expr(
         &self,
     ) -> Option<&KExpression<'a>> {
@@ -352,11 +328,9 @@ impl<'a> DispatchState<'a> {
 // ---------- Scheduler shared spine ----------
 
 impl<'a> Scheduler<'a> {
-    /// Build the per-part `bare_outcomes` cache consulted by strict
-    /// admission and the fused splice/park walk. One
-    /// `resolve_name_part` per bare-name part; non-bare-name parts
-    /// get `None`. Built with `consumer = None` so cycle detection is
-    /// deferred to the splice walk.
+    /// Build the per-part `bare_outcomes` cache: one
+    /// `resolve_name_part` per bare-name part, `None` otherwise.
+    /// `consumer = None` defers cycle detection to the splice walk.
     pub(in crate::machine::execute::scheduler::dispatch) fn build_bare_outcomes(
         &self,
         parts: &[Spanned<ExpressionPart<'a>>],
@@ -376,9 +350,8 @@ impl<'a> Scheduler<'a> {
 
     /// Submit each `PendingSub`, splice already-terminal subs inline,
     /// install an Owned dep_edge from each in-flight sub to this slot,
-    /// and return the routed [`EagerSubsInstall`]. Shared by both the
-    /// Keyworded driver (`picked = None`) and the FunctionValueCall
-    /// fast lane (`picked = Some(f)`).
+    /// and return the routed [`EagerSubsInstall`]. `picked = Some(f)`
+    /// is the FunctionValueCall install; `None` is Keyworded.
     pub(in crate::machine::execute::scheduler::dispatch) fn install_eager_subs(
         &mut self,
         mut working_expr: KExpression<'a>,
@@ -415,10 +388,9 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Build the standard `NodeStep::Replace` shell every parked-
-    /// Dispatch install site uses: drop the entry expression to an
-    /// empty placeholder (the state carries the evolving `working_expr`
-    /// from here on) and zero the four invoke-shape fields.
+    /// Standard `NodeStep::Replace` for parked-Dispatch install sites:
+    /// drops the entry expression to an empty placeholder (the state
+    /// carries the evolving `working_expr` from here on).
     pub(in crate::machine::execute::scheduler::dispatch) fn replace_with_parked_dispatch(
         &self,
         state: DispatchState<'a>,
@@ -432,13 +404,13 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Track-completion continuation shared between the Keyworded and
-    /// FunctionValueCall `eager_subs` tracks. Reads each sub's
-    /// terminal, splices `Future(value)` into `working_expr.parts[i]`,
-    /// frees the sub, then routes on `track.picked`:
+    /// Track-completion continuation for `eager_subs` tracks. Routes
+    /// on `track.picked`:
     ///
     /// - `None` (Keyworded install) — tail into
-    ///   [`KeywordedState::finish`], which re-resolves dispatch.
+    ///   [`KeywordedState::finish`], which re-resolves dispatch so an
+    ///   element-typed `Future(_)` revealed by a sub can surface as
+    ///   `DispatchFailed` rather than a bind-time `TypeMismatch`.
     /// - `Some(f)` (FunctionValueCall install) — bind `f` directly.
     pub(in crate::machine::execute::scheduler::dispatch) fn resume_eager_subs(
         &mut self,
@@ -475,9 +447,6 @@ impl<'a> Scheduler<'a> {
     /// terminalize (or single-producer-park) in one poll; only
     /// `Keyworded` and `FunctionValueCall` carry tracks that can
     /// re-enter via the resume arms.
-    ///
-    /// Called from the `NodeWork::Dispatch` arm of
-    /// [`Scheduler::execute`]; this is the only dispatch driver.
     pub(super) fn run_dispatch(
         &mut self,
         expr: KExpression<'a>,
@@ -485,7 +454,6 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        // Drain the wake side-channel on entry.
         let _wakes = self.store.take_recent_wakes(NodeId(idx));
         let init = match state {
             DispatchState::Initialized(i) => i,

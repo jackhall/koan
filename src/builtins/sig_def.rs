@@ -1,17 +1,14 @@
-//! `SIG <name:TypeExprRef> = <body:KExpression>` — declare a module signature (an interface
-//! a module can be ascribed to). See
+//! `SIG <name:TypeExprRef> = <body:KExpression>` — declare a module signature (an
+//! interface a module can be ascribed to). See
 //! [design/typing/modules.md](../../design/typing/modules.md).
 //!
-//! Construction shape mirrors [`module_def`](super::module_def): body statements dispatch
-//! against a fresh child scope on the OUTER scheduler, then a `Combine` over those slots
-//! captures the populated scope into a [`Signature`] value, allocates it in the parent's
-//! arena, and binds it under the signature's name. Body declarations are
-//! `LET name = (FN <signature> -> <return> = ...)` for operations and `LET Type = TypeExpr`
-//! for abstract type declarations (stage 4 will add `axiom`s here too).
-//!
-//! Stage 1 stores the raw scope; the ascription operators (`:|` / `:!`) iterate it at
-//! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
-//! attaches axioms.
+//! Construction mirrors [`module_def`](super::module_def): body statements dispatch
+//! against a fresh child scope on the outer scheduler; a `Combine` over those slots
+//! captures the populated scope into a [`Signature`] value, allocates it in the
+//! parent's arena, and binds it under the signature's name. Body declarations are
+//! `LET name = (FN <signature> -> <return> = ...)` for operations and
+//! `LET Type = TypeExpr` for abstract type declarations. The ascription operators
+//! (`:|` / `:!`) iterate the stored scope at ascription time.
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -48,7 +45,6 @@ pub fn body<'a>(
 
     let deps = sched.enter_body_block(decl_scope, body_expr);
 
-    // SIG is a nominal binder (D7 carve-out).
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::nominal(chain.index))
@@ -58,13 +54,10 @@ pub fn body<'a>(
         let arena = parent_scope.arena;
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
-        // Post-collapse: the signature value rides `KTypeValue(KType::Signature(s))`.
-        // The type-side identity carries the *constraint* form
-        // `KType::SatisfiesSignature { sig_id, sig_path, .. }` rather than the
-        // identity-bearing `KType::Signature(_)` — slot annotations `:OrderedSig` mean
-        // "any module satisfying OrderedSig", not "this signature value itself."
-        // Splitting the two storage roles keeps the slot-vs-value semantic distinction
-        // the pre-collapse SatisfiesSignature/Signature split already encoded.
+        // The signature value rides `KTypeValue(KType::Signature(s))`; the type-side
+        // identity carries the *constraint* form `SatisfiesSignature` so slot
+        // annotations `:OrderedSig` mean "any module satisfying OrderedSig" rather
+        // than "this signature value itself."
         let identity = KType::SatisfiesSignature {
             sig_id: sig.sig_id(),
             sig_path: name_for_finish.clone(),
@@ -83,8 +76,8 @@ pub fn body<'a>(
     BodyResult::DeferTo(combine_id)
 }
 
-/// Dispatch-time placeholder extractor for SIG. `parts[1]` is the `Type(t)` token of the
-/// signature's name slot. Same shape as STRUCT / MODULE / named UNION.
+/// Dispatch-time placeholder extractor: pulls the signature name from `parts[1]`'s
+/// `Type(t)` token. Same shape as STRUCT / MODULE / named UNION.
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
@@ -111,8 +104,6 @@ mod tests {
     use crate::machine::RuntimeArena;
     use crate::parse::parse;
 
-    /// Smoke test for SIG's binder_name extractor: structural extraction of the `Type(_)`
-    /// token at `parts[1]`.
     #[test]
     fn binder_name_extracts_sig_name() {
         let mut exprs = parse("SIG OrderedSig = (VAL x :Number)").expect("parse should succeed");
@@ -148,12 +139,8 @@ mod tests {
         assert_eq!(sig.path, "OrderedSig");
     }
 
-    /// Body-statement forward-reference: a SIG body's `VAL x: SomeType` references an
-    /// outer-scope-bound type alias. Mirrors `module_def::module_body_parks_on_outer_placeholder`
-    /// — post-refactor the body statement's type-resolution sub-Dispatch parks on the
-    /// outer placeholder. The outer `LET MyAlias = Number` (Type-class binder name —
-    /// stays on the LET path) finalizes first; the SIG body's VAL slot then sees
-    /// `MyAlias` resolved against the outer scope.
+    /// Body-statement forward-reference: a SIG body's `VAL x :SomeType` parks on an
+    /// outer-scope-bound type alias and resolves once the alias finalizes.
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
         let arena = RuntimeArena::new();
@@ -174,10 +161,8 @@ mod tests {
         );
     }
 
-    /// Failing body statement surfaces as the SIG node's error and must NOT bind `Foo` in
-    /// the parent scope. The failing surface is a VAL slot whose declared type names a
-    /// nonexistent name; the type-resolution sub-Dispatch errors `UnboundName`, the
-    /// VAL Combine propagates the error, and the SIG Combine short-circuits.
+    /// A failing body statement surfaces as the SIG node's error and must not bind
+    /// `Foo` in the parent scope.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
         let arena = RuntimeArena::new();

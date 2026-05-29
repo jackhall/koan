@@ -1,22 +1,10 @@
-//! Tagged-union construction primitives. The `apply` helper synthesizes a tail
-//! expression that re-dispatches through the construction-primitive builtin; the
-//! synthesis lives next to the type, not inside the dispatch builtins that consume
-//! it.
-//!
-//! `apply` is the entry point both surface forms invoke: the type-token call via
-//! the dispatch scheduler's `ConstructorCall` fast lane, and the identifier-bound
-//! LET-alias call via the stateful `FunctionValueCall` fast lane. `apply` synthesizes
-//! a tail expression that re-dispatches through the construction-primitive builtin
-//! defined here, whose typed slots let the scheduler resolve sub-expression
-//! value-parts before construction runs.
-//!
-//! The primitive builtin has no keyword in its signature — three typed slots
-//! (`Type`, `Identifier`, `Any`) are specific enough to claim its dispatch bucket
-//! unambiguously, and no user surface form spells the call directly. The user constructs
-//! via the type token (`Maybe (some 42)`) or a LET-bound identifier; both routes funnel
-//! through `apply`. The slot-0 `Type` is shared with the struct construction primitive
-//! ([`super::struct_value`]); they don't collide because struct construct is
-//! 2-slot, not 3-slot — different dispatch bucket.
+//! Tagged-union construction primitives. `apply` is the entry point both surface
+//! forms invoke — the type-token call via the `ConstructorCall` fast lane and the
+//! identifier-bound LET-alias call via the `FunctionValueCall` fast lane — and
+//! synthesizes a tail expression that re-dispatches through the construction-primitive
+//! builtin defined here. The primitive has no keyword; three typed slots
+//! (`Type`, `Identifier`, `Any`) claim its dispatch bucket unambiguously. Slot-0
+//! `Type` is shared with [`super::struct_value`] but the arity differs (2 vs 3 slots).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -33,13 +21,10 @@ use crate::machine::model::values::KObject;
 use super::register_builtin;
 
 /// Take the args parts captured at the call site and produce a `BodyResult::Tail`
-/// re-dispatching through the construction primitive. `schema_obj` is the looked-up
-/// `&'a KObject<'a>` reference (must be `KObject::TaggedUnionType(_)` — caller's
-/// responsibility).
-///
-/// Validates the args shape: exactly two parts, with the first an `Identifier` (the tag
-/// name). The second part rides through unchanged so the scheduler resolves sub-expressions
-/// (`(foo)`, list literals, etc.) before construction sees the value.
+/// re-dispatching through the construction primitive. `schema_obj` must be a
+/// `KObject::TaggedUnionType` (caller-enforced). Validates the args shape: exactly
+/// two parts, the first an `Identifier` tag. The second rides through unchanged so
+/// the scheduler can resolve sub-expressions before construction sees the value.
 pub fn apply<'a>(
     schema_obj: &'a KObject<'a>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
@@ -98,29 +83,25 @@ pub fn construct<'a>(
             got: value.ktype().name().to_string(),
         }));
     }
-    // Stage 3.0c: copy `(scope_id, name)` off the `TaggedUnionType` so the value
-    // carries the declaring schema's identity. Stage 3.1 reads these in `ktype()`.
     Ok(KObject::Tagged {
         tag,
         value: Rc::new(value.deep_clone()),
         scope_id: schema_scope_id,
         name: schema_name.to_string(),
-        // Erased at construction: the runtime type arguments are stamped by ascription at
-        // an annotated boundary, not synthesized here from a monomorphic schema.
+        // Type args are stamped by ascription at an annotated boundary, not here.
         type_args: Rc::new(vec![]),
     })
 }
 
-/// Body of the construction-primitive builtin. Pulls the schema, tag, and value out of the
-/// bundle, calls [`construct`], and arena-allocates the result. Registered with no keyword
-/// in the signature — the typed-slot specificity is what claims its bucket.
+/// Body of the construction-primitive builtin. Pulls the schema, tag, and value out
+/// of the bundle, calls [`construct`], and arena-allocates the result.
 fn primitive_body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
-    // Pull `(schema, name, scope_id)` off the `TaggedUnionType` so the produced
-    // `Tagged` value carries the declaring schema's identity — stage 3.0c.
+    // Carry `(schema, name, scope_id)` so the produced `Tagged` value points back at
+    // the declaring schema's identity.
     let (schema, schema_name, schema_scope_id) = match bundle.get("schema") {
         Some(KObject::TaggedUnionType { schema, name, scope_id }) => {
             (Rc::clone(schema), name.clone(), *scope_id)
@@ -136,10 +117,8 @@ fn primitive_body<'a>(
             return BodyResult::Err(KError::new(KErrorKind::MissingArg("schema".to_string())));
         }
     };
-    // The `KType::Type` slot also accepts `KObject::StructType`; if a caller routed a
-    // struct schema into this 3-slot path (e.g. via a hand-built dispatch), the
-    // `KObject::TaggedUnionType` match above catches that — anything else falls into the
-    // TypeMismatch arm.
+    // `KType::Type` also accepts `KObject::StructType`; the match above forces
+    // TaggedUnionType so a struct routed through this 3-slot path errors cleanly.
     let tag = match bundle.get("tag") {
         Some(KObject::KString(s)) => s.clone(),
         Some(other) => {
@@ -163,9 +142,8 @@ fn primitive_body<'a>(
     }
 }
 
-/// Register the construction primitive. No keyword in the signature — `Type` in slot 0
-/// plus the 3-slot bucket `[Slot, Slot, Slot]` won't collide with other 3-arg signatures
-/// via the specificity tiebreak. Called from [`super::default_scope`].
+/// Register the construction primitive. No keyword; the `[Type, Identifier, Any]`
+/// slot triple claims its bucket via the specificity tiebreak.
 pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
@@ -243,10 +221,8 @@ mod tests {
         }
     }
 
-    /// The construction primitive can be reached by the only shape that produces it (a
-    /// resolved `TaggedUnionType` in slot 0 plus a tag identifier and a value). Surface
-    /// users go through `Maybe (some 42)`; this test exercises the primitive directly via
-    /// the parens-wrapping that resolves `maybe` to a Future.
+    /// Exercises the primitive directly via the parens-wrapping that resolves
+    /// `maybe` to a Future before the slot-0 type bind.
     #[test]
     fn primitive_constructs_tagged_value() {
         let arena = RuntimeArena::new();
@@ -293,10 +269,8 @@ mod tests {
         }
     }
 
-    /// Surface form `Maybe (other 42)` (the `ConstructorCall` fast lane's
-    /// leaf-Type-head shape) propagates the schema's tag check. Companion to
-    /// `primitive_rejects_unknown_tag`, which pins the same diagnostic through the
-    /// `(maybe) other 42` shape.
+    /// `ConstructorCall` fast lane (leaf-Type head) propagates the schema's tag check —
+    /// companion to `primitive_rejects_unknown_tag`'s `(maybe) other 42` shape.
     #[test]
     fn ctor_fast_lane_propagates_tag_validation_error() {
         let arena = RuntimeArena::new();
@@ -310,8 +284,7 @@ mod tests {
         );
     }
 
-    /// Surface form `Maybe (some (x))` where the value-cell is a parens-wrapped
-    /// identifier. The inner `(x)` rides the `BareIdentifier` fast lane to resolve
+    /// Value-cell sub-expression `(x)` rides the `BareIdentifier` fast lane to resolve
     /// `x` before the synthesized TAG call sees the typed-slot bind.
     #[test]
     fn ctor_fast_lane_with_sub_expression_value() {

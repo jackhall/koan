@@ -20,10 +20,9 @@
 use crate::machine::NodeId;
 use super::super::nodes::{NodeWork, work_deps};
 
-/// A backward edge stored in `dep_edges[consumer]`. Both kinds install the
-/// same forward wake edge in `notify_list[producer]`; the kind distinction
-/// matters only at reclaim time, where `free` recurses into `Owned` children
-/// but stops at `Notify` so the walk cannot transit into unrelated subgraphs.
+/// Backward edge in `dep_edges[consumer]`. Kind only matters at reclaim:
+/// `free` recurses into `Owned` children but stops at `Notify` so the walk
+/// cannot transit into unrelated subgraphs.
 #[derive(Copy, Clone, Debug)]
 pub(super) enum DepEdge {
     Owned(NodeId),
@@ -38,8 +37,7 @@ impl DepEdge {
     }
 }
 
-/// Owned-edge sidecar built from `work_deps`: every dep the spawning work
-/// reports is an owned sub-slot. `Notify` (park) edges are installed
+/// Owned-edge sidecar built from `work_deps`. Park edges are installed
 /// separately via `add_park_edge`.
 pub(super) fn work_owned_edges<'a>(work: &NodeWork<'a>) -> Vec<DepEdge> {
     match work_deps(work) {
@@ -48,17 +46,12 @@ pub(super) fn work_owned_edges<'a>(work: &NodeWork<'a>) -> Vec<DepEdge> {
     }
 }
 
-/// Tri-vector dependency state. All three vectors share an index space with
-/// `Scheduler::nodes`.
 pub(super) struct DepGraph {
-    /// Forward edges: producer index -> consumer indices to wake.
+    /// Forward wake edges: producer -> consumers.
     notify_list: Vec<Vec<usize>>,
-    /// Count of not-yet-observed deps per consumer. Reaching zero routes the
-    /// slot via `WorkQueues::push_woken`.
+    /// Not-yet-observed deps per consumer; zero routes via `WorkQueues::push_woken`.
     pending_deps: Vec<usize>,
-    /// Backward edges per consumer. `free` walks this sidecar but recurses
-    /// only into `Owned`, so park edges cannot transit the reclaim walk into
-    /// unrelated subgraphs.
+    /// Backward edges per consumer; `free` recurses only into `Owned`.
     dep_edges: Vec<Vec<DepEdge>>,
 }
 
@@ -71,12 +64,10 @@ impl DepGraph {
         }
     }
 
-    /// Atomic init of all three vectors for a freshly allocated slot,
-    /// branching on recycle vs. extend so the caller can't observe the
-    /// difference. `pending_producers` is the caller-filtered subset of
-    /// `owned_edges` whose producers are not yet terminal, keeping `DepGraph`
-    /// oblivious to results storage. Returns the installed pending count for
-    /// enqueue routing.
+    /// Atomic init of all three vectors for a freshly allocated slot
+    /// (recycle or extend). `pending_producers` is the caller-filtered subset
+    /// of `owned_edges` whose producers are not yet terminal, so `DepGraph`
+    /// stays oblivious to results storage. Returns the installed pending count.
     pub(super) fn install_for_slot(
         &mut self,
         consumer: NodeId,
@@ -98,8 +89,8 @@ impl DepGraph {
         pending_producers.len()
     }
 
-    /// Atomic +1 across all three vectors for a mid-run owned dep. Caller
-    /// guarantees `producer` is not yet terminal at install time.
+    /// Atomic +1 across all three vectors. Caller guarantees `producer` is
+    /// not yet terminal.
     pub(super) fn add_owned_edge(
         &mut self,
         producer: NodeId,
@@ -110,9 +101,9 @@ impl DepGraph {
         self.dep_edges[consumer.index()].push(DepEdge::Owned(producer));
     }
 
-    /// Atomic +1 across all three vectors for a mid-run park edge. The
-    /// backward entry is `Notify(producer)` so `free` skips past it. Caller
-    /// guarantees `producer` is not yet terminal.
+    /// Atomic +1 across all three vectors; the backward entry is
+    /// `Notify(producer)` so `free` skips past it. Caller guarantees
+    /// `producer` is not yet terminal.
     pub(super) fn add_park_edge(
         &mut self,
         producer: NodeId,
@@ -123,11 +114,10 @@ impl DepGraph {
         self.dep_edges[consumer.index()].push(DepEdge::Notify(producer));
     }
 
-    /// True iff `producer` is forward-reachable from `consumer` along the
-    /// wake graph — i.e. parking `consumer` on `producer` would deadlock
-    /// (e.g. `LET Ty = Ty`, where the sub-Dispatch is the binder's Owned
-    /// child and would park on its own ancestor). Caller surfaces a
-    /// structured error instead of installing the park edge.
+    /// True iff `producer` is forward-reachable from `consumer` — i.e.
+    /// parking `consumer` on `producer` would deadlock (e.g. `LET Ty = Ty`,
+    /// where the sub-Dispatch would park on its own ancestor). Caller surfaces
+    /// a structured error instead of installing the park edge.
     pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         if producer == consumer {
             return true;
@@ -151,16 +141,9 @@ impl DepGraph {
     /// Drains `notify_list[producer_idx]` and returns every consumer paired
     /// with a `hit_zero` flag indicating whether its `pending_deps` reached
     /// zero on this decrement. Atomic across the wake-pending pair (Inv-A
-    /// still holds — the decrement is in-method).
-    ///
-    /// Callers fan-out: `Scheduler::finalize` always pushes the producer to
-    /// the consumer's `recent_wakes` side-channel, and additionally stamps a
-    /// pending Lift + pushes onto the woken run-set when `hit_zero` is true.
-    /// Step 2 of the stateful-dispatch refactor (see
-    /// `roadmap/dispatch_fix/stateful-dispatch-02-recent-wakes.md`) widened
-    /// this return type from `Vec<usize>` so the caller can drive both the
-    /// side-channel append (per consumer) and the queue push (per
-    /// counter-zero consumer) off a single drain.
+    /// still holds — the decrement is in-method). The `hit_zero` channel lets
+    /// the caller append to a side-channel for every consumer while only
+    /// enqueueing counter-zero ones, off a single drain.
     pub(super) fn drain_notify(&mut self, producer_idx: usize) -> Vec<(usize, bool)> {
         let notifees = std::mem::take(&mut self.notify_list[producer_idx]);
         let mut out = Vec::with_capacity(notifees.len());
@@ -196,8 +179,6 @@ impl DepGraph {
     pub(super) fn is_dep_edges_empty(&self, idx: usize) -> bool {
         self.dep_edges[idx].is_empty()
     }
-
-    // --- Test-only accessors for direct synthetic-state setup. ---
 
     #[cfg(test)]
     pub(super) fn dep_edges_at(&self, idx: usize) -> &[DepEdge] {

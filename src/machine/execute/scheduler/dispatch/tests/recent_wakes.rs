@@ -6,12 +6,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::{NodeId, RuntimeArena};
 
-/// The `recent_wakes` side-channel is `Dispatch`-only. A non-`Dispatch`
-/// consumer (here a `Lift(Pending(producer))` slot) parked on a
-/// `Dispatch` producer must drain to an empty Vec — `push_recent_wake`
-/// filters non-Dispatch work via the same peek-discriminator pattern
-/// as `stamp_lift_ready`. The Lift's stamp-then-enqueue path stays
-/// intact (asserted indirectly through full-suite parity).
+/// `recent_wakes` is Dispatch-only; non-Dispatch consumers must drain empty.
 #[test]
 fn recent_wakes_empty_for_non_dispatch_consumer() {
     let arena = RuntimeArena::new();
@@ -27,10 +22,6 @@ fn recent_wakes_empty_for_non_dispatch_consumer() {
     assert!(sched.store.take_recent_wakes(consumer).is_empty());
 }
 
-/// A `Dispatch` consumer parked on a `Dispatch` producer records the
-/// producer's `NodeId` in `recent_wakes` when the producer finalizes.
-/// The drained list is the side channel the per-variant resume entries
-/// key off when waking from a track-install.
 #[test]
 fn recent_wakes_records_producer_for_dispatch_consumer() {
     let arena = RuntimeArena::new();
@@ -52,9 +43,6 @@ fn recent_wakes_records_producer_for_dispatch_consumer() {
     assert!(sched.store.take_recent_wakes(consumer).is_empty());
 }
 
-/// Sanity: a `NodeId` constructed via `add_dispatch` indexes the
-/// freshly-grown `recent_wakes` slot — drain on a never-woken
-/// Dispatch returns empty.
 #[test]
 fn recent_wakes_drain_default_empty() {
     let arena = RuntimeArena::new();

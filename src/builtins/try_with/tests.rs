@@ -17,8 +17,6 @@ fn ok_arm_runs_on_success_and_binds_it_to_value() {
     let bytes = run_program(
         "TRY (PRINT \"hello\") WITH (ok -> (PRINT \"caught ok\"))",
     );
-    // The expr ran first (printing "hello") and the ok arm fires with `it` bound to
-    // PRINT's return value ("hello"). The ok body prints "caught ok".
     assert_eq!(bytes, b"hello\ncaught ok\n");
 }
 
@@ -27,7 +25,6 @@ fn ok_binds_it_to_success_value() {
     let bytes = run_program(
         "TRY (PRINT \"value\") WITH (ok -> (PRINT it))",
     );
-    // First PRINT writes "value" and returns "value"; `it` is bound to that string.
     assert_eq!(bytes, b"value\nvalue\n");
 }
 
@@ -44,8 +41,7 @@ fn unbound_name_arm_catches_unbound_name() {
 
 #[test]
 fn shape_error_arm_catches_shape_error() {
-    // MATCH on a non-Tagged value raises ShapeError("inexhaustive match...") via
-    // `branch_walk`. Use that as a deterministic trigger.
+    // Inexhaustive MATCH is a deterministic ShapeError trigger.
     let bytes = run_program(
         "UNION Maybe = (some :Number none :Null)\n\
          LET m = (Maybe (some 1))\n\
@@ -112,12 +108,8 @@ fn wildcard_arm_catches_when_no_specific_match() {
     assert_eq!(bytes, b"caught wildcard\n");
 }
 
-/// Under the lexical-block model the TRY body runs in a fresh `child_under`
-/// scope. `LET x = 2` inside the body creates a local binding (shadow), not a
-/// rebind of the outer `x`, so the TRY succeeds and the WITH arm never fires.
-/// Pinned here as the divergent-bind hazard the lexical structure removes:
-/// pre-refactor this body leaked into the enclosing scope and produced a
-/// hidden Rebind. See roadmap/dispatch_fix/lexical-provenance.md §8.
+/// TRY body runs in a fresh `child_under` scope, so `LET x = 2` shadows rather
+/// than rebinds the outer `x`. The WITH arm never fires.
 #[test]
 fn try_body_let_creates_local_binding_not_rebind() {
     let bytes = run_program(
@@ -133,9 +125,7 @@ fn try_body_let_creates_local_binding_not_rebind() {
     );
 }
 
-/// Companion: the TRY body's local LET must NOT survive past the TRY. The body
-/// scope is `child_under(scope)`, so the binding lives in that child and
-/// disappears when the slot's chain is dropped.
+/// Companion: the TRY body's local LET must not survive past the TRY.
 #[test]
 fn try_body_let_not_visible_after_try() {
     let bytes = run_program(
@@ -143,8 +133,6 @@ fn try_body_let_not_visible_after_try() {
          TRY (LET y = 99) WITH (_ -> (PRINT it.kind))\n\
          PRINT x",
     );
-    // `PRINT x` reads the outer x (still 1), confirming the TRY body's binding
-    // didn't leak and the success path returned normally.
     assert_eq!(bytes, b"1\n");
 }
 
@@ -161,10 +149,8 @@ fn specific_arm_wins_over_wildcard() {
 
 #[test]
 fn frames_non_empty_after_recursive_call() {
-    // A user-fn that always references an unbound name; the BAD call appends a frame
-    // before the error reaches TRY's catch slot, so `it.frames` lists at least one
-    // entry rendered as `"in <expression> (<function>)"`. PRINT a List renders as
-    // `[item, …]`, so a non-empty list begins with `[in ` and an empty list is `[]`.
+    // PRINT renders a List as `[item, …]`, so a non-empty frames list starts
+    // with `[in ` and an empty list is `[]`.
     let bytes = run_program(
         "FN (BAD n :Number) -> Any = (missing_name)\n\
          TRY (BAD 1) WITH (\
@@ -195,13 +181,9 @@ fn nested_try_catches_inner_separately_from_outer() {
 
 #[test]
 fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
-    // `it` in the branch body resolves through the per-TRY child scope's `it`
-    // binding at dispatch time. This test routes through QUOTE/EVAL: `q` captures
-    // `(it)` at the top level (where `it` is not in scope, but QUOTE doesn't
-    // evaluate), then the branch body EVAL's `q`. EVAL resolves names against the
-    // call-site scope at run time — only the per-TRY child scope's `it` binding
-    // can satisfy the lookup. If that binding is removed, `it` is unbound when
-    // EVAL runs.
+    // EVAL resolves names against the call-site scope at run time, so `it`
+    // inside a top-level QUOTE only succeeds if the per-TRY child scope's `it`
+    // binding is visible there.
     let bytes = run_program(
         "LET q = #(it)\n\
          TRY (PRINT \"value\") WITH (\
@@ -213,9 +195,8 @@ fn it_resolves_via_scope_for_eval_of_top_level_quoted_reference() {
 
 #[test]
 fn try_inside_tco_position_preserves_frame_chain() {
-    // TRY inside a recursive HOP through a tagged value. Mirrors
-    // `match_case::recursive_tagged_match_no_uaf` — the catch path must keep the
-    // call-site frame Rc chained on the new frame.
+    // Mirror of `match_case::recursive_tagged_match_no_uaf`: the catch path
+    // must keep the call-site frame Rc chained on the new frame.
     let bytes = run_program(
         "UNION Bit = (one :Null zero :Null)\n\
          FN (HOP b :Tagged) -> Any = (TRY (MATCH (b) WITH (\

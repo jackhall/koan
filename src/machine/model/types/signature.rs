@@ -5,13 +5,9 @@
 //! Not to be confused with the **module-signature** type (`SIG`-declared) at
 //! [`crate::machine::model::values::module::Signature`].
 //!
-//! The `return_type` field is a [`ReturnType`] rather than a bare [`KType`] so functor
-//! return types that reference a per-call parameter (`-> Er`, `-> (MODULE_TYPE_OF Er Type)`,
-//! `-> (SIG_WITH Set ((Elt: Er)))`) survive FN-definition without sub-dispatching against
-//! the outer scope. The `Resolved(KType)` variant covers every non-templated case —
-//! builtins, user-defined FNs whose return type doesn't reference any parameter, every
-//! historical site — and `Deferred(DeferredReturn)` carries the parser- or
-//! expression-preserved form for per-call re-elaboration at the dispatch boundary.
+//! `return_type` is a [`ReturnType`] rather than a bare [`KType`] so functor return types
+//! that reference a per-call parameter (`-> Er`, `-> (MODULE_TYPE_OF Er Type)`) survive
+//! FN-definition without sub-dispatching against the outer scope.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::values::NamedPairs;
@@ -31,10 +27,10 @@ pub enum UntypedElement {
 /// uppercases lowercase registered tokens so the two sides agree on spelling.
 pub type UntypedKey = Vec<UntypedElement>;
 
-/// True iff `s` classifies as a keyword (fixed token). See [token classes in
-/// design/type-system.md](../../../../design/type-system.md#token-classes--the-parser-level-foundation):
-/// pure-symbol tokens (no ASCII letters) are always keywords; alphabetic tokens are keywords
-/// iff they have ≥2 ASCII-uppercase letters and no ASCII-lowercase letters.
+/// True iff `s` classifies as a keyword (fixed token). See
+/// [tokens.md](../../../../design/typing/tokens.md): pure-symbol tokens (no ASCII letters)
+/// are always keywords; alphabetic tokens are keywords iff they have ≥2 ASCII-uppercase
+/// letters and no ASCII-lowercase letters.
 pub fn is_keyword_token(s: &str) -> bool {
     let has_letter = s.chars().any(|c| c.is_ascii_alphabetic());
     if !has_letter {
@@ -60,40 +56,24 @@ pub struct ExpressionSignature<'a> {
     pub elements: Vec<SignatureElement<'a>>,
 }
 
-/// Carrier for an FN's declared return type. The shipped surface admits parameter-name
-/// references in return-type position (`FN (LIFT Er: OrderedSig) -> Er = ...`); per-call
-/// elaboration runs as a sibling Combine of the body and joins for the lift-time slot
-/// check. See [module-system functors][1].
-///
-/// `Resolved(KType)` is the static case — the return type is fully elaborated at
-/// FN-definition (or builtin-registration) time. Every builtin and every user-defined FN
-/// whose return type doesn't reference a parameter rides this arm.
-///
-/// `Deferred(DeferredReturn)` is the per-call case. The FN body's parameter-name scan
-/// (see [`crate::builtins::fn_def`]) detected at least one leaf matching a
-/// parameter; the captured surface form is held verbatim so the dispatch boundary can
-/// re-elaborate against the per-call scope where Stage A's type-side install has
-/// registered the parameter's type-language identity.
-///
-/// [1]: ../../../design/module-system.md#functors
+/// Carrier for an FN's declared return type. The surface admits parameter-name references
+/// in return-type position (`FN (LIFT Er: OrderedSig) -> Er = ...`); `Deferred` holds the
+/// captured surface form for per-call re-elaboration against the per-call scope where the
+/// parameter's type-language identity is registered. See
+/// [functors.md](../../../../design/typing/functors.md).
 pub enum ReturnType<'a> {
     Resolved(KType<'a>),
     Deferred(DeferredReturn<'a>),
 }
 
-/// Surface form preserved for per-call re-elaboration. Two carriers, mirroring the two
-/// FN overloads (one whose return-type slot is `TypeExprRef`, one whose slot is
-/// `KExpression`):
+/// Surface form preserved for per-call re-elaboration. Two carriers mirror the two FN
+/// return-type slot kinds:
 ///
-/// - `TypeExpr(TypeExpr)` — parser-preserved structured form. Bare leaves (`Er`) or
-///   parameterized leaves (`List<Er>`, `Wrap<Er>`). Re-elaborated per call via
-///   `elaborate_type_expr` against the per-call scope. The carrier is `'static` because
-///   `TypeExpr` itself owns its strings — no arena lifetime to thread.
-/// - `Expression(KExpression<'a>)` — captured parens-form expression
-///   (`(MODULE_TYPE_OF Er Type)`, `(SIG_WITH Set ((Elt: Er)))`). Re-runs as a
-///   sub-Dispatch under the per-call scope; the resulting `KTypeValue`'s inner `KType`
-///   is the per-call return type. Lifetime `'a` matches `KFunction::body` — same
-///   arena-anchored carrier discipline.
+/// - `TypeExpr` — parser-preserved structured form (`Er`, `List<Er>`). Re-elaborated per
+///   call via `elaborate_type_expr`. Owns its strings, so no arena lifetime.
+/// - `Expression` — captured parens-form expression (`(MODULE_TYPE_OF Er Type)`). Re-runs
+///   as a sub-Dispatch under the per-call scope; the resulting `KTypeValue`'s inner
+///   `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {
     TypeExpr(TypeExpr),
     Expression(KExpression<'a>),
@@ -118,12 +98,6 @@ impl<'a> Clone for DeferredReturn<'a> {
 }
 
 impl<'a> PartialEq for ReturnType<'a> {
-    /// Variant + payload equality. Two `Resolved` are equal iff their `KType`s match;
-    /// two `Deferred` are equal iff their carrier variants and payloads match
-    /// structurally. Used by [`ExpressionSignature::exact_equal`] to flag overload
-    /// duplicates — two
-    /// FN-defs whose return-type carriers are byte-identical are interchangeable for
-    /// dispatch, so the `DuplicateOverload` semantic still applies.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ReturnType::Resolved(a), ReturnType::Resolved(b)) => a == b,
@@ -142,11 +116,8 @@ impl<'a> PartialEq for DeferredReturn<'a> {
                 type_expr_eq(a, b)
             }
             (DeferredReturn::Expression(a), DeferredReturn::Expression(b)) => {
-                // Render-based structural equality. `KExpression` doesn't impl `Eq` and
-                // a deep walk over `ExpressionPart` (which carries `&'a KObject` futures)
-                // would have to handle pointer-equal Future entries. `summarize()` is the
-                // existing canonical-rendering helper and is sufficient for duplicate
-                // overload detection — the rendered form encodes structural identity.
+                // `KExpression` doesn't impl `Eq` (parts carry `&'a KObject` futures);
+                // canonical render is sufficient for duplicate-overload detection.
                 a.summarize() == b.summarize()
             }
             _ => false,
@@ -197,8 +168,7 @@ impl<'a> std::fmt::Debug for DeferredReturn<'a> {
 }
 
 impl<'a> ReturnType<'a> {
-    /// Surface name for diagnostics. `Resolved` delegates to `KType::name`; `Deferred`
-    /// renders the carrier's surface form (the `TypeExpr` or `KExpression` summary).
+    /// Surface name for diagnostics.
     pub fn name(&self) -> String {
         match self {
             ReturnType::Resolved(kt) => kt.name(),
@@ -207,13 +177,9 @@ impl<'a> ReturnType<'a> {
         }
     }
 
-    /// Lift-time return-type check. `Resolved` delegates to `KType::matches_value` —
-    /// the existing static check applies unchanged. `Deferred` returns `true` here:
-    /// the actual slot check moves into the per-call elaboration's Combine finish,
-    /// where the resolved `KType` is available. The lift-time site at
-    /// [`crate::machine::execute::scheduler::execute::Scheduler::execute`]
-    /// skips the per-slot check for `Deferred(_)` to avoid a redundant (and
-    /// always-passing) `Any`-style accept here.
+    /// Lift-time return-type check. `Deferred` returns `true` — the real slot check
+    /// runs in the per-call elaboration's Combine finish, where the resolved `KType`
+    /// is available.
     pub fn matches_value(&self, obj: &crate::machine::model::values::KObject<'a>) -> bool {
         match self {
             ReturnType::Resolved(kt) => kt.matches_value(obj),
@@ -221,9 +187,6 @@ impl<'a> ReturnType<'a> {
         }
     }
 
-    /// Convenience: `true` iff this is `Resolved(_)`. Used by the lift-time check at
-    /// `execute.rs` to decide whether to run the slot check inline or skip in favour of
-    /// the Combine finish's per-call check.
     pub fn is_resolved(&self) -> bool {
         matches!(self, ReturnType::Resolved(_))
     }
@@ -241,37 +204,16 @@ impl<'a> ExpressionSignature<'a> {
         })
     }
 
-    /// Named-argument call-shape match. Parses `args.parts` as `<name> = <value>`
-    /// triples (or the dict-literal surface — see [`NamedPairs`]) and reports
-    /// `true` iff every `SignatureElement::Argument` in this signature has a
-    /// name-keyed entry with a type-accepting value, with no residual unknown
-    /// names. `SignatureElement::Keyword` entries are *elided* — they appear in
-    /// the reconstructed positional form (see
-    /// [`KFunction::reconstruct_positional`](crate::machine::core::kfunction::KFunction::reconstruct_positional))
-    /// but never appear in the named-arg surface.
-    ///
-    /// Companion to `KFunction::reconstruct_positional`, which rebuilds the
-    /// positional expression by interleaving signature keywords between
-    /// picked-by-name values: that path is the invocation side; this is the
-    /// call-shape probe. Arg-order independence falls out of the named-by-name
-    /// lookup — `(a = 1, b = 2)` and `(b = 2, a = 1)` both satisfy `(a :Number
-    /// PICK b :Number)`.
-    ///
-    /// The dispatch scheduler's FunctionValueCall fast lane calls
-    /// `reconstruct_positional` directly and surfaces its structured `KError`,
-    /// rather than pre-checking with this helper; the helper remains in the
-    /// public API for downstream callers and as a cheap shape probe. There is
-    /// no companion positional `matches_*` admission — koan has no `f 1 2` call
-    /// syntax for function values, so the named-arg shape is the whole
-    /// user-facing surface.
+    /// Named-argument call-shape probe. Parses `args.parts` as `<name> = <value>` (or
+    /// the dict-literal surface — see [`NamedPairs`]) and reports `true` iff every
+    /// `Argument` has a name-keyed entry with a type-accepting value, with no residual
+    /// unknown names. `Keyword` elements are elided — they belong to the dispatch form,
+    /// not the named-arg surface.
     pub fn matches_without_keywords(&self, args: &KExpression<'a>) -> bool {
         let mut pairs = match NamedPairs::parse(args, "function call") {
             Ok(p) => p,
             Err(_) => return false,
         };
-        // Every Argument must have a name-keyed entry whose value-part is accepted by
-        // the slot's ktype. Skips Keyword elements entirely — they are part of the
-        // dispatch form, not the named-arg surface.
         for el in &self.elements {
             if let SignatureElement::Argument(arg) = el {
                 match pairs.take(&arg.name) {
@@ -280,8 +222,6 @@ impl<'a> ExpressionSignature<'a> {
                 }
             }
         }
-        // Any residual entry is an unknown-name error in the named-arg surface, so the
-        // signature does not admit this call shape.
         pairs.into_unknown().is_none()
     }
 
@@ -297,8 +237,8 @@ impl<'a> ExpressionSignature<'a> {
             .collect()
     }
 
-    /// Uppercases lowercase fixed tokens so the bucket key matches what dispatch computes from
-    /// incoming expressions. TODO(monadic-effects): emit a warning instead of silently
+    /// Uppercases lowercase fixed tokens so the bucket key matches what dispatch computes
+    /// from incoming expressions. TODO(monadic-effects): emit a warning instead of silently
     /// rewriting once effects exist — rejecting would lose the "drop in a builtin without
     /// thinking about caps" affordance.
     pub fn normalize(&mut self) {
@@ -311,8 +251,8 @@ impl<'a> ExpressionSignature<'a> {
         }
     }
 
-    /// Assumes `self` and `other` share an `UntypedKey` (caller's responsibility) — only
-    /// argument slots contribute, since fixed-token positions are equal by construction.
+    /// Assumes `self` and `other` share an `UntypedKey` — only argument slots contribute,
+    /// since fixed-token positions are equal by construction.
     pub fn specificity_vs(&self, other: &ExpressionSignature<'a>) -> Specificity {
         let mut any_more = false;
         let mut any_less = false;
@@ -333,12 +273,9 @@ impl<'a> ExpressionSignature<'a> {
         }
     }
 
-    /// Pairwise specificity tournament across a slice of co-bucket signatures. Returns
-    /// `Some(i)` iff `candidates[i]` is strictly more specific than every other candidate
-    /// (`StrictlyMore` against all peers, not `StrictlyMore | Equal` — `Equal` against any
-    /// peer means there's a same-arg-type duplicate, which must surface as ambiguity rather
-    /// than silently win). `None` for an empty slice or any no-clear-winner case; callers
-    /// distinguish via `candidates.is_empty()`.
+    /// Pairwise specificity tournament across co-bucket signatures. Returns `Some(i)` iff
+    /// `candidates[i]` is `StrictlyMore` than every peer — `Equal` against any peer means a
+    /// same-arg-type duplicate, which must surface as ambiguity rather than silently win.
     pub fn most_specific(candidates: &[&ExpressionSignature<'a>]) -> Option<usize> {
         candidates
             .iter()
@@ -353,15 +290,7 @@ impl<'a> ExpressionSignature<'a> {
 
     /// Structural equality on shape + per-`Argument` `KType` + return type. Independent of
     /// `Argument::name` — two overloads with matching shape and types collide for dispatch
-    /// regardless of parameter naming. The name-insensitive sibling of the derived
-    /// `PartialEq` impl.
-    ///
-    /// Return-type equality flows through [`ReturnType`]'s `PartialEq` impl. `Resolved`
-    /// compares by inner `KType`; `Deferred` compares by carrier variant + payload (see
-    /// `ReturnType::eq`'s docstring for the equality rule on the parens-form `Expression`
-    /// variant). Two FN-defs whose deferred carriers are structurally identical surface as
-    /// `DuplicateOverload`, which matches the existing semantic — they are interchangeable
-    /// for dispatch.
+    /// regardless of parameter naming.
     pub fn exact_equal(&self, other: &ExpressionSignature<'a>) -> bool {
         if self.return_type != other.return_type {
             return false;
@@ -383,8 +312,8 @@ pub enum SignatureElement<'a> {
 }
 
 /// `name` keys the slot in the `ArgumentBundle`; `ktype` gates what `ExpressionPart`s it
-/// accepts. Carries `'a` because the slot's declared `KType` may reference arena-pinned
-/// `Module` / `Signature` carriers after the type-language collapse.
+/// accepts. `'a` because the declared `KType` may reference arena-pinned `Module` /
+/// `Signature` carriers.
 pub struct Argument<'a> {
     pub name: String,
     pub ktype: KType<'a>,

@@ -120,8 +120,6 @@ fn struct_construction_value_type_mismatch() {
 
 #[test]
 fn struct_construction_with_identifier_arg() {
-    // Bare identifiers on the value side resolve through the `BareIdentifier` fast lane
-    // because `apply` wraps each value-part in a single-part sub-expression after reordering.
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
@@ -138,8 +136,6 @@ fn struct_construction_with_identifier_arg() {
 
 #[test]
 fn struct_construction_order_independent() {
-    // The user can write fields in any order; `apply` reorders to schema declaration order
-    // before construction. Result is identical regardless of source order.
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
@@ -192,11 +188,9 @@ fn struct_construction_unbound_type_token_errors() {
     );
 }
 
-/// Regression: struct values iterate (and therefore PRINT/`summarize` render) in
-/// declaration order. Pre-Phase-1 this used a `HashMap`, so the surface output sat at
-/// hash-iteration order — which differed from the schema and surprised users. The order
-/// `z, a, m` is chosen to differ from any alphabetical / hash-stable ordering on a small
-/// set of single-letter keys.
+/// Field order is `z, a, m` — picked to differ from any alphabetical or
+/// hash-stable ordering on single-letter keys, so a regression to a hashed
+/// container would be detectable.
 #[test]
 fn struct_value_iterates_in_declaration_order() {
     let arena = RuntimeArena::new();
@@ -224,7 +218,6 @@ fn struct_value_iterates_in_declaration_order() {
 
 #[test]
 fn struct_value_summarizes_with_type_name_and_fields() {
-    // Smoke-tests the `summarize` format so PRINT downstream doesn't surprise users.
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);

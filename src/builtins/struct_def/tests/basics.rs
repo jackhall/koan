@@ -4,8 +4,6 @@ use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_si
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
-/// Smoke test for STRUCT's binder_name extractor: structural extraction of the `Type(_)`
-/// token at `parts[1]`.
 #[test]
 fn binder_name_extracts_struct_name() {
     let expr = parse_one("STRUCT Point = (x :Number, y :Number)");
@@ -70,11 +68,8 @@ fn struct_rejects_unknown_type_name() {
     );
 }
 
-/// RAII pending-types lifecycle: a body-Err arm (here: unknown type name in
-/// the schema, which routes through `FieldListOutcome::Err`) must leave
-/// `bindings.pending_types` empty. With the guard the cleanup is
-/// unconditional; this test pins the property against a regression that
-/// shadows / forgets the guard on the early-return path.
+/// A body-Err arm must leave `bindings.pending_types` empty — pins against a
+/// regression that shadows or forgets the RAII guard on the early-return path.
 #[test]
 fn struct_err_arm_drops_pending_types_entry() {
     let arena = RuntimeArena::new();
@@ -110,9 +105,8 @@ fn struct_rejects_duplicate_field() {
 
 #[test]
 fn struct_rejects_odd_part_count() {
-    // Under the Design-B sigil regime, typed fields parse as `[Identifier, Type]`
-    // PAIRS. An odd number of parts (a name without its type slot) is rejected by
-    // the pair-list walker.
+    // Typed fields parse as `[Identifier, Type]` pairs; a name without its type
+    // slot is rejected by the pair-list walker.
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let err = run_one_err(scope, parse_one("STRUCT Pair = (x :Number y)"));

@@ -23,13 +23,11 @@ pub(super) enum NodeOutput<'a> {
 /// frame and scope. `function`, when set, names the user-fn whose body the replacement is
 /// entering — any error landing on this slot gets a `Frame` appended for the trace.
 ///
-/// `block_entry` is the lexical-block-entry annotation carried over from
-/// `BodyResult::Tail.block_entry`. `None` keeps the slot's current `LexicalFrame` chain
-/// unchanged (CONS-tail, builtin tail continuations). `Some(scope_id)` enters a new
-/// lexical block: when `function` is `None` the reinstall site prepends `(scope_id, 0)`
-/// to the chain; when `function` is `Some(f)` the chain is rebuilt via
-/// `assemble_body_chain` (the FN-body rule that keeps chain depth = lexical nesting
-/// depth, NOT call depth).
+/// `block_entry` annotates lexical-block entry. `None` keeps the slot's current
+/// `LexicalFrame` chain unchanged. `Some(scope_id)` enters a new lexical block: when
+/// `function` is `None` the reinstall site prepends `(scope_id, 0)` to the chain; when
+/// `function` is `Some(_)` the chain is rebuilt via `assemble_body_chain` (the FN-body
+/// rule that keeps chain depth = lexical nesting depth, NOT call depth).
 pub(super) enum NodeStep<'a> {
     Done(NodeOutput<'a>),
     Replace {
@@ -39,9 +37,8 @@ pub(super) enum NodeStep<'a> {
         block_entry: Option<ScopeId>,
         /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
         /// (mirrors [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
-        /// Read by `compute_replace_chain`'s `block_entry: Some(_)` arms to position
-        /// the freshly-pushed block frame at index `N` for multi-statement
-        /// tail-into-last; `0` (the default) is the single-statement case.
+        /// Positions the freshly-pushed block frame at index `N` for multi-statement
+        /// tail-into-last; `0` is the single-statement case.
         body_index: usize,
     },
 }
@@ -62,18 +59,11 @@ pub(super) enum NodeWork<'a> {
     /// universal birth state and one variant per `DispatchShape` for the
     /// stateful driver to transition into on first classification.
     /// `state.init.pre_subs` carries any recursively pre-submitted sub-
-    /// Dispatches keyed by their slot index in `expr.parts`; populated by
-    /// submit-time recursion for binder-shaped expressions (so a nested
-    /// binder's placeholders install at the outermost submission point —
-    /// see `roadmap/dispatch_fix/nested-binder-submission.md`), empty
+    /// Dispatches keyed by their slot index in `expr.parts`, populated at
+    /// submit time for binder-shaped expressions so a nested binder's
+    /// placeholders install at the outermost submission point; empty
     /// otherwise. Phase 4 of `run_dispatch` reuses these instead of
     /// allocating fresh sub-Dispatches for the named slots.
-    ///
-    /// In step 1 of the stateful-dispatch refactor, every Dispatch slot
-    /// reaches `Scheduler::execute` in `state == Initialized` (the legacy
-    /// driver never produces a non-Initialized state, and the park-rebuild
-    /// sites in `dispatch.rs` always reconstruct as `Initialized`). Later
-    /// steps add per-variant re-entry states.
     Dispatch {
         expr: KExpression<'a>,
         state: DispatchState<'a>,
@@ -89,9 +79,8 @@ pub(super) enum NodeWork<'a> {
         finish: CombineFinish<'a>,
     },
     /// Catching dual of a single-dep `Combine`: waits on `from` and hands its terminal
-    /// (Value or Err) to `finish`. The catching variant exists because `Combine` short-
-    /// circuits on dep-error before its finish runs; `Catch`'s finish always runs so the
-    /// closure can decide to recover. Backs `TRY-WITH`.
+    /// (Value or Err) to `finish`. `Combine` short-circuits on dep-error before its
+    /// finish runs; `Catch`'s finish always runs so the closure can decide to recover.
     Catch {
         from: NodeId,
         finish: CatchFinish<'a>,
@@ -101,11 +90,8 @@ pub(super) enum NodeWork<'a> {
 
 impl<'a> NodeWork<'a> {
     /// `Dispatch` in the `Initialized` birth state with empty `pre_subs`.
-    /// The common construction path — only the submit-time binder walk
-    /// populates `pre_subs` (via the `add_with_chain` rewrite arm in
-    /// `submit.rs`). Park-rebuild sites in `dispatch.rs` go through
-    /// [`DispatchState::initialized`] directly so they can carry the
-    /// preserved `pre_subs` across re-Dispatch.
+    /// Sites that need to carry pre-submitted sub-Dispatches across a
+    /// re-Dispatch go through [`DispatchState::initialized`] directly.
     pub(super) fn dispatch(expr: KExpression<'a>) -> Self {
         NodeWork::Dispatch {
             expr,
@@ -153,10 +139,8 @@ pub(super) struct Node<'a> {
     /// type-check pass.
     pub(super) function: Option<&'a KFunction<'a>>,
     /// Immutable cactus-chain naming this node's lexical position. Head frame is the
-    /// innermost enclosing block; tail (`parent: None`) is top-level. Attached by
-    /// `Scheduler::add` from `enter_block`'s explicit chain or the ambient
-    /// `active_chain`. See `core/lexical_frame.rs` and the roadmap item
-    /// `dispatch_fix/lexical-provenance.md`.
+    /// innermost enclosing block; tail (`parent: None`) is top-level. See
+    /// `core/lexical_frame.rs`.
     pub(super) chain: Rc<LexicalFrame>,
 }
 
@@ -166,14 +150,11 @@ pub(super) struct Node<'a> {
 /// prefix is installed separately as `Notify` edges by `Scheduler::add`.
 pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
-        // `pre_subs` are NOT read-deps of the Dispatch itself; they ride along
-        // structurally on the slot's `DispatchState::Initialized` so the
-        // keyworded part walk can splice them at the named slot indices.
+        // `pre_subs` ride along structurally on the slot's `DispatchState`; they are
+        // not read-deps of the Dispatch itself.
         NodeWork::Dispatch { .. } => None,
         NodeWork::Combine { deps, park_count, .. } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),
-        // `Lift` is only installed via `NodeStep::Replace` with deps wired explicitly;
-        // arms exist for total coverage and are exercised by tests below.
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
     }

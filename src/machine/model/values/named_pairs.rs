@@ -1,25 +1,13 @@
-//! Shared parser for named-argument lists. Used by struct construction
-//! ([`crate::builtins::struct_value::apply`]) and first-class function calls
-//! ([`KFunction::reconstruct_positional`](crate::machine::core::kfunction::KFunction::reconstruct_positional)) —
-//! the two paths that switched from positional to named arguments.
+//! Shared parser for named-argument lists. Two surface forms are accepted:
 //!
-//! Two surface forms are accepted:
+//! - `Point (x = 3, y = 4)` — paren-expr walked as `<Identifier> <Keyword("=")> <value>`
+//!   triples via [`parse_keyword_triple_list`].
+//! - `Point {x: 3, y: 4}` — single dict literal whose keys are the field names. The
+//!   dict-frame `:` keeps its pair-separator role, so this form is the natural surface
+//!   for users coming from dict literals.
 //!
-//! - `Point (x = 3, y = 4)` — paren-expr with `=`-separated triples. The inner expression
-//!   parts are walked as `<Identifier> <Keyword("=")> <value>` triples via
-//!   [`parse_keyword_triple_list`].
-//! - `Point {x: 3, y: 4}` — single dict literal whose string keys are the field names.
-//!   The dict-frame `:` keeps its pair-separator role, so this form is the natural
-//!   surface for users coming from dict literals.
-//!
-//! The parser inspects the input shape: a single `ExpressionPart::DictLiteral` chooses
-//! the dict-form path; anything else routes through the keyword-triple walker.
-//!
-//! After parsing, [`NamedPairs`] wraps the resulting name→value map as a consume-by-name
-//! handle: callers `take(name)` for each declared slot, and any residual entry surfaces
-//! via [`NamedPairs::into_unknown`] as the unknown-name error. The wrapper encodes the
-//! presence-once invariant the call sites previously enforced via three passes plus a
-//! `.expect("missing-arg check above guarantees presence")`.
+//! A single `ExpressionPart::DictLiteral` routes to the dict-form path; anything else
+//! routes through the keyword-triple walker.
 
 use std::collections::HashMap;
 
@@ -27,11 +15,9 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::parse_keyword_triple_list;
 
-/// Walk an expression's parts as a named-value list and assemble the resulting ordered
-/// list of `(name, value-part)` pairs. Errors with a `ShapeError`-string on malformed
-/// shapes or duplicate names.
-///
-/// Accepts either form (see module docs); empty `parts` returns an empty `Vec`.
+/// Walk an expression's parts as a named-value list (see module docs for accepted
+/// forms) and assemble the resulting ordered list of `(name, value-part)` pairs.
+/// Errors with a `ShapeError`-string on malformed shapes or duplicate names.
 pub fn parse_named_value_pairs<'a>(
     expr: &KExpression<'a>,
     context: &str,
@@ -59,14 +45,10 @@ pub fn parse_named_value_pairs<'a>(
     parse_keyword_triple_list(expr, context, "=", |part, _name| Ok(part.clone()))
 }
 
-/// Consume-by-name view over a named-argument list. Built from
-/// [`parse_named_value_pairs`]; callers `take(name)` for each declared slot and call
-/// [`into_unknown`](Self::into_unknown) at the end to surface any unconsumed name.
-///
-/// Duplicate names are rejected during parsing, so the map is bijective: each `take`
-/// either returns the unique value or yields a missing-name error. Arity is implicit —
-/// once every declared name has been taken and the residual is empty, the input
-/// matched the declaration exactly.
+/// Consume-by-name view over a named-argument list. Callers `take(name)` for each
+/// declared slot and call [`into_unknown`](Self::into_unknown) at the end to surface
+/// any unconsumed name. Duplicates are rejected during parsing, so each `take` is
+/// unique.
 pub struct NamedPairs<'a> {
     map: HashMap<String, ExpressionPart<'a>>,
 }

@@ -18,9 +18,6 @@ fn type_name_ref<'a>(name: &str, params: TypeParams) -> KObject<'a> {
 
 // ---------- shared-Rc clone paths on the extract_* helpers ----------
 
-/// `extract_kexpression`'s `Err(rc) => KExpression` arm: when the bundle's slot is
-/// shared with an outside holder, `Rc::try_unwrap` fails and the helper falls back
-/// to cloning the inner `KExpression`.
 #[test]
 fn extract_kexpression_clones_when_rc_is_shared() {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("k".into()))]);
@@ -32,8 +29,6 @@ fn extract_kexpression_clones_when_rc_is_shared() {
     assert!(matches!(got.parts.as_slice(), [Spanned { value: ExpressionPart::Identifier(n), .. }] if n == "k"));
 }
 
-/// `extract_kexpression`'s `Err(rc) => _` arm: shared `Rc` holding a non-`KExpression`
-/// variant yields `None`.
 #[test]
 fn extract_kexpression_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::Number(1.0));
@@ -43,8 +38,6 @@ fn extract_kexpression_shared_non_matching_variant_returns_none() {
     assert!(extract_kexpression(&mut bundle, "e").is_none());
 }
 
-/// `extract_ktype`'s `Err(rc) => KTypeValue` arm: shared `Rc` clones the inner
-/// `KType`.
 #[test]
 fn extract_ktype_clones_when_rc_is_shared() {
     let shared = Rc::new(KObject::KTypeValue(KType::Number));
@@ -54,7 +47,6 @@ fn extract_ktype_clones_when_rc_is_shared() {
     assert_eq!(extract_ktype(&mut bundle, "t"), Some(KType::Number));
 }
 
-/// `extract_ktype`'s `Err(rc) => _` arm.
 #[test]
 fn extract_ktype_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::Number(2.0));
@@ -64,8 +56,6 @@ fn extract_ktype_shared_non_matching_variant_returns_none() {
     assert!(extract_ktype(&mut bundle, "t").is_none());
 }
 
-/// `extract_type_name_ref`'s `Err(rc) => TypeNameRef` arm clones the carried
-/// `TypeExpr` when the slot's `Rc` is shared.
 #[test]
 fn extract_type_name_ref_clones_when_rc_is_shared() {
     let shared = Rc::new(type_name_ref("Foo", TypeParams::None));
@@ -76,7 +66,6 @@ fn extract_type_name_ref_clones_when_rc_is_shared() {
     assert_eq!(got.name, "Foo");
 }
 
-/// `extract_type_name_ref`'s `Err(rc) => _` arm.
 #[test]
 fn extract_type_name_ref_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::KTypeValue(KType::Number));
@@ -88,8 +77,6 @@ fn extract_type_name_ref_shared_non_matching_variant_returns_none() {
 
 // ---------- extract_bare_type_name arms ----------
 
-/// `TypeNameRef` carrier with `TypeParams::List(_)` → `ShapeError` with the
-/// rendered surface form.
 #[test]
 fn extract_bare_type_name_rejects_parameterized_type_name_ref_list() {
     let bundle = one_slot_bundle(
@@ -106,7 +93,6 @@ fn extract_bare_type_name_rejects_parameterized_type_name_ref_list() {
     }
 }
 
-/// `TypeNameRef` carrier with `TypeParams::Function { .. }` → `ShapeError`.
 #[test]
 fn extract_bare_type_name_rejects_parameterized_type_name_ref_function() {
     let bundle = one_slot_bundle(
@@ -129,9 +115,8 @@ fn extract_bare_type_name_rejects_parameterized_type_name_ref_function() {
     }
 }
 
-/// `KTypeValue` leaf-variant arm: surface name is the `KType::name()` rendering.
-/// Picks `KType::Number` as a representative leaf — the arm shares one body across
-/// every leaf variant in the match.
+/// `KType::Number` stands in for every leaf variant — the match arm shares one
+/// body across all of them.
 #[test]
 fn extract_bare_type_name_accepts_ktypevalue_leaf() {
     let bundle = one_slot_bundle("T", KObject::KTypeValue(KType::Number));
@@ -139,8 +124,6 @@ fn extract_bare_type_name_accepts_ktypevalue_leaf() {
     assert_eq!(name, "Number");
 }
 
-/// `KTypeValue` structural arm: `List<Number>` is parameterized and rejected with
-/// the rendered `:(LIST OF Number)` surface form embedded in the message.
 #[test]
 fn extract_bare_type_name_rejects_ktypevalue_structural() {
     let list = KType::List(Box::new(KType::Number));
@@ -155,8 +138,6 @@ fn extract_bare_type_name_rejects_ktypevalue_structural() {
     }
 }
 
-/// `Some(other)` arm: a slot holding a value-typed `KObject` (not a `TypeNameRef`
-/// or `KTypeValue` carrier) returns `TypeMismatch { expected: "TypeExprRef" }`.
 #[test]
 fn extract_bare_type_name_rejects_non_type_carrier() {
     let bundle = one_slot_bundle("T", KObject::Number(1.0));
@@ -171,7 +152,6 @@ fn extract_bare_type_name_rejects_non_type_carrier() {
     }
 }
 
-/// `None` arm: missing slot returns `MissingArg`.
 #[test]
 fn extract_bare_type_name_missing_slot_returns_missing_arg() {
     let bundle = ArgumentBundle { args: HashMap::new() };
@@ -191,8 +171,6 @@ fn unwrap_err<T>(r: Result<T, KError>) -> KError {
     }
 }
 
-/// `require_kexpression` mismatch arm: a non-`KExpression` slot routes through the
-/// shared `mismatch` helper.
 #[test]
 fn require_kexpression_mismatch_routes_through_mismatch_helper() {
     let bundle = one_slot_bundle("e", KObject::Number(1.0));
@@ -207,7 +185,6 @@ fn require_kexpression_mismatch_routes_through_mismatch_helper() {
     }
 }
 
-/// `require_ktype` mismatch arm.
 #[test]
 fn require_ktype_mismatch_routes_through_mismatch_helper() {
     let bundle = one_slot_bundle("t", KObject::Number(1.0));
@@ -215,7 +192,6 @@ fn require_ktype_mismatch_routes_through_mismatch_helper() {
     assert!(matches!(err.kind, KErrorKind::TypeMismatch { .. }));
 }
 
-/// `require_module` mismatch arm.
 #[test]
 fn require_module_mismatch_routes_through_mismatch_helper() {
     let bundle = one_slot_bundle("m", KObject::Number(1.0));
@@ -223,7 +199,6 @@ fn require_module_mismatch_routes_through_mismatch_helper() {
     assert!(matches!(err.kind, KErrorKind::TypeMismatch { .. }));
 }
 
-/// `require_signature` mismatch arm.
 #[test]
 fn require_signature_mismatch_routes_through_mismatch_helper() {
     let bundle = one_slot_bundle("s", KObject::Number(1.0));
@@ -231,8 +206,6 @@ fn require_signature_mismatch_routes_through_mismatch_helper() {
     assert!(matches!(err.kind, KErrorKind::TypeMismatch { .. }));
 }
 
-/// `require` (the no-narrow variant) routes a missing slot through `get_or_missing`'s
-/// `MissingArg` closure — exercises the second arm of `ok_or_else`.
 #[test]
 fn require_missing_slot_returns_missing_arg() {
     let bundle = ArgumentBundle { args: HashMap::new() };
@@ -245,23 +218,18 @@ fn require_missing_slot_returns_missing_arg() {
 
 // ---------- unique-Rc Ok(_) => None arms on the extract_* helpers ----------
 
-/// `extract_kexpression`'s `Ok(_) => None` arm: the bundle owns the only `Rc`
-/// (`try_unwrap` succeeds) but the inner variant isn't `KExpression`, so the helper
-/// returns `None`. Distinct from the shared-`Rc` mismatch arm covered above.
 #[test]
 fn extract_kexpression_unique_non_matching_variant_returns_none() {
     let mut bundle = one_slot_bundle("e", KObject::Number(1.0));
     assert!(extract_kexpression(&mut bundle, "e").is_none());
 }
 
-/// `extract_ktype`'s `Ok(_) => None` arm.
 #[test]
 fn extract_ktype_unique_non_matching_variant_returns_none() {
     let mut bundle = one_slot_bundle("t", KObject::Number(1.0));
     assert!(extract_ktype(&mut bundle, "t").is_none());
 }
 
-/// `extract_type_name_ref`'s `Ok(_) => None` arm.
 #[test]
 fn extract_type_name_ref_unique_non_matching_variant_returns_none() {
     let mut bundle = one_slot_bundle("t", KObject::KTypeValue(KType::Number));

@@ -18,23 +18,18 @@ use super::scope::Scope;
 ///   auto-derived drops only touch *owned* contents.
 ///
 /// `KObject` and `KType` go through the single cycle-gated [`alloc`](RuntimeArena::alloc)
-/// entry via [`CycleGated`]; `KFunction` / `Scope` / `Module` / `Signature` use their
-/// own un-gated `alloc_*` methods because none of them can hold a self-targeting
-/// `Rc<CallArena>` today.
+/// entry via [`CycleGated`]; `KFunction` / `Scope` / `Module` / `Signature` use un-gated
+/// `alloc_*` methods because none of them can hold a self-targeting `Rc<CallArena>`.
 ///
-/// `escape` backs the cycle gate on `alloc` (the [`CycleGated`] entry); see
-/// [memory-model.md § Cycle gate](../../../design/memory-model.md#cycle-gate-on-alloc_object).
+/// See [memory-model.md § Cycle gate](../../../design/memory-model.md#cycle-gate-on-alloc_object).
 pub struct RuntimeArena {
     objects: Arena<KObject<'static>>,
     functions: Arena<KFunction<'static>>,
     scopes: Arena<Scope<'static>>,
     modules: Arena<Module<'static>>,
     signatures: Arena<Signature<'static>>,
-    /// `KType<'a>` carries arena-pinned references for the module/signature variants;
-    /// storage uses the `<'static>` erasure pattern shared with `objects` / `functions` /
-    /// `scopes` / `modules` / `signatures`. SAFETY follows the same argument: zero-sized
-    /// lifetimes, returned `&'a` tied to the caller's borrow, no `'static` reference
-    /// escapes. Backs the per-type identity binding storage (`Bindings::types` map).
+    /// Backs per-type identity binding storage (`Bindings::types`). Same erasure /
+    /// SAFETY argument as the other sub-arenas.
     ktypes: Arena<KType<'static>>,
     /// Stable addresses of every `KObject` allocated here. Backs `owns_object` membership
     /// queries via a linear scan (no deref, no borrow). `usize` rather than `*const _` keeps
@@ -60,8 +55,7 @@ impl RuntimeArena {
         }
     }
 
-    /// Construct a `RuntimeArena` whose `alloc` redirects self-cyclic values to
-    /// `escape` (the cycle gate; see [`CycleGated`]).
+    /// `alloc` will redirect self-cyclic values to `escape`; see [`CycleGated`].
     pub fn with_escape(escape: *const RuntimeArena) -> Self {
         Self {
             objects: Arena::new(),
@@ -76,8 +70,7 @@ impl RuntimeArena {
     }
 
 
-    /// Whether `ptr` was returned by a prior `alloc::<KObject<_>>` on this arena. Linear
-    /// scan over `allocated_objects`.
+    /// Whether `ptr` was returned by a prior `alloc::<KObject<_>>` on this arena.
     pub fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
         // `KObject` is invariant in `'a`, so the through-`'static` cast is required despite
         // clippy's complaint.
@@ -130,8 +123,8 @@ impl RuntimeArena {
     }
 
 
-    /// Whether the functions sub-arena holds zero `KFunction`s. When true, no value can hold
-    /// a `&KFunction` pointing into this arena — see the `alloc_function` invariant.
+    /// When true, no value can hold a `&KFunction` pointing into this arena — see the
+    /// `alloc_function` invariant.
     pub fn functions_is_empty(&self) -> bool { self.functions.len() == 0 }
 }
 
@@ -150,7 +143,7 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
     match obj {
         KObject::KFunction(_, Some(rc)) => rc_targets(rc, arena_ptr),
         KObject::KFuture(_, Some(rc)) => rc_targets(rc, arena_ptr),
-        // Post-collapse: a module value rides `KTypeValue(KType::Module { frame, .. })`.
+        // A module value rides `KTypeValue(KType::Module { frame, .. })`.
         KObject::KTypeValue(kt) => ktype_anchors_to(kt, arena_ptr),
         KObject::List(items, _) => items.iter().any(|x| obj_anchors_to(x, arena_ptr)),
         KObject::Dict(entries, _, _) => entries.values().any(|x| obj_anchors_to(x, arena_ptr)),
@@ -167,21 +160,17 @@ fn ktype_anchors_to(t: &KType<'_>, arena_ptr: *const RuntimeArena) -> bool {
     }
 }
 
-/// Per-type plumbing for the cycle-gated allocator. Each implementor pairs its
-/// anchor predicate (which sub-values carry an `Rc<CallArena>` and whose
-/// backing arena to compare against) with its sub-arena local-alloc body.
-/// Sharing this through one trait keeps the gate-and-recurse logic in
-/// [`RuntimeArena::alloc_gated`] rather than forked across per-type
-/// `alloc_*` methods — a future variant gaining a frame anchor adds one
-/// `impl CycleGated`, not another copy of the gate.
+/// Per-type plumbing for the cycle-gated allocator. Sharing this through one trait keeps
+/// the gate-and-recurse logic in [`RuntimeArena::alloc`] rather than forked across per-type
+/// `alloc_*` methods — a future variant gaining a frame anchor adds one `impl CycleGated`,
+/// not another copy of the gate.
 pub trait CycleGated<'a>: Sized {
-    /// True iff any descendant carries an `Rc<CallArena>` whose backing
-    /// `RuntimeArena` is `arena_ptr` — i.e. allocating `self` into the
-    /// arena at `arena_ptr` would form a self-referential cycle.
+    /// True iff any descendant carries an `Rc<CallArena>` whose backing `RuntimeArena` is
+    /// `arena_ptr` — i.e. allocating `self` into that arena would form a self-referential
+    /// cycle.
     fn anchors_to(&self, arena_ptr: *const RuntimeArena) -> bool;
-    /// Lifetime-erase and stash `self` in the appropriate sub-arena of
-    /// `arena`. The cycle-gate has already redirected to the escape arena
-    /// if needed; this is the local-store step.
+    /// Lifetime-erase and stash `self` in the appropriate sub-arena. The cycle gate has
+    /// already redirected to the escape arena if needed; this is the local-store step.
     fn alloc_local(self, arena: &'a RuntimeArena) -> &'a Self;
 }
 
@@ -215,18 +204,15 @@ impl<'a> CycleGated<'a> for KType<'a> {
 }
 
 impl RuntimeArena {
-    /// Single allocator entry for any `T: CycleGated`. Walks the escape chain
-    /// when the value would self-cycle (an `Rc<CallArena>` pointing back at
-    /// `self`), then hands off to the type's `alloc_local`. `KObject` and
-    /// `KType` are the impls today; a future variant that gains a frame
-    /// anchor adds one `impl CycleGated`, not another `alloc_X` method.
+    /// Single allocator entry for any `T: CycleGated`. Walks the escape chain when the
+    /// value would self-cycle (an `Rc<CallArena>` pointing back at `self`), then hands off
+    /// to the type's `alloc_local`.
     ///
-    /// SAFETY of the `&*escape_ptr`: `escape_ptr` was set by `CallArena::new`
-    /// to the outer scope's arena address. The outer arena outlives `self`
-    /// per the lexical-scoping invariant (per-call frames are nested inside
-    /// their captured definition scope's arena); `Rc<CallArena>` keeps the
-    /// chain pinned. So `'a` (bounded by `&self`) is a valid lifetime to
-    /// attach to the dereferenced escape pointer.
+    /// SAFETY of the `&*escape_ptr`: `escape_ptr` was set by `CallArena::new` to the outer
+    /// scope's arena address. The outer arena outlives `self` per the lexical-scoping
+    /// invariant (per-call frames nest inside their captured definition scope's arena);
+    /// `Rc<CallArena>` keeps the chain pinned. So `'a` (bounded by `&self`) is a valid
+    /// lifetime to attach to the dereferenced escape pointer.
     pub fn alloc<'a, T: CycleGated<'a>>(&'a self, value: T) -> &'a T {
         if let Some(escape_ptr) = self.escape {
             let self_ptr = self as *const RuntimeArena;
@@ -242,10 +228,8 @@ impl RuntimeArena {
 #[cfg(test)]
 impl RuntimeArena {
     /// Total number of values stored across all six sub-arenas (test-only). Each `alloc_*`
-    /// method writes to exactly one sub-arena, so this is the precise allocation count
-    /// without double-counting — a `KObject::KTypeValue(KType::Module { module, frame })`
-    /// value, for example, occupies one slot in `objects` and the referenced `&Module`
-    /// occupies an independent slot in `modules`.
+    /// writes to exactly one sub-arena, so this is the precise allocation count without
+    /// double-counting.
     pub fn alloc_count(&self) -> usize {
         self.objects.len()
             + self.functions.len()
@@ -257,16 +241,11 @@ impl RuntimeArena {
 }
 
 /// Static-singleton inhabitants. `KObject` itself isn't `Sync` (some variants carry `Rc` /
-/// `Box<dyn Trait>`), but `Null` and `Bool(bool)` are unit-shaped — no references, no
-/// interior shared state. Typing the static storage at this unit-only enum lets the
-/// `NULL_HOLDER` / `TRUE_HOLDER` / `FALSE_HOLDER` statics derive `Sync` naturally, so no
-/// dedicated `unsafe impl Sync` is needed for static storage.
-///
-/// The `Holder` statics are storage-only; the accessors below project the corresponding
-/// `&KObject<'static>` from a `const KObject<'static>` item (a `const` is inlined per use
-/// site and doesn't go through static storage, so `KObject: !Sync` is no obstacle). The
-/// remaining `unsafe` in each accessor is the `'static → 'a` re-annotation, which is sound
-/// because the carried variant holds no lifetime-parameterized data.
+/// `Box<dyn Trait>`), but `Null` and `Bool(bool)` are unit-shaped. Typing the static
+/// storage at this unit-only enum lets the `*_HOLDER` statics derive `Sync` naturally —
+/// no `unsafe impl Sync` needed. The accessors then project a `const KObject` (inlined
+/// per use site, sidestepping `!Sync`) and re-annotate `'static → 'a`, sound because the
+/// projected variants carry no lifetime-parameterized data.
 enum StaticKValue {
     Null,
     Bool(bool),
@@ -276,11 +255,9 @@ static NULL_HOLDER: StaticKValue = StaticKValue::Null;
 static TRUE_HOLDER: StaticKValue = StaticKValue::Bool(true);
 static FALSE_HOLDER: StaticKValue = StaticKValue::Bool(false);
 
-/// Project the `KObject` view of a static `StaticKValue`. Lives at the boundary so the
-/// `Holder` statics' typed inventory drives the accessor surface: any future addition to
-/// `StaticKValue` is forced through here. `const` items inline at the use site, so the
-/// returned reference is rvalue-promoted to `&'static KObject<'static>` without requiring
-/// `KObject: Sync`.
+/// Project the `KObject` view of a static `StaticKValue`. Lives at the boundary so any
+/// future addition to `StaticKValue` is forced through here. `const` items inline at the
+/// use site, so the returned reference is rvalue-promoted without requiring `KObject: Sync`.
 fn project<'a>(v: &'static StaticKValue) -> &'a KObject<'a> {
     const NULL: KObject<'static> = KObject::Null;
     const TRUE: KObject<'static> = KObject::Bool(true);
@@ -296,13 +273,10 @@ fn project<'a>(v: &'static StaticKValue) -> &'a KObject<'a> {
     unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(r) }
 }
 
-/// Singleton `&KObject::Null`.
 pub fn null_singleton<'a>() -> &'a KObject<'a> { project(&NULL_HOLDER) }
 
-/// Singleton `&KObject::Bool(true)`.
 pub fn true_singleton<'a>() -> &'a KObject<'a> { project(&TRUE_HOLDER) }
 
-/// Singleton `&KObject::Bool(false)`.
 pub fn false_singleton<'a>() -> &'a KObject<'a> { project(&FALSE_HOLDER) }
 
 /// One user-fn call's allocation frame. Owns its own `RuntimeArena` for the per-call child
@@ -317,9 +291,8 @@ pub fn false_singleton<'a>() -> &'a KObject<'a> { project(&FALSE_HOLDER) }
 /// SAFETY: `CallArena` is only heap-pinned via `Rc`, so `arena`'s heap address is stable
 /// for the Rc's life and `scope_ptr` (into `arena.scopes`) stays valid alongside it.
 /// Accessors re-attach lifetimes anchored to `&self`. Field declaration order keeps
-/// `arena` before `outer_frame` so the auto-derived `Drop` tears down this arena's
-/// allocations before releasing the parent Rc — inner pointers die before the outer
-/// storage they may reference.
+/// `arena` before `outer_frame` so the auto-derived `Drop` tears down this arena before
+/// releasing the parent Rc — inner pointers die before the outer storage they may reference.
 pub struct CallArena {
     arena: RuntimeArena,
     scope_ptr: *const Scope<'static>,
@@ -363,20 +336,13 @@ impl CallArena {
         }
     }
 
-    /// Scope handle whose borrow lifetime is statically tied to `&self`. Use this when
-    /// feeding the per-call scope into local-bind plumbing (e.g. [`Scope::bind_value`])
-    /// that does not need to escape the `Rc`'s borrow.
-    ///
-    /// Unlike [`CallArena::scope`], the returned reference is bounded by `'p` (the
-    /// `&'p Rc<Self>` receiver's borrow), so the caller does not need an `unsafe`
-    /// `'a`-anchoring transmute to feed it into `'p`-lifetime APIs. The single internal
-    /// transmute converts the `'static`-erased `scope_ptr` storage back to the receiver's
-    /// borrow lifetime — strictly shorter than the broader `&'a Scope<'a>` claim that
-    /// [`CallArena::scope`] makes.
+    /// Scope handle bounded by `&'p Rc<Self>` — strictly shorter than the `&'a Scope<'a>`
+    /// claim of [`CallArena::scope`]. Use this for local-bind plumbing (e.g.
+    /// [`Scope::bind_value`]) that does not need to escape the `Rc`'s borrow, so the caller
+    /// avoids an `unsafe` `'a`-anchoring transmute on the receiving end.
     ///
     /// SAFETY: `scope_ptr` is stable for the `Rc`'s lifetime (heap-pinned by `Rc`); the
-    /// returned `'p` is bounded by `&'p Rc<Self>` so the borrow cannot outlive the
-    /// receiver.
+    /// returned `'p` is bounded by the receiver so the borrow cannot outlive it.
     pub fn scope_for_bind<'p>(self: &'p Rc<Self>) -> &'p Scope<'p> {
         unsafe {
             std::mem::transmute::<&Scope<'static>, &'p Scope<'p>>(&*self.scope_ptr)
@@ -396,12 +362,11 @@ impl CallArena {
     /// sub-Dispatch, etc.), so a reuse would be visible to that escaped reference
     /// and break snapshot semantics.
     ///
-    /// SAFETY: callers must guarantee that at the moment of call, no live reference
-    /// into the old `arena` or old child `Scope` is held outside this `Rc`. The
-    /// `Rc::get_mut` gate is the structural witness for that: if any other `Rc` to
-    /// this frame still exists, reset is refused; if none does, the only references
-    /// into the arena live in slots already terminalized and freed by the time TCO
-    /// Replace runs (per `execute.rs`'s dep-edges-cleared invariant).
+    /// SAFETY: callers must guarantee that at the moment of call, no live reference into
+    /// the old `arena` or old child `Scope` is held outside this `Rc`. The `Rc::get_mut`
+    /// gate is the structural witness: if any other `Rc` to this frame still exists, reset
+    /// is refused; if none does, by the dep-edges-cleared TCO invariant the only references
+    /// into the arena lived in slots already terminalized and freed.
     pub fn try_reset_for_tail<'p>(
         self: &mut Rc<Self>,
         new_outer: &'p Scope<'p>,
@@ -488,9 +453,9 @@ mod tests {
         assert!(std::ptr::eq(s.arena, frame.arena()));
     }
 
-    /// Raw-pointer roundtrip: extract `*const RuntimeArena` and `*const Scope<'_>` from a
-    /// frame, transmute via `&*ptr` to lifetime-anchored refs, mutate the arena through
-    /// one ref while the other is still live, then read through the held child ref.
+    /// Raw-pointer roundtrip: lifetime-anchor an extracted `*const RuntimeArena` and
+    /// `*const Scope<'_>` from the same frame, then mutate via one ref while the other
+    /// stays live.
     #[test]
     fn call_arena_scope_survives_subsequent_alloc_via_raw_ptr_roundtrip() {
         let arena = RuntimeArena::new();
@@ -520,9 +485,8 @@ mod tests {
         assert!(s1.outer.is_some());
     }
 
-    /// Two-deep `outer_frame` chain. Drop the local `outer` Rc handle before reading
-    /// through `inner.scope().outer.unwrap()` — at that point only `inner.outer_frame`
-    /// keeps the outer arena alive.
+    /// Two-deep chain: dropping the local `outer` handle leaves only `inner.outer_frame`
+    /// keeping the outer arena alive while we read through `inner.scope().outer`.
     #[test]
     fn call_arena_chained_outer_frame_walkable() {
         let arena = RuntimeArena::new();
@@ -535,9 +499,8 @@ mod tests {
         assert!(outer_scope.outer.is_some());
     }
 
-    /// Re-anchor `frame.scope()` via transmute, move it into a struct alongside the
-    /// frame's Rc, drop the local Rc handle, then read the re-anchored ref through the
-    /// struct field — the in-struct Rc must keep the arena alive for `h.s`.
+    /// In-struct Rc must keep the arena alive for a re-anchored `&Scope` stored alongside
+    /// it once the local Rc handle is dropped.
     #[test]
     fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
         struct Holder<'a> { s: &'a Scope<'a>, _f: Rc<CallArena> }
@@ -554,10 +517,8 @@ mod tests {
         assert!(h.s.outer.is_some());
     }
 
-    /// `RuntimeArena::alloc_object` does `RefCell::borrow_mut` on `allocated_objects`
-    /// while a prior `&KObject` from the same arena is shared-borrowed. Typed-arena
-    /// promises stable addresses, but tree borrows is sensitive to interleaved mutation
-    /// under live shared borrows — pin the shape down.
+    /// Allocating mutates `allocated_objects` via `RefCell::borrow_mut` while a prior
+    /// `&KObject` from the same arena is shared-borrowed. Pins that tree-borrows shape.
     #[test]
     fn runtime_arena_alloc_while_prior_ref_live() {
         let a = RuntimeArena::new();
@@ -567,8 +528,7 @@ mod tests {
         assert!(matches!(r2, KObject::Number(n) if *n == 2.0));
     }
 
-    /// `alloc_ktype` returns an arena-lifetime `&KType` and bumps `alloc_count` by one. Pins
-    /// the new sub-arena's accounting alongside the no-`unsafe`, no-transmute storage path.
+    /// `alloc::<KType>` returns an arena-lifetime `&KType` and bumps `alloc_count` by one.
     #[test]
     fn alloc_ktype_returns_arena_lifetime_ref_and_counts() {
         let a = RuntimeArena::new();
@@ -578,32 +538,23 @@ mod tests {
         assert_eq!(a.alloc_count(), baseline + 1);
     }
 
-    /// `try_reset_for_tail` swaps the inner `RuntimeArena` for a fresh one and
-    /// re-allocates the child `Scope` into it. Pins the new transmute pair (the
-    /// `&Scope<'_> → &Scope<'static>` outer cast and the raw-arena-ptr
-    /// re-anchor) under tree borrows: after reset, an alloc_object via the
-    /// frame's `arena()` plus a `bind_value` on `frame.scope()` must coexist.
+    /// Pins the reset transmute pair (`&Scope<'_> → &Scope<'static>` outer cast plus the
+    /// raw-arena-ptr re-anchor) under tree borrows: after reset, a fresh alloc via
+    /// `arena()` and a `bind_value` on `scope()` must coexist.
     #[test]
     fn call_arena_try_reset_for_tail_round_trip() {
         let outer_arena = RuntimeArena::new();
         let outer_scope = default_scope(&outer_arena, Box::new(std::io::sink()));
         let mut frame: Rc<CallArena> = CallArena::new(outer_scope, None);
-        // Allocate something into the pre-reset arena so we know it's live.
         let _pre = frame.arena().alloc(KObject::Number(1.0));
-        let pre_count = frame.arena().alloc_count();
-        assert!(pre_count >= 1);
+        assert!(frame.arena().alloc_count() >= 1);
 
         let did_reset = frame.try_reset_for_tail(outer_scope);
         assert!(did_reset, "Rc was unique, reset must succeed");
 
-        // Fresh arena: storage was torn down. The new scope alloc adds 1.
-        assert_eq!(
-            frame.arena().alloc_count(),
-            1,
-            "reset arena should hold only the freshly allocated child scope",
-        );
+        // Fresh arena: only the new child scope remains.
+        assert_eq!(frame.arena().alloc_count(), 1);
 
-        // Round-trip: bind a value into the reset scope, read it back.
         let v = frame.arena().alloc(KObject::Number(42.0));
         frame.scope().bind_value("k".to_string(), v, BindingIndex::BUILTIN).unwrap();
         assert!(matches!(frame.scope().lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
@@ -627,7 +578,6 @@ mod tests {
         let did_reset = frame.try_reset_for_tail(outer_scope);
         assert!(!did_reset, "aliased frame must refuse reset");
 
-        // Frame untouched: same arena instance, same allocations as before.
         assert_eq!(
             frame.arena() as *const RuntimeArena as usize,
             pre_arena_addr,
@@ -669,7 +619,7 @@ mod tests {
         let stored_ptr = stored as *const KObject<'_>;
         assert!(
             outer.owns_object(stored_ptr),
-            "self-anchored alloc_object should redirect to the escape arena (outer)",
+            "self-anchored alloc should redirect to the escape arena (outer)",
         );
         assert!(
             !frame.arena().owns_object(stored_ptr),

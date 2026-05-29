@@ -25,8 +25,6 @@ fn let_inserts_binding_into_scope() {
     assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
 }
 
-/// Smoke test for LET's binder_name extractor: structural extraction of `parts[1]`
-/// returns the bound name without requiring sub-dispatches.
 #[test]
 fn binder_name_extracts_let_name() {
     use crate::parse::parse;
@@ -36,9 +34,8 @@ fn binder_name_extracts_let_name() {
     assert_eq!(name.as_deref(), Some("hello"));
 }
 
-/// End-to-end install-then-clear: dispatch `LET x = 1` through the scheduler. The
-/// binder_name hook installs `placeholders["x"] = NodeId(...)` before the body runs;
-/// after the body finalizes via `bind_value`, the placeholder is removed.
+/// End-to-end install-then-clear: the binder_name hook installs a placeholder
+/// before the body runs; `bind_value` clears it on finalize.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::machine::RuntimeArena;
@@ -51,19 +48,13 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
     let exprs = parse("LET hello = 1").unwrap();
     for e in exprs { sched.add_dispatch(e, scope); }
     sched.execute().unwrap();
-    // After execute, placeholders should not contain "hello" — bind_value cleared it.
     assert!(scope.bindings().placeholders().get("hello").is_none());
     assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
 }
 
-/// Phase 3: `LET T = T` is a trivially cyclic alias — the RHS references the binder
-/// itself. Under index-gated resolution the self-reference is the degenerate "value
-/// LET defined at the same lexical position as the reference" case: the producer's
-/// `Ty` placeholder sits at index `i`, the consumer reads at cutoff `i`, and the
-/// strict `b.idx < c` predicate makes the binding invisible — so the consumer
-/// surfaces `UnboundName` rather than the old self-park cycle path. The
-/// non-nominal-binder carve-out does not apply (LET is value-style gated).
-/// Same surface as the Identifier-LHS form (`LET x = x`).
+/// `LET T = T` is a trivially cyclic alias. Under index-gated resolution the
+/// strict `b.idx < c` predicate makes the in-progress binding invisible so the
+/// consumer surfaces `UnboundName` rather than self-parking on a cycle.
 #[test]
 fn let_t_cycle_errors() {
     use crate::machine::RuntimeArena;
@@ -87,19 +78,14 @@ fn let_t_cycle_errors() {
     }
 }
 
-/// Stage 1.6: `LET Foo = <non-type>` — Type-class LHS with a non-type RHS. The
-/// bind-time check fires before the value reaches storage, producing a structured
-/// `TypeClassBindingExpectsType` rather than the downstream `UnboundName` /
-/// `ShapeError` the old "bind silently" path eventually surfaced. Covers Number
-/// and Str independently — the blocklist's `matches!` arm carries one variant per
-/// primitive, so removing any single variant must surface here.
+/// `LET Foo = <non-type>` — Type-class LHS with a non-type RHS surfaces a
+/// structured `TypeClassBindingExpectsType`. Covers Number and Str independently
+/// so removing either primitive variant from the allowlist regresses here.
 #[test]
 fn let_type_class_with_non_type_value_errors() {
     use crate::machine::RuntimeArena;
     use crate::machine::KErrorKind;
     use crate::parse::parse;
-    // Post-collapse: `TypeClassBindingExpectsType.got` is the pre-rendered type name
-    // (e.g. `"Number"`) rather than a `KType` value — keeps `KError` lifetime-free.
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -118,10 +104,8 @@ fn let_type_class_with_non_type_value_errors() {
     }
 }
 
-/// Stage 1.7: `LET Foo = Number` — Type-class LHS with a type RHS. Storage now
-/// lives in `bindings.types` (via `register_type`), reachable through
-/// `Scope::resolve_type`. Regression guard that the blocklist doesn't reject the
-/// good case and that the storage flip lands on the right map.
+/// `LET Foo = Number` — Type-class LHS with a type RHS lands in `bindings.types`
+/// via `register_type`, reachable through `Scope::resolve_type`.
 #[test]
 fn let_type_class_with_type_value_still_binds() {
     use crate::machine::RuntimeArena;
@@ -144,8 +128,8 @@ fn let_type_class_with_type_value_still_binds() {
     assert_eq!(*kt, KType::Number, "expected Number, got {:?}", kt);
 }
 
-/// Stage 1.6: `LET foo = 1` (lowercase, Identifier overload) is untouched by
-/// the new check — it doesn't go through the `KTypeValue(_)` arm at all.
+/// `LET foo = 1` (lowercase, Identifier overload) doesn't go through the
+/// `KTypeValue(_)` arm and so isn't subject to the type-class allowlist.
 #[test]
 fn let_identifier_lhs_with_non_type_still_binds() {
     use crate::machine::RuntimeArena;
@@ -170,9 +154,8 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     );
 }
 
-/// Stage 1.6: `LET List<Number> = 1` — parameterized binder name is rejected by
-/// the structural-shape check, which fires before the primitive blocklist.
-/// Regression guard for ordering.
+/// Parameterized binder names hit the structural shape check, which fires
+/// before the type-class allowlist — regression guard for ordering.
 #[test]
 fn let_parameterized_type_lhs_still_shape_errors() {
     use crate::machine::RuntimeArena;
@@ -197,12 +180,9 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     }
 }
 
-/// Stage 3.1 aliasing-preserves-identity: `LET Pt = Point` writes a `types[Pt]`
-/// entry that equals `types[Point]` field-wise — `Pt` and `Point` lower to the
-/// same `UserType` (same kind, scope_id, name="Point"). The alias binder name
-/// `Pt` is for value-side lookup only; the type identity stays Point's. Token
-/// classification requires the binder to carry at least one lowercase letter
-/// to read as a type-class name.
+/// `LET Pt = Point` writes a `types[Pt]` entry equal to `types[Point]` —
+/// aliasing preserves the original `UserType` identity rather than minting a
+/// fresh one from the alias name.
 #[test]
 fn let_aliases_struct_preserves_type_identity() {
     use crate::machine::RuntimeArena;
@@ -227,10 +207,9 @@ fn let_aliases_struct_preserves_type_identity() {
     assert_eq!(*pt, *point, "alias must preserve type identity field-wise");
 }
 
-/// A lowercase-name `LET` inside a SIG body must surface a focused `ShapeError`
-/// directing the user to `VAL`. The check fires only for the value-route
-/// (neither Type-class LET nor a nominal-identity carrier alias); `LET Type =
-/// Number` and `LET MyMod = (Some :| Sig)` keep working inside SIG bodies.
+/// A lowercase-name `LET` inside a SIG body surfaces a `ShapeError` directing
+/// the user to `VAL`. The check fires only for the value-route, so
+/// `LET Type = Number` and module-alias forms keep working inside SIG bodies.
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
@@ -238,22 +217,14 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // Outer parse-and-execute: the SIG body errors via `(LET compare = 0)`. The
-    // inner body's error propagates through the SIG outer Combine; the SIG node
-    // itself does not bind.
     let _err = run_one_err(scope, parse_one("SIG Bad = (LET compare = 0)"));
-    // The diagnostic for the lowercase-LET-in-SIG rejection lives on a child
-    // node; the outer SIG node's error is a combine-propagated shape error. The
-    // assertion below pins the SIG itself didn't bind — the migration-loud
-    // observable. The diagnostic text is best-effort discoverable via a debug
-    // run; the integration smoke is what blocks regressions.
     assert!(
         scope.bindings().data().get("Bad").is_none(),
         "SIG with lowercase-LET in body must not bind",
     );
-    // Verify the diagnostic shape by running the LET directly against a
-    // synthetic SIG-classified scope. The strict-reject check fires at body time
-    // when the nearest non-`Anonymous` enclosing scope is `ScopeKind::Sig`.
+    // Verify the diagnostic shape directly against a synthetic SIG scope — the
+    // outer SIG's error is a combine-propagated shape error and doesn't carry
+    // the inner diagnostic text.
     use crate::machine::Scope;
     let sig_scope = arena.alloc_scope(Scope::child_under_sig(
         scope,
@@ -271,12 +242,9 @@ fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     }
 }
 
-/// Stage-5 allowlist regression — plain FN bound to a Type-class name now
-/// errors at the LET site. Pre-Stage-5 the denylist accepted this case (no
-/// primitive / container match) and silently landed the function in `data`;
-/// the allowlist's three-arm test rejects it as `TypeClassBindingExpectsType`
-/// because a plain `KFunction` carries neither `KTypeValue`, nominal identity,
-/// nor the `is_functor` flag.
+/// Plain FN bound to a Type-class name errors at the LET site — a plain
+/// `KFunction` carries neither `KTypeValue`, nominal identity, nor the
+/// `is_functor` flag, so the allowlist rejects it.
 #[test]
 fn let_type_class_with_plain_function_rejects() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
@@ -296,10 +264,9 @@ fn let_type_class_with_plain_function_rejects() {
     }
 }
 
-/// Stage-5 allowlist regression — FUNCTOR-flagged KFunction admits as a
-/// Type-class LET RHS. The `is_functor: true` flag flips the third arm of
-/// `is_admissible_type_class_rhs`; the binding lands in `bindings.data` via
-/// the fallthrough `bind_value` (FUNCTOR isn't a nominal-identity carrier).
+/// FUNCTOR-flagged KFunction admits as a Type-class LET RHS via the third
+/// allowlist arm. The binding lands in `bindings.data` (FUNCTOR isn't a
+/// nominal-identity carrier).
 #[test]
 fn let_type_class_with_functor_admits() {
     use crate::builtins::test_support::{run, run_root_silent};
@@ -321,9 +288,9 @@ fn let_type_class_with_functor_admits() {
     );
 }
 
-/// SIG-body `LET <Type-class> = ...` keeps working post-VAL — the strict reject
-/// only fires for the value-route. `LET Type = Number` lands on `register_type`,
-/// not `bind_value`, so the SIG-body gate doesn't fire.
+/// SIG-body `LET <Type-class> = ...` keeps working — the SIG-body reject only
+/// fires for the value-route, and `LET Type = Number` routes through
+/// `register_type`.
 #[test]
 fn let_type_class_in_sig_body_still_works() {
     use crate::builtins::test_support::{run, run_root_silent};
@@ -342,12 +309,9 @@ fn let_type_class_in_sig_body_still_works() {
     );
 }
 
-/// LET partition guard (design/typing/elaboration.md § Binding-map partition):
-/// `LET <name> = <m>` where `name` is value-classified (lowercase-
-/// leading) and the RHS evaluates to a module value must reject at the LET
-/// site. Module / signature carriers belong on Type-classified identifiers
-/// only; this test pins the diagnostic so the partition rule has a regression
-/// site.
+/// Partition guard regression site: a value-classified binder name with a
+/// module RHS rejects at the LET site. See design/typing/elaboration.md
+/// § Binding-map partition.
 #[test]
 fn let_value_class_lhs_with_module_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
@@ -355,8 +319,6 @@ fn let_value_class_lhs_with_module_rhs_rejects() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // Set up a module value `IntOrd`. The lowercase rebind `int_ord` is the
-    // partition violation — lowercase binder, module RHS.
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -378,9 +340,9 @@ fn let_value_class_lhs_with_module_rhs_rejects() {
     }
 }
 
-/// Companion to `let_value_class_lhs_with_module_rhs_rejects`: signature carrier
-/// on the RHS surface fires the same partition rejection. Pinned independently
-/// because the predicate matches `KType::Module` and `KType::Signature` separately.
+/// Companion to `let_value_class_lhs_with_module_rhs_rejects` — pinned
+/// independently because the predicate matches `KType::Module` and
+/// `KType::Signature` on separate arms.
 #[test]
 fn let_value_class_lhs_with_signature_rhs_rejects() {
     use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
@@ -389,9 +351,6 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "SIG OrderedSig = (VAL compare :Number)");
-    // `OrderedSig` is a Type-classified token; resolving it through the `BareTypeLeaf`
-    // fast lane returns the signature carrier. The lowercase binder + signature RHS hits
-    // the partition guard.
     let err = run_one_err(scope, parse_one("LET sig_alias = OrderedSig"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {

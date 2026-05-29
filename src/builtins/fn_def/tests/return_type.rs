@@ -8,8 +8,6 @@ use crate::machine::{KErrorKind, RuntimeArena};
 use crate::machine::execute::Scheduler;
 use crate::parse::parse;
 
-/// `FN` parses the declared return type from the `-> Type` slot and stores it on the
-/// registered function's signature.
 #[test]
 fn fn_parses_declared_return_type_onto_signature() {
     let arena = RuntimeArena::new();
@@ -20,9 +18,9 @@ fn fn_parses_declared_return_type_onto_signature() {
     assert_eq!(f.signature.return_type, ReturnType::Resolved(KType::Number));
 }
 
-/// Missing `-> Type` annotation: the FN call doesn't match the registered signature, so
-/// no user-fn gets bound. (Sub-expression dispatch may also error first depending on body
-/// shape — the load-bearing assertion is that DOUBLE isn't bound.)
+/// Missing `-> Type`: the FN call doesn't match the registered signature, so no user-fn
+/// gets bound. Sub-expression dispatch may error first depending on body shape — the
+/// load-bearing assertion is that `DOUBLE` isn't registered.
 #[test]
 fn fn_without_return_type_annotation_does_not_register() {
     let arena = RuntimeArena::new();
@@ -32,11 +30,10 @@ fn fn_without_return_type_annotation_does_not_register() {
     for expr in exprs {
         sched.add_dispatch(expr, scope);
     }
-    let _ = sched.execute(); // ignore: may or may not error depending on which sub fails first
+    let _ = sched.execute();
     assert!(!fn_is_registered(scope, "DOUBLE"), "DOUBLE should not be registered without -> Type");
 }
 
-/// Unknown type name in the return slot surfaces as a `ShapeError`.
 #[test]
 fn fn_with_unknown_return_type_name_errors() {
     let arena = RuntimeArena::new();
@@ -54,7 +51,6 @@ fn fn_with_unknown_return_type_name_errors() {
     );
 }
 
-/// Runtime return-type check fires when the body produces a value of the wrong type.
 #[test]
 fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     let arena = RuntimeArena::new();
@@ -82,10 +78,7 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     );
 }
 
-/// User-bound type alias used as a FN return type elaborates against the captured
-/// scope: `LET MyT = Number` followed by `FN (DOIT xs: MyT) -> MyT = (xs)` registers
-/// and runs. Pins the bare-leaf-user-bound case the phase-3 elaborator now handles in
-/// the FN-def body.
+/// User-bound type alias as a FN return type: elaborates against the captured scope.
 #[test]
 fn fn_with_user_bound_return_type_works() {
     use super::capture_program_output;
@@ -97,11 +90,8 @@ fn fn_with_user_bound_return_type_works() {
     assert_eq!(bytes, b"7\n");
 }
 
-/// Forward reference: `FN (DOIT xs: MyT) -> MyT = (xs)` followed by
-/// `LET MyT = Number` in the same batch. The scheduler installs `MyT`'s placeholder at
-/// submit time (LET's binder_name); the FN's body parks on it via Combine and re-elaborates
-/// against the now-final scope when the LET wakes. Pins that source-order doesn't
-/// matter for placeholder-bearing forward references.
+/// Forward reference: FN's body parks on `MyT`'s submit-time placeholder via Combine
+/// and re-elaborates against the final scope when the LET wakes.
 #[test]
 fn fn_with_forward_user_bound_return_type_works() {
     use super::capture_program_output;
@@ -113,10 +103,8 @@ fn fn_with_forward_user_bound_return_type_works() {
     assert_eq!(bytes, b"7\n");
 }
 
-/// Stage 2 invariant: when the return-type carrier is `KObject::TypeNameRef`, the
-/// surface form survives bind so diagnostics render the user's identifier verbatim
-/// (`SomeWeirdName`, not a normalized form). Asserts the "surface form survives bind
-/// for diagnostics" guarantee carried by the carrier doc.
+/// When the return-type carrier is `KObject::TypeNameRef`, the surface form survives
+/// bind so diagnostics render the user's identifier verbatim.
 #[test]
 fn fn_return_type_surface_name_preserved_in_error() {
     let arena = RuntimeArena::new();
@@ -134,7 +122,6 @@ fn fn_return_type_surface_name_preserved_in_error() {
     );
 }
 
-/// `Any` return type is the no-op fast path: any body value satisfies it.
 #[test]
 fn user_fn_with_any_return_type_accepts_anything() {
     let arena = RuntimeArena::new();

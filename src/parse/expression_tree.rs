@@ -1,22 +1,14 @@
 //! Top-level parser: runs the `quote-mask → whitespace-collapse → tokenize →
-//! tree-build` pipeline and returns a `KExpression`. The parse-stack and frame
+//! tree-build` pipeline and returns a `KExpression`. Parse-stack and frame
 //! abstractions live in sibling modules ([`super::parse_stack`], [`super::frame`]);
 //! dict-pair state lives on [`super::dict_literal::DictFrame`]. The `:(...)`
-//! type-expression frame ([`Frame::TypeExpr`](super::frame::Frame)) collects the
-//! inner expression verbatim and wraps it as `ExpressionPart::SigiledTypeExpr`
-//! — no parser-side shape folding; shape recognition is the dispatcher's job.
-//! Framing arms here stay one-liners.
+//! type-expression frame ([`Frame::TypeExpr`](super::frame::Frame)) collects its
+//! inner expression verbatim — shape recognition is the dispatcher's job.
 //!
-//! Phase 4: `Reader` now tracks an original-source `cursor: u32` alongside its byte
-//! position in the masked stream. JUMP markers snap the cursor; LITERAL markers leave it
-//! untouched (the JUMP that follows every literal re-aligns it). Verbatim bytes advance
-//! the cursor by their UTF-8 width unless the byte is synthetic — i.e. immediately
-//! preceded by a JUMP — in which case the JUMP already set the cursor and the synthetic
-//! byte is shadow-positioned at the same offset. Frame open/close and token-start arms
-//! record cursor snapshots so spans land on `KExpression`, the wrapping `Spanned`, and
-//! the structural keyword pushes. `classify_token` carries the token-start offset down to
-//! atom-level so sub-atoms (ATTR, NOT, TRY triggers) get 1-codepoint trigger spans inside
-//! a token-wide wrapper.
+//! `Reader` tracks an original-source `cursor: u32` alongside its byte position
+//! in the masked stream. JUMP markers snap the cursor; LITERAL markers leave it
+//! untouched (the trailing JUMP re-aligns it). Verbatim bytes advance the cursor
+//! by their UTF-8 width unless the byte is synthetic (immediately after a JUMP).
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
@@ -34,8 +26,8 @@ use super::dict_literal::DictFrame;
 use super::frame::{close_paren_to_part, Frame};
 use super::parse_stack::{close_collection, flush_token, open_collection, ParseStack};
 
-/// Width of the UTF-8 codepoint whose leading byte is `b`. Defaults to 1 on malformed
-/// continuation bytes so a corrupt input still terminates rather than spinning.
+/// Width of the UTF-8 codepoint whose leading byte is `b`. Defaults to 1 on a
+/// malformed continuation byte so corrupt input terminates rather than spinning.
 fn utf8_width(b: u8) -> usize {
     match b {
         _ if b < 0x80 => 1,
@@ -46,8 +38,6 @@ fn utf8_width(b: u8) -> usize {
     }
 }
 
-/// Decode the codepoint at `bytes[pos]` without advancing. Returns `None` past EOF or
-/// on malformed UTF-8 (the masked stream is always valid UTF-8 in practice).
 fn decode_char_at(bytes: &[u8], pos: usize) -> Option<char> {
     let b = *bytes.get(pos)?;
     let width = utf8_width(b);
@@ -55,11 +45,10 @@ fn decode_char_at(bytes: &[u8], pos: usize) -> Option<char> {
     std::str::from_utf8(slice).ok()?.chars().next()
 }
 
-/// Like `decode_char_at`, but transparently skips over `JUMP_MARK <digits> JUMP_MARK`
-/// runs. The collapse pass plants JUMPs immediately after `]`/`}` (the close-adjacency
-/// check below has to look past them to find the real next token), and similar gaps
-/// appear at line / dedent boundaries. LITERAL markers are *not* skipped — a literal
-/// glued to a closing bracket is still an adjacency violation.
+/// Like `decode_char_at`, but skips over `JUMP_MARK <digits> JUMP_MARK` runs so
+/// the close-adjacency check can see past collapse-planted JUMPs to the real
+/// next token. LITERAL markers are *not* skipped — a literal glued to a closing
+/// bracket is still an adjacency violation.
 fn peek_char_past_jumps(bytes: &[u8], pos: usize) -> Option<char> {
     let mut p = pos;
     while let Some(&b) = bytes.get(p) {
@@ -80,12 +69,10 @@ fn peek_char_past_jumps(bytes: &[u8], pos: usize) -> Option<char> {
     None
 }
 
-/// Hand-rolled byte cursor over the masked stream. Maintains both stream `pos` and
-/// original-source `cursor: u32`. The `just_jumped` flag flips on every JUMP and is
-/// consumed by the next byte-advance: that next byte is "synthetic" (collapse-inserted
-/// or post-mask alignment), so it shouldn't advance the cursor — the JUMP already set
-/// it to the next real-content offset. Subsequent verbatim bytes advance the cursor
-/// normally.
+/// Byte cursor over the masked stream tracking both stream `pos` and
+/// original-source `cursor: u32`. `just_jumped` flips on every JUMP and is
+/// consumed by the next byte-advance — that byte is synthetic so the JUMP
+/// already snapped cursor to the next real offset.
 struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -106,9 +93,6 @@ impl<'a> Reader<'a> {
         decode_char_at(self.bytes, self.pos)
     }
 
-    /// Consume one byte. The cursor advances by 1 for verbatim bytes; for the byte
-    /// immediately after a JUMP the advance is suppressed (the byte is synthetic and
-    /// the JUMP already snapped cursor to the next real offset).
     fn advance_byte(&mut self) {
         self.pos += 1;
         if self.just_jumped {
@@ -118,8 +102,6 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Decode the codepoint at `pos` and advance `pos` by its UTF-8 width. The cursor
-    /// advances by the same width unless this is the byte immediately after a JUMP.
     fn advance_codepoint(&mut self) -> char {
         let b = self.bytes[self.pos];
         let width = utf8_width(b);
@@ -134,9 +116,8 @@ impl<'a> Reader<'a> {
         c
     }
 
-    /// Consume a `\x1D<digits>\x1D` JUMP marker. The leading sentinel must already be
-    /// at the cursor. Snaps `cursor` to the parsed offset and flags `just_jumped` so the
-    /// next byte-advance doesn't double-count.
+    /// Consume a `\x1D<digits>\x1D` JUMP marker; snap `cursor` to the parsed
+    /// offset and set `just_jumped` so the next byte-advance doesn't double-count.
     fn read_jump(&mut self) -> Result<u32, KError> {
         debug_assert_eq!(self.peek_byte(), Some(JUMP_MARK));
         self.pos += 1;
@@ -150,9 +131,8 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
 
-    /// Consume a `\x1F<idx>\x1E<orig_byte_len>` LITERAL marker. The leading sentinel
-    /// must already be at the cursor. Returns `(idx, orig_byte_len)`; the cursor is
-    /// *not* advanced — the JUMP that mask_quotes always emits after a literal
+    /// Consume a `\x1F<idx>\x1E<orig_byte_len>` LITERAL marker. The cursor is
+    /// *not* advanced — the JUMP that `mask_quotes` emits after every literal
     /// re-aligns it past the closing quote.
     fn read_literal_marker(&mut self) -> Result<(usize, u32), KError> {
         debug_assert_eq!(self.peek_byte(), Some(LITERAL_MARK));
@@ -166,8 +146,7 @@ impl<'a> Reader<'a> {
         Ok((idx as usize, len))
     }
 
-    /// Read ASCII decimal digits up to (but not consuming) `stop`. Errors when the
-    /// run is empty or when the digits don't fit in `u32`.
+    /// Read ASCII decimal digits up to (but not consuming) `stop`.
     fn read_decimal(&mut self, stop: u8, label: &str) -> Result<u32, KError> {
         let start = self.pos;
         while let Some(b) = self.peek_byte() {
@@ -192,8 +171,7 @@ impl<'a> Reader<'a> {
             .ok_or_else(|| KError::parse(format!("{label}: invalid decimal payload"), None))
     }
 
-    /// Read ASCII decimal digits until the next non-digit byte (or EOF). Errors when
-    /// the run is empty or when the digits don't fit in `u32`.
+    /// Read ASCII decimal digits until the next non-digit byte (or EOF).
     fn read_decimal_until_non_digit(&mut self, label: &str) -> Result<u32, KError> {
         let start = self.pos;
         while let Some(b) = self.peek_byte() {
@@ -228,9 +206,7 @@ pub fn build_tree<'a>(
     let mut pending_type_paren_cursor: Option<u32> = None;
 
     loop {
-        // Drain JUMP markers at the top of the loop so the dispatch never has to
-        // think about them. Each JUMP snaps `reader.cursor` to the payload offset
-        // and flips `just_jumped` so the next byte-advance doesn't double-count.
+        // Drain JUMPs up-front so dispatch arms never see them.
         while reader.peek_byte() == Some(JUMP_MARK) {
             reader.read_jump()?;
         }
@@ -268,9 +244,6 @@ pub fn build_tree<'a>(
                 let span_start = reader.cursor;
                 reader.advance_byte();
                 if let Some(type_start) = pending_type_paren_cursor.take() {
-                    // `:(...)` opens a sigiled-type-expression frame that collects the
-                    // inner expression verbatim (no shape recognition). The dispatcher
-                    // routes the wrapped `KExpression` through its standard classifier.
                     stack.push_frame(Frame::TypeExpr {
                         expr: KExpression::new(Vec::new()),
                         span_start: type_start,
@@ -350,12 +323,11 @@ pub fn build_tree<'a>(
                     end,
                 )?;
             }
-            // Dispatch order: dict-pair separator first (state-machine has its own rules),
-            // then `:|` / `:!` ascription operators (assembled here because `!` is itself a
-            // prefix operator and would never reach keyword classification), then the
-            // glued-right type sigils `:(` and `:T`. A lone `:` outside a dict (with
-            // whitespace after or at EOF) is a parse error — type-position annotation must
-            // glue the sigil to its operand.
+            // Dict-pair separator first; then `:|` / `:!` (assembled here because
+            // `!` is itself a prefix operator and would never reach keyword
+            // classification); then glued-right type sigils `:(` / `:T`. A lone
+            // `:` outside a dict is a parse error — annotation must glue to its
+            // operand.
             ':' => {
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 let colon_cursor = reader.cursor;
@@ -385,15 +357,14 @@ pub fn build_tree<'a>(
                             continue;
                         }
                         Some(b'(') => {
+                            // Leave the '(' for the next iteration; the '(' arm
+                            // sees `pending_type_paren_cursor` and opens a
+                            // TypeExpr frame.
                             pending_type_paren_cursor = Some(colon_cursor);
-                            // Don't consume the '(' — let the next loop iteration's '(' arm
-                            // see it and open the TypeExpr frame because the cursor is set.
                         }
                         Some(byte) if byte.is_ascii_uppercase() => {
-                            // Glued type sigil: the next token starts with an uppercase
-                            // letter and will classify as a `Type` per `classify_atom`.
-                            // The `:` is already consumed; the regular tokenizer produces
-                            // the `ExpressionPart::Type` from the following identifier.
+                            // Glued `:T`: the regular tokenizer turns the
+                            // following uppercase-leading token into a Type.
                         }
                         Some(_) => {
                             let next_char = reader.peek_char().unwrap_or('?');
@@ -421,8 +392,8 @@ pub fn build_tree<'a>(
                     }
                 }
             }
-            // Pair separator in a dict; whitespace-equivalent (no-op) everywhere else, so
-            // type-annotation triples like `a: Number, b: Str` parse without altering shape.
+            // Dict pair separator; whitespace-equivalent elsewhere so
+            // annotation triples like `a: Number, b: Str` parse cleanly.
             ',' => {
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 reader.advance_byte();
@@ -430,11 +401,8 @@ pub fn build_tree<'a>(
                     d.accept_comma()?;
                 }
             }
-            // `<` and `>` no longer carry type-position meaning (Design B retired the
-            // `<>` TypeFrame in favour of the `:(...)` sigil). They flush the buffer and
-            // emit standalone `Keyword` parts, leaving room for future numeric-comparison
-            // operators to dispatch on. The `->` arrow stays contiguous because the
-            // `prev == Some('-')` carve-out keeps `>` glued to the leading `-`.
+            // `<` / `>` emit standalone `Keyword` parts. The `prev == Some('-')`
+            // carve-out keeps `->` contiguous so the arrow survives as one token.
             '>' if prev == Some('-') => {
                 buf.push('>');
                 reader.advance_byte();
@@ -449,12 +417,10 @@ pub fn build_tree<'a>(
                     span,
                 ));
             }
-            // Quote literals: `mask_quotes` has rewritten the content into either an
-            // empty pair (no marker) or a `LITERAL_MARK <idx> LEN_SEP <len>` placeholder
-            // followed by the closing quote and a `JUMP_MARK <past_close> JUMP_MARK`
-            // anchor. The literal-open cursor is captured before any advance; the
-            // closing JUMP snaps cursor to one past the original closing quote, which is
-            // the correct exclusive end of the span.
+            // `mask_quotes` rewrote the body as either an empty pair or
+            // `LITERAL_MARK <idx> LEN_SEP <len>` + closing quote + trailing JUMP.
+            // The trailing JUMP snaps cursor to one past the original closing
+            // quote — the correct exclusive span end.
             '\'' | '"' => {
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 let open_byte = b;
@@ -462,9 +428,8 @@ pub fn build_tree<'a>(
                 reader.advance_byte();
                 match reader.peek_byte() {
                     Some(byte) if byte == open_byte => {
-                        // Empty literal `''` / `""`. No marker, no JUMP — both quotes
-                        // advance cursor verbatim, so reader.cursor is already past the
-                        // closing quote.
+                        // Empty literal: no marker, no JUMP — both quotes
+                        // advanced the cursor verbatim.
                         reader.advance_byte();
                         let span = Span { start: literal_open_cursor, end: reader.cursor };
                         stack.push_part(Spanned::at(
@@ -527,10 +492,10 @@ pub fn build_tree<'a>(
     stack.finish()
 }
 
-/// Collapses single-`Expression` wrappers so `((foo bar))` and `(foo bar)` dispatch the
-/// same. Captures the outermost `(span, file)` before the collapse loop and stamps them
-/// back onto the final survivor — peeling otherwise leaks the innermost wrapper's span,
-/// but users see the outermost region in diagnostics.
+/// Collapses single-`Expression` wrappers so `((foo bar))` and `(foo bar)`
+/// dispatch the same. The outermost `(span, file)` is re-stamped onto the
+/// survivor so diagnostics point at the user-visible region, not the innermost
+/// wrapper.
 fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
     let outer_span = expr.span;
     let outer_file = expr.file;
@@ -571,16 +536,14 @@ fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
     }
 }
 
-/// Public entry point: returns one `KExpression` per top-level line. Registers the
-/// input under the synthetic path `<input>` so spans on returned `KExpression` nodes
-/// resolve into source locations via the thread-local registry. Use
-/// [`parse_with_path`] when the caller has a real filename.
+/// Returns one `KExpression` per top-level line, registering the input under
+/// the synthetic path `<input>`. Use [`parse_with_path`] to supply a real path.
 pub fn parse<'a>(input: &str) -> Result<Vec<KExpression<'a>>, KError> {
     parse_with_path(input, "<input>")
 }
 
-/// Variant of [`parse`] that registers the source under a caller-supplied `path`.
-/// CLI / interpret-with-writer use this so error frames render real filenames.
+/// [`parse`] variant that registers the source under a caller-supplied `path`
+/// so error frames render real filenames.
 pub fn parse_with_path<'a>(
     input: &str,
     path: impl Into<Rc<str>>,
@@ -589,9 +552,9 @@ pub fn parse_with_path<'a>(
     parse_with_source(id)
 }
 
-/// Run the parse pipeline against a pre-registered `SourceFile`. Installs `id` as
-/// the active `CURRENT_FILE` for the duration of the call via [`CurrentFileGuard`]
-/// so `KError::parse` and `Frame::for_call` see the right file.
+/// Parse against a pre-registered `SourceFile`. Installs `id` as the active
+/// `CURRENT_FILE` via [`CurrentFileGuard`] so `KError::parse` sees the right
+/// file.
 pub fn parse_with_source<'a>(id: FileId) -> Result<Vec<KExpression<'a>>, KError> {
     let _guard = CurrentFileGuard::push(id);
     let (masked, quotes) = source::with(id, |f| mask_quotes(&f.text));

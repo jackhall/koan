@@ -1,27 +1,16 @@
 //! Scope-bound resolution of a surface [`TypeExpr`] into an arena-allocated `&KType`.
 //!
-//! Read-only consumer of the bindings façade: takes a [`TypeExpr`], runs the elaborator
-//! against the scope chain, and caches the result into `bindings.type_expr_memo` once
-//! the result is safe to share. Never touches `data`, `functions`, `placeholders`,
-//! `pending`, `out`, or `kind` — the read‑only dependency is what justifies the split
-//! from `scope.rs`.
+//! Read-only consumer of the bindings façade: never touches `data`, `functions`,
+//! `placeholders`, `pending`, `out`, or `kind` — the read-only dependency is what
+//! justifies the split from `scope.rs`.
 //!
 //! ## Invariant pinned here
 //!
-//! **The `type_expr_memo` is monotonic and never observes pre‑close opaque identity.**
-//! An entry is written only on the `Done` arm AND only when every user‑type the
-//! elaborated result references is finalized (i.e. absent from its owning scope's
-//! `pending_types`). The `Park` arm — whether from the elaborator itself or from a
-//! still-pending user-type referenced by the elaborated result — never writes the
-//! cache, so a mid‑SCC pre-close `UserType` identity cannot leak into a later memo
-//! hit.
-//!
-//! ## SCC awareness
-//!
-//! [`KTypeUserRefs`] walks the *top level* of a `KType` only — it does NOT recurse
-//! into a `UserType`'s `kind` payload. SCC closure is atomic across all members of
-//! a cycle, so a finalized `Foo` guarantees every user‑type embedded in `Foo`'s
-//! payload is also finalized; descending into payloads would only re‑prove that.
+//! **The `type_expr_memo` is monotonic and never observes pre-close opaque identity.**
+//! An entry is written only on the `Done` arm AND only when every user-type the
+//! elaborated result references is finalized (absent from its owning scope's
+//! `pending_types`). The `Park` arm never writes the cache, so a mid-SCC pre-close
+//! `UserType` identity cannot leak into a later memo hit.
 
 use crate::machine::core::kerror::{KError, KErrorKind};
 use crate::machine::core::kfunction::NodeId;
@@ -33,10 +22,9 @@ use crate::machine::model::types::KType;
 use super::scope::Scope;
 use super::scope_id::ScopeId;
 
-/// Outcome of [`Scope::resolve_type_expr`]. The three variants mirror
-/// [`crate::machine::model::types::ElabResult`] but `Done` carries the
-/// arena-allocated cache reference and `Park` carries scheduler `NodeId`s the
-/// caller parks on.
+/// Outcome of [`Scope::resolve_type_expr`]. Mirrors
+/// [`crate::machine::model::types::ElabResult`] but `Done` carries an
+/// arena-allocated cache reference and `Park` carries scheduler `NodeId`s.
 pub enum ResolveTypeExprOutcome<'a> {
     Done(&'a KType<'a>),
     Park(Vec<NodeId>),
@@ -44,21 +32,11 @@ pub enum ResolveTypeExprOutcome<'a> {
 }
 
 impl<'a> Scope<'a> {
-    /// Layer‑2 scope‑bound TypeExpr resolution memo. Tries the cache first; on miss,
-    /// runs [`crate::machine::model::types::elaborate_type_expr`] against `self`,
-    /// asks a [`FinalizeGate`] whether the elaborated result is safe to share, and
-    /// writes back into the cache only when the gate admits it.
-    ///
-    /// Three outcomes:
-    /// - `Done(kt)`: elaboration succeeded and the gate admitted (every referenced
-    ///   user‑type is finalized). The result is arena‑allocated and cached.
-    /// - `Park(producers)`: the elaborator parked on a placeholder, OR the gate
-    ///   rejected (the elaborated result references a still‑pending user‑type).
-    ///   The producer `NodeId`s identify the wake sources the caller parks on.
-    ///   **No cache write** in the Park case — caching mid‑SCC‑window would
-    ///   observe pre‑close opaque identity.
-    /// - `Unbound(msg)`: a leaf name didn't resolve anywhere. Caller wraps in a
-    ///   structured `ShapeError`.
+    /// Layer-2 scope-bound TypeExpr resolution memo. On miss, runs
+    /// [`crate::machine::model::types::elaborate_type_expr`] against `self`, asks a
+    /// [`FinalizeGate`] whether the result is safe to share, and writes the cache
+    /// only when the gate admits. The Park arm — elaborator-parked or gate-rejected —
+    /// never writes the cache: caching mid-SCC would observe pre-close opaque identity.
     pub fn resolve_type_expr(&'a self, te: &TypeExpr) -> ResolveTypeExprOutcome<'a> {
         use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
         if let Some(kt) = self.type_expr_memo_get(te) {
@@ -83,24 +61,18 @@ impl<'a> Scope<'a> {
 }
 
 /// Resolve a bare leaf [`TypeExpr`] against `scope`'s type-side bindings and return the
-/// canonical value-side `KObject` carrier. Called by the `BareTypeLeaf` fast lane in
-/// `scheduler::dispatch::single_poll`, the keyworded splice walk for type-token slots
-/// (`resolve_name_part` in `scheduler::dispatch`), and the `ConstructorCall` fast lane
-/// for resolving the head identity's paired value carrier.
+/// canonical value-side `KObject` carrier.
 ///
-/// Coercions performed:
-/// - Reject parameterized shapes (`List<...>`, `Function<...>` etc.) with `ShapeError`.
-/// - On a `resolve_type` hit reporting a nominal identity (`UserType`,
-///   `SatisfiesSignature`, `Module`, or `Signature`), recover the paired value-side carrier
-///   via `scope.lookup` so downstream operators receive the expected `KSignature` /
-///   `KModule` / `StructType` / `TaggedUnionType` part rather than a synthesized
-///   `KTypeValue`. Nominal binders install the carrier atomically with the type
-///   identity, so the paired-carrier lookup is infallible under normal flow; the
-///   synthesis below covers the defensive case.
-/// - Otherwise (builtin leaves, `LET <Type-class> = <KTypeValue>` aliases) synthesize a
-///   `KObject::KTypeValue(kt.clone())` carrier so the value sits in the same dispatch
-///   transport every other body consumes.
-/// - On `resolve_type` miss surface `UnboundName(name)`.
+/// - Parameterized shapes (`List<...>`, `Function<...>` etc.) are rejected with `ShapeError`.
+/// - For a nominal identity (`UserType`, `SatisfiesSignature`, `Module`, `Signature`),
+///   recover the paired value-side carrier so downstream operators see the expected
+///   `KSignature` / `KModule` / `StructType` / `TaggedUnionType` part rather than a
+///   synthesized `KTypeValue`. Nominal binders install the carrier atomically with
+///   the type identity, so the lookup is infallible under normal flow; the synthesis
+///   below covers the defensive case.
+/// - Otherwise synthesize `KObject::KTypeValue(kt.clone())` so the value sits in the
+///   same dispatch transport every other body consumes.
+/// - Miss surfaces `UnboundName(name)`.
 pub fn coerce_type_token_value<'a>(
     scope: &'a Scope<'a>,
     t: &TypeExpr,
@@ -115,12 +87,6 @@ pub fn coerce_type_token_value<'a>(
     let name = t.name.as_str();
     match scope.resolve_type_with_chain(name, chain) {
         Some(kt) => {
-            // Nominal identity types (`UserType`, `SatisfiesSignature`, `Module`,
-            // `Signature`) are installed with a paired value-side carrier at the same
-            // scope. Recover the carrier so downstream operators (`:|`, `:!`,
-            // ATTR-Module/Struct, `struct_construct`, `MODULE_TYPE_OF`) receive the
-            // expected `KSignature` / `KModule` / `StructType` / `TaggedUnionType`
-            // part rather than a synthesized `KTypeValue`.
             if matches!(
                 kt,
                 KType::UserType { .. }
@@ -131,8 +97,7 @@ pub fn coerce_type_token_value<'a>(
                 if let Some(obj) = scope.lookup_with_chain(name, chain) {
                     return Ok(obj);
                 }
-                // Unreachable when finalize installed the paired carrier; fall
-                // through to the KTypeValue synthesis below as a defensive recovery.
+                // Defensive fall-through when finalize skipped the paired-carrier install.
             }
             Ok(scope.arena.alloc(KObject::KTypeValue(kt.clone())))
         }
@@ -140,24 +105,18 @@ pub fn coerce_type_token_value<'a>(
     }
 }
 
-/// Precondition value for the `type_expr_memo` cache: names the load‑bearing
-/// invariant *"no pre‑close user‑type identity may enter the memo"* as a type
-/// rather than a free function. Constructed at the point of decision (post
-/// `ElabResult::Done`) and consulted once.
+/// Precondition value for the `type_expr_memo` cache, naming the load-bearing
+/// invariant *"no pre-close user-type identity may enter the memo"* as a type.
 ///
-/// The gate **admits** a `KType` iff every top‑level user‑type it references is
-/// finalized in its owning scope (absent from that scope's `pending_types`);
-/// otherwise it returns the producer `NodeId`s the caller parks on. Held by
-/// reference to `Scope` — no state, just a named decision point.
+/// Admits a `KType` iff every top-level user-type it references is finalized in
+/// its owning scope (absent from that scope's `pending_types`); otherwise returns
+/// the producer `NodeId`s the caller parks on.
 struct FinalizeGate<'a> {
     scope: &'a Scope<'a>,
 }
 
 impl<'a> FinalizeGate<'a> {
     /// Producer `NodeId`s the caller must park on; empty iff the gate admits.
-    /// Walks the *top level* of `kt` via [`KTypeUserRefs`], looks each
-    /// `(scope_id, name)` up in its owning scope's `pending_types`, and
-    /// deduplicates the producer ids it collects.
     fn pending_producers(&self, kt: &KType<'_>) -> Vec<NodeId> {
         let mut pending: Vec<NodeId> = Vec::new();
         for (scope_id, name) in KTypeUserRefs::of(kt) {
@@ -167,12 +126,10 @@ impl<'a> FinalizeGate<'a> {
             if !owner.bindings().pending_types().contains_key(name) {
                 continue;
             }
-            // Unfiltered placeholder lookup: the elaborator is registering a
-            // dependency edge for SCC tracking, not enforcing a consumer's
-            // index-gated visibility, so `chain_cutoff = None` admits every
-            // entry. A `Value`-arm hit would mean the named type already
-            // finalized, which the `pending_types` check above rules out for
-            // any name that reaches this branch.
+            // `chain_cutoff = None` because this is SCC dependency tracking, not
+            // consumer-visibility enforcement. A `Value`-arm hit would mean the
+            // named type already finalized, which the `pending_types` check above
+            // rules out for any name reaching this branch.
             if let Some(crate::machine::core::Resolution::Placeholder(node_id)) =
                 owner.bindings().lookup_value(name, None)
             {
@@ -185,15 +142,13 @@ impl<'a> FinalizeGate<'a> {
     }
 }
 
-/// Iterator yielding every top‑level user‑type reference `(scope_id, name)` in a
-/// `KType`. Replaces the previous `referenced_user_types(kt) -> Vec<(ScopeId,
-/// String)>` collector — borrows the name as `&str` rather than cloning, and
-/// keeps a small `&KType` stack as its only state.
+/// Iterator yielding every top-level user-type reference `(scope_id, name)` in a
+/// `KType`.
 ///
-/// **SCC discipline** (load‑bearing): does NOT recurse into a `UserType`'s
+/// **SCC discipline** (load-bearing): does NOT recurse into a `UserType`'s
 /// `kind` payload. SCC closure is atomic across members, so a finalized `Foo`
-/// guarantees every user‑type embedded in `Foo`'s payload is also finalized;
-/// payload recursion would only re‑prove that.
+/// guarantees every user-type embedded in `Foo`'s payload is also finalized;
+/// payload recursion would only re-prove that.
 struct KTypeUserRefs<'k, 'a> {
     stack: Vec<&'k KType<'a>>,
 }
@@ -216,10 +171,6 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 KType::SatisfiesSignature { sig_id, sig_path, .. } => {
                     return Some((*sig_id, sig_path.as_str()));
                 }
-                // Post-collapse: a module/signature/abstract-type carrier identifies its
-                // owning scope by the carried `&Module` / `&Signature` pointer's
-                // `scope_id()` / `sig_id()`. The `name` is the module's `path` (for
-                // first-class modules and abstract-type members) or the signature's `path`.
                 KType::Module { module, .. } => {
                     return Some((module.scope_id(), module.path.as_str()));
                 }
@@ -279,8 +230,6 @@ mod tests {
     use crate::builtins::test_support::run_root_silent;
     use crate::machine::core::RuntimeArena;
 
-    /// Builtin leaf resolves to `Done` and caches the result; the second call returns
-    /// the same arena pointer without re-walking.
     #[test]
     fn resolve_type_expr_builtin_leaf_caches() {
         let arena = RuntimeArena::new();
@@ -298,7 +247,6 @@ mod tests {
         assert!(std::ptr::eq(first, second), "second call should hit the memo");
     }
 
-    /// A genuinely unbound leaf surfaces as `Unbound` and is not cached.
     #[test]
     fn resolve_type_expr_unbound_returns_unbound() {
         let arena = RuntimeArena::new();
@@ -310,8 +258,8 @@ mod tests {
         }
     }
 
-    /// User-bound types reached after finalize land in the memo. Build a STRUCT,
-    /// then resolve a TypeExpr for its name — should `Done` and cache.
+    /// Pins the post-finalize memo path: a user type reached after STRUCT
+    /// finalize lands in the cache.
     #[test]
     fn resolve_type_expr_user_struct_caches_after_finalize() {
         use crate::builtins::test_support::{parse_one, run_one};
@@ -327,7 +275,6 @@ mod tests {
             KType::UserType { name, .. } => assert_eq!(name, "Point"),
             _ => panic!("expected UserType for Point"),
         }
-        // Second resolve hits the memo and returns the same pointer.
         let kt2 = match scope.resolve_type_expr(&te) {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done on memo hit"),
@@ -335,9 +282,7 @@ mod tests {
         assert!(std::ptr::eq(kt, kt2));
     }
 
-    /// `KTypeUserRefs` walks structural variants (`List`, `Dict`, `KFunction`,
-    /// etc.) and yields top‑level user‑type refs in source order. Pins the
-    /// recursion shape against a regression that would skip nested structurals.
+    /// Pins recursion shape against a regression that skips nested structurals.
     #[test]
     fn ktype_user_refs_yields_nested_structural_refs_in_order() {
         use crate::machine::model::types::UserTypeKind;
@@ -353,17 +298,15 @@ mod tests {
             scope_id: b_id,
             name: "B".into(),
         };
-        // Dict<A, List<B>> — A is the key, B is nested inside the value's List.
+        // Dict<A, List<B>>
         let kt = KType::Dict(Box::new(user_a), Box::new(KType::List(Box::new(user_b))));
         let refs: Vec<(ScopeId, String)> =
             KTypeUserRefs::of(&kt).map(|(id, n)| (id, n.to_string())).collect();
         assert_eq!(refs, vec![(a_id, "A".into()), (b_id, "B".into())]);
     }
 
-    /// SCC discipline: a `UserType` with a payload that itself contains another
-    /// `UserType` (e.g. `NEWTYPE` `repr`) must NOT be recursed into. The outer
-    /// `UserType` is yielded; the inner is invisible to the iterator. Guards
-    /// against a "fix" that accidentally descends into `UserType.kind`.
+    /// SCC discipline: the iterator must not descend into a `UserType`'s `kind`
+    /// payload — the outer `UserType` is yielded, the inner stays invisible.
     #[test]
     fn ktype_user_refs_does_not_recurse_into_user_type_payload() {
         use crate::machine::model::types::UserTypeKind;
@@ -384,9 +327,7 @@ mod tests {
         assert_eq!(refs, vec![(outer_id, "Outer".into())]);
     }
 
-    /// Leaf types (`Number`, `Str`, etc.) yield nothing — the iterator drains
-    /// to `None` immediately. Cheap pin against a regression that would push a
-    /// spurious leaf onto the stack.
+    /// Pin against a regression that would push a spurious leaf onto the stack.
     #[test]
     fn ktype_user_refs_yields_nothing_for_leaf() {
         let mut iter = KTypeUserRefs::of(&KType::Number);
@@ -446,9 +387,6 @@ mod tests {
             }
         }
 
-        /// Paired-carrier recovery: a `KType::UserType { .. }` registered in
-        /// `bindings.types` paired with a value-side carrier in `bindings.data` returns
-        /// the paired value, not a synthesized `KTypeValue`.
         #[test]
         fn recovers_paired_value() {
             use crate::machine::model::types::UserTypeKind;
@@ -466,18 +404,13 @@ mod tests {
 
             let leaf = TypeExpr::leaf("Point".to_string());
             let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Point lookup");
-            // Identity-equality: the helper hands back the paired carrier rather than
-            // synthesizing a fresh one.
             assert!(std::ptr::eq(obj, paired));
         }
 
-        /// Defensive paired-recovery fall-through: `bindings.types[name]` carries a nominal
-        /// identity (`UserType`) but `bindings.data[name]` is empty. Nominal binders
-        /// install the paired carrier atomically with the type identity, so this is
-        /// unreachable through normal flow — the test forces it by `register_type`
-        /// *without* a paired `bind_value`. The helper must not panic; it falls through
-        /// to synthesizing a fresh `KTypeValue(kt)` carrier so the dispatch transport
-        /// stays valid.
+        /// Defensive paired-recovery fall-through: when `bindings.types[name]` holds a
+        /// nominal identity but `bindings.data[name]` is empty, the helper must not
+        /// panic — it synthesizes a fresh `KTypeValue(kt)` so the dispatch transport
+        /// stays valid. Unreachable in normal flow (nominal binders install both atomically).
         #[test]
         fn falls_through_when_paired_value_absent() {
             use crate::machine::model::types::UserTypeKind;
@@ -488,15 +421,14 @@ mod tests {
                 scope_id: scope.id,
                 name: "Orphan".to_string(),
             };
-            // types-side only — no paired `bind_value`. Exercises the "paired carrier
-            // missing" defensive fall-through.
+            // types-side only — no paired `bind_value`.
             scope.register_type("Orphan".into(), kt.clone(), BindingIndex::BUILTIN);
 
             let leaf = TypeExpr::leaf("Orphan".to_string());
             let obj = coerce_type_token_value(scope, &leaf, None).expect("fall-through must Ok");
             match obj {
                 KObject::KTypeValue(KType::UserType { name, .. }) => {
-                    assert_eq!(name, "Orphan", "fall-through synthesized carrier for the registered identity");
+                    assert_eq!(name, "Orphan");
                 }
                 other => panic!("expected synthesized KTypeValue(UserType(Orphan)), got {:?}", other.ktype()),
             }

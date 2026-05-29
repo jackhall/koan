@@ -1,19 +1,15 @@
 use super::collapse_whitespace as collapse_bytes;
 use crate::parse::quotes::JUMP_MARK;
 
-/// Test shim: keep the readable `&str` → `String` ergonomics from the pre-Phase-2 API.
-/// Phase 3 added JUMP markers around every synthetic char; the existing assertions check
-/// the high-level paren shape, so we strip the markers before comparing. Marker-aware
-/// tests at the bottom of this module assert against the raw byte stream instead.
+/// `&str` → `String` shim that strips JUMP markers so the paren-shape assertions stay
+/// readable. Marker-aware tests at the bottom of the module use the raw byte stream.
 fn collapse_whitespace(input: &str) -> Result<String, String> {
     collapse_bytes(input.as_bytes())
         .map(|v| String::from_utf8(strip_jumps(&v)).expect("UTF-8 in test"))
         .map_err(|e| e.to_string())
 }
 
-/// Strip `JUMP_MARK <digits> JUMP_MARK` runs from a masked byte stream so textual
-/// assertions don't have to encode the cursor anchors. LITERAL markers pass through
-/// untouched — they survive into `build_tree` regardless of phase.
+/// Strip `JUMP_MARK <digits> JUMP_MARK` runs; LITERAL markers pass through untouched.
 fn strip_jumps(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -141,8 +137,6 @@ fn output_has_no_tabs_or_newlines() {
 
 #[test]
 fn list_literal_open_suspends_indentation_handling() {
-    // The `[` on line 1 stays open across lines 2–4, so those lines append to the list
-    // span instead of becoming nested paren groups. The closing `]` brings depth back to 0.
     assert_eq!(
         collapse_whitespace("LET xs = [\n  1\n  2\n  3\n]").unwrap(),
         "(LET xs = [ 1 2 3 ])",
@@ -151,8 +145,6 @@ fn list_literal_open_suspends_indentation_handling() {
 
 #[test]
 fn multiline_list_with_continuation_indent() {
-    // The `[1` opens at the end of line 1; lines 2 and 3 sit under it as continuation,
-    // not as deeper-indent children. Final `]` closes the span.
     assert_eq!(
         collapse_whitespace("LET xs = [1\n          2\n          3]").unwrap(),
         "(LET xs = [1 2 3])",
@@ -161,8 +153,6 @@ fn multiline_list_with_continuation_indent() {
 
 #[test]
 fn nested_multiline_lists() {
-    // Inner `]` brings depth from 2 to 1 mid-line; outer `]` closes back to 0 on the
-    // last line.
     assert_eq!(
         collapse_whitespace("[[1\n  2]\n [3 4]]").unwrap(),
         "([[1 2] [3 4]])",
@@ -171,9 +161,6 @@ fn nested_multiline_lists() {
 
 #[test]
 fn balanced_inline_list_does_not_perturb_indentation() {
-    // `[1 2 3]` balances within its line, so depth stays at 0 and the indentation pass
-    // continues normally — the next line becomes a sibling group as it would without
-    // brackets at all.
     assert_eq!(
         collapse_whitespace("LET xs = [1 2 3]\nbar").unwrap(),
         "(LET xs = [1 2 3]) (bar)",
@@ -182,7 +169,6 @@ fn balanced_inline_list_does_not_perturb_indentation() {
 
 #[test]
 fn multiline_dict_literal_continues() {
-    // Same continuation rule as lists: `{` opens, lines append, `}` closes.
     assert_eq!(
         collapse_whitespace("LET d = {\n  a = 1\n  b = 2\n}").unwrap(),
         "(LET d = { a = 1 b = 2 })",
@@ -199,7 +185,6 @@ fn inline_dict_does_not_perturb_indentation() {
 
 #[test]
 fn nested_multiline_dict_inside_list() {
-    // List opens on line 1, dict opens inside on line 2; both close on the last line.
     assert_eq!(
         collapse_whitespace("[\n  {a: 1\n   b: 2}\n]").unwrap(),
         "([ {a: 1 b: 2} ])",
@@ -210,8 +195,6 @@ fn nested_multiline_dict_inside_list() {
 
 #[test]
 fn trailing_comma_continues_expression() {
-    // The `,` at end of line 1 suspends indentation handling; line 2 appends to the open
-    // group instead of becoming a child block.
     assert_eq!(
         collapse_whitespace("add 1,\n    2").unwrap(),
         "(add 1, 2)",
@@ -220,7 +203,6 @@ fn trailing_comma_continues_expression() {
 
 #[test]
 fn trailing_comma_chain_across_three_lines() {
-    // Continuation persists as long as each line keeps ending in `,`.
     assert_eq!(
         collapse_whitespace("foo 1,\n    2,\n    3").unwrap(),
         "(foo 1, 2, 3)",
@@ -229,8 +211,7 @@ fn trailing_comma_chain_across_three_lines() {
 
 #[test]
 fn trailing_comma_inside_paren_expression() {
-    // The motivating UNION shape: open paren on line 1, comma signals continuation,
-    // close paren on line 2.
+    // Motivating UNION shape.
     assert_eq!(
         collapse_whitespace("UNION Maybe = (some :Number,\n               none :Null)")
             .unwrap(),
@@ -240,8 +221,6 @@ fn trailing_comma_inside_paren_expression() {
 
 #[test]
 fn trailing_comma_continuation_through_blank_line() {
-    // Blank lines are skipped before the continuation check, so they don't break a
-    // comma chain — same shape Python uses inside bracket continuations.
     assert_eq!(
         collapse_whitespace("add 1,\n\n    2").unwrap(),
         "(add 1, 2)",
@@ -250,14 +229,11 @@ fn trailing_comma_continuation_through_blank_line() {
 
 #[test]
 fn dangling_trailing_comma_at_eof() {
-    // No following line to consume the continuation; the `,` rides through unchanged.
-    // `build_tree` drops it as a no-op once it sees an expression-frame `,`.
     assert_eq!(collapse_whitespace("foo,").unwrap(), "(foo,)");
 }
 
 #[test]
 fn no_trailing_comma_keeps_sibling_boundary() {
-    // Guard: lines that don't end in `,` still produce sibling groups.
     assert_eq!(collapse_whitespace("foo\nbar").unwrap(), "(foo) (bar)");
 }
 
@@ -265,9 +241,6 @@ fn no_trailing_comma_keeps_sibling_boundary() {
 
 #[test]
 fn open_paren_continues_under_greater_indent() {
-    // `PRINT (` leaves a paren open; the deeper `3.14` line nests inside it as its own
-    // group, and the `)` at the opening indent closes the literal paren. Each continuation
-    // line is wrapped (nest-per-line), so the body is `((3.14))`.
     assert_eq!(
         collapse_whitespace("PRINT (\n  3.14\n)").unwrap(),
         "(PRINT ( (3.14 )))",
@@ -276,8 +249,6 @@ fn open_paren_continues_under_greater_indent() {
 
 #[test]
 fn open_paren_closes_at_deeper_indent() {
-    // The matching `)` may itself sit on a deeper-indent continuation line (>= the opener),
-    // and still closes the group; it never triggered an expression break.
     assert_eq!(
         collapse_whitespace("PRINT (\n    3.14\n    )").unwrap(),
         "(PRINT ( (3.14 )))",
@@ -286,8 +257,7 @@ fn open_paren_closes_at_deeper_indent() {
 
 #[test]
 fn open_paren_nests_each_continuation_line() {
-    // Two deeper lines under an open paren each wrap as their own nested group, so the
-    // paren body is `(A) (B)` — nest-per-line, not a flattened argument list.
+    // Nest-per-line, not flattened: body is `(A) (B)`.
     assert_eq!(
         collapse_whitespace("FOO (\n  A\n  B\n)").unwrap(),
         "(FOO ( (A) (B )))",
@@ -296,8 +266,6 @@ fn open_paren_nests_each_continuation_line() {
 
 #[test]
 fn nested_multiline_parens_pair_correctly() {
-    // An inner `(` opened on a deeper line closes at its own indent before the outer `)`
-    // closes at the opener's. The anchor stack keeps each paren matched to its own opener.
     assert_eq!(
         collapse_whitespace("FOO (\n  BAR (\n    x\n  )\n)").unwrap(),
         "(FOO ( (BAR ( (x ) ))))",
@@ -306,26 +274,19 @@ fn nested_multiline_parens_pair_correctly() {
 
 #[test]
 fn open_paren_same_indent_break_is_error() {
-    // The dangling-`(` case: the `(` opens at indent 0, then `3.14` breaks at the same
-    // indentation without closing it. A clear parse error, not a downstream dispatch
-    // failure on an empty `()` group.
     let err = collapse_whitespace("PRINT (\n3.14\n)").unwrap_err();
     assert!(err.contains("unmatched '('"), "got: {err}");
 }
 
 #[test]
 fn close_paren_below_opener_indent_is_error() {
-    // The opener sits at indent 2; the `)` dedents to indent 0, below its opener. Closing
-    // a paren shallower than where it opened is rejected (same-or-greater close rule).
     let err = collapse_whitespace("A\n  PRINT (\n    3.14\n)").unwrap_err();
     assert!(err.contains("less indented"), "got: {err}");
 }
 
 #[test]
 fn comma_continuation_overrides_paren_indent_guard() {
-    // A trailing comma is an explicit continuation, so a same-indent next line is allowed
-    // even with the paren still open (the motivating multi-line UNION shape). Comma lines
-    // join flat rather than nesting.
+    // Comma overrides the same-indent dangling-`(` guard; comma lines join flat.
     assert_eq!(
         collapse_whitespace("PRINT (,\n3.14,\n)").unwrap(),
         "(PRINT (, 3.14, ))",
@@ -334,8 +295,6 @@ fn comma_continuation_overrides_paren_indent_guard() {
 
 #[test]
 fn balanced_inline_paren_does_not_perturb_indentation() {
-    // A line whose parens balance within it (`PRINT (3.14)`) leaves no paren open, so the
-    // following line becomes a sibling group as usual.
     assert_eq!(
         collapse_whitespace("PRINT (3.14)\nbar").unwrap(),
         "(PRINT (3.14)) (bar)",
@@ -346,8 +305,7 @@ fn balanced_inline_paren_does_not_perturb_indentation() {
 
 #[test]
 fn quote_sigil_continuation_wraps_outside_paren() {
-    // `#3` on a continuation line must collapse to `#(3)`, not `(#3)` — the latter
-    // violates `expression_tree`'s sigil-adjacency rule (sigil glued to a non-paren).
+    // `#3` must collapse to `#(3)`, not `(#3)`, to satisfy the sigil-adjacency rule.
     assert_eq!(
         collapse_whitespace("LET x =\n  #3").unwrap(),
         "(LET x = #(3))",
@@ -356,8 +314,6 @@ fn quote_sigil_continuation_wraps_outside_paren() {
 
 #[test]
 fn eval_sigil_continuation_wraps_outside_paren() {
-    // Symmetric case for `$`: `$q` collapses to `$(q)` so the parser sees the sigil
-    // immediately followed by `(`.
     assert_eq!(
         collapse_whitespace("foo\n  $q").unwrap(),
         "(foo $(q))",
@@ -366,16 +322,12 @@ fn eval_sigil_continuation_wraps_outside_paren() {
 
 #[test]
 fn quote_sigil_at_top_level_wraps_outside_paren() {
-    // The same rule applies even when the sigil-led line is itself the root of the
-    // collapse (no parent expression). `#3` collapses to `#(3)`.
     assert_eq!(collapse_whitespace("#3").unwrap(), "#(3)");
 }
 
 #[test]
 fn sigil_with_paren_operand_still_legal() {
-    // `#(3)` written on a continuation line collapses to `#((3))`. The double wrapping
-    // is harmless: `peel_redundant` in `build_tree` strips extra single-`Expression`
-    // wrappers downstream.
+    // Double wrapping is fine: `peel_redundant` collapses it downstream.
     assert_eq!(
         collapse_whitespace("foo\n  #(3)").unwrap(),
         "(foo #((3)))",
@@ -384,8 +336,6 @@ fn sigil_with_paren_operand_still_legal() {
 
 #[test]
 fn sigil_continuation_with_deeper_children() {
-    // Deeper-indented children of a sigil-led line live inside the sigil's group, so
-    // the sigil applies to the whole sub-block.
     assert_eq!(
         collapse_whitespace("foo\n  #bar\n    baz").unwrap(),
         "(foo #(bar (baz)))",
@@ -394,12 +344,10 @@ fn sigil_continuation_with_deeper_children() {
 
 // --- Sigils on comma- and bracket-continuation lines (no wrap-operand fix) ---
 //
-// The wrap-outside-paren rewrite only runs on the indent-driven path. Lines consumed by
-// the comma-continuation or open-bracket/dict continuation path are appended verbatim,
-// so a bare `#sym` on those lines stays bare and reaches `build_tree` to be rejected by
-// the sigil-adjacency rule. These tests lock that contract in: the user gets a clear
-// parse error and must spell out `#(sym)` explicitly when continuing into a list/dict
-// literal or trailing-comma chain.
+// The wrap-outside-paren rewrite only runs on the indent-driven path. Flat-continuation
+// lines append verbatim, so a bare `#sym` stays bare and `build_tree` rejects it. These
+// tests lock that contract in — users must spell `#(sym)` inside comma/list/dict
+// continuations.
 
 #[test]
 fn comma_continuation_with_bare_sigil_stays_bare() {
@@ -435,25 +383,20 @@ fn bracket_continuation_with_paren_sigils_passes_through() {
 
 #[test]
 fn dict_continuation_with_paren_sigils_passes_through() {
-    // The motivating dict-as-struct shape from the roadmap: each value is a `#(...)`
-    // QUOTE that the struct constructor will dispatch on later.
+    // Motivating dict-as-struct shape: each value is a `#(...)` QUOTE.
     assert_eq!(
         collapse_whitespace("LET d = {\n  x = #(foo)\n  y = #(bar)\n}").unwrap(),
         "(LET d = { x = #(foo) y = #(bar) })",
     );
 }
 
-// --- Phase 3: JUMP marker placement ---
+// --- JUMP marker placement ---
 //
-// These tests assert against the *raw* byte stream emitted by `collapse_whitespace`,
-// including the `JUMP_MARK <offset> JUMP_MARK` cursor anchors that the pass inserts
-// around every synthetic char. `build_tree` consumes-and-ignores the payloads today
-// (Phase 2 behaviour, unchanged in Phase 3) but Phase 4 will read them to populate
-// `KExpression::span`, so locking the offsets in now catches regressions early.
+// Raw-byte assertions, including the `JUMP_MARK <offset> JUMP_MARK` cursor anchors. The
+// downstream span recovery reads these payloads, so the offsets are load-bearing.
 
 use crate::parse::quotes::{LEN_SEP, LITERAL_MARK};
 
-/// Build a `\x1D<offset>\x1D` JUMP marker.
 fn jmp(offset: u32) -> Vec<u8> {
     let mut v = vec![JUMP_MARK];
     v.extend_from_slice(offset.to_string().as_bytes());
@@ -461,8 +404,7 @@ fn jmp(offset: u32) -> Vec<u8> {
     v
 }
 
-/// Build a `\x1F<idx>\x1E<orig_byte_len>` LITERAL marker (matches the form emitted by
-/// `mask_quotes`; used to construct synthetic post-mask inputs for round-trip tests).
+/// LITERAL marker matching `mask_quotes`'s form, for synthetic post-mask inputs.
 fn lit(idx: usize, len: usize) -> Vec<u8> {
     let mut v = vec![LITERAL_MARK];
     v.extend_from_slice(idx.to_string().as_bytes());

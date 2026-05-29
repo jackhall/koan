@@ -8,23 +8,18 @@ use super::super::super::nodes::{NodeOutput, NodeWork};
 use super::super::dep_graph::DepEdge;
 use super::super::Scheduler;
 
-
 #[test]
 fn free_reclaims_owned_subtree() {
-    // Synthetic state: four Dispatch slots wired as a linear Owned chain
-    //   s0 ─Owned→ s1 ─Owned→ s2 ─Owned→ s3
-    // After `free(s1)`: s1, s2, s3 reclaimed; s0 untouched.
+    // s0 ─Owned→ s1 ─Owned→ s2 ─Owned→ s3; free(s1) reclaims s1..s3, leaves s0.
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let value: &KObject = arena.alloc(KObject::Number(42.0));
-    // Allocate four slots by adding placeholder Dispatches.
     let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
     let s0 = sched.add(mk_dispatch(), root);
     let s1 = sched.add(mk_dispatch(), root);
     let s2 = sched.add(mk_dispatch(), root);
     let s3 = sched.add(mk_dispatch(), root);
-    // Simulate post-run state and wire the ownership graph by hand.
     for id in [s0, s1, s2, s3] {
         sched.store.clear_node(id);
     }
@@ -37,7 +32,6 @@ fn free_reclaims_owned_subtree() {
 
     sched.free(s1.index());
 
-    // s1, s2, s3 reclaimed; s0 untouched.
     assert!(sched.store.result_is_none(s1), "s1 result cleared");
     assert!(sched.store.result_is_none(s2), "s2 result cleared");
     assert!(sched.store.result_is_none(s3), "s3 result cleared");
@@ -65,7 +59,7 @@ fn free_skips_live_slot_and_is_idempotent() {
     let mut sched = Scheduler::new();
     let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
     let s = sched.add(mk_dispatch(), root);
-    // Live slot: free should be a no-op.
+    // Live slot: free must be a no-op.
     sched.free(s.index());
     assert!(sched.store.is_live(s));
     assert_eq!(sched.store.free_list_len(), 0);
@@ -81,13 +75,8 @@ fn free_skips_live_slot_and_is_idempotent() {
 
 #[test]
 fn free_does_not_recurse_through_notify_edges() {
-    // Regression canary for the conflation bug fixed by `DepEdge`. Synthetic state:
-    //   s_owner:   parent with dep_edges = [Owned(s_owned), Notify(s_sibling)]
-    //   s_owned:   terminalized, owned by s_owner
-    //   s_sibling: terminalized, parked-on by s_owner (must survive free of owner)
-    // After `free(s_owner)`: only s_owner and s_owned land on `free_list`. The
-    // sibling's `results` and `dep_edges` are untouched — the prior single-list
-    // implementation would have reclaimed it as a transitive owned dep.
+    // Regression canary for the Owned/Notify conflation fixed by `DepEdge`:
+    // free(owner) must reclaim only Owned descendants, not parked-on siblings.
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
@@ -102,10 +91,8 @@ fn free_does_not_recurse_through_notify_edges() {
     sched.store.set_result(s_owner, NodeOutput::Value(value));
     sched.store.set_result(s_owned, NodeOutput::Value(value));
     sched.store.set_result(s_sibling, NodeOutput::Value(value));
-    // Give the sibling a non-empty edge list so the bug-shape would observably
-    // walk into it: a self-loop would never be installed in the real scheduler,
-    // but it lets us assert the walk stopped at the Notify edge by checking the
-    // list is still intact after free.
+    // Sibling self-loop is synthetic: a real scheduler never installs one, but it
+    // gives the bug-shape something to walk into so we can assert the walk stopped.
     sched.deps.set_dep_edges(s_owner.index(), vec![
         DepEdge::Owned(s_owned),
         DepEdge::Notify(s_sibling),
@@ -133,16 +120,13 @@ fn free_does_not_recurse_through_notify_edges() {
 
 #[test]
 fn freed_slot_does_not_appear_in_other_notify_lists() {
-    // Reclamation invariant: after `free(idx)`, `idx` must not appear in any other
-    // slot's `notify_list`. Holds by construction — by the time `idx` is freed, its
-    // pending_deps reached zero, which means every producer has already drained.
-    // Canary against a future change that would free a slot before its producer
-    // drained, leaving a stale edge to misfire onto a reused slot.
+    // Reclamation invariant: after `free(idx)`, no other slot's `notify_list` may
+    // reference `idx`. Canary against a future change that frees a slot before its
+    // producer drains, leaving a stale edge to misfire onto a reused slot.
     let arena = RuntimeArena::new();
     let root = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
 
-    // Run a small program with sub-Dispatch fan-out to populate notify edges.
     let exprs = crate::parse::parse(
         "LET x = 1\n\
          LET y = 2\n\

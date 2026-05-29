@@ -1,9 +1,5 @@
-//! Unit coverage for the stage-1.2 `types` map and its `try_register_type` write
-//! primitive, plus the stage-1.3 `try_register_nominal` atomic-install primitive.
-//! `try_register_type` is now live (stage 1.4 wired `Scope::register_type` onto it);
-//! `try_register_nominal` remains unused until stage 3 migrates STRUCT / UNION /
-//! MODULE finalize paths onto it. These tests directly exercise `Bindings` against
-//! `RuntimeArena`-allocated `&KType` / `&KObject` values.
+//! Unit coverage for the `types` map write primitives `try_register_type` and
+//! `try_register_nominal`, plus the `pending_types` RAII guard lifecycle.
 
 use super::*;
 use crate::machine::core::arena::RuntimeArena;
@@ -20,7 +16,6 @@ fn try_register_type_inserts_into_types_map() {
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
-    // Type-side storage is the only home for this binding — `data` stays empty.
     let (stored, _) = *bindings.types().get("Foo").expect("Foo should be in types map");
     assert!(std::ptr::eq(stored, kt));
     assert!(bindings.data().get("Foo").is_none());
@@ -40,7 +35,6 @@ fn try_register_type_rejects_collision_with_rebind() {
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
     assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
-    // First binding remains intact — the collision must not overwrite.
     let (stored, _) = *bindings.types().get("Foo").expect("Foo should still be present");
     assert!(std::ptr::eq(stored, kt1));
 }
@@ -55,7 +49,6 @@ fn try_register_type_yields_conflict_on_live_types_borrow() {
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("conflict path returns Ok(Conflict), not Err");
     assert!(matches!(outcome, ApplyOutcome::Conflict));
-    // Live read borrow blocked the write; nothing was inserted.
     assert!(_r.get("Foo").is_none());
 }
 
@@ -96,7 +89,6 @@ fn try_register_nominal_inserts_into_both_maps() {
         .try_register_nominal("Foo", kt, obj, BindingIndex::BUILTIN)
         .expect("try_register_nominal should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
-    // Atomic install: both maps hold the exact pointers we supplied.
     let (stored_kt, _) = *bindings.types().get("Foo").expect("Foo should be in types map");
     let (stored_obj, _) = *bindings.data().get("Foo").expect("Foo should be in data map");
     assert!(std::ptr::eq(stored_kt, kt));
@@ -118,9 +110,8 @@ fn try_register_nominal_rejects_collision_in_types_with_rebind() {
         Ok(_) => panic!("collision on types side must Err(Rebind), not Ok"),
     };
     assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
-    // Pre-check rejected the transaction before either insert: data side untouched.
+    // Pre-check rejected the transaction before either insert.
     assert!(bindings.data().get("Foo").is_none());
-    // First types binding survives intact.
     let (stored, _) = *bindings.types().get("Foo").expect("Foo should still be in types");
     assert!(std::ptr::eq(stored, kt_existing));
 }
@@ -140,9 +131,8 @@ fn try_register_nominal_rejects_collision_in_data_with_rebind() {
         Ok(_) => panic!("collision on data side must Err(Rebind), not Ok"),
     };
     assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
-    // Pre-check rejected the transaction before either insert: types side untouched.
+    // Pre-check rejected the transaction before either insert.
     assert!(bindings.types().get("Foo").is_none());
-    // First data binding survives intact.
     let (stored, _) = *bindings.data().get("Foo").expect("Foo should still be in data");
     assert!(std::ptr::eq(stored, obj_existing));
 }
@@ -158,30 +148,24 @@ fn try_register_nominal_yields_conflict_on_live_types_borrow() {
         .try_register_nominal("Foo", kt, obj, BindingIndex::BUILTIN)
         .expect("conflict path returns Ok(Conflict), not Err");
     assert!(matches!(outcome, ApplyOutcome::Conflict));
-    // Borrow contention on `types` blocked the write: both maps untouched.
     assert!(_r.get("Foo").is_none());
     assert!(bindings.data().get("Foo").is_none());
 }
 
-/// Stage 3.0d scaffolding: `Bindings::new()` initializes `pending_types` empty.
-/// No writer in 3.0 — the field is observable only as an empty map until stage 3.2
-/// wires the SCC pre-registration pass.
 #[test]
 fn new_bindings_has_empty_pending_types() {
     let bindings: Bindings<'_> = Bindings::new();
     assert!(bindings.pending_types().is_empty());
 }
 
-/// Stage 3.2: the SCC cycle-close sweep pre-installs each member's identity via
-/// `try_register_type`. The eventual `try_register_nominal` call observes the
-/// matching pre-installed identity and writes only the carrier into `data`. Pins
-/// the idempotent arm against regression.
+/// The SCC cycle-close sweep pre-installs each member's identity via
+/// `try_register_type`; the eventual `try_register_nominal` observes the
+/// matching identity and writes only the carrier into `data`.
 #[test]
 fn try_register_nominal_is_idempotent_against_matching_pre_installed_types() {
     let arena = RuntimeArena::new();
     let bindings: Bindings<'_> = Bindings::new();
-    // Build two pointer-distinct but value-equal KTypes — cycle-close and finalize
-    // each alloc their own.
+    // Pointer-distinct but value-equal KTypes: cycle-close and finalize each alloc their own.
     let kt_pre: &KType = arena.alloc(KType::UserType {
         kind: UserTypeKind::Struct,
         scope_id: ScopeId::from_raw(0, 0xDEAD_BEEF),
@@ -196,23 +180,19 @@ fn try_register_nominal_is_idempotent_against_matching_pre_installed_types() {
     assert_eq!(*kt_pre, *kt_finalize, "values must be equal");
     let obj: &KObject<'_> = arena.alloc(KObject::Number(1.0));
     bindings.try_register_type("Foo", kt_pre, BindingIndex::BUILTIN).unwrap();
-    // try_register_nominal: types[Foo] already populated with matching identity,
-    // data[Foo] empty → idempotent path, write only data.
     let outcome = bindings
         .try_register_nominal("Foo", kt_finalize, obj, BindingIndex::BUILTIN)
         .expect("idempotent arm should succeed");
     assert!(matches!(outcome, ApplyOutcome::Applied));
-    // The types entry keeps the PRE-installed pointer (not the finalize's).
+    // types keeps the PRE-installed pointer, data takes the finalize's carrier.
     let (stored_kt, _) = *bindings.types().get("Foo").expect("Foo in types");
     assert!(std::ptr::eq(stored_kt, kt_pre));
-    // The data entry is the finalize's carrier.
     let (stored_obj, _) = *bindings.data().get("Foo").expect("Foo in data");
     assert!(std::ptr::eq(stored_obj, obj));
 }
 
-/// RAII guard: dropping the value returned by `insert_pending_type` removes the
-/// matching entry from `pending_types`. Pins the lifecycle invariant that the
-/// guard — not any caller-side `remove` — is the sole removal path.
+/// Dropping the value returned by `insert_pending_type` is the sole removal path
+/// for a `pending_types` entry outside `#[cfg(test)]`.
 #[test]
 fn pending_binder_guard_drop_removes_entry() {
     use crate::machine::model::ast::KExpression;
@@ -227,16 +207,14 @@ fn pending_binder_guard_drop_removes_entry() {
     {
         let _guard = bindings.insert_pending_type("Foo".into(), entry);
         assert!(bindings.pending_types().contains_key("Foo"));
-    } // guard drops here
+    }
     assert!(
         !bindings.pending_types().contains_key("Foo"),
         "guard Drop should have removed the pending_types entry",
     );
 }
 
-/// Guard Drop tolerates an entry that has already been removed (e.g. a future
-/// path where finalize drains explicitly). The current code never double-removes,
-/// but the Drop must not panic if the map turns out to be empty for the name.
+/// Guard Drop must tolerate an already-removed entry without panicking.
 #[test]
 fn pending_binder_guard_drop_tolerates_absent_entry() {
     use crate::machine::model::ast::KExpression;
@@ -249,9 +227,7 @@ fn pending_binder_guard_drop_tolerates_absent_entry() {
         edges: Vec::new(),
     };
     let guard = bindings.insert_pending_type("Foo".into(), entry);
-    // Pull the entry out from under the guard.
     bindings.pending_remove("Foo");
-    // Guard drop should silently succeed.
     drop(guard);
     assert!(!bindings.pending_types().contains_key("Foo"));
 }

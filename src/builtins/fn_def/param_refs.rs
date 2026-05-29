@@ -1,22 +1,13 @@
-//! Parameter‑name reference scan for FN‑def's Stage B param‑name detection.
+//! Parameter-name reference scan for FN-def's Stage B param-name detection.
 //!
-//! Answers one question: *"does this carrier (a `TypeExpr` or a `KExpression`)
-//! contain any leaf whose name matches one of the FN's parameter names?"* A `true`
-//! result short‑circuits the eager‑elaborate path at FN‑def time — the parameter
-//! is by construction not bound in the FN's outer scope, so eagerly elaborating
-//! the carrier would either fail or produce the wrong answer. Instead the carrier
-//! becomes a `ReturnType::Deferred(_)` (or a `Deferred` parameter‑type entry)
-//! that re‑elaborates per call against the dispatch‑boundary scope.
-//!
-//! Two surface forms feed in: a `TypeExpr` (overload 1's `TypeExprRef` carrier)
-//! and a `KExpression` (overload 2's `KExpression` carrier). The `KExpression`
-//! walker descends into `Expression`, `ListLiteral`, and `DictLiteral` parts so
-//! the scan sees every parameter-named leaf the body could reference.
+//! Answers: *does this carrier contain any leaf whose name matches one of the FN's
+//! parameter names?* A `true` result short-circuits the eager-elaborate path — the
+//! parameter is not bound in the FN's outer scope, so the carrier becomes a
+//! `ReturnType::Deferred(_)` that re-elaborates per call against the dispatch-boundary
+//! scope.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 
-/// True iff `te` contains any leaf name (top‑level or nested through `TypeParams`)
-/// that matches one of `param_names`. Drives overload 1's Stage B decision.
 pub(super) fn type_expr_references_any(te: &TypeExpr, param_names: &[String]) -> bool {
     if param_names.iter().any(|n| n == &te.name) {
         return true;
@@ -31,9 +22,6 @@ pub(super) fn type_expr_references_any(te: &TypeExpr, param_names: &[String]) ->
     }
 }
 
-/// True iff `expr` contains any leaf — `Identifier(name)` or `Type(TypeExpr { name, .. })`,
-/// recursing into nested `Expression` / `ListLiteral` / `DictLiteral` parts — matching
-/// one of `param_names`. Drives overload 2's Stage B decision.
 pub(super) fn kexpression_references_any(
     expr: &KExpression<'_>,
     param_names: &[String],
@@ -46,9 +34,6 @@ fn part_references_any(part: &ExpressionPart<'_>, param_names: &[String]) -> boo
         ExpressionPart::Identifier(name) => param_names.iter().any(|n| n == name),
         ExpressionPart::Type(t) => type_expr_references_any(t, param_names),
         ExpressionPart::Expression(boxed) => kexpression_references_any(boxed, param_names),
-        // SigiledTypeExpr carries a KExpression; recurse so a parameter-name reference
-        // inside a sigiled return-type (`-> :(LIST OF Er)`) is detected for deferred-
-        // return classification.
         ExpressionPart::SigiledTypeExpr(boxed) => kexpression_references_any(boxed, param_names),
         ExpressionPart::ListLiteral(items) => {
             items.iter().any(|p| part_references_any(p, param_names))

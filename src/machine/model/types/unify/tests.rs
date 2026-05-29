@@ -31,7 +31,6 @@ fn ctor_te(name: &str, args: Vec<TypeExpr>) -> TypeExpr {
     }
 }
 
-/// `:(List T)` against `List<Number>` binds `T = Number`.
 #[test]
 fn list_param_binds_element_type() {
     let declared = list_te(TypeExpr::leaf("T".into()));
@@ -40,8 +39,8 @@ fn list_param_binds_element_type() {
     assert_eq!(result, UnifyResult::Bound(vec![("T".into(), KType::Number)]));
 }
 
-/// A concrete-leaf slot binds nothing and still unifies (the caller's `matches_value`
-/// owns the agreement check).
+/// Concrete-leaf slots bind nothing; agreement is the caller's `matches_value`
+/// responsibility.
 #[test]
 fn concrete_leaf_binds_nothing() {
     let declared = list_te(TypeExpr::leaf("Number".into()));
@@ -52,7 +51,6 @@ fn concrete_leaf_binds_nothing() {
     );
 }
 
-/// `:(Dict K V)` against `Dict<Str, Number>` binds both params position-wise.
 #[test]
 fn dict_params_bind_key_and_value() {
     let declared = dict_te(TypeExpr::leaf("K".into()), TypeExpr::leaf("V".into()));
@@ -66,7 +64,6 @@ fn dict_params_bind_key_and_value() {
     }
 }
 
-/// `:(Result T E)` against `ConstructorApply { Result, [Number, MyErr] }` binds T and E.
 #[test]
 fn constructor_apply_params_bind_args() {
     let declared = ctor_te("Result", vec![
@@ -96,7 +93,6 @@ fn constructor_apply_params_bind_args() {
     }
 }
 
-/// Nested: `:(List (List T))` against `List<List<Number>>` binds `T = Number`.
 #[test]
 fn nested_list_param_binds() {
     let declared = list_te(list_te(TypeExpr::leaf("T".into())));
@@ -107,7 +103,7 @@ fn nested_list_param_binds() {
     );
 }
 
-/// A param that appears twice must bind consistently — conflicting occurrences mismatch.
+/// A param appearing twice must bind consistently; conflicts mismatch.
 #[test]
 fn repeated_param_conflicting_binding_mismatches() {
     let declared = dict_te(TypeExpr::leaf("T".into()), TypeExpr::leaf("T".into()));
@@ -118,7 +114,6 @@ fn repeated_param_conflicting_binding_mismatches() {
     ));
 }
 
-/// A param that appears twice with the same concrete type binds once.
 #[test]
 fn repeated_param_consistent_binding_ok() {
     let declared = dict_te(TypeExpr::leaf("T".into()), TypeExpr::leaf("T".into()));
@@ -129,7 +124,6 @@ fn repeated_param_consistent_binding_ok() {
     );
 }
 
-/// Head-constructor / shape disagreement is a mismatch.
 #[test]
 fn shape_disagreement_mismatches() {
     let declared = list_te(TypeExpr::leaf("T".into()));
@@ -140,7 +134,6 @@ fn shape_disagreement_mismatches() {
     ));
 }
 
-/// Constructor arity disagreement is a mismatch.
 #[test]
 fn constructor_arity_mismatch() {
     let declared = ctor_te("Result", vec![TypeExpr::leaf("T".into())]);

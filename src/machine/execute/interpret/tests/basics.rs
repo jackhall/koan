@@ -35,8 +35,7 @@ fn interprets_match_via_print() {
 fn match_branch_resolves_outer_name() {
     // The branch body's lazy slot evaluates in the surrounding scope, so a name bound
     // before the MATCH (`greeting`) resolves through the outer chain at branch-dispatch
-    // time. Integration-level coverage of the lazy-slot/closure-capture machinery from
-    // a koan program (the `match_case` unit tests exercise it via test scaffolding).
+    // time.
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     run(
@@ -50,8 +49,7 @@ fn match_branch_resolves_outer_name() {
 #[test]
 fn match_unmatched_branch_skips_let_side_effect() {
     // The unmatched branch's body is never dispatched, so its `LET y = 1` must not
-    // execute and `y` must remain unbound. Verifies the lazy-slot guarantee end-to-end:
-    // unmatched branches are inert.
+    // execute and `y` must remain unbound.
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(
@@ -90,9 +88,9 @@ fn let_binds_a_list_literal_of_numbers() {
     }
 }
 
-/// A *stamped* empty list (via a typed FN return) is NOT flagged by the empty-container
-/// rule: its carrier carries a concrete element type, so binding the FN's result through
-/// an untyped `LET` succeeds and the binding records the stamped `List<Number>`.
+/// A typed FN return stamps the empty list's carrier with a concrete element type,
+/// so an untyped `LET` binds it as `List<Number>` instead of tripping the
+/// empty-container rule.
 #[test]
 fn let_binds_stamped_empty_list_from_typed_fn_return() {
     let arena = RuntimeArena::new();
@@ -117,9 +115,8 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
     }
 }
 
-/// Empty-container error rule: binding a bare `[]` through an untyped `LET` is an error —
-/// an empty list has no element type to infer and was never stamped by an annotation
-/// upstream. The user must annotate the producing boundary or use a non-empty literal.
+/// A bare `[]` through an untyped `LET` has no element type to infer and was never
+/// stamped upstream, so the empty-container rule rejects it.
 #[test]
 fn let_binds_an_empty_list_literal_errors() {
     use crate::machine::KErrorKind;
@@ -136,8 +133,6 @@ fn let_binds_an_empty_list_literal_errors() {
 
 #[test]
 fn list_literal_with_subexpression_element_evaluates_eagerly() {
-    // `(LET y = 7)` evaluates as part of the list construction; afterwards `y` is bound
-    // and the list contains the LET's return value (the bound number).
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET xs = [1 (LET y = 7) 3]\n", &arena, captured);

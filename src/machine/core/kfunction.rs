@@ -1,20 +1,6 @@
-//! `KFunction` — the callable Koan function value, plus the scheduler-facing types
-//! a body depends on. A `KFunction` carries an `ExpressionSignature` (its call shape),
+//! `KFunction` — the callable Koan function value. Carries an `ExpressionSignature`,
 //! a `Body` (builtin `fn` pointer or captured user-defined `KExpression`), and the
-//! lexical scope captured at definition time. `bind` produces a `KFuture` from a
-//! positional call; `apply` rewrites a named-argument call into a tail-form
-//! `BodyResult` for the scheduler to run.
-//!
-//! Submodules:
-//! - [`argument_bundle`] — the resolved name-to-value map passed to a body, plus the
-//!   slot-extraction helpers used by binder builtins.
-//! - [`scheduler_handle`] — `NodeId`, the `SchedulerHandle` trait, and `CombineFinish`.
-//! - [`body`] — `BodyResult`, `BuiltinFn`, `BinderNameFn`, and the `Body` enum.
-//! - [`invoke`] — `KFunction::invoke` (the body-runner) that binds parameters into a
-//!   per-call child scope and returns a tail-call.
-//! - [`pick`] — per-slot classification (`classify_for_pick`, `ClassifiedSlots`,
-//!   `lazy_eager_indices`) consumed by the dispatch driver's post-pick fused
-//!   splice/park/eager walk.
+//! lexical scope captured at definition time.
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -39,56 +25,38 @@ pub use body::{Body, BodyResult, BuiltinFn, BinderBucketFn, BinderNameFn};
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
-/// A callable Koan function: signature, body, and the lexical environment captured at
-/// definition time (the scope that ran the `FN ...` form, or run-root for builtins).
-///
-/// The captured-scope handle is carried at the type level via `NonNull<Scope<'a>>` +
-/// `PhantomData<&'a Scope<'a>>` (see the `captured` field). One `unsafe { NonNull::as_ref }`
-/// remains inside [`KFunction::captured_scope`]; everything else flows through the type
-/// system.
-///
 /// SAFETY: the captured scope is allocated in a `RuntimeArena` that outlives this
 /// `KFunction` — they share the arena (FN registers the function in the same scope it
-/// captures; builtins are registered in run-root). See `runtime/arena.rs` for the broader
+/// captures; builtins are registered in run-root). See `core/arena.rs` for the broader
 /// lifetime-erasure pattern.
 pub struct KFunction<'a> {
     pub signature: ExpressionSignature<'a>,
     pub body: Body<'a>,
-    /// Captured definition-scope pointer. **Variance-load-bearing.** `Scope<'a>` is
-    /// invariant in `'a` (it contains `RefCell`s), so the paired
-    /// `PhantomData<&'a Scope<'a>>` below is required to keep `KFunction<'a>` invariant in
-    /// `'a`. Do **not** simplify `_p` to `PhantomData<&'a ()>` — that would make
-    /// `KFunction` covariant in `'a` and silently reintroduce the soundness bug the old
-    /// `*const Scope<'static>` erasure was working around the wrong way. The constructor
-    /// (`with_binder_name`) takes `&'a Scope<'a>` directly and stores it via `NonNull::from`,
-    /// so the only `unsafe` site is the `NonNull::as_ref` deref in `captured_scope`.
+    /// **Variance-load-bearing.** `Scope<'a>` is invariant in `'a` (it contains
+    /// `RefCell`s), so the paired `PhantomData<&'a Scope<'a>>` is required to keep
+    /// `KFunction<'a>` invariant in `'a`. Do **not** simplify `_p` to
+    /// `PhantomData<&'a ()>` — that would make `KFunction` covariant in `'a` and
+    /// silently reintroduce a soundness bug.
     captured: NonNull<Scope<'a>>,
     _p: PhantomData<&'a Scope<'a>>,
-    /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE); `None` for
-    /// everything else. See [`BinderNameFn`].
+    /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE).
     pub binder_name: Option<BinderNameFn>,
-    /// `Some(_)` for binder builtins whose body registers a callable function — `FN`
-    /// and `FUNCTOR`. Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
+    /// `Some(_)` for binder builtins whose body registers a callable function (`FN`,
+    /// `FUNCTOR`). Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
     /// dispatch driver installs an entry in `bindings.pending_overloads` and a
     /// sibling bare-arg call form like `(MAKESET IntOrd)` parks on the binder slot
-    /// instead of surfacing `DispatchFailed` before finalize. See [`BinderBucketFn`]
-    /// for the rationale on keying by bucket rather than lead keyword.
+    /// instead of surfacing `DispatchFailed` before finalize.
     pub binder_bucket: Option<BinderBucketFn>,
-    /// Flipped on by the `FUNCTOR` binder (and stays `false` for `FN`). Distinguishes
-    /// the same underlying `KFunction` shape into the two type-language families:
-    /// `function_value_ktype` projects `is_functor → KType::KFunctor`, else
-    /// `KType::KFunction`. The cross-arm wall in `function_compat` refuses both
-    /// directions of the `KFunctor`/`KFunction` mismatch silently — see
+    /// Flipped on by the `FUNCTOR` binder. Distinguishes the same underlying
+    /// `KFunction` shape into the two type-language families: `function_value_ktype`
+    /// projects `is_functor → KType::KFunctor`, else `KType::KFunction`. See
     /// [design/typing/functors.md](../../../design/typing/functors.md).
     pub is_functor: bool,
     /// Flipped on by binder builtins whose binding installs a *nominal* identity —
-    /// `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE`. The placeholder install
-    /// site in [`crate::machine::execute::scheduler::submit`] reads this flag and
-    /// stamps the resulting [`crate::machine::core::BindingIndex`] with
-    /// `nominal_binder: true`, carving the entry out of the strict-lexical-cutoff
-    /// visibility test so siblings on the same block can refer to one another
-    /// regardless of source order (mutual recursion across nominal binders).
-    /// `LET` / `FN` (without FUNCTOR-flagging) and other binders leave this `false`.
+    /// `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE`. Carves the entry out of
+    /// the strict-lexical-cutoff visibility test so siblings on the same block can
+    /// refer to one another regardless of source order (mutual recursion across
+    /// nominal binders).
     pub is_nominal_binder: bool,
 }
 
@@ -110,15 +78,6 @@ impl<'a> KFunction<'a> {
         Self::with_binder_and_functor(signature, body, captured, binder_name, None, false, false)
     }
 
-    /// Like [`Self::with_binder_name`] but lets the caller flip the `is_functor` flag at
-    /// construction time and pass a `binder_bucket` extractor (for `FN` / `FUNCTOR`,
-    /// whose body registers a callable function and so wants a bucket-keyed
-    /// pending-overload entry). Used by the `FUNCTOR` binder; everything else routes
-    /// through `with_binder_name` and leaves both new fields at their defaults.
-    ///
-    /// `is_nominal_binder` flips on the D7 visibility carve-out for STRUCT / named
-    /// UNION / SIG / FUNCTOR / MODULE binders. LET / FN binders pass `false`. See
-    /// [`Self::is_nominal_binder`] for the consumer.
     pub fn with_binder_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
@@ -141,10 +100,10 @@ impl<'a> KFunction<'a> {
         }
     }
 
-    /// Re-borrow the captured scope at `'a`. SAFETY: `captured` was built from
-    /// `NonNull::from(&'a Scope<'a>)` in [`Self::with_binder_name`], so the pointer is non-null
-    /// and points at a `Scope<'a>` that outlives this `KFunction<'a>` by the broader
-    /// runtime-arena SAFETY argument (see `core/arena.rs::RuntimeArena`).
+    /// SAFETY: `captured` was built from `NonNull::from(&'a Scope<'a>)` in
+    /// [`Self::with_binder_and_functor`], so the pointer is non-null and points at a
+    /// `Scope<'a>` that outlives this `KFunction<'a>` by the broader runtime-arena
+    /// SAFETY argument (see `core/arena.rs::RuntimeArena`).
     pub fn captured_scope(&self) -> &'a Scope<'a> {
         unsafe { self.captured.as_ref() }
     }
@@ -207,16 +166,6 @@ impl<'a> KFunction<'a> {
         })
     }
 
-    /// Part-reconstruction core for the named-arg invocation path. Parses `args`
-    /// as `<name> = <value>` triples (or the dict-literal surface) and rebuilds the
-    /// positional expression with each signature `Keyword` element re-interleaved at
-    /// its declared position. Bind / dispatch against the returned expression mirrors
-    /// what the original keyword-bearing call site would have produced.
-    ///
-    /// Sole caller is the dispatch scheduler's stateful FunctionValueCall fast
-    /// lane, which calls `bind` on the reconstructed expression directly and
-    /// bypasses `resolve_dispatch_with_chain`.
-    ///
     /// Validation precedence (first wins): malformed pair shape (`ShapeError` from
     /// `NamedPairs::parse`) → missing arg (`MissingArg`) → unknown arg
     /// (`ShapeError("unknown name ...")`). Arity is implicit — `NamedPairs` rejects
@@ -270,14 +219,9 @@ mod tests {
         BodyResult::Value(marker(s, "any"))
     }
 
-    /// Walk the scope chain and return the first overload whose bucket key matches `expr`
-    /// — a coarse, classifier-shape-only lookup. Each migrated test calls
-    /// `f.classify_for_pick(&expr)` on the result to assert the per-slot index buckets
-    /// directly, so the lookup only needs to land on *some* overload registered under
-    /// the right bucket key. The PR C dispatch driver's actual admission (cache-driven
-    /// strict against bare-name outcomes) is exercised end-to-end by the scheduler
-    /// tests; the tests in this mod cover the post-pick classification surface in
-    /// isolation.
+    /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape
+    /// match, falling back to any overload registered under the bucket so the
+    /// classification check still runs against a real `KFunction` shape.
     fn find_match<'a>(
         scope: &'a Scope<'a>,
         expr: &KExpression<'a>,
@@ -287,9 +231,6 @@ mod tests {
         while let Some(s) = current {
             let functions = s.bindings().functions();
             if let Some(bucket) = functions.get(&key) {
-                // Prefer a strict-shape match when one exists; otherwise fall back to
-                // any overload registered under the bucket so the classification check
-                // still runs against a real `KFunction` shape.
                 if let Some((f, _)) = bucket.iter().find(|(f, _)| f.signature.matches(expr)) {
                     return Some(*f);
                 }
@@ -302,11 +243,9 @@ mod tests {
         None
     }
 
-    /// A function whose signature is `OP <v:Number>` classified against `OP someName` (where
-    /// `someName` is a bare Identifier in a Number-typed slot) returns `wrap_indices = [1]`
-    /// and no ref_name_indices — the dispatcher will wrap `someName` as a sub-Dispatch so
-    /// it resolves through the `BareIdentifier` fast lane (or the bare-name short-circuit,
-    /// if the name is bound).
+    /// `OP <v:Number>` classified against `OP someName` (Identifier in Number slot)
+    /// returns `wrap_indices = [1]` — the dispatcher wraps `someName` as a sub-Dispatch
+    /// resolved through the `BareIdentifier` fast lane.
     #[test]
     fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         let arena = RuntimeArena::new();
@@ -330,14 +269,10 @@ mod tests {
         assert!(!pick.picked_has_binder_name);
     }
 
-    /// The `<verb:Identifier> <args:KExpression>` shape — picked against `myFn (x: 1)`
-    /// — returns ref_name_indices = [0]: the Identifier slot is a literal-name reference
-    /// and the function has no binder_name, so replay-park will check whether `myFn`
-    /// resolves to a placeholder. (Historically this was `call_by_name`'s registered
-    /// signature; that builtin was deleted in Phase 1 of
-    /// `scratch/plan-fast-lane-subsume.md` and the test registers an equivalent
-    /// `[Identifier, KExpression]` overload locally so the classification check
-    /// remains exercised.)
+    /// `<verb:Identifier> <args:KExpression>` picked against `myFn (x: 1)` returns
+    /// `ref_name_indices = [0]`: the Identifier slot is a literal-name reference and
+    /// the function has no `binder_name`, so replay-park checks whether `myFn`
+    /// resolves to a placeholder.
     #[test]
     fn classify_returns_ref_name_indices_for_non_binder_function() {
         let arena = RuntimeArena::new();
@@ -372,10 +307,8 @@ mod tests {
         assert!(!pick.picked_has_binder_name);
     }
 
-    /// LET's name slot is `Identifier` (or `TypeExprRef`), but LET has `binder_name = Some(_)` —
-    /// so `classify_for_pick` should NOT include the name slot in `ref_name_indices`.
-    /// Binder literal-name slots are *declarations*, not references; replay-park must skip
-    /// them.
+    /// LET has `binder_name = Some(_)`, so its Identifier name slot is a *declaration*,
+    /// not a reference, and `classify_for_pick` must exclude it from `ref_name_indices`.
     #[test]
     fn classify_skips_ref_name_indices_for_binder_function() {
         let arena = RuntimeArena::new();
@@ -397,10 +330,8 @@ mod tests {
         );
     }
 
-    /// A non-binder_name function whose slot is `TypeExprRef`, classified against a bare leaf
-    /// Type-token, lands the Type slot in `ref_name_indices` the same way an Identifier in
-    /// an Identifier slot does — replay-park parks the call on the Type-token's
-    /// placeholder. Symmetry pinned by
+    /// A bare leaf Type-token in a `TypeExprRef` slot lands in `ref_name_indices` the
+    /// same way an Identifier in an Identifier slot does. Symmetry pinned by
     /// [design/execution-model.md § Dispatch-time name placeholders](../../../design/execution-model.md#dispatch-time-name-placeholders).
     #[test]
     fn classify_type_token_in_typeexprref_slot_returns_ref_name_indices() {
@@ -428,10 +359,8 @@ mod tests {
         assert!(!pick.picked_has_binder_name);
     }
 
-    /// Stage 2: a manually-constructed `KFunction` with the `is_functor` flag set
-    /// projects through `KObject::ktype()` as `KType::KFunctor`; the unflagged
-    /// case stays `KType::KFunction`. Pins the projection split that drives the
-    /// cross-arm wall in `function_compat`.
+    /// `is_functor`-flagged `KFunction` projects through `KObject::ktype()` as
+    /// `KType::KFunctor`; unflagged stays `KType::KFunction`.
     #[test]
     fn function_value_ktype_projects_kfunctor_when_flagged() {
         use crate::machine::model::types::{ReturnType, ExpressionSignature};
@@ -447,11 +376,9 @@ mod tests {
                 }),
             ],
         };
-        // Plain FN: `is_functor: false`, projects KFunction.
         let plain = KFunction::with_binder_name(make_sig(), Body::Builtin(body_any), scope, None);
         let plain_obj = KObject::KFunction(arena.alloc_function(plain), None);
         assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
-        // Flagged FN: `is_functor: true`, projects KFunctor.
         let functor = KFunction::with_binder_and_functor(
             make_sig(),
             Body::Builtin(body_any),
@@ -471,10 +398,9 @@ mod tests {
         }
     }
 
-    /// Companion to the literal-name slot case: a bare leaf Type-token in an `Any` slot of a
-    /// non-binder lands in `wrap_indices` so the auto-wrap pass rewrites it into a
-    /// sub-Dispatch that resolves through the `BareTypeLeaf` fast lane.
-    /// `LET T = Number` walks the same wrap path as `LET y = z`.
+    /// A bare leaf Type-token in an `Any` slot lands in `wrap_indices` — the auto-wrap
+    /// pass rewrites it into a sub-Dispatch resolved through the `BareTypeLeaf` fast
+    /// lane.
     #[test]
     fn classify_type_token_in_any_slot_returns_wrap_indices() {
         let arena = RuntimeArena::new();

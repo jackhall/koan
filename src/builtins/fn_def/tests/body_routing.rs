@@ -1,40 +1,17 @@
-//! Branch coverage for the FN-def `body()` routing matrix: each test forces a
-//! specific (return-type-state × param-list-result) combination, exercises one
-//! `ReturnTypeCapture` variant on the Combine-finish path, or trips a splice
-//! rejection. Also covers the Stage B param-name scan utility arms
-//! (`type_expr_references_any` Function-arrow recursion, `part_references_any`
-//! Identifier / ListLiteral / DictLiteral arms).
+//! Branch coverage for the FN-def `body()` routing matrix and `ReturnTypeCapture`
+//! variants on the Combine-finish path, plus the Stage B param-name scan utility arms.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::execute::Scheduler;
 use crate::machine::model::{KType, ReturnType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
-// ---------- Stage B param-name scan: utility arms in `type_expr_references_any` /
-// `part_references_any`. Each test forces the scan to detect a parameter reference
-// inside a return-type carrier and re-route the FN through `ReturnType::Deferred(_)`. ---
-
-// Deleted (Function-arrow-return-type-with-param-ref defers): the
-// pre-type-language-via-dispatch surface `:(Function (Number) -> Er)` relied on
-// parser-fold of the Function-arrow form into a single `TypeExpr` carrying a
-// `TypeParams::Function` shape, then ran `type_expr_references_any` on that
-// folded form to detect `Er`. Post-type-language-via-dispatch the parser does
-// no fold — `:(FN (...) -> Er)` is a `SigiledTypeExpr` whose inner expression
-// sub-dispatches under the parent scope where `Er` resolves to its signature
-// carrier. The Function-arrow `TypeParams::Function` arm of
-// `type_expr_references_any` is now unreachable from any parser-emitted
-// shape; the param-ref-deferral coverage rides on the parens-form sibling
-// tests below (`fn_def_parens_return_type_with_*_param_ref_defers`).
-
-/// `part_references_any` `Identifier` arm: parens-form return type carrying a bare
-/// lowercase identifier matching a parameter name must defer.
+/// Parens-form return type carrying a bare lowercase identifier matching a parameter
+/// name must defer.
 #[test]
 fn fn_def_parens_return_type_with_identifier_param_ref_defers() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // Parens-form return type `(somefn xs)` — `xs` parses as `Identifier("xs")` and
-    // matches the FN's parameter name, routing to `Deferred(Expression(_))` without
-    // any FN-def-time sub-Dispatch attempt against the outer scope.
     run(
         scope,
         "FN (USE xs :Number) -> (somefn xs) = (xs)",
@@ -46,9 +23,8 @@ fn fn_def_parens_return_type_with_identifier_param_ref_defers() {
     );
 }
 
-/// `part_references_any` `ListLiteral` arm: a list literal inside a parens-form return
-/// type carrying a parameter-name reference must defer. Exercises the recursion through
-/// `items.iter().any(part_references_any, ...)`.
+/// List literal inside a parens-form return type carrying a parameter-name reference
+/// must defer.
 #[test]
 fn fn_def_parens_return_type_with_list_literal_param_ref_defers() {
     let arena = RuntimeArena::new();
@@ -64,9 +40,8 @@ fn fn_def_parens_return_type_with_list_literal_param_ref_defers() {
     );
 }
 
-/// `part_references_any` `DictLiteral` arm: a dict literal inside a parens-form return
-/// type carrying a parameter-name reference in a value position must defer. Exercises
-/// the per-pair recursion through `pairs.iter().any(|(k, v)| ...)`.
+/// Dict literal inside a parens-form return type carrying a parameter-name reference
+/// in a value position must defer.
 #[test]
 fn fn_def_parens_return_type_with_dict_literal_param_ref_defers() {
     let arena = RuntimeArena::new();
@@ -82,21 +57,14 @@ fn fn_def_parens_return_type_with_dict_literal_param_ref_defers() {
     );
 }
 
-// ---------- (Deferred return type, Pending param list) routing arm + Combine-finish
-// `ReturnTypeCapture::Deferred` arm. -----------------------------------------------------
-
-/// (Deferred return type, Pending params) routing arm: an FN whose return type
-/// references a parameter name *and* whose parameter type elaboration parks on a
-/// SIG declared in the same batch routes through `defer_via_combine` carrying
-/// `ReturnTypeCapture::Deferred(_)`. Pins that the Combine finish lifts that
-/// carrier verbatim into `ReturnType::Deferred(_)` once the SIG terminalizes.
+/// An FN whose return type references a parameter name and whose parameter type
+/// elaboration parks on a same-batch SIG routes through `defer_via_combine` carrying
+/// `ReturnTypeCapture::Deferred(_)`; the Combine finish lifts that carrier verbatim
+/// into `ReturnType::Deferred(_)` once the SIG terminalizes.
 #[test]
 fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // SIG and FN submitted in the same batch — the FN's param type elaboration parks
-    // on `OrderedSig`'s placeholder; the return-type `Er` matches a parameter name
-    // and routes through `ReturnTypeCapture::Deferred`.
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -110,14 +78,10 @@ fn fn_def_deferred_return_with_pending_param_routes_through_combine() {
     );
 }
 
-// ---------- (ExprSubDispatched return type, Pending params) routing arm: parens-form
-// return type with no parameter reference combined with a parking parameter slot. ------
-
-/// (ExprSubDispatched, Pending) routing arm: a parens-form return type that
-/// sub-dispatches at FN-def (no parameter reference) and a parameter slot that parks
-/// on a forward-LET binding must both join the same Combine. The return-type
-/// sub-dispatch is appended after the park producers; its `results_pos` says where the
-/// closure picks the lifted `KTypeValue` out of `&[&KObject]`.
+/// A parens-form return type that sub-dispatches at FN-def (no parameter reference)
+/// and a parameter slot that parks on a forward-LET binding both join the same
+/// Combine; the return-type sub-dispatch's `results_pos` says where the closure picks
+/// the lifted `KTypeValue` out of `&[&KObject]`.
 #[test]
 fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine() {
     let arena = RuntimeArena::new();
@@ -135,12 +99,9 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
     );
 }
 
-// ---------- (Pending return type, Done params) routing arm + `make_capture`'s two
-// variants. ----------------------------------------------------------------------------
-
-/// (Pending bare-leaf return type, Done params) routing arm with `make_capture`'s
-/// `TypeParams::None` branch: a bare forward-LET return type with no parameters parks
-/// on the LET's placeholder and routes through `ReturnTypeCapture::Unresolved(name)`.
+/// A bare forward-LET return type with no parameters parks on the LET's placeholder
+/// and routes through `ReturnTypeCapture::Unresolved(name)` (`make_capture`'s
+/// `TypeParams::None` branch).
 #[test]
 fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
     let arena = RuntimeArena::new();
@@ -158,22 +119,9 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
     );
 }
 
-// `fn_def_forward_let_parameterized_return_type_resolves_after_wake` removed:
-// the legacy positional `:(List MyT)` form is no longer routed through the
-// dispatcher (the `TypeCall` arm is deleted; only the field-walker's
-// `try_synth_legacy` path serves the legacy positional shape, and FN return
-// types don't go through that path). The keyworded `:(LIST OF MyT)` form
-// resolves through the keyworded dispatch path, which the
-// `make_capture::TypeParams::List | Function` arm doesn't exercise.
-
-// ---------- Combine-finish error paths: a sub-Dispatched param or return-type slot
-// that resolves to a non-`KTypeValue` result. -------------------------------------------
-
-/// Combine-finish parameter-slot splice check: a parens-form parameter type that
-/// sub-dispatches to a non-`KTypeValue` (`(1)` → `Number(1)`) must surface a
-/// `ShapeError` naming the offending slot's part-index. Pins the per-slot diagnostic
-/// path so the rejection is attributed to the right signature slot rather than
-/// surfacing later as an opaque elaborator failure.
+/// A parens-form parameter type that sub-dispatches to a non-`KTypeValue` must
+/// surface a `ShapeError` naming the offending slot's part-index, attributing the
+/// rejection to the right signature slot rather than an opaque elaborator failure.
 #[test]
 fn fn_def_parens_param_type_non_type_value_errors() {
     let arena = RuntimeArena::new();
@@ -192,10 +140,9 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     assert!(!fn_is_registered(scope, "USE"), "USE should not register");
 }
 
-/// Combine-finish return-type splice check: a parens-form return type that
-/// sub-dispatches to a non-`KTypeValue` (`(1)` → `Number(1)`) must surface a
-/// `ShapeError` naming the return-type slot. Mirrors the parameter-slot check but on
-/// the `ReturnTypeCapture::ReturnTypeExpr` arm of the Combine finish.
+/// A parens-form return type that sub-dispatches to a non-`KTypeValue` must surface
+/// a `ShapeError` naming the return-type slot (the
+/// `ReturnTypeCapture::ReturnTypeExpr` arm of the Combine finish).
 #[test]
 fn fn_def_parens_return_type_non_type_value_errors() {
     let arena = RuntimeArena::new();

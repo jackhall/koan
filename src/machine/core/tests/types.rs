@@ -1,9 +1,5 @@
-//! `register_type` rewire + `resolve_type` tests.
-//!
-//! Pin the three load-bearing properties of the rewire:
-//! - storage flip: `register_type` writes `types`, not `data`;
-//! - `resolve_type` outer-chain walk;
-//! - inner-scope shadowing of outer type bindings.
+//! `register_type` / `resolve_type` tests: type bindings land in `types` (not `data`),
+//! `resolve_type` walks the outer chain, and inner scopes shadow outer type bindings.
 
 use crate::machine::BindingIndex;
 use super::super::{RuntimeArena, Scope};
@@ -19,7 +15,7 @@ fn register_type_inserts_into_types_map_not_data() {
     assert!(scope.bindings().types().get("Foo").is_some());
     assert!(
         scope.bindings().data().get("Foo").is_none(),
-        "post-1.4: type binding must not appear in data map",
+        "type binding must not appear in data map",
     );
 }
 

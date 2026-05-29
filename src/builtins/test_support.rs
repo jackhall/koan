@@ -1,9 +1,6 @@
-//! Shared test-only scaffolding for the builtin tests: a `Write` sink that captures PRINT
-//! output, the parse/run/run_err harness over the dispatcher, run-root scope constructors,
-//! and a handful of dispatch-test signature/marker builders shared between
-//! `core::scope::tests` and `execute::scheduler::tests`.
-//!
-//! All items are `pub(crate)` and the module is gated `#[cfg(test)]` at its declaration site.
+//! Shared test-only scaffolding for the builtin tests: PRINT-capturing `Write` sink,
+//! parse/run/run_err harness over the dispatcher, run-root scope constructors, and
+//! dispatch-test signature/marker builders.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -19,8 +16,7 @@ use crate::parse::parse;
 
 use super::default_scope;
 
-/// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read back what
-/// the scope's sink received.
+/// `Write` adapter that mirrors output into a shared `Vec<u8>` so tests can read it back.
 pub(crate) struct SharedBuf(pub Rc<RefCell<Vec<u8>>>);
 
 impl Write for SharedBuf {
@@ -45,27 +41,22 @@ pub(crate) fn run_root_silent<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
     default_scope(arena, Box::new(std::io::sink()))
 }
 
-/// Run-root scope with no builtins registered, for tests that exercise scope-machinery
-/// primitives directly without going through `default_scope`.
+/// Run-root scope with no builtins registered, for tests that exercise scope machinery
+/// directly.
 pub(crate) fn run_root_bare<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
     arena.alloc_scope(Scope::run_root(arena, None, Box::new(std::io::sink())))
 }
 
-/// Parse a source string expected to contain exactly one top-level expression. Panics on
-/// parse failure or wrong arity.
+/// Parse a source string expected to contain exactly one top-level expression.
 pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
     let mut exprs = parse(src).expect("parse should succeed");
     assert_eq!(exprs.len(), 1, "test helper expects a single expression");
     exprs.remove(0)
 }
 
-/// Semantic errors surface via `read_result`, not `execute`; reach for [`run_one_err`] when
-/// the test expects a `KError`.
-///
-/// Uses `add_dispatch` (not `enter_block`) so the submission picks up the detached
-/// auto-root chain — visibility is "complete" against `scope`, so every binding from
-/// prior `run(...)` calls reads through. This matches REPL semantics: a single
-/// expression queried against an existing scope sees everything in it.
+/// Dispatches `expr` against `scope` with REPL-style "complete" visibility, so bindings
+/// from prior `run(...)` calls read through. Semantic errors surface via `read_result`,
+/// not `execute` — use [`run_one_err`] when the test expects a `KError`.
 pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
@@ -73,8 +64,7 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
     sched.read(id)
 }
 
-/// Like [`run_one`] but returns the `KError` produced by the dispatched node. Panics if the
-/// node finished without an error.
+/// Like [`run_one`] but returns the `KError` produced by the dispatched node.
 pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
@@ -85,13 +75,9 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
     }
 }
 
-/// REPL-style setup: parse `source` and dispatch each top-level statement
-/// individually via `add_dispatch`, so each picks up the detached auto-root chain
-/// and reads through to every previously-bound name. Chained calls
-/// (`run(scope, "...")` then `run(scope, "...")`) compose because each submission's
-/// visibility is "complete" against `scope`. Tests that need to assert top-level
-/// statement *ordering* (e.g. forward-ref-fails behavior) call `enter_block`
-/// directly instead.
+/// REPL-style setup: parse `source` and dispatch each top-level statement individually,
+/// so chained `run(scope, ...)` calls compose. Tests asserting top-level statement
+/// *ordering* (e.g. forward-ref-fails behavior) call `enter_block` directly instead.
 pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
@@ -101,11 +87,8 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     sched.execute().expect("scheduler should succeed");
 }
 
-/// Fetch the single bare-`FN` overload whose signature's first keyword is `keyword`,
-/// searching the `functions` dispatch buckets. Bare FN keywords no longer mirror into
-/// `data` (only `LET f = (FN …)` does), so tests that inspect a registered function's
-/// signature read it from the dispatch surface through this helper. Panics if no overload
-/// or more than one is found under `keyword`.
+/// Fetch the single bare-`FN` overload whose signature's first keyword is `keyword`.
+/// Panics if zero or more than one match.
 pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
     let mut found: Option<&'a KFunction<'a>> = None;
     for (_, bucket) in scope.bindings().iter_functions() {
@@ -124,9 +107,7 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 }
 
 /// True iff some `functions` bucket holds an overload whose first keyword is `keyword`.
-/// Negative-path companion to [`lookup_fn`] for "this FN should not register" assertions
-/// (which can no longer be expressed as `data.get(keyword).is_none()` now that bare FN
-/// keywords never land in `data`).
+/// Negative-path companion to [`lookup_fn`] for "this FN should not register" assertions.
 pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
     scope.bindings().iter_functions().into_iter().any(|(_, bucket)| {
         bucket.iter().any(|f| {
@@ -139,14 +120,12 @@ pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
 }
 
 /// Allocate a labeled marker object on `scope`'s arena. Dispatch tests register builtins
-/// whose bodies return distinct markers (`"identifier"`, `"any"`, …) so the test asserts
-/// which overload won by inspecting the produced string.
+/// whose bodies return distinct markers so the test can assert which overload won.
 pub(crate) fn marker<'a>(scope: &'a Scope<'a>, label: &'static str) -> &'a KObject<'a> {
     scope.arena.alloc(KObject::KString(label.into()))
 }
 
-/// Build a one-argument signature (`<name: kt>`) returning `Any`. Used by dispatch-test
-/// builtins on both sides of the scope/scheduler split.
+/// Build a one-argument signature (`<name: kt>`) returning `Any`.
 pub(crate) fn one_slot_sig<'a>(name: &str, kt: KType<'a>) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),

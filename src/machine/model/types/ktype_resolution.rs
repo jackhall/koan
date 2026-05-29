@@ -1,22 +1,16 @@
 //! Surface-name and `TypeExpr` → `KType` elaboration, plus join (LUB) for inferring
-//! container element types from heterogeneous values. The user-facing entry points for
-//! turning parsed type syntax into a `KType` live here, alongside the join used by
-//! `KObject::ktype` to infer container element types.
+//! container element types from heterogeneous values.
 
 use super::ktype::{KType, UserTypeKind};
 use crate::machine::model::ast::{TypeExpr, TypeParams};
 
 impl<'a> KType<'a> {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
-    /// `List`). Returns `None` for unknown names. `Identifier`, `TypeExprRef` are
-    /// dispatch-time meta-types — not surface-declarable. `KFunction` is no longer a surface
-    /// name; users write `Function<(...)-> R>` for typed functions or `Any` for unconstrained.
+    /// `List`). Returns `None` for unknown names.
     ///
-    /// Returns `KType<'a>` parameterized over the caller's lifetime. Every produced shape
-    /// is owned-data — no arena pointers, no `Module` / `Signature` carriers — but
-    /// `KType<'a>` is invariant in `'a` (the `Module.type_members: RefCell<HashMap<_,
-    /// KType<'a>>>` field puts `'a` in invariant position), so we must build at the
-    /// caller's `'a` directly rather than rely on covariant coercion from `'static`.
+    /// Built at the caller's `'a` directly because `KType<'a>` is invariant in `'a`
+    /// (the `Module.type_members: RefCell<HashMap<_, KType<'a>>>` field puts `'a` in
+    /// invariant position), so covariant coercion from `'static` is unavailable.
     pub fn from_name(name: &str) -> Option<KType<'a>> {
         match name {
             "Number" => Some(KType::Number),
@@ -27,11 +21,6 @@ impl<'a> KType<'a> {
             "Dict" => Some(KType::Dict(Box::new(KType::Any), Box::new(KType::Any))),
             "KExpression" => Some(KType::KExpression),
             "Type" => Some(KType::Type),
-            // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
-            // carrier for the struct/tagged families; module / signature surface names
-            // lower to dedicated `AnyModule` / `AnySignature` wildcards after the
-            // type-language collapse (`UserTypeKind::Module` no longer exists, so the
-            // surface keyword has its own variant in KType).
             "Tagged" => Some(KType::AnyUserType { kind: UserTypeKind::Tagged }),
             "Struct" => Some(KType::AnyUserType { kind: UserTypeKind::Struct }),
             "Module" => Some(KType::AnyModule),
@@ -42,18 +31,10 @@ impl<'a> KType<'a> {
     }
 
     /// Lower a parser `TypeExpr` into a `KType` against the builtin table only — no
-    /// scope-aware resolver. Recurses through container shapes (`List<T>`, `Dict<K, V>`,
-    /// `Function<(...)->R>`); each leaf goes through [`KType::from_name`].
-    ///
-    /// User-defined / module-local type names (anything not in `from_name`) surface as
-    /// `Err(_)` for the caller to either fall back on the
-    /// [`crate::machine::model::values::KObject::TypeNameRef`] carrier (the
-    /// [`crate::machine::model::ast::ExpressionPart::resolve_for`] seam at parser-side lowering) or
-    /// route through the scheduler-aware
-    /// [`crate::machine::model::types::elaborate_type_expr`] (the FN / LET / STRUCT body
-    /// path that consults `Scope` for placeholder + value lookups).
-    ///
-    /// Returns `KType<'a>` parameterized over the caller's lifetime, same as `from_name`.
+    /// scope-aware resolver. Recurses through container shapes; each leaf goes through
+    /// [`KType::from_name`]. Unknown leaves surface as `Err(_)`; the caller either falls
+    /// back to a `TypeNameRef` carrier or routes through the scheduler-aware
+    /// [`crate::machine::model::types::elaborate_type_expr`].
     pub fn from_type_expr(t: &TypeExpr) -> Result<KType<'a>, String> {
         match (t.name.as_str(), &t.params) {
             (_, TypeParams::None) => KType::from_name(&t.name)
@@ -99,9 +80,8 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Least-upper-bound of two types. Used by `KObject::ktype` to infer container element
-    /// types from heterogeneous values: `[1, 2]` → `List<Number>`, `[1, "x"]` → `List<Any>`,
-    /// nested containers join element-wise.
+    /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` →
+    /// `List<Any>`; nested containers join element-wise.
     pub fn join(a: &KType<'a>, b: &KType<'a>) -> KType<'a> {
         if a == b {
             return a.clone();
@@ -224,7 +204,6 @@ mod tests {
 
     #[test]
     fn from_type_expr_unknown_paramless_name_errors() {
-        // bare unknown leaf → from_name returns None → error
         assert!(KType::from_type_expr(&leaf("Banana")).is_err());
     }
 
@@ -247,11 +226,6 @@ mod tests {
         assert!(KType::from_type_expr(&te).is_err());
     }
 
-    /// Builtin lookup directly: `from_type_expr` for a paramless leaf routes through
-    /// `from_name` exclusively. Scope-aware shadowing of builtins (a binding rebinding
-    /// `Number` to a struct type, for instance) lives one layer up in
-    /// [`crate::machine::model::types::elaborate_type_expr`], which consults `Scope`
-    /// before falling through to `from_name`.
     #[test]
     fn from_type_expr_leaf_falls_through_to_builtin() {
         assert_eq!(
@@ -262,7 +236,6 @@ mod tests {
 
     #[test]
     fn from_name_kfunction_no_longer_resolves() {
-        // KFunction is no longer surface-declarable — users write Function<(...)-> R> or Any.
         assert_eq!(KType::from_name("KFunction"), None);
     }
 

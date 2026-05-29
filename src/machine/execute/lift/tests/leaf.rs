@@ -131,8 +131,7 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
     assert_eq!(count_after, before);
 }
 
-/// Pre-anchored KModule preserves its existing Rc — same shape as the
-/// KFunction / KFuture preservation cases.
+/// Pre-anchored KModule preserves its existing Rc.
 #[test]
 fn kmodule_with_existing_anchor_preserves_it() {
     use crate::machine::model::values::Module;
@@ -163,8 +162,7 @@ fn kmodule_with_existing_anchor_preserves_it() {
 }
 
 /// Non-composite, non-function variants fall through to `deep_clone` on the
-/// slow path — the `other` catch-all arm. Defeats the fast path so the match
-/// is actually reached.
+/// slow path. Defeats the fast path so the match is actually reached.
 #[test]
 fn primitive_lifts_via_deep_clone_on_slow_path() {
     let arena = RuntimeArena::new();

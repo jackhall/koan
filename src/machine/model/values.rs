@@ -1,12 +1,9 @@
-//! Runtime values: the universal [`KObject`] enum, dict-key wrapper [`KKey`], and the
-//! [`Module`] / [`Signature`] carriers. [`named_pairs`] is the shared parser used by
-//! struct-construction and first-class function calls (both consume `<name>: <value>`
-//! lists).
+//! Runtime values: the universal [`KObject`] enum, dict-key wrapper [`KKey`],
+//! the [`Module`] / [`Signature`] carriers, and the shared `<name>: <value>`
+//! parser [`NamedPairs`] used by struct construction and first-class calls.
 //!
-//! Construction-primitive builtins for product (`Struct`) and sum (`Tagged`) types live
-//! one layer up in [`crate::builtins::struct_value`] and
-//! [`crate::builtins::tagged_union`]; the dispatch entry point that routes a
-//! resolved verb-object to the right `apply` lives in [`crate::builtins`] too.
+//! Construction-primitive builtins for `Struct` and `Tagged` live one layer up
+//! in [`crate::builtins::struct_value`] and [`crate::builtins::tagged_union`].
 
 mod kkey;
 mod kobject;

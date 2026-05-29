@@ -1,21 +1,10 @@
 //! Type-constructor builtins — `LIST_OF`, `DICT_OF`, `FUNCTION_OF`,
-//! `MODULE_TYPE_OF`, `TYPE_CONSTRUCTOR`, `SIG_WITH`. Each ships as an
-//! ordinary scheduled `KFunction` whose inputs are `TypeExprRef`-typed
-//! slots (resolved to `KObject::KTypeValue(kt)`) and whose outputs are
-//! also `KObject::KTypeValue(kt)` carrying the elaborated `KType`
-//! directly. Dispatching them through the same `Dispatch` / `Bind`
-//! machinery values use means a parameterized type can be assembled by
-//! sub-expression evaluation: `(LIST_OF (MODULE_TYPE_OF M Type))` wakes
-//! the outer slot only after the inner sub-dispatch resolves to a
-//! concrete `KType` value.
-//!
-//! Why builtins rather than a parallel registration table: the design in
-//! [design/typing/scheduler.md](../../design/typing/scheduler.md) reduces
-//! type-expression evaluation to ordinary dispatch — same scope-lookup
-//! chain, same `Bind`-waits-for-subs refinement, same `lift_kobject`
-//! rules. No new node kind, no `KType::TypeVar`, no second registration
-//! table; a `TypeExprRef`-typed binding lives in `Scope::data` like any
-//! other value.
+//! `MODULE_TYPE_OF`, `TYPE_CONSTRUCTOR`, `SIG_WITH`. Each ships as a
+//! scheduled `KFunction` over `TypeExprRef`-typed slots, so a
+//! parameterized type assembles via sub-expression evaluation:
+//! `(LIST_OF (MODULE_TYPE_OF M Type))` wakes the outer slot only after
+//! the inner sub-dispatch resolves to a concrete `KType` value. See
+//! [design/typing/scheduler.md](../../design/typing/scheduler.md).
 
 mod dict_of;
 mod function_of;
@@ -24,9 +13,6 @@ mod module_type_of;
 mod sig_with;
 mod type_constructor;
 
-// `UserTypeKind` no longer referenced here — `:Module` lowers to `KType::AnyModule`,
-// `:Signature` to `KType::AnySignature` (the `UserTypeKind::Module` arm retired with
-// the type-language collapse).
 use crate::machine::model::KType;
 use crate::machine::Scope;
 
@@ -60,11 +46,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         function_of::body,
     );
-    // Single overload: the `m` slot is `Module`. Bare Type-token operands
-    // (`MODULE_TYPE_OF Foo Type`) ride the unified auto-wrap path and resolve through the
-    // `BareTypeLeaf` fast lane to a `Future(KModule)`, which then matches this slot
-    // strictly. Same shape as the ascription operators — no parallel TypeExprRef-lhs
-    // overload needed.
     register_builtin(
         scope,
         "MODULE_TYPE_OF",
@@ -75,11 +56,6 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         module_type_of::body,
     );
-    // `TYPE_CONSTRUCTOR <param:TypeExprRef>` — declares a higher-kinded type-constructor
-    // slot (template form). Inside a SIG body, `LET Wrap = (TYPE_CONSTRUCTOR Type)` binds
-    // `Wrap` to a `KTypeValue(UserType { kind: TypeConstructor { param_names: ["T"] }, .. })`
-    // template; `ascribe.rs:body_opaque` re-mints the slot with a fresh per-call
-    // `scope_id` and the slot's declared name (e.g. `Wrap`) on opaque ascription.
     register_builtin(
         scope,
         "TYPE_CONSTRUCTOR",
@@ -89,11 +65,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         ]),
         type_constructor::body,
     );
-    // `SIG_WITH <sig:Signature> <bindings:KExpression>` — see
-    // [`sig_with::body`] for the inner-triple parsing rules. The `bindings`
-    // slot is `KExpression` (lazy), so the dispatcher hands the parens group
-    // to the body verbatim; sub-Dispatch of inner value expressions
-    // (`(Elt: (MODULE_TYPE_OF E Type))`) is the body's responsibility.
+    // `bindings` is `KExpression` (lazy) so sub-Dispatch of inner value
+    // expressions stays the body's responsibility — see [`sig_with::body`].
     register_builtin(
         scope,
         "SIG_WITH",

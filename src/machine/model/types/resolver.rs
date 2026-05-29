@@ -136,12 +136,10 @@ pub fn elaborate_type_expr<'a>(
             match el.scope.resolve(name) {
                 Resolution::Placeholder(id) => {
                     // Record the edge unconditionally: the parked-on name may not be in
-                    // `pending_types` yet (its body hasn't dispatched), but DFS sees the
-                    // persistent edge list later and closes the cycle when the second
-                    // binder records its reciprocal edge. Trivial self-cycles
-                    // (`LET T = T`) are caught by the dispatch driver's eager-resolve
-                    // pass before the elaborator runs — see
-                    // `dispatch::resolve_name_part` / `would_create_cycle`.
+                    // `pending_types` yet, but DFS sees the persistent edge list later
+                    // and closes the cycle when the second binder records its reciprocal
+                    // edge. Trivial self-cycles (`LET T = T`) are caught earlier by the
+                    // dispatch driver's eager-resolve pass.
                     if let Some(decl) = el.current_decl_name.clone() {
                         el.scope.bindings().record_pending_edge(&decl, name.clone());
                         if let Some(members) = detect_pending_cycle(el.scope, &decl) {
@@ -270,7 +268,7 @@ pub fn elaborate_type_expr<'a>(
             // Forward reference to an in-flight `LET Wrap = ...` whose placeholder is
             // registered but whose body hasn't dispatched. Trivial self-cycles
             // (`LET Wrap = Wrap<...>`) are caught earlier by the dispatch driver's
-            // eager-resolve pass — see `dispatch::resolve_name_part`.
+            // eager-resolve pass.
             if let Resolution::Placeholder(id) = el.scope.resolve(name) {
                 return ElabResult::Park(vec![id]);
             }
@@ -351,21 +349,11 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
             scope_id,
             name: name.clone(),
         };
-        // Cycle members are nominal binders (STRUCT / named UNION). Recover the
-        // member's installed [`BindingIndex`] from its placeholder entry — the
-        // identity installs at the same lexical position the eventual finalize will
-        // use, and the placeholder install at submission has already carved the
-        // member's flag bit. Defensive fallback to a generic nominal tag at index 0:
-        // a cycle-close call without a matching placeholder is a programming error
-        // upstream, not a soft-recovery point.
-        // Recover the cycle member's installed `BindingIndex` from its
-        // placeholder. The lookup is visibility-unfiltered (cycle-close runs
-        // outside any consumer's chain), so a `Placeholder` arm hit returns
-        // the placeholder's producer id; the index lives on the underlying
-        // `placeholders` entry, retrieved here via the test-side raw view
-        // since the typed lookup intentionally drops the index. A cycle-close
-        // call without a matching placeholder is a programming error upstream,
-        // not a soft-recovery point — the fallback below is defensive.
+        // Recover the cycle member's installed `BindingIndex` from its placeholder so
+        // the identity installs at the lexical position the eventual finalize will use.
+        // Lookup is visibility-unfiltered (cycle-close runs outside any consumer's
+        // chain). The `unwrap_or` fallback is defensive: missing placeholder here is
+        // an upstream programming error, not a soft-recovery point.
         let bind_index = scope
             .ancestors()
             .find_map(|s| {

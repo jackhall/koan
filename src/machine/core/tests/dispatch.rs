@@ -31,9 +31,7 @@ fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
 fn body_number_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "number_any")) }
 fn body_any_number<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "any_number")) }
 
-/// Successful pick on an overload registered in the current scope: the carried
-/// `Resolved` exposes the classifier's per-slot indices (here, an Identifier in an
-/// `Any` slot lands in `wrap_indices`).
+/// An Identifier in an `Any` slot lands in `wrap_indices`.
 #[test]
 fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let arena = RuntimeArena::new();
@@ -50,8 +48,6 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     }
 }
 
-/// Tied strict overloads (`<Number> OP <Any>` vs `<Any> OP <Number>` against `5 OP 7`)
-/// surface as `Ambiguous(2)` at the scope where the tie occurs.
 #[test]
 fn resolve_returns_ambiguous_for_tied_overloads() {
     let arena = RuntimeArena::new();
@@ -69,8 +65,6 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
     }
 }
 
-/// Inner scope has no matching overload; resolution descends to `outer` and picks
-/// there.
 #[test]
 fn resolve_walks_outer_chain_on_unmatched() {
     let arena = RuntimeArena::new();
@@ -81,8 +75,8 @@ fn resolve_walks_outer_chain_on_unmatched() {
     assert!(matches!(inner.resolve_dispatch(&expr), ResolveOutcome::Resolved(_)));
 }
 
-/// Inner ambiguity does NOT fall through to `outer`: the outer scope has a
-/// non-ambiguous overload, but resolution still reports Ambiguous from the inner tie.
+/// Inner ambiguity must surface even when `outer` has a non-ambiguous overload —
+/// resolution does not fall through past a tie.
 #[test]
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     let arena = RuntimeArena::new();
@@ -102,13 +96,11 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     }
 }
 
-/// A binder_name-bearing overload (here a synthetic LET-like binder) populates
-/// `placeholder_name` from its extractor.
+/// A binder_name-bearing overload populates `placeholder_name` from its extractor.
 #[test]
 fn resolve_carries_placeholder_name_for_binder_function() {
     use crate::builtins::register_builtin_with_binder;
     fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
-        // Mirror LET's shape: expression's 2nd part is the binder Identifier.
         match expr.parts.get(1).map(|p| &p.value) {
             Some(ExpressionPart::Identifier(n)) => Some(n.clone()),
             _ => None,
@@ -141,10 +133,8 @@ fn resolve_carries_placeholder_name_for_binder_function() {
     }
 }
 
-/// The tentative pass only fires when strict picked nothing at the same scope.
-/// Register only a `<Identifier>` overload; calling with a `Number` literal must miss
-/// strictly *and* tentatively (Literal is not a bare name), giving Unmatched at
-/// run-root.
+/// A `Number` literal against an `<Identifier>`-only overload misses strictly
+/// *and* tentatively (a Literal is not a bare name).
 #[test]
 fn resolve_tentative_falls_back_only_when_strict_empty() {
     let arena = RuntimeArena::new();
@@ -154,11 +144,11 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
     assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Unmatched));
 }
 
-/// A nested-Expression shape `((deep_call) + 1)` returns `Deferred`: the typed `+`
-/// overload doesn't strictly match (Expression in Number slot) and doesn't tentatively
-/// match either (Expression isn't a bare name), but eager evaluation of `(deep_call)`
-/// may produce a `Future(Number)` that the post-Bind re-dispatch picks. Distinct from
-/// `Unmatched` — the scheduler falls through to its eager-sub loop on `Deferred`.
+/// `((deep_call) + 1)` returns `Deferred` rather than `Unmatched`: the typed
+/// overload can't match the nested `Expression` strictly or tentatively, but
+/// eager evaluation of `(deep_call)` may produce a `Future(Number)` that a
+/// post-Bind re-dispatch picks. The scheduler routes `Deferred` into its
+/// eager-sub loop instead of erroring.
 #[test]
 fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let arena = RuntimeArena::new();
@@ -173,15 +163,8 @@ fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Deferred));
 }
 
-// -------- unit-level dispatch tests on `resolve_dispatch` --------
-//
-// Cover overload-resolution behaviors at the `resolve_dispatch` boundary. The
-// end-to-end variants that drive `Scheduler::execute` live with the rest of the
-// scheduler integration tests at `execute::scheduler::tests`.
-
-
-/// Parent owns the LET builtin; child has no functions of its own. `resolve_dispatch`
-/// against the child must climb to the parent.
+/// Parent owns the LET builtin; child has no functions of its own —
+/// `resolve_dispatch` against the child must climb to the parent.
 #[test]
 fn resolve_walks_outer_chain_to_find_builtin() {
     let arena = RuntimeArena::new();
@@ -210,11 +193,9 @@ fn resolve_dispatch_with_no_outer_and_no_match_is_unmatched() {
     assert!(matches!(scope.resolve_dispatch(&expr), ResolveOutcome::Unmatched));
 }
 
-/// No-bucket fallback consults `pending_overloads` by the *full* bucket key.
-/// An entry installed for `(MAKESET _)` parks a call shaped `(MAKESET <bare>)`,
-/// but a call shaped `(MAKESET <bare> USING <bare>)` — same lead keyword, different
-/// bucket — still surfaces `Unmatched`. Two FN/FUNCTOR overloads sharing a head
-/// keyword but differing in later keywords must not collide on the park edge.
+/// `pending_overloads` is keyed by the *full* bucket. An entry for `(MAKESET _)`
+/// parks `(MAKESET <bare>)` but must not park `(MAKESET <bare> USING <bare>)` —
+/// sharing a lead keyword is not enough to collide.
 #[test]
 fn pending_overload_parks_only_on_exact_bucket_match() {
     use crate::machine::model::types::{UntypedElement, UntypedKey};
@@ -227,7 +208,6 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         .install_pending_overload(bucket_single, NodeId(42), BindingIndex::BUILTIN)
         .expect("install_pending_overload");
 
-    // Bare-arg call: `(MAKESET fwd)` — single-slot bucket matches the entry.
     let bare = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("MAKESET".into())),
         Spanned::bare(ExpressionPart::Identifier("fwd".into())),
@@ -238,9 +218,6 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
             std::any::type_name_of_val(&other)),
     }
 
-    // Multi-keyword call: `(MAKESET fwd USING other)` — same lead keyword but
-    // different bucket. Must NOT collide on the lead-keyword conflation; should
-    // surface `Unmatched` since no entry was installed for this bucket.
     let multi = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("MAKESET".into())),
         Spanned::bare(ExpressionPart::Identifier("fwd".into())),
@@ -253,12 +230,10 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     );
 }
 
-/// Sibling FN/FUNCTOR binders sharing one inner-call bucket key each install
-/// their own `pending_overloads[bucket]` entry into a per-bucket Vec — the
-/// "index-gated bucket parking" pattern. A consumer's `resolve_dispatch` parks
-/// on the earliest-index visible entry; on that producer's finalize the entry
-/// is removed and the consumer re-dispatches against whatever is now visible
-/// (live `functions[bucket]` candidates or remaining pending siblings).
+/// Two sibling binders that share a bucket key each install their own
+/// `pending_overloads[bucket]` entry — coalescing or rejecting the second would
+/// drop a distinct wake source. A consumer parks on the earliest-index visible
+/// entry.
 #[test]
 fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     use crate::machine::model::types::{UntypedElement, UntypedKey};
@@ -267,9 +242,6 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     let scope = run_root_bare(&arena);
     let bucket: UntypedKey =
         vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
-    // Two sibling FN binders, indices 3 and 4. Each installs its own pending
-    // entry; the second install must NOT be coalesced or rejected — both are
-    // distinct wake sources.
     scope
         .install_pending_overload(bucket.clone(), NodeId(101), BindingIndex::value(3))
         .expect("first install");
@@ -285,8 +257,6 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
         entries,
     );
 
-    // Consumer at a chain-cutoff strictly greater than both indices: parks on
-    // the earliest-index visible entry (NodeId(101)).
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("PICK".into())),
         Spanned::bare(ExpressionPart::Identifier("fwd".into())),
@@ -306,9 +276,8 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     }
 }
 
-/// `<Number> OP <Any>` vs `<Any> OP <Number>` against `5 OP 7` are incomparable: each is
-/// more specific in one slot and less in the other. `resolve_dispatch` reports
-/// `Ambiguous`; the integration path surfaces the same error via Scheduler::execute.
+/// Pairs the unit `Ambiguous` outcome with the end-to-end `AmbiguousDispatch`
+/// error from `Scheduler::execute`.
 #[test]
 fn dispatch_errors_on_ambiguous_overlap() {
     let arena = RuntimeArena::new();

@@ -1,16 +1,12 @@
-//! Integration tests for the no-keyword fast-lane dispatch (PR B of the unified-walk
-//! roadmap item). Each test exercises one variant of `DispatchShape` and asserts both
-//! the surface behavior (correct return value) and the routing claim (fast-lane
-//! shapes don't enter `resolve_dispatch_with_chain`, keyworded shapes do).
+//! Integration tests for the no-keyword fast-lane dispatch. Each test exercises
+//! one variant of `DispatchShape` and asserts both the surface behavior and the
+//! routing claim (fast-lane shapes don't enter `resolve_dispatch_with_chain`,
+//! keyworded shapes do).
 //!
 //! Routing assertions use the test-only counter on
-//! [`crate::machine::core::resolve_dispatch_entry_count`]. Each test resets the
-//! counter, runs the dispatch, and reads back — `0` proves the fast lane bypassed
-//! the candidate machinery; `≥1` proves the keyworded pipeline ran. The counter is
-//! thread-local so tests run independently under `cargo test`'s default thread pool.
-//!
-//! See `roadmap/dispatch_fix/unified-walk.md` and `scratch/plan-unified-walk.md` D4 /
-//! D5 / D10 for the routing contract.
+//! [`crate::machine::core::resolve_dispatch_entry_count`]. The counter is
+//! thread-local so tests run independently under `cargo test`'s default thread
+//! pool.
 
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
@@ -27,9 +23,6 @@ use crate::machine::model::{KObject, Parseable};
 use crate::machine::{BindingIndex, KFunction, RuntimeArena, Scope};
 use crate::machine::core::source::Spanned;
 
-/// Submit `expr` against `scope` and return its terminal value. Mirrors
-/// `test_support::run_one` but is in-module so each fast-lane test can call it
-/// without re-importing.
 fn dispatch_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
@@ -37,12 +30,9 @@ fn dispatch_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<
     sched.read(id)
 }
 
-/// `body_identity` — accepts one Number arg and returns it unchanged. Used by the
-/// `keyworded_unchanged_with_keyword_in_body` test to register a function value `f`
-/// against which the `(f IF x)` keyword-in-body probe routes through the keyworded
-/// path. The signature is `<n :Number>` (no keywords), which means no koan user
-/// surface can call it directly — the test only inspects routing, never the call
-/// outcome.
+/// Accepts one Number arg and returns it unchanged. The signature is `<n :Number>`
+/// (no keywords), which means no koan user surface can call it directly — tests
+/// using it only inspect routing, never the call outcome.
 fn body_identity<'a>(
     _scope: &'a Scope<'a>,
     _sched: &mut dyn KfHandle<'a>,
@@ -56,10 +46,8 @@ fn body_identity<'a>(
     }
 }
 
-/// Bind a function value `f` with signature `<n :Number>` on `scope`. Only used by
-/// `keyworded_unchanged_with_keyword_in_body` to give `(f IF x)` a real Identifier
-/// head to resolve — the named-arg fast-lane tests use the FN/LET user surface
-/// directly.
+/// Bind a function value `f` with signature `<n :Number>` on `scope`, giving an
+/// Identifier head that resolves to a function value without going through FN/LET.
 fn bind_identity_fn<'a>(scope: &'a Scope<'a>) {
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Number),
@@ -80,8 +68,7 @@ fn bind_identity_fn<'a>(scope: &'a Scope<'a>) {
 }
 
 /// `(Number)` — single bare leaf Type token. Classifies as `BareTypeLeaf`; the
-/// fast-lane handler routes through `coerce_type_token_value`, never entering
-/// `resolve_dispatch_with_chain`.
+/// fast-lane handler routes through `coerce_type_token_value`.
 #[test]
 fn bare_type_leaf_short_circuits() {
     let arena = RuntimeArena::new();
@@ -101,16 +88,10 @@ fn bare_type_leaf_short_circuits() {
     );
 }
 
-/// User-facing named-arg path. `LET f = (FN (DOUBLE x :Number) -> Number = (x))`
-/// registers a function whose signature is `[Keyword("DOUBLE"), Argument(x :Number)]`.
-/// Calling `f (x = 7)` routes through the fast lane's *named-arg admission*: the
-/// signature's lone Argument `x` is present with a Number value (keyword `DOUBLE`
-/// elided), and the fast lane reconstructs the positional expression via
-/// `KFunction::reconstruct_positional` and binds directly with `picked = Some(f)`.
-/// **The counter must read 0** — under PR B + Phase 1 of the fast-lane subsumption
-/// (`scratch/plan-fast-lane-subsume.md`) the entry-point head resolution short-
-/// circuits and the construction primitive doesn't run (it's a function, not a
-/// constructor).
+/// User-facing named-arg path. `f (x = 7)` against a signature with a leading
+/// keyword `DOUBLE` elides the keyword via the fast lane's named-arg admission,
+/// reconstructs the positional expression, and binds directly with
+/// `picked = Some(f)` — no entry into `resolve_dispatch_with_chain`.
 #[test]
 fn function_value_call_named_args_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
@@ -134,12 +115,9 @@ fn function_value_call_named_args_short_circuits() {
     );
 }
 
-/// Named-arg path with reordering. `LET f = (FN (a :Number PICK b :Number) ...)` —
-/// signature is `[Argument(a), Keyword(PICK), Argument(b)]`. Calling
-/// `f (b = 2, a = 1)` reorders the args vs the signature's positional layout;
-/// `matches_without_keywords` reports `true` because the name-keyed lookup is
-/// order-independent. The reconstructed positional form weaves keywords back in at
-/// the right positions.
+/// Named-arg path with reordering. `f (b = 2, a = 1)` against a signature
+/// `(a :Number PICK b :Number)` is order-independent at the name-keyed lookup;
+/// reconstruction weaves keywords back in at their signature positions.
 #[test]
 fn function_value_call_named_args_out_of_order_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
@@ -162,12 +140,9 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     );
 }
 
-/// Named-arg path with a missing required arg. `f (a = 1)` against
-/// `(a :Number PICK b :Number)` — `b` is missing. Phase 1 of the `call_by_name`
-/// subsumption surfaces `MissingArg("b")` from inside the fast-lane handler
-/// (`reconstruct_positional`'s structured error), so the counter stays at 0 — no
-/// keyworded fall-through. Mirrors the migrated `call_by_name_missing_named_arg`
-/// surface assertion below; the routing assertion (counter == 0) is the new piece.
+/// Named-arg path with a missing required arg. `MissingArg("b")` surfaces from
+/// inside the fast-lane handler (`reconstruct_positional`'s structured error)
+/// without falling through to the keyworded pipeline.
 #[test]
 fn function_value_call_named_args_missing_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
@@ -198,15 +173,13 @@ fn function_value_call_named_args_missing_short_circuits() {
 }
 
 // =====================================================================
-// Migrated `call_by_name` tests (Phase 1 of unified-walk follow-up). Each test
-// preserves the surface assertion from the deleted `src/builtins/call_by_name.rs`
-// test module verbatim and adds `resolve_dispatch_entry_count == 0` to pin the
-// fast-lane routing. See `scratch/plan-fast-lane-subsume.md` Phase 1 commit 3.
+// Surface assertions on the named-arg fast lane, paired with a routing claim
+// (`resolve_dispatch_entry_count == 0`) to pin that the fast lane handles each
+// case rather than falling through.
 // =====================================================================
 
 /// `f (x = 7)` against `(FN (DOUBLE x :Number) ...)` — function-value call via
-/// named-arg admission, fast-lane bound directly. Migrated from
-/// `call_by_name::tests::fn_callable_via_call_by_name`.
+/// named-arg admission, fast-lane bound directly.
 #[test]
 fn fast_lane_fn_callable_via_named_args() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -226,8 +199,7 @@ fn fast_lane_fn_callable_via_named_args() {
 }
 
 /// Internal keyword in a non-leading signature slot must be re-woven between
-/// reordered args at reconstruction time. Migrated from
-/// `call_by_name_weaves_internal_keyword`.
+/// reordered args at reconstruction time.
 #[test]
 fn fast_lane_weaves_internal_keyword() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -241,8 +213,7 @@ fn fast_lane_weaves_internal_keyword() {
 }
 
 /// Named-arg lookup is by name, not position: `(b = 2, a = 1)` satisfies
-/// `(a PICK b)` the same as `(a = 1, b = 2)`. Migrated from
-/// `call_by_name_named_args_order_independent`.
+/// `(a PICK b)` the same as `(a = 1, b = 2)`.
 #[test]
 fn fast_lane_named_args_order_independent() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -256,9 +227,7 @@ fn fast_lane_named_args_order_independent() {
 }
 
 /// Unknown named-arg fires after missing-arg precedence is satisfied. `(a = 1,
-/// b = 2, c = 3)` covers required names plus an extra `c`. Migrated from
-/// `call_by_name_unknown_named_arg`; the surface predicate is identical (matches
-/// "unknown name" + the offending name in backticks).
+/// b = 2, c = 3)` covers required names plus an extra `c`.
 #[test]
 fn fast_lane_unknown_named_arg() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
@@ -276,8 +245,7 @@ fn fast_lane_unknown_named_arg() {
 }
 
 /// Malformed pair shape (`f (a 1)` — missing `=` / `:`-separator) surfaces a
-/// `ShapeError` from `NamedPairs::parse` inside `reconstruct_positional`. Same
-/// substring tolerance as the deleted `call_by_name_missing_colon` test.
+/// `ShapeError` from `NamedPairs::parse` inside `reconstruct_positional`.
 #[test]
 fn fast_lane_missing_separator() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
@@ -295,7 +263,6 @@ fn fast_lane_missing_separator() {
 }
 
 /// Duplicate named-arg is caught by `NamedPairs::parse` at construction time.
-/// Migrated from `call_by_name_duplicate_named_arg`.
 #[test]
 fn fast_lane_duplicate_named_arg() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
@@ -313,9 +280,9 @@ fn fast_lane_duplicate_named_arg() {
 }
 
 /// Non-function head resolves to a value-side carrier the fast lane refuses with
-/// `TypeMismatch { arg: "verb", expected: "KFunction or Type" }`. Migrated from
-/// `call_by_name_on_non_function_returns_error`; verb-precedence (verb resolves
-/// before pair parsing) holds because head resolution is the first match arm.
+/// `TypeMismatch { arg: "verb", expected: "KFunction or Type" }`. Verb-precedence
+/// (verb resolves before pair parsing) holds because head resolution is the first
+/// match arm.
 #[test]
 fn fast_lane_on_non_function_returns_error() {
     use crate::builtins::test_support::{run, run_one_err, run_root_silent};
@@ -339,17 +306,11 @@ fn fast_lane_on_non_function_returns_error() {
 /// Tagged-union construction via a LET-bound lowercase alias. The fast lane
 /// resolves `maybe` to `TaggedUnionType`, calls `tagged_union::apply`, and
 /// schedules the synthesized tail as a sub-Dispatch through the
-/// `tagged_union_construct` primitive. Migrated from
-/// `call_by_name_on_tagged_union_constructs`.
+/// `tagged_union_construct` primitive.
 ///
-/// **Counter contract.** The entry-point head resolution short-circuits in the
-/// fast lane (no candidate walk for `maybe`). The synthesized tail
-/// `[Future(schema), tag, value]` re-dispatches through `tagged_union_construct`,
-/// which IS a keyworded dispatch and so advances the counter exactly once. We
-/// assert `counter == 1`: 0 walks for the entry-point head, 1 walk for the
-/// construction primitive. Compared to the pre-migration path (`call_by_name`
-/// resolution + `tagged_union_construct` re-dispatch = 2 walks) the fast lane
-/// saves the entry walk.
+/// Counter contract: entry-point head resolution short-circuits (0 walks); the
+/// synthesized tail `[Future(schema), tag, value]` re-dispatches through
+/// `tagged_union_construct`, a keyworded dispatch that advances the counter once.
 #[test]
 fn fast_lane_on_tagged_union_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -376,19 +337,15 @@ fn fast_lane_on_tagged_union_constructs() {
 
 /// Struct construction via a LET-bound lowercase alias. `(STRUCT Pt = ...)`
 /// returns the `StructType` value which LET binds under `pt`; the fast lane
-/// routes the call through `struct_value::apply`. Migrated from
-/// `call_by_name_on_struct_type_constructs`.
+/// routes the call through `struct_value::apply`.
 ///
-/// **Counter contract.** `struct_value::apply` synthesizes a tail of shape
+/// Counter contract: `struct_value::apply` synthesizes a tail of shape
 /// `[Future(schema), ListLiteral([(<v_1>), ...])]` re-dispatching through the
 /// `struct_construct` primitive. The list-literal aggregate spawns one
-/// sub-Dispatch per value-cell to route bare identifiers through the
-/// `BareIdentifier` fast lane and bare literals through `value_pass`. With two
-/// fields (`x`, `y`) bound to bare-literal values the resulting walks are: 1
-/// for `struct_construct`'s own dispatch + 1 each for the two value-cell
-/// sub-Dispatches + 1 trailing re-dispatch (the synthesized tail's outermost
-/// shape itself) = 4. The entry-point head walk for `pt` is the one that's
-/// removed vs the pre-migration `call_by_name` path.
+/// sub-Dispatch per value-cell. With two fields bound to bare-literal values:
+/// 1 (construction primitive) + 2 (value-cell sub-Dispatches) + 1 (synthesized
+/// tail's outermost shape) = 4 walks. The entry-point head walk is the one the
+/// fast lane removes.
 #[test]
 fn fast_lane_on_struct_type_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -414,8 +371,8 @@ fn fast_lane_on_struct_type_constructs() {
     }
 }
 
-/// Unbound head surfaces `UnboundName(name)` directly from the fast-lane handler
-/// (D1.2: no fall-through). Migrated from `call_by_name_unbound_returns_error`.
+/// Unbound head surfaces `UnboundName(name)` directly from the fast-lane handler;
+/// no fall-through to the keyworded pipeline.
 #[test]
 fn fast_lane_unbound_returns_error() {
     use crate::builtins::test_support::{run_one_err, run_root_silent};
@@ -431,14 +388,11 @@ fn fast_lane_unbound_returns_error() {
     );
 }
 
-/// Closure-lifetime test #1 (migrated verbatim from
-/// `call_by_name::tests::closure_escapes_outer_call_and_remains_invocable`):
-/// a closure returned out of its defining call remains invocable. The lifted
+/// A closure returned out of its defining call remains invocable. The lifted
 /// `KObject::KFunction` carries an `Rc<CallArena>` keeping the per-call arena
 /// (where the inner function's storage and captured scope live) alive past
 /// frame drop. The fast lane's `KObject::KFunction(f, _)` pattern matches
-/// regardless of whether the second field is `Some(rc)` or `None`, so the
-/// escaped-closure path goes through unchanged.
+/// regardless of whether the second field is `Some(rc)` or `None`.
 #[test]
 fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -458,9 +412,8 @@ fn fast_lane_closure_escapes_outer_call_and_remains_invocable() {
     );
 }
 
-/// Closure-lifetime test #2 (migrated verbatim from
-/// `escaped_closure_with_param_returns_body_value`): variant exercising
-/// parameter-binding via the captured scope after escape.
+/// Closure-lifetime variant exercising parameter-binding via the captured scope
+/// after escape.
 #[test]
 fn fast_lane_escaped_closure_with_param_returns_body_value() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -475,12 +428,11 @@ fn fast_lane_escaped_closure_with_param_returns_body_value() {
     assert!(matches!(result, KObject::Number(n) if *n == 42.0));
 }
 
-/// Closure-lifetime test #3 (migrated verbatim from
-/// `list_of_closures_escapes_outer_call_with_rc_attached`): `lift_kobject` must
-/// recurse through the `List` variant to attach the dying frame's `Rc<CallArena>`
-/// to embedded `KFunction(_, None)` elements; otherwise the inner function's
-/// `&KFunction` reference would dangle into the freed per-call arena. Asserting
-/// the lifted closure's frame field is `Some` verifies the recursion fired.
+/// `lift_kobject` must recurse through the `List` variant to attach the dying
+/// frame's `Rc<CallArena>` to embedded `KFunction(_, None)` elements; otherwise
+/// the inner function's `&KFunction` reference would dangle into the freed
+/// per-call arena. Asserting the lifted closure's frame field is `Some` verifies
+/// the recursion fired.
 #[test]
 fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -504,30 +456,20 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     }
 }
 
-/// `f (x = 7)` submitted as a *forward reference*: `f` is installed as a
+/// `f (x = 7)` submitted as a forward reference: `f` is installed as a
 /// `Placeholder` on `scope` before the slot is dispatched. The fast lane's
-/// `FunctionValueCall` handler hits the `Placeholder` arm (which fires on the
-/// head-resolution, before the args-shape check) and installs a combined park,
-/// never entering `resolve_dispatch_with_chain`.
-///
-/// Routing claim: the counter reads `0`. The `f (x = 7)` slot's run_dispatch saw
-/// the `Placeholder`, installed the park, and returned without ever touching the
-/// candidate machinery. The producer is a `BareIdentifier` shape pointing at a
-/// pre-bound value, so the producer's own dispatch also fast-lanes (no counter
-/// advance there either).
+/// `FunctionValueCall` handler hits the `Placeholder` arm on head-resolution
+/// (before the args-shape check), installs a combined park, and never enters
+/// `resolve_dispatch_with_chain`.
 #[test]
 fn function_value_call_forward_ref_parks() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
 
-    // Pre-allocate a placeholder-backing slot. The slot's actual content doesn't
-    // matter — `f (x = 7)`'s run_dispatch installs a park edge on it and returns
-    // without inspecting the args at all (the Placeholder arm fires on the head
-    // resolution). Bind `producer_target` to a value first so the producer's own
-    // dispatch also fast-lanes (BareIdentifier with a Resolution::Value hit, no
-    // counter advance) — otherwise the unbound fall-through would advance the
-    // counter and defeat the routing assertion.
+    // Bind `producer_target` to a value so the producer's own dispatch fast-lanes
+    // via the BareIdentifier `Resolution::Value` hit — otherwise the unbound
+    // fall-through would advance the counter and defeat the routing assertion.
     let producer_target = scope.arena.alloc(KObject::Number(42.0));
     scope
         .bind_value("producer_target".to_string(), producer_target, BindingIndex::BUILTIN)
@@ -542,9 +484,6 @@ fn function_value_call_forward_ref_parks() {
         .install_placeholder("f".to_string(), producer, BindingIndex::BUILTIN)
         .expect("install_placeholder should succeed");
 
-    // `f (x = 7)` — Identifier head plus a single nested-parens part. Classifies
-    // as FunctionValueCall; the fast lane sees `Resolution::Placeholder` for `f`
-    // and parks.
     let f_call = parse_one("f (x = 7)");
     let _f_call_id = sched.add_dispatch(f_call, scope);
 
@@ -558,10 +497,8 @@ fn function_value_call_forward_ref_parks() {
     );
 }
 
-/// `(PRINT 5)` — keyword-headed call routes to the registered `PRINT` builtin
-/// through the candidate path. The classifier flags it as `Keyworded` (PRINT in
-/// head is a Keyword); `resolve_dispatch_with_chain` runs at least once to find
-/// the bucket.
+/// `(PRINT 5)` — keyword-headed call routes through the candidate path.
+/// `resolve_dispatch_with_chain` runs at least once to find the bucket.
 #[test]
 fn keyworded_unchanged() {
     let arena = RuntimeArena::new();
@@ -578,17 +515,13 @@ fn keyworded_unchanged() {
 }
 
 // =====================================================================
-// Direct classifier assertions (Phase 2 commit 1 of the fast-lane subsumption).
-// These call `classify_dispatch_shape` and pattern-match the returned variant.
-// Unlike the routing tests above (which observe the dispatch counter), these
-// pin the classifier's branching itself — particularly the split between
-// `TypeCall` (head leaf-Type + all-leaf args) and `ConstructorCall` (head
-// leaf-Type + any non-leaf arg) introduced for Phase 2.
+// Direct classifier assertions: call `classify_dispatch_shape` and pattern-match
+// the returned variant. Pin the classifier's branching directly, vs the routing
+// tests above which observe the dispatch counter.
 // =====================================================================
 
 /// `(MyStruct (x = 1, y = 2))` — leaf-Type head, single nested-`Expression`
-/// body. Classifier must route to `ConstructorCall`, not `TypeCall` (the
-/// args aren't leaf Types) or `Keyworded` (no keyword in `parts`).
+/// body. Classifier must route to `ConstructorCall`, not `Keyworded`.
 #[test]
 fn classifier_struct_construct_routes_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
@@ -600,8 +533,7 @@ fn classifier_struct_construct_routes_to_type_constructor_call() {
 }
 
 /// `(Maybe (some 42))` — leaf-Type head, single nested-`Expression` body
-/// holding `(some 42)`. Same shape as the struct case — must route to
-/// `ConstructorCall`.
+/// holding `(some 42)`. Must route to `ConstructorCall`.
 #[test]
 fn classifier_tagged_construct_routes_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
@@ -612,9 +544,8 @@ fn classifier_tagged_construct_routes_to_type_constructor_call() {
     );
 }
 
-/// `(Bar (x))` — leaf-Type head, nested-`Expression` body that wraps a single
-/// identifier (the newtype-construction shape). Routes to
-/// `ConstructorCall`.
+/// `(Bar (x))` — leaf-Type head, nested-`Expression` body wrapping a single
+/// identifier (the newtype-construction shape). Routes to `ConstructorCall`.
 #[test]
 fn classifier_newtype_construct_routes_to_type_constructor_call() {
     use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
@@ -625,9 +556,8 @@ fn classifier_newtype_construct_routes_to_type_constructor_call() {
     );
 }
 
-/// `(List Number)` — leaf-Type head, every arg a leaf Type. Post-`TypeCall`
-/// deletion this collapses to `ConstructorCall` (every leaf-Type-headed
-/// multi-part call routes through one classifier variant). The keyworded
+/// `(List Number)` — leaf-Type head, every arg a leaf Type. Every leaf-Type-
+/// headed multi-part call routes through `ConstructorCall`. The keyworded
 /// `LIST OF` overload is the supported way to elaborate `List<Number>`.
 #[test]
 fn classifier_legacy_positional_collapses_to_type_constructor_call() {
@@ -635,43 +565,36 @@ fn classifier_legacy_positional_collapses_to_type_constructor_call() {
     let expr = parse_one("(List Number)");
     assert!(
         matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
-        "leaf-Type head + leaf-Type args must collapse to ConstructorCall \
-         after the TypeCall arm is removed",
+        "leaf-Type head + leaf-Type args must classify as ConstructorCall",
     );
 }
 
 /// Mixed shapes where the head is a fast-lane shape (leaf `Type` or `Identifier`)
 /// but a keyword appears later in the parts list. The classifier's step-1 sweep
-/// catches these and routes to `Keyworded`. Pins the D4 contract: "sweep first,
-/// branch on head second".
+/// catches these and routes to `Keyworded` — sweep first, branch on head second.
 ///
 /// Two probes:
-/// - `(List MAYBE Number)`: head `List` is a leaf Type, body has keyword `MAYBE`.
-///   No registered `(_ MAYBE _)` overload; the keyworded path surfaces a
-///   `DispatchFailed`. We tolerate the error and read the counter.
-/// - `(f IF x)`: head `f` is a lowercase Identifier, body has keyword `IF`. Same
-///   routing story.
-///
-/// The assertion is purely routing: the counter must advance in both cases.
+/// - `(List MAYBE Number)`: leaf-Type head, keyword `MAYBE` in body. No
+///   registered overload, so the keyworded path surfaces a `DispatchFailed`;
+///   we tolerate the error and read the counter.
+/// - `(f IF x)`: lowercase Identifier head, keyword `IF` in body.
 #[test]
 fn keyworded_unchanged_with_keyword_in_body() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     bind_identity_fn(scope);
 
-    // (List MAYBE Number) — leaf-Type head, keyword `MAYBE` in body.
     let expr_a = parse_one("(List MAYBE Number)");
     reset_resolve_dispatch_entry_count();
     let mut sched = Scheduler::new();
     sched.add_dispatch(expr_a, scope);
-    let _ = sched.execute(); // DispatchFailed is fine — routing is what we test.
+    let _ = sched.execute();
     assert!(
         resolve_dispatch_entry_count() >= 1,
         "(List MAYBE Number) must route to Keyworded (keyword in body); count was {}",
         resolve_dispatch_entry_count(),
     );
 
-    // (f IF x) — lowercase Identifier head, keyword `IF` in body.
     let expr_b = parse_one("(f IF x)");
     reset_resolve_dispatch_entry_count();
     let mut sched = Scheduler::new();
@@ -684,18 +607,15 @@ fn keyworded_unchanged_with_keyword_in_body() {
     );
 }
 
-/// Step 4b acceptance: a Keyworded dispatch whose initial resolve picks
-/// an overload but whose value-cell parts need sub-Dispatch evaluation
-/// (the Resolved-with-eager-subs arm) terminates correctly under the
-/// stateful driver. Pins that the `KeywordedState::WaitingEagerSubs`
-/// state installed in `install_eager_subs_track` resumes, re-resolves,
-/// and binds inline through `invoke_to_step_pinned`.
+/// A Keyworded dispatch whose initial resolve picks an overload but whose
+/// value-cell parts need sub-Dispatch evaluation (the Resolved-with-eager-subs
+/// arm) must terminate correctly under the stateful driver. Pins that
+/// `KeywordedState::WaitingEagerSubs` resumes, re-resolves, and binds inline
+/// through `invoke_to_step_pinned`.
 ///
-/// Program: `LET y = (FIRST [1 2 3])`. The LET binder picks at initial
-/// resolve (LET is a single-overload binder); the RHS `(FIRST [1 2 3])`
-/// is an eager sub-Dispatch (`PendingSub::Dispatch`). After the sub
-/// resolves to `1`, the resume handler splices `Future(1)` into the LET
-/// expression and re-resolves — same overload, then `bind` + invoke.
+/// Program: `LET y = (FIRST [1 2 3])`. LET picks at initial resolve; the RHS
+/// is an eager sub-Dispatch. After the sub resolves to `1`, the resume handler
+/// splices `Future(1)` into the LET expression and re-resolves.
 #[test]
 fn stateful_keyworded_eager_subs_resumes_through_state() {
     let arena = RuntimeArena::new();
@@ -716,11 +636,10 @@ fn stateful_keyworded_eager_subs_resumes_through_state() {
     );
 }
 
-/// Step 4b acceptance: a `Deferred` outcome at initial resolve installs
-/// the eager-subs track with no captured function, and the resume
-/// handler's re-resolve picks the overload after the spliced sub
-/// supplies the discriminating type. Two overloads tie on the
-/// bare-arg shape; the typed `Future(List<Number>)` lands the
+/// A `Deferred` outcome at initial resolve installs the eager-subs track with
+/// no captured function; the resume handler's re-resolve picks the overload
+/// after the spliced sub supplies the discriminating type. Two overloads tie
+/// on the bare-arg shape; the typed `Future(List<Number>)` lands the
 /// `:(LIST OF Number)` arm.
 #[test]
 fn stateful_keyworded_deferred_resolves_after_eager_subs() {
@@ -747,17 +666,13 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     }
 }
 
-/// Unit-tested against each Keyworded track variant: the drain-end
-/// cycle-detection guard in [`Scheduler::execute`] reads the parked
-/// slot's carrier expression from `KeywordedState` (not from the empty
-/// placeholder `NodeWork::Dispatch.expr` left behind by the install
-/// sites `install_eager_subs_track`, `install_bare_name_park`,
-/// `install_overload_park` — each drops the entry `expr` to
-/// `KExpression::new(Vec::new())` and leaves the live `working_expr`
-/// on the state). With only the empty `NodeWork::Dispatch.expr`
-/// available the deadlock sample would render as `""`; the
-/// `DispatchState::parked_carrier_expr` accessor must instead surface
-/// the state-carried expression.
+/// For each Keyworded track variant: the drain-end cycle-detection guard in
+/// [`Scheduler::execute`] must read the parked slot's carrier expression from
+/// `KeywordedState`, not from the placeholder `NodeWork::Dispatch.expr` that
+/// `install_eager_subs_track` / `install_bare_name_park` / `install_overload_park`
+/// drop to `KExpression::new(Vec::new())`. With only the empty `NodeWork`
+/// expression available the deadlock sample would render as `""`;
+/// `DispatchState::parked_carrier_expr` must surface the state-carried form.
 #[test]
 fn keyworded_parked_carrier_expr_reads_state() {
     use super::super::dispatch::keyworded::{
@@ -766,11 +681,9 @@ fn keyworded_parked_carrier_expr_reads_state() {
     use super::super::dispatch::{DispatchState, EagerSubsTrack, Initialized};
 
     fn carrier_expr<'a>() -> KExpression<'a> {
-        // `(LIFT_BARE arg)` — a recognizable keyworded sample distinct from
-        // any other test's expressions, so a regression that drops the
-        // carrier and falls back to the empty `NodeWork::Dispatch.expr`
-        // shows up as a `""` summary, not a coincidentally-matching
-        // sibling expression.
+        // `(LIFT_BARE arg)` — a recognizable sample distinct from any other
+        // test's expressions, so a regression that drops the carrier shows up
+        // as a `""` summary, not a coincidentally-matching sibling expression.
         KExpression::new(vec![
             Spanned::bare(ExpressionPart::Keyword("LIFT_BARE".into())),
             Spanned::bare(ExpressionPart::Identifier("arg".into())),

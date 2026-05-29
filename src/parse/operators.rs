@@ -1,11 +1,10 @@
-//! Operator table driving compound-atom desugaring. Each entry pairs a trigger character
-//! with an `OperatorKind` whose arity-typed builder constructs the resulting expression.
+//! Operator table driving compound-atom desugaring. Each entry pairs a
+//! trigger character with an arity-typed builder.
 //!
-//! Builders receive their operand(s) as `Spanned<ExpressionPart>` plus the trigger char's
-//! span and return a `Spanned<ExpressionPart>`. The returned wrapper's span covers
-//! `start_of_first_operand` through `end_of_last_operand_or_trigger`; the inner synthetic
-//! `Keyword("ATTR"|"NOT"|"TRY")` carries the 1-codepoint trigger span so diagnostics can
-//! point at the exact operator character.
+//! Builders receive their operand(s) plus the trigger's span and return a
+//! `Spanned<ExpressionPart>` covering the full operand range. The inner
+//! synthetic `Keyword("ATTR"|"NOT"|"TRY")` carries the 1-codepoint trigger
+//! span so diagnostics can point at the exact operator character.
 
 use crate::machine::core::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -28,8 +27,8 @@ pub struct Operator {
     pub kind: OperatorKind,
 }
 
-/// `[` and `]` are intentionally absent: they're list-literal delimiters handled one level up,
-/// not token-internal operators, so compound indexing like `foo[idx]` is not expressible here.
+/// `[` and `]` are absent: they're list-literal delimiters handled one level
+/// up, so compound indexing like `foo[idx]` isn't expressible here.
 const OPERATORS: &[Operator] = &[
     Operator { trigger: '!', kind: OperatorKind::Prefix(build_not)  },
     Operator { trigger: '.', kind: OperatorKind::Infix(build_attr)  },
@@ -91,9 +90,9 @@ fn build_try<'a>(
     Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 
-/// Variant view returned by `find_suffix`: restricted to the two kinds that can appear
-/// after an atom (`Infix`, `Suffix`). `Prefix` is structurally absent so `parse_compound`'s
-/// match is exhaustive without an `unreachable!` arm.
+/// Variant view returned by `find_suffix`: only the kinds that can appear
+/// after an atom. `Prefix` is structurally absent so `parse_compound`'s match
+/// is exhaustive without an `unreachable!` arm.
 pub enum SuffixOp {
     Infix(BinaryBuild),
     Suffix(UnaryBuild),

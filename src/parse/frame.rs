@@ -1,20 +1,10 @@
-//! `Frame` is one entry on the parse stack maintained by `build_tree`. Each variant
-//! corresponds to one nesting shape — paren-expression, list literal, dict literal,
-//! `:(...)` type-expression group. `into_part` folds a closed frame into the
-//! `Spanned<ExpressionPart>` it produces; `matches_closer` is the variant↔closer lookup
-//! the close-bracket arms use to decide whether the topmost frame legally ends here.
+//! One entry on `build_tree`'s parse stack — one variant per nesting shape
+//! (paren-expression, list literal, dict literal, `:(...)` type-expression group).
 //!
-//! Each variant carries `span_start: u32` — the original-source byte offset of the
-//! opener — so frame close can stamp `Span { start: span_start, end: cursor }` on the
-//! resulting node. The sigiled-Expression variant additionally carries `sigil_cursor`
-//! so the outer `#(...)` / `$(...)` wrapper covers the sigil byte plus the body.
-//!
-//! The `:(...)` type-expression frame (`TypeExpr`) is a *parse-context marker*: it
-//! collects the raw inner parts into a `KExpression` wrapped in
-//! [`ExpressionPart::SigiledTypeExpr`]. Shape recognition (positional `:(List Number)`
-//! vs. keyworded `:(LIST OF Number)` vs. user-functor application
-//! `:(MyFunctor (T = IntOrd))`) is the dispatcher's responsibility — the parser does no
-//! folding inside the sigil.
+//! `span_start` is the opener's original-source byte offset, used to stamp
+//! `Span { start: span_start, end: cursor }` at close time. The sigiled-Expression
+//! variant additionally carries `sigil_cursor` so the outer `#(...)` / `$(...)`
+//! wrapper covers the sigil byte plus the body.
 
 use crate::machine::core::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -22,15 +12,14 @@ use crate::machine::KError;
 
 use super::dict_literal::DictFrame;
 
-/// One frame of `build_tree`'s parse stack. `Expression::head` is `Some` only when the frame
-/// was opened by a `#(...)` / `$(...)` sigil; on close such a frame yields the
-/// `(QUOTE <body>)` / `(EVAL <body>)` AST shape rather than a bare `Expression` part.
 pub(super) enum Frame<'a> {
+    /// `head: Some(_)` flags a `#(...)` / `$(...)` sigil; on close such a frame yields
+    /// the `(QUOTE <body>)` / `(EVAL <body>)` AST shape rather than a bare Expression
+    /// part, and `sigil_cursor` (set iff `head` is) anchors the outer span at the sigil.
     Expression {
         expr: KExpression<'a>,
         head: Option<&'static str>,
         span_start: u32,
-        /// Set only when `head` is `Some(_)`: the cursor of the leading `#` / `$`.
         sigil_cursor: Option<u32>,
     },
     List {
@@ -41,12 +30,9 @@ pub(super) enum Frame<'a> {
         dict: DictFrame<'a>,
         span_start: u32,
     },
-    /// Opened by a glued `:(` sigil; contents parse as a regular expression and the close
-    /// folds into [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`] — a parse-context
-    /// marker for "this slot evaluates to a type". Shape recognition (positional
-    /// `:(List Number)` vs. keyworded `:(LIST OF Number)`) is handled by the dispatcher;
-    /// the parser stores the inner expression verbatim. `span_start` is the cursor of
-    /// the leading `:`, so the resulting Spanned wrapper covers the whole `:(...)`.
+    /// Opened by a glued `:(` sigil. The inner expression is stored verbatim and folded
+    /// into [`ExpressionPart::SigiledTypeExpr`] — shape recognition is the dispatcher's
+    /// job. `span_start` is the cursor of the leading `:`.
     TypeExpr {
         expr: KExpression<'a>,
         span_start: u32,
@@ -54,29 +40,20 @@ pub(super) enum Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
-    /// Append a part to this frame. Span info is preserved when the frame's payload is a
-    /// `Vec<Spanned<…>>` (Expression frame's KExpression); for List/Dict/TypeExpr the
-    /// inner storage holds bare `ExpressionPart`s so the span is dropped at push time.
+    /// Spans are preserved on Expression and TypeExpr (whose payload is a
+    /// `Vec<Spanned<…>>`); List and Dict store bare parts so the span is dropped here.
     pub(super) fn push(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self {
             Frame::Expression { expr, .. } => expr.parts.push(part),
             Frame::List { items, .. } => items.push(part.value),
             Frame::Dict { dict, .. } => dict.push(part.value),
-            // SigiledTypeExpr stores the inner parts as a real `KExpression` (spans
-            // preserved) so the dispatcher's sub-Dispatch through the inner expression
-            // sees the same `Spanned` shape it does for regular expressions.
             Frame::TypeExpr { expr, .. } => expr.parts.push(part),
         }
     }
 
-    /// Fold this frame's contents into the `Spanned<ExpressionPart>` it produces when
-    /// closed by its matching closer. `end` is the cursor just past the closer (=
-    /// exclusive end of the span). Expression frames with a sigil head wrap as
-    /// `(QUOTE body)` / `(EVAL body)` with the outer span covering sigil + body; the
-    /// dict and type-expr variants run their deferred validation (`DictFrame::finish`,
-    /// `TypeExprFrame::build`), which is the only failure path here. Closer-vs-variant
-    /// mismatch is the caller's responsibility — this function trusts that the frame
-    /// was matched against the right closer upstream.
+    /// `end` is the cursor just past the closer (exclusive end of the span). The only
+    /// failure path is `DictFrame::finish` for the Dict variant; closer-vs-variant
+    /// pairing is assumed valid (see `matches_closer`).
     pub(super) fn into_part(self, end: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
         let file = source::current();
         match self {
@@ -124,8 +101,8 @@ impl<'a> Frame<'a> {
         }
     }
 
-    /// True iff `closer` is the legal end-token for this frame variant. Both Expression
-    /// and TypeExpr frames close on `)`; the variant determines which builder runs.
+    /// Expression and TypeExpr both close on `)`; the variant determines which
+    /// builder runs in `into_part`.
     pub(super) fn matches_closer(&self, closer: char) -> bool {
         matches!(
             (self, closer),
@@ -137,11 +114,8 @@ impl<'a> Frame<'a> {
     }
 }
 
-/// `)`-close case-analysis. Reaching a `)` (literal or the synthetic close the whitespace
-/// pass emits at end-of-expression) while a `[`/`{` frame is still open means that bracket
-/// was never closed — report it as an unclosed `[`/`{` pointing at the opener, not as an
-/// internal "closed paren" mismatch. Expression and TypeExpr frames delegate to
-/// `Frame::into_part`.
+/// A `)` reaching a List/Dict frame means the `[`/`{` was never closed; report it as
+/// an unclosed bracket pointing at the opener rather than a paren mismatch.
 pub(super) fn close_paren_to_part<'a>(
     frame: Frame<'a>,
     end: u32,

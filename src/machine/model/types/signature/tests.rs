@@ -49,7 +49,7 @@ fn most_specific_returns_none_for_empty() {
 
 #[test]
 fn most_specific_returns_none_when_tied() {
-    // Two `Number` overloads tie under `Equal` — ambiguity must surface, not a winner.
+    // Ambiguity must surface, not a winner.
     let a = one_slot(KType::Number);
     let b = one_slot(KType::Number);
     let cands: Vec<&ExpressionSignature<'_>> = vec![&a, &b];
@@ -58,13 +58,10 @@ fn most_specific_returns_none_when_tied() {
 
 #[test]
 fn return_type_clone_round_trips_all_arms() {
-    // Resolved arm
     let r = ReturnType::Resolved(KType::Number);
     assert_eq!(r, r.clone());
-    // Deferred(TypeExpr) arm — also exercises DeferredReturn::clone TypeExpr arm
     let d = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeExpr::leaf("Er".into())));
     assert_eq!(d, d.clone());
-    // Deferred(Expression) arm — exercises DeferredReturn::clone Expression arm
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
     assert_eq!(e, e.clone());
 }
@@ -73,12 +70,9 @@ fn return_type_clone_round_trips_all_arms() {
 fn return_type_eq_deferred_match_and_variant_mismatch() {
     let r = ReturnType::Resolved(KType::Number);
     let d = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeExpr::leaf("Er".into())));
-    // Variant-mismatch `_ => false` arm.
     assert_ne!(r, d);
-    // Deferred==Deferred arm — same payload.
     let d2 = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeExpr::leaf("Er".into())));
     assert_eq!(d, d2);
-    // Deferred==Deferred arm — different payload.
     let d3 = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeExpr::leaf("Other".into())));
     assert_ne!(d, d3);
 }
@@ -97,20 +91,17 @@ fn deferred_return_eq_matches_per_carrier() {
     assert_eq!(e1, e2);
     assert_ne!(e1, e3);
 
-    // Variant-mismatch `_ => false` arm.
     assert_ne!(t1, e1);
 }
 
 #[test]
 fn type_expr_eq_covers_all_param_arms() {
-    // Leaf (None vs None) — name match and name mismatch.
     let leaf_a = TypeExpr::leaf("A".into());
     let leaf_a2 = TypeExpr::leaf("A".into());
     let leaf_b = TypeExpr::leaf("B".into());
     assert!(type_expr_eq(&leaf_a, &leaf_a2));
     assert!(!type_expr_eq(&leaf_a, &leaf_b));
 
-    // List structural equality, element mismatch, and arity mismatch.
     let list_a = list_te("List", vec![TypeExpr::leaf("A".into())]);
     let list_a2 = list_te("List", vec![TypeExpr::leaf("A".into())]);
     let list_diff = list_te("List", vec![TypeExpr::leaf("X".into())]);
@@ -122,7 +113,6 @@ fn type_expr_eq_covers_all_param_arms() {
     assert!(!type_expr_eq(&list_a, &list_diff));
     assert!(!type_expr_eq(&list_a, &list_two));
 
-    // Function structural equality, arg mismatch, and return-type mismatch.
     let fn_a = fn_te(vec![TypeExpr::leaf("A".into())], TypeExpr::leaf("R".into()));
     let fn_a2 = fn_te(vec![TypeExpr::leaf("A".into())], TypeExpr::leaf("R".into()));
     let fn_arg_diff =
@@ -138,9 +128,8 @@ fn type_expr_eq_covers_all_param_arms() {
     assert!(!type_expr_eq(&fn_a, &fn_ret_diff));
     assert!(!type_expr_eq(&fn_a, &fn_arity));
 
-    // Variant-mismatch `_ => false` arm. Same name across both sides so the
-    // name short-circuit at the top of `type_expr_eq` doesn't pre-empt the
-    // params-shape fallthrough.
+    // Same name across both sides so the name short-circuit doesn't pre-empt
+    // the params-shape fallthrough.
     let same_name_leaf = TypeExpr::leaf("Shape".into());
     let same_name_list = list_te("Shape", vec![TypeExpr::leaf("A".into())]);
     let same_name_fn =
@@ -158,7 +147,6 @@ fn type_expr_eq_covers_all_param_arms() {
 
 #[test]
 fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
-    // Length mismatch arm: sig has 1 element, expr has 0 parts.
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![SignatureElement::Keyword("FOO".into())],
@@ -166,13 +154,11 @@ fn expression_signature_matches_rejects_length_and_keyword_part_mismatches() {
     let empty: KExpression<'_> = KExpression::new(vec![]);
     assert!(!sig.matches(&empty));
 
-    // Keyword-slot vs non-Keyword part arm: sig expects keyword, expr supplies a literal.
     let mismatched = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
         crate::machine::model::ast::KLiteral::Number(1.0),
     ))]);
     assert!(!sig.matches(&mismatched));
 
-    // Sanity: matching keyword at the right position still accepts.
     let matching = KExpression::new(vec![Spanned::bare(ExpressionPart::Keyword("FOO".into()))]);
     assert!(sig.matches(&matching));
 }
@@ -195,13 +181,10 @@ fn deferred_return_debug_renders_both_arms() {
 
 #[test]
 fn return_type_name_covers_all_arms() {
-    // Resolved delegates to KType::name.
     let r = ReturnType::Resolved(KType::Number);
     assert_eq!(r.name(), KType::Number.name());
-    // Deferred(TypeExpr) renders the surface name via TypeExpr::render.
     let t = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeExpr::leaf("Er".into())));
     assert_eq!(t.name(), "Er");
-    // Deferred(Expression) renders via KExpression::summarize.
     let e = ReturnType::Deferred(DeferredReturn::Expression(expr_with_keyword("FOO")));
     assert_eq!(e.name(), "FOO");
 }
@@ -210,11 +193,10 @@ fn return_type_name_covers_all_arms() {
 fn return_type_matches_value_deferred_always_true_resolved_delegates() {
     use crate::machine::model::values::KObject;
     let obj = KObject::Number(42.0);
-    // Deferred arm: always true — per-call check runs elsewhere.
+    // Deferred always matches — per-call check runs elsewhere.
     let d = ReturnType::Deferred(DeferredReturn::TypeExpr(TypeExpr::leaf("Er".into())));
     assert!(d.matches_value(&obj));
     assert!(!d.is_resolved());
-    // Resolved arm: delegates to KType::matches_value.
     let r_num = ReturnType::Resolved(KType::Number);
     assert!(r_num.matches_value(&obj));
     assert!(r_num.is_resolved());

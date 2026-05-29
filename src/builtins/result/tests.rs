@@ -3,8 +3,6 @@ use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
-/// `Result` registers a `TypeConstructor` identity on the type side so `:(Result T E)`
-/// resolves, and a `TaggedUnionType` carrier (schema `{ok, error}`) on the value side.
 #[test]
 fn result_registers_type_constructor_and_carrier() {
     let arena = RuntimeArena::new();
@@ -84,9 +82,8 @@ fn result_matches_ok_branch() {
     assert_eq!(buf.borrow().as_slice(), b"1\n");
 }
 
-/// Redeclaring the builtin `Result` is rejected: the binder placeholder install at
-/// dispatch time refuses a name already bound to a non-function value (the carrier),
-/// raising `Rebind` before the union ever finalizes.
+/// Placeholder install at dispatch time refuses a name already bound to a
+/// non-function value (the carrier), so the union errors before finalizing.
 #[test]
 fn redeclaring_result_errors() {
     let arena = RuntimeArena::new();

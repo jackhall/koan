@@ -16,8 +16,8 @@ fn run_program(source: &str) -> Vec<u8> {
 
 #[test]
 fn success_wraps_value_in_ok() {
-    // `(PRINT "v")` prints "v" and returns "v"; CATCH wraps ok("v"); the ok arm's
-    // `(PRINT it)` prints it again.
+    // Double "v\n": PRINT both renders and returns its argument, so the ok
+    // arm's `(PRINT it)` re-prints the same string CATCH captured.
     let bytes = run_program(
         "MATCH (CATCH (PRINT \"v\")) WITH (ok -> (PRINT it) error -> (PRINT \"no\"))",
     );
@@ -26,8 +26,8 @@ fn success_wraps_value_in_ok() {
 
 #[test]
 fn failure_wraps_to_tagged_in_error() {
-    // The error payload is the raw `KError::to_tagged()` carrier, so MATCH-ing `it`
-    // dispatches by `KErrorKind` tag; `unbound_name`'s payload carries `.name`.
+    // Exercises the `KErrorKind`-tagged payload: nested MATCH dispatches on
+    // the kind tag, and `.name` is the unbound_name variant's payload field.
     let bytes = run_program(
         "MATCH (CATCH (foo)) WITH (\
             ok -> (PRINT \"no\")\
@@ -39,8 +39,8 @@ fn failure_wraps_to_tagged_in_error() {
 
 #[test]
 fn catch_in_let_does_not_short_circuit() {
-    // A bare `LET r = (foo)` would fail the program; CATCH absorbs the fault so the
-    // following statement still runs.
+    // Without CATCH the unbound `foo` would abort the program before the
+    // second statement ran.
     let bytes = run_program(
         "LET r = (CATCH (foo))\n\
          (PRINT \"after\")",
@@ -51,8 +51,8 @@ fn catch_in_let_does_not_short_circuit() {
 
 #[test]
 fn nested_catch_wraps_inner_result_in_outer_ok() {
-    // The inner CATCH *succeeds* (it produces a `Result` value rather than faulting),
-    // so the outer CATCH wraps it in `ok`. `it` is then the inner `error(...)` Result.
+    // Inner CATCH *succeeds* (producing a Result), so the outer wraps it in
+    // `ok`; `it` then names the inner `error(...)` Result.
     let bytes = run_program(
         "MATCH (CATCH (CATCH (foo))) WITH (\
             ok -> (MATCH it WITH (ok -> (PRINT \"inner-ok\") error -> (PRINT \"inner-error\")))\
@@ -64,9 +64,9 @@ fn nested_catch_wraps_inner_result_in_outer_ok() {
 
 #[test]
 fn catch_inside_tco_position_preserves_frame_chain() {
-    // CATCH inside a recursive HOP through a tagged value. Mirrors
-    // `try_with::try_inside_tco_position_preserves_frame_chain` — the catch path must
-    // keep the call-site frame Rc chained on the new frame.
+    // Regression: the catch path must keep the call-site frame Rc chained on
+    // the new frame across recursive HOPs, or the TCO continuation loses its
+    // resumption context.
     let bytes = run_program(
         "UNION Bit = (one :Null zero :Null)\n\
          FN (HOP b :Tagged) -> Any = (CATCH (MATCH (b) WITH (\
@@ -78,8 +78,8 @@ fn catch_inside_tco_position_preserves_frame_chain() {
     assert_eq!(bytes, b"done\n");
 }
 
-/// A CATCH-produced `Result` and a `Result (...)`-constructed `Result` share the carrier's
-/// `(name, scope_id)` — the nominal identity that makes them MATCH the same way.
+/// Nominal identity: a CATCH-produced `Result` and a `Result (...)`-constructed
+/// one must share `(name, scope_id)` so MATCH dispatches them identically.
 #[test]
 fn catch_result_shares_identity_with_constructed_result() {
     let arena = RuntimeArena::new();

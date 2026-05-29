@@ -1,15 +1,5 @@
-//! Keyworded dispatch shape — state and transitions co-located.
-//!
-//! The Keyworded shape is the catch-all (any keyword present, or a
-//! head that isn't a fast-lane shape). [`KeywordedState`] carries a
-//! single [`ParkTrack`] (or `None` for the initial-entry shape) whose
-//! three variants capture the three distinct park reasons:
-//! [`ParkTrack::Overload`] (resolve returned `ParkOnProducers` before
-//! the part walk ran), [`ParkTrack::BareName`] (the part walk
-//! discovered ≥1 unresolved bare-name producer), and
-//! [`ParkTrack::EagerSubs`] (≥1 eager sub-expression is pending). The
-//! enum encodes mutual exclusivity at the type level; the resume
-//! routing in [`KeywordedState::resume`] is a single `match`.
+//! Keyworded dispatch shape: the catch-all for any expression with a
+//! keyword present, or a head that isn't a fast-lane shape.
 
 use std::marker::PhantomData;
 
@@ -29,25 +19,16 @@ use super::{
 
 pub(in crate::machine::execute) struct KeywordedState<'a> {
     pub(in crate::machine::execute) init: Initialized,
-    /// Park reason carried by a `Keyworded` slot that has parked.
-    /// `None` is the initial-entry shape; the transition
-    /// `Initialized → Keyworded` writes `Some` when the slot stages
-    /// eager subs or parks on producers.
+    /// `None` on initial entry; `Some` once the slot has parked.
     pub(in crate::machine::execute) track: Option<ParkTrack<'a>>,
 }
 
-/// Reason a `Keyworded` slot is parked. The three variants are mutually
-/// exclusive by construction:
-/// - [`ParkTrack::Overload`] — `ResolveOutcome::ParkOnProducers` arm of
-///   [`KeywordedState::initial`] (and the post-eager-subs re-resolve in
-///   [`KeywordedState::finish`]). The resolve fails *before* the part
-///   walk runs.
-/// - [`ParkTrack::BareName`] — the part walk discovered ≥1 unresolved
-///   bare-name producer. The park-precedence guard installs the park
-///   *before* staging any subs (submitting would leak nodes on the
-///   re-Dispatch wake path).
-/// - [`ParkTrack::EagerSubs`] — Resolved-with-subs or `Deferred` arm of
-///   [`KeywordedState::initial`] staged ≥1 eager sub.
+/// Park reason for a `Keyworded` slot. Variants are mutually exclusive
+/// by construction: a single resolve either parks on producers
+/// (`Overload`), or runs the part walk which discovers bare-name
+/// producers (`BareName`) or stages eager subs (`EagerSubs`). The
+/// bare-name park must be installed *before* staging any subs — submitting
+/// would leak nodes on the re-Dispatch wake path.
 pub(in crate::machine::execute) enum ParkTrack<'a> {
     Overload(OverloadParkTrack<'a>),
     BareName(BareNameParkTrack<'a>),
@@ -55,9 +36,8 @@ pub(in crate::machine::execute) enum ParkTrack<'a> {
 }
 
 impl<'a> ParkTrack<'a> {
-    /// Working expression carried by the track. Surfaced through
-    /// [`crate::machine::execute::scheduler::dispatch::DispatchState::parked_carrier_expr`]
-    /// so the drain-end cycle-detection guard can render a parked sample.
+    /// Working expression carried by the track, for drain-end
+    /// cycle-detection sample rendering.
     pub(in crate::machine::execute) fn carrier_expr(&self) -> &KExpression<'a> {
         match self {
             ParkTrack::Overload(t) => &t.expr,
@@ -67,14 +47,10 @@ impl<'a> ParkTrack<'a> {
     }
 }
 
-/// Track state for the bare-name forward references a `Keyworded`
-/// slot is parked on. Carries the partly-spliced `working_expr`
-/// (Resolved wrap slots already substituted for `Future(obj)`; Parked
-/// wrap and ref-name slots keep their original bare-name token) so the
-/// re-entry can re-run [`KeywordedState::initial`] against it.
-///
-/// Park edges are installed as `Notify` (via `add_park_edge`): the
-/// producers are sibling forward references, not children of this slot.
+/// Track for bare-name forward-reference parks. `working_expr` is
+/// partly spliced — Resolved wrap slots already substituted for
+/// `Future(obj)`; Parked wrap and ref-name slots keep their original
+/// bare-name token — so resume re-runs `initial` against it.
 pub(in crate::machine::execute) struct BareNameParkTrack<'a> {
     pub(in crate::machine::execute) working_expr: KExpression<'a>,
     pub(in crate::machine::execute) producers: Vec<NodeId>,
@@ -90,12 +66,9 @@ impl<'a> BareNameParkTrack<'a> {
     }
 }
 
-/// Track state for the forward-reference overload producers a
-/// `Keyworded` slot is parked on. Carries the *original* `expr` (no
-/// splice has happened yet) so the resume can hand it straight back to
-/// [`KeywordedState::initial`].
-///
-/// Park edges are installed as `Notify` (via `add_park_edge`).
+/// Track for forward-reference overload-producer parks. Carries the
+/// *original* `expr` — no splice has happened yet — so resume hands it
+/// straight back to `initial`.
 pub(in crate::machine::execute) struct OverloadParkTrack<'a> {
     pub(in crate::machine::execute) expr: KExpression<'a>,
     pub(in crate::machine::execute) producers: Vec<NodeId>,
@@ -137,15 +110,9 @@ impl<'a> KeywordedState<'a> {
         Self { init, track: Some(ParkTrack::Overload(track)) }
     }
 
-    /// Entry from the dispatch router for the Keyworded shape. Routes
-    /// the *one-shot* (Resolved, no parks, no eager subs) case to a
-    /// direct terminate that inlines the placeholder install and the
-    /// `function.bind` call without going through any per-variant
-    /// state. The Resolved-with-parks and Resolved-with-eager-subs
-    /// sub-cases install the bare-name-park / eager-subs Track on
-    /// `KeywordedState`; `Deferred` folds into the eager-subs Track
-    /// with no captured function; `ParkOnProducers` installs the
-    /// overload-park Track. All re-entry routes through [`Self::resume`].
+    /// Entry from the dispatch router. Resolved-no-parks-no-subs
+    /// terminates inline; all other outcomes install a `ParkTrack` and
+    /// re-enter through [`Self::resume`].
     pub(super) fn initial(
         sched: &mut Scheduler<'a>,
         expr: KExpression<'a>,
@@ -154,8 +121,7 @@ impl<'a> KeywordedState<'a> {
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let bare_outcomes = sched.build_bare_outcomes(&expr.parts, scope);
-        // ProducerErrored short-circuit: a bare-name arg whose producer has
-        // already terminalized with `Err` can never resolve.
+        // A bare-name arg whose producer already errored can never resolve.
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::ProducerErrored(e) = outcome {
                 let frame = Frame::from_expr("<wrap-resolve>", &expr);
@@ -193,7 +159,6 @@ impl<'a> KeywordedState<'a> {
                 return Ok(Self::install_overload_park(sched, producers, expr, pre_subs, idx));
             }
         };
-        // Install dispatch-time placeholders.
         let lex_index = sched
             .active_chain
             .as_ref()
@@ -250,8 +215,7 @@ impl<'a> KeywordedState<'a> {
         Self::install_eager_subs_track(sched, new_expr, staged_subs, pre_subs, scope, idx)
     }
 
-    /// Resume entry. The enum-typed `track` makes mutual exclusivity a
-    /// type-system fact; the match is exhaustive across park reasons.
+    /// Resume entry, dispatched on the installed `ParkTrack` variant.
     pub(super) fn resume(
         self,
         sched: &mut Scheduler<'a>,
@@ -273,10 +237,8 @@ impl<'a> KeywordedState<'a> {
         }
     }
 
-    /// Re-resolve completion shared between the parked-track resume and
-    /// the all-subs-terminal-at-install short-circuit. Called from
-    /// [`Scheduler::resume_eager_subs`] for the `picked = None`
-    /// (Keyworded install) arm.
+    /// Re-resolve dispatch against the (now fully spliced) `working_expr`
+    /// after eager subs complete.
     pub(super) fn finish(
         sched: &mut Scheduler<'a>,
         working_expr: KExpression<'a>,
@@ -309,10 +271,9 @@ impl<'a> KeywordedState<'a> {
         }
     }
 
-    /// Realize the overload-park Track: filter `producers` for cycles
-    /// and already-errored terminals, install `Notify` park edges, and
-    /// transition to `Keyworded(WaitingOverloadPark)`. Cross-shape
-    /// entry — also called from `single_poll::constructor_call` for
+    /// Realize an overload-park Track, filtering `producers` for cycles
+    /// and already-errored terminals. Visibility is widened for
+    /// `single_poll::constructor_call`, which reuses this path for
     /// forward-reference type-binder parks.
     pub(in crate::machine::execute::scheduler) fn install_overload_park(
         sched: &mut Scheduler<'a>,
@@ -348,10 +309,8 @@ impl<'a> KeywordedState<'a> {
         )))
     }
 
-    /// Eager-only Track installer for the `ResolveOutcome::Deferred`
-    /// arm. Schedules every eager part as a sub-Dispatch (or aggregate)
-    /// and parks the slot on them; on track completion the resume
-    /// re-resolves dispatch against the spliced expression.
+    /// `ResolveOutcome::Deferred` arm: stage every eager part and park
+    /// on them, with no speculative function pick captured.
     fn install_eager_only(
         sched: &mut Scheduler<'a>,
         expr: KExpression<'a>,
@@ -368,9 +327,6 @@ impl<'a> KeywordedState<'a> {
         Self::install_eager_subs_track(sched, new_expr, staged_subs, Vec::new(), scope, idx)
     }
 
-    /// Realize the bare-name park Track: install `Notify` park edges
-    /// from each producer to this slot and transition to
-    /// `Keyworded(WaitingBareNamePark)`.
     fn install_bare_name_park(
         sched: &mut Scheduler<'a>,
         producers: Vec<NodeId>,
@@ -388,11 +344,6 @@ impl<'a> KeywordedState<'a> {
         )))
     }
 
-    /// Eager-subs install: route the shared install outcome by the
-    /// `AllInline`/`Parked`/`DepError` shape. The `AllInline` arm tails
-    /// into [`Self::finish`] (re-resolve); the `Parked` arm wraps the
-    /// track in a `KeywordedState::with_eager_subs` and replaces the
-    /// slot.
     fn install_eager_subs_track(
         sched: &mut Scheduler<'a>,
         working_expr: KExpression<'a>,
@@ -416,19 +367,11 @@ impl<'a> KeywordedState<'a> {
     }
 }
 
-/// Fused splice / park / eager-sub walk over `parts`. Per part exactly
-/// one arm fires: pre-sub splice (reuse recorded NodeId), wrap slot
-/// (Resolved ⇒ rewrite to `Future(obj)`; Parked ⇒ cycle-check + push
-/// producer; Unbound ⇒ slot-terminal `UnboundName`), ref-name slot
-/// (Parked ⇒ cycle-check + push producer; Resolved / Unbound ⇒
-/// no-op), or eager-sub slot (stage a sub-Dispatch / aggregate).
-///
-/// Pure: no scheduler submission, no park-edge installation. Caller
+/// Fused splice / park / eager-sub walk over `parts`. Pure: no
+/// scheduler submission, no park-edge installation — the caller
 /// decides whether to install a combined park or submit the staged
-/// subs.
-///
-/// `Err(KError)` surfaces a *slot terminal* error (cycle / unbound
-/// wrap), not a scheduler-level error.
+/// subs. `Err(KError)` surfaces a *slot-terminal* error (cycle /
+/// unbound wrap), not a scheduler-level error.
 fn part_walk<'a>(
     sched: &mut Scheduler<'a>,
     parts: Vec<crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'a>>>,

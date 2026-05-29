@@ -35,8 +35,8 @@ fn lookup_bool_key<'a, 'b>(
     d.get(&probe)
 }
 
-/// Empty-container error rule: binding a bare `{}` through an untyped `LET` is an error,
-/// mirroring the empty-list rule — no key/value types to infer, no annotation upstream.
+/// Mirrors the empty-list rule: bare `{}` through an untyped `LET` has no key/value
+/// types to infer and no upstream annotation, so the empty-container rule rejects it.
 #[test]
 fn let_binds_an_empty_dict_literal_errors() {
     use crate::machine::execute::interpret_with_writer;
@@ -111,7 +111,6 @@ fn bare_identifier_key_is_looked_up() {
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 1);
-            // The key should be the looked-up value of `name`, not the literal "name".
             assert!(matches!(lookup_string_key(entries, "alice"), Some(KObject::Number(n)) if *n == 1.0));
             assert!(lookup_string_key(entries, "name").is_none());
         }
@@ -195,8 +194,7 @@ fn nested_dict_in_list_binds_correctly() {
 
 #[test]
 fn non_scalar_key_returns_shape_error() {
-    // Bind a variable to a list, then use it as a dict key via lookup. The list reaches
-    // `KKey::try_from_kobject` at materialization time and is rejected.
+    // The list reaches `KKey::try_from_kobject` at materialization time and is rejected.
     let result = interpret_with_writer(
         "LET k = [1 2]\nLET d = {(k): 1}",
         Box::new(std::io::sink()),

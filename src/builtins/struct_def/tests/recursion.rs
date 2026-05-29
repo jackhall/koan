@@ -4,17 +4,14 @@ use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
 use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
 
-/// Phase 3 — self-recursive STRUCT: `STRUCT Tree = (children: List<Tree>)` elaborates
-/// with the field type carrying `KType::RecursiveRef("Tree")` inside `KType::List(...)`.
-/// The elaborator's threaded set seeded with the binder's own name short-circuits the
-/// self-reference to `RecursiveRef` rather than parking on the binder's placeholder.
+/// Self-recursive STRUCT: `STRUCT Tree = (children :(List Tree))` should elaborate
+/// the field as `List(RecursiveRef("Tree"))` via the elaborator's binder-name
+/// threading.
 ///
-/// Disabled while the dispatcher-driven type language is the only path: a
-/// parameterized self-reference like `:(LIST OF Tree)` inside `STRUCT Tree`'s
-/// body sub-Dispatches through the standalone dispatcher, which currently has
-/// no SCC threading context — `Tree` reaches the bare-Type-leaf fast lane and
-/// errors `UnboundName` instead of short-circuiting to `RecursiveRef`. See
-/// `roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md`.
+/// Disabled: a parameterized self-reference sub-Dispatches through the
+/// standalone dispatcher, which has no SCC threading context — `Tree` reaches
+/// the bare-Type-leaf fast lane and errors `UnboundName`. See
+/// [roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md](../../../../roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md).
 #[ignore = "blocked on SCC-aware dispatcher for self-recursive parameterized types"]
 #[test]
 fn recursive_struct_tree_elaborates_with_recursive_ref_on_field() {
@@ -37,18 +34,10 @@ fn recursive_struct_tree_elaborates_with_recursive_ref_on_field() {
     }
 }
 
-/// Mutually recursive STRUCTs. `STRUCT TreeA = (b: TreeB)` and
-/// `STRUCT TreeB = (a: TreeA)` submitted in the same batch must both finalize.
-/// Stage 3.2 SCC pre-registration installs each binder's identity into
-/// `bindings.types` synchronously at cycle-close, so cross-member references
-/// resolve to `KType::UserType` directly — no `RecursiveRef` wrap inside SCC
-/// members.
-/// Sanity check that two unrelated STRUCTs in the same batch don't
-/// spuriously cross-pollinate `RecursiveRef`. `STRUCT A = (x: Number)`,
-/// `STRUCT B = (y: A)` — B's field references A, which is non-recursive; B's schema    /// must record the resolved `KType` for `y` (post-3.1: `KType::UserType { kind:
-/// Struct, .. }` from Aa's identity), never a `RecursiveRef`. Per-binder
-/// threaded-set seeding handles this — only the binder's own name is in its
-/// threaded set.
+/// Two unrelated STRUCTs in the same batch must not cross-pollinate
+/// `RecursiveRef`: `Bb`'s `y :Aa` field must resolve to `UserType{Aa}`, not a
+/// `RecursiveRef` — per-binder threaded-set seeding scopes the short-circuit to
+/// the binder's own name.
 #[test]
 fn mutual_non_recursive_pair_does_not_wrap_either() {
     let arena = RuntimeArena::new();
@@ -65,9 +54,6 @@ fn mutual_non_recursive_pair_does_not_wrap_either() {
         Some(KObject::StructType { fields, .. }) => fields.clone(),
         other => panic!("expected Bb to be a StructType, got {:?}", other.map(|o| o.ktype())),
     };
-    // `y`'s recorded KType is whatever the elaborator pulls out of `Aa`'s binding —
-    // post-3.1 `KType::UserType { kind: Struct, name: "Aa", .. }` from the dual-
-    // write — not `RecursiveRef`.
     assert_eq!(b_fields[0].0, "y");
     assert!(
         !matches!(b_fields[0].1, KType::RecursiveRef(_)),
@@ -97,9 +83,8 @@ fn mutually_recursive_struct_pair() {
         Some(KObject::StructType { fields, .. }) => fields.clone(),
         other => panic!("expected TreeB StructType, got {:?}", other.map(|o| o.ktype())),
     };
-    // Each member's field references the OTHER as `UserType` (not `RecursiveRef`):
-    // SCC cycle-close pre-installed both identities so cross-member resolution
-    // returns the named identity directly.
+    // Cross-member references resolve to `UserType` (not `RecursiveRef`) because
+    // SCC cycle-close pre-installs both identities before either finalizes.
     assert_eq!(a_fields[0].0, "b");
     assert!(
         matches!(&a_fields[0].1, KType::UserType { kind: UserTypeKind::Struct, name, .. } if name == "TreeB"),
@@ -112,7 +97,6 @@ fn mutually_recursive_struct_pair() {
         "TreeB.a expected UserType{{TreeA}}, got {:?}",
         b_fields[0].1,
     );
-    // Pending-types entries are drained after cycle-close + each member's finalize.
     drop(data);
     assert!(scope.bindings().pending_types().is_empty());
 }

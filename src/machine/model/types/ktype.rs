@@ -4,42 +4,31 @@
 //! `Dict<Any, Any>` at `from_name` time. There's no bare `KFunction` — "any function" with
 //! no signature has nothing to dispatch on, so users write `Function<(args) -> R>` or `Any`.
 //!
-//! Predicates (`is_more_specific_than`, `matches_value`, `accepts_part`, `function_compat`)
-//! live in `ktype_predicates.rs`; elaboration (`from_name`, `from_type_expr`, `join`,
-//! `join_iter`) lives in `ktype_resolution.rs`.
+//! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
-//! Lifetime parameter `'a`: KType carries arena-pinned references for the type-language
-//! entities that own a child scope (`Module`, `Signature`). The five "module/signature"
-//! variants (`Module`, `Signature`, `AbstractType`, `AnyModule`, `AnySignature`) hold
-//! `&'a Module<'a>` / `&'a Signature<'a>` pointers; every other variant is owned data and
-//! ignores the parameter. The annotation mirrors `KObject<'a>`, `KFunction<'a>`, and
-//! `Module<'a>` — types and values now share one lifetime.
+//! Lifetime parameter `'a`: the five module/signature variants (`Module`, `Signature`,
+//! `AbstractType`, `AnyModule`, `AnySignature`) hold `&'a Module<'a>` / `&'a Signature<'a>`
+//! arena pointers; every other variant is owned data and ignores the parameter.
 
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::values::{Module, Signature};
 use std::rc::Rc;
 
 /// Surface-keyword classifier shared by `KType::UserType` and `KType::AnyUserType`.
-/// Maps each variant to its declaring keyword (`STRUCT`, `UNION` → `Tagged`, `MODULE`,
-/// `NEWTYPE`, `TYPE_CONSTRUCTOR`). See
-/// [per-declaration type identity](../../../../design/typing/user-types.md).
+/// See [per-declaration type identity](../../../../design/typing/user-types.md).
 ///
 /// The manual `PartialEq` / `Eq` impl below *ignores* the inner payload — identity
 /// equality is by variant tag only. Load-bearing for wildcard admissibility:
 /// `AnyUserType { kind: Newtype { repr: <sentinel> } }` must admit any concrete
-/// `UserType { kind: Newtype { repr: <real> }, .. }`, and the same applies to the
-/// `TypeConstructor` variant.
+/// `UserType { kind: Newtype { repr: <real> }, .. }`, and the same for `TypeConstructor`.
 #[derive(Clone, Debug)]
 pub enum UserTypeKind<'a> {
     Struct,
     Tagged,
-    /// Fresh nominal identity over a transparent representation (`NEWTYPE Distance = Number`
-    /// carries `repr: Box<KType::Number>`). `repr` is NOT part of identity equality — the
-    /// manual `PartialEq` excludes it.
+    /// Fresh nominal identity over a transparent representation. `repr` is NOT part of
+    /// identity equality.
     Newtype { repr: Box<KType<'a>> },
-    /// Higher-kinded type-constructor slot declared via `LET Wrap = (TYPE_CONSTRUCTOR T)`
-    /// inside a SIG body. `param_names` is NOT part of identity equality — the manual
-    /// `PartialEq` excludes it.
+    /// Higher-kinded type-constructor slot. `param_names` is NOT part of identity equality.
     TypeConstructor { param_names: Vec<String> },
 }
 
@@ -85,11 +74,7 @@ pub enum KType<'a> {
     },
     /// Structural functor type — mirrors `KFunction` storage and rendering, but
     /// carries no admissibility against `KFunction` (the cross-arms in
-    /// `function_compat` refuse both directions). Minted by the `FUNCTOR` binder
-    /// when `is_functor: true` flips on the underlying `KFunctionValue`, and by
-    /// the `Functor` arm of `elaborate_type_expr` for the `:(Functor (params) -> R)`
-    /// surface-form sigil. `params` mirror `KFunction::args` (positional, same
-    /// shape); `ret` mirrors `KFunction::ret`.
+    /// `function_compat` refuse both directions).
     KFunctor {
         params: Vec<KType<'a>>,
         ret: Box<KType<'a>>,
@@ -98,9 +83,8 @@ pub enum KType<'a> {
     /// Lazy slot: accepts an unevaluated `ExpressionPart::Expression` so the builtin chooses
     /// when (or whether) to run it.
     KExpression,
-    /// Meta-type for slots capturing a parsed type-name token (`ExpressionPart::Type`).
-    /// Resolves to `KObject::TypeExprValue(t)` — the full structured `TypeExpr`, preserving
-    /// nested parameters rather than flattening to a name string.
+    /// Meta-type for slots capturing a parsed type-name token. Carries the full structured
+    /// `TypeExpr` rather than flattening to a name string.
     TypeExprRef,
     /// Meta-type for first-class type-values; both tagged-union and struct schemas report this.
     Type,
@@ -113,73 +97,54 @@ pub enum KType<'a> {
     /// one-direction only — `UserType` is more specific than `AnyUserType` of the same
     /// kind, not the reverse.
     AnyUserType { kind: UserTypeKind<'a> },
-    /// First-class module value tagged with the signature it satisfies. `sig_id` is the
-    /// declaring `Signature`'s `decl_scope_ptr as usize` — addresses are stable for the
-    /// run (the arena pins the `Signature`) and two `SIG Foo = (...)` declarations in
-    /// the same scope already error (`Rebind`), so the cast is collision-free. Equality
-    /// is by `sig_id` plus the `pinned_slots` constraint vector; `sig_path` is for
-    /// diagnostics only.
+    /// First-class module value tagged with the signature it satisfies. `sig_id` addresses
+    /// are stable for the run (the arena pins the `Signature`) and rebind in the same scope
+    /// already errors, so the cast is collision-free. Equality is by `sig_id` plus
+    /// `pinned_slots`; `sig_path` is diagnostic-only.
     ///
-    /// `pinned_slots` carries sharing constraints — abstract-type slots of the signature
-    /// pinned to specific concrete `KType`s. Empty for the unconstrained `OrderedSig`
-    /// form. The vec is order-preserving (rather than a `HashMap`) so structural equality
-    /// is deterministic and the diagnostic surface stays stable.
+    /// `pinned_slots` carries abstract-type slots pinned to concrete `KType`s. The vec is
+    /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
     SatisfiesSignature {
         sig_id: ScopeId,
         sig_path: String,
         pinned_slots: Vec<(String, KType<'a>)>,
     },
-    /// First-class module value's type. Replaces `KObject::KModule` for type-language
-    /// purposes — the module carrier moves into KType so dispatch and ATTR project from
-    /// the same shape. `frame` carries the per-call `Rc<CallArena>` anchor for
-    /// functor-built modules (mirrors the old `KModule` payload verbatim).
+    /// First-class module value's type. `frame` carries the per-call `Rc<CallArena>`
+    /// anchor for functor-built modules.
     Module {
         module: &'a Module<'a>,
         frame: Option<Rc<CallArena>>,
     },
-    /// First-class module signature value's type. Replaces `KObject::KSignature` for
-    /// type-language purposes; the arena-pinned `&'a Signature<'a>` pointer parallels
-    /// `KType::Module`'s carrier shape.
+    /// First-class module signature value's type.
     Signature(&'a Signature<'a>),
-    /// Abstract type member of a module, minted by opaque ascription (`Foo.Type`). The
-    /// arena-pinned `source_module` pointer mirrors `KType::Module`'s carrier; manual
-    /// `PartialEq` compares `(source_module.scope_id(), name)` rather than pointer
-    /// equality so two opaque-ascriptions of the same source module with the same
-    /// abstract name compare equal. Replaces the former `UserType { kind:
-    /// UserTypeKind::Module, .. }` shape for abstract-type members.
+    /// Abstract type member of a module, minted by opaque ascription (`Foo.Type`). Manual
+    /// `PartialEq` compares `(source_module.scope_id(), name)` so two opaque-ascriptions of
+    /// the same source module with the same abstract name compare equal.
     AbstractType {
         source_module: &'a Module<'a>,
         name: String,
     },
-    /// `:Module` slot wildcard. Replaces `AnyUserType { kind: Module }` — `:Module`
-    /// admits first-class modules, not "abstract-types-from-some-module."
+    /// `:Module` slot wildcard — admits first-class modules.
     AnyModule,
-    /// `:Signature` slot wildcard. Replaces `MetaSignature` — `:Signature` admits
-    /// first-class signature values.
+    /// `:Signature` slot wildcard — admits first-class signature values.
     AnySignature,
     /// Recursive type binder. `body` describes the unfolded shape with `binder` in scope as a
     /// `RecursiveRef` for self-references. `name()` renders as the binder name so diagnostics
     /// stay readable (e.g. `Tree` rather than `Mu Tree. List<Tree>`).
     Mu { binder: String, body: Box<KType<'a>> },
     /// Application of a higher-kinded type constructor to arg types. `ctor` is a
-    /// `KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }` carrying the
-    /// per-call nominal identity of the constructor slot; `args` are the elaborated arg
-    /// types, one per `param_names` entry on the constructor.
-    ///
-    /// Structural equality by `(ctor, args)` — mirrors `KType::List(_)` / `Dict(_, _)`: an
-    /// applied form keyed on inner structure, not a per-declaration nominal identity.
+    /// `UserType` with `TypeConstructor` kind; `args` are the elaborated arg types.
+    /// Structural equality by `(ctor, args)`.
     ConstructorApply { ctor: Box<KType<'a>>, args: Vec<KType<'a>> },
-    /// Back-reference to an enclosing `Mu`'s binder. Equality is by binder name only — the
-    /// concrete identity is recovered from the surrounding `Mu` context.
+    /// Back-reference to an enclosing `Mu`'s binder. Equality is by binder name only.
     RecursiveRef(String),
     Any,
 }
 
 impl<'a> KType<'a> {
-    /// Surface-syntax rendering. Mirrors the keyworded type-language overloads
-    /// (`LIST OF T`, `MAP K -> V`, `FN <args> -> R`, `FUNCTOR <params> -> R`) so the
-    /// rendered form parses back to the same `KType` through the dispatch-driven
-    /// type-language path (see `design/typing/type-language-via-dispatch.md`).
+    /// Surface-syntax rendering. The rendered form parses back to the same `KType`
+    /// through the dispatch-driven type-language path (see
+    /// [type-language via dispatch](../../../../design/typing/type-language-via-dispatch.md)).
     pub fn name(&self) -> String {
         match self {
             KType::Number => "Number".into(),
@@ -206,7 +171,7 @@ impl<'a> KType<'a> {
                 if pinned_slots.is_empty() {
                     sig_path.clone()
                 } else {
-                    // Display-only — does not round-trip through the parser.
+                    // Display-only; does not round-trip through the parser.
                     let inner: Vec<String> = pinned_slots
                         .iter()
                         .map(|(name, kt)| format!("({}: {})", name, kt.name()))
@@ -229,21 +194,18 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing;
-    /// currently delegates to `name()`.
+    /// Stable entry point for diagnostic rendering. Reserved seam for cycle-aware printing.
     pub fn render(&self) -> String {
         self.name()
     }
 }
 
-/// Manual `PartialEq` — needed because three of the new variants carry arena pointers
-/// (`Module`, `Signature`, `AbstractType`) whose identity is the pointee's stable
-/// `scope_id()` / `sig_id()` rather than the raw pointer. Two opaque ascriptions of the
-/// same source module producing different `&Module` (each ascription allocates a fresh
-/// child scope) must NOT compare equal under `KType::Module`; conversely, two
-/// `KType::AbstractType` values minted from the same source-and-name must compare equal
-/// even when their `&Module` pointers differ. The remaining variants follow the prior
-/// derived-equality shape verbatim.
+/// Manual `PartialEq` — `Module`, `Signature`, and `AbstractType` carry arena pointers
+/// whose identity is the pointee's stable `scope_id()` / `sig_id()` rather than the raw
+/// pointer. Two opaque ascriptions of the same source module produce different `&Module`
+/// (each allocates a fresh child scope) and must NOT compare equal under `KType::Module`;
+/// two `KType::AbstractType` values minted from the same source-and-name MUST compare
+/// equal even when their `&Module` pointers differ.
 impl<'a> PartialEq for KType<'a> {
     fn eq(&self, other: &Self) -> bool {
         use KType::*;
@@ -269,17 +231,11 @@ impl<'a> PartialEq for KType<'a> {
                 SatisfiesSignature { sig_id: i1, pinned_slots: p1, .. },
                 SatisfiesSignature { sig_id: i2, pinned_slots: p2, .. },
             ) => i1 == i2 && p1 == p2,
-            // Identity by the module's child-scope id — two opaque ascriptions allocate
-            // distinct child scopes (and ScopeIds) so they remain distinct as types.
             // `frame` is a lifecycle anchor, not part of identity.
             (Module { module: m1, .. }, Module { module: m2, .. }) => {
                 m1.scope_id() == m2.scope_id()
             }
-            // Identity by sig_id — same scheme as `KType::Module`.
             (Signature(s1), Signature(s2)) => s1.sig_id() == s2.sig_id(),
-            // Identity by `(source_module.scope_id(), name)` — two ascriptions of the
-            // same source module with the same abstract-type name are the same type even
-            // though their `&Module` pointers may differ.
             (
                 AbstractType { source_module: m1, name: n1 },
                 AbstractType { source_module: m2, name: n2 },
@@ -298,12 +254,8 @@ impl<'a> PartialEq for KType<'a> {
 }
 impl<'a> Eq for KType<'a> {}
 
-/// Manual `Debug` — `derive` is blocked because `Module<'_>` / `Signature<'_>` /
-/// `CallArena` don't (and can't easily) implement `Debug`: `Module` carries a `*const
-/// Scope<'static>` lifetime-erasure pointer plus a `RefCell<HashMap<String, KType>>` whose
-/// values can recurse into module-typed KTypes; pretty-printing those is unbounded. The
-/// surface-name rendering `KType::name()` is the right level of detail for diagnostics
-/// and matches what error messages show users.
+/// Manual `Debug` — `derive` is blocked because `Module` / `Signature` / `CallArena`
+/// don't implement `Debug` and recursing through module-typed KTypes is unbounded.
 impl<'a> std::fmt::Debug for KType<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "KType({})", self.name())
@@ -377,9 +329,6 @@ mod tests {
 
     #[test]
     fn functor_and_function_are_disjoint_types() {
-        // Stage 0: structural identity is shape-disjoint even when params and ret align.
-        // The cross-arm wall in `function_compat` enforces the same disjointness at the
-        // admissibility layer (Stage 4).
         let f = KType::KFunction {
             args: vec![KType::Number],
             ret: Box::new(KType::Bool),
@@ -463,9 +412,6 @@ mod tests {
 
     #[test]
     fn any_module_and_any_signature_render_surface_keywords() {
-        // `:Module` / `:Signature` slot wildcards render as their surface keyword
-        // (parser round-trip) — replaces the `AnyUserType { kind: Module }` /
-        // `MetaSignature` rendering after the carrier collapse.
         let am: KType<'_> = KType::AnyModule;
         let asg: KType<'_> = KType::AnySignature;
         assert_eq!(am.name(), "Module");
@@ -474,8 +420,8 @@ mod tests {
 
     #[test]
     fn user_type_name_renders_bare_name() {
-        // Per-declaration tag renders the declared `name`, not the kind keyword — pins the
-        // diagnostic surface so a `Point` struct slot shows `Point`, not `Struct`.
+        // Renders the declared `name`, not the kind keyword: a `Point` struct slot shows
+        // `Point`, not `Struct`.
         let t = KType::UserType {
             kind: UserTypeKind::Struct,
             scope_id: ScopeId::from_raw(0, 0x1234),

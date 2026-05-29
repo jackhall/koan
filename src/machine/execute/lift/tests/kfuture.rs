@@ -10,8 +10,7 @@ use crate::parse::parse;
 use super::{alloc_local_kf, defeat_fast_path, dispatch_for_test};
 
 /// A KFuture with no descendant borrow into the dying arena must lift to
-/// `frame: None` — anchoring would over-keep the arena. The dummy KFunction
-/// below defeats `functions_is_empty()`'s fast path so the slow path runs.
+/// `frame: None` — anchoring would over-keep the arena.
 #[test]
 fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, SignatureElement, ReturnType};
@@ -20,6 +19,7 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
+    // Defeat the `functions_is_empty()` fast path so the slow path runs.
     let kf = KFunction::new(
         ExpressionSignature {
             return_type: ReturnType::Resolved(KType::Null),
@@ -42,21 +42,14 @@ fn unanchored_kfuture_no_arena_borrow_does_not_anchor() {
     let lifted = lift_kobject(&kf_obj, &dying);
 
     match lifted {
-        KObject::KFuture(_, frame) => assert!(
-            frame.is_none(),
-            "KFuture without descendant borrows into dying arena must lift to frame=None",
-        ),
+        KObject::KFuture(_, frame) => assert!(frame.is_none()),
         other => panic!("expected lifted KFuture, got {:?}", other.ktype()),
     }
-    assert_eq!(
-        Rc::strong_count(&dying),
-        strong_before,
-        "lifting a non-borrowing KFuture must not bump the dying frame's Rc",
-    );
+    assert_eq!(Rc::strong_count(&dying), strong_before);
 }
 
-/// Symmetric case: a KFuture whose parsed parts contain a `Future(&KObject)`
-/// allocated in the dying arena must lift with `frame: Some(rc)`.
+/// A KFuture whose parsed parts contain a `Future(&KObject)` allocated in
+/// the dying arena must lift with `frame: Some(rc)`.
 #[test]
 fn unanchored_kfuture_with_arena_borrow_does_anchor() {
     use crate::machine::model::{ExpressionSignature, KType, ReturnType, SignatureElement};
@@ -66,8 +59,6 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let dying = CallArena::new(scope, None);
 
-    // Defeat `functions_is_empty()` fast path so the slow path runs. Captured
-    // scope lives in `dying.arena()` to satisfy `alloc_function`'s invariant.
     let kf = KFunction::new(
         ExpressionSignature {
             return_type: ReturnType::Resolved(KType::Null),
@@ -90,25 +81,17 @@ fn unanchored_kfuture_with_arena_borrow_does_anchor() {
     let strong_before = Rc::strong_count(&dying);
     let lifted = lift_kobject(&kf_obj, &dying);
     match &lifted {
-        KObject::KFuture(_, frame) => assert!(
-            frame.is_some(),
-            "KFuture borrowing into dying arena must lift with frame=Some(rc)",
-        ),
+        KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected lifted KFuture, got {:?}", other.ktype()),
     }
-    assert_eq!(
-        Rc::strong_count(&dying),
-        strong_before + 1,
-        "lifting a borrowing KFuture must clone the dying frame's Rc once",
-    );
+    assert_eq!(Rc::strong_count(&dying), strong_before + 1);
     // Drop borrowers before `dying` so arena teardown order is well-defined.
     drop(lifted);
     drop(kf_obj);
 }
 
-/// `kobject_borrows_arena`'s KFuture predicate arm (221) — a KFuture
-/// parked inside another KFuture's `bundle.args` exercises the recursive
-/// borrow walk. The inner future borrows via its own captured function.
+/// A KFuture parked inside another KFuture's `bundle.args` exercises the
+/// recursive borrow walk; the inner future borrows via its captured function.
 #[test]
 fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
     use crate::machine::core::kfunction::ArgumentBundle;
@@ -144,10 +127,8 @@ fn kfuture_bundle_arg_with_nested_kfuture_anchors() {
     drop(obj);
 }
 
-/// `any_descendant`'s Struct recursion arm (138–140) is reachable only via
-/// `kobject_borrows_arena`'s `None` predicate return on Struct. A KFuture
-/// whose `bundle.args` carries a Struct with a borrowing field exercises
-/// the recursion through the fields map.
+/// A KFuture whose `bundle.args` carries a Struct with a borrowing field
+/// exercises recursion through the fields map.
 #[test]
 fn kfuture_bundle_arg_with_struct_field_anchors() {
     use crate::machine::ScopeId;
@@ -183,8 +164,7 @@ fn kfuture_bundle_arg_with_struct_field_anchors() {
     drop(obj);
 }
 
-/// `expression_borrows_arena`'s `Expression` part recursion arm (205) — a
-/// `parsed.parts` `Expression(Box<KExpression>)` whose inner parts borrow
+/// A `parsed.parts` `Expression(Box<KExpression>)` whose inner parts borrow
 /// into the dying arena must drive anchor.
 #[test]
 fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
@@ -216,9 +196,8 @@ fn kfuture_parsed_expression_part_with_arena_borrow_anchors() {
     drop(obj);
 }
 
-/// `kobject_borrows_arena`'s `KExpression` predicate arm (220–221) — a
-/// `KExpression` parked in `bundle.args` whose inner parts borrow into the
-/// dying arena must drive anchor.
+/// A `KExpression` parked in `bundle.args` whose inner parts borrow into
+/// the dying arena must drive anchor.
 #[test]
 fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     let arena = RuntimeArena::new();
@@ -249,8 +228,7 @@ fn kfuture_bundle_arg_with_kexpression_borrow_anchors() {
     drop(obj);
 }
 
-/// Pre-anchored KFuture preserves its anchor through lift (mirror of the
-/// KFunction case — both arms must share the "respect `existing`" rule).
+/// Pre-anchored KFuture preserves its anchor through lift.
 #[test]
 fn kfuture_with_existing_anchor_preserves_it() {
     let arena = RuntimeArena::new();
@@ -277,10 +255,8 @@ fn kfuture_with_existing_anchor_preserves_it() {
     assert_eq!(other_after, other_before + 1);
 }
 
-/// `kfuture_borrows_dying_arena` walks `bundle.args` for borrowing payloads.
 /// A KFunction whose captured scope lives in the dying arena, parked in a
-/// bundle slot, must drive lift to anchor — exercises `kobject_borrows_arena`'s
-/// KFunction predicate arm (220–225).
+/// bundle slot, must drive lift to anchor.
 #[test]
 fn kfuture_bundle_arg_with_local_kfunction_anchors() {
     let arena = RuntimeArena::new();
@@ -301,10 +277,7 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
     let lifted = lift_kobject(&obj, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::KFuture(_, frame) => assert!(
-            frame.is_some(),
-            "bundle-arg KFunction borrowing into dying arena must drive anchor",
-        ),
+        KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
@@ -312,9 +285,8 @@ fn kfuture_bundle_arg_with_local_kfunction_anchors() {
     drop(obj);
 }
 
-/// `kfuture_borrows_dying_arena`'s function-captured-scope short-circuit (186–187).
-/// A KFuture whose own function was captured in the dying arena anchors without
-/// needing any borrowing payload in parts or bundle.
+/// A KFuture whose own function was captured in the dying arena anchors
+/// without needing any borrowing payload in parts or bundle.
 #[test]
 fn kfuture_with_local_function_anchors() {
     use crate::machine::core::kfunction::ArgumentBundle;
@@ -335,10 +307,7 @@ fn kfuture_with_local_function_anchors() {
     let lifted = lift_kobject(&obj, &dying);
     let count_after = Rc::strong_count(&dying);
     match &lifted {
-        KObject::KFuture(_, frame) => assert!(
-            frame.is_some(),
-            "KFuture whose function captured the dying scope must anchor",
-        ),
+        KObject::KFuture(_, frame) => assert!(frame.is_some()),
         other => panic!("expected KFuture, got {:?}", other.ktype()),
     }
     assert_eq!(count_after, before + 1);
@@ -346,9 +315,8 @@ fn kfuture_with_local_function_anchors() {
     drop(obj);
 }
 
-/// `kobject_borrows_arena`'s composite-recursion arms (230–233) only fire when
-/// a bundle arg is a List/Dict/Tagged with a borrowing descendant. A `List`
-/// containing a dying-captured KFunction exercises the recursion.
+/// A bundle-arg `List` containing a dying-captured KFunction exercises the
+/// composite-recursion arms (List/Dict/Tagged).
 #[test]
 fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     let arena = RuntimeArena::new();
@@ -375,8 +343,8 @@ fn kfuture_bundle_arg_with_list_of_kfunction_anchors() {
     drop(obj);
 }
 
-/// `kobject_borrows_arena`'s KModule arm (226–229) — module child scope in
-/// dying arena, parked in a bundle slot.
+/// A KModule whose child scope lives in the dying arena, parked in a
+/// bundle slot, must drive anchor.
 #[test]
 fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     use crate::machine::model::values::Module;
@@ -409,8 +377,8 @@ fn kfuture_bundle_arg_with_local_kmodule_anchors() {
     drop(obj);
 }
 
-/// `expression_borrows_arena`'s `ListLiteral` arm (206) — a `parsed.parts`
-/// `ListLiteral` whose inner `Future` part points into the dying arena.
+/// A `parsed.parts` `ListLiteral` whose inner `Future` part points into
+/// the dying arena must drive anchor.
 #[test]
 fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
     let arena = RuntimeArena::new();
@@ -440,8 +408,8 @@ fn kfuture_parsed_listliteral_with_arena_borrow_anchors() {
     drop(obj);
 }
 
-/// `expression_borrows_arena`'s `DictLiteral` arm (207–209) — value side
-/// of a `(key, value)` pair carries the borrowing `Future` part.
+/// A `parsed.parts` `DictLiteral` whose value side carries a borrowing
+/// `Future` part must drive anchor.
 #[test]
 fn kfuture_parsed_dictliteral_with_arena_borrow_anchors() {
     let arena = RuntimeArena::new();

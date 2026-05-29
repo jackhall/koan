@@ -4,11 +4,9 @@ use crate::builtins::test_support::{fn_is_registered, lookup_fn, run, run_root_s
 use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
 
-/// Verify that `LET MyList = (LIST_OF Number)` registers a type binding carrying the
-/// elaborated `KType::List(Number)`. Post-stage-1.7 storage flip the LET TypeExprRef
-/// overload writes `bindings.types` (reachable via `Scope::resolve_type`); the prior
-/// `KObject::KTypeValue` carrier survives only as a dispatch transport, not as the
-/// storage shape.
+/// `LET MyList = (LIST_OF Number)` writes the elaborated `KType::List(Number)`
+/// to `bindings.types` (reachable via `Scope::resolve_type`); the `KTypeValue`
+/// carrier is only a dispatch transport, not the storage shape.
 #[test]
 fn list_of_let_binding_is_ktype_value() {
     use crate::machine::model::KType;
@@ -21,10 +19,8 @@ fn list_of_let_binding_is_ktype_value() {
     assert_eq!(*kt, KType::List(Box::new(KType::Number)));
 }
 
-/// The scheduler-aware elaborator reads a `KTypeValue` binding back as its stored
-/// `KType`: `LET MyList = (LIST_OF Number)` followed by an elaborator walk of the
-/// `MyList` leaf returns `KType::List(Number)`. Replaces the previous `ScopeResolver`
-/// path that was deleted in phase 5.
+/// `elaborate_type_expr` lowers a leaf naming a type-side LET binding back to its
+/// stored `KType` (`LET MyList = (LIST_OF Number)` -> `KType::List(Number)`).
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::ast::TypeExpr;
@@ -40,24 +36,16 @@ fn elaborator_lowers_ktype_value_binding() {
     }
 }
 
-/// FN-def integration: a parameter typed `Er: OrderedSig` lowers via the scope-aware
-/// `elaborate_type_expr` into `KType::SatisfiesSignature { sig_id, sig_path: "OrderedSig" }`,
-/// with `sig_id` equal to the declaring `Signature::sig_id()`. Pins the elaborator-to-
-/// FN-signature path that drives functor dispatch.
-///
-/// Module-system functor-params Stage A: this test was migrated from a lowercase
-/// `elem` parameter to Type-class `Er` (the documented surface form). The FN-def
-/// parameter parser now admits Type-classified bare-leaf tokens as parameter names
-/// in addition to lowercase Identifiers, which is what makes the documented
-/// `FN (LIFT Er: OrderedSig) -> ...` surface form actually parse.
+/// A parameter typed `Er :OrderedSig` lowers via `elaborate_type_expr` into
+/// `KType::SatisfiesSignature { sig_id, sig_path: "OrderedSig", .. }` with `sig_id`
+/// matching the declaring `Signature::sig_id()`. Also pins that the SIG and FN can
+/// land in the same batch — the FN's signature elaboration parks on the SIG
+/// placeholder.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::machine::model::{Argument, KType, SignatureElement};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // Phase 3: single batch — the FN's signature elaboration parks on `OrderedSig`'s
-    // SIG placeholder and the Combine wakes it once the SIG finalizes. Previously
-    // required two batches because the synchronous type-name resolution didn't park.
     run(
         scope,
         "SIG OrderedSig = (VAL compare :Number)\n\
@@ -86,11 +74,9 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     }
 }
 
-/// End-to-end park-on-LET-placeholder: a `LET MyList = (LIST_OF Number)` followed in the
-/// same batch by a `FN (USE xs: MyList) -> ...` previously failed because FN-def's
-/// signature elaboration ran synchronously and the LET hadn't finalized. Post-phase-3 the
-/// FN body parks on the LET's placeholder via a Combine and re-runs the elaboration
-/// against the now-final scope.
+/// End-to-end park-on-LET-placeholder: a `LET` followed in the same batch by a
+/// `FN` whose signature references it works because FN-def parks on the LET's
+/// placeholder and re-runs elaboration against the finalized scope.
 #[test]
 fn let_then_fn_in_same_batch_works() {
     use crate::builtins::default_scope;
@@ -108,9 +94,6 @@ fn let_then_fn_in_same_batch_works() {
         sched.add_dispatch(e, scope);
     }
     sched.execute().unwrap();
-    // Post-stage-1.7 the LET TypeExprRef overload writes `MyList` into `bindings.types`,
-    // not `data` — check the type-side map. The bare FN-def's `USE` binding lives in the
-    // `functions` dispatch bucket (no `data` mirror).
     assert!(
         scope.resolve_type("MyList").is_some(),
         "MyList should be bound in bindings.types after the batch executes",

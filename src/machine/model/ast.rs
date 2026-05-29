@@ -1,7 +1,4 @@
-//! AST node types shared across the parse module. `KExpression` is a function-call node;
-//! `ExpressionPart` is one element inside such a call — atoms (literals, identifiers, types,
-//! keywords), collection literals (lists, dicts), and nested expressions. `KLiteral`
-//! enumerates the concrete literal kinds the lexer can produce.
+//! AST node types shared across the parse module.
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
@@ -21,21 +18,13 @@ pub enum KLiteral {
     Null,
 }
 
-/// Surface representation of a type token. Leaf types like `Number` carry `TypeParams::None`;
-/// container types like `List<Number>` and `Function<A, B -> R>` carry their inner types in
-/// the structured `TypeParams` variant.
+/// Surface representation of a type token.
 ///
-/// `builtin_cache` is the Layer-1 resolution cache: when
-/// [`crate::machine::model::types::KType::from_type_expr`] succeeds against
-/// the builtin table, the resulting `KType` is stored here so subsequent
-/// `resolve_for` calls skip the recursive walk. Scope-independent — the result depends
-/// only on the surface form. `from_type_expr` failures (user-bound names) are not
-/// cached here; those route through the scope-owned Layer-2 memo on `Scope`.
-///
-/// Storage is `KType<'static>` because the builtin-only path never carries arena-pinned
-/// `Module` / `Signature` references — `from_type_expr` only ever produces `Number`,
-/// `List<Any>`, `Function<...>`-shaped values whose `'a` is purely phantom. The cached
-/// value coerces to any `&'a KType<'a>` via the standard sub-typing path.
+/// `builtin_cache` memoizes the scope-independent builtin-resolution result so repeat
+/// `resolve_for` calls against the same surface form skip the recursive walk. User-bound
+/// names miss the cache and route through the scope-owned memo on `Scope`. Storage is
+/// `KType<'static>` because the builtin-only path produces only owned-data variants
+/// (no arena-pinned `Module` / `Signature` refs).
 #[derive(Debug)]
 pub struct TypeExpr {
     pub name: String,
@@ -73,14 +62,12 @@ impl std::hash::Hash for TypeExpr {
 }
 
 /// Inner-type carrier on a `TypeExpr`. The variant split bakes the `Function` arrow rule
-/// into the *shape* — downstream consumers don't have to know that `Function` is special.
+/// into the shape so downstream consumers don't special-case `Function`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeParams {
-    /// Leaf type (`Number`, `Str`, `Any`) or an unparameterized container (`List`).
     None,
     /// `List<X>`, `Dict<K, V>`. Arity validation lives at the KType-construction layer.
     List(Vec<TypeExpr>),
-    /// `Function<A, B, ... -> R>` — the `->` arrow distinguishes args from return type.
     Function { args: Vec<TypeExpr>, ret: Box<TypeExpr> },
 }
 
@@ -93,9 +80,7 @@ impl TypeExpr {
         }
     }
 
-    /// Render in surface syntax — Design-B sigil form. Leaves render bare (`Number`);
-    /// parameterized types render with the `:(...)` sigil so the output round-trips
-    /// through the parser unchanged: `:(List Number)`, `:(Function (A) -> R)`.
+    /// Render in surface syntax so the output round-trips through the parser unchanged.
     pub fn render(&self) -> String {
         match &self.params {
             TypeParams::None => self.name.clone(),
@@ -111,23 +96,17 @@ impl TypeExpr {
     }
 }
 
-/// One element of a parsed expression. Parser outputs are `Keyword`, `Identifier`, `Type`,
-/// `Expression`, `SigiledTypeExpr`, `ListLiteral`, `DictLiteral`, and `Literal`; the
-/// scheduler introduces `Future` later, splicing a completed dep's resolved value into
-/// its dependent's parts list before late dispatch.
+/// One element of a parsed expression. `Future` is introduced by the scheduler when it
+/// splices a completed dep's resolved value into its dependent's parts list.
 pub enum ExpressionPart<'a> {
     Keyword(String),
     Identifier(String),
-    /// A type-name reference like `Number`, `KFunction`, or `List<Number>`. The `TypeExpr`
-    /// carries any nested parameters; leaf types use `TypeParams::None`.
     Type(TypeExpr),
     Expression(Box<KExpression<'a>>),
-    /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` is the raw
-    /// inner expression and must dispatch in type-context, returning a type-side carrier
-    /// (`KTypeValue`, `Module`, `Signature`, `UserType`, `KFunctor`). Shape recognition
-    /// is the dispatcher's responsibility — the parser does no folding here, so legacy
-    /// positional `:(List Number)` and new keyworded `:(LIST OF Number)` both ride
-    /// this variant. See [design/typing/type-language-via-dispatch.md].
+    /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
+    /// in type-context, returning a type-side carrier. Shape recognition is the
+    /// dispatcher's responsibility — the parser does no folding here. See
+    /// [design/typing/type-language-via-dispatch.md](../../../design/typing/type-language-via-dispatch.md).
     SigiledTypeExpr(Box<KExpression<'a>>),
     ListLiteral(Vec<ExpressionPart<'a>>),
     DictLiteral(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
@@ -158,8 +137,7 @@ impl<'a> ExpressionPart<'a> {
         )))
     }
 
-    /// Short textual rendering of this part, matching the per-part subset of
-    /// `KExpression::summarize`.
+    /// Per-part subset of `KExpression::summarize`.
     pub fn summarize(&self) -> String {
         match self {
             ExpressionPart::Keyword(s) => s.clone(),
@@ -188,42 +166,14 @@ impl<'a> ExpressionPart<'a> {
         }
     }
 
-    /// Slot-aware resolve. Identical to `resolve` for every variant except `Type`: when the
-    /// receiving slot is `KType::TypeExprRef`, the surface `TypeExpr` is lowered into a
-    /// runtime carrier so consumers downstream operate on a unified value representation
-    /// rather than parser surface syntax.
-    ///
-    /// Two routes:
-    /// - When [`crate::machine::model::types::KType::from_type_expr`] succeeds (builtin
-    ///   leaf names like `Number`, or structural shapes like `List<Number>` /
-    ///   `Function<(...)-> R>`), the result is packaged as `KObject::KTypeValue(kt)`.
-    /// - When `from_type_expr` returns `Err` — i.e. a bare-leaf name that isn't a
-    ///   builtin (`Point`, `IntOrd`, `MyList`) — the carrier becomes a
-    ///   `KObject::TypeNameRef(t)` preserving the parser-side `TypeExpr`. The
-    ///   consuming body (`extract_bare_type_name`, ATTR's TypeExprRef lhs, FN's
-    ///   deferred return-type elaboration, `LET <Type-class> = …`) reads the surface
-    ///   name directly off the carrier or — when scope-aware elaboration is needed —
-    ///   calls [`crate::machine::core::Scope::resolve_type_expr`] which
-    ///   memoizes the resolution per-scope.
-    ///
-    /// The carrier shape is required because `resolve_for` runs at `KFunction::bind`
-    /// time — before any body sees the slot — and the bind-time pass has no `Scope`
-    /// reference in hand. The earlier transitional `KType::Unresolved` carrier
-    /// (deleted in stage 2) routed the surface name through the elaborated-type
-    /// language; `TypeNameRef` keeps it on the value side where the rest of the
-    /// bind-time surface-name plumbing lives.
+    /// Slot-aware resolve. Identical to `resolve` except for `Type` into a `TypeExprRef`
+    /// slot: builtin shapes (`Number`, `List<Number>`, `Function<...>`) lower to
+    /// `KObject::KTypeValue`; bare user names lower to `KObject::TypeNameRef`, deferring
+    /// scope-aware elaboration to consumers via `Scope::resolve_type_expr`. Runs at
+    /// `KFunction::bind` time, which has no `Scope` in hand.
     pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> KObject<'a> {
         use crate::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
-            // Layer-1 cache: builtin-only resolution is surface-form-only, so the
-            // result is invariant across dispatches against this same `TypeExpr`.
-            //
-            // Cache storage is `KType<'static>` because the builtin-only path never
-            // carries arena-pinned `Module` / `Signature` references. The cached value
-            // contains no references; only the no-op `'a` parameter differs from the
-            // outer `KType<'a>` the caller needs. Cloning under a lifetime transmute
-            // is sound because the clone is independent owned data (no aliasing into
-            // the cache).
             if let Some(kt) = t.builtin_cache.get() {
                 // SAFETY: `KType<'static>` and `KType<'a>` have identical layout
                 // (lifetimes are zero-sized); the cache's `KType<'static>` carries
@@ -237,9 +187,7 @@ impl<'a> ExpressionPart<'a> {
                 return KObject::KTypeValue(lifted);
             }
             // Rebuild at the caller's lifetime, then stash a `'static` copy for the
-            // next resolve_for hit. Re-running `from_type_expr` for storage is cheap
-            // (the slow path is the recursive walk we just did) — keeps the cache
-            // soundness contract local to this function.
+            // next hit. Keeps the cache soundness contract local to this function.
             return match KType::<'a>::from_type_expr(t) {
                 Ok(kt) => {
                     if let Ok(static_kt) = KType::<'static>::from_type_expr(t) {
@@ -263,25 +211,18 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => KObject::Bool(*b),
             ExpressionPart::Literal(KLiteral::Null) => KObject::Null,
             ExpressionPart::Expression(e) => KObject::KExpression((**e).clone()),
-            // Sub-expression elements should already have been replaced with `Future`s by
-            // the scheduler; a raw `Expression` here round-trips as a `KExpression` value
-            // rather than its computed result.
-            // SigiledTypeExpr in `resolve()` should not occur: every SigiledTypeExpr is
-            // either dispatched through the dispatcher's SigiledTypeExpr fast lane (where
-            // it tail-replaces with the inner expression) or sub-Dispatched as a single-
-            // part KExpression wrapper (where the dispatcher unwraps it the same way).
-            // A bare `resolve()` here would mean a builtin extracted the raw part value
-            // without going through the dispatcher — which loses the type-context
-            // marker. Panic to surface that.
+            // Every SigiledTypeExpr must reach a value either through the dispatcher's
+            // fast lane or via sub-Dispatch — both unwrap it preserving the type-context
+            // marker. Reaching `resolve()` means a builtin grabbed the raw part and lost
+            // that marker.
             ExpressionPart::SigiledTypeExpr(_) => {
                 unreachable!("SigiledTypeExpr only valid in type-context dispatch")
             }
             ExpressionPart::ListLiteral(items) => {
                 KObject::list(items.iter().map(|p| p.resolve()).collect())
             }
-            // Sub-expression and bare-identifier dict entries should already have been
-            // resolved by the scheduler. Non-scalar keys reaching here are a scheduler bug
-            // — it's responsible for surfacing them as a structured `ShapeError` earlier.
+            // Non-scalar keys reaching here are a scheduler bug — it must surface them as
+            // a structured `ShapeError` before resolve.
             ExpressionPart::DictLiteral(pairs) => {
                 let mut map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>> = HashMap::new();
                 for (k, v) in pairs {
@@ -328,9 +269,7 @@ impl<'a> Clone for KExpression<'a> {
 
 /// A parsed Koan expression: an ordered sequence of `ExpressionPart`s.
 ///
-/// `span` and `file` reference the source region the parser saw. Both are
-/// `None` for hand-built ASTs (tests, builtin-synthesized fragments before
-/// per-builtin source registration lands).
+/// `span` and `file` are `None` for hand-built ASTs.
 pub struct KExpression<'a> {
     pub parts: Vec<Spanned<ExpressionPart<'a>>>,
     pub span: Option<Span>,
@@ -338,8 +277,7 @@ pub struct KExpression<'a> {
 }
 
 impl<'a> KExpression<'a> {
-    /// Spanless constructor — every parser/test caller that doesn't yet attribute
-    /// source goes through here. Span wiring populates `span`/`file` in later phases.
+    /// Spanless constructor; `span`/`file` populated by later phases.
     pub fn new(parts: Vec<Spanned<ExpressionPart<'a>>>) -> Self {
         KExpression { parts, span: None, file: None }
     }
@@ -357,11 +295,9 @@ impl<'a> KExpression<'a> {
             .collect()
     }
 
-    /// If `parts[1]` is a single `Type(t)` token, return its bare name. Used as the
-    /// dispatch-time placeholder extractor for typed-binder builtins (STRUCT, UNION,
-    /// MODULE, SIG) whose surface form is `<KEYWORD> <Name> = (<body>)`. Returns `None`
-    /// on shape mismatch; the builtin body is responsible for surfacing the structured
-    /// error (see [`crate::machine::core::kfunction::BinderNameFn`]).
+    /// Dispatch-time placeholder extractor for typed-binder builtins (`STRUCT <Name> = …`):
+    /// if `parts[1]` is a single `Type(t)`, returns its bare name; `None` on shape
+    /// mismatch. The builtin body surfaces the structured error.
     pub fn binder_name_from_type_part(&self) -> Option<String> {
         match &self.parts.get(1)?.value {
             ExpressionPart::Type(t) => Some(t.name.clone()),
@@ -383,12 +319,9 @@ impl<'a> KExpression<'a> {
         Some(out)
     }
 
-    /// Consuming counterpart of [`Self::borrow_inner_expressions`], shaped for right-fold
-    /// consumers: returns `(preceding, last)` where every preceding expression keeps its
-    /// source order and `last` is the rightmost inner expression — both already unwrapped
-    /// from `ExpressionPart::Expression`. Requires non-empty `parts`. On shape mismatch
-    /// (any non-`Expression` part, or empty) returns the original `KExpression` back
-    /// unmodified so the caller can pass through.
+    /// Consuming right-fold counterpart of [`Self::borrow_inner_expressions`]: returns
+    /// `(preceding, last)` with both unwrapped from `ExpressionPart::Expression`. On any
+    /// shape mismatch returns `self` back so the caller can pass through.
     pub fn try_take_inner_expressions_split(
         self,
     ) -> Result<(Vec<KExpression<'a>>, KExpression<'a>), Self> {

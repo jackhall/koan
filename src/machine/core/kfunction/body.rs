@@ -1,7 +1,5 @@
-//! Body-shape types: what a builtin body returns (`BodyResult`), the `fn`-pointer
-//! aliases for builtin bodies and binder-name hooks (`BuiltinFn`, `BinderNameFn`), and the
-//! `Body` enum that picks between a builtin pointer and a captured user-defined
-//! `KExpression`.
+//! Body-shape types: `BodyResult`, the builtin-body / binder-hook `fn`-pointer aliases,
+//! and the `Body` enum (builtin pointer vs captured `KExpression`).
 
 use std::rc::Rc;
 
@@ -17,50 +15,39 @@ use super::KFunction;
 
 /// What a builtin's body returns.
 ///
-/// `Tail { expr, frame: Some(f), .. }` installs the per-call `CallArena` `f` in the slot;
-/// the scheduler rewrites the slot's work to `Dispatch(expr)` and re-runs it, so a chain of
-/// tail calls reuses one slot. A TCO replace drops the slot's previous frame immediately;
-/// for user-fn invokes that's safe (the new child scope's `outer` is the FN's captured
-/// scope, not the previous frame's), and for builtins whose new child scope's `outer` IS
-/// the call site (MATCH), the new frame holds the previous frame's `Rc` via
-/// `CallArena::outer_frame` so the drop doesn't free memory still in use.
+/// `Tail { frame: Some(f), .. }` installs `f` as the slot's per-call frame and rewrites
+/// its work to `Dispatch(expr)`, so a chain of tail calls reuses one slot. The previous
+/// frame is dropped immediately; when the new child scope's `outer` IS the call site
+/// (MATCH), `f` must hold the prior `Rc` via `CallArena::outer_frame` to keep
+/// still-referenced memory alive. User-fn invokes are safe because the new child's
+/// `outer` is the FN's captured scope, not the prior frame's.
 ///
 /// `Tail { frame: None, .. }` keeps the slot's existing frame and scope.
 ///
-/// `DeferTo(id)` rewrites the slot's work to `Lift { from: id }`; the slot's terminal
-/// becomes whatever `id` produces. Used by binder bodies (MODULE, SIG) that schedule a
-/// `Combine` to wrap up their body statements: the Combine owns the finalize work and the
-/// binder's own slot lifts its terminal off the Combine. Same shape as `defer_to_lift`'s
-/// post-Bind park, exposed to bodies for combinator-style planning.
+/// `DeferTo(id)` rewrites the slot's work to `Lift { from: id }`. Used by binder bodies
+/// (MODULE, SIG) that schedule a `Combine` to finalize their body statements: the
+/// binder's slot lifts its terminal off the Combine.
 pub enum BodyResult<'a> {
     Value(&'a KObject<'a>),
     Tail {
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
-        /// User-fn reference attached to the slot for two purposes: the slot's Done arm
-        /// reads `signature.return_type` to enforce the declared return type at runtime,
-        /// and on error `function.summarize()` becomes the appended `Frame`'s function
-        /// name. `None` for builtin tails that are deferred-eval continuations, not calls.
+        /// Used by the slot's Done arm to enforce `signature.return_type` and to label
+        /// the appended `Frame` on error. `None` for builtin tails that are
+        /// deferred-eval continuations, not calls.
         function: Option<&'a KFunction<'a>>,
-        /// Lexical-block entry annotation. `None` means the tail continues in the same
-        /// lexical block as its slot's current chain (CONS-tail, builtin tail
-        /// continuations). `Some(scope_id)` means the tail enters a fresh lexical block
-        /// — MATCH / TRY arms, FN body resolved-return. The reinstall site in
-        /// `execute.rs`'s `NodeStep::Replace` arm prepends `(scope_id, 0)` to the
-        /// slot's chain when `function` is `None`; when `function` is `Some(f)` the
-        /// chain is assembled via the FN-body rule (see
-        /// `kfunction/invoke.rs::assemble_body_chain`).
+        /// `Some(id)` means the tail enters a fresh lexical block (MATCH / TRY arms,
+        /// FN body resolved-return); `None` continues the slot's current block (CONS
+        /// tail, builtin tail continuations). The reinstall site
+        /// (`compute_replace_chain` in `execute/scheduler/execute.rs`) prepends
+        /// `(id, 0)` when `function` is `None`; when `function` is `Some`, the chain
+        /// is assembled via `kfunction/invoke.rs::assemble_body_chain`.
         block_entry: Option<ScopeId>,
-        /// Body-scope chain index for an FN-body tail-replace (`block_entry: Some` +
-        /// `function: Some`) or a MATCH / TRY arm-body tail-replace (`block_entry:
-        /// Some` + `function: None`). `0` (the default) for single-statement bodies —
-        /// the body's lone statement sees only its own parameters / `it` binding
-        /// (both carved out via `nominal_binder: true`). For multi-statement bodies
-        /// where the slot tail-replaces into the *last* statement, this is `N` (one
-        /// past the earlier `1..N-1` siblings submitted via `add_dispatch_with_chain`
-        /// against the body / arm scope), so the strict `b.idx < c` predicate admits
-        /// every earlier sibling. Ignored when `block_entry: None` (TCO continuation
-        /// in the same lexical block).
+        /// Body-scope chain index for a block-entry tail-replace. `0` for
+        /// single-statement bodies. For multi-statement bodies tail-replacing into
+        /// the *last* statement, this is `N` so the strict `b.idx < c` predicate
+        /// admits the `1..N-1` siblings already submitted against the body / arm
+        /// scope. Ignored when `block_entry: None`.
         body_index: usize,
     },
     DeferTo(NodeId),
@@ -86,22 +73,15 @@ impl<'a> BodyResult<'a> {
         Self::tail_with_frame_at_index(expr, frame, function, 0)
     }
 
-    /// FN-body tail-replace with an explicit `body_index` for the body-scope chain
-    /// frame. `0` matches single-statement bodies (today's default); `N` lets the
-    /// FN slot tail-replace into the *last* statement of an N-statement body whose
-    /// earlier `N-1` siblings were submitted via `enter_block` (chain indices
-    /// `1..N-1`). The last statement at index `N` then sees every earlier sibling
-    /// under the strict `b.idx < c` predicate.
+    /// FN-body tail-replace with an explicit `body_index` (see [`BodyResult::Tail`]).
     pub fn tail_with_frame_at_index(
         expr: KExpression<'a>,
         frame: Rc<CallArena>,
         function: &'a KFunction<'a>,
         body_index: usize,
     ) -> Self {
-        // FN body entry: capture the per-call child scope's id before moving `frame`
-        // into the variant. The reinstall site (`compute_replace_chain` in
-        // `execute.rs`) reads `block_entry` to know this is an FN-body block-entry,
-        // and pulls the same scope id off `frame.scope()` to assemble the chain.
+        // Capture the scope id before `frame` moves into the variant; the reinstall
+        // site reads it off `frame.scope()` to assemble the chain.
         let body_scope_id = frame.scope().id;
         BodyResult::Tail {
             expr,
@@ -112,10 +92,7 @@ impl<'a> BodyResult<'a> {
         }
     }
 
-    /// Tail-into-a-new-lexical-block constructor for builtins that don't carry a
-    /// `&KFunction`. MATCH and TRY arms use this — they prepend `(scope_id, 0)` to the
-    /// slot's chain at the reinstall site, with `function: None` so the FN-body
-    /// assembly path is skipped.
+    /// Block-entry tail-replace for builtins without a `&KFunction` (MATCH / TRY arms).
     pub fn tail_with_block(
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
@@ -124,13 +101,7 @@ impl<'a> BodyResult<'a> {
         Self::tail_with_block_at_index(expr, frame, scope_id, 0)
     }
 
-    /// Block-entry tail-replace with an explicit chain index for the freshly-
-    /// pushed block frame. `0` (the default) for single-statement arm bodies;
-    /// `N` lets MATCH / TRY tail-replace into the *last* statement of an N-
-    /// statement arm body whose earlier `N-1` siblings were submitted via
-    /// `enter_block` against the arm's per-call child scope (chain indices
-    /// `1..N-1`). The last statement at index `N` sees every earlier sibling
-    /// under the strict `b.idx < c` predicate.
+    /// Block-entry tail-replace with an explicit `body_index` (see [`BodyResult::Tail`]).
     pub fn tail_with_block_at_index(
         expr: KExpression<'a>,
         frame: Option<Rc<CallArena>>,
@@ -150,10 +121,8 @@ impl<'a> BodyResult<'a> {
         BodyResult::Err(e)
     }
 
-    /// Test helper for bodies that contractually only yield `Value` or `Err`:
-    /// extracts the `Value` payload, panicking with `ctx` and the actual
-    /// variant name otherwise. Collapses the 4-arm match pattern that used to
-    /// be repeated across builtin unit tests.
+    /// Test helper for bodies that contractually yield only `Value` or `Err`:
+    /// extracts the `Value` payload, panicking with `ctx` otherwise.
     #[cfg(test)]
     pub fn expect_value(self, ctx: &str) -> &'a KObject<'a> {
         match self {
@@ -166,10 +135,10 @@ impl<'a> BodyResult<'a> {
 }
 
 /// Split an FN / MATCH-arm / TRY-arm body into top-level statements. Mirrors the
-/// all-`Expression` detection used by [`super::scheduler_handle::SchedulerHandle::enter_body_block`]
-/// so a body of bare sub-expressions (`((s_0) (s_1) ... (s_{N-1}))`) yields `N`
-/// separately-dispatchable statements; any non-`Expression` part (or `< 2` parts)
-/// leaves the body as a single statement. Always returns at least one element.
+/// all-`Expression` detection used by
+/// [`super::scheduler_handle::SchedulerHandle::enter_body_block`]; any non-`Expression`
+/// part or fewer than two parts leaves the body as a single statement. Always returns
+/// at least one element.
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
     let is_multi = body.parts.len() >= 2
         && body.parts.iter().all(|p| matches!(p.value, ExpressionPart::Expression(_)));
@@ -185,42 +154,34 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
     }
 }
 
-/// Builtin body. `for<'a>` so a single `fn` works for any caller scope lifetime;
-/// `Scope` is `&'a` (not `&mut`) because every node spawned during the body shares it
-/// — mutability is interior via `RefCell`.
+/// Builtin body. `Scope` is `&'a` (not `&mut`) — every node spawned during the body
+/// shares it; mutability is interior via `RefCell`.
 pub type BuiltinFn = for<'a> fn(
     &'a Scope<'a>,
     &mut dyn SchedulerHandle<'a>,
     ArgumentBundle<'a>,
 ) -> BodyResult<'a>;
 
-/// Dispatch-time name extractor for a binder builtin. `run_dispatch` calls it on the
-/// unresolved expression *before* sub-deps are scheduled; returning `Some(name)` installs
-/// `placeholders[name] = NodeId(this_slot)` in the dispatching scope so a sibling looking
-/// up `name` while this slot's body is still in flight parks on this slot (see
-/// [`crate::machine::core::Scope::resolve`]). `None` opts out.
+/// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
+/// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the
+/// body is in flight parks on this slot (see [`crate::machine::core::Scope::resolve`]).
 pub type BinderNameFn = for<'a> fn(&KExpression<'a>) -> Option<String>;
 
-/// Dispatch-time bucket-key extractor for a binder builtin whose body registers a
-/// callable function (`FN`, `FUNCTOR`). Returns the `UntypedKey` for a *call* to the
-/// to-be-registered overload — derived from the binder's captured signature
-/// expression (e.g. `(MAKESET Er :OrderedSig)` → `[Keyword("MAKESET"), Slot]`). The
-/// driver pairs the returned key with the binder's slot id and installs it in
-/// `bindings.pending_overloads` so a sibling bare-arg call form parks on the
-/// producer instead of failing dispatch. `None` opts out (everything other than FN /
-/// FUNCTOR).
+/// Dispatch-time bucket-key extractor for a binder that registers a callable
+/// (`FN`, `FUNCTOR`). Returns the `UntypedKey` for a *call* to the to-be-registered
+/// overload (e.g. `(MAKESET Er :OrderedSig)` → `[Keyword("MAKESET"), Slot]`); the
+/// driver installs it in `bindings.pending_overloads` so a sibling call form parks
+/// on the producer instead of failing dispatch.
 ///
-/// Separate from [`BinderNameFn`] because the two extractors serve different consumers:
-/// `BinderNameFn` keys forward-reference *name* resolution (consulted via
-/// `Scope::resolve`); `BinderBucketFn` keys forward-reference *dispatch* resolution
-/// (consulted via the no-bucket fallback in `resolve_dispatch`). Keying by the
-/// inner-call bucket — not just the lead keyword — keeps overloads that share a head
-/// keyword but differ in later keywords (`MAKESET _` vs `MAKESET _ USING _`) from
-/// colliding on the park edge.
+/// Separate from [`BinderNameFn`] because the two key different resolvers:
+/// `BinderNameFn` for `Scope::resolve`, `BinderBucketFn` for the no-bucket fallback
+/// in `resolve_dispatch`. Keying on the full bucket (not just the lead keyword)
+/// keeps overloads sharing a head keyword but differing in later keywords
+/// (`MAKESET _` vs `MAKESET _ USING _`) from colliding on the park edge.
 pub type BinderBucketFn = for<'a> fn(&KExpression<'a>) -> Option<UntypedKey>;
 
-/// An enum (rather than `Box<dyn Fn>`) so the `UserDefined` case stays introspectable —
-/// TCO and error-frame attribution both need to walk into the captured expression.
+/// Enum (not `Box<dyn Fn>`) so `UserDefined` stays introspectable — TCO and
+/// error-frame attribution walk into the captured expression.
 pub enum Body<'a> {
     Builtin(BuiltinFn),
     UserDefined(KExpression<'a>),

@@ -1,10 +1,8 @@
 //! Machine — the runtime that maps a parsed `KExpression` to a value by selecting the
 //! `KFunction` whose signature matches its parts and running its `Body`. Submodules:
 //!
-//! - `core` — `Scope`, `RuntimeArena`, `KError`, `KFuture`, scheduler glue, plus
-//!   the `kfunction` submodule (`KFunction`, `Body`, `BodyResult`, `ArgumentBundle`,
-//!   scheduler handle) — kept together because the two have bidirectional traffic
-//!   that any top-level split spuriously fans out.
+//! - `core` — `Scope`, `RuntimeArena`, `KError`, `KFuture`, scheduler glue, and the
+//!   `kfunction` submodule (`KFunction`, `Body`, `BodyResult`, `ArgumentBundle`).
 //! - `model` — `KType`, `KObject`, `Module`, `Signature`, signature traits.
 //! - `execute` — top-level interpret loop and scheduler driver.
 

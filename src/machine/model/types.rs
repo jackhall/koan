@@ -21,9 +21,7 @@ pub use signature::{
 #[allow(unused_imports)]
 pub use signature::Specificity;
 pub use typed_field_list::{parse_typed_field_list_via_elaborator, FieldListOutcome};
-// Phase 5 generic-destructuring unifier — the reusable per-call type-parameter binding
-// core. Exported as the seam the FN-signature deferral integration will consume; not yet
-// wired into `invoke.rs` (see the roadmap item's remaining-work note), so the re-export is
-// unused at the crate level for now.
+// Generic-destructuring unifier; re-exported as the seam for FN-signature deferral but
+// not yet consumed at the crate level.
 #[allow(unused_imports)]
 pub use unify::{unify_slot, UnifyResult};

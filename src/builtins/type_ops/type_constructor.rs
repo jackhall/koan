@@ -4,17 +4,11 @@ use crate::machine::{ArgumentBundle, BodyResult, Scope, ScopeId, SchedulerHandle
 
 use crate::builtins::err;
 
-/// `TYPE_CONSTRUCTOR <param:TypeExprRef>` → `TypeExprRef` carrying a *template*
-/// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names: vec![<param>] }, .. }`
-/// with `scope_id: 0` and a placeholder `name` (`"_typeconstructor"`). The returned value
-/// is a declaration template — `ascribe.rs:body_opaque` re-mints a fresh per-call
-/// `scope_id` and the binding's slot name when the surrounding SIG is opaquely ascribed,
-/// mirroring how `kind: Module` abstract-type slots get minted today. Stage 2 ships
-/// arity-1 only; the `param_names` slot carries exactly one entry.
-///
-/// The `param` slot is read through `require_ktype` — the dispatcher has already resolved
-/// either a bare `Type` token or a parameterized leaf into a `KTypeValue(_)`; we surface
-/// its `name()` as the constructor's parameter symbol.
+/// `TYPE_CONSTRUCTOR <param:TypeExprRef>` → `TypeExprRef` carrying a template
+/// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`
+/// with `ScopeId::SENTINEL` and a placeholder `name` (`"_typeconstructor"`). The
+/// surrounding opaque ascription (`ascribe.rs:body_opaque`) re-mints both with the
+/// binding's slot name and a per-call `scope_id`. Arity-1 only.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -24,9 +18,6 @@ pub fn body<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    // The parameter symbol is the bare Type-token name (`T`, `Elt`, ...). Structural
-    // or parameterized shapes are rejected — `(TYPE_CONSTRUCTOR List<Number>)` would
-    // be meaningless as a quantifier symbol.
     let param = param_kt.name();
     BodyResult::Value(
         scope.arena.alloc(KObject::KTypeValue(KType::UserType {
@@ -45,13 +36,7 @@ mod tests {
     use crate::machine::model::{KObject, KType};
     use crate::machine::{BindingIndex, RuntimeArena, ScopeId};
 
-    // ---------- Module-system stage 2 Workstream B: TYPE_CONSTRUCTOR builtin ----------
-
-    /// `(TYPE_CONSTRUCTOR Type)` returns a `KTypeValue` wrapping a template
-    /// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names: ["T"] }, .. }`
-    /// with the sentinel placeholder name (`_typeconstructor`) and `scope_id: 0`. The
-    /// ascription site re-mints with the slot's declared name and a fresh per-call
-    /// `scope_id`; this test just pins the template shape the builtin returns.
+    /// Pins the template shape the builtin returns before opaque ascription re-mints it.
     #[test]
     fn type_constructor_builtin_returns_ktype_value() {
         let arena = RuntimeArena::new();
@@ -70,9 +55,7 @@ mod tests {
         }
     }
 
-    /// `SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))` parses and binds. The SIG's
-    /// decl-scope carries a `KType::UserType { kind: TypeConstructor { .. }, .. }` template
-    /// in `bindings.types` under `Wrap`. Pins the LET-routing + register_type path.
+    /// Pins the LET-routing + `register_type` path for a higher-kinded SIG slot.
     #[test]
     fn sig_declares_higher_kinded_slot() {
         let arena = RuntimeArena::new();
@@ -91,21 +74,10 @@ mod tests {
         }
     }
 
-    /// FN-def whose return type is `Wrap<Number>` against a root-scope-bound
-    /// TypeConstructor `Wrap`. Pins the dispatch path: `resolve_for` turns the
-    /// parameterized type into a `TypeNameRef` carrier, `elaborate_type_expr` runs
-    /// the new ConstructorApply arm, and the FN's stored signature carries a
-    /// `KType::ConstructorApply { ctor: Wrap, args: [Number] }`. Isolates the path
-    /// from SIG-body forward-reference parking (covered by `monad_signature_smoke`).
-    /// Root-scope LET is unchanged by the VAL refactor — only SIG-body lowercase
-    /// LETs migrated.
-    ///
-    /// Disabled with the deletion of the dispatcher's `TypeCall` arm: a
-    /// user-declared TypeConstructor like `Wrap` no longer routes the legacy
-    /// positional `:(Wrap Number)` shape through the dispatcher (no keyworded
-    /// overload exists for user-defined constructors). Re-enable once the
-    /// type-language dispatch path covers user-defined constructor application —
-    /// see `roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md`.
+    /// Pins the dispatch path for an FN return type `Wrap<Number>` against a
+    /// root-scope-bound TypeConstructor. Re-enable once user-defined constructor
+    /// application gets a keyworded overload — see
+    /// `roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md`.
     #[ignore = "user-defined TypeConstructor `:(Wrap T)` needs a keyworded application overload"]
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
@@ -130,7 +102,6 @@ mod tests {
             Ok(_) => {}
             Err(e) => panic!("FN with :(Wrap Number) return failed: {}", e),
         }
-        // Verify the FN's return type is ConstructorApply<Wrap, [Number]>.
         let pure = scope.bindings().expect_value("pure");
         let f = match pure {
             KObject::KFunction(f, _) => *f,
@@ -145,30 +116,9 @@ mod tests {
         }
     }
 
-    /// Module-system stage 2 Workstream B2: end-to-end smoke test for the monad-shaped
-    /// signature. `SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)) (VAL pure:
-    /// Function<(Number) -> Wrap<Number>>))` parses, the SIG body's VAL slot elaborates
-    /// `Function<(Number) -> Wrap<Number>>` through the existing `Function` arm in
-    /// `elaborate_type_expr` and the inner `Wrap<Number>` through the new
-    /// `ConstructorApply` arm. The resulting `pure` member is bound under the SIG's
-    /// decl-scope as a `KTypeValue(KFunction { args, ret: ConstructorApply{Wrap, …} })`
-    /// carrier (the post-VAL slot shape; pre-VAL the slot bound the ascription-by-example
-    /// FN value directly). Load-bearing for `monadic-side-effects.md`.
-    ///
-    /// `Number` is used as the parameter type rather than `T` because koan's token
-    /// classification rejects single-letter Type tokens (needs ≥1 lowercase). The
-    /// roadmap-decided surface form `(TYPE_CONSTRUCTOR T)` is conceptual; the runtime
-    /// param symbol is whatever Type-classified token the user writes (here `Type`,
-    /// a builtin meta-type name).
-    ///
-    /// SIG-body order matters: `LET Wrap` precedes the `VAL pure` slot so the inner
-    /// `Wrap<Number>` resolves synchronously against the SIG decl_scope's
-    /// `bindings.types["Wrap"]` entry. VAL's structural-`TypeNameRef` arm elaborates
-    /// synchronously and surfaces a ShapeError on park — see `val_decl.rs`'s body for
-    /// the rationale (no safe park route for structural shapes today).
-    ///
-    /// Disabled with the deletion of the dispatcher's `TypeCall` arm: see
-    /// `fn_return_type_constructor_apply_root_scope` for context.
+    /// End-to-end smoke for a monad-shaped signature: `LET Wrap` precedes
+    /// `VAL pure` so the inner `Wrap<Number>` resolves synchronously against the
+    /// SIG decl-scope's `bindings.types["Wrap"]` entry.
     #[ignore = "user-defined TypeConstructor `:(Wrap T)` needs a keyworded application overload"]
     #[test]
     fn monad_signature_smoke() {
@@ -192,21 +142,15 @@ mod tests {
                 panic!("expr {} errored: {}", i, e);
             }
         }
-        // The SIG must have bound — pull it out of scope and walk its decl_scope.
         let s = match scope.bindings().data().get("Monad").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Signature(s))) => *s,
             other => panic!("Monad must bind a KSignature, got {:?}", other.map(|o| o.ktype())),
         };
-        // `Wrap` lives in the SIG's `bindings.types` as a TypeConstructor template.
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         assert!(matches!(
             wrap_kt,
             KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }
         ));
-        // `pure` is bound in the SIG's `bindings.data` as a `KTypeValue` carrying the
-        // declared `Function<(Number) -> Wrap<Number>>` type (post-VAL slot shape).
-        // The inner `Wrap<Number>` elaborated against the SIG decl_scope as a
-        // `ConstructorApply { ctor: Wrap, args: [Number] }`.
         let pure = s.decl_scope().bindings().expect_value("pure");
         let kt = match pure {
             KObject::KTypeValue(kt) => kt,
@@ -233,11 +177,8 @@ mod tests {
         }
     }
 
-    /// `(M.Wrap)` after opaque ascription resolves through the new module's
-    /// `type_members` to the per-call-minted constructor variant. Pins the ATTR path's
-    /// flow: `attr.rs` routes `Foo.Wrap` through `type_members` lookup, and the new
-    /// `UserTypeKind::TypeConstructor` variant flows through the existing
-    /// `KType::UserType` arm unchanged.
+    /// `(M.Wrap)` after opaque ascription resolves through the module's
+    /// `type_members` to the per-call-minted constructor variant.
     #[test]
     fn module_attr_access_returns_type_constructor() {
         let arena = RuntimeArena::new();
@@ -248,7 +189,6 @@ mod tests {
              MODULE IntList = ((LET Wrap = Number))\n\
              LET Mo = (IntList :| MonadSig)",
         );
-        // Mo's type_members must carry a TypeConstructor slot under `Wrap`.
         let mo = match scope.bindings().data().get("Mo").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
             other => panic!("Mo should be a module, got {:?}", other.map(|o| o.ktype())),
@@ -257,7 +197,6 @@ mod tests {
         match wrap_t {
             Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, name, .. }) => {
                 assert_eq!(name, "Wrap");
-                // The per-call mint carries the SIG's declared param-name list.
                 assert_eq!(param_names, vec!["Type".to_string()]);
             }
             other => panic!(

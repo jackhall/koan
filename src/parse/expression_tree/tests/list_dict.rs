@@ -1,6 +1,5 @@
 //! `list_dict` parse cases for `expression_tree::parse`.
 
-
 use super::{top, tree};
 
 #[test]
@@ -47,8 +46,6 @@ fn list_inside_paren_expression() {
 
 #[test]
 fn paren_expression_inside_list() {
-    // Sub-expressions inside list literals stay as Expression elements; the scheduler is
-    // responsible for resolving them at runtime via the Combine node path.
     assert_eq!(
         tree("[(LET x = 1) y]").unwrap(),
         "[L[[t(LET) t(x) t(=) n(1)] t(y)]]",
@@ -67,8 +64,6 @@ fn close_bracket_without_open_errors() {
 
 #[test]
 fn close_paren_when_innermost_is_list_errors() {
-    // `[1 2)` opens a List frame then hits `)` before a `]` — the bracket was never
-    // closed. The diagnostic reports the unclosed `[`, not an internal frame mismatch.
     let err = tree("[1 2)").unwrap_err();
     assert!(
         err.contains("unclosed '['"),
@@ -78,7 +73,6 @@ fn close_paren_when_innermost_is_list_errors() {
 
 #[test]
 fn close_paren_when_innermost_is_dict_errors() {
-    // Symmetric to the list case for `{a: 1)`.
     let err = tree("{a: 1)").unwrap_err();
     assert!(
         err.contains("unclosed '{'"),
@@ -88,8 +82,7 @@ fn close_paren_when_innermost_is_dict_errors() {
 
 #[test]
 fn open_bracket_glued_to_token_errors() {
-    // List literals must stand alone — `foo[2]` is no longer valid (was compound
-    // indexing). The user must write `foo [2]` if they actually want a sibling list.
+    // List literals must stand alone — `foo [2]` for a sibling list.
     assert!(tree("foo[2]").is_err());
 }
 
@@ -100,8 +93,6 @@ fn close_bracket_glued_to_token_errors() {
 
 #[test]
 fn open_bracket_glued_to_close_paren_errors() {
-    // `(x)[2]` is also forbidden: the result of a paren-expression can't be glued to a
-    // list literal.
     assert!(tree("(x)[2]").is_err());
 }
 
@@ -122,7 +113,6 @@ fn list_after_whitespace_is_fine() {
 
 #[test]
 fn list_literal_with_commas() {
-    // Commas inside a list act as whitespace.
     assert_eq!(tree("[1, 2, 3]").unwrap(), "[L[n(1) n(2) n(3)]]");
 }
 
@@ -143,8 +133,6 @@ fn list_literal_with_mixed_separators() {
 
 #[test]
 fn adjacent_brackets_in_nested_list_are_fine() {
-    // `[[1 2]]` is two `[` then two `]` — each `[` is preceded by `(` or `[`, and each
-    // `]` is followed by `]` or `)`. All adjacency rules satisfied.
     assert_eq!(tree("[[1 2]]").unwrap(), "[L[L[n(1) n(2)]]]");
 }
 
@@ -165,7 +153,7 @@ fn two_pairs_with_comma() {
 
 #[test]
 fn two_pairs_without_comma() {
-    // Auto-commit rule: `b` arriving while value=[1] commits the prior pair.
+    // Auto-commit: `b` arriving while value=[1] commits the prior pair.
     assert_eq!(
         tree("{a: 1 b: 2}").unwrap(),
         "[D{t(a): n(1), t(b): n(2)}]",
@@ -240,7 +228,6 @@ fn trailing_comma_allowed() {
 
 #[test]
 fn unbalanced_colon_errors() {
-    // Second `:` inside the same value position is rejected.
     assert!(tree("{a: 1: 2}").is_err());
 }
 
@@ -256,25 +243,19 @@ fn key_without_colon_errors() {
 
 #[test]
 fn colon_outside_dict_with_space_errors() {
-    // `: ` outside a dict frame is a parse error under the type-sigil regime — the colon
-    // must be glued to its operand (`:Number` for bare, `:(List ...)` for parameterized).
-    // The string below is built from pieces so source-rewrite tooling can't migrate the
-    // colon away — the point of the test is precisely the bad-glue form.
+    // Outside a dict, `:` must be glued to its operand (`:Number`, `:(List ...)`).
+    // String built from pieces so source-rewrite tooling can't migrate the colon away.
     let bad: String = format!("a{}{} Number", ':', "");
     assert!(tree(&bad).is_err());
 }
 
 #[test]
 fn glued_colon_outside_dict_emits_type() {
-    // Glued `:T` produces an `ExpressionPart::Type` directly, no `Keyword(":")` in between.
     assert_eq!(tree("a :Number").unwrap(), "[t(a) T(Number)]");
 }
 
 #[test]
 fn comma_in_expression_is_whitespace() {
-    // `,` inside an expression frame is a no-op — same parsed shape as whitespace.
-    // Lets future named-argument parameter lists use commas as visual separators without
-    // affecting the tree.
     assert_eq!(tree("a, b").unwrap(), tree("a b").unwrap());
     assert_eq!(tree("(a,, b)").unwrap(), tree("(a b)").unwrap());
     assert_eq!(tree("(a :Number, b :Str)").unwrap(), tree("(a :Number b :Str)").unwrap());
@@ -302,12 +283,9 @@ fn close_brace_glued_to_token_errors() {
 
 #[test]
 fn multiline_dict_via_top_level_pipeline() {
-    // Multi-line dict goes through the full `parse` pipeline since `collapse_whitespace`
-    // is the part that handles continuation. `tree` skips that step so we use `top`.
+    // Multi-line continuation lives in `collapse_whitespace`, which `tree` skips — use `top`.
     assert_eq!(
         top("LET d = {\n  a: 1\n  b: 2\n}").unwrap(),
         vec!["[t(LET) t(d) t(=) D{t(a): n(1), t(b): n(2)}]"],
     );
 }
-
-// --- Parameterized type tests (Design-B `:(...)` sigil) ---

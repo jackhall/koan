@@ -9,8 +9,6 @@ use crate::machine::execute::Scheduler;
 
 use super::capture_program_output;
 
-/// A typed parameter records its declared `KType` on the registered signature, rather
-/// than collapsing to `Any` as it did before per-param annotations existed.
 #[test]
 fn fn_typed_param_records_ktype_on_signature() {
     let arena = RuntimeArena::new();
@@ -28,7 +26,6 @@ fn fn_typed_param_records_ktype_on_signature() {
     }
 }
 
-/// A call whose argument satisfies the parameter type dispatches into the body.
 #[test]
 fn fn_typed_param_dispatches_on_matching_call() {
     let arena = RuntimeArena::new();
@@ -38,9 +35,8 @@ fn fn_typed_param_dispatches_on_matching_call() {
     assert!(matches!(result, KObject::Number(n) if *n == 7.0));
 }
 
-/// A call whose argument doesn't satisfy the parameter type fails at dispatch with
-/// `DispatchFailed` (the per-slot type check filters out the only candidate, so the
-/// scope chain runs out without a match). Same path as builtins.
+/// Mismatched arg: per-slot type check filters out the only candidate, the scope chain
+/// runs out, and the queue stalls — surfaces as `DispatchFailed` from `execute()` itself.
 #[test]
 fn fn_typed_param_rejects_mismatched_call() {
     let arena = RuntimeArena::new();
@@ -48,9 +44,6 @@ fn fn_typed_param_rejects_mismatched_call() {
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let mut sched = Scheduler::new();
     let _ = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
-    // The dispatch failure surfaces via `execute()` here (the queue can't make
-    // progress past the unmatchable call). The other shape — `execute() -> Ok` plus
-    // a per-slot Err — is what return-type mismatches use; this case is different.
     let err = sched.execute().expect_err("DOUBLE \"hi\" should fail dispatch");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
@@ -59,8 +52,7 @@ fn fn_typed_param_rejects_mismatched_call() {
 }
 
 /// Two FNs sharing a shape but differing on parameter type both register, and dispatch
-/// routes each call to the body whose type signature matches. Exercises the existing
-/// slot-specificity path now that user-fns can carry concrete types.
+/// routes each call to the body whose type signature matches.
 #[test]
 fn fn_overloads_dispatch_by_param_type() {
     let bytes = capture_program_output(
@@ -72,8 +64,6 @@ fn fn_overloads_dispatch_by_param_type() {
     assert_eq!(bytes, b"number\nstring\n");
 }
 
-/// A bare identifier without `: Type` in a parameter slot is rejected with a
-/// `ShapeError` naming the offending parameter.
 #[test]
 fn fn_param_without_annotation_is_rejected() {
     let arena = RuntimeArena::new();
@@ -92,8 +82,6 @@ fn fn_param_without_annotation_is_rejected() {
     assert!(!fn_is_registered(scope, "DOUBLE"), "DOUBLE should not register");
 }
 
-/// An unknown type name in a parameter slot surfaces as a `ShapeError` mentioning the
-/// bad name, mirroring the return-type case.
 #[test]
 fn fn_param_with_unknown_type_name_is_rejected() {
     let arena = RuntimeArena::new();
@@ -111,9 +99,8 @@ fn fn_param_with_unknown_type_name_is_rejected() {
     );
 }
 
-/// Comma-separated parameter triples parse the same as whitespace-separated ones —
-/// the parser strips commas inside expression frames, so `(x: Number, y: Number)`
-/// and `(x: Number y: Number)` are interchangeable.
+/// Commas inside expression frames are stripped, so comma- and whitespace-separated
+/// parameter triples are interchangeable.
 #[test]
 fn fn_comma_separated_typed_params_register() {
     let bytes = capture_program_output(

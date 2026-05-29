@@ -11,18 +11,14 @@ use crate::machine::model::types::{KType, Parseable, Serializable, SignatureElem
 #[cfg(test)]
 mod tests;
 
-/// Reference to a [`KObject`] that is statically guaranteed not to be a
-/// [`KObject::Wrapped`]. The only constructor is [`Self::peel`], which collapses any
-/// `Wrapped` layer at construction time; by induction (every prior construction went
-/// through the same peel), peeling one level is enough. Used as the field type of
-/// `KObject::Wrapped.inner` so the newtype-over-newtype collapse invariant is encoded
-/// in the type rather than enforced by caller discipline.
+/// Reference to a [`KObject`] statically guaranteed not to be a [`KObject::Wrapped`].
+/// The sole constructor [`Self::peel`] collapses any `Wrapped` layer; by induction
+/// peeling one level suffices. Encodes the newtype-over-newtype collapse invariant in
+/// the type rather than caller discipline.
 #[derive(Copy, Clone)]
 pub struct NonWrappedRef<'a>(&'a KObject<'a>);
 
 impl<'a> NonWrappedRef<'a> {
-    /// Sole constructor. Peels any `Wrapped` layer so the wrapped reference is
-    /// invariantly not to a `Wrapped`.
     pub fn peel(value: &'a KObject<'a>) -> Self {
         match value {
             KObject::Wrapped { inner, .. } => *inner,
@@ -35,14 +31,11 @@ impl<'a> NonWrappedRef<'a> {
     }
 }
 
-/// Runtime value: scalars, collections, an unevaluated expression, a bound-but-unrun task, or a
-/// reference to a function in some scope. The universal value type that `KFunction`s consume
-/// and produce; implements `Parseable` so values can be compared and rendered uniformly.
+/// Runtime value: the universal type that `KFunction`s consume and produce.
 ///
-/// Composite payloads (`List`, `Dict`, `Tagged`, `Struct`, `TaggedUnionType`) are
-/// `Rc`-shared under an immutable-value contract: a future mutable-list builtin would need
-/// `Rc::make_mut` at the mutation site. `Struct.fields` uses `IndexMap` so iteration order
-/// matches schema declaration order.
+/// Composite payloads are `Rc`-shared under an immutable-value contract; a future
+/// mutable-list builtin would need `Rc::make_mut` at the mutation site. `Struct.fields`
+/// uses `IndexMap` so iteration matches declaration order.
 ///
 /// `KFunction` and `KFuture` carry an `Option<Rc<CallArena>>` lifecycle anchor; see
 /// [memory-model.md § Closure escape](../../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
@@ -51,15 +44,14 @@ pub enum KObject<'a> {
     KString(String),
     Bool(bool),
     /// List value. The second field is the memoized/ascribed element type: at fresh
-    /// construction (`KObject::list`) it is the join (LUB) of the contents, computed once
-    /// under the immutable-`Rc` contract; at an annotated boundary it is re-stamped to the
-    /// declared element type (coarsening included). `ktype()` reads this field directly
-    /// rather than re-walking the contents. Construct via [`KObject::list`] /
-    /// [`KObject::list_with_type`]; never the tuple directly outside this module.
+    /// construction the join (LUB) of the contents under the immutable-`Rc` contract; at
+    /// an annotated boundary re-stamped to the declared element type (coarsening
+    /// included). Construct via [`KObject::list`] / [`KObject::list_with_type`]; never
+    /// the tuple directly outside this module.
     List(Rc<Vec<KObject<'a>>>, Box<KType<'a>>),
     /// Dict value. The second/third fields are the memoized/ascribed key + value types,
-    /// computed once at construction (`KObject::dict`) as the join of the keys / values, or
-    /// re-stamped at an annotated boundary. `ktype()` reads them directly.
+    /// computed as the join of the keys / values at fresh construction or re-stamped at
+    /// an annotated boundary.
     Dict(
         Rc<HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>>,
         Box<KType<'a>>,
@@ -68,37 +60,31 @@ pub enum KObject<'a> {
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
-    /// Tagged-union schema. `(name, scope_id)` is the declared type's identity —
-    /// `name` is the declared type name (`Maybe`), `scope_id` is the declaring scope's
-    /// `ScopeId` and uses the same scheme `Module::scope_id()` does. `ktype()` reports
-    /// `KType::Type` (the schema is a value *of* the meta-type); `Tagged` *values*
-    /// synthesize `KType::UserType { kind: Tagged, .. }` from these identity fields,
-    /// which `crate::builtins::tagged_union::construct` copies onto each
-    /// produced value.
+    /// Tagged-union schema. `(name, scope_id)` is the declared type's identity (same
+    /// scheme as `Module::scope_id()`). `ktype()` reports `KType::Type` — the schema is
+    /// a value *of* the meta-type; `Tagged` values synthesize
+    /// `KType::UserType { kind: Tagged, .. }` from these identity fields.
     TaggedUnionType {
         schema: Rc<HashMap<String, KType<'a>>>,
         name: String,
         scope_id: ScopeId,
     },
-    /// Struct schema. `(scope_id, name)` is the declared type's identity — same scheme
-    /// as `TaggedUnionType`. `ktype()` reports `KType::Type`; produced `Struct` values
-    /// synthesize `KType::UserType { kind: Struct, .. }` from these identity fields,
-    /// copied onto each value by `crate::builtins::struct_value::construct`.
+    /// Struct schema. `(scope_id, name)` is the declared type's identity. `ktype()`
+    /// reports `KType::Type`; `Struct` values synthesize
+    /// `KType::UserType { kind: Struct, .. }` from these identity fields.
     StructType {
         name: String,
         scope_id: ScopeId,
         fields: Rc<Vec<(String, KType<'a>)>>,
     },
-    /// Tagged-union value. `(name, scope_id)` carries the declaring schema's identity
-    /// through to the value, populated by `crate::builtins::tagged_union::construct` from the schema
-    /// in the bundle. `ktype()` synthesizes `KType::UserType { kind: Tagged, .. }`
-    /// from these fields so dispatch on type identity sees the declared union.
+    /// Tagged-union value. `(name, scope_id)` carries the schema's identity through to
+    /// the value; `ktype()` synthesizes `KType::UserType { kind: Tagged, .. }` so
+    /// dispatch on type identity sees the declared union.
     ///
     /// `type_args` carries the value's runtime type arguments for a parameterized union
-    /// (`Result<T, E>`): empty (`Rc::new(vec![])`) means erased — `ktype()` reports the
-    /// bare `UserType` as before — and when populated `ktype()` synthesizes
-    /// `KType::ConstructorApply { ctor, args: type_args }` so dispatch and slot admission
-    /// see the full instantiation. Populated by ascription stamping at annotated boundaries.
+    /// (`Result<T, E>`): empty means erased; populated, `ktype()` synthesizes
+    /// `KType::ConstructorApply` so dispatch and slot admission see the full
+    /// instantiation. Populated by ascription stamping at annotated boundaries.
     Tagged {
         tag: String,
         value: Rc<KObject<'a>>,
@@ -106,46 +92,38 @@ pub enum KObject<'a> {
         name: String,
         type_args: Rc<Vec<KType<'a>>>,
     },
-    /// Struct value. `(name, scope_id)` carries the declaring schema's identity through
-    /// to the value, populated by `crate::builtins::struct_value::construct`. `ktype()` synthesizes
-    /// `KType::UserType { kind: Struct, .. }` from these fields.
+    /// Struct value. `(name, scope_id)` carries the schema's identity through to the
+    /// value; `ktype()` synthesizes `KType::UserType { kind: Struct, .. }`.
     Struct {
         name: String,
         scope_id: ScopeId,
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
     /// First-class type value carrying the elaborated `KType` directly. The parser's
-    /// surface `TypeExpr` is lowered at the seam (`ExpressionPart::resolve_for` for bare
-    /// `Type(_)` tokens, the type-builtins for parameterized sub-dispatches) so consumers
-    /// downstream never see surface syntax again. Slot kind is still `KType::TypeExprRef`;
-    /// the slot is the dispatch-position marker, the variant is the runtime value.
+    /// surface `TypeExpr` is lowered at the seam so downstream consumers never see
+    /// surface syntax again. Slot kind is still `KType::TypeExprRef`; the slot is the
+    /// dispatch-position marker, the variant is the runtime value.
     ///
-    /// Post-collapse this is the sole value-side carrier for first-class modules and
-    /// signatures too: a module value is `KTypeValue(KType::Module { module, frame })`,
-    /// a signature value is `KTypeValue(KType::Signature(s))`. The dedicated
-    /// `KModule` / `KSignature` variants retired with the type-language collapse.
+    /// Also the value-side carrier for first-class modules and signatures: a module
+    /// value is `KTypeValue(KType::Module { module, frame })`, a signature value is
+    /// `KTypeValue(KType::Signature(s))`.
     KTypeValue(KType<'a>),
     /// Bind-time carrier for a `TypeExprRef`-slot value whose surface `TypeExpr` couldn't
-    /// be lowered to a concrete `KType` at `ExpressionPart::resolve_for` time — i.e. a
+    /// be lowered to a concrete `KType` at `ExpressionPart::resolve_for` time — a
     /// bare-leaf name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`,
-    /// `MyList`). Preserves the parser-side `TypeExpr` for consumers that want the surface
-    /// name (`extract_bare_type_name`, ATTR's TypeExprRef-lhs lookup, FN's deferred return-
-    /// type elaboration, `LET <Type-class> = …`); scope-aware resolution + memoization
-    /// now lives on [`crate::machine::core::Scope::resolve_type_expr`].
+    /// `MyList`). Preserves the parser-side `TypeExpr` for consumers that want the
+    /// surface name; scope-aware resolution + memoization lives on
+    /// [`crate::machine::core::Scope::resolve_type_expr`].
     TypeNameRef(TypeExpr),
-    /// Stage-4 NEWTYPE carrier. Tags a representation value with a NEWTYPE type identity.
-    /// `inner` is the underlying representation value, invariantly *not* a `Wrapped` —
-    /// the [`NonWrappedRef`] field type enforces newtype-over-newtype collapse at the
-    /// only construction path ([`crate::builtins::newtype_def::newtype_construct`]'s
-    /// Combine finish, which builds the carrier through [`NonWrappedRef::peel`]).
-    /// `type_id` is the `&'a KType::UserType { kind: Newtype, .. }` minted at NEWTYPE
-    /// declaration time (the same arena reference `bindings.types[name]` holds).
+    /// NEWTYPE carrier: tags a representation value with a NEWTYPE type identity.
+    /// `inner` is invariantly *not* a `Wrapped` — the [`NonWrappedRef`] field type
+    /// enforces newtype-over-newtype collapse at the construction path. `type_id` is
+    /// the `&'a KType::UserType { kind: Newtype, .. }` minted at NEWTYPE declaration
+    /// time (the same arena reference `bindings.types[name]` holds).
     ///
     /// `ktype()` reports `(*type_id).clone()` — the per-declaration nominal identity.
-    /// Dispatch on a slot typed by `Distance` admits a `Wrapped` whose `type_id`
-    /// resolves to the same `(scope_id, name)`. ATTR over a `Wrapped` falls through to
-    /// `inner` (`access_field`'s `Wrapped` arm), so wrapping a struct in a NEWTYPE
-    /// doesn't force every field accessor to redo.
+    /// ATTR over a `Wrapped` falls through to `inner`, so wrapping a struct in a
+    /// NEWTYPE doesn't force every field accessor to redo.
     Wrapped {
         inner: NonWrappedRef<'a>,
         type_id: &'a KType<'a>,
@@ -154,24 +132,22 @@ pub enum KObject<'a> {
 }
 
 impl<'a> KObject<'a> {
-    /// Fresh `List` carrier: computes the element type once as the join (LUB) of the
-    /// contents under the immutable-`Rc` contract. Empty list memoizes `Any` (the join's
-    /// identity); the empty-container *error* rule lives at the untyped-resolution boundary,
-    /// not here.
+    /// Fresh `List` carrier: memoizes the element type as the join (LUB) of contents.
+    /// Empty list memoizes `Any` (the join's identity); the empty-container *error*
+    /// rule lives at the untyped-resolution boundary, not here.
     pub fn list(items: Vec<KObject<'a>>) -> KObject<'a> {
         let elem = KType::join_iter(items.iter().map(|i| i.ktype()));
         KObject::List(Rc::new(items), Box::new(elem))
     }
 
-    /// `List` carrier with an explicitly supplied element type. Used by lift (preserve the
-    /// already-memoized type across an arena-anchor rebuild) and by ascription stamping
-    /// (re-tag to the declared element type, coarsening included).
+    /// `List` carrier with an explicitly supplied element type — for lift (preserve the
+    /// memoized type across an arena-anchor rebuild) and ascription stamping (re-tag to
+    /// the declared element type, coarsening included).
     pub fn list_with_type(items: Rc<Vec<KObject<'a>>>, elem: KType<'a>) -> KObject<'a> {
         KObject::List(items, Box::new(elem))
     }
 
-    /// Fresh `Dict` carrier: computes key + value types once as the join of the keys /
-    /// values.
+    /// Fresh `Dict` carrier: memoizes key + value types as the join of the keys / values.
     pub fn dict(map: HashMap<Box<dyn Serializable<'a> + 'a>, KObject<'a>>) -> KObject<'a> {
         let k = KType::join_iter(map.keys().map(|k| k.ktype()));
         let v = KType::join_iter(map.values().map(|v| v.ktype()));
@@ -187,18 +163,17 @@ impl<'a> KObject<'a> {
         KObject::Dict(map, Box::new(key), Box::new(value))
     }
 
-    /// Ascription stamping at an annotated boundary (FN return type, argument slot, LET
-    /// ascription). The declared type is the contract: callers have already checked the
-    /// value satisfies `declared` via `matches_value`; this re-tags the carrier to
-    /// *exactly* the declared parameter types, coarsening included — a `List<Number>` value
-    /// returned through `:(List Any)` re-tags to `List<Any>`, so downstream dispatch sees
-    /// the contract rather than the implementation's incidental precision.
+    /// Ascription stamping at an annotated boundary (FN return type, argument slot,
+    /// LET ascription). Callers have already checked the value satisfies `declared`;
+    /// this re-tags the carrier to *exactly* the declared parameter types — a
+    /// `List<Number>` returned through `:(List Any)` re-tags to `List<Any>`, so
+    /// downstream dispatch sees the contract rather than the implementation's
+    /// incidental precision.
     ///
-    /// Only the three parameterized carriers are re-tagged; every other shape passes
-    /// through unchanged (its `ktype()` is already its nominal identity). For a `Tagged`
-    /// stamped against a `ConstructorApply`, the constructor identity must already match
-    /// (the caller's `matches_value` guaranteed it); the `type_args` are replaced with the
-    /// declared args. Empty containers stamp vacuously (the declared element type wins).
+    /// Only the three parameterized carriers re-tag; every other shape passes through
+    /// (its `ktype()` is already its nominal identity). For a `Tagged` stamped against
+    /// a `ConstructorApply`, the constructor identity must already match; the
+    /// `type_args` are replaced with the declared args.
     pub fn stamp_type(self, declared: &KType<'a>) -> KObject<'a> {
         match (self, declared) {
             (KObject::List(items, _), KType::List(elem)) => {
@@ -222,16 +197,14 @@ impl<'a> KObject<'a> {
     }
 
     /// True iff this is an empty container carrying no usable element-type information —
-    /// an empty `List` whose memoized element type is `Any`, or an empty `Dict` whose key
-    /// and value types are both `Any`. Such a value has no join to infer from and was never
-    /// stamped by an annotation; reaching an *untyped* resolution boundary (an untyped `LET`
-    /// binding, a bare top-level expression result) with this shape is an error
-    /// (see [runtime-type-parameter-carriers](../../../../roadmap/type_language/type-parameter-binding.md)).
+    /// an empty `List` whose memoized element type is `Any`, or an empty `Dict` whose
+    /// key and value types are both `Any`. Reaching an *untyped* resolution boundary
+    /// (untyped `LET` binding, bare top-level expression result) with this shape is an
+    /// error (see [type-parameter-binding](../../../../roadmap/type_language/type-parameter-binding.md)).
     ///
-    /// A stamped empty container (e.g. `FN -> :(List Number) = ([])` re-tags to element
-    /// `Number`) is *not* flagged: its carrier carries a non-`Any` element type. A
-    /// non-empty heterogeneous literal (`[2, "hello"]` → `List<Any>`) is *not* flagged: it
-    /// carries information and is legal where `:(List Any)` is declared.
+    /// A stamped empty container is not flagged (its carrier carries a non-`Any`
+    /// element type), nor is a non-empty heterogeneous literal `List<Any>` (it carries
+    /// information and is legal where `:(List Any)` is declared).
     pub fn is_unstamped_empty_container(&self) -> bool {
         match self {
             KObject::List(items, elem) => {
@@ -246,30 +219,25 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Runtime type tag. `KFuture` reports as `KFunction` since a bound-but-unrun call is
-    /// functionally a thunk and KFutures don't escape as user-visible values today.
+    /// Runtime type tag. `KFuture` reports as `KFunction` since a bound-but-unrun call
+    /// is functionally a thunk and KFutures don't escape as user-visible values today.
     pub fn ktype(&self) -> KType<'a> {
         match self {
             KObject::Number(_) => KType::Number,
             KObject::KString(_) => KType::Str,
             KObject::Bool(_) => KType::Bool,
             KObject::Null => KType::Null,
-            // O(1) field read of the memoized/ascribed element type — no contents re-walk.
             KObject::List(_, elem) => KType::List(elem.clone()),
             KObject::Dict(_, k, v) => KType::Dict(k.clone(), v.clone()),
             KObject::KFunction(f, _) => function_value_ktype(f),
             KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
-            // Schema carriers report the meta-type (`KType::Type`): they are values *of*
-            // the meta-type, not user-typed values. Per-declaration value carriers
-            // (`Struct`, `Tagged`) synthesize `KType::UserType` from their `(scope_id,
-            // name)` identity fields so dispatch on type identity sees distinct types
-            // per declaration.
+            // Schema carriers are values *of* the meta-type, not user-typed values.
             KObject::TaggedUnionType { .. } => KType::Type,
             KObject::StructType { .. } => KType::Type,
-            // Erased `type_args` reports the bare `UserType` identity (today's behavior);
-            // a populated carrier synthesizes the applied form so dispatch / slot admission
-            // see the full instantiation (`Result<Number, MyErr>`).
+            // Erased `type_args` reports the bare `UserType` identity; a populated
+            // carrier synthesizes the applied form so dispatch sees the full
+            // instantiation (`Result<Number, MyErr>`).
             KObject::Tagged { name, scope_id, type_args, .. } => {
                 let bare = KType::UserType {
                     kind: UserTypeKind::Tagged,
@@ -290,32 +258,23 @@ impl<'a> KObject<'a> {
                 scope_id: *scope_id,
                 name: name.clone(),
             },
-            // Post-collapse: module/signature values ride `KTypeValue(KType::Module/Signature)`.
-            // The carried `KType` IS the identity; report it directly rather than the
-            // meta-type marker, so dispatch and slot admission see the same shape as a
-            // type-position carrier (no `KType::UserType { kind: Module, .. }` synthesis).
-            //
-            // Other `KTypeValue` carriers (`Number`, `Str`, builtin-shape types) still
-            // report as `TypeExprRef` — they fill the dispatch-position marker for surface
-            // type expressions.
+            // Module/signature values carry the identity directly — report it rather
+            // than the meta-type marker, so dispatch sees the same shape as a
+            // type-position carrier. Other `KTypeValue` carriers fill the
+            // `TypeExprRef` dispatch-position marker.
             KObject::KTypeValue(kt) => match kt {
                 KType::Module { .. } | KType::Signature(_) => kt.clone(),
                 _ => KType::TypeExprRef,
             },
-            // `TypeNameRef` is dispatch-equivalent to `KTypeValue` — both fill a
-            // `TypeExprRef`-typed slot. The slot's role is the dispatch-position marker;
-            // whether the carrier resolved at `resolve_for` time or stays surface-form
-            // until a scope-aware consumer asks is an internal detail.
+            // Dispatch-equivalent to `KTypeValue` — both fill a `TypeExprRef`-typed slot.
             KObject::TypeNameRef(_) => KType::TypeExprRef,
-            // Stage 4: a `Wrapped` reports its cached NEWTYPE identity directly. The cell
-            // is the arena ref the declaration site minted; cloning preserves the
-            // `(kind, scope_id, name)` triple the dispatcher reads.
             KObject::Wrapped { type_id, .. } => (*type_id).clone(),
         }
     }
 
-    /// Independent-but-cheap clone: composite payloads are `Rc::clone`d under the
-    /// immutable-value contract; `KFunction`/`KFuture` preserve their `Rc<CallArena>` anchor.
+    /// Independent-but-cheap clone: composite payloads `Rc::clone` under the
+    /// immutable-value contract; `KFunction`/`KFuture` preserve their `Rc<CallArena>`
+    /// anchor.
     pub fn deep_clone(&self) -> KObject<'a> {
         match self {
             KObject::Number(n) => KObject::Number(*n),
@@ -353,9 +312,6 @@ impl<'a> KObject<'a> {
             },
             KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
             KObject::TypeNameRef(t) => KObject::TypeNameRef(t.clone()),
-            // Stage 4: both fields are arena references; copying them preserves the
-            // immutable-carrier contract. `inner` already lives in the arena, so no
-            // deep allocation is needed here.
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
                 inner: *inner,
                 type_id,
@@ -386,10 +342,7 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// First-class module accessor. Post-collapse, module values ride the
-    /// `KTypeValue(KType::Module { .. })` carrier; this helper projects through that
-    /// shape so consumers (`bundle.require_module`, ATTR's `access_module_member`) read
-    /// the same `&'a Module<'a>` they used to read from `KObject::KModule`.
+    /// Projects through the `KTypeValue(KType::Module { .. })` carrier.
     pub fn as_module(&self) -> Option<&'a super::module::Module<'a>> {
         match self {
             KObject::KTypeValue(KType::Module { module, .. }) => Some(*module),
@@ -397,8 +350,7 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// First-class signature accessor. Same shape as `as_module` — projects through the
-    /// `KTypeValue(KType::Signature(_))` carrier.
+    /// Projects through the `KTypeValue(KType::Signature(_))` carrier.
     pub fn as_signature(&self) -> Option<&'a super::module::Signature<'a>> {
         match self {
             KObject::KTypeValue(KType::Signature(s)) => Some(*s),
@@ -432,19 +384,16 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
             _ => None,
         })
         .collect();
-    // Module-system functor-params Stage B coarsening: structural `KType::KFunction` /
-    // `KFunctor` can't carry a `Deferred(_)` return-type carrier (the structural type
-    // language has no surface for "per-call elaboration of this expression"). Collapse
-    // to `KType::Any` so the structural type stays well-formed; the precise per-call
-    // return type is observed at the dispatch boundary, not from a structural-type
-    // comparison. Tracked separately at
-    // [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
+    // Structural `KType::KFunction` / `KFunctor` can't carry a `Deferred(_)` return —
+    // the type language has no surface for "per-call elaboration of this expression".
+    // Coarsen to `KType::Any`; the precise per-call return type is observed at the
+    // dispatch boundary, not from a structural-type comparison. Tracked at
+    // [kfunction-deferred-ret-precision](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
     let ret = match &f.signature.return_type {
         ReturnType::Resolved(kt) => Box::new(kt.clone()),
         ReturnType::Deferred(_) => Box::new(KType::Any),
     };
-    // The `is_functor` flag (set at FUNCTOR-binder construction time) projects this
-    // value's type-language carrier into the disjoint `KFunctor` family. Cross-arm
+    // `is_functor` projects into the disjoint `KFunctor` family; cross-arm
     // admissibility is refused in `function_compat` — see
     // [design/typing/functors.md](../../../../design/typing/functors.md).
     if f.is_functor {
@@ -503,22 +452,16 @@ impl<'a> Parseable<'a> for KObject<'a> {
                 format!("{}({})", name, parts.join(", "))
             }
             KObject::Null => "null".to_string(),
-            // Post-collapse: module/signature carriers ride `KTypeValue(KType::Module/Signature)`.
-            // Render as `module <path>` / `sig <path>` so user-visible diagnostics stay the
-            // same shape as before the collapse; all other `KTypeValue` carriers (Number,
-            // Str, etc.) render via the type's `name()`.
+            // Module / signature carriers render as `module <path>` / `sig <path>`.
             KObject::KTypeValue(KType::Module { module, .. }) => format!("module {}", module.path),
             KObject::KTypeValue(KType::Signature(s)) => format!("sig {}", s.path),
             KObject::KTypeValue(t) => t.render(),
-            // Preserve the surface form the user wrote (`Point`, `Foo<Bar>`) for
-            // diagnostics — rendering through the scope-resolved `&KType` would route
-            // via `name()` and might normalize, which the "surface form survives bind"
-            // invariant forbids.
+            // Preserve the surface form the user wrote (`Point`, `Foo<Bar>`) — going
+            // through the scope-resolved `&KType` would route via `name()` and might
+            // normalize, which the "surface form survives bind" invariant forbids.
             KObject::TypeNameRef(t) => t.render(),
-            // Stage 4: render as `Distance(<inner summary>)`. `type_id.name()` returns
-            // the bare declared name (per `user_type_name_renders_bare_name`); the
-            // inner summary recurses via the `Parseable` impl, mirroring the
-            // surface-form invariant Struct / Tagged carriers honor.
+            // Render as `Distance(<inner summary>)`; `type_id.name()` returns the bare
+            // declared name (per `user_type_name_renders_bare_name`).
             KObject::Wrapped { inner, type_id } => format!(
                 "{}({})",
                 type_id.name(),

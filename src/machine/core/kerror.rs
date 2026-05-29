@@ -8,9 +8,6 @@ use crate::machine::core::scope_id::ScopeId;
 use crate::machine::core::source::{self, FileId, SourceLoc, Span};
 use crate::machine::model::types::Parseable;
 use crate::machine::model::values::KObject;
-// `KType` import retired with the `TypeClassBindingExpectsType.got` flip to a
-// pre-rendered `String` — kept the kerror module lifetime-free across the
-// type-language collapse.
 use crate::machine::model::ast::KExpression;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
@@ -39,33 +36,26 @@ pub enum KErrorKind {
     Rebind { name: String },
     /// Distinct from `Rebind` — collision is per-signature within the same name's bucket.
     DuplicateOverload { name: String, signature: String },
-    /// LET on a Type-class binder with a non-type RHS — caught at bind time
-    /// rather than at downstream elaboration. Pairs with stage 1.7's routing flip.
-    /// `got` is the rendered name of the offending value's type (e.g. `"Number"`),
-    /// pre-stringified so `KError` doesn't need a `KType<'a>` lifetime parameter.
+    /// LET on a Type-class binder with a non-type RHS. `got` is the rendered
+    /// name of the offending value's type (e.g. `"Number"`), pre-stringified
+    /// so `KError` stays lifetime-free.
     TypeClassBindingExpectsType { name: String, got: String },
-    /// A `TypeNameRef` carrier landed at the dispatch boundary's per-call
-    /// parameter install (`type_identity_for`) but its `TypeExpr` couldn't
-    /// be elaborated in the FN's captured definition scope because some
-    /// referenced type-binding is still pending finalization. Replaces today's
-    /// silent skip — surfaces the precise context (parameter, surface form,
-    /// pending finalize-node) so a workload that hits this regularly is
-    /// debuggable without diving into the dispatcher's internals.
+    /// A `TypeNameRef` carrier reached `type_identity_for` but its `TypeExpr`
+    /// couldn't elaborate because some referenced type-binding is still
+    /// pending finalization.
     TypeIdentityPendingAtDispatch {
         param: String,
         surface: String,
         pending_on: Vec<crate::machine::core::kfunction::NodeId>,
     },
-    /// The scheduler drained its work queues with one or more nodes still parked
-    /// on dependencies that can no longer fire — a dependency cycle. Surfaced
-    /// instead of letting the top-level result read panic on an unresolved slot.
+    /// Scheduler drained its work queues with nodes still parked on
+    /// dependencies that can no longer fire (dependency cycle).
     SchedulerDeadlock { pending: usize, sample: String },
 }
 
 /// One entry in an error's call-stack trace. `function` and `expression` are
-/// `summarize()` text; `location` is `Some` when the originating `KExpression` had
-/// both `span` and `file` populated (parser-produced ASTs) and `None` for
-/// hand-built ASTs (tests, builtin-synthesized fragments).
+/// `summarize()` text; `location` is `Some` when the originating `KExpression`
+/// had both `span` and `file` populated.
 #[derive(Clone)]
 pub struct Frame {
     pub function: String,
@@ -74,8 +64,7 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Locationless frame — used by call sites that synthesize a frame from
-    /// summary strings without an originating `KExpression`.
+    /// Locationless frame for call sites without an originating `KExpression`.
     pub fn bare(function: impl Into<String>, expression: impl Into<String>) -> Frame {
         Frame {
             function: function.into(),
@@ -92,9 +81,9 @@ impl Frame {
         }
     }
 
-    /// Frame keyed off a `KExpression` (so the location resolves) but with a
-    /// caller-chosen `function` label (e.g. `"<bind>"`, `"<replay-park>"`) for
-    /// scheduler-internal frames that don't have a real `KFunction`.
+    /// Frame keyed off a `KExpression` but with a caller-chosen `function`
+    /// label (e.g. `"<bind>"`) for scheduler-internal frames without a real
+    /// `KFunction`.
     pub fn from_expr(function: impl Into<String>, expr: &KExpression<'_>) -> Frame {
         Frame {
             function: function.into(),
@@ -118,9 +107,8 @@ impl KError {
         Self { kind, frames: Vec::new() }
     }
 
-    /// Standard constructor for parse-pass errors. Resolves `file` from the
-    /// thread-local `CURRENT_FILE` so call sites only have to thread the `Span`
-    /// they observed.
+    /// Parse-pass error constructor. Resolves `file` from the thread-local
+    /// `CURRENT_FILE` so call sites only thread the observed `Span`.
     pub fn parse(msg: impl Into<String>, span: Option<Span>) -> Self {
         Self::new(KErrorKind::ParseError {
             message: msg.into(),
@@ -138,20 +126,17 @@ impl KError {
         self.with_frame(Frame::for_call(function, expr))
     }
 
-    /// Spelled out (vs. `Clone`) so propagation sites read as intent rather than mechanism.
+    /// Spelled out (vs. `Clone`) so propagation sites read as intent.
     pub fn clone_for_propagation(&self) -> Self {
         self.clone()
     }
 
-    /// Lower this error into a `KObject::Tagged` for `TRY-WITH` to dispatch on. The `tag`
-    /// names the `KErrorKind` variant (e.g. `"type_mismatch"`) and the payload is a
-    /// `KObject::Struct` mirroring the variant's Rust fields plus `frames :List<Str>` (each
-    /// frame rendered as `"in <expression> (<function>)"`).
-    ///
-    /// `(scope_id, name)` on the wrapping `Tagged` uses [`ScopeId::SENTINEL`] / `"KError"`
-    /// because no user-declared union type ever names this carrier — TRY's branch walker
-    /// reads `tag` and `value` directly without going through `MATCH`. The inner payload
-    /// `Struct` has the variant name (e.g. `"TypeMismatch"`) and the same sentinel.
+    /// Lower this error into a `KObject::Tagged` for `TRY-WITH` to dispatch
+    /// on. The `tag` names the `KErrorKind` variant (e.g. `"type_mismatch"`);
+    /// the payload is a `KObject::Struct` mirroring the variant's fields plus
+    /// `frames :List<Str>`. The wrapping `Tagged` uses [`ScopeId::SENTINEL`] /
+    /// `"KError"` because TRY's branch walker reads `tag` and `value` directly
+    /// without going through `MATCH`.
     pub fn to_tagged<'a>(&self) -> KObject<'a> {
         let (tag, struct_name, fields) = self.kind.to_struct_fields();
         let frames_list = KObject::list(
@@ -190,12 +175,10 @@ impl KError {
 }
 
 impl KErrorKind {
-    /// `(tag, struct_name, fields)` for `KError::to_tagged`. The struct's field order
-    /// mirrors the variant's declaration order; `frames` is appended by the caller.
-    /// Dispatcher-internal kinds (`Rebind`, `DuplicateOverload`,
-    /// `TypeClassBindingExpectsType`, `TypeIdentityPendingAtDispatch`) flatten to a minimal
-    /// `{ kind :Str, message :Str }` shape — they're only catchable via `_` so the per-kind
-    /// fields would never be addressed.
+    /// `(tag, struct_name, fields)` for `KError::to_tagged`. Field order
+    /// mirrors the variant's declaration order; `frames` is appended by the
+    /// caller. Dispatcher-internal kinds flatten to `{ kind, message }` since
+    /// they're only catchable via `_`.
     fn to_struct_fields<'a>(&self) -> (String, String, Vec<(String, KObject<'a>)>) {
         match self {
             KErrorKind::TypeMismatch { arg, expected, got } => (
@@ -260,9 +243,9 @@ impl KErrorKind {
                     Some(sp) => (Some(sp.start), Some(sp.end)),
                     None => (None, None),
                 };
-                // Raw offsets surface even when file lookup misses (synthetic AST,
-                // dropped registry, etc.) so in-language consumers can still pattern-
-                // match on byte ranges; resolved fields fall back to "" / 0.
+                // Raw offsets surface even when file lookup misses so
+                // in-language consumers can pattern-match on byte ranges;
+                // resolved fields fall back to "" / 0.
                 fields.push((
                     "span_start".to_string(),
                     KObject::Number(span_start.unwrap_or(0) as f64),

@@ -32,10 +32,9 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     assert!(matches!(sched.read(id), KObject::Number(n) if *n == 42.0));
 }
 
-/// Under index-gated resolution a later-sibling LET is invisible to an earlier
-/// sibling's reference — `LET y = (x)` at index `i` cannot see `LET x = 1` at
-/// index `i+1` (the strict `b.idx < c` predicate hides the producer's binding,
-/// and LET is value-style gated). The consumer surfaces `UnboundName`.
+/// Index-gated resolution hides a later-sibling LET from an earlier sibling's
+/// reference (strict `b.idx < c`, value-style gated), so the consumer surfaces
+/// `UnboundName` rather than parking.
 #[test]
 fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
@@ -83,10 +82,8 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
-/// Index-gated companion: a bare-Identifier wrap-slot reference whose binding is
-/// declared at a later sibling is invisible under the gate. The wrap-slot's
-/// eager-name resolve surfaces `UnboundName` rather than parking and waking when
-/// the later sibling finalizes.
+/// Wrap-slot companion of the LET forward-ref test: the eager-name resolve must
+/// surface `UnboundName` under the gate, not park on the later-sibling binding.
 #[test]
 fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
@@ -105,10 +102,8 @@ fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     );
 }
 
-/// Backward-ref companion: putting the LET binders ahead of the consumer keeps the
-/// multi-producer wrap-slot replay-park alive under the gate — the producers'
-/// indices sit strictly less than the consumer's, so the gate doesn't hide them
-/// and the placeholder/park mechanism still wakes the slot once both finalize.
+/// Backward-ref shape: producers precede the consumer so the gate doesn't hide
+/// them, and the multi-producer wrap-slot replay-park wakes once both finalize.
 #[test]
 fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let arena = RuntimeArena::new();
@@ -126,14 +121,9 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 3.0));
 }
 
-/// Under index-gated resolution a forward call to a later-sibling FN is invisible
-/// to the consumer (FN is value-style gated, not a nominal binder). The
-/// dispatch's per-scope `Bindings::lookup_function` filters by the same
-/// visibility predicate (and the `pending_overloads` fall-through it covers
-/// inherits the same gate), so the call surfaces `DispatchFailed` rather than
-/// parking on the not-yet-finalized overload — `execute` returns `Err`
-/// directly (matching the `?` propagation on a dispatch miss; see
-/// `Scheduler::run_dispatch`).
+/// FN is value-style gated (not a nominal binder), so a forward call to a
+/// later-sibling FN is invisible under the gate and surfaces `DispatchFailed`
+/// rather than parking on the not-yet-finalized overload.
 #[test]
 fn forward_keyword_function_reference_is_unbound() {
     let arena = RuntimeArena::new();
@@ -154,10 +144,6 @@ fn forward_keyword_function_reference_is_unbound() {
     );
 }
 
-/// Backward-ref companion exercising the multi-producer replay-park wake — the
-/// LET binders for `aa`/`bb` precede the consumer, so the gate doesn't hide
-/// them, and the placeholder/park mechanism still wakes the slot once both
-/// finalize.
 #[test]
 fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let arena = RuntimeArena::new();
@@ -175,13 +161,9 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
 }
 
-/// Miri audit-slate: pins the bare-name-short-circuit Lift-park lifetime contract.
-/// The `&KObject<'a>` the Lift returns is the producer's reference, not a clone —
-/// the arena must outlive the wake and re-run. Under index-gated resolution the
-/// consumer must sit *after* the producer (otherwise the gate hides the binding),
-/// so this is a backward-ref shape; the parking mechanism still exercises the
-/// Lift/notify lifetimes when a same-block producer hasn't terminalized at the
-/// consumer's submit time.
+/// Miri audit-slate: pins the bare-name-short-circuit Lift-park lifetime
+/// contract. The `&KObject<'a>` Lift returns is the producer's reference, not a
+/// clone, so the arena must outlive the wake and re-run.
 #[test]
 fn lift_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();
@@ -195,10 +177,7 @@ fn lift_park_minimal_program_for_miri() {
 }
 
 /// Miri audit-slate: pins the replay-park scope-lifetime contract — the parked
-/// slot's scope must stay valid across the wake and the re-dispatch. Backward-ref
-/// shape (FN-decl before call) keeps the call dispatchable under the gate; the
-/// call's wrap-slot may still replay-park (e.g. on an `aa` placeholder) when the
-/// arg is a not-yet-bound name, which is what exercises the lifetime contract.
+/// slot's scope must stay valid across the wake and the re-dispatch.
 #[test]
 fn replay_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();
@@ -215,8 +194,8 @@ fn replay_park_minimal_program_for_miri() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
-/// A producer that errors at dispatch time aborts `execute` via `?` propagation.
-/// Rerouting sub-Dispatch failures into the consumer's slot is a follow-up.
+/// A producer that errors at dispatch time aborts `execute` via `?` propagation
+/// rather than routing the failure into the consumer's slot.
 #[test]
 fn replay_park_propagates_producer_error() {
     let arena = RuntimeArena::new();
@@ -236,11 +215,8 @@ fn replay_park_propagates_producer_error() {
     assert!(scope.lookup("y").is_none(), "y should not bind when its dependency errors");
 }
 
-/// A bare Type-token in a `TypeExprRef` slot of a non-binder picks up the same
-/// replay-park rails as a bare Identifier: `IntOrd :| OrderedSig` submitted before
-/// `MODULE IntOrd` / `SIG OrderedSig` must park on the placeholders the binders install
-/// rather than racing the FIFO submission order. Pins the Type-token park symmetry
-/// described in
+/// Bare Type-tokens in `TypeExprRef` slots of non-binders ride the same
+/// replay-park rails as bare Identifiers — see
 /// [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders).
 #[test]
 fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
@@ -261,11 +237,10 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     );
 }
 
-/// Substrate cross-check: `LET ty = Number` still binds `ty` to a `KTypeValue`
-/// carrying the `Number` leaf. After the unification, the value flows through the
-/// wrap → `BareTypeLeaf` fast lane rather than the literal `KTypeValue` carve-out;
-/// the observable binding must be identical to the literal path. (Lowercase LHS
-/// because single-letter uppercase tokens don't classify as Type names.)
+/// `LET ty = Number` must bind `ty` to a `KTypeValue` carrying the `Number`
+/// leaf — the wrap → `BareTypeLeaf` fast lane has to match the literal
+/// `KTypeValue` carve-out observably. (Lowercase LHS because single-letter
+/// uppercase tokens don't classify as Type names.)
 #[test]
 fn let_t_equals_number_still_binds_ktype_value() {
     use crate::machine::model::KType;

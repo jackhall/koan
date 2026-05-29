@@ -2,24 +2,15 @@
 //! slots whose declared type is recorded explicitly. See
 //! [design/typing/modules.md § Structures and signatures](../../design/typing/modules.md#structures-and-signatures).
 //!
-//! Gate: outside a SIG body the body returns `ShapeError`. The gate pivots on the
-//! first non-`Anonymous` [`ScopeKind`]: `Sig` admits, `Module` rejects.
+//! Inside a SIG decl_scope `bindings.data[name] = KObject::KTypeValue(declared_kt)`
+//! means "value slot whose declared type is `kt`" rather than "name bound to a type
+//! value"; the disambiguation is by scope context.
 //!
-//! Storage: `bindings.data[name] = KObject::KTypeValue(declared_kt)`. Inside a SIG
-//! decl_scope this carrier means "value slot whose declared type is `kt`" rather
-//! than "name bound to a type value"; the disambiguation is by scope context.
-//!
-//! Type resolution dispatches on the `ty` carrier shape:
-//! - Builtin-leaf `KTypeValue(kt)` and bare-leaf `TypeNameRef` — sub-Dispatch a
-//!   single-part `[Type(te)]` expression so a SIG-local `LET <name> = ...` shadow
-//!   wins over the builtin-table fallback. See [`schedule_type_resolve`] for the
-//!   ownership rationale.
-//! - Structural `KTypeValue(kt)` (`KFunction`, `List`, `Dict`, `UserType`, ...) —
-//!   lifted directly. Inner builtin names don't re-bind against decl_scope
-//!   shadowing; full type-shape checking will revisit when modular implicits land.
-//! - Parameterized / function-shaped `TypeNameRef` — synchronous elaboration
-//!   against decl_scope first; on park, sub-Dispatch each referenced leaf and
-//!   re-elaborate in the Combine finish.
+//! Type resolution dispatches on the `ty` carrier shape: leaf carriers re-dispatch
+//! against decl_scope so a SIG-local `LET <name> = ...` shadow wins over the
+//! builtin table; structural carriers (`KFunction`, `List`, ...) are lifted
+//! directly; parameterized `TypeNameRef` is elaborated synchronously and, on park,
+//! sub-Dispatches each leaf before re-elaborating in the Combine finish.
 
 use crate::machine::core::ResolveTypeExprOutcome;
 use crate::machine::core::source::Spanned;
@@ -32,7 +23,6 @@ use crate::machine::model::{KObject, KType};
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
-/// Sub-dispatch `[Type(te)]` against `decl_scope`.
 fn schedule_type_resolve<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     decl_scope: &'a Scope<'a>,
@@ -71,7 +61,6 @@ enum CarrierForm<'a> {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
     Leaf(TypeExpr),
-    /// Parser-preserved `TypeExpr` from a `TypeNameRef` carrier.
     Raw(TypeExpr),
     /// Structural carrier accepted as-is; inner names are not re-bound.
     Direct(KType<'a>),
@@ -102,8 +91,7 @@ pub fn body<'a>(
         None => return err(KError::new(KErrorKind::MissingArg("name".to_string()))),
     };
 
-    // Defense-in-depth against a future routing change that lets a Type-classified
-    // token reach the name slot; abstract-type members must use `LET`.
+    // Defense-in-depth: abstract-type members must use `LET`, not `VAL`.
     if super::ascribe::is_abstract_type_name(&name) {
         return err(KError::new(KErrorKind::ShapeError(format!(
             "VAL slot name `{name}` classifies as a Type token; abstract-type members \
@@ -120,9 +108,7 @@ pub fn body<'a>(
         Err(e) => return err(e),
     };
 
-    // VAL is value-style gated — strict lexical cutoff applies. The SIG body itself
-    // is the lexical block; the VAL statement's index is the binder's submission
-    // position.
+    // Value-style: strict lexical cutoff against the SIG body's chain index.
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::value(chain.index))
@@ -162,8 +148,8 @@ pub fn body<'a>(
     }
 }
 
-/// Free type-name references inside `te`. Each leaf will sub-Dispatch independently
-/// so the dispatcher installs one Notify edge per placeholder hit.
+/// Each leaf sub-Dispatches independently so the dispatcher installs one Notify
+/// edge per placeholder hit.
 fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -179,8 +165,7 @@ fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
                 }
             }
             TypeParams::List(items) => {
-                // Outer constructor name is itself a leaf reference (e.g. `Wrap` in
-                // `Wrap<Number>` must resolve against decl_scope).
+                // Constructor name is itself a leaf (e.g. `Wrap` in `Wrap<Number>`).
                 if seen.insert(te.name.clone()) {
                     out.push(te.name.clone());
                 }
@@ -189,7 +174,8 @@ fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
                 }
             }
             TypeParams::Function { args, ret } => {
-                // `Function<...>` is a builtin keyword, not a resolvable name.
+                // `Function<...>` is a builtin keyword, not a resolvable name —
+                // skip the outer name, walk only the operands.
                 for a in args {
                     walk(a, out, seen);
                 }
@@ -201,7 +187,6 @@ fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
     out
 }
 
-/// Bind `name` to `KObject::KTypeValue(declared_kt)` under `scope.bindings.data`.
 fn finalize_val<'a>(
     scope: &'a Scope<'a>,
     name: String,
@@ -216,8 +201,7 @@ fn finalize_val<'a>(
     BodyResult::Value(allocated)
 }
 
-/// Combine over the sub-Dispatch; finalize once `results[0]` carries the resolved
-/// `KTypeValue`. Errored deps short-circuit via `run_combine` before the closure runs.
+/// Errored deps short-circuit via `run_combine` before the closure runs.
 fn defer_val_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -233,8 +217,7 @@ fn defer_val_via_combine<'a>(
         let resolved = results[0];
         let kt = match resolved {
             KObject::KTypeValue(kt) => kt.clone(),
-            // A non-`KTypeValue` here would be a routing bug; surface a structured
-            // error rather than panicking.
+            // Routing bug — surface structured, don't panic.
             other => {
                 return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
                     "VAL type `{}` sub-dispatch resolved to a non-type value of kind `{}`",
@@ -249,9 +232,9 @@ fn defer_val_via_combine<'a>(
     BodyResult::DeferTo(combine_id)
 }
 
-/// Combine over per-leaf sub-Dispatches; re-elaborates the structural `TypeExpr`
-/// once every leaf has terminalized. Per-leaf parks use Notify edges so the SIG
-/// outer Combine keeps exclusive cascade-free ownership of sibling LET producers.
+/// Re-elaborates the structural `TypeExpr` once every leaf has terminalized.
+/// Per-leaf parks use Notify edges so the SIG outer Combine keeps exclusive
+/// cascade-free ownership of sibling LET producers.
 fn defer_val_structural_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -281,7 +264,6 @@ fn defer_val_structural_via_combine<'a>(
     BodyResult::DeferTo(combine_id)
 }
 
-/// Dispatch-time placeholder extractor: `parts[1]` is the bound name's `Identifier`.
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
@@ -290,7 +272,7 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    // The Design-B sigil consumes `:`, so the signature has no explicit colon keyword.
+    // Design-B sigil consumes `:`; no explicit colon keyword in the signature.
     register_builtin_with_binder(
         scope,
         "VAL",

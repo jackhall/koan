@@ -17,10 +17,6 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
     items.into_iter().map(Spanned::bare).collect()
 }
 
-// --- Layer-1 cache (`TypeExpr::builtin_cache`) exercised through `resolve_for` ---
-
-/// Layer-1 cache: a builtin `TypeExpr` populates `builtin_cache` on first
-/// `resolve_for` and re-uses the cached `KType` on subsequent calls.
 #[test]
 fn resolve_for_populates_builtin_cache() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeExpr::leaf("Number".into()));
@@ -31,7 +27,6 @@ fn resolve_for_populates_builtin_cache() {
     } else {
         panic!("expected Type part");
     }
-    // Second call returns the cached value without re-walking.
     let r2 = part.resolve_for(&slot);
     match r2 {
         KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
@@ -39,8 +34,6 @@ fn resolve_for_populates_builtin_cache() {
     }
 }
 
-/// Layer-1 cache does NOT cache user-bound names: a leaf not in the builtin
-/// table produces a `TypeNameRef` carrier and `builtin_cache` remains empty.
 #[test]
 fn resolve_for_skips_cache_for_user_bound_leaf() {
     let part: ExpressionPart<'static> = ExpressionPart::Type(TypeExpr::leaf("MyType".into()));
@@ -54,28 +47,20 @@ fn resolve_for_skips_cache_for_user_bound_leaf() {
     }
 }
 
-/// Targeted Miri coverage for the `TypeExpr::builtin_cache` lifetime-lift in
-/// [`crate::machine::model::ast::ExpressionPart::resolve_for`]. The cache stores
-/// owned-data `KType<'static>` and the cache-hit path clones-then-transmutes the
-/// cached value to `KType<'a>` for the caller. The transmute is sound because
-/// the clone carries no `Module` / `Signature` arena references — only owned
-/// variants (`Number`, `List<Any>`, `Function<...>`, wildcards) reach the cache.
-///
-/// This test exercises the lift twice against two *distinct* non-`'static`
-/// arena lifetimes with a pre-seeded cache, so each call hits the cache-hit
-/// transmute path. Under tree borrows, a pointer-aliasing or use-after-free
-/// regression on the cache cell would fire here.
+/// Miri coverage for the `TypeExpr::builtin_cache` lifetime-lift in
+/// [`crate::machine::model::ast::ExpressionPart::resolve_for`]. The cache holds
+/// `KType<'static>` and the cache-hit path clones-then-transmutes to `KType<'a>`.
+/// SAFETY: the transmute is sound because only owned variants (`Number`,
+/// `List<Any>`, `Function<...>`, wildcards) — never `Module` / `Signature`
+/// arena references — reach the cache. Two pre-seeded runs against distinct
+/// non-`'static` arenas exercise the cache-hit transmute under tree borrows.
 #[test]
 fn builtin_cache_lifetime_lift_does_not_dangle() {
     use crate::machine::core::RuntimeArena;
 
-    // Pre-seed the cache so both calls hit the unsafe lift path (rather than
-    // running through the from_type_expr fallback that re-populates).
     let te = TypeExpr::leaf("Number".into());
     te.builtin_cache.set(KType::Number).expect("OnceCell is empty");
 
-    // Round 1: arena_a's lifetime drives the `'a` instantiation. The clone
-    // copies the populated cache content into the part-owned TypeExpr.
     {
         let arena_a = RuntimeArena::new();
         let part_a: ExpressionPart<'_> = ExpressionPart::Type(te.clone());
@@ -85,15 +70,14 @@ fn builtin_cache_lifetime_lift_does_not_dangle() {
             KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
             _ => panic!("expected KTypeValue from cache-hit path"),
         }
-        // Defeat any single-arena optimization tree borrows could mistake for
-        // a stable address: a sibling alloc on arena_a between the two calls.
+        // Sibling alloc defeats any single-arena address-stability assumption
+        // tree borrows might exploit.
         let _other = arena_a.alloc(KObject::Number(1.0));
         let _ = arena_a;
     }
 
-    // Round 2: a *fresh* arena with a different `'a`. The cache (still
-    // populated on `te`) is re-read; the lift produces a new `KType<'a>`
-    // that must be independent of arena_a's now-dead lifetime.
+    // Fresh arena with a different `'a`; the lift must be independent of
+    // arena_a's now-dead lifetime.
     {
         let arena_b = RuntimeArena::new();
         let part_b: ExpressionPart<'_> = ExpressionPart::Type(te.clone());
@@ -106,14 +90,8 @@ fn builtin_cache_lifetime_lift_does_not_dangle() {
         let _ = arena_b;
     }
 
-    // Sanity-check the cache survives both runs intact.
     assert_eq!(te.builtin_cache.get(), Some(&KType::Number));
 }
-
-// --- Readback helpers used by error rendering and dispatch ---
-// `summarize` per variant, `binder_name_from_type_part`,
-// `borrow_inner_expressions`, `try_take_inner_expressions_split` (all four
-// shapes), and the `Parseable` impl.
 
 #[test]
 fn summarize_atomic_variants() {
@@ -156,7 +134,6 @@ fn summarize_nested_expression_part_threads_through() {
 
 #[test]
 fn kexpression_summarize_joins_parts_with_spaces() {
-    // Goes through `Parseable::summarize` for `KExpression`.
     let e = KExpression::new(parts_of(vec![kw("LET"), ident("x"), ident("=")]));
     assert_eq!(e.summarize(), "LET x =");
 }
@@ -262,8 +239,7 @@ fn type_expr_render_parameterized_and_function() {
 
 #[test]
 fn debug_for_expression_part_and_kexpression() {
-    // Exercise the Debug branches — the exact format isn't load-bearing, but the
-    // impls must not panic and must mention the variant tag.
+    // Exact format isn't load-bearing; just assert non-empty / tagged output.
     let parts: Vec<ExpressionPart<'static>> = vec![
         kw("LET"),
         ident("x"),

@@ -7,8 +7,6 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{BindingIndex, RuntimeArena};
 
-/// Resolved-Identifier path: bare Identifier in scope.bindings.data returns
-/// `NameOutcome::Resolved(&obj)` pointing at the bound carrier.
 #[test]
 fn resolve_name_part_identifier_resolved() {
     let arena = RuntimeArena::new();
@@ -23,10 +21,6 @@ fn resolve_name_part_identifier_resolved() {
     }
 }
 
-/// Resolved-Type path: bare leaf `Type` token whose name lives in
-/// `bindings.types` routes through `coerce_type_token_value` and returns the
-/// `KTypeValue` synthesis. The builtin `Number` registered at default_scope
-/// satisfies this without extra setup.
 #[test]
 fn resolve_name_part_type_resolved() {
     let arena = RuntimeArena::new();
@@ -48,9 +42,6 @@ fn resolve_name_part_type_resolved() {
     }
 }
 
-/// Parked path: a Dispatch slot installed as a `binder_name` placeholder against the
-/// name resolves to `NameOutcome::Parked(producer)`. Mimics a forward LET binder
-/// by manually installing a placeholder against a fresh slot.
 #[test]
 fn resolve_name_part_parked() {
     let arena = RuntimeArena::new();
@@ -68,8 +59,6 @@ fn resolve_name_part_parked() {
     }
 }
 
-/// Unbound path: a name with no binding and no placeholder returns
-/// `NameOutcome::Unbound(name)`.
 #[test]
 fn resolve_name_part_unbound() {
     let arena = RuntimeArena::new();
@@ -82,8 +71,7 @@ fn resolve_name_part_unbound() {
     }
 }
 
-/// Cycle path: when `consumer` is provided and matches the producer (self-park),
-/// returns `NameOutcome::Cycle(name)` rather than `Parked`.
+/// A `consumer` argument that matches its own producer returns `Cycle`, not `Parked`.
 #[test]
 fn resolve_name_part_self_park_is_cycle() {
     let arena = RuntimeArena::new();

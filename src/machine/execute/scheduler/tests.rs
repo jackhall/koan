@@ -1,23 +1,13 @@
-//! Tests for the scheduler, split by surface:
+//! Scheduler tests, split by surface:
 //!
-//! - [`execute`] — basic dispatch ordering and inter-expression lookup.
-//! - [`reclaim`] — `free` / node-reclamation invariants.
-//! - [`combine`] — combine, defer_to, and tail-call slot reuse.
-//! - [`dispatch`] — overload routing rules end-to-end through the scheduler.
-//! - [`dispatch_shapes`] — `DispatchShape` classification + no-keyword
-//!   fast-lane routing (the four no-keyword shapes bypass
-//!   `resolve_dispatch_with_chain`; keyword-bearing shapes enter it).
-//! - [`unified_walk`] — cache-driven strict-only dispatch surface tests not
-//!   covered elsewhere (self-reference, bare-name forward ref to a
-//!   nominal-binder placeholder).
-//! - [`lexical_provenance`] — `LexicalFrame` chain attachment + assembly.
-//! - [`index_gated`] — index-gated resolution end-to-end (forward / backward refs,
-//!   value-style vs nominal-binder visibility, overload pre-filter, type-side gate,
-//!   mutual recursion across nominal binders).
+//! - [`execute`], [`reclaim`], [`combine`], [`dispatch`],
+//!   [`lexical_provenance`], [`index_gated`], [`unified_walk`].
+//! - [`dispatch_shapes`] — no-keyword shapes bypass
+//!   `resolve_dispatch_with_chain`; keyword-bearing shapes enter it.
 //! - [`nested_binder_submission`] — recursive submission of binder-shaped
-//!   sub-Dispatches at outermost-submission time, so nested binders' placeholders
-//!   install before any sibling can dispatch (closes the `LET f = (FN NAME [x] x)`
-//!   race independent of FIFO ordering).
+//!   sub-Dispatches at outermost-submission time installs nested binders'
+//!   placeholders before any sibling can dispatch, closing the
+//!   `LET f = (FN NAME [x] x)` race independent of FIFO ordering.
 
 mod combine;
 mod dispatch;

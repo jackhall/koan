@@ -5,11 +5,9 @@ use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, Sche
 use crate::builtins::err;
 
 /// `FUNCTION_OF <args:KExpression> -> <ret:TypeExprRef>` → `TypeExprRef` carrying
-/// `Function<(args) -> ret>`. The `args` slot is captured raw as a `KExpression` whose
-/// parts are bare `Type(_)` tokens; we re-extract and elaborate each into a `KType`.
-/// Parameterized inner args (`List<Number>`) come through as `Future(KTypeValue(kt))` from
-/// a prior sub-dispatch; leaf `Type(t)` tokens go through the resolver-free
-/// [`KType::from_type_expr`] (builtin-table only) to handle nested-parameter shapes.
+/// `Function<(args) -> ret>`. The `args` slot is captured raw as a `KExpression`; each
+/// part is either a bare `Type(_)` token (elaborated via [`KType::from_type_expr`]) or a
+/// `Future(KTypeValue(kt))` from a prior sub-dispatch.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -57,8 +55,6 @@ mod tests {
     use crate::machine::model::{KObject, KType};
     use crate::machine::RuntimeArena;
 
-    /// `FUNCTION_OF (Number) -> Str` dispatches and produces a `KTypeValue` carrying
-    /// `KFunction { args: [Number], ret: Str }`.
     #[test]
     fn function_of_unary_lowers_to_kfunction() {
         let arena = RuntimeArena::new();
@@ -78,7 +74,6 @@ mod tests {
         }
     }
 
-    /// `FUNCTION_OF () -> Number` — empty args group, the parts list is empty.
     #[test]
     fn function_of_nullary_lowers_to_kfunction() {
         let arena = RuntimeArena::new();
@@ -98,8 +93,6 @@ mod tests {
         }
     }
 
-    /// `FUNCTION_OF (Number Bool) -> Number` — multi-arg form, each bare `Type` token
-    /// elaborates through `KType::from_type_expr`.
     #[test]
     fn function_of_multi_arg_lowers_to_kfunction() {
         let arena = RuntimeArena::new();

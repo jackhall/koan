@@ -1,8 +1,6 @@
 //! Single-poll dispatch shapes — bare identifier, bare leaf type,
 //! constructor call, sigiled type expression. All four terminalize
-//! (or single-producer-park) in one poll and never re-enter, so the
-//! state types are minimal markers and the handlers are free
-//! functions.
+//! (or single-producer-park) in one poll and never re-enter.
 
 use std::marker::PhantomData;
 
@@ -65,10 +63,8 @@ impl<'a> SigilState<'a> {
     }
 }
 
-/// Handler for `DispatchShape::BareIdentifier`. Surfaces `UnboundName`
-/// directly for a bare identifier with no binding and no visible
-/// placeholder. Subsumes the retired `value_lookup` Identifier-slot
-/// overload.
+/// Surfaces `UnboundName` directly when the name has no binding and
+/// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'a>(
     sched: &mut Scheduler<'a>,
     name: String,
@@ -78,8 +74,8 @@ pub(super) fn bare_identifier<'a>(
     match scope.resolve_with_chain(&name, sched.active_chain.as_deref()) {
         Resolution::Value(obj) => NodeStep::Done(NodeOutput::Value(obj)),
         Resolution::Placeholder(producer) => {
-            // Notify edge, not Owned: the producer is a sibling slot
-            // this Lift only parks on for a wake.
+            // Notify edge, not Owned: producer is a sibling slot, we
+            // only park for the wake.
             sched.deps.add_park_edge(producer, NodeId(idx));
             NodeStep::Replace {
                 work: NodeWork::Lift(LiftState::Pending(producer)),
@@ -95,9 +91,6 @@ pub(super) fn bare_identifier<'a>(
     }
 }
 
-/// Fast lane for `DispatchShape::BareTypeLeaf`. Routes through
-/// `coerce_type_token_value`. Subsumes the retired `value_lookup`
-/// TypeExprRef-slot overload.
 pub(super) fn bare_type_leaf<'a>(
     sched: &mut Scheduler<'a>,
     t: &TypeExpr,
@@ -113,8 +106,6 @@ pub(super) fn bare_type_leaf<'a>(
     }
 }
 
-/// Handler for `DispatchShape::SigiledTypeExpr`. Tail-replaces this
-/// slot with a Dispatch of the inner expression.
 pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
     let inner = match expr.parts.into_iter().next() {
         Some(Spanned { value: ExpressionPart::SigiledTypeExpr(boxed), .. }) => *boxed,
@@ -129,15 +120,10 @@ pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
     }
 }
 
-/// Handler for `DispatchShape::ConstructorCall` (leaf-Type head +
-/// nested-parens body). Resolves the head identity type-side and
-/// routes by `KType::UserType { kind, .. }`. See the per-arm doc
-/// inline.
-///
-/// A forward-reference `Placeholder` on the head name routes through
-/// `KeywordedState::install_overload_park` (single-producer is fine
-/// — the installer dedupes/cycle-filters internally) so the resume
-/// rebuilds via `KeywordedState::initial`.
+/// A forward-reference `Placeholder` on the head name parks via
+/// `install_overload_park` (single-producer is fine — the installer
+/// dedupes / cycle-filters internally) so the resume rebuilds via
+/// `KeywordedState::initial`.
 pub(super) fn constructor_call<'a>(
     sched: &mut Scheduler<'a>,
     expr: KExpression<'a>,
@@ -228,9 +214,7 @@ pub(super) fn constructor_call<'a>(
     }
 }
 
-/// Decode a constructor `BodyResult` into a `NodeStep`. Shared with
-/// `fn_value::dispatch_callable_value` for Struct / Tagged head
-/// construction.
+/// Decode a constructor `BodyResult` into a `NodeStep`.
 pub(super) fn schedule_constructor_body<'a>(
     sched: &mut Scheduler<'a>,
     body: BodyResult<'a>,

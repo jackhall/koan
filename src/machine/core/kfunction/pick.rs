@@ -56,27 +56,16 @@ impl<'a> KFunction<'a> {
                     (KType::KExpression, _) => return None,
                     (_, ExpressionPart::Expression(_))
                     | (_, ExpressionPart::SigiledTypeExpr(_)) => {
-                        // Speculative: assume the eager-evaluated result will type-match at
-                        // late dispatch. If not, dispatch will fail at that point.
-                        // SigiledTypeExpr rides the Expression path — sub-dispatch produces
-                        // a type-side Future the receiving slot's check then validates.
+                        // Speculative: assume the eager-evaluated result will type-match
+                        // at late dispatch. SigiledTypeExpr rides the Expression path —
+                        // sub-dispatch produces a type-side Future the slot then validates.
                         eager_indices.push(i);
                     }
                     (_, other) => {
-                        // Bare-name relaxation: a bare Identifier or bare leaf-Type
-                        // part in any slot whose declared type isn't `Identifier` /
-                        // `TypeExprRef` is auto-wrap-eligible. The PR C strict
-                        // admission's [`signature_admits_strict`] does the analogous
-                        // admission step against the bare-name outcome cache; here
-                        // we admit the part for *lazy-candidacy classification*
-                        // purposes. Admitting the part here keeps the function's
-                        // lazy candidacy intact when a sibling `KExpression+Expression`
-                        // slot is the one driving laziness — without this,
-                        // `SIG_WITH OrderedSig (...)` would lose its lazy candidacy
-                        // on the `sig: Signature` / `Type(OrderedSig)` pairing and
-                        // the post-pick eager loop would sub-Dispatch the bindings
-                        // group, defeating the lazy contract for the `KExpression`
-                        // slot.
+                        // Admit bare names in non-literal-name slots so a sibling
+                        // `KExpression+Expression` slot can still drive lazy candidacy
+                        // (else `SIG_WITH OrderedSig (...)` loses laziness on the
+                        // `sig: Signature` / `Type(OrderedSig)` pairing).
                         if is_bare_name(other)
                             && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
                         {

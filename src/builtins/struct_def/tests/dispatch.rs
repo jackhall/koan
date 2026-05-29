@@ -6,9 +6,8 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
 
 /// `finalize_struct` is idempotent when both `bindings.types[name]` and
-/// `bindings.data[name]` are already populated. Pins the defensive guard at the
-/// top of `finalize_struct` against a future refactor that might silently
-/// regress the cycle-close-then-Combine-finish double-fire safety net.
+/// `bindings.data[name]` are already populated — pins the cycle-close-then-
+/// Combine-finish double-fire safety net.
 #[test]
 fn finalize_struct_is_idempotent_when_both_maps_populated() {
     use crate::machine::model::types::UserTypeKind;
@@ -44,11 +43,8 @@ fn finalize_struct_is_idempotent_when_both_maps_populated() {
     }
 }
 
-/// Stage 3.0c identity-field invariant: two STRUCTs declared in the same scope
-/// share `scope_id` (they're both bound on the same parent scope) but carry
-/// distinct `name`s. This is the per-declaration identity the 3.1 `ktype()` flip
-/// reads — `Foo` and `Bar` lower to distinct `KType::UserType { name: .., scope_id: .. }`
-/// even though they sit in the same scope, because `name` separates them.
+/// Two STRUCTs declared in the same scope share `scope_id` but carry distinct
+/// `name`s — `name` separates per-declaration identity within a scope.
 #[test]
 fn struct_pair_same_scope_distinct_names_share_scope_id() {
     let arena = RuntimeArena::new();
@@ -73,11 +69,9 @@ fn struct_pair_same_scope_distinct_names_share_scope_id() {
     assert_eq!(foo_id, bar_id, "same-scope STRUCTs must share scope_id");
 }
 
-/// Stage 3.1 impact: two STRUCTs declared at the same scope with identical field shapes
-/// have distinct per-declaration identity. Two `FN (PICK x: Foo)` and
-/// `FN (PICK x: Bar)` overloads coexist (pre-3.1 collapsed to `DuplicateOverload`
-/// because both slot types lowered to `KType::Struct`), and dispatching on a
-/// `Foo`-typed value selects the `Foo` body — same for `Bar`.
+/// Two STRUCTs with identical field shapes have distinct per-declaration
+/// identity: `FN (PICK x: Foo)` and `FN (PICK x: Bar)` coexist, and dispatching
+/// on a `Foo`-typed value selects the `Foo` body.
 #[test]
 fn per_declaration_dispatch_separates_overloads() {
     use crate::builtins::test_support::run;
@@ -102,9 +96,8 @@ fn per_declaration_dispatch_separates_overloads() {
     }
 }
 
-/// Wildcard slot `Struct` admits any struct carrier regardless of declaring schema —
-/// the `AnyUserType { kind: Struct }` arm. Both `Foo` and `Bar` values lower to
-/// distinct `UserType`s, but both refine `AnyUserType { kind: Struct }`.
+/// Wildcard slot `Struct` admits any struct carrier: both `Foo` and `Bar`
+/// values lower to distinct `UserType`s but both refine `AnyUserType { kind: Struct }`.
 #[test]
 fn wildcard_struct_slot_admits_any_struct_carrier() {
     use crate::builtins::test_support::run;

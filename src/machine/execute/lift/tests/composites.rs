@@ -8,11 +8,8 @@ use crate::machine::CallArena;
 
 use super::{alloc_local_kf, defeat_fast_path};
 
-/// `any_descendant`'s Dict recursion arm (136) and List None-recursion arm
-/// (177) only fire when a Dict / List sits inside another composite at lift
-/// time. `List<Dict<KFunction>>` triggers both: the outer list rebuild walks
-/// each item through `needs_lift` → `any_descendant`, which recurses into
-/// Dict, which recurses into the KFunction leaf.
+/// `List<Dict<KFunction>>` drives `any_descendant` recursion through both the
+/// Dict arm and the nested-List arm down to the KFunction leaf.
 #[test]
 fn list_of_dict_with_kfunction_anchors_via_recursion() {
     use crate::machine::model::types::Serializable;
@@ -45,8 +42,8 @@ fn list_of_dict_with_kfunction_anchors_via_recursion() {
     assert_eq!(count_after, before + 1);
 }
 
-/// `any_descendant`'s Tagged recursion arm (137). `List<Tagged<KFunction>>`
-/// walks the outer list, recurses into Tagged's `value`, finds the KFunction.
+/// `List<Tagged<KFunction>>` exercises the Tagged recursion arm of
+/// `any_descendant`.
 #[test]
 fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     use crate::machine::ScopeId;
@@ -80,9 +77,9 @@ fn list_of_tagged_with_kfunction_anchors_via_recursion() {
     assert_eq!(count_after, before + 1);
 }
 
-/// `needs_lift`'s pre-anchored short-circuit arms (164, 169, 171) — when a
-/// List descendant already carries its own `Some(rc)` anchor, the predicate
-/// must return `Some(false)` and the list must NOT mark them as needing lift.
+/// A descendant carrying its own `Some(rc)` anchor must short-circuit
+/// `needs_lift` so the list reuses its Rc and the dying frame's count is
+/// untouched.
 #[test]
 fn list_with_pre_anchored_variants_skips_them() {
     use crate::machine::core::kfunction::ArgumentBundle;
@@ -124,8 +121,8 @@ fn list_with_pre_anchored_variants_skips_them() {
     assert_eq!(dying_after, before, "pre-anchored variants must not bump dying Rc");
 }
 
-/// `needs_lift`'s KFuture None arm (170) — unanchored KFuture inside a list
-/// whose function captured the dying scope drives the rebuild.
+/// Unanchored KFuture inside a list whose function captured the dying scope
+/// drives the rebuild.
 #[test]
 fn list_with_unanchored_kfuture_anchors() {
     use crate::machine::core::kfunction::ArgumentBundle;
@@ -151,8 +148,7 @@ fn list_with_unanchored_kfuture_anchors() {
     assert_eq!(count_after, before + 1);
 }
 
-/// `needs_lift`'s KModule None arm (172–174) — unanchored KModule whose
-/// child scope is the dying arena, inside a list.
+/// Unanchored KModule whose child scope is the dying arena, inside a list.
 #[test]
 fn list_with_unanchored_kmodule_anchors() {
     use crate::machine::model::values::Module;
@@ -178,9 +174,8 @@ fn list_with_unanchored_kmodule_anchors() {
     assert_eq!(count_after, before + 1);
 }
 
-/// `needs_lift`'s `Struct | KExpression => Some(false)` arm (176) — Struct
-/// and KExpression descendants inside a List are leaves to needs_lift, so
-/// the list must reuse its Rc (no rebuild) when those are its only contents.
+/// Struct and KExpression are `needs_lift` leaves, so a list of only those
+/// must reuse its Rc.
 #[test]
 fn list_with_struct_and_kexpression_descendants_clones_rc() {
     use crate::machine::ScopeId;
@@ -210,8 +205,8 @@ fn list_with_struct_and_kexpression_descendants_clones_rc() {
     assert_eq!(count_after, before + 1);
 }
 
-/// List of non-borrowing leaves must lift via `Rc::clone` — the rebuild branch
-/// would over-allocate and break the fast-path/needs_lift invariant.
+/// A list of non-borrowing leaves must lift via `Rc::clone`; rebuilding would
+/// over-allocate.
 #[test]
 fn list_no_descendants_clones_rc() {
     let arena = RuntimeArena::new();
@@ -235,8 +230,6 @@ fn list_no_descendants_clones_rc() {
     assert_eq!(count_after, before + 1, "Rc::clone bumps count by 1");
 }
 
-/// List containing a KFunction whose captured scope is the dying arena must rebuild
-/// the list and anchor the inner KFunction on the dying frame's Rc.
 #[test]
 fn list_with_local_kfunction_rebuilds_and_anchors() {
     let arena = RuntimeArena::new();

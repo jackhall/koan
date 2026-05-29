@@ -4,9 +4,8 @@ use crate::builtins::test_support::{
 use crate::machine::{KErrorKind, RuntimeArena};
 use crate::machine::model::{KObject, KType};
 
-/// Smoke test: `(VAL zero: Number)` inside a SIG body binds `zero` under the SIG's
-/// decl_scope as a `KTypeValue(KType::Number)` carrier. The slot exists in
-/// `bindings.data` so `ascribe::shape_check` will require it of an ascribed module.
+/// Smoke: the VAL slot lives in `bindings.data` so `ascribe::shape_check` will
+/// require it of an ascribed module.
 #[test]
 fn val_inside_sig_binds_typeexpr_carrier() {
     let arena = RuntimeArena::new();
@@ -23,11 +22,9 @@ fn val_inside_sig_binds_typeexpr_carrier() {
     }
 }
 
-/// SIG-local shadowing: `LET Type = Number` inside the SIG body shadows the builtin
-/// `Type`. A subsequent `(VAL zero: Type)` re-elaborates against the SIG decl_scope's
-/// types map and binds `zero` with `KType::Number` (the shadow), not `KType::Type`
-/// (the meta-type). Pins the parking path — sibling statement order isn't
-/// guaranteed, so VAL parks on LET's placeholder and resumes via Combine.
+/// Pins the parking path: sibling statement order isn't guaranteed, so VAL parks
+/// on LET's placeholder and resumes via Combine, picking the SIG-local shadow
+/// (`KType::Number`) over the meta-type builtin.
 #[test]
 fn val_resolves_sig_local_type_shadow() {
     let arena = RuntimeArena::new();
@@ -50,8 +47,7 @@ fn val_resolves_sig_local_type_shadow() {
     }
 }
 
-/// `VAL` outside a SIG body — at the run-root — surfaces a structured `ShapeError`
-/// directing the user to `LET`. Gate is the immediate-enclosing labeled scope check.
+/// Gate fires on the immediate-enclosing labeled scope.
 #[test]
 fn val_outside_sig_errors() {
     let arena = RuntimeArena::new();
@@ -68,8 +64,8 @@ fn val_outside_sig_errors() {
     }
 }
 
-/// `VAL` inside a MODULE body — modules are not SIGs; surface the same diagnostic.
-/// The immediate enclosing labeled scope is `"MODULE ..."`, not `"SIG ..."`.
+/// Companion to `val_outside_sig_errors`: MODULE's enclosing labeled scope is
+/// `"MODULE ..."`, not `"SIG ..."`, so the same diagnostic must fire.
 #[test]
 fn val_inside_module_errors() {
     let arena = RuntimeArena::new();
@@ -89,10 +85,8 @@ fn val_inside_module_errors() {
     }
 }
 
-/// `(VAL compare: Function<(Number, Number) -> Number>)` — structural type carrier.
-/// The dispatcher's eager `from_type_expr` lowering produces
-/// `KFunction { args: [Number, Number], ret: Number }`; the body accepts the result
-/// directly because the structural form has no SIG-local shadow to honor.
+/// Structural carriers (here `Function<...>`) are lifted directly — no SIG-local
+/// shadow to honor, so the body skips the re-dispatch path.
 #[test]
 fn val_function_typed_slot() {
     let arena = RuntimeArena::new();
@@ -117,9 +111,8 @@ fn val_function_typed_slot() {
     }
 }
 
-/// VAL on a SIG body whose name is later required by ascription: the missing-member
-/// shape-check still fires because `shape_check` walks `bindings.data` and VAL
-/// writes there.
+/// `shape_check` walks `bindings.data` and VAL writes there, so a missing slot
+/// surfaces as a ShapeError naming both the member and the SIG.
 #[test]
 fn val_slot_required_by_shape_check() {
     let arena = RuntimeArena::new();
@@ -141,10 +134,9 @@ fn val_slot_required_by_shape_check() {
     }
 }
 
-/// A MODULE that supplies the VAL-declared slot via a regular `LET name = <value>`
-/// satisfies the SIG. The shape_check is name-presence only; the VAL's declared
-/// type is recorded but not yet checked against the example value's `ktype()` —
-/// that's modular implicits.
+/// Pins the name-presence-only contract: shape_check passes even though the
+/// MODULE's `LET compare = 0` value isn't type-checked against the VAL's declared
+/// `Number` — that's modular implicits' job, not shape_check's.
 #[test]
 fn val_slot_satisfied_by_module_let_member() {
     let arena = RuntimeArena::new();
@@ -159,8 +151,9 @@ fn val_slot_satisfied_by_module_let_member() {
     assert!(matches!(data.get("Ord").map(|(o, _)| *o), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))));
 }
 
-/// SIG body mixing the abstract type declaration (`LET Type = Number`) with a VAL
-/// slot referencing it. Pins the canonical roadmap form.
+/// Pins the canonical SIG form: abstract type via `LET Type = ...` plus a VAL
+/// slot whose declared type references it. `Type` lives in
+/// `bindings.types`, `zero` in `bindings.data`.
 #[test]
 fn val_with_abstract_type_member_declaration() {
     let arena = RuntimeArena::new();
@@ -173,7 +166,6 @@ fn val_with_abstract_type_member_declaration() {
         Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         _ => panic!("WithZero must bind a KSignature"),
     };
-    // `Type` lives in the SIG's `bindings.types`; `zero` lives in `bindings.data`.
     let type_kt = s.decl_scope().bindings().expect_type("Type");
     assert_eq!(*type_kt, KType::Number);
     let zero = s.decl_scope().bindings().expect_value("zero");

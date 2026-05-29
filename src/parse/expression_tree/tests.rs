@@ -1,16 +1,8 @@
-//! Tests for `expression_tree::parse`, split by parse construct:
+//! Tests for `expression_tree::parse`.
 //!
-//! - [`basics`] — top-level wrapping, whitespace, paren grouping, balance errors.
-//! - [`literals`] — string/number/bool/null literals and identifier classification.
-//! - [`list_dict`] — list and dict literal forms, including brace/bracket errors.
-//! - [`type_sigil`] — `: Type` sigil, function-type arrow, type parameter parsing.
-//! - [`value_sigil`] — `:'`/`:!` quote and eval sigils plus continuation rules.
-//!
-//! Each test parses a source snippet through `expression_tree::parse` and
-//! compares the result against an expected shape string produced by the local
-//! `describe` helper, which renders an `ExpressionPart` tree as a compact
-//! `t(...)` / `T(...)` / `e(...)` notation — terser to read and diff than the
-//! full `KExpression` debug output.
+//! Each test parses a source snippet and compares the result against an expected
+//! shape string produced by the local `describe` helper, which renders an
+//! `ExpressionPart` tree as compact `t(...)` / `T(...)` notation.
 
 mod basics;
 mod list_dict;
@@ -30,9 +22,7 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
             ExpressionPart::Identifier(s) => format!("t({})", s),
             ExpressionPart::Type(t) => format!("T({})", t.render()),
             ExpressionPart::Expression(e) => describe(e),
-            // Strip exactly one wrapping `[…]` from describe(e) — the inner expression
-            // is rendered as `[part1 part2 …]` but the sigil wrapper wants just the
-            // parts. `trim_start/end_matches` strips greedily so we slice instead.
+            // Slice (not trim) to strip exactly one wrapping `[…]` — trim_matches is greedy.
             ExpressionPart::SigiledTypeExpr(e) => {
                 let inner = describe(e);
                 let stripped = inner

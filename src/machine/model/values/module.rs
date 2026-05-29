@@ -21,11 +21,10 @@ use super::super::types::KType;
 
 /// First-class module value. `path` is the lexical-source label (`"IntOrd"`,
 /// `"Outer.Inner"`); `type_members` maps the module's abstract type names to the `KType`
-/// they currently expose. Post-collapse, opaque-ascription members mint
-/// `KType::AbstractType { source_module, name }`; the first-class module value itself
-/// rides `KType::Module { module, frame }` in the surrounding `KObject::KTypeValue`
-/// carrier (the two are distinguished by KType variant, not by a shared `UserType`
-/// `kind` tag).
+/// they currently expose. Opaque-ascription members mint `KType::AbstractType {
+/// source_module, name }`; the module value itself rides `KType::Module { module, frame
+/// }` in the surrounding `KObject::KTypeValue` (the two are distinguished by KType
+/// variant, not by a shared `UserType` `kind` tag).
 pub struct Module<'a> {
     pub path: String,
     child_scope_ptr: *const Scope<'static>,
@@ -33,11 +32,10 @@ pub struct Module<'a> {
     /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
     pub type_members: RefCell<HashMap<String, KType<'a>>>,
-    /// Sigs this module shape-checks against. Populated by `:|` and `:!` at ascription
-    /// time via [`Module::mark_satisfies`]. `accepts_part` for `KType::SatisfiesSignature {
-    /// sig_id }` is an O(1) membership check against this set. `RefCell` because
-    /// ascription writes after the surrounding `KObject::KModule` is already alloc'd —
-    /// same shape as `type_members`.
+    /// Sigs this module shape-checks against. `accepts_part` for
+    /// `KType::SatisfiesSignature { sig_id }` is an O(1) membership check against this
+    /// set. `RefCell` for the same reason as `type_members` — ascription writes after
+    /// the surrounding `KObject::KModule` is already alloc'd.
     pub compatible_sigs: RefCell<Vec<ScopeId>>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
@@ -57,10 +55,7 @@ impl<'a> Module<'a> {
         }
     }
 
-    /// Record that this module shape-checks against `sig_id`. Routed through one named
-    /// method (rather than open-coded `compatible_sigs.borrow_mut().push(...)` at each
-    /// ascription site) so future ascription paths are easy to grep for, and so the
-    /// idempotency check sits in one place — re-ascribing the same module to the same sig
+    /// Record that this module shape-checks against `sig_id`. Idempotent — re-ascribing
     /// (e.g. `(View :| OrderedSig)` after `(View :! OrderedSig)`) doesn't double-insert.
     pub fn mark_satisfies(&self, sig_id: ScopeId) {
         let mut s = self.compatible_sigs.borrow_mut();
@@ -113,10 +108,10 @@ impl<'a> Signature<'a> {
         }
     }
 
-    /// Stable identity used to seed `KType::SatisfiesSignature { sig_id, .. }`. Mirrors
-    /// `Module::scope_id` — each `SIG` declares its own decl_scope and therefore mints
-    /// a fresh `ScopeId`; two `SIG Foo = (...)` declarations in the same lexical scope
-    /// already error (`Rebind`), so distinct `Signature` values always have distinct ids.
+    /// Stable identity used to seed `KType::SatisfiesSignature { sig_id, .. }`. Each
+    /// `SIG` declares its own decl_scope and thus a fresh `ScopeId`; two `SIG Foo = (...)`
+    /// in the same lexical scope already error (`Rebind`), so distinct `Signature`s
+    /// always have distinct ids.
     pub fn sig_id(&self) -> ScopeId {
         self.decl_scope().id
     }
@@ -124,11 +119,10 @@ impl<'a> Signature<'a> {
 
 #[cfg(test)]
 mod tests {
-    //! Targeted Miri coverage for the `Module` / `Signature` unsafe sites: the
-    //! `*const Scope<'static>` lifetime-erasure transmutes and `type_members` `RefCell`
-    //! mutation under a held `&'a Module<'a>` borrow. Each shape is exercised in
-    //! isolation so a regression attributes to a single site rather than an end-to-end run.
-    //! See [`design/memory-model.md`](../../../../design/memory-model.md).
+    //! Miri coverage for the unsafe sites: `*const Scope<'static>` lifetime-erasure
+    //! transmutes and `type_members` `RefCell` mutation under a held `&'a Module<'a>`
+    //! borrow. Each shape is exercised in isolation so a regression attributes to a
+    //! single site. See [`design/memory-model.md`](../../../../design/memory-model.md).
     use super::*;
     use crate::builtins::default_scope;
     use crate::machine::core::RuntimeArena;
@@ -175,8 +169,6 @@ mod tests {
         let scope_id = module.scope_id();
         {
             let mut tm = module.type_members.borrow_mut();
-            // Post-collapse: opaque-ascription members are minted as
-            // `KType::AbstractType { source_module, name }`.
             tm.insert(
                 "Type".into(),
                 KType::AbstractType {
@@ -193,10 +185,9 @@ mod tests {
         ));
     }
 
-    /// Post-collapse: a module value rides `KTypeValue(KType::Module { module, frame })`.
-    /// Build one whose `child_scope` lives in a `CallArena`, lift it against the dying
-    /// frame, and assert the lifted carrier carries the arena anchor. Pins the unsafe
-    /// site behind functor execution end-to-end through the new variant.
+    /// Build a `KTypeValue(KType::Module { module, frame })` whose `child_scope` lives in
+    /// a `CallArena`, lift it against the dying frame, and assert the lifted carrier
+    /// carries the arena anchor. Pins the unsafe site behind functor execution end-to-end.
     #[test]
     fn functor_per_call_module_lifts_correctly() {
         use crate::machine::core::kfunction::{Body, KFunction};

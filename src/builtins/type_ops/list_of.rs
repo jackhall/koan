@@ -26,8 +26,6 @@ mod tests {
     use crate::machine::model::{KObject, KType};
     use crate::machine::RuntimeArena;
 
-    /// `(LIST_OF Number)` dispatches and produces a `KTypeValue` carrying the elaborated
-    /// `KType::List(Number)` directly — no surface-form round-trip needed.
     #[test]
     fn list_of_number_lowers_to_list_number() {
         let arena = RuntimeArena::new();
@@ -41,8 +39,7 @@ mod tests {
         }
     }
 
-    /// Nested dispatch: `(LIST_OF (LIST_OF Number))` schedules the inner LIST_OF as a
-    /// sub-Dispatch and the outer Bind splices the result in. End-to-end exercises the
+    /// Nested dispatch: outer Bind splices the inner LIST_OF result in — exercises the
     /// scheduler-driven type-expression path.
     #[test]
     fn nested_list_of_dispatches_through_scheduler() {

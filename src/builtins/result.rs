@@ -1,18 +1,14 @@
-//! `Result` — a builtin two-variant tagged union (`ok :T`, `error :E`) over two
-//! type parameters, registered once at prelude build.
+//! `Result` — a builtin two-variant tagged union (`ok :T`, `error :E`),
+//! registered once at prelude build like `List`/`Dict`, not via `UNION`/`STRUCT`.
 //!
-//! Shaped like `List`/`Dict` (a specific pre-registered type), not a `UNION`/`STRUCT`
-//! declarator. Two registrations ride under the one name, dual-written by
-//! [`Scope::register_nominal`] exactly as [`union::finalize_union`](super::union):
-//!   - `bindings.types["Result"]` = a [`UserTypeKind::TypeConstructor`] identity, so
+//! Dual-written by [`Scope::register_nominal`] just as [`union::finalize_union`](super::union):
+//!   - `bindings.types["Result"]` — a [`UserTypeKind::TypeConstructor`] identity, so
 //!     `:(Result Number MyErr)` drives the resolver's `ConstructorApply` arm.
-//!   - `bindings.data["Result"]` = a [`KObject::TaggedUnionType`] carrier with schema
-//!     `{ok: Any, error: Any}`, so `(Result (ok v))` / `(Result (error e))` construct
-//!     through the existing `dispatch_constructor` route with no new construction code.
+//!   - `bindings.data["Result"]` — a [`KObject::TaggedUnionType`] carrier with schema
+//!     `{ok: Any, error: Any}`, so `(Result (ok v))` constructs via `dispatch_constructor`.
 //!
-//! Type parameters are erased at runtime (consistent with `List`/`Dict`): the type-side
-//! identity keys on `(kind, scope_id, name)` and `UserTypeKind`'s `PartialEq` ignores
-//! `param_names`, so every `:(Result …)` resolves to the one registered carrier.
+//! Type parameters are erased at runtime (as for `List`/`Dict`): `UserTypeKind`'s
+//! `PartialEq` ignores `param_names`, so every `:(Result …)` resolves to the one carrier.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -37,8 +33,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
         scope_id,
         name: "Result".into(),
     };
-    // Registration runs once at prelude build, so a collision is a programming error;
-    // `register_nominal` panics on borrow conflict and we drop the success value.
+    // Prelude build runs once; a collision here would be a programming error.
     let _ = scope.register_nominal("Result".into(), identity, carrier, BindingIndex::BUILTIN);
 }
 

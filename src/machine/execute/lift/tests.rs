@@ -13,7 +13,7 @@ use crate::machine::model::{KObject, Parseable};
 use crate::machine::{CallArena, KError, KErrorKind, ResolveOutcome, Scope};
 
 /// Test-only `(scope, expr) → KFuture` driver for one-shot bind without spinning a
-/// `Scheduler`. Not production API — the scheduler drives all real dispatches.
+/// `Scheduler`.
 pub(super) fn dispatch_for_test<'a>(
     scope: &'a Scope<'a>,
     expr: KExpression<'a>,
