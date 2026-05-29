@@ -5,6 +5,9 @@ use std::process::ExitCode;
 
 use koan::machine::interpret_with_writer_path;
 
+// Miri can't call mimalloc's FFI (`mi_malloc_aligned`); fall back to the
+// system allocator under miri so the bin target stays in the audit slate.
+#[cfg(not(miri))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
