@@ -113,9 +113,8 @@ impl<'a> NodeStore<'a> {
     }
 
     /// Replace the node payload with a fresh per-call frame, re-anchoring the frame's
-    /// per-call [`Scope`] to `'a` so callers don't have to. See [memory-model.md § Arena
-    /// lifetime erasure](../../../../design/memory-model.md#arena-lifetime-erasure) for
-    /// the store-witnesses-the-re-anchor argument.
+    /// per-call [`Scope`] to `'a` so callers don't have to. See
+    /// [per-call-arena-protocol.md § Slot-table re-anchor](../../../../design/per-call-arena-protocol.md#slot-table-re-anchor).
     pub(super) fn reinstall_with_frame(
         &mut self,
         id: NodeId,

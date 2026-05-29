@@ -99,7 +99,10 @@ inner expression's parts decide its shape:
   `MAP _ -> _` / `FN` / `FUNCTOR` overloads in
   [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs).
 - `BareTypeLeaf` / `BareIdentifier` for single-name sigils
-  (`:(Number)`, `:(MyType)`).
+  (`:(Number)`, `:(MyType)`). The `BareTypeLeaf` fast lane is the
+  primary caller of `coerce_type_token_value` — see
+  [elaboration.md § Layers](elaboration.md#layers) § Layer 4 for the
+  shared coercion seam.
 - `ConstructorCall` for a leaf-Type head with non-empty rest
   (`:(MyStruct 1 2 3)`) — routes Struct / Tagged / Newtype heads
   through their construction primitives.

@@ -65,17 +65,73 @@ Number` finalizes, and writes through `Scope::register_type` to land in
 `bindings.types`. The mutual-recursion SCC sweep covers the cycle case;
 the placeholder-park rail covers the source-order case.
 
+## Layers
+
+The pipeline from parser [`TypeExpr`](../../src/machine/model/ast.rs) to
+fully-elaborated `&'a KType` runs through five layers, each with a
+distinct source-file home. Other typing docs that touch a single layer
+cross-link this section rather than restating its slice.
+
+- **Layer 1 — surface-form builtin cache** in
+  [`ast.rs`](../../src/machine/model/ast.rs). A `OnceCell<KType>` on
+  `TypeExpr` itself memoizes scope-independent builtin lowering.
+  `ExpressionPart::resolve_for` reads the cell first; misses run
+  [`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs)
+  and write back when the surface form resolves against the builtin
+  table. Arity is enforced here, before binder install. See
+  [Strict admission rules](#strict-admission-rules) below for the cache
+  mechanics.
+- **Layer 2 — scope-bound elaboration memo** in
+  [`bindings.rs`](../../src/machine/core/bindings.rs). A
+  `RefCell<HashMap<TypeExpr, &'a KType>>` on `Bindings` (`type_expr_memo`)
+  caches resolved `TypeExpr → &'a KType` per scope, gated by a finalize
+  check on every embedded user-type. Reached through
+  [`Scope::resolve_type_expr`](../../src/machine/core/scope.rs), which
+  returns the three-outcome
+  `ResolveTypeExprOutcome::{Done, Park, Unbound}`. See
+  [Strict admission rules](#strict-admission-rules) for the gate and
+  the monotonicity argument.
+- **Layer 3 — the elaborator** in
+  [`resolver.rs`](../../src/machine/model/types/resolver.rs). Recursive
+  walk over `TypeExpr` that threads the set of binders currently being
+  elaborated for self-reference recognition (described above), parks on
+  not-yet-finalized leaves via `ElabResult::Park(producers)`, and
+  produces `&'a KType`. FN-signature, STRUCT/UNION field-type, and
+  FUNCTOR per-call return-type Combines all reduce to this walk; see
+  [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
+  for the parking integration.
+- **Layer 4 — bare-leaf dispatch ingress** in
+  [`resolve_type_expr.rs`](../../src/machine/core/resolve_type_expr.rs).
+  [`coerce_type_token_value`](../../src/machine/core/resolve_type_expr.rs)
+  is the shared coercion seam from a bare-`Type` token to a dispatch-time
+  carrier, called from the dispatcher's `BareTypeLeaf` fast lane and the
+  keyworded splice walk's eager name-resolve pass. Resolves through
+  `bindings.types` and synthesizes `KObject::KTypeValue(kt.clone())` on a
+  non-nominal hit; nominal hits recover the paired value-side carrier
+  from `bindings.data`. See
+  [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) below for
+  the downstream consumers.
+- **Layer 5 — surface-form-survives-bind carrier** in
+  [`kobject.rs`](../../src/machine/model/values/kobject.rs).
+  `KObject::TypeNameRef(TypeExpr)` preserves the parser-side `TypeExpr`
+  verbatim for bare-leaf type names not in the builtin table — so
+  diagnostics quote the user's identifier exactly as written rather than
+  the elaborated canonical form. See
+  [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) for the
+  consumers that carry a `TypeNameRef` arm beside the `KTypeValue` arm.
+
 ## Binding-map partition
 
-Type bindings live in a separate map from value bindings. The
-[`Bindings`](../../src/machine/core/bindings.rs) façade owns four maps:
-`data` for values, `functions` for registered overloads, `placeholders` for
-in-flight dispatch tasks, and `types` for type-name → `&KType` arena pointers.
-Token-class-driven lookup at the resolver decides which map to consult —
-Type-class tokens consult `types`, identifier tokens consult `data`. Builtin
-type names *and* `LET Ty = Number`-style aliases live in `bindings.types` as
-arena-allocated `&KType`
-([`RuntimeArena::alloc_ktype`](../../src/machine/core/arena.rs)),
+Type bindings live in a separate map from value bindings — the type-side
+slice of the [lookup → admit protocol](lookup-protocol.md)'s Layer 2.
+The [`Bindings`](../../src/machine/core/bindings.rs) façade owns four
+maps: `data` for values, `functions` for registered overloads,
+`placeholders` for in-flight dispatch tasks, and `types` for type-name →
+`&KType` arena pointers. Token-class-driven lookup at the resolver
+decides which map to consult — Type-class tokens consult `types`,
+identifier tokens consult `data`. Builtin type names *and* `LET Ty =
+Number`-style aliases live in `bindings.types` as arena-allocated
+`&KType` ([`RuntimeArena::alloc_ktype`](../../src/machine/core/arena.rs)),
 reachable through
 [`Scope::resolve_type`](../../src/machine/core/scope.rs) on the same
 pointer as the builtin.

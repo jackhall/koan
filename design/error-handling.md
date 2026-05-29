@@ -70,12 +70,13 @@ for an out-of-bounds index, or a `MissingArg` with a hand-crafted message).
 
 A user-fn whose body tail-calls another user-fn ends up with only the inner
 function in the trace, because the slot's `function` field is replaced at TCO
-time (see [execution-model.md](execution-model.md)). Non-tail-call positions —
-e.g., a sub-`Dispatch` inside a parens-wrapped sub-expression — preserve the
-outer frame: the slot rewrites to a `Lift` shim that retains the call frame
-and `function` label until the spawned `Bind` notifies, so an error landing
-on the Lift carries the outer function's frame. This matches how other
-languages with TCO behave.
+time (see [execution-model.md](execution-model.md) and
+[per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse)).
+Non-tail-call positions — e.g., a sub-`Dispatch` inside a parens-wrapped
+sub-expression — preserve the outer frame: the slot rewrites to a `Lift`
+shim that retains the call frame and `function` label until the spawned
+`Bind` notifies, so an error landing on the Lift carries the outer
+function's frame. This matches how other languages with TCO behave.
 
 ## User-side surface
 

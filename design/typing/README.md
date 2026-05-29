@@ -31,6 +31,12 @@ Type-system mechanics:
   `Scope::register_nominal`, cycle close for mutually recursive nominals,
   and the `NEWTYPE` keyword's `Wrapped` carrier with its newtype-over-newtype
   collapse invariant encoded in the field type.
+- [lookup-protocol.md](lookup-protocol.md) — the three-layer foundation
+  every dispatch and name-resolution site threads: `Scope` chain-walks
+  ancestors, `Bindings` finds entries gated by the visibility predicate,
+  `KType` predicates admit or reject the candidate. Names the entry
+  points and explains why this is a foundation (correctly distributed)
+  rather than a seam.
 
 Module-system mechanics:
 

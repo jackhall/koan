@@ -193,12 +193,17 @@ Per-call elaboration runs at the dispatch boundary in
 [`KFunction::invoke`](../../src/machine/core/kfunction/invoke.rs). The
 `Deferred(_)` arm spawns the body Dispatch and (for the `Expression`
 carrier) an optional return-type sub-Dispatch under the per-call frame
-via `SchedulerHandle::with_active_frame`, then joins them in a `Combine`
-whose finish closure runs `per_call_ret.matches_value(body_value)` and
-surfaces mismatches with `(per-call return type)` wording. The
-`TypeExpr` carrier elaborates inline against the per-call scope where the
-per-call type-side bind has installed the parameter-name identities; both
-carriers feed the same Combine. The lift-time return-type check in
+via `SchedulerHandle::with_active_frame` (see
+[per-call-arena-protocol.md § Active-frame propagation](../per-call-arena-protocol.md#active-frame-propagation)),
+then joins them in a `Combine` whose finish closure runs
+`per_call_ret.matches_value(body_value)` and surfaces mismatches with
+`(per-call return type)` wording. The
+`TypeExpr` carrier elaborates inline against the per-call scope where
+the per-call type-side bind has installed the parameter-name
+identities; both carriers feed the same Combine. The inline elaboration
+is the standard
+[elaboration.md § Layers](elaboration.md#layers) § Layer 3 walk against
+the per-call scope. The lift-time return-type check in
 [`scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the Combine

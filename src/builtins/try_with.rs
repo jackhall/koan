@@ -95,8 +95,7 @@ fn dispatch_branch<'a>(
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
 
-    // Frame chains `outer_frame` so the call-site arena outlives the child scope's
-    // `outer` pointer while the new frame is live (see `match_case::body`).
+    // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
     let frame: Rc<CallArena> = CallArena::new(scope, outer_frame);
     let arena_ptr: *const RuntimeArena = frame.arena();
     let scope_ptr: *const Scope<'_> = frame.scope();

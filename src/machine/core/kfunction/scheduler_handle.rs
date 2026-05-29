@@ -45,10 +45,9 @@ pub trait SchedulerHandle<'a> {
         scope: &'a Scope<'a>,
         finish: CatchFinish<'a>,
     ) -> NodeId;
-    /// Active slot's `Rc<CallArena>`. A builtin building a new per-call frame whose child
-    /// scope's `outer` points into the call site chains that Rc onto the new frame; without
-    /// this, the new frame's `outer` dangles the moment the slot's old frame is dropped on
-    /// TCO replace.
+    /// Active slot's `Rc<CallArena>`. See
+    /// [per-call-arena-protocol.md § Active-frame propagation](../../../../design/per-call-arena-protocol.md#active-frame-propagation)
+    /// and [§ Outer-frame chain](../../../../design/per-call-arena-protocol.md#outer-frame-chain-for-builtin-built-frames).
     fn current_frame(&self) -> Option<Rc<CallArena>>;
 
     /// Run a closure with `active_frame` temporarily set to `frame`, then restore the
@@ -60,15 +59,8 @@ pub trait SchedulerHandle<'a> {
         body: &mut dyn FnMut(&mut dyn SchedulerHandle<'a>),
     );
 
-    /// Take the active frame for reuse on a TCO Replace iff it is uniquely owned —
-    /// i.e. no closure or sub-slot has cloned the `Rc` out. On `Some`, the caller
-    /// becomes the sole owner; calling [`CallArena::try_reset_for_tail`] on it is
-    /// guaranteed to succeed. On `None`, the active frame is left in place and the
-    /// caller must allocate a fresh frame.
-    ///
-    /// The "uniquely owned" gate is what keeps reuse semantically equivalent to
-    /// drop-and-alloc: any escaped `Rc` (returned closure, list element carrying a
-    /// `KFunction(_, Some(rc))`, ...) keeps strong_count > 1 and refuses reuse.
+    /// Take the active frame for reuse on a TCO Replace iff it is uniquely owned. See
+    /// [per-call-arena-protocol.md § TCO frame reuse](../../../../design/per-call-arena-protocol.md#tco-frame-reuse).
     fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>>;
 
     /// Active slot's lexical chain. Mirrors [`Self::current_frame`]. See `LexicalFrame`.

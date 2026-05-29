@@ -233,7 +233,9 @@ annotation. The three boundaries are:
 - **`LET`** ascription — same check-then-stamp on the bound value.
 
 **Arity is enforced at FN-definition time** by `KType::from_type_expr`:
-`:(List A B)` rejects with a precise error before the function is ever called.
+`:(List A B)` rejects with a precise error before the function is ever
+called. (See [elaboration.md § Layers](elaboration.md#layers) § Layer 1
+for where `from_type_expr` sits in the elaboration pipeline.)
 
 `KFunction` is not a surface-declarable type name — there's no "any function"
 KType, since a function with no signature has nothing to dispatch on. Use
@@ -256,16 +258,16 @@ than at the slot kind.
 
 ### `TypeNameRef` — surface form survives bind
 
-When a `TypeExprRef`-slot value's surface `TypeExpr` can't be lowered to a
-concrete `KType` at `ExpressionPart::resolve_for` time — a bare-leaf name not in
+A `TypeExprRef`-slot value whose surface `TypeExpr` doesn't resolve at
+`ExpressionPart::resolve_for` time — a bare-leaf name outside
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)'s
-builtin table (`Point`, `IntOrd`, `MyList`, or just an unknown name like
-`SomeWeirdName`) — the bind-time carrier is
+builtin table (`Point`, `IntOrd`, `MyList`, or an unknown name like
+`SomeWeirdName`) — rides through bind as
 [`KObject::TypeNameRef(TypeExpr)`](../../src/machine/model/values/kobject.rs)
-rather than `KTypeValue(_)`. This carrier preserves the parser-side `TypeExpr`
-**verbatim**: scope-aware elaboration (see
-[`Scope::resolve_type_expr`](../../src/machine/core/scope.rs)) happens later
-against the captured scope, but the **surface form survives bind unchanged**.
+rather than `KTypeValue(_)`. See
+[elaboration.md § Layers](elaboration.md#layers) § Layer 5 for where this
+carrier sits in the pipeline and the eventual scope-aware elaboration
+hop.
 
 The guarantee this gives consumers: diagnostics can quote the user's
 identifier exactly as written, not the elaborated canonical form. A FN
@@ -392,24 +394,21 @@ the concrete overload wins by specificity without tying.
 ### Overload bucket visibility filter
 
 Function-bucket lookup pre-filters by per-overload visibility before the strict
-admit predicate runs. Each `functions` entry carries a per-overload
+admit predicate runs — the [lookup → admit protocol](lookup-protocol.md)'s
+Layer 2 (`Bindings::lookup_function`) applied per-overload rather than per
+name. Each `functions` entry carries a per-overload
 [`BindingIndex`](../../src/machine/core/bindings.rs) — the lexical statement
 index at which the overload was registered, paired with a `nominal_binder` flag.
-[`Bindings::lookup_function`](../../src/machine/core/bindings.rs) consults
-the consumer's `chain_cutoff` (the per-scope translation of its
-[`LexicalFrame`](../../src/machine/core/lexical_frame.rs) chain) and drops any
-overload whose `BindingIndex` is not visible — same strict
-`idx < cutoff` predicate as [`Scope::resolve_with_chain`](../../src/machine/core/scope.rs).
 A consumer between two same-bucket overloads sees only the earlier; the
 later-sibling overload is hidden, and dispatch falls through to outer scopes
 unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
 does **not** apply to FN-bucket overloads — they're value-style gated.
-[`OverloadBucket::pick`](../../src/machine/core/resolve_dispatch.rs) receives
-the pre-filtered survivor list (a non-empty `FunctionLookup::Bucket` arm) and
-runs only the admit predicate over it. When no bucket admits at a given
-scope but a `pending_overloads[key]` entry is visible, the same lookup falls
-through to `FunctionLookup::Pending(NodeId)` and the dispatcher records the
-innermost such producer for a park-and-replay on wake.
+[`OverloadBucket::pick_strict`](../../src/machine/core/resolve_dispatch.rs)
+receives the pre-filtered survivor list (a non-empty `FunctionLookup::Bucket`
+arm) and runs only the admit predicate over it. When no bucket admits at a
+given scope but a `pending_overloads[key]` entry is visible, the same lookup
+falls through to `FunctionLookup::Pending(NodeId)` and the dispatcher records
+the innermost such producer for a park-and-replay on wake.
 
 The result: an FN reference resolves under the same lexical-position rule as a
 value-LET reference. Forward calls between sibling FNs work through the

@@ -45,19 +45,15 @@ pub struct Scheduler<'a> {
     pub(in crate::machine::execute::scheduler) queues: WorkQueues,
     pub(in crate::machine::execute::scheduler) deps: DepGraph,
     pub(in crate::machine::execute::scheduler) store: NodeStore<'a>,
-    /// Frame Rc of the slot currently being executed. Read via `SchedulerHandle::current_frame`
-    /// so frame-creating builtins (MATCH) can chain it onto their new frame.
+    /// Frame Rc of the slot currently being executed. See
+    /// [per-call-arena-protocol.md § Active-frame propagation](../../../design/per-call-arena-protocol.md#active-frame-propagation).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
     /// Lexical chain of the slot currently executing. `Scheduler::add` reads this to attach
     /// a chain to every sub-slot that doesn't carry an explicit `enter_block` chain, so
     /// internal binder sub-dispatches inherit the parent's chain implicitly.
     pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
-    /// Per-slot reserve frame for the running step. `invoke_to_step_pinned` takes it,
-    /// pins `active_frame` aside, installs the reserve as the new `active_frame`, and
-    /// lets `try_take_reusable_frame_for_tail` consume it (uniqueness holds because
-    /// the slot's `frame` field carries the pinned local; the reserve was uniquely held).
-    /// `None` between slot steps. See design/memory-model.md § Ping-pong reserve frame
-    /// on stateful resume paths.
+    /// Per-slot reserve frame for the running step. `None` between slot steps. See
+    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
     pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
     #[cfg(test)]
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
@@ -65,8 +61,8 @@ pub struct Scheduler<'a> {
 
 /// RAII-shaped save/restore wrapper around the per-step `active_frame`, `active_chain`,
 /// and `active_reserve` swap that brackets each iteration of [`Scheduler::execute`].
-/// Bookkeeping spine for the ping-pong reserve-frame rotation
-/// (design/memory-model.md § Ping-pong reserve frame on stateful resume paths).
+/// Bookkeeping spine for the ping-pong reserve-frame rotation; see
+/// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
 pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
     prev_frame: Option<Rc<CallArena>>,
     prev_chain: Option<Rc<LexicalFrame>>,

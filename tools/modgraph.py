@@ -714,6 +714,37 @@ def update_baseline(path: Path, score: Score, root_loc: int) -> None:
               f"from {prior_date} {prior_sha} (Δ {delta:+.2f}, recorded to {path}).")
 
 
+def regenerate_source_data(edges_path: Path) -> None:
+    """Rewrite the two files modgraph reads from: the module dep graph (via
+    `cargo modules dependencies`) and `observe/doc_graph.dot` (via
+    `tools/doclinks.py signals`). Both fail loudly — a silent stale DOT is the
+    bug this helper exists to prevent."""
+    repo = Path(__file__).resolve().parent.parent
+    cargo_cmd = [
+        "cargo", "modules", "dependencies",
+        "--package", "koan", "--lib",
+        "--no-externs", "--no-sysroot",
+        "--no-traits", "--no-fns", "--no-types",
+    ]
+    print(f"regenerating {edges_path} via `cargo modules dependencies`...")
+    proc = subprocess.run(cargo_cmd, cwd=repo, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"cargo modules failed (exit {proc.returncode}):\n{proc.stderr}"
+        )
+    edges_path.write_text(proc.stdout)
+    doclinks = repo / "tools" / "doclinks.py"
+    print(f"regenerating observe/doc_graph.dot via `doclinks.py signals`...")
+    proc = subprocess.run(
+        ["python3", str(doclinks), "signals"],
+        cwd=repo, capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"doclinks signals failed (exit {proc.returncode}):\n{proc.stderr}"
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--edges", required=True, type=Path, help="cargo-modules DOT output")
@@ -788,7 +819,16 @@ def main() -> int:
                          "delta line against the prior top entry (e.g. --baseline "
                          "observe/complexity.txt). Dirty-snapshot `+` entries are "
                          "retained.")
+    ap.add_argument("--regenerate", action="store_true",
+                    help="before scoring, regenerate the two source-data files this "
+                         "tool reads from: rewrite --edges via `cargo modules "
+                         "dependencies` and rewrite observe/doc_graph.dot via "
+                         "`tools/doclinks.py signals`. Use this to make a "
+                         "regen+score pass mechanical.")
     args = ap.parse_args()
+
+    if args.regenerate:
+        regenerate_source_data(args.edges)
 
     edges = load_edges(args.edges)
     prose_redirect: dict[Path, Path] = {}

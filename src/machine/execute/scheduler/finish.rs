@@ -138,40 +138,9 @@ impl<'a> Scheduler<'a> {
     }
 
     /// `invoke_to_step` with the slot's reserve frame consumed when available,
-    /// falling back to the pin-only shape otherwise. Used by the stateful
-    /// resume / install-time short-circuit sites where the dispatch slot holds
-    /// the only `Rc<CallArena>` for the arena `scope` lives in.
-    ///
-    /// **Reserve-consuming arm** (`Some` reserve): the per-slot reserve was
-    /// rotated in two iterations ago by the Replace arm in `execute.rs`, so
-    /// its scope is past every live tree-borrows protector. The helper:
-    ///
-    /// 1. Pins `self.active_frame` (the slot's current frame) via a local
-    ///    clone — this keeps `scope` alive across the invoke.
-    /// 2. Swaps the reserve into `self.active_frame`. The reserve was uniquely
-    ///    held by `active_reserve` (`SchedulerHandle::current_frame` returns
-    ///    `active_frame`, never `active_reserve`; the only other Rc was the
-    ///    `slot.reserve_frame` field, drained by `take_for_run` and routed
-    ///    through `enter_slot_step`), so `strong_count == 1` on the now-active
-    ///    reserve.
-    /// 3. Calls `invoke_to_step`. Inside,
-    ///    `try_take_reusable_frame_for_tail`'s uniqueness check succeeds on
-    ///    the reserve, the reset lands, and the body runs in the reset arena.
-    /// 4. Restores `self.active_frame = local_pin` so the post-step swap in
-    ///    `execute.rs` sees the slot's frame and can rotate it into the next
-    ///    iteration's reserve.
-    ///
-    /// **Pin-only arm** (`None` reserve, first or second iteration): clones
-    /// `self.active_frame` for the duration of the invoke. Without the pin,
-    /// `KFunction::invoke` would successfully take the frame for tail-reuse
-    /// and `try_reset_for_tail` would deallocate the arena while `scope`'s
-    /// tree-borrows protector is still live (UB). The pin keeps
-    /// `strong_count >= 2` across the invoke, foreclosing the tail-reuse on
-    /// the slot's only frame Rc.
-    ///
-    /// See [design/memory-model.md § Ping-pong reserve frame on stateful
-    /// resume paths](../../../../design/memory-model.md) for the rotation
-    /// design and `recursive_tagged_match_no_uaf` for the Miri witness.
+    /// falling back to a pin-only shape otherwise. See
+    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame)
+    /// for the rotation; `recursive_tagged_match_no_uaf` is the Miri witness.
     pub(super) fn invoke_to_step_pinned(
         &mut self,
         future: KFuture<'a>,

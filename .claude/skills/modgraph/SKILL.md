@@ -17,7 +17,16 @@ Assume `cargo modules` is on PATH.
 
 ## Recipes
 
-### 1. Export the dep graph
+### 1. Score against the tracked baseline (regenerate + score in one shot)
+
+```sh
+python3 tools/modgraph.py --regenerate \
+    --edges observe/modules.dot --root koan --baseline observe/complexity.txt
+```
+
+`--regenerate` rewrites the two source-data files modgraph reads from before scoring: it runs `cargo modules dependencies ...` to refresh `--edges`, and `tools/doclinks.py signals` to refresh `observe/doc_graph.dot` (which `doclinks` consumes — kept in sync so source and doc graphs match the same working-tree state). This is the canonical command for "rescore after I changed something." Use it instead of manually invoking `cargo modules` + `doclinks signals`.
+
+### 2. Manual export of the dep graph (only if you need a non-default DOT)
 
 ```sh
 cargo modules dependencies --package koan --lib \
@@ -27,7 +36,7 @@ cargo modules dependencies --package koan --lib \
 
 The `--no-fns --no-types --no-traits` flags are required: the walk maps modules to files, and symbol-level nodes have no `.rs` backing, which would silently zero out LOC.
 
-### 2. Score a subtree (or the whole crate)
+### 3. Score a subtree directly
 
 ```sh
 python3 tools/modgraph.py --edges /tmp/koan.dot --root koan
@@ -40,7 +49,7 @@ Each row prints `nest N.N` next to `index N.N` (the rolled-up structural cost) a
 
 For tracked baselines (used by the `verify` skill), pass `--baseline <file>` — modgraph prunes unreachable-SHA entries (branch checkout / hard reset / rebase drop), prepends today's measurement, trims to 5, and prints a delta line. Dirty-snapshot `+` entries are retained so a pre-commit hook (which always sees a staged-but-not-yet-committed tree) doesn't erase the trend log. For ad-hoc what-if scoring (refactor exploration via `modgraph_rewrite.py`), leave the flag off so the baseline file isn't touched.
 
-### 3. Score a *refactor* (module renames)
+### 4. Score a *refactor* (module renames)
 
 `tools/modgraph_rewrite.py module` rewrites the DOT graph and mirrors `src/` so you can re-run modgraph against a hypothetical layout without touching real files:
 
@@ -58,7 +67,7 @@ python3 tools/modgraph.py --edges /tmp/koan_proposed.dot --root koan \
 
 Each `--rename OLD=NEW` rebinds module paths matching `OLD` or starting with `OLD::`; both DOT tokens and the mirrored `src/` filenames update. Renames apply against the original path only — chains (`A=B`, `B=C`) must be expressed as the final target. For long lists, use `--rename-file <path>` (one `OLD=NEW` per line, `#` for comments).
 
-### 4. Score a *refactor* (item extraction)
+### 5. Score a *refactor* (item extraction)
 
 When the seam is "pull these specific items out into a new module" (not a whole-module rename), use `tools/modgraph_rewrite.py item`. It reads a SCIP code-index from `rust-analyzer`, resolves item references at function/method granularity, and surgically rewrites the DOT plus mirrored `src/`:
 

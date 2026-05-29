@@ -37,7 +37,10 @@ matches any `KObject::Struct` / `Tagged` of the matching kind. Each kind
 ranks alongside the others with no per-kind branching at the dispatcher.
 The module/signature variants follow the parallel stratification:
 `KType::Module { .. }` ≺ `KType::AnyModule` ≺ `Any`, and
-`KType::Signature(_)` ≺ `KType::AnySignature` ≺ `Any`.
+`KType::Signature(_)` ≺ `KType::AnySignature` ≺ `Any`. This is the
+identity-and-wildcard slice of Layer 3 of the
+[lookup → admit protocol](lookup-protocol.md); the predicate is the same
+one every dispatch admit pass runs.
 
 ## Value carriers and nominal install
 

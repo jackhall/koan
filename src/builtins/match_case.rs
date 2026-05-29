@@ -59,9 +59,7 @@ pub fn body<'a>(
         }
         Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
     };
-    // Chain the call-site frame on the new `CallArena` so a per-call call-site arena
-    // (e.g. MATCH inside a user-fn body) outlives the child scope's `outer` pointer.
-    // `current_frame` is `None` at run-root, which outlives the run.
+    // Chain the call-site frame per per-call-arena-protocol.md § Outer-frame chain.
     let frame: Rc<CallArena> = CallArena::new(scope, sched.current_frame());
     let arena_ptr: *const RuntimeArena = frame.arena();
     let scope_ptr: *const Scope<'_> = frame.scope();
@@ -205,9 +203,8 @@ mod tests {
 
     #[test]
     fn recursive_tagged_match_no_uaf() {
-        // Regression: TCO replace dropped the enclosing-fn frame before MATCH's
-        // deferred lift ran, freeing the call-site arena under MATCH's child
-        // `outer` pointer. Frame Rc must chain through `outer_frame`.
+        // Pins the `outer_frame` chain — per-call-arena-protocol.md
+        // § MATCH frame lifetime under tail recursion.
         let bytes = run_program(
             "UNION Bit = (one :Null zero :Null)\n\
              FN (HOP b :Tagged) -> Any = (MATCH (b) WITH (\

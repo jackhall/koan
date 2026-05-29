@@ -12,8 +12,8 @@ use super::scope::Scope;
 ///
 /// See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
 /// for the transmute soundness argument and
-/// [§ Cycle gate](../../../design/memory-model.md#cycle-gate-on-alloc_object) for
-/// the `Rc<CallArena>` redirect that `alloc` enforces.
+/// [per-call-arena-protocol.md § Cycle gate](../../../design/per-call-arena-protocol.md#cycle-gate-on-alloc_object)
+/// for the `Rc<CallArena>` redirect that `alloc` enforces.
 pub struct RuntimeArena {
     objects: Arena<KObject<'static>>,
     functions: Arena<KFunction<'static>>,
@@ -275,10 +275,10 @@ pub fn false_singleton<'a>() -> &'a KObject<'a> { project(&FALSE_HOLDER) }
 /// the frame's life past slot finalize. Field order is load-bearing: `arena` drops before
 /// `outer_frame`, so inner pointers die before the outer storage they may reference.
 ///
-/// See [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
-/// for the heap-pinning / drop-order invariants and
-/// [§ Per-call-frame chaining](../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames)
-/// for when `outer_frame` is needed.
+/// See [per-call-arena-protocol.md](../../../design/per-call-arena-protocol.md) for the
+/// carrier set, lift-time anchor decision, cycle gate, `outer_frame` chain, and TCO
+/// frame reuse; [memory-model.md § Arena lifetime erasure](../../../design/memory-model.md#arena-lifetime-erasure)
+/// for the heap-pinning / drop-order invariants.
 pub struct CallArena {
     arena: RuntimeArena,
     scope_ptr: *const Scope<'static>,
@@ -340,11 +340,8 @@ impl CallArena {
     /// Reset this frame in place for a tail-call iteration: drop the old arena storage,
     /// install a fresh `RuntimeArena` escaping into `new_outer.arena`, re-allocate the
     /// child `Scope` under `new_outer`. Returns `false` (untouched) when `Rc::get_mut`
-    /// fails — any other live `Rc` foreclosing in-place reuse.
-    ///
-    /// See [memory-model.md § Tail-step frame reuse](../../../design/memory-model.md#tail-step-frame-reuse)
-    /// for the two structural invariants (no-escape, no-live-external-refs) that make
-    /// the in-place reset sound.
+    /// fails — any other live `Rc` foreclosing in-place reuse. See
+    /// [per-call-arena-protocol.md § TCO frame reuse](../../../design/per-call-arena-protocol.md#tco-frame-reuse).
     pub fn try_reset_for_tail<'p>(
         self: &mut Rc<Self>,
         new_outer: &'p Scope<'p>,

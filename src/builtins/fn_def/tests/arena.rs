@@ -56,7 +56,7 @@ fn chained_tail_calls_reuse_frames() {
 
 /// Recursive tail-call through a `MATCH` arm. Pins the refcount-driven reuse
 /// refusal one step out, resume one step later; see
-/// [memory-model.md § MATCH frame lifetime under tail recursion](../../../../design/memory-model.md#match-frame-lifetime-under-tail-recursion).
+/// [per-call-arena-protocol.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-arena-protocol.md#match-frame-lifetime-under-tail-recursion).
 #[test]
 fn match_driven_tail_recursion_completes() {
     let arena = RuntimeArena::new();

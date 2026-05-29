@@ -38,7 +38,7 @@ impl<'a> NonWrappedRef<'a> {
 /// uses `IndexMap` so iteration matches declaration order.
 ///
 /// `KFunction` and `KFuture` carry an `Option<Rc<CallArena>>` lifecycle anchor; see
-/// [memory-model.md § Closure escape](../../../../design/memory-model.md#closure-escape-per-call-arenas--rc).
+/// [per-call-arena-protocol.md § Carriers](../../../../design/per-call-arena-protocol.md#carriers).
 pub enum KObject<'a> {
     Number(f64),
     KString(String),

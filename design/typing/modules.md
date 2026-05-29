@@ -172,10 +172,11 @@ the call-site arena (rather than a per-call frame that drops at block end) is wh
 makes forwarding sound: a forwarded bind — or a function defined in the block and
 forward-registered into the call site — references values and a captured scope
 that all live in the call-site arena. For a functor-result module whose child
-scope lives in a per-call [`CallArena`](../../src/machine/core/arena.rs), the
-opened module's value (carrying that arena's `Rc`) is rooted in the call-site
-arena so the borrowed window survives both the block and any closure that escapes
-it reading a surfaced member.
+scope lives in a per-call `CallArena`, the opened module's value (carrying that
+arena's `Rc` per the
+[per-call arena protocol](../per-call-arena-protocol.md#carriers)) is rooted in
+the call-site arena so the borrowed window survives both the block and any
+closure that escapes it reading a surfaced member.
 
 A bare `FN` registration writes only the `functions` dispatch bucket, never
 `data`; only the `LET f = (FN …)` capture form also writes `data`. The surfaced

@@ -215,6 +215,9 @@ src/
 
 Design rationale — one topical doc each. Mostly shipped behavior, but
 sections may be aspirational where a decision has landed ahead of code.
+[design/README.md](design/README.md) is the design-tree index — what
+each doc owns, the foundation-vs-seam heuristic the refactor analysis
+uses, and pointers to the analysis tooling.
 
 - [design/execution-model.md](design/execution-model.md) — scheduler, deferred dispatch, per-call arenas.
 - [design/memory-model.md](design/memory-model.md) — value ownership, lifting, lexical closures.

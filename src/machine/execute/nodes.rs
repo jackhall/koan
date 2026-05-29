@@ -113,17 +113,8 @@ pub(super) struct Node<'a> {
     /// slot needs — TCO drop is immediate with no `prev` chain.
     pub(super) frame: Option<Rc<CallArena>>,
     /// Per-slot reserve frame for the ping-pong rotation that lets stateful
-    /// eager-subs resumes reuse a `CallArena` across iterations. Filled at the
-    /// second Tail Replace (the first has no prior frame to rotate in; the
-    /// second's `prev_frame` lands here); iteration 3+ consumes it via
-    /// `invoke_to_step_pinned`'s reserve-swap. The reserve is two iterations
-    /// old by construction at consumption time, so its `scope` is past every
-    /// live tree-borrows protector — `try_reset_for_tail` may safely reset it.
-    /// Drops naturally when the slot terminalizes; the Replace arm in
-    /// `execute.rs` rotates `prev_frame` into this field on each new-frame
-    /// Replace, superseding the prior (2-iter-old) reserve. See
-    /// [design/memory-model.md § Ping-pong reserve frame on stateful resume
-    /// paths](../../../design/memory-model.md).
+    /// eager-subs resumes reuse a `CallArena` across iterations. See
+    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
     pub(super) reserve_frame: Option<Rc<CallArena>>,
     /// Set in lockstep with `frame`. Read on Done to enforce the declared return type
     /// and to append a `Frame` to errors for the call-stack trace.

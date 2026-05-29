@@ -193,21 +193,11 @@ construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite.
 
-The slot's `Rc<CallArena>` is held in exactly one place during each step:
-[`Scheduler::execute`](../src/machine/execute/scheduler/execute.rs) moves
-`node.frame` directly into `self.active_frame` (no clone) and reverses the
-move after the step. That single-ownership discipline is what lets the
-tail-reuse path detect "nothing escaped" via `Rc::strong_count == 1`:
-[`SchedulerHandle::try_take_reusable_frame_for_tail`](../src/machine/core/kfunction/scheduler_handle.rs)
-takes the active frame, refuses to hand it out if any clone exists, and
-otherwise lets `KFunction::invoke` reset the frame in place via
-[`CallArena::try_reset_for_tail`](../src/machine/core/arena.rs) — swap the
-inner `RuntimeArena` for a fresh empty one, re-allocate the child `Scope`,
-re-link `outer` to the new call's captured scope. The shell, the heap-pinned
-arena address, and the slot's `frame` field all survive across the
-iteration; only the storage turns over. Frames carrying an escaped closure
-(or any other clone of the `Rc`) fall through to a fresh `CallArena::new`,
-preserving snapshot semantics for the escaped value.
+The slot's `Rc<CallArena>` is held in exactly one place during each step,
+which is what lets the tail-reuse path detect "nothing escaped" and reset
+the frame shell in place across iterations rather than allocating a fresh
+one. See
+[per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse).
 
 A subtle point: host-stack overflow on naïve recursion is solved by the graph
 model itself, not by `Tail`. Every "recursive call" enters the scheduler's
@@ -400,44 +390,30 @@ The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`,
 [`register_builtin_with_binder`](../src/machine/core/kfunction.rs);
 everything else stays placeholder-free.
 
-Production reads go through three visibility-aware lookups on the façade:
-[`Bindings::lookup_value`](../src/machine/core/bindings.rs) /
-[`Bindings::lookup_type`](../src/machine/core/bindings.rs) /
-[`Bindings::lookup_function`](../src/machine/core/bindings.rs). Each takes
-a `chain_cutoff: Option<usize>` — the consumer's lexical index within
-*this* scope as computed by
-[`LexicalFrame::index_for`](../src/machine/core/lexical_frame.rs) — and
-applies the [`visible`](../src/machine/core/scope.rs) predicate
-(`b.nominal_binder || b.idx < c`) per entry. `lookup_value` consults
-`data` then `placeholders` and returns `Resolution::Value(&KObject)` for
-a finalized visible binding, `Resolution::Placeholder(NodeId)` for a
-still-running visible producer, or `None` (the caller surfaces
-`Resolution::UnboundName` on chain exhaustion). `lookup_function`
-consults `functions[key]` first, filtered per-overload by visibility,
-and falls through to `pending_overloads[key]` only when no live bucket
-admits — returning `FunctionLookup::Bucket(Vec<&KFunction>)` (non-empty,
-pre-filtered), `FunctionLookup::Pending(NodeId)` (an in-flight FN /
-FUNCTOR binder's producer to park on), or `FunctionLookup::None`. The
-dispatcher records the innermost `Pending` arm during its ancestor walk
-and parks on it only if no bucket admits anywhere, so the bucket /
-pending-overload pair surfaces from one traversal rather than two. The raw map accessors (`data` / `types` /
-`functions` / `placeholders` / `pending_overloads`) are gated
-`#[cfg(test)]`; production sites that genuinely sweep all members
-(`MODULE` member mirroring, signature shape-check, REPL reflection)
-consume the value-yielding `iter_data` / `iter_types` / `iter_functions`,
-which release the underlying borrow at the iterator boundary.
-
-[`Scope::resolve_with_chain`](../src/machine/core/scope.rs) and
-[`resolve_type_with_chain`](../src/machine/core/scope.rs) delegate
-per-ancestor to `lookup_value` / `lookup_type`, mapping the consumer's
-`LexicalFrame` chain to each ancestor scope's `chain_cutoff` and returning
-the first visible hit. The `Scope::resolve` shorthand (no chain argument)
-reads as "see everything" and is reserved for test fixtures and
-builtin-registration paths; production dispatch always threads the
-consumer's `LexicalFrame` chain through. `bind_value` and
-`register_function` remove their own placeholder before inserting into
-`data` / `functions`, so the two tables are mutually exclusive at any
-moment.
+Production reads thread the three-layer
+[lookup → admit protocol](typing/lookup-protocol.md): `Scope::resolve_*_with_chain`
+walks ancestors, the `Bindings::lookup_*` accessors apply the
+`chain_cutoff`-gated `visible` predicate per entry, and `KType`
+predicates accept or reject the candidate. The placeholder mechanism
+extends the value- and function-side lookups so a still-running visible
+producer surfaces as `Resolution::Placeholder(NodeId)` /
+`FunctionLookup::Pending(NodeId)` rather than `UnboundName` —
+[`Bindings::lookup_value`](../src/machine/core/bindings.rs) consults
+`data` then `placeholders`, and
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs) consults
+`functions[key]` (per-overload visibility-filtered) and falls through to
+`pending_overloads[key]` only when no live bucket admits. The dispatcher
+records the innermost `Pending` arm during its ancestor walk and parks
+on it only if no bucket admits anywhere, so the bucket /
+pending-overload pair surfaces from one traversal rather than two. The
+raw map accessors (`data` / `types` / `functions` / `placeholders` /
+`pending_overloads`) are gated `#[cfg(test)]`; production sites that
+genuinely sweep all members (`MODULE` member mirroring, signature
+shape-check, REPL reflection) consume the value-yielding `iter_data` /
+`iter_types` / `iter_functions`, which release the underlying borrow at
+the iterator boundary. `bind_value` and `register_function` remove their
+own placeholder before inserting into `data` / `functions`, so the two
+tables are mutually exclusive at any moment.
 
 ### Miri Lift-park lifetime contract
 
@@ -607,7 +583,9 @@ The rails the dispatch driver feeds:
     routes through `coerce_type_token_value` so the dispatch-phase carrier
     matches what `value_lookup::body_type_expr` would synthesize. Failures
     surface directly; there is no candidate-machinery alternative for a
-    bare leaf type.
+    bare leaf type. See
+    [typing/elaboration.md § Layers](typing/elaboration.md#layers)
+    § Layer 4 for the shared coercion seam.
   - `ConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
     `stateful_constructor_call` resolves the head Type token and
     routes `StructType` / `TaggedUnionType` / `Newtype` / `TypeConstructor`
@@ -803,7 +781,9 @@ elaboration plugs into the same mechanism: when
 bare type-name leaf whose binder is in `Scope::placeholders` but not yet
 finalized, it returns `ElabResult::Park(producers)` and FN-def's body
 schedules a `Combine` over those producers that re-runs the signature
-elaboration against the now-final scope at finish time. A parens-wrapped
+elaboration against the now-final scope at finish time. (See
+[typing/elaboration.md § Layers](typing/elaboration.md#layers) § Layer 3
+for the elaborator's role in the pipeline.) A parens-wrapped
 parameter type (`xs: (LIST_OF Number)`) rides the same Combine:
 `parse_fn_param_list` records the `(slot_idx, sub_expr)` pair, FN-def
 schedules each sub-expression as its own `Dispatch`, and the Combine's
@@ -1029,10 +1009,11 @@ recursive tree-walker can't get cheaply.
   working copy for [the splice mechanism](#working-copy-splice).
   Clone cost is O(body size). It also acquires a per-call frame —
   either reusing the prev-step's `CallArena` shell via
-  `try_reset_for_tail` (see [memory-model.md § Tail-step frame
-  reuse](memory-model.md#tail-step-frame-reuse)) or allocating a fresh
-  one. The reuse path is allocation-free; the fresh path heap-allocates
-  one `Rc<CallArena>` plus six `typed_arena::Arena::new()` pools.
+  `try_reset_for_tail` (see
+  [per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse))
+  or allocating a fresh one. The reuse path is allocation-free; the
+  fresh path heap-allocates one `Rc<CallArena>` plus six
+  `typed_arena::Arena::new()` pools.
 - **Per dep-result splice.** O(1) write into `expr.parts`.
 - **Per terminal.** Single `notify_list` drain. The cost scales with
   the producer's dependent count, which is typically 1 (the consumer
@@ -1055,7 +1036,7 @@ recursive tree-walker can't get cheaply.
   uniquely owned, `try_reset_for_tail` swaps its inner `RuntimeArena`
   for a fresh one and re-binds — no `Rc<CallArena>` box allocation,
   no `Scope` re-anchoring through the heap. See
-  [memory-model.md § Tail-step frame reuse](memory-model.md#tail-step-frame-reuse).
+  [per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse).
 
 ### Vs a tree-walking interpreter
 

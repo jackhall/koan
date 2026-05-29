@@ -104,6 +104,14 @@ What's shipped that the open items below build on:
   `active_frame` and tail-reuses *it* instead of allocating fresh
   — recovering the per-iteration `CallArena` shell allocation the
   pin-only shape would otherwise pay.
+- *Per-call arena protocol doc.* [design/per-call-arena-protocol.md](design/per-call-arena-protocol.md)
+  is the single named owner of the `Rc<CallArena>` contract — carriers, the
+  lift-time anchor decision, the `alloc_object` cycle gate, active-frame
+  propagation, the `outer_frame` chain for builtin-built frames, TCO frame
+  reuse, and the ping-pong reserve rotation. The five docs that previously
+  carried fragments (memory-model, execution-model, error-handling,
+  typing/functors, typing/modules) keep their topic-specific narrative and
+  cross-link the protocol page for the mechanics.
 
 ## Next items
 
@@ -189,19 +197,12 @@ language through the dispatcher and the user-functor application surface:
 ### Refactor — [roadmap/refactor/](roadmap/refactor/)
 
 Structural cleanups surfaced by the `modgraph` + `doclinks gap`
-analysis. Two are source-level (collapse the keyword-free dispatch
-surface, concentrate the nominal dual-write protocol); the other
-three are doc-only seams the analysis confirmed exist in prose but
-not in code — concepts spanning 4–5 design docs that need a single
-canonical owner page, with the source code staying correctly
-distributed:
+analysis. The remaining two items are source-level — collapse the
+keyword-free dispatch surface, and concentrate the nominal dual-write
+protocol:
 
 - [Collapse all keyword-free dispatch into `dispatch.rs`](roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md)
 - [Concentrate the nominal dual-write protocol in `core::nominal`](roadmap/refactor/nominal-dual-write-protocol.md)
-- [Canonical doc for the per-call arena protocol](roadmap/refactor/per-call-arena-protocol-doc.md)
-- [Canonical doc for the lookup → admit protocol](roadmap/refactor/lookup-protocol-doc.md)
-- [Name the five elaboration layers in `design/typing/elaboration.md`](roadmap/refactor/elaboration-layers-doc.md)
-- [`design/README.md` — design-tree index + foundation/seam heuristic](roadmap/refactor/design-readme.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

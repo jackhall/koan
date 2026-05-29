@@ -24,6 +24,7 @@ You handle the doc-update phase of a koan PR. Your inputs are:
    - **Update `README.md` / `TUTORIAL.md`** if the work changes user-facing surface or directory layout.
    - **Bulk path rewrites?** If files moved (renames, sub-module extractions), `python3 tools/doclinks.py fix-refs OLD=NEW [...]` rewrites every link whose target resolves to OLD across markdown and rust comments. Pass `--from-file mapping.txt` for a long list. The tool refuses to run if any NEW doesn't exist on disk.
    - **Source-file comments** that link to deleted/renamed docs need updating. The `fix-refs` subcommand handles bulk renames; otherwise `check` will flag them.
+   - **Prose migration sweep.** When the PR moved prose into a new owner doc (a doc-only seam consolidation, or any "this section now lives in X.md"), follow the skill's *When migrating prose between docs* rule: grep `src/` for `old-doc.md#anchor` references whose anchor disappeared (broken even when the file-level link still resolves), and trim source comments whose prose now duplicates the new owner doc — replacing with a one-line cross-link only.
 
 3. **Apply the workflow gates from the skill:**
 
