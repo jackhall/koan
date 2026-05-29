@@ -77,20 +77,15 @@ pub enum ResolveOutcome<'a> {
 }
 
 impl<'a> Scope<'a> {
-    /// Convenience entry point with the visibility gate disabled and no cache:
-    /// admission falls back to `arg.matches(part)` for every slot.
-    pub fn resolve_dispatch(&'a self, expr: &KExpression<'a>) -> ResolveOutcome<'a> {
-        self.resolve_dispatch_with_chain(expr, None, &[])
-    }
-
     /// Chain-gated, cache-driven dispatch resolution.
     ///
     /// Each candidate is filtered against the visibility predicate before
     /// admission — per-overload tagging matters because overloads in a bucket
-    /// may sit at different lexical positions. `chain = None` disables the
-    /// gate; an empty `bare_outcomes` reverts admission to shape-only
+    /// may sit at different lexical positions. `chain = None` is reserved for
+    /// test-only callers; production paths always supply the slot's chain.
+    /// An empty `bare_outcomes` reverts admission to shape-only
     /// `arg.matches(part)`.
-    pub fn resolve_dispatch_with_chain(
+    pub fn resolve_dispatch(
         &'a self,
         expr: &KExpression<'a>,
         chain: Option<&LexicalFrame>,

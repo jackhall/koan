@@ -18,7 +18,8 @@ pub(super) fn dispatch_for_test<'a>(
     scope: &'a Scope<'a>,
     expr: KExpression<'a>,
 ) -> Result<KFuture<'a>, KError> {
-    match scope.resolve_dispatch(&expr) {
+    let chain = crate::machine::LexicalFrame::detached();
+    match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
         ResolveOutcome::Resolved(r) => r.function.bind(expr),
         ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
             expr: expr.summarize(),

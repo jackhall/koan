@@ -3,7 +3,7 @@
 //! - [`execute`], [`reclaim`], [`combine`], [`dispatch`],
 //!   [`lexical_provenance`], [`index_gated`], [`unified_walk`].
 //! - [`dispatch_shapes`] — no-keyword shapes bypass
-//!   `resolve_dispatch_with_chain`; keyword-bearing shapes enter it.
+//!   `resolve_dispatch`; keyword-bearing shapes enter it.
 //! - [`nested_binder_submission`] — recursive submission of binder-shaped
 //!   sub-Dispatches at outermost-submission time installs nested binders'
 //!   placeholders before any sibling can dispatch, closing the

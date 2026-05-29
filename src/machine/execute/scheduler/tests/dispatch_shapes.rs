@@ -1,6 +1,6 @@
 //! Integration tests for the no-keyword fast-lane dispatch. Each test exercises
 //! one variant of `DispatchShape` and asserts both the surface behavior and the
-//! routing claim (fast-lane shapes don't enter `resolve_dispatch_with_chain`,
+//! routing claim (fast-lane shapes don't enter `resolve_dispatch`,
 //! keyworded shapes do).
 //!
 //! Routing assertions use the test-only counter on
@@ -79,7 +79,7 @@ fn bare_type_leaf_short_circuits() {
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "BareTypeLeaf must not enter resolve_dispatch_with_chain",
+        "BareTypeLeaf must not enter resolve_dispatch",
     );
     assert!(
         matches!(result, KObject::KTypeValue(KType::Number)),
@@ -91,7 +91,7 @@ fn bare_type_leaf_short_circuits() {
 /// User-facing named-arg path. `f (x = 7)` against a signature with a leading
 /// keyword `DOUBLE` elides the keyword via the fast lane's named-arg admission,
 /// reconstructs the positional expression, and binds directly with
-/// `picked = Some(f)` — no entry into `resolve_dispatch_with_chain`.
+/// `picked = Some(f)` — no entry into `resolve_dispatch`.
 #[test]
 fn function_value_call_named_args_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
@@ -105,7 +105,7 @@ fn function_value_call_named_args_short_circuits() {
         resolve_dispatch_entry_count(),
         0,
         "(f (x = 7)) with f = (FN (DOUBLE x :Number) ...) must fast-lane bypass \
-         resolve_dispatch_with_chain via matches_without_keywords; counter was {}",
+         resolve_dispatch via matches_without_keywords; counter was {}",
         resolve_dispatch_entry_count(),
     );
     assert!(
@@ -191,7 +191,7 @@ fn fast_lane_fn_callable_via_named_args() {
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "named-arg call must fast-lane bypass resolve_dispatch_with_chain; \
+        "named-arg call must fast-lane bypass resolve_dispatch; \
          counter was {}",
         resolve_dispatch_entry_count(),
     );
@@ -460,7 +460,7 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
 /// `Placeholder` on `scope` before the slot is dispatched. The fast lane's
 /// `FunctionValueCall` handler hits the `Placeholder` arm on head-resolution
 /// (before the args-shape check), installs a combined park, and never enters
-/// `resolve_dispatch_with_chain`.
+/// `resolve_dispatch`.
 #[test]
 fn function_value_call_forward_ref_parks() {
     let arena = RuntimeArena::new();
@@ -492,13 +492,13 @@ fn function_value_call_forward_ref_parks() {
     assert_eq!(
         resolve_dispatch_entry_count(),
         0,
-        "FunctionValueCall forward-ref park must not enter resolve_dispatch_with_chain; \
+        "FunctionValueCall forward-ref park must not enter resolve_dispatch; \
          the head-Placeholder arm fires before any args-shape inspection",
     );
 }
 
 /// `(PRINT 5)` — keyword-headed call routes through the candidate path.
-/// `resolve_dispatch_with_chain` runs at least once to find the bucket.
+/// `resolve_dispatch` runs at least once to find the bucket.
 #[test]
 fn keyworded_unchanged() {
     let arena = RuntimeArena::new();
@@ -508,7 +508,7 @@ fn keyworded_unchanged() {
     let _ = dispatch_one(scope, expr);
     assert!(
         resolve_dispatch_entry_count() >= 1,
-        "Keyworded shape must enter resolve_dispatch_with_chain at least once; \
+        "Keyworded shape must enter resolve_dispatch at least once; \
          count was {}",
         resolve_dispatch_entry_count(),
     );

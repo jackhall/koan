@@ -128,7 +128,7 @@ impl<'a> KeywordedState<'a> {
             }
         }
         let chain = ctx.chain_deref();
-        let outcome = scope.resolve_dispatch_with_chain(&expr, chain, &bare_outcomes);
+        let outcome = scope.resolve_dispatch(&expr, chain, &bare_outcomes);
         let resolved = match outcome {
             ResolveOutcome::Resolved(r) => r,
             ResolveOutcome::Ambiguous(n) => {
@@ -243,7 +243,7 @@ impl<'a> KeywordedState<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        match scope.resolve_dispatch(&working_expr) {
+        match scope.resolve_dispatch(&working_expr, ctx.chain_deref(), &[]) {
             ResolveOutcome::Resolved(r) => {
                 let future = r.function.bind(working_expr)?;
                 Ok(ctx.invoke_to_step_pinned(future, scope, idx))

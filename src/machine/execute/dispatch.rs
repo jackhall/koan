@@ -262,7 +262,7 @@ pub(in crate::machine::execute) struct EagerSubsTrack<'a> {
     pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
     /// `Some(f)` is the FunctionValueCall install; resume binds `f`
     /// directly. `None` is the Keyworded install; resume re-runs
-    /// `resolve_dispatch_with_chain` — re-resolve is authoritative so
+    /// `resolve_dispatch` — re-resolve is authoritative so
     /// an element-typed `Future(_)` revealed by an eager sub surfaces
     /// as `DispatchFailed` (non-match) rather than a bind-time
     /// `TypeMismatch`.
