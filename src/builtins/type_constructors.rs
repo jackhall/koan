@@ -167,7 +167,7 @@ fn extract_param_types<'a>(
     sig_expr: &KExpression<'a>,
     head: &str,
 ) -> ExtractOutcome<'a> {
-    use crate::machine::core::ResolveTypeExprOutcome;
+    use crate::machine::ResolveTypeExprOutcome;
     use crate::machine::model::ast::TypeParams;
     let parts = &sig_expr.parts;
     let mut out: Vec<KType<'a>> = Vec::new();

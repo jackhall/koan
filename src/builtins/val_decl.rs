@@ -12,7 +12,7 @@
 //! directly; parameterized `TypeNameRef` is elaborated synchronously and, on park,
 //! sub-Dispatches each leaf before re-elaborating in the Combine finish.
 
-use crate::machine::core::ResolveTypeExprOutcome;
+use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::machine::{

@@ -12,15 +12,11 @@
 //! `pending_types`). The `Park` arm never writes the cache, so a mid-SCC pre-close
 //! `UserType` identity cannot leak into a later memo hit.
 
-use crate::machine::core::kerror::{KError, KErrorKind};
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::core::lexical_frame::LexicalFrame;
+use crate::machine::core::{KError, KErrorKind, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::{TypeExpr, TypeParams};
 use crate::machine::model::values::KObject;
 use crate::machine::model::types::KType;
-
-use super::scope::Scope;
-use super::scope_id::ScopeId;
 
 /// Outcome of [`Scope::resolve_type_expr`]. Mirrors
 /// [`crate::machine::model::types::ElabResult`] but `Done` carries an

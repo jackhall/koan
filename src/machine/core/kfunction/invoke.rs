@@ -1,9 +1,10 @@
 use std::rc::Rc;
 
 use crate::machine::core::{
-    assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, LexicalFrame,
-    ResolveTypeExprOutcome, RuntimeArena, Scope,
+    assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, LexicalFrame, RuntimeArena,
+    Scope,
 };
+use crate::machine::ResolveTypeExprOutcome;
 use super::body::split_body_statements;
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,

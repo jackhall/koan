@@ -331,9 +331,9 @@ boundary.
 This makes element-only-differing overloads (`:(List Number)` vs `:(List Str)`)
 dispatchable across the forms a container argument takes. Admission is
 strict-only, driven by a per-`run_dispatch` `bare_outcomes` cache —
-[`signature_admits_strict`](../../src/machine/core/resolve_dispatch.rs)
+[`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 reads each bare-name slot's cached
-[`NameOutcome`](../../src/machine/core/resolve_dispatch.rs) once and
+[`NameOutcome`](../../src/machine/execute/dispatch/resolve_dispatch.rs) once and
 admits accordingly. The forms:
 
 - **Evaluated argument** (`DESCRIBE (xs)`, a call result) — already a typed
@@ -403,7 +403,7 @@ A consumer between two same-bucket overloads sees only the earlier; the
 later-sibling overload is hidden, and dispatch falls through to outer scopes
 unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
 does **not** apply to FN-bucket overloads — they're value-style gated.
-[`OverloadBucket::pick_strict`](../../src/machine/core/resolve_dispatch.rs)
+[`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 receives the pre-filtered survivor list (a non-empty `FunctionLookup::Bucket`
 arm) and runs only the admit predicate over it. When no bucket admits at a
 given scope but a `pending_overloads[key]` entry is visible, the same lookup

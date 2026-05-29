@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use crate::builtins::newtype_def::newtype_construct;
 use crate::builtins::{dispatch_constructor, struct_value, tagged_union};
-use crate::machine::core::coerce_type_token_value;
+use super::coerce_type_token_value;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::Parseable;

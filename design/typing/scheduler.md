@@ -72,7 +72,7 @@ tighten-after-the-fact scheduler primitive.
 
 ## Post-walk dispatch fallback precedence
 
-When [`Scope::resolve_dispatch_with_chain`](../../src/machine/core/resolve_dispatch.rs)
+When [`Scope::resolve_dispatch_with_chain`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 walks every visible scope without any bucket admitting strictly, it falls
 through to a cache-driven post-walk fallback that picks one of five
 outcomes by fixed precedence:

@@ -15,13 +15,12 @@
 //! [`DispatchCtx`] — the typed facade over `&mut Scheduler<'a>` — so the
 //! shape modules never spell scheduler field names.
 
-use crate::machine::core::coerce_type_token_value;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 use crate::machine::model::Parseable;
 use crate::machine::{
-    Frame, KError, KErrorKind, NameOutcome, NodeId, Resolution, Scope,
+    Frame, KError, KErrorKind, NodeId, Resolution, Scope,
 };
 
 use super::scheduler::Scheduler;
@@ -30,6 +29,8 @@ use super::nodes::{NodeOutput, NodeStep};
 mod ctx;
 pub(in crate::machine::execute) mod fn_value;
 pub(in crate::machine::execute) mod keyworded;
+pub(in crate::machine) mod resolve_dispatch;
+pub(in crate::machine) mod resolve_type_expr;
 pub(in crate::machine::execute) mod single_poll;
 
 #[cfg(test)]
@@ -38,6 +39,10 @@ mod tests;
 pub(in crate::machine::execute) use ctx::DispatchCtx;
 use fn_value::FnValueState;
 use keyworded::KeywordedState;
+pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
+#[cfg(test)]
+pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
+pub use resolve_type_expr::{coerce_type_token_value, ResolveTypeExprOutcome};
 use single_poll::{BareIdState, BareTypeState, CtorState, SigilState};
 
 /// Pre-walk classification of a `KExpression` into the four no-keyword

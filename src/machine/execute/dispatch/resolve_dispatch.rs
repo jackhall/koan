@@ -8,16 +8,12 @@
 //! deciding arg is still an unevaluated eager part). Strict-Empty at every
 //! scope falls through to the post-walk cache-driven fallback.
 
-use crate::machine::core::kerror::KError;
 use crate::machine::core::kfunction::{ClassifiedSlots, KFunction};
-use crate::machine::core::lexical_frame::LexicalFrame;
+use crate::machine::core::{FunctionLookup, KError, LexicalFrame, Scope};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement};
 use crate::machine::model::values::KObject;
 use crate::machine::NodeId;
-
-use super::bindings::FunctionLookup;
-use super::scope::Scope;
 
 /// Cached outcome of resolving a bare-name part (`Identifier` or leaf `Type`).
 /// Built once per dispatch into a slice paralleling `expr.parts` (`None` for
@@ -139,7 +135,7 @@ impl<'a> Scope<'a> {
             return outcome;
         }
         // Post-walk strict-Empty fallback derived from the cache. See
-        // [design/typing/scheduler.md § Post-walk dispatch fallback precedence](../../../design/typing/scheduler.md#post-walk-dispatch-fallback-precedence).
+        // [design/typing/scheduler.md § Post-walk dispatch fallback precedence](../../../../design/typing/scheduler.md#post-walk-dispatch-fallback-precedence).
         let mut placeholders: Vec<NodeId> = Vec::new();
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::Parked(p) = outcome {
@@ -203,7 +199,7 @@ enum PickPass<'a> {
 }
 
 /// Strict admission against the `bare_outcomes` cache. Rule table at
-/// [design/typing/elaboration.md § Strict admission rules](../../../design/typing/elaboration.md#strict-admission-rules).
+/// [design/typing/elaboration.md § Strict admission rules](../../../../design/typing/elaboration.md#strict-admission-rules).
 fn signature_admits_strict<'a>(
     sig: &ExpressionSignature<'a>,
     expr: &KExpression<'a>,

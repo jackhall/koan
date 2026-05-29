@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::machine::core::ResolveTypeExprOutcome;
+use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };

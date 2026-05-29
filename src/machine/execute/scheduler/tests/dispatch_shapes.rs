@@ -4,14 +4,14 @@
 //! keyworded shapes do).
 //!
 //! Routing assertions use the test-only counter on
-//! [`crate::machine::core::resolve_dispatch_entry_count`]. The counter is
+//! [`crate::machine::execute::dispatch::resolve_dispatch_entry_count`]. The counter is
 //! thread-local so tests run independently under `cargo test`'s default thread
 //! pool.
 
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle as KfHandle};
-use crate::machine::core::{
+use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
 use crate::machine::execute::Scheduler;

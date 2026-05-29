@@ -16,7 +16,9 @@ pub use core::kfunction::{
 };
 pub use core::{
     BindingIndex, Bindings, CallArena, Frame, FunctionLookup, KError, KErrorKind, KFuture,
-    LexicalFrame, NameOutcome, ResolveOutcome, Resolution, Resolved, RuntimeArena, Scope, ScopeId,
-    ScopeKind,
+    LexicalFrame, Resolution, RuntimeArena, Scope, ScopeId, ScopeKind,
 };
-pub use execute::{Scheduler, interpret, interpret_with_writer, interpret_with_writer_path};
+pub use execute::{
+    coerce_type_token_value, interpret, interpret_with_writer, interpret_with_writer_path,
+    NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved, Scheduler,
+};

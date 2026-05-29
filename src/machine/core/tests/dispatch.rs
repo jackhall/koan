@@ -4,7 +4,7 @@ use crate::machine::BindingIndex;
 use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
-use super::super::ResolveOutcome;
+use crate::machine::ResolveOutcome;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::builtins::register_builtin;

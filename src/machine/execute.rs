@@ -15,5 +15,9 @@ mod scheduler;
 pub use interpret::{interpret, interpret_with_writer, interpret_with_writer_path};
 pub use scheduler::Scheduler;
 
+pub use dispatch::{
+    coerce_type_token_value, NameOutcome, ResolveOutcome, ResolveTypeExprOutcome, Resolved,
+};
+
 #[cfg(test)]
 pub use lift::lift_kobject_for_test;

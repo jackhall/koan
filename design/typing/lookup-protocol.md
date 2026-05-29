@@ -38,11 +38,11 @@ matching the three lookup kinds:
 - [`Scope::resolve_type_with_chain`](../../src/machine/core/scope.rs) —
   type-name lookup. Per-ancestor calls
   [`Bindings::lookup_type`](../../src/machine/core/bindings.rs).
-- [`Scope::resolve_dispatch_with_chain`](../../src/machine/core/resolve_dispatch.rs)
+- [`Scope::resolve_dispatch_with_chain`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
   — function-bucket lookup. Per-ancestor calls
   [`Bindings::lookup_function`](../../src/machine/core/bindings.rs)
   and, on a non-empty bucket, hands it to
-  [`OverloadBucket::pick_strict`](../../src/machine/core/resolve_dispatch.rs)
+  [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
   for the per-overload admit pass.
 
 [`Scope::resolve`](../../src/machine/core/scope.rs) is the chainless
@@ -115,12 +115,12 @@ check fires:
   two read carrier-type metadata in O(1).
 
 The dispatch-admission glue is
-[`signature_admits_strict`](../../src/machine/core/resolve_dispatch.rs),
+[`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs),
 which walks slot/part pairs and consults the per-`run_dispatch`
 `bare_outcomes` cache — the strict-admission rules table at
 [elaboration.md § Strict admission rules](elaboration.md#strict-admission-rules)
 spells out which `NameOutcome` arms admit via `accepts_part`, which
-admit shape-only, and which strict-reject. [`OverloadBucket::pick_strict`](../../src/machine/core/resolve_dispatch.rs)
+admit shape-only, and which strict-reject. [`OverloadBucket::pick_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 wraps the filter-then-`most_specific` dance over a single scope's
 visibility-pre-filtered bucket.
 

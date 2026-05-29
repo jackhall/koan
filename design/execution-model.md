@@ -547,7 +547,7 @@ a `<wrap-resolve>` frame before any candidate work.
 Step 3 calls
 [`Scope::resolve_dispatch_with_chain`](../src/machine/core/scope.rs) once,
 passing the cache as `bare_outcomes: &[Option<NameOutcome<'a>>]`. Admission
-is strict-only: [`signature_admits_strict`](../src/machine/core/resolve_dispatch.rs)
+is strict-only: [`signature_admits_strict`](../src/machine/execute/dispatch/resolve_dispatch.rs)
 reads each bare-name slot's cached outcome rather than re-resolving it per
 scope. A `Resolved(obj)` cache entry admits iff
 [`KType::accepts_part`](../src/machine/model/types/ktype_predicates.rs)

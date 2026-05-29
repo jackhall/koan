@@ -101,8 +101,8 @@ cross-link this section rather than restating its slice.
   [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
   for the parking integration.
 - **Layer 4 — bare-leaf dispatch ingress** in
-  [`resolve_type_expr.rs`](../../src/machine/core/resolve_type_expr.rs).
-  [`coerce_type_token_value`](../../src/machine/core/resolve_type_expr.rs)
+  [`resolve_type_expr.rs`](../../src/machine/execute/dispatch/resolve_type_expr.rs).
+  [`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
   is the shared coercion seam from a bare-`Type` token to a dispatch-time
   carrier, called from the dispatcher's `BareTypeLeaf` fast lane and the
   keyworded splice walk's eager name-resolve pass. Resolves through
@@ -205,7 +205,7 @@ The single-part `<v:TypeExpr>` lookup that those consumers' siblings used to
 need is now folded into the dispatcher's `BareTypeLeaf` fast lane
 ([`dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)),
 which calls
-[`coerce_type_token_value`](../../src/machine/core/resolve_type_expr.rs)
+[`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
 directly — the shared coercion seam also called from the keyworded splice
 walk's eager name-resolve pass
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
@@ -220,7 +220,7 @@ FN's deferred return-type elaboration peeks the slot to pick between
 (deferred carrier consuming the parser-preserved `TypeExpr`), then drives the
 existing park-on-placeholder machinery from there. The sole
 `KObject::KTypeValue` synthesis site for dispatch transport lives in
-[`coerce_type_token_value`](../../src/machine/core/resolve_type_expr.rs),
+[`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs),
 which mints `KObject::KTypeValue(kt.clone())` on a non-nominal `resolve_type`
 hit. On a `resolve_type` miss, the bare-leaf arm of `elaborate_type_expr`
 falls through to `Scope::resolve` for compatibility with the small set of
@@ -232,7 +232,7 @@ surface-name carrier variant inside `KType` itself.
 
 ## Strict admission rules
 
-[`signature_admits_strict`](../../src/machine/core/resolve_dispatch.rs)
+[`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)
 admits a candidate signature against an expression by walking slot/part
 pairs and consulting the per-`run_dispatch` `bare_outcomes` cache. The
 admission rule per cache entry on a bare-name part:
