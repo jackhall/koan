@@ -112,6 +112,20 @@ What's shipped that the open items below build on:
   carried fragments (memory-model, execution-model, error-handling,
   typing/functors, typing/modules) keep their topic-specific narrative and
   cross-link the protocol page for the mechanics.
+- *Dispatcher / scheduler facade.* The dispatch tree lives at
+  `execute::dispatch`, sibling of `execute::scheduler` (and
+  `execute::interpret` / `execute::lift`). Every dispatch entry point
+  takes [`&mut DispatchCtx<'a, '_>`](src/machine/execute/dispatch/ctx.rs) —
+  a newtype over `&mut Scheduler<'a>` exposing exactly the scheduler
+  operations the dispatcher uses (slot queries, `DepGraph` mutations,
+  sub-submission, the recent-wakes side-channel, list/dict-literal
+  scheduling, plus the dispatcher-only `build_bare_outcomes` /
+  `install_eager_subs` / `replace_with_parked_dispatch` /
+  `resume_eager_subs` / `invoke_to_step{,_pinned}` ops). `DispatchCtx`
+  also implements [`SchedulerHandle`](src/machine/core/kfunction/scheduler_handle.rs),
+  so builtin sub-slot routing inherits the dispatcher's contextual
+  frame/chain via the facade rather than re-borrowing the bare
+  scheduler.
 
 ## Next items
 
@@ -198,12 +212,10 @@ language through the dispatcher and the user-functor application surface:
 
 Structural cleanups surfaced by the `modgraph` + `doclinks gap`
 analysis. The remaining items are source-level — collapse the
-keyword-free dispatch surface, narrow the scheduler's internal
-surface to the dispatcher, and concentrate the nominal dual-write
+keyword-free dispatch surface and concentrate the nominal dual-write
 protocol:
 
 - [Collapse all keyword-free dispatch into `dispatch.rs`](roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md)
-- [Hoist dispatcher out of scheduler behind a typed facade](roadmap/refactor/dispatch-scheduler-facade.md)
 - [Concentrate the nominal dual-write protocol in `core::nominal`](roadmap/refactor/nominal-dual-write-protocol.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

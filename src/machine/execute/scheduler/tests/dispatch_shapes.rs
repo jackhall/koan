@@ -524,7 +524,7 @@ fn keyworded_unchanged() {
 /// body. Classifier must route to `ConstructorCall`, not `Keyworded`.
 #[test]
 fn classifier_struct_construct_routes_to_type_constructor_call() {
-    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("MyStruct (x = 1, y = 2)");
     assert!(
         matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
@@ -536,7 +536,7 @@ fn classifier_struct_construct_routes_to_type_constructor_call() {
 /// holding `(some 42)`. Must route to `ConstructorCall`.
 #[test]
 fn classifier_tagged_construct_routes_to_type_constructor_call() {
-    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Maybe (some 42)");
     assert!(
         matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
@@ -548,7 +548,7 @@ fn classifier_tagged_construct_routes_to_type_constructor_call() {
 /// identifier (the newtype-construction shape). Routes to `ConstructorCall`.
 #[test]
 fn classifier_newtype_construct_routes_to_type_constructor_call() {
-    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Bar (x)");
     assert!(
         matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
@@ -561,7 +561,7 @@ fn classifier_newtype_construct_routes_to_type_constructor_call() {
 /// `LIST OF` overload is the supported way to elaborate `List<Number>`.
 #[test]
 fn classifier_legacy_positional_collapses_to_type_constructor_call() {
-    use super::super::dispatch::{classify_dispatch_shape, DispatchShape};
+    use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("(List Number)");
     assert!(
         matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
@@ -675,10 +675,10 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
 /// `DispatchState::parked_carrier_expr` must surface the state-carried form.
 #[test]
 fn keyworded_parked_carrier_expr_reads_state() {
-    use super::super::dispatch::keyworded::{
+    use crate::machine::execute::dispatch::keyworded::{
         BareNameParkTrack, KeywordedState, OverloadParkTrack,
     };
-    use super::super::dispatch::{DispatchState, EagerSubsTrack, Initialized};
+    use crate::machine::execute::dispatch::{DispatchState, EagerSubsTrack, Initialized};
 
     fn carrier_expr<'a>() -> KExpression<'a> {
         // `(LIFT_BARE arg)` — a recognizable sample distinct from any other

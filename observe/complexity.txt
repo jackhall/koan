@@ -2,8 +2,8 @@
 # (the four scoring columns are per root-loc; root-loc is the absolute
 #  subtree LOC, read back as --reference-loc when scoring candidates)
 # managed by tools/modgraph.py --baseline; newest first, capped to 5 entries
+2026-05-29 c89c924+ 234.49 99.13 64.55 70.82 13517
 2026-05-29 f3ba37f+ 231.79 96.71 65.19 69.88 13335
 2026-05-29 45c99ee+ 231.35 96.71 65.19 69.44 13335
 2026-05-29 45c99ee+ 231.35 96.71 65.19 69.44 13335
 2026-05-29 45c99ee+ 231.35 96.71 65.19 69.44 13335
-2026-05-29 45c99ee+ 231.24 96.71 65.19 69.33 13335

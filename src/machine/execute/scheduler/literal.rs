@@ -5,7 +5,7 @@ use crate::machine::model::{KKey, KObject, Serializable};
 use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId, Scope};
 use crate::machine::model::ast::ExpressionPart;
 
-use super::dispatch::resolve_name_part;
+use super::super::dispatch::resolve_name_part;
 use super::super::nodes::NodeWork;
 use super::Scheduler;
 
@@ -31,7 +31,7 @@ impl<'a> Slot<'a> {
 }
 
 impl<'a> Scheduler<'a> {
-    pub(super) fn schedule_list_literal(
+    pub(in crate::machine::execute) fn schedule_list_literal(
         &mut self,
         items: Vec<ExpressionPart<'a>>,
         scope: &'a Scope<'a>,
@@ -66,7 +66,7 @@ impl<'a> Scheduler<'a> {
     /// Bare identifiers on either side are name-resolved (Python-like: keys are
     /// expressions, not symbols). Non-scalar keys produce `KErrorKind::ShapeError` at
     /// finish-time via the `KKey` conversion.
-    pub(super) fn schedule_dict_literal(
+    pub(in crate::machine::execute) fn schedule_dict_literal(
         &mut self,
         pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
         scope: &'a Scope<'a>,

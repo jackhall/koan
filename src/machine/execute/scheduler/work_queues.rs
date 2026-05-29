@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 /// `fresh` so an in-progress computation finishes before the next fresh top-level
 /// expression starts. Both rules are enforced by the method surface.
 #[derive(Default)]
-pub(super) struct WorkQueues {
+pub(in crate::machine::execute::scheduler) struct WorkQueues {
     fresh: VecDeque<usize>,
     in_flight: VecDeque<usize>,
 }

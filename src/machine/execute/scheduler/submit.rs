@@ -9,7 +9,7 @@ use crate::machine::model::{KType, SignatureElement};
 
 use super::super::nodes::{Node, NodeWork, work_park_producers};
 use super::dep_graph::work_owned_edges;
-use super::dispatch::DispatchState;
+use super::super::dispatch::DispatchState;
 use super::Scheduler;
 
 /// Submission-time binder-install info — see [design/execution-model.md
@@ -127,7 +127,7 @@ impl<'a> Scheduler<'a> {
     /// (REPL-style submission, test fixtures), synthesize a detached chain so
     /// the visibility predicate treats every scope as "complete" — the
     /// submission then reads through to every previously-bound name.
-    pub(super) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
+    pub(in crate::machine::execute::scheduler) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
         if self.active_chain.is_some() {
             self.add_with_chain(work, scope, None)
         } else {

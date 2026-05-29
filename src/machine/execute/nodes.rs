@@ -7,7 +7,7 @@ use crate::machine::{
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 
-use super::scheduler::dispatch::DispatchState;
+use super::dispatch::DispatchState;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.

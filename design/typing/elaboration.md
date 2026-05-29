@@ -203,12 +203,12 @@ Three downstream consumers each carry a `TypeNameRef` arm beside the existing
 
 The single-part `<v:TypeExpr>` lookup that those consumers' siblings used to
 need is now folded into the dispatcher's `BareTypeLeaf` fast lane
-([`scheduler/dispatch/single_poll.rs`](../../src/machine/execute/scheduler/dispatch/single_poll.rs)),
+([`dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)),
 which calls
 [`coerce_type_token_value`](../../src/machine/core/resolve_type_expr.rs)
 directly — the shared coercion seam also called from the keyworded splice
 walk's eager name-resolve pass
-([`scheduler/dispatch.rs`](../../src/machine/execute/scheduler/dispatch.rs)).
+([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
 The helper resolves through `bindings.types` and, on a nominal
 `UserType` / `SatisfiesSignature` / `Module` / `Signature` hit, recovers
 the paired value-side carrier from `bindings.data`.

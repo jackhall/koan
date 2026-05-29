@@ -4,7 +4,7 @@ Functions are first-class values in Koan. `KFunction` is a `KObject` variant
 ([kobject.rs](../src/machine/model/values/kobject.rs)), so a function can be returned from a
 body, bound via `LET`, looked up by name, and invoked through the fast-lane
 `FunctionValueCall` handler
-([dispatch.rs](../src/machine/execute/scheduler/dispatch.rs) —
+([dispatch.rs](../src/machine/execute/dispatch.rs) —
 `fast_lane_function_value_call`) or by appearing in a position the dispatcher
 resolves.
 

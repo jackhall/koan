@@ -41,6 +41,37 @@ recover or re-raise. The `TRY-WITH` builtin
 spawns its watched expression as a sub-dispatch and registers a `Catch`
 that picks the matching branch by tag.
 
+## The dispatcher / scheduler boundary
+
+The dispatch tree
+([`execute/dispatch/`](../src/machine/execute/dispatch.rs)) is a sibling
+of [`execute/scheduler/`](../src/machine/execute/scheduler.rs), not
+nested inside it. The two communicate through one typed surface:
+[`DispatchCtx<'a, 'b>`](../src/machine/execute/dispatch/ctx.rs) — a
+newtype over `&'b mut Scheduler<'a>` that every dispatch entry point
+takes in place of a bare `&mut Scheduler<'a>`. `DispatchCtx` exposes
+exactly the scheduler operations the dispatcher uses (slot queries,
+`DepGraph` mutations, sub-submission, the recent-wakes side-channel,
+list/dict-literal scheduling, plus the dispatcher-only ops
+`build_bare_outcomes` / `install_eager_subs` /
+`replace_with_parked_dispatch` / `resume_eager_subs` /
+`invoke_to_step{,_pinned}`). The `DepGraph`, `NodeStore`, and
+active-frame fields stay `pub(in execute::scheduler)`; the dispatch
+shape modules (`keyworded`, `fn_value`, `single_poll`) never name
+scheduler fields directly. Adding a fast-lane shape lists its
+scheduler operations against `DispatchCtx`'s method surface; a future
+scheduler internal rename (`active_chain` → ..., `DepGraph` split) is a
+single-file change inside `scheduler/`.
+
+`DispatchCtx` also implements
+[`SchedulerHandle`](../src/machine/core/kfunction/scheduler_handle.rs)
+— the external builtin-body-facing surface — so closures the dispatcher
+hands off to `KFunction::invoke` (and any sub-slots they spawn) inherit
+the dispatcher's contextual `active_frame` and lexical chain. The
+`with_active_frame` body re-receives `&mut DispatchCtx`, so nested
+builtin invokes still route through the facade rather than re-borrowing
+the bare scheduler.
+
 ## `BodyResult` — the three return shapes
 
 A builtin body returns one of:
@@ -163,7 +194,7 @@ the parent's `parts` (replacing each with a placeholder `Identifier`),
 spawns it as a sub-Dispatch, and parks the parent on its own slot via an
 `EagerSubsTrack` carried on `KeywordedState` or `FnValueState`. The
 parent's `NodeWork::Dispatch` stays in place; only its `DispatchState`
-transitions. When the subs terminalize, `Scheduler::resume_eager_subs`
+transitions. When the subs terminalize, `DispatchCtx::resume_eager_subs`
 writes each result back into the track's `working_expr`:
 `working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The
 assembled `Future`-laden expression then goes through `resolve_dispatch`
@@ -218,7 +249,7 @@ list/dict aggregates and combinator builtins like `TRY`, a `Combine` /
 iteration, so realistic recursive code is O(n) scheduler memory even
 when its data footprint is O(1).
 
-Reclamation runs at the end of `Scheduler::resume_eager_subs` (track
+Reclamation runs at the end of `DispatchCtx::resume_eager_subs` (track
 completion), `run_combine`, and `run_catch`. Once the consumer has read
 its dep results and either spliced them into `working_expr.parts` as
 `Future(value)` (eager-subs track) or handed them to its finish closure
@@ -462,7 +493,7 @@ The collected `(slot_idx, sub_node_id)` pairs ride through into the
 parent's `NodeWork::Dispatch { expr, pre_subs }`
 ([`nodes.rs`](../src/machine/execute/nodes.rs)). When the parent runs,
 the fused splice / park / eager-sub walk in
-[`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs) consults
+[`dispatch.rs`](../src/machine/execute/dispatch.rs) consults
 `pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
 a slot already pre-submitted reuses the existing `NodeId` (and replaces
 the part with an empty-`Identifier` placeholder for the eventual `Bind`
@@ -486,7 +517,7 @@ branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 scope visible. This is what lets a REPL query read through to every
 prior bind without sharing an index space with them.
 
-The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) —
+The execute side — [`run_dispatch`](../src/machine/execute/dispatch.rs) —
 opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
 expression's parts for any `Keyword` first and, if none, branches on the head
 token's shape, producing one of six `DispatchShape` variants. The five
@@ -501,7 +532,7 @@ dep-schedule pipeline below.
 
 The keyworded pipeline runs in four steps. Step 1 builds the bare-name
 outcome cache: one
-[`resolve_name_part`](../src/machine/execute/scheduler/dispatch.rs) call per
+[`resolve_name_part`](../src/machine/execute/dispatch.rs) call per
 bare-name part of `expr` (`Identifier` or leaf `Type`) into
 `bare_outcomes: Vec<Option<NameOutcome<'a>>>`, with `None` for non-bare-name
 parts. The cache is built with `consumer = None` so cycle detection is
@@ -722,13 +753,14 @@ The rails the dispatch driver feeds:
   sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)),
   `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
-  function directly via `invoke_to_step` (a wrap-slot-only call like
-  `MAKESET IntOrd` resolves bare names in Step 4, leaves no eager parts,
-  and binds in one step — no eager-subs-track detour). Otherwise it
-  installs an `EagerSubsTrack` on the slot's `KeywordedState` and parks
-  through `replace_with_parked_dispatch`; on track completion
-  `Scheduler::resume_eager_subs` re-resolves the spliced `working_expr`
-  and binds via `invoke_to_step_pinned`.
+  function directly via `DispatchCtx::invoke_to_step` (a wrap-slot-only
+  call like `MAKESET IntOrd` resolves bare names in Step 4, leaves no
+  eager parts, and binds in one step — no eager-subs-track detour).
+  Otherwise it installs an `EagerSubsTrack` on the slot's
+  `KeywordedState` and parks through
+  `DispatchCtx::replace_with_parked_dispatch`; on track completion
+  `DispatchCtx::resume_eager_subs` re-resolves the spliced
+  `working_expr` and binds via `DispatchCtx::invoke_to_step_pinned`.
 
   Dict and list literals (`classify_aggregate_part` in
   [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
@@ -809,7 +841,7 @@ diagnostic points at code the reader can act on.
 ### `DispatchState` — per-variant state envelope
 
 Every `NodeWork::Dispatch` slot carries a
-[`DispatchState`](../src/machine/execute/scheduler/dispatch.rs) value
+[`DispatchState`](../src/machine/execute/dispatch.rs) value
 that records where the slot is in the per-shape state machine. The enum
 has one variant per `DispatchShape` plus a pre-classification birth
 state:
@@ -852,7 +884,7 @@ construct these and one-shot paths terminalize without installing a
 track.
 
 `Keyworded` carries three mutually-exclusive park tracks, installed by
-named installers in [`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs):
+named installers in [`dispatch.rs`](../src/machine/execute/dispatch.rs):
 
 - **`eager_subs: Option<EagerSubsTrack>`** — installed by
   `stateful_install_eager_subs_track` (Resolved-with-eager-subs and
@@ -929,10 +961,10 @@ invariant is checked on every wake.
 
 The state is `pub(in crate::machine::execute)` rather than `pub(super)`
 because `nodes.rs` (which carries the `NodeWork::Dispatch { state }`
-variant) lives at `crate::machine::execute::nodes`, outside the
-`scheduler/` submodule. The wider visibility is the minimum needed for
-`NodeWork` to name `DispatchState`; no caller outside the execute tree
-sees the carrier.
+variant) lives at `crate::machine::execute::nodes`, sibling to the
+`dispatch/` and `scheduler/` subtrees. The wider visibility is the
+minimum needed for `NodeWork` to name `DispatchState`; no caller
+outside the execute tree sees the carrier.
 
 The drain-end cycle-detection guard (`NodeStore::unresolved`)
 summarizes parked slots from the state-carried expression rather than

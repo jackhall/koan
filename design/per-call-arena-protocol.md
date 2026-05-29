@@ -274,6 +274,16 @@ frame** in `Node::reserve_frame` that ping-pongs across
   local pin is swapped back into `active_frame` so the Replace arm
   reads the slot's frame as today.
 
+The dispatcher reaches the slot's reserve / active-frame state through
+the narrow [`DispatchCtx`](../src/machine/execute/dispatch/ctx.rs)
+facade (see [execution-model.md § The dispatcher / scheduler
+boundary](execution-model.md#the-dispatcher--scheduler-boundary)) —
+`sched.active_reserve_take()` drains the reserve, and
+`sched.active_frame_replace(...)` performs the local pin/swap. The
+`active_frame` / `active_reserve` fields themselves stay
+`pub(in execute::scheduler)`; the accessor surface is what dispatch
+sees.
+
 The two-iteration gap is the safety witness: when iteration N consumes
 the reserve, the reserve's scope was the active scope on iteration
 N-2 and is past every live tree-borrows protector by the time

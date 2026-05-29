@@ -6,6 +6,7 @@
 //! See [design/execution-model.md](../../design/execution-model.md) and
 //! [design/memory-model.md](../../design/memory-model.md).
 
+mod dispatch;
 mod interpret;
 mod lift;
 mod nodes;

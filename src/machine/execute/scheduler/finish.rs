@@ -1,9 +1,9 @@
 use crate::machine::model::KObject;
 use crate::machine::{
-    BodyResult, CatchFinish, CombineFinish, Frame, KError, KFuture, NodeId, Scope,
+    BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId, Scope,
 };
 
-use super::dispatch::propagate_dep_error;
+use super::super::dispatch::propagate_dep_error;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
@@ -108,54 +108,4 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// `Tail` rewrites the current slot's work in place (constant scheduler
-    /// memory for recursion). `DeferTo(id)` rewrites to a Lift off `id`.
-    ///
-    /// `idx` is required so the `DeferTo` arm can install an `Owned` edge for
-    /// `id` via `defer_to_lift` before returning the `Replace`; without that
-    /// install, the Replace gate's `pending_count(idx)` reads zero and
-    /// re-enqueues the Lift before the producer runs.
-    pub(super) fn invoke_to_step(
-        &mut self,
-        future: KFuture<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        match future.function.invoke(scope, self, future.bundle) {
-            BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
-                NodeStep::Replace {
-                    work: NodeWork::dispatch(expr),
-                    frame,
-                    function,
-                    block_entry,
-                    body_index,
-                }
-            }
-            BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
-            BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
-        }
-    }
-
-    /// `invoke_to_step` with the slot's reserve frame consumed when available,
-    /// falling back to a pin-only shape otherwise. See
-    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame)
-    /// for the rotation; `recursive_tagged_match_no_uaf` is the Miri witness.
-    pub(super) fn invoke_to_step_pinned(
-        &mut self,
-        future: KFuture<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> NodeStep<'a> {
-        if let Some(reserve) = self.active_reserve.take() {
-            let local_pin = self.active_frame.clone();
-            self.active_frame = Some(reserve);
-            let step = self.invoke_to_step(future, scope, idx);
-            self.active_frame = local_pin;
-            step
-        } else {
-            let _frame_pin = self.active_frame.clone();
-            self.invoke_to_step(future, scope, idx)
-        }
-    }
 }

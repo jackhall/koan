@@ -15,9 +15,8 @@ use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
-use super::super::Scheduler;
-use super::super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::{extract_named_call_inner, keyworded::KeywordedState, Initialized};
+use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
+use super::{DispatchCtx, extract_named_call_inner, keyworded::KeywordedState, Initialized};
 
 pub(in crate::machine::execute) struct BareIdState<'a> {
     pub(in crate::machine::execute) init: Initialized,
@@ -66,17 +65,17 @@ impl<'a> SigilState<'a> {
 /// Surfaces `UnboundName` directly when the name has no binding and
 /// no visible placeholder — no dispatch retry, no overload search.
 pub(super) fn bare_identifier<'a>(
-    sched: &mut Scheduler<'a>,
+    ctx: &mut DispatchCtx<'a, '_>,
     name: String,
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    match scope.resolve_with_chain(&name, sched.active_chain.as_deref()) {
+    match scope.resolve_with_chain(&name, ctx.chain_deref()) {
         Resolution::Value(obj) => NodeStep::Done(NodeOutput::Value(obj)),
         Resolution::Placeholder(producer) => {
             // Notify edge, not Owned: producer is a sibling slot, we
             // only park for the wake.
-            sched.deps.add_park_edge(producer, NodeId(idx));
+            ctx.add_park_edge(producer, NodeId(idx));
             NodeStep::Replace {
                 work: NodeWork::Lift(LiftState::Pending(producer)),
                 frame: None,
@@ -92,11 +91,11 @@ pub(super) fn bare_identifier<'a>(
 }
 
 pub(super) fn bare_type_leaf<'a>(
-    sched: &mut Scheduler<'a>,
+    ctx: &mut DispatchCtx<'a, '_>,
     t: &TypeExpr,
     scope: &'a Scope<'a>,
 ) -> NodeStep<'a> {
-    let chain = sched.active_chain.as_deref();
+    let chain = ctx.chain_deref();
     match coerce_type_token_value(scope, t, chain) {
         Ok(obj) => NodeStep::Done(NodeOutput::Value(obj)),
         Err(KError { kind: KErrorKind::UnboundName(n), .. }) => {
@@ -125,7 +124,7 @@ pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
 /// dedupes / cycle-filters internally) so the resume rebuilds via
 /// `KeywordedState::initial`.
 pub(super) fn constructor_call<'a>(
-    sched: &mut Scheduler<'a>,
+    ctx: &mut DispatchCtx<'a, '_>,
     expr: KExpression<'a>,
     scope: &'a Scope<'a>,
     idx: usize,
@@ -138,11 +137,11 @@ pub(super) fn constructor_call<'a>(
         Ok(parts) => parts,
         Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
     };
-    let chain = sched.active_chain.as_deref();
+    let chain = ctx.chain_deref();
     match scope.resolve_with_chain(&head_t.name, chain) {
         Resolution::Placeholder(producer) => {
             return KeywordedState::install_overload_park(
-                sched,
+                ctx,
                 vec![producer],
                 expr,
                 Vec::new(),
@@ -189,17 +188,17 @@ pub(super) fn constructor_call<'a>(
                     })));
                 }
             };
-            schedule_constructor_body(sched, body, idx)
+            schedule_constructor_body(ctx, body, idx)
         }
         KType::UserType { kind: UserTypeKind::Newtype { .. }, .. } => {
-            let body = newtype_construct(scope, sched, identity, inner_parts);
-            schedule_constructor_body(sched, body, idx)
+            let body = newtype_construct(scope, ctx, identity, inner_parts);
+            schedule_constructor_body(ctx, body, idx)
         }
         KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. } => match scope
             .lookup_with_chain(&head_t.name, chain)
             .and_then(|c| dispatch_constructor(c, inner_parts))
         {
-            Some(body) => schedule_constructor_body(sched, body, idx),
+            Some(body) => schedule_constructor_body(ctx, body, idx),
             None => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "constructible Type".to_string(),
@@ -216,7 +215,7 @@ pub(super) fn constructor_call<'a>(
 
 /// Decode a constructor `BodyResult` into a `NodeStep`.
 pub(super) fn schedule_constructor_body<'a>(
-    sched: &mut Scheduler<'a>,
+    ctx: &mut DispatchCtx<'a, '_>,
     body: BodyResult<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
@@ -229,7 +228,7 @@ pub(super) fn schedule_constructor_body<'a>(
             body_index,
         },
         BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-        BodyResult::DeferTo(combine_id) => sched.defer_to_lift(idx, combine_id),
+        BodyResult::DeferTo(combine_id) => ctx.defer_to_lift(idx, combine_id),
         BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
     }
 }

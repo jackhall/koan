@@ -13,9 +13,6 @@ use node_store::NodeStore;
 use work_queues::WorkQueues;
 
 mod dep_graph;
-/// Visible up to `crate::machine::execute` because sibling `nodes.rs`
-/// names `DispatchState` in `NodeWork::Dispatch`.
-pub(in crate::machine::execute) mod dispatch;
 mod execute;
 mod finish;
 mod literal;
@@ -134,7 +131,7 @@ impl<'a> Scheduler<'a> {
     pub fn is_empty(&self) -> bool { self.store.is_empty() }
 
     /// An errored sub counts as ready — parents short-circuit on it.
-    pub(in crate::machine::execute::scheduler) fn is_result_ready(&self, id: NodeId) -> bool {
+    pub(in crate::machine::execute) fn is_result_ready(&self, id: NodeId) -> bool {
         self.store.is_result_ready(id)
     }
 
@@ -147,6 +144,96 @@ impl<'a> Scheduler<'a> {
     /// Panics on `Err`.
     pub fn read(&self, id: NodeId) -> &'a KObject<'a> {
         self.store.read(id)
+    }
+
+    // ----- Narrow dispatcher-facing surface (pub(in execute)) -----
+    //
+    // These methods are the dispatcher's named contract with the scheduler:
+    // every `DispatchCtx` touch routes through one of them, so the storage
+    // layout (`deps` / `store` / `queues` / `active_*` fields) stays
+    // scheduler-internal. Order mirrors `DispatchCtx`'s method groups in
+    // `dispatch/ctx.rs` for cross-reference.
+
+    /// Atomic +1 on the consumer's pending count, edges list, and the
+    /// producer's notify list (`DepGraph::add_park_edge`).
+    pub(in crate::machine::execute) fn add_park_edge(
+        &mut self,
+        producer: NodeId,
+        consumer: NodeId,
+    ) {
+        self.deps.add_park_edge(producer, consumer);
+    }
+
+    /// Atomic +1 on the consumer's pending count, edges list, and the
+    /// producer's notify list, recording the edge as `Owned` so reclaim
+    /// recurses through it (`DepGraph::add_owned_edge`).
+    pub(in crate::machine::execute) fn add_owned_edge(
+        &mut self,
+        producer: NodeId,
+        consumer: NodeId,
+    ) {
+        self.deps.add_owned_edge(producer, consumer);
+    }
+
+    /// True iff `producer` is forward-reachable from `consumer`
+    /// (`DepGraph::would_create_cycle`).
+    pub(in crate::machine::execute) fn would_create_cycle(
+        &self,
+        producer: NodeId,
+        consumer: NodeId,
+    ) -> bool {
+        self.deps.would_create_cycle(producer, consumer)
+    }
+
+    /// Success-path eager free for the slot's owned edges
+    /// (`DepGraph::clear_dep_edges`).
+    pub(in crate::machine::execute) fn clear_dep_edges(&mut self, idx: usize) {
+        self.deps.clear_dep_edges(idx);
+    }
+
+    /// Drain producers that fired since this slot's last poll
+    /// (`NodeStore::take_recent_wakes`).
+    pub(in crate::machine::execute) fn take_recent_wakes(
+        &mut self,
+        consumer: NodeId,
+    ) -> Vec<NodeId> {
+        self.store.take_recent_wakes(consumer)
+    }
+
+    /// Borrow the ambient lexical chain (`&self.active_chain.as_deref()`).
+    /// Name-resolution helpers read this to apply chain-aware visibility.
+    pub(in crate::machine::execute) fn chain_deref(&self) -> Option<&LexicalFrame> {
+        self.active_chain.as_deref()
+    }
+
+    /// Cloned `Rc` to the ambient lexical chain. Used by initial-resolve
+    /// sites that capture the chain's `index` for `BindingIndex`.
+    pub(in crate::machine::execute) fn active_chain_clone(&self) -> Option<Rc<LexicalFrame>> {
+        self.active_chain.clone()
+    }
+
+    /// Cloned `Rc` to the ambient per-call frame, for the local-pin guard
+    /// in `invoke_to_step_pinned`. See
+    /// [per-call-arena-protocol.md § Ping-pong reserve frame](../../../design/per-call-arena-protocol.md#ping-pong-reserve-frame).
+    pub(in crate::machine::execute) fn active_frame_clone(&self) -> Option<Rc<CallArena>> {
+        self.active_frame.clone()
+    }
+
+    /// Take the per-slot reserve frame. Pairs with
+    /// [`Scheduler::active_frame_replace`] in the pin/swap pattern that
+    /// installs `reserve` as the ambient frame for one nested invoke.
+    pub(in crate::machine::execute) fn active_reserve_take(&mut self) -> Option<Rc<CallArena>> {
+        self.active_reserve.take()
+    }
+
+    /// Replace the ambient `active_frame` with `new`, returning the prior
+    /// value. The `with_active_frame` body bracket and the
+    /// `invoke_to_step_pinned` pin/swap both go through this.
+    pub(in crate::machine::execute) fn active_frame_replace(
+        &mut self,
+        new: Option<Rc<CallArena>>,
+    ) -> Option<Rc<CallArena>> {
+        std::mem::replace(&mut self.active_frame, new)
     }
 }
 

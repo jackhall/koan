@@ -12,11 +12,10 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
-use super::super::Scheduler;
-use super::super::super::nodes::{NodeOutput, NodeStep};
+use super::super::nodes::{NodeOutput, NodeStep};
 use super::{
-    DispatchState, EagerSubsInstall, EagerSubsTrack, Initialized, extract_named_call_inner,
-    stage_all_eager_parts,
+    DispatchCtx, DispatchState, EagerSubsInstall, EagerSubsTrack, Initialized,
+    extract_named_call_inner, stage_all_eager_parts,
 };
 use super::single_poll::schedule_constructor_body;
 
@@ -61,7 +60,7 @@ impl<'a> FnValueState<'a> {
     }
 
     pub(super) fn initial(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
@@ -70,11 +69,11 @@ impl<'a> FnValueState<'a> {
             ExpressionPart::Identifier(n) => n.clone(),
             _ => unreachable!("FunctionValueCall shape implies Identifier head"),
         };
-        let chain = sched.active_chain.as_deref();
+        let chain = ctx.chain_deref();
         match scope.resolve_with_chain(&head, chain) {
-            Resolution::Value(obj) => Self::dispatch_callable_value(sched, expr, obj, scope, idx),
+            Resolution::Value(obj) => Self::dispatch_callable_value(ctx, expr, obj, scope, idx),
             Resolution::Placeholder(producer_id) => {
-                Ok(Self::install_head_park(sched, producer_id, expr, idx))
+                Ok(Self::install_head_park(ctx, producer_id, expr, idx))
             }
             Resolution::UnboundName => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::UnboundName(head),
@@ -84,7 +83,7 @@ impl<'a> FnValueState<'a> {
 
     pub(super) fn resume(
         self,
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
@@ -95,17 +94,17 @@ impl<'a> FnValueState<'a> {
                 head_placeholder.is_none(),
                 "eager_subs and head_placeholder are mutually exclusive",
             );
-            return sched.resume_eager_subs(track, scope, idx);
+            return ctx.resume_eager_subs(track, scope, idx);
         }
         let track = head_placeholder
             .expect("FunctionValueCall resume is only entered after a track is installed");
         let FnValueHeadPlaceholderTrack { expr, producer, .. } = track;
         let _ = producer;
-        Self::initial(sched, expr, scope, idx)
+        Self::initial(ctx, expr, scope, idx)
     }
 
     fn dispatch_callable_value(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
         head_obj: &'a KObject<'a>,
         scope: &'a Scope<'a>,
@@ -117,16 +116,16 @@ impl<'a> FnValueState<'a> {
         };
         match head_obj {
             KObject::KFunction(f, _) => match f.reconstruct_positional(inner_parts) {
-                Ok(rebuilt) => Self::install_eager_subs_track(sched, rebuilt, f, scope, idx),
+                Ok(rebuilt) => Self::install_eager_subs_track(ctx, rebuilt, f, scope, idx),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             },
             KObject::StructType { .. } => Ok(schedule_constructor_body(
-                sched,
+                ctx,
                 struct_value::apply(head_obj, inner_parts),
                 idx,
             )),
             KObject::TaggedUnionType { .. } => Ok(schedule_constructor_body(
-                sched,
+                ctx,
                 tagged_union::apply(head_obj, inner_parts),
                 idx,
             )),
@@ -143,7 +142,7 @@ impl<'a> FnValueState<'a> {
     /// When no subs schedule or all short-circuit at install time,
     /// `picked` is bound directly without installing a track.
     fn install_eager_subs_track(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
         picked: &'a KFunction<'a>,
         scope: &'a Scope<'a>,
@@ -151,16 +150,16 @@ impl<'a> FnValueState<'a> {
     ) -> Result<NodeStep<'a>, KError> {
         let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts);
         let working_expr = KExpression::new(new_parts);
-        match sched.install_eager_subs(working_expr, staged_subs, Some(picked), scope, idx) {
+        match ctx.install_eager_subs(working_expr, staged_subs, Some(picked), scope, idx) {
             EagerSubsInstall::DepError(step) => Ok(step),
             EagerSubsInstall::AllInline(working_expr) => match picked.bind(working_expr) {
-                Ok(future) => Ok(sched.invoke_to_step_pinned(future, scope, idx)),
+                Ok(future) => Ok(ctx.invoke_to_step_pinned(future, scope, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             },
             EagerSubsInstall::Parked(track) => {
                 // FunctionValueCall is non-binder; `pre_subs` is always empty.
                 let init = Initialized { pre_subs: Vec::new() };
-                Ok(sched.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
+                Ok(ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
                     Self::with_eager_subs(init, track),
                 ))))
             }
@@ -168,15 +167,15 @@ impl<'a> FnValueState<'a> {
     }
 
     fn install_head_park(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         producer: NodeId,
         expr: KExpression<'a>,
         idx: usize,
     ) -> NodeStep<'a> {
-        sched.deps.add_park_edge(producer, NodeId(idx));
+        ctx.add_park_edge(producer, NodeId(idx));
         let track = FnValueHeadPlaceholderTrack::new(expr, producer);
         let init = Initialized { pre_subs: Vec::new() };
-        sched.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
+        ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
             Self::with_head_placeholder(init, track),
         )))
     }

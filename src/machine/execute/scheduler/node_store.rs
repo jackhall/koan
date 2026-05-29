@@ -57,7 +57,7 @@ enum SlotState<'a> {
     Free,
 }
 
-pub(super) struct NodeStore<'a> {
+pub(in crate::machine::execute::scheduler) struct NodeStore<'a> {
     slots: SlotVec<SlotState<'a>>,
     /// Reclaimed slot indices. `alloc_slot` pulls from here before
     /// extending `slots`, giving constant scheduler memory across
@@ -267,9 +267,10 @@ impl<'a> NodeStore<'a> {
     }
 
     /// Drain the producers that fired since the slot's last poll. Called by
-    /// `run_dispatch` on entry; the side-channel stays empty for non-
-    /// `Dispatch` work by construction in `push_recent_wake`.
-    pub(super) fn take_recent_wakes(&mut self, consumer: NodeId) -> Vec<NodeId> {
+    /// `run_dispatch` on entry via `Scheduler::take_recent_wakes`; the
+    /// side-channel stays empty for non-`Dispatch` work by construction in
+    /// `push_recent_wake`.
+    pub(in crate::machine::execute::scheduler) fn take_recent_wakes(&mut self, consumer: NodeId) -> Vec<NodeId> {
         std::mem::take(&mut self.recent_wakes[consumer])
     }
 

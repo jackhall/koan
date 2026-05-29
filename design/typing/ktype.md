@@ -93,7 +93,7 @@ evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../src/parse/frame.rs) (`Frame::TypeExpr`);
 the dispatcher's `fast_lane_sigiled_type_expr` handler
-([dispatch.rs](../../src/machine/execute/scheduler/dispatch.rs))
+([dispatch.rs](../../src/machine/execute/dispatch.rs))
 tail-replaces the slot with a `Dispatch` of the wrapped expression. See
 [type-language-via-dispatch.md](type-language-via-dispatch.md) for the full
 sigil-and-dispatch contract.

@@ -49,7 +49,7 @@ pub(super) struct DepRow {
     edges: Vec<DepEdge>,
 }
 
-pub(super) struct DepGraph {
+pub(in crate::machine::execute::scheduler) struct DepGraph {
     rows: Vec<DepRow>,
 }
 
@@ -91,7 +91,7 @@ impl DepGraph {
     /// Atomic +1 on the consumer's pending count, edges list, and the
     /// producer's notify list. Caller guarantees `producer` is not yet
     /// terminal.
-    pub(super) fn add_owned_edge(
+    pub(in crate::machine::execute::scheduler) fn add_owned_edge(
         &mut self,
         producer: NodeId,
         consumer: NodeId,
@@ -106,7 +106,7 @@ impl DepGraph {
     /// pending count + edges; the backward entry is `Notify(producer)` so
     /// `free` skips past it. Caller guarantees `producer` is not yet
     /// terminal.
-    pub(super) fn add_park_edge(
+    pub(in crate::machine::execute::scheduler) fn add_park_edge(
         &mut self,
         producer: NodeId,
         consumer: NodeId,
@@ -121,7 +121,7 @@ impl DepGraph {
     /// parking `consumer` on `producer` would deadlock (e.g. `LET Ty = Ty`,
     /// where the sub-Dispatch would park on its own ancestor). Caller surfaces
     /// a structured error instead of installing the park edge.
-    pub(super) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
+    pub(in crate::machine::execute::scheduler) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
         if producer == consumer {
             return true;
         }
@@ -170,7 +170,7 @@ impl DepGraph {
 
     /// Eager-free on the success path. Inv-C ensures the slot's notify list
     /// is already drained by the time the caller hits this.
-    pub(super) fn clear_dep_edges(&mut self, idx: usize) {
+    pub(in crate::machine::execute::scheduler) fn clear_dep_edges(&mut self, idx: usize) {
         self.rows[idx].edges.clear();
     }
 

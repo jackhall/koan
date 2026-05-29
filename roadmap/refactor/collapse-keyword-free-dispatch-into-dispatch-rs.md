@@ -11,7 +11,7 @@ content lives below the size-charge knee. Establishes the invariant
 
 **Problem.** The dispatcher classifies expressions into a `Keyworded`
 catch-all plus five no-keyword fast-lane shapes (see
-[`classify_dispatch_shape`](../../src/machine/execute/scheduler/dispatch.rs)).
+[`classify_dispatch_shape`](../../src/machine/execute/dispatch.rs)).
 The keyword-absence gate is the principal discriminator: every
 keyword-bearing expression goes through `Keyworded`, and most
 keyword-free ones go through a fast lane (`BareIdentifier`,
@@ -36,11 +36,11 @@ keyword-free ones go through a fast lane (`BareIdentifier`,
    (`"struct_construct"` / `"tagged_union_construct"`) are referenced
    only by their own registrations — dead code.
 3. **The five existing fast-lane states live in a wrapper module.**
-   [`src/machine/execute/scheduler/dispatch/single_poll.rs`](../../src/machine/execute/scheduler/dispatch/single_poll.rs)
+   [`src/machine/execute/dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)
    holds `BareIdState`, `BareTypeState`, `CtorState`, `SigilState`
    plus their `bare_identifier` / `bare_type_leaf` / `sigiled_type_expr`
    / `constructor_call` / `schedule_constructor_body` functions. The
-   wrapper adds a depth-6 module whose only contents are the fast-lane
+   wrapper adds a depth-5 module whose only contents are the fast-lane
    bodies that conceptually belong next to `classify_dispatch_shape`.
 
 The three are interlocked: collapsing `single_poll` makes
@@ -71,10 +71,16 @@ per fast-lane shape, no new wrapper module).
   reader investigating `BareIdentifier` dispatch loads ~80 lines of
   one state plus its poll body, not a 700-line dispatch module.
 
-**Scoring.** Measured via `modgraph` against the post-Pass-14
-baseline (machine 218.98, crate 228.80) with `--reference-loc`
-fixing the denominator and `--delete` / `--delete-file` modelling
-the deletions:
+**Scoring.** The numbers below were measured via `modgraph` against
+the post-Pass-14 baseline (machine 218.98, crate 228.80) with
+`--reference-loc` fixing the denominator and `--delete` /
+`--delete-file` modelling the deletions. **That baseline is stale:**
+the dispatch-scheduler-facade refactor (hoisted dispatcher up to
+`execute::dispatch`, narrowed the scheduler surface) shipped after
+these measurements and re-shaped both the machine-root and crate
+trees. Re-score against the post-facade baseline before committing
+to a granularity; the relative ordering of the three sub-pieces
+should hold, but the absolute deltas will move.
 
 | Sub-piece | machine Δ | crate Δ |
 |---|---|---|

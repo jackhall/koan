@@ -10,11 +10,10 @@ use crate::machine::{
     BindingIndex, Frame, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, Scope,
 };
 
-use super::super::Scheduler;
-use super::super::super::nodes::{NodeOutput, NodeStep};
+use super::super::nodes::{NodeOutput, NodeStep};
 use super::{
-    DispatchState, EagerSubsInstall, EagerSubsTrack, Initialized, PartWalkResult, PendingSub,
-    bare_name_of, propagate_dep_error,
+    DispatchCtx, DispatchState, EagerSubsInstall, EagerSubsTrack, Initialized, PartWalkResult,
+    PendingSub, bare_name_of, propagate_dep_error,
 };
 
 pub(in crate::machine::execute) struct KeywordedState<'a> {
@@ -114,13 +113,13 @@ impl<'a> KeywordedState<'a> {
     /// terminates inline; all other outcomes install a `ParkTrack` and
     /// re-enter through [`Self::resume`].
     pub(super) fn initial(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
         pre_subs: Vec<(usize, NodeId)>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let bare_outcomes = sched.build_bare_outcomes(&expr.parts, scope);
+        let bare_outcomes = ctx.build_bare_outcomes(&expr.parts, scope);
         // A bare-name arg whose producer already errored can never resolve.
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::ProducerErrored(e) = outcome {
@@ -128,7 +127,7 @@ impl<'a> KeywordedState<'a> {
                 return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame)))));
             }
         }
-        let chain = sched.active_chain.as_deref();
+        let chain = ctx.chain_deref();
         let outcome = scope.resolve_dispatch_with_chain(&expr, chain, &bare_outcomes);
         let resolved = match outcome {
             ResolveOutcome::Resolved(r) => r,
@@ -153,15 +152,14 @@ impl<'a> KeywordedState<'a> {
                     "Deferred resolve_dispatch implies no binder pick at submit time; \
                      `pre_subs` must be empty here",
                 );
-                return Self::install_eager_only(sched, expr, scope, idx);
+                return Self::install_eager_only(ctx, expr, scope, idx);
             }
             ResolveOutcome::ParkOnProducers(producers) => {
-                return Ok(Self::install_overload_park(sched, producers, expr, pre_subs, idx));
+                return Ok(Self::install_overload_park(ctx, producers, expr, pre_subs, idx));
             }
         };
-        let lex_index = sched
-            .active_chain
-            .as_ref()
+        let lex_index = ctx
+            .active_chain()
             .expect("dispatching slot must have an active chain")
             .index;
         let bind_index = BindingIndex {
@@ -181,7 +179,7 @@ impl<'a> KeywordedState<'a> {
             }
         }
         let walk = match part_walk(
-            sched,
+            ctx,
             expr.parts,
             &pre_subs,
             &bare_outcomes,
@@ -198,7 +196,7 @@ impl<'a> KeywordedState<'a> {
             // re-Dispatch on wake re-runs the walk and re-stages them.
             let _ = staged_subs;
             return Ok(Self::install_bare_name_park(
-                sched,
+                ctx,
                 producers_to_wait,
                 new_expr,
                 pre_subs,
@@ -207,18 +205,18 @@ impl<'a> KeywordedState<'a> {
         }
         if staged_subs.is_empty() {
             return match resolved.function.bind(new_expr) {
-                Ok(future) => Ok(sched.invoke_to_step(future, scope, idx)),
+                Ok(future) => Ok(ctx.invoke_to_step(future, scope, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             };
         }
         let _ = resolved; // discard the speculative pick.
-        Self::install_eager_subs_track(sched, new_expr, staged_subs, pre_subs, scope, idx)
+        Self::install_eager_subs_track(ctx, new_expr, staged_subs, pre_subs, scope, idx)
     }
 
     /// Resume entry, dispatched on the installed `ParkTrack` variant.
     pub(super) fn resume(
         self,
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
@@ -228,19 +226,19 @@ impl<'a> KeywordedState<'a> {
         );
         match track {
             ParkTrack::Overload(OverloadParkTrack { expr, .. }) => {
-                Self::initial(sched, expr, init.pre_subs, scope, idx)
+                Self::initial(ctx, expr, init.pre_subs, scope, idx)
             }
             ParkTrack::BareName(BareNameParkTrack { working_expr, .. }) => {
-                Self::initial(sched, working_expr, init.pre_subs, scope, idx)
+                Self::initial(ctx, working_expr, init.pre_subs, scope, idx)
             }
-            ParkTrack::EagerSubs(track) => sched.resume_eager_subs(track, scope, idx),
+            ParkTrack::EagerSubs(track) => ctx.resume_eager_subs(track, scope, idx),
         }
     }
 
     /// Re-resolve dispatch against the (now fully spliced) `working_expr`
     /// after eager subs complete.
     pub(super) fn finish(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         working_expr: KExpression<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
@@ -248,7 +246,7 @@ impl<'a> KeywordedState<'a> {
         match scope.resolve_dispatch(&working_expr) {
             ResolveOutcome::Resolved(r) => {
                 let future = r.function.bind(working_expr)?;
-                Ok(sched.invoke_to_step_pinned(future, scope, idx))
+                Ok(ctx.invoke_to_step_pinned(future, scope, idx))
             }
             ResolveOutcome::Ambiguous(n) => Err(KError::new(KErrorKind::AmbiguousDispatch {
                 expr: working_expr.summarize(),
@@ -261,7 +259,7 @@ impl<'a> KeywordedState<'a> {
                 }))
             }
             ResolveOutcome::ParkOnProducers(producers) => Ok(Self::install_overload_park(
-                sched,
+                ctx,
                 producers,
                 working_expr,
                 Vec::new(),
@@ -275,8 +273,8 @@ impl<'a> KeywordedState<'a> {
     /// and already-errored terminals. Visibility is widened for
     /// `single_poll::constructor_call`, which reuses this path for
     /// forward-reference type-binder parks.
-    pub(in crate::machine::execute::scheduler) fn install_overload_park(
-        sched: &mut Scheduler<'a>,
+    pub(in crate::machine::execute::dispatch) fn install_overload_park(
+        ctx: &mut DispatchCtx<'a, '_>,
         producers: Vec<NodeId>,
         expr: KExpression<'a>,
         pre_subs: Vec<(usize, NodeId)>,
@@ -284,12 +282,12 @@ impl<'a> KeywordedState<'a> {
     ) -> NodeStep<'a> {
         let mut to_wait: Vec<NodeId> = Vec::new();
         for p in producers {
-            if sched.is_result_ready(p) {
-                if let Err(e) = sched.read_result(p) {
+            if ctx.is_result_ready(p) {
+                if let Err(e) = ctx.read_result(p) {
                     let frame = Frame::from_expr("<dispatch-park>", &expr);
                     return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))));
                 }
-            } else if !sched.deps.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
+            } else if !ctx.would_create_cycle(p, NodeId(idx)) && !to_wait.contains(&p) {
                 to_wait.push(p);
             }
         }
@@ -300,11 +298,11 @@ impl<'a> KeywordedState<'a> {
             })));
         }
         for p in &to_wait {
-            sched.deps.add_park_edge(*p, NodeId(idx));
+            ctx.add_park_edge(*p, NodeId(idx));
         }
         let track = OverloadParkTrack::new(expr, to_wait);
         let init = Initialized { pre_subs };
-        sched.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+        ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
             Self::with_overload_park(init, track),
         )))
     }
@@ -312,7 +310,7 @@ impl<'a> KeywordedState<'a> {
     /// `ResolveOutcome::Deferred` arm: stage every eager part and park
     /// on them, with no speculative function pick captured.
     fn install_eager_only(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         expr: KExpression<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
@@ -324,42 +322,42 @@ impl<'a> KeywordedState<'a> {
              resolve_dispatch contract requires at least one eager part",
         );
         let new_expr = KExpression::new(new_parts);
-        Self::install_eager_subs_track(sched, new_expr, staged_subs, Vec::new(), scope, idx)
+        Self::install_eager_subs_track(ctx, new_expr, staged_subs, Vec::new(), scope, idx)
     }
 
     fn install_bare_name_park(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         producers: Vec<NodeId>,
         working_expr: KExpression<'a>,
         pre_subs: Vec<(usize, NodeId)>,
         idx: usize,
     ) -> NodeStep<'a> {
         for p in &producers {
-            sched.deps.add_park_edge(*p, NodeId(idx));
+            ctx.add_park_edge(*p, NodeId(idx));
         }
         let track = BareNameParkTrack::new(working_expr, producers);
         let init = Initialized { pre_subs };
-        sched.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+        ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
             Self::with_bare_name_park(init, track),
         )))
     }
 
     fn install_eager_subs_track(
-        sched: &mut Scheduler<'a>,
+        ctx: &mut DispatchCtx<'a, '_>,
         working_expr: KExpression<'a>,
         staged_subs: Vec<(usize, PendingSub<'a>)>,
         pre_subs: Vec<(usize, NodeId)>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        match sched.install_eager_subs(working_expr, staged_subs, None, scope, idx) {
+        match ctx.install_eager_subs(working_expr, staged_subs, None, scope, idx) {
             EagerSubsInstall::DepError(step) => Ok(step),
             EagerSubsInstall::AllInline(working_expr) => {
-                Self::finish(sched, working_expr, scope, idx)
+                Self::finish(ctx, working_expr, scope, idx)
             }
             EagerSubsInstall::Parked(track) => {
                 let init = Initialized { pre_subs };
-                Ok(sched.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+                Ok(ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
                     Self::with_eager_subs(init, track),
                 ))))
             }
@@ -373,7 +371,7 @@ impl<'a> KeywordedState<'a> {
 /// subs. `Err(KError)` surfaces a *slot-terminal* error (cycle /
 /// unbound wrap), not a scheduler-level error.
 fn part_walk<'a>(
-    sched: &mut Scheduler<'a>,
+    ctx: &mut DispatchCtx<'a, '_>,
     parts: Vec<crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'a>>>,
     pre_subs: &[(usize, NodeId)],
     bare_outcomes: &[Option<NameOutcome<'a>>],
@@ -402,7 +400,7 @@ fn part_walk<'a>(
                     new_parts.push(Spanned { value: ExpressionPart::Future(obj), span });
                 }
                 Some(NameOutcome::Parked(p)) => {
-                    if sched.deps.would_create_cycle(*p, NodeId(idx)) {
+                    if ctx.would_create_cycle(*p, NodeId(idx)) {
                         let name = bare_name_of(&part.value).unwrap_or_default();
                         return Err(KError::new(KErrorKind::SchedulerDeadlock {
                             pending: 1,
@@ -438,7 +436,7 @@ fn part_walk<'a>(
                 );
             if park_eligible {
                 if let Some(NameOutcome::Parked(p)) = &bare_outcomes[i] {
-                    if sched.deps.would_create_cycle(*p, NodeId(idx)) {
+                    if ctx.would_create_cycle(*p, NodeId(idx)) {
                         let name = bare_name_of(&part.value).unwrap_or_default();
                         return Err(KError::new(KErrorKind::SchedulerDeadlock {
                             pending: 1,

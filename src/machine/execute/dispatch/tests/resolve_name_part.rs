@@ -2,7 +2,7 @@ use crate::builtins::default_scope;
 use crate::machine::NameOutcome;
 use crate::machine::core::source::Spanned;
 use crate::machine::execute::Scheduler;
-use crate::machine::execute::scheduler::dispatch::resolve_name_part;
+use crate::machine::execute::dispatch::resolve_name_part;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{BindingIndex, RuntimeArena};
@@ -77,10 +77,10 @@ fn resolve_name_part_self_park_is_cycle() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let slot = sched.add(
-        crate::machine::execute::nodes::NodeWork::dispatch(KExpression::new(vec![
-            Spanned::bare(ExpressionPart::Identifier("self_ref".into())),
-        ])),
+    let slot = sched.add_dispatch(
+        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
+            "self_ref".into(),
+        ))]),
         scope,
     );
     scope.install_placeholder("self_ref".to_string(), slot, BindingIndex::BUILTIN).unwrap();

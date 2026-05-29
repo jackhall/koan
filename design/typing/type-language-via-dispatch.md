@@ -86,7 +86,7 @@ nested-parens part holding the kwargs.
 ## Classifier
 
 `classify_dispatch_shape`
-([dispatch.rs](../../src/machine/execute/scheduler/dispatch.rs))
+([dispatch.rs](../../src/machine/execute/dispatch.rs))
 carries a `SigiledTypeExpr` variant whose handler
 (`fast_lane_sigiled_type_expr`) tail-replaces the slot with a
 `Dispatch` of the wrapped `KExpression`. The inner dispatch sees the

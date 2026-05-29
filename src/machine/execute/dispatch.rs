@@ -1,8 +1,7 @@
 //! Dispatch shape router, classifier, and shared spine.
 //!
-//! [`Scheduler::run_dispatch`] classifies the slot via
-//! [`classify_dispatch_shape`] and routes to one of the five shape
-//! handlers:
+//! [`run_dispatch`] classifies the slot via [`classify_dispatch_shape`]
+//! and routes to one of the five shape handlers:
 //!
 //! - **Keyworded** (any keyword present, or a head that isn't a
 //!   fast-lane shape) → [`keyworded::KeywordedState`]
@@ -12,7 +11,9 @@
 //!   **SigiledTypeExpr** → [`single_poll`] handlers
 //!
 //! State and transitions live with their shape; this file keeps the
-//! cross-shape glue.
+//! cross-shape glue. Every per-shape handler takes a
+//! [`DispatchCtx`] — the typed facade over `&mut Scheduler<'a>` — so the
+//! shape modules never spell scheduler field names.
 
 use crate::machine::core::coerce_type_token_value;
 use crate::machine::core::kfunction::KFunction;
@@ -23,16 +24,18 @@ use crate::machine::{
     Frame, KError, KErrorKind, NameOutcome, NodeId, Resolution, Scope,
 };
 
-use super::Scheduler;
-use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
+use super::scheduler::Scheduler;
+use super::nodes::{NodeOutput, NodeStep};
 
-pub(in crate::machine::execute::scheduler) mod fn_value;
-pub(in crate::machine::execute::scheduler) mod keyworded;
-pub(in crate::machine::execute::scheduler) mod single_poll;
+mod ctx;
+pub(in crate::machine::execute) mod fn_value;
+pub(in crate::machine::execute) mod keyworded;
+pub(in crate::machine::execute) mod single_poll;
 
 #[cfg(test)]
 mod tests;
 
+pub(in crate::machine::execute) use ctx::DispatchCtx;
 use fn_value::FnValueState;
 use keyworded::KeywordedState;
 use single_poll::{BareIdState, BareTypeState, CtorState, SigilState};
@@ -100,7 +103,7 @@ pub(super) fn resolve_name_part<'a>(
         }
         _ => unreachable!("resolve_name_part only called on bare-name parts"),
     };
-    let chain = scheduler.active_chain.as_deref();
+    let chain = scheduler.chain_deref();
     match scope.resolve_with_chain(name, chain) {
         Resolution::Placeholder(producer) => {
             return if scheduler.is_result_ready(producer) {
@@ -108,7 +111,7 @@ pub(super) fn resolve_name_part<'a>(
                     Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
                     Ok(_) => NameOutcome::Unbound(name.to_string()),
                 }
-            } else if matches!(consumer, Some(c) if scheduler.deps.would_create_cycle(producer, c))
+            } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c))
             {
                 NameOutcome::Cycle(name.to_string())
             } else {
@@ -183,7 +186,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`.
-fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> NodeStep<'a> {
+pub(super) fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> NodeStep<'a> {
     let frame = Frame::from_expr("<bind>", working_expr);
     NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
 }
@@ -224,8 +227,8 @@ pub(super) fn stage_all_eager_parts<'a>(
     (new_parts, staged)
 }
 
-/// Outcome of [`Scheduler::install_eager_subs`].
-pub(in crate::machine::execute::scheduler::dispatch) enum EagerSubsInstall<'a> {
+/// Outcome of [`DispatchCtx::install_eager_subs`].
+pub(in crate::machine::execute::dispatch) enum EagerSubsInstall<'a> {
     AllInline(KExpression<'a>),
     Parked(EagerSubsTrack<'a>),
     DepError(NodeStep<'a>),
@@ -325,176 +328,60 @@ impl<'a> DispatchState<'a> {
     }
 }
 
-// ---------- Scheduler shared spine ----------
+// ---------- Cross-shape driver ----------
 
-impl<'a> Scheduler<'a> {
-    /// Build the per-part `bare_outcomes` cache: one
-    /// `resolve_name_part` per bare-name part, `None` otherwise.
-    /// `consumer = None` defers cycle detection to the splice walk.
-    pub(in crate::machine::execute::scheduler::dispatch) fn build_bare_outcomes(
-        &self,
-        parts: &[Spanned<ExpressionPart<'a>>],
-        scope: &'a Scope<'a>,
-    ) -> Vec<Option<NameOutcome<'a>>> {
-        parts
-            .iter()
-            .map(|p| match &p.value {
-                ExpressionPart::Identifier(_) => Some(resolve_name_part(scope, &p.value, self, None)),
-                ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-                    Some(resolve_name_part(scope, &p.value, self, None))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Submit each `PendingSub`, splice already-terminal subs inline,
-    /// install an Owned dep_edge from each in-flight sub to this slot,
-    /// and return the routed [`EagerSubsInstall`]. `picked = Some(f)`
-    /// is the FunctionValueCall install; `None` is Keyworded.
-    pub(in crate::machine::execute::scheduler::dispatch) fn install_eager_subs(
-        &mut self,
-        mut working_expr: KExpression<'a>,
-        staged_subs: Vec<(usize, PendingSub<'a>)>,
-        picked: Option<&'a KFunction<'a>>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> EagerSubsInstall<'a> {
-        let mut pending_subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
-        for (i, pending) in staged_subs {
-            let sub_id = match pending {
-                PendingSub::Reuse(id) => id,
-                PendingSub::Dispatch(sub_expr) => self.add(NodeWork::dispatch(sub_expr), scope),
-                PendingSub::ListLit(items) => self.schedule_list_literal(items, scope),
-                PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs, scope),
+/// Stateful dispatch driver. Classifies the slot's shape and routes to
+/// the matching per-shape entry. Fast-lane variants terminalize (or
+/// single-producer-park) in one poll; only `Keyworded` and
+/// `FunctionValueCall` carry tracks that can re-enter via the resume
+/// arms.
+pub(in crate::machine::execute) fn run_dispatch<'a>(
+    ctx: &mut DispatchCtx<'a, '_>,
+    expr: KExpression<'a>,
+    state: DispatchState<'a>,
+    scope: &'a Scope<'a>,
+    idx: usize,
+) -> Result<NodeStep<'a>, KError> {
+    let _wakes = ctx.take_recent_wakes(NodeId(idx));
+    let init = match state {
+        DispatchState::Initialized(i) => i,
+        DispatchState::Keyworded(ks) => return ks.resume(ctx, scope, idx),
+        DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, scope, idx),
+        _ => unreachable!(
+            "remaining fast-lane stateful variants terminalize in one poll; \
+             only Keyworded and FunctionValueCall re-enter from a parked track"
+        ),
+    };
+    match classify_dispatch_shape(&expr) {
+        DispatchShape::BareTypeLeaf => {
+            debug_assert!(init.pre_subs.is_empty());
+            let t = match &expr.parts[0].value {
+                ExpressionPart::Type(t) => t.clone(),
+                _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
             };
-            if self.is_result_ready(sub_id) {
-                match self.read_result(sub_id) {
-                    Err(e) => return EagerSubsInstall::DepError(bind_frame_err(e, &working_expr)),
-                    Ok(value) => {
-                        working_expr.parts[i].value = ExpressionPart::Future(value);
-                        self.free(sub_id.index());
-                    }
-                }
-            } else {
-                self.deps.add_owned_edge(sub_id, NodeId(idx));
-                pending_subs.push((i, sub_id));
-            }
+            Ok(single_poll::bare_type_leaf(ctx, &t, scope))
         }
-        if pending_subs.is_empty() {
-            EagerSubsInstall::AllInline(working_expr)
-        } else {
-            EagerSubsInstall::Parked(EagerSubsTrack { working_expr, subs: pending_subs, picked })
+        DispatchShape::BareIdentifier => {
+            debug_assert!(init.pre_subs.is_empty());
+            let name = match &expr.parts[0].value {
+                ExpressionPart::Identifier(n) => n.clone(),
+                _ => unreachable!("BareIdentifier shape implies single Identifier part"),
+            };
+            Ok(single_poll::bare_identifier(ctx, name, scope, idx))
         }
-    }
-
-    /// Standard `NodeStep::Replace` for parked-Dispatch install sites:
-    /// drops the entry expression to an empty placeholder (the state
-    /// carries the evolving `working_expr` from here on).
-    pub(in crate::machine::execute::scheduler::dispatch) fn replace_with_parked_dispatch(
-        &self,
-        state: DispatchState<'a>,
-    ) -> NodeStep<'a> {
-        NodeStep::Replace {
-            work: NodeWork::Dispatch { expr: KExpression::new(Vec::new()), state },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
+        DispatchShape::FunctionValueCall => {
+            debug_assert!(init.pre_subs.is_empty());
+            let _ = init;
+            FnValueState::initial(ctx, expr, scope, idx)
         }
-    }
-
-    /// Track-completion continuation for `eager_subs` tracks. Routes
-    /// on `track.picked`:
-    ///
-    /// - `None` (Keyworded install) — tail into
-    ///   [`KeywordedState::finish`], which re-resolves dispatch so an
-    ///   element-typed `Future(_)` revealed by a sub can surface as
-    ///   `DispatchFailed` rather than a bind-time `TypeMismatch`.
-    /// - `Some(f)` (FunctionValueCall install) — bind `f` directly.
-    pub(in crate::machine::execute::scheduler::dispatch) fn resume_eager_subs(
-        &mut self,
-        track: EagerSubsTrack<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
-        let EagerSubsTrack { mut working_expr, subs, picked } = track;
-        for (_, sub_id) in &subs {
-            if let Err(e) = self.read_result(*sub_id) {
-                return Ok(bind_frame_err(e, &working_expr));
-            }
+        DispatchShape::ConstructorCall => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(single_poll::constructor_call(ctx, expr, scope, idx))
         }
-        let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
-        for (part_idx, dep_id) in subs {
-            let value = self.read(dep_id);
-            working_expr.parts[part_idx].value = ExpressionPart::Future(value);
-        }
-        self.deps.clear_dep_edges(idx);
-        for d in dep_indices {
-            self.free(d);
-        }
-        match picked {
-            None => KeywordedState::finish(self, working_expr, scope, idx),
-            Some(f) => match f.bind(working_expr) {
-                Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
-                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-            },
-        }
-    }
-
-    /// Stateful dispatch driver. Classifies the slot's shape and
-    /// routes to the matching per-shape entry. Fast-lane variants
-    /// terminalize (or single-producer-park) in one poll; only
-    /// `Keyworded` and `FunctionValueCall` carry tracks that can
-    /// re-enter via the resume arms.
-    pub(super) fn run_dispatch(
-        &mut self,
-        expr: KExpression<'a>,
-        state: DispatchState<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
-        let _wakes = self.store.take_recent_wakes(NodeId(idx));
-        let init = match state {
-            DispatchState::Initialized(i) => i,
-            DispatchState::Keyworded(ks) => return ks.resume(self, scope, idx),
-            DispatchState::FunctionValueCall(fs) => return fs.resume(self, scope, idx),
-            _ => unreachable!(
-                "remaining fast-lane stateful variants terminalize in one poll; \
-                 only Keyworded and FunctionValueCall re-enter from a parked track"
-            ),
-        };
-        match classify_dispatch_shape(&expr) {
-            DispatchShape::BareTypeLeaf => {
-                debug_assert!(init.pre_subs.is_empty());
-                let t = match &expr.parts[0].value {
-                    ExpressionPart::Type(t) => t.clone(),
-                    _ => unreachable!("BareTypeLeaf shape implies single leaf Type part"),
-                };
-                Ok(single_poll::bare_type_leaf(self, &t, scope))
-            }
-            DispatchShape::BareIdentifier => {
-                debug_assert!(init.pre_subs.is_empty());
-                let name = match &expr.parts[0].value {
-                    ExpressionPart::Identifier(n) => n.clone(),
-                    _ => unreachable!("BareIdentifier shape implies single Identifier part"),
-                };
-                Ok(single_poll::bare_identifier(self, name, scope, idx))
-            }
-            DispatchShape::FunctionValueCall => {
-                debug_assert!(init.pre_subs.is_empty());
-                let _ = init;
-                FnValueState::initial(self, expr, scope, idx)
-            }
-            DispatchShape::ConstructorCall => {
-                debug_assert!(init.pre_subs.is_empty());
-                Ok(single_poll::constructor_call(self, expr, scope, idx))
-            }
-            DispatchShape::Keyworded => KeywordedState::initial(self, expr, init.pre_subs, scope, idx),
-            DispatchShape::SigiledTypeExpr => {
-                debug_assert!(init.pre_subs.is_empty());
-                Ok(single_poll::sigiled_type_expr(expr))
-            }
+        DispatchShape::Keyworded => KeywordedState::initial(ctx, expr, init.pre_subs, scope, idx),
+        DispatchShape::SigiledTypeExpr => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(single_poll::sigiled_type_expr(expr))
         }
     }
 }

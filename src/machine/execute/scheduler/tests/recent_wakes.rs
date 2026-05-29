@@ -12,8 +12,10 @@ fn recent_wakes_empty_for_non_dispatch_consumer() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let producer = sched.add_dispatch(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_p".into()))]),
+    let producer = sched.add(
+        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+            ExpressionPart::Identifier("_p".into()),
+        )])),
         scope,
     );
     let consumer = sched.add(NodeWork::Lift(LiftState::Pending(producer)), scope);
@@ -27,12 +29,16 @@ fn recent_wakes_records_producer_for_dispatch_consumer() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let producer = sched.add_dispatch(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_p".into()))]),
+    let producer = sched.add(
+        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+            ExpressionPart::Identifier("_p".into()),
+        )])),
         scope,
     );
-    let consumer = sched.add_dispatch(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_c".into()))]),
+    let consumer = sched.add(
+        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+            ExpressionPart::Identifier("_c".into()),
+        )])),
         scope,
     );
     sched.deps.add_park_edge(producer, consumer);
@@ -48,8 +54,10 @@ fn recent_wakes_drain_default_empty() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let id: NodeId = sched.add_dispatch(
-        KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
+    let id: NodeId = sched.add(
+        NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+            ExpressionPart::Identifier("_".into()),
+        )])),
         scope,
     );
     assert!(sched.store.take_recent_wakes(id).is_empty());
