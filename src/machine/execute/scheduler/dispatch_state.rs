@@ -52,7 +52,7 @@ pub(in crate::machine::execute) struct FnValueState<'a> {
     /// fast lane stages eager subs and parks waiting on them. Mutually exclusive
     /// with `head_placeholder` at install time (head resolution succeeds before
     /// the part walk runs).
-    pub(in crate::machine::execute) eager_subs: Option<FnValueEagerSubsTrack<'a>>,
+    pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'a>>,
     /// Head-placeholder park track installed by the `Resolution::Placeholder`
     /// arm of `stateful_fast_lane_function_value_call`. `None` is the initial
     /// shape; writes `Some` when the head name resolved to a forward-reference
@@ -136,15 +136,36 @@ pub(in crate::machine::execute) struct KeywordedState<'a> {
 pub(in crate::machine::execute) struct EagerSubsTrack<'a> {
     pub(in crate::machine::execute) working_expr: KExpression<'a>,
     pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
-    _ph: std::marker::PhantomData<&'a KFunction<'a>>,
+    /// Picked function carried across the park.
+    ///
+    /// `Some(f)` is the FunctionValueCall install: the head resolved to a
+    /// single `KFunction` value carrier and no re-resolve happens on
+    /// resume — the resume binds `f` directly against the spliced
+    /// `working_expr`.
+    ///
+    /// `None` is the Keyworded install (both the Resolved-with-subs and
+    /// `Deferred` arms): on resume the slot re-runs
+    /// `resolve_dispatch_with_chain` against the spliced expression. The
+    /// re-resolve is authoritative — an element-typed `Future(_)` revealed
+    /// by an eager sub surfaces as `DispatchFailed` (non-match) rather
+    /// than a bind-time `TypeMismatch`.
+    pub(in crate::machine::execute) picked: Option<&'a KFunction<'a>>,
 }
 
 impl<'a> EagerSubsTrack<'a> {
-    pub(in crate::machine::execute) fn new(
+    pub(in crate::machine::execute) fn keyworded(
         working_expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
     ) -> Self {
-        Self { working_expr, subs, _ph: std::marker::PhantomData }
+        Self { working_expr, subs, picked: None }
+    }
+
+    pub(in crate::machine::execute) fn fn_value(
+        working_expr: KExpression<'a>,
+        subs: Vec<(usize, NodeId)>,
+        picked: &'a KFunction<'a>,
+    ) -> Self {
+        Self { working_expr, subs, picked: Some(picked) }
     }
 }
 
@@ -202,38 +223,6 @@ impl<'a> OverloadParkTrack<'a> {
         producers: Vec<NodeId>,
     ) -> Self {
         Self { expr, producers, _ph: std::marker::PhantomData }
-    }
-}
-
-/// Track state for the eager-subs sub-Dispatches a `FunctionValueCall`
-/// slot is parked on. Mirrors `EagerSubsTrack`'s shape — same `(part_idx,
-/// sub_id)` Owned-dep model and `working_expr` splice contract — but
-/// carries the picked `KFunction` from the head `Resolution::Value`
-/// arm. `FunctionValueCall` is non-overload-set (the head resolves to a
-/// single `KFunction` value carrier, not a candidate bucket), so a
-/// typed `Future(_)` revealed by an eager sub can't narrow to a more
-/// specific pick — the resume binds `picked` directly without
-/// re-running `resolve_dispatch`.
-///
-/// `working_expr` carries every part that was *not* an eager sub plus
-/// an `Identifier("")` placeholder at every sub index — the same
-/// splice shape `EagerSubsTrack` uses.
-pub(in crate::machine::execute) struct FnValueEagerSubsTrack<'a> {
-    pub(in crate::machine::execute) working_expr: KExpression<'a>,
-    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
-    /// The picked function set at install time from the head
-    /// `Resolution::Value(KFunction)` arm. Bound directly on resume —
-    /// no re-resolve.
-    pub(in crate::machine::execute) picked: &'a KFunction<'a>,
-}
-
-impl<'a> FnValueEagerSubsTrack<'a> {
-    pub(in crate::machine::execute) fn new(
-        working_expr: KExpression<'a>,
-        subs: Vec<(usize, NodeId)>,
-        picked: &'a KFunction<'a>,
-    ) -> Self {
-        Self { working_expr, subs, picked }
     }
 }
 
@@ -375,7 +364,7 @@ impl<'a> FnValueState<'a> {
     /// now parks on plus the picked function bound at resume.
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
-        track: FnValueEagerSubsTrack<'a>,
+        track: EagerSubsTrack<'a>,
     ) -> Self {
         Self { init, eager_subs: Some(track), head_placeholder: None }
     }

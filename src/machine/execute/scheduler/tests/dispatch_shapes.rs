@@ -943,7 +943,7 @@ fn stateful_keyworded_parked_carrier_expr_reads_state() {
 
     let with_eager_subs = DispatchState::Keyworded(Box::new(KeywordedState::with_eager_subs(
         Initialized { pre_subs: Vec::new() },
-        EagerSubsTrack::new(carrier_expr(), Vec::new()),
+        EagerSubsTrack::keyworded(carrier_expr(), Vec::new()),
     )));
     assert_eq!(
         with_eager_subs.parked_carrier_expr().map(Parseable::summarize),

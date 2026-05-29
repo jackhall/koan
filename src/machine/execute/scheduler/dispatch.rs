@@ -12,8 +12,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypePara
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::dispatch_state::{
-    BareNameParkTrack, DispatchState, EagerSubsTrack, FnValueEagerSubsTrack,
-    FnValueHeadPlaceholderTrack, FnValueState, KeywordedState, OverloadParkTrack,
+    BareNameParkTrack, DispatchState, EagerSubsTrack, FnValueHeadPlaceholderTrack, FnValueState,
+    KeywordedState, OverloadParkTrack,
 };
 use super::Scheduler;
 
@@ -291,6 +291,66 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
         Some(f) => cloned.with_frame(f),
         None => cloned,
     }
+}
+
+/// Shape a dep-error terminal with the `<bind>` surface frame keyed off
+/// `working_expr`. Shared by every eager-subs install / resume site so the
+/// surface stays identical with `run_bind`'s `reclaim_deps` propagation.
+fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> NodeStep<'a> {
+    let frame = Frame::from_expr("<bind>", working_expr);
+    NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
+}
+
+/// Walk raw parts emitting an `Identifier("")` placeholder at every eager
+/// slot (`Expression` / `SigiledTypeExpr` / `ListLiteral` / `DictLiteral`)
+/// and a parallel staged-subs Vec; non-eager parts pass through unchanged.
+/// Shared by the Keyworded-Deferred arm and the FunctionValueCall fast
+/// lane — both treat *every* eager part as a sub (no slot filter).
+fn stage_all_eager_parts<'a>(
+    parts: Vec<Spanned<ExpressionPart<'a>>>,
+) -> (Vec<Spanned<ExpressionPart<'a>>>, Vec<(usize, PendingSub<'a>)>) {
+    let mut new_parts: Vec<Spanned<ExpressionPart<'a>>> = Vec::with_capacity(parts.len());
+    let mut staged: Vec<(usize, PendingSub<'a>)> = Vec::new();
+    for (i, part) in parts.into_iter().enumerate() {
+        let span = part.span;
+        match part.value {
+            ExpressionPart::Expression(boxed) => {
+                staged.push((i, PendingSub::Dispatch(*boxed)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            }
+            ExpressionPart::SigiledTypeExpr(boxed) => {
+                let wrapped = KExpression::new(vec![Spanned::bare(
+                    ExpressionPart::SigiledTypeExpr(boxed),
+                )]);
+                staged.push((i, PendingSub::Dispatch(wrapped)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            }
+            ExpressionPart::ListLiteral(items) => {
+                staged.push((i, PendingSub::ListLit(items)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            }
+            ExpressionPart::DictLiteral(pairs) => {
+                staged.push((i, PendingSub::DictLit(pairs)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            }
+            other => new_parts.push(Spanned { value: other, span }),
+        }
+    }
+    (new_parts, staged)
+}
+
+/// Outcome of [`Scheduler::install_eager_subs`]. The caller routes:
+/// - `AllInline` — every sub terminalized at install time, no parking needed.
+///   Keyworded finishes via `stateful_keyworded_finish` (re-resolve);
+///   FunctionValueCall binds `picked` directly.
+/// - `Parked` — at least one sub is in flight. Caller wraps the carried
+///   track in the driver-specific state and uses [`Scheduler::replace_with_parked_dispatch`].
+/// - `DepError` — an already-terminal sub errored. Already shaped as
+///   `NodeStep::Done(Err)` with the `<bind>` surface frame; return as-is.
+enum EagerSubsInstall<'a> {
+    AllInline(KExpression<'a>),
+    Parked(EagerSubsTrack<'a>),
+    DepError(NodeStep<'a>),
 }
 
 impl<'a> Scheduler<'a> {
@@ -826,33 +886,7 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let mut new_parts = Vec::with_capacity(expr.parts.len());
-        let mut staged_subs: Vec<(usize, PendingSub<'a>)> = Vec::new();
-        for (i, part) in expr.parts.into_iter().enumerate() {
-            let span = part.span;
-            match part.value {
-                ExpressionPart::Expression(boxed) => {
-                    staged_subs.push((i, PendingSub::Dispatch(*boxed)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::SigiledTypeExpr(boxed) => {
-                    let wrapped = KExpression::new(vec![Spanned::bare(
-                        ExpressionPart::SigiledTypeExpr(boxed),
-                    )]);
-                    staged_subs.push((i, PendingSub::Dispatch(wrapped)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::ListLiteral(items) => {
-                    staged_subs.push((i, PendingSub::ListLit(items)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    staged_subs.push((i, PendingSub::DictLit(pairs)));
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                }
-                other => new_parts.push(Spanned { value: other, span }),
-            }
-        }
+        let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts);
         debug_assert!(
             !staged_subs.is_empty(),
             "stateful_install_eager_only invoked from Deferred arm; \
@@ -887,23 +921,9 @@ impl<'a> Scheduler<'a> {
         }
         let track = BareNameParkTrack::new(working_expr, producers);
         let init = super::dispatch_state::Initialized { pre_subs };
-        NodeStep::Replace {
-            work: NodeWork::Dispatch {
-                // Drop the entry expression — the state carries the
-                // partly-spliced `working_expr` from here on. The keyworded
-                // resume routes by state variant and never reads this
-                // field, but `NodeWork::Dispatch` still requires it
-                // structurally. Mirrors the eager-subs install shape.
-                expr: KExpression::new(Vec::new()),
-                state: DispatchState::Keyworded(Box::new(
-                    KeywordedState::with_bare_name_park(init, track),
-                )),
-            },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        }
+        self.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+            KeywordedState::with_bare_name_park(init, track),
+        )))
     }
 
     /// Realize the overload-park Track: filter `producers` for cycles
@@ -962,48 +982,26 @@ impl<'a> Scheduler<'a> {
         }
         let track = OverloadParkTrack::new(expr, to_wait);
         let init = super::dispatch_state::Initialized { pre_subs };
-        NodeStep::Replace {
-            work: NodeWork::Dispatch {
-                // Drop the entry expression — the state carries `expr`
-                // from here on. The keyworded resume routes by state
-                // variant and never reads this field, but
-                // `NodeWork::Dispatch` still requires it structurally.
-                // Mirrors the bare-name-park / eager-subs install shape.
-                expr: KExpression::new(Vec::new()),
-                state: DispatchState::Keyworded(Box::new(
-                    KeywordedState::with_overload_park(init, track),
-                )),
-            },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        }
+        self.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+            KeywordedState::with_overload_park(init, track),
+        )))
     }
 
-    /// Realize the eager-subs Track: submit each `PendingSub` to the
-    /// scheduler, install an Owned dep_edge from each sub to this slot so
-    /// the slot parks until the last sub finalizes, and transition to
-    /// `KeywordedState::WaitingEagerSubs`. The submission-time
-    /// `is_result_ready(sub)` check splices already-terminal subs inline
-    /// (their value lands as `Future(obj)` in `working_expr.parts[i]`
-    /// directly) — only the not-yet-terminal subs end up in the parked
-    /// `subs` Vec and contribute to `pending_deps`. The all-terminal-at-
-    /// install short-circuit avoids re-entering the dispatch loop just to
-    /// pop the slot back out.
-    ///
-    /// `function = Some` is the Resolved-with-eager-subs arm (the resume
-    /// handler binds the captured function); `function = None` is the
-    /// `ResolveOutcome::Deferred` arm (the resume handler re-resolves
-    /// dispatch against the spliced expression).
-    fn stateful_install_eager_subs_track(
+    /// Submit each `PendingSub`, splice already-terminal subs inline,
+    /// install an Owned dep_edge from each in-flight sub to this slot, and
+    /// route the outcome via [`EagerSubsInstall`]. Shared by both the
+    /// Keyworded driver (`picked = None`, finishes via re-resolve) and the
+    /// FunctionValueCall fast lane (`picked = Some(f)`, binds directly on
+    /// resume). The submission-time `is_result_ready` short-circuit avoids
+    /// re-entering the dispatch loop when every sub was terminal at install.
+    fn install_eager_subs(
         &mut self,
         mut working_expr: KExpression<'a>,
         staged_subs: Vec<(usize, PendingSub<'a>)>,
-        pre_subs: Vec<(usize, NodeId)>,
+        picked: Option<&'a crate::machine::core::kfunction::KFunction<'a>>,
         scope: &'a Scope<'a>,
         idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
+    ) -> EagerSubsInstall<'a> {
         let mut pending_subs: Vec<(usize, NodeId)> = Vec::with_capacity(staged_subs.len());
         for (i, pending) in staged_subs {
             let sub_id = match pending {
@@ -1013,20 +1011,8 @@ impl<'a> Scheduler<'a> {
                 PendingSub::DictLit(pairs) => self.schedule_dict_literal(pairs, scope),
             };
             if self.is_result_ready(sub_id) {
-                // Already-terminal sub (typically a `Reuse` of a pre_sub the
-                // scheduler picked up before this slot's first poll, or an
-                // aggregate Combine that finished synchronously). Short-
-                // circuit on dep-error matching `run_bind`'s `<bind>` frame
-                // so the surface is identical across drivers; otherwise
-                // splice the future and eagerly free the sub.
                 match self.read_result(sub_id) {
-                    Err(e) => {
-                        let frame = Frame::from_expr("<bind>", &working_expr);
-                        return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                            e,
-                            Some(frame),
-                        ))));
-                    }
+                    Err(e) => return EagerSubsInstall::DepError(bind_frame_err(e, &working_expr)),
                     Ok(value) => {
                         working_expr.parts[i].value = ExpressionPart::Future(value);
                         self.free(sub_id.index());
@@ -1038,30 +1024,60 @@ impl<'a> Scheduler<'a> {
             }
         }
         if pending_subs.is_empty() {
-            // All subs were terminal at install time and were spliced
-            // inline. Run the completion path directly so we don't park
-            // for one re-entry only to do the same work.
-            return self.stateful_keyworded_finish(working_expr, scope, idx);
+            EagerSubsInstall::AllInline(working_expr)
+        } else {
+            EagerSubsInstall::Parked(EagerSubsTrack {
+                working_expr,
+                subs: pending_subs,
+                picked,
+            })
         }
-        let track = EagerSubsTrack::new(working_expr, pending_subs);
-        let init = super::dispatch_state::Initialized { pre_subs };
-        Ok(NodeStep::Replace {
+    }
+
+    /// Build the standard `NodeStep::Replace` shell every parked-`Dispatch`
+    /// install site uses: drop the entry expression to an empty placeholder
+    /// (the state carries the evolving `working_expr` from here on) and
+    /// zero the four invoke-shape fields. The driver's resume routes by
+    /// state variant and never reads the entry `expr` field, but
+    /// `NodeWork::Dispatch` still requires it structurally.
+    pub(super) fn replace_with_parked_dispatch(&self, state: DispatchState<'a>) -> NodeStep<'a> {
+        NodeStep::Replace {
             work: NodeWork::Dispatch {
-                // Drop the entry expression — the state carries the
-                // evolving `working_expr` from here on. The keyworded
-                // resume routes by state variant and never reads this
-                // field, but `NodeWork::Dispatch` still requires it
-                // structurally.
                 expr: KExpression::new(Vec::new()),
-                state: DispatchState::Keyworded(Box::new(
-                    KeywordedState::with_eager_subs(init, track),
-                )),
+                state,
             },
             frame: None,
             function: None,
             block_entry: None,
             body_index: 0,
-        })
+        }
+    }
+
+    /// Keyworded eager-subs install: route the shared install outcome by
+    /// the `AllInline`/`Parked`/`DepError` shape. The `AllInline` arm tails
+    /// into `stateful_keyworded_finish` (re-resolve against the spliced
+    /// expression); the `Parked` arm wraps the track in a
+    /// `KeywordedState::with_eager_subs` and replaces the slot.
+    fn stateful_install_eager_subs_track(
+        &mut self,
+        working_expr: KExpression<'a>,
+        staged_subs: Vec<(usize, PendingSub<'a>)>,
+        pre_subs: Vec<(usize, NodeId)>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        match self.install_eager_subs(working_expr, staged_subs, None, scope, idx) {
+            EagerSubsInstall::DepError(step) => Ok(step),
+            EagerSubsInstall::AllInline(working_expr) => {
+                self.stateful_keyworded_finish(working_expr, scope, idx)
+            }
+            EagerSubsInstall::Parked(track) => {
+                let init = super::dispatch_state::Initialized { pre_subs };
+                Ok(self.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+                    KeywordedState::with_eager_subs(init, track),
+                ))))
+            }
+        }
     }
 
     /// Resume entry for a `Keyworded` slot. The three Keyworded tracks
@@ -1108,7 +1124,7 @@ impl<'a> Scheduler<'a> {
             "Keyworded resume is only entered after a track is installed; \
              the install sites set `eager_subs`, `bare_name_park`, or `overload_park`",
         );
-        self.stateful_keyworded_resume_eager_subs(track, scope, idx)
+        self.stateful_resume_eager_subs(track, scope, idx)
     }
 
     /// Track-completion continuation for the `bare_name_park` track.
@@ -1167,30 +1183,36 @@ impl<'a> Scheduler<'a> {
         self.stateful_keyworded_initial(expr, init.pre_subs, scope, idx)
     }
 
-    /// Track-completion continuation for the `eager_subs` track. Reads each
-    /// sub's terminal, splices `Future(value)` into `working_expr.parts[i]`,
-    /// frees the sub, and either binds the captured picked function
-    /// (Resolved arm) or re-resolves dispatch against the spliced expression
-    /// (Deferred arm: `function == None`). On dep-error, surfaces the
-    /// `<bind>` frame to match the keyworded `run_bind` driver's surface.
+    /// Track-completion continuation shared between the Keyworded and
+    /// FunctionValueCall `eager_subs` tracks. Reads each sub's terminal,
+    /// splices `Future(value)` into `working_expr.parts[i]`, frees the
+    /// sub, then routes on `track.picked`:
     ///
-    /// Eager-free on the success path: clear the slot's dep_edges then
-    /// free each sub. On the error path the dep_edges stay around for
-    /// chain-free at slot drop.
-    fn stateful_keyworded_resume_eager_subs(
+    /// - `None` (Keyworded install) — tail into
+    ///   [`Self::stateful_keyworded_finish`], which re-resolves dispatch
+    ///   against the spliced expression. Re-resolve is authoritative; an
+    ///   element-typed `Future(_)` that narrows a typed-slot admission
+    ///   surfaces `DispatchFailed` (non-match) rather than a bind-time
+    ///   `TypeMismatch`.
+    /// - `Some(f)` (FunctionValueCall install) — bind `f` directly. The
+    ///   head was a single `KFunction` value carrier, not a candidate
+    ///   bucket, so no re-resolve narrows the pick.
+    ///
+    /// On dep-error surfaces the `<bind>` frame to match the keyworded
+    /// `run_bind` driver's `reclaim_deps` surface. Eager-free on the
+    /// success path: clear the slot's dep_edges then free each sub —
+    /// `dep_edges[idx]` at resume time holds only the Owned entries the
+    /// install set up, so clearing is sound.
+    fn stateful_resume_eager_subs(
         &mut self,
         track: EagerSubsTrack<'a>,
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let EagerSubsTrack { mut working_expr, subs, .. } = track;
+        let EagerSubsTrack { mut working_expr, subs, picked } = track;
         for (_, sub_id) in &subs {
             if let Err(e) = self.read_result(*sub_id) {
-                let frame = Frame::from_expr("<bind>", &working_expr);
-                return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                    e,
-                    Some(frame),
-                ))));
+                return Ok(bind_frame_err(e, &working_expr));
             }
         }
         let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
@@ -1198,15 +1220,17 @@ impl<'a> Scheduler<'a> {
             let value = self.read(dep_id);
             working_expr.parts[part_idx].value = ExpressionPart::Future(value);
         }
-        // Success-path eager free — mirrors `run_bind`'s `reclaim_deps`.
-        // `dep_edges[idx]` at this point holds only the Owned entries we
-        // installed in `stateful_install_eager_subs_track`; clearing is
-        // sound (no Notify edges to drop).
         self.deps.clear_dep_edges(idx);
         for d in dep_indices {
             self.free(d);
         }
-        self.stateful_keyworded_finish(working_expr, scope, idx)
+        match picked {
+            None => self.stateful_keyworded_finish(working_expr, scope, idx),
+            Some(f) => match f.bind(working_expr) {
+                Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
+                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+            },
+        }
     }
 
     /// Re-resolve completion shared between the parked-track resume and the
@@ -1360,108 +1384,26 @@ impl<'a> Scheduler<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let mut new_parts = Vec::with_capacity(expr.parts.len());
-        let mut pending_subs: Vec<(usize, NodeId)> = Vec::new();
-        // First pass: stage every part. Schedules sub-Dispatches /
-        // aggregates eagerly, emitting an `Identifier("")` placeholder
-        // at each eager slot.
-        for (i, part) in expr.parts.into_iter().enumerate() {
-            let span = part.span;
-            let sub_id = match part.value {
-                ExpressionPart::Expression(boxed) => {
-                    let id = self.add(NodeWork::dispatch(*boxed), scope);
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    id
-                }
-                ExpressionPart::SigiledTypeExpr(boxed) => {
-                    let wrapped = KExpression::new(vec![Spanned::bare(
-                        ExpressionPart::SigiledTypeExpr(boxed),
-                    )]);
-                    let id = self.add(NodeWork::dispatch(wrapped), scope);
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    id
-                }
-                ExpressionPart::ListLiteral(items) => {
-                    let id = self.schedule_list_literal(items, scope);
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    id
-                }
-                ExpressionPart::DictLiteral(pairs) => {
-                    let id = self.schedule_dict_literal(pairs, scope);
-                    new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
-                    id
-                }
-                other => {
-                    new_parts.push(Spanned { value: other, span });
-                    continue;
-                }
-            };
-            // Submission-time splice: if the sub is already terminal
-            // (an aggregate Combine that finished synchronously, or a
-            // value-shaped Dispatch that terminalized inline), splice
-            // its `Future` inline and skip the Owned edge — matching
-            // the keyworded `stateful_install_eager_subs_track`
-            // short-circuit. On dep-error, surface the `<bind>` frame
-            // for parity with `run_bind`.
-            if self.is_result_ready(sub_id) {
-                match self.read_result(sub_id) {
-                    Err(e) => {
-                        let working_expr = KExpression::new(new_parts);
-                        let frame = Frame::from_expr("<bind>", &working_expr);
-                        return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                            e,
-                            Some(frame),
-                        ))));
-                    }
-                    Ok(value) => {
-                        // Splice into the just-pushed placeholder.
-                        let last = new_parts.len() - 1;
-                        new_parts[last].value = ExpressionPart::Future(value);
-                        self.free(sub_id.index());
-                    }
-                }
-            } else {
-                self.deps.add_owned_edge(sub_id, NodeId(idx));
-                pending_subs.push((i, sub_id));
-            }
-        }
+        let (new_parts, staged_subs) = stage_all_eager_parts(expr.parts);
         let working_expr = KExpression::new(new_parts);
-        if pending_subs.is_empty() {
-            // Either no eager parts at all or every sub short-circuited
-            // at install time. Bind `picked` directly without installing
-            // a track.
-            return match picked.bind(working_expr) {
+        match self.install_eager_subs(working_expr, staged_subs, Some(picked), scope, idx) {
+            EagerSubsInstall::DepError(step) => Ok(step),
+            EagerSubsInstall::AllInline(working_expr) => match picked.bind(working_expr) {
                 Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-            };
-        }
-        // FunctionValueCall is non-binder; submit-time recursion
-        // never populated `pre_subs`, so the carrier carries an
-        // empty `Initialized`. Drop the assertion here — the caller
-        // (`run_dispatch`'s classify arm) already asserted
-        // it before routing to this installer; the structural-
-        // embedding rule's destructure-and-discard contract is
-        // satisfied by constructing `Initialized` fresh.
-        let track = FnValueEagerSubsTrack::new(working_expr, pending_subs, picked);
-        let init = super::dispatch_state::Initialized { pre_subs: Vec::new() };
-        Ok(NodeStep::Replace {
-            work: NodeWork::Dispatch {
-                // Drop the entry expression — the state carries the
-                // evolving `working_expr` from here on. The
-                // FunctionValueCall resume routes by state variant and
-                // never reads this field, but `NodeWork::Dispatch`
-                // still requires it structurally. Mirrors the
-                // keyworded eager-subs install shape.
-                expr: KExpression::new(Vec::new()),
-                state: DispatchState::FunctionValueCall(Box::new(
-                    FnValueState::with_eager_subs(init, track),
-                )),
             },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        })
+            EagerSubsInstall::Parked(track) => {
+                // FunctionValueCall is non-binder; submit-time recursion
+                // never populated `pre_subs`, so the carrier carries an
+                // empty `Initialized`. The structural-embedding rule's
+                // destructure-and-discard contract is satisfied by
+                // constructing `Initialized` fresh.
+                let init = super::dispatch_state::Initialized { pre_subs: Vec::new() };
+                Ok(self.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
+                    FnValueState::with_eager_subs(init, track),
+                ))))
+            }
+        }
     }
 
     /// Realize the FunctionValueCall head-placeholder Track: install a
@@ -1488,21 +1430,9 @@ impl<'a> Scheduler<'a> {
         // reads it. Construct `Initialized` fresh per the structural-
         // embedding rule's destructure-and-discard contract.
         let init = super::dispatch_state::Initialized { pre_subs: Vec::new() };
-        NodeStep::Replace {
-            work: NodeWork::Dispatch {
-                // Drop the entry expression — the state carries `expr`
-                // from here on. Mirrors the keyworded park-track
-                // install shape.
-                expr: KExpression::new(Vec::new()),
-                state: DispatchState::FunctionValueCall(Box::new(
-                    FnValueState::with_head_placeholder(init, track),
-                )),
-            },
-            frame: None,
-            function: None,
-            block_entry: None,
-            body_index: 0,
-        }
+        self.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
+            FnValueState::with_head_placeholder(init, track),
+        )))
     }
 
     /// Resume entry for a `FunctionValueCall` slot. Routes by install
@@ -1532,60 +1462,13 @@ impl<'a> Scheduler<'a> {
                  the part walk could stage any subs; eager_subs install implies the \
                  head resolved to `Value(KFunction)`); resume must never see both",
             );
-            return self.stateful_fn_value_resume_eager_subs(track, scope, idx);
+            return self.stateful_resume_eager_subs(track, scope, idx);
         }
         let track = head_placeholder.expect(
             "FunctionValueCall resume is only entered after a track is installed; \
              the install sites set `eager_subs` or `head_placeholder`",
         );
         self.stateful_fn_value_resume_head_placeholder(track, scope, idx)
-    }
-
-    /// Track-completion continuation for the FunctionValueCall
-    /// `eager_subs` track. Reads each sub's terminal, splices
-    /// `Future(value)` into `working_expr.parts[i]`, frees the sub,
-    /// and binds `picked` against the spliced expression. Mirrors
-    /// `stateful_keyworded_resume_eager_subs`'s shape — including the
-    /// `<bind>` frame on dep-error for surface parity with `run_bind`,
-    /// and the `clear_dep_edges` + per-sub `free` ordering matching
-    /// `run_bind`'s `reclaim_deps`.
-    ///
-    /// No re-resolve: `FunctionValueCall` is non-overload-set, so a
-    /// typed `Future(_)` revealed by an eager sub can't narrow to a
-    /// more specific pick — bind `picked` directly.
-    fn stateful_fn_value_resume_eager_subs(
-        &mut self,
-        track: FnValueEagerSubsTrack<'a>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
-        let FnValueEagerSubsTrack { mut working_expr, subs, picked } = track;
-        for (_, sub_id) in &subs {
-            if let Err(e) = self.read_result(*sub_id) {
-                let frame = Frame::from_expr("<bind>", &working_expr);
-                return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
-                    e,
-                    Some(frame),
-                ))));
-            }
-        }
-        let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
-        for (part_idx, dep_id) in subs {
-            let value = self.read(dep_id);
-            working_expr.parts[part_idx].value = ExpressionPart::Future(value);
-        }
-        // Success-path eager free — mirrors `run_bind`'s `reclaim_deps`.
-        // `dep_edges[idx]` at this point holds only the Owned entries
-        // we installed in `stateful_install_fn_value_eager_subs_track`;
-        // clearing is sound (no Notify edges to drop).
-        self.deps.clear_dep_edges(idx);
-        for d in dep_indices {
-            self.free(d);
-        }
-        match picked.bind(working_expr) {
-            Ok(future) => Ok(self.invoke_to_step_pinned(future, scope, idx)),
-            Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
-        }
     }
 
     /// Track-completion continuation for the FunctionValueCall
