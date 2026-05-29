@@ -20,8 +20,6 @@
 //! `resolve_name_part`, `extract_named_call_inner`,
 //! `propagate_dep_error`, `stage_all_eager_parts`).
 
-use std::marker::PhantomData;
-
 use crate::builtins::value_lookup::coerce_type_token_value;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
@@ -204,8 +202,7 @@ pub(super) fn propagate_dep_error(e: &KError, frame: Option<Frame>) -> KError {
 
 /// Shape a dep-error terminal with the `<bind>` surface frame keyed
 /// off `working_expr`. Shared by every eager-subs install / resume
-/// site so the surface matches `run_bind`'s `reclaim_deps`
-/// propagation.
+/// site.
 fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> NodeStep<'a> {
     let frame = Frame::from_expr("<bind>", working_expr);
     NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame))))
@@ -362,12 +359,6 @@ impl<'a> DispatchState<'a> {
         }
     }
 }
-
-// `PhantomData` of the empty variants is touched only structurally;
-// silence the unused-field lint via a no-op reference here.
-const _: fn() = || {
-    let _ = PhantomData::<&()>;
-};
 
 // ---------- Scheduler shared spine ----------
 

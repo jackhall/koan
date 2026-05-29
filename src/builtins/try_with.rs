@@ -8,7 +8,7 @@
 //! tag). Per-arm `it` shape is documented on the roadmap and pinned by [`KError::to_tagged`].
 //!
 //! Both slots are `KExpression` (lazy). `expr` must be lazy so the catching path can
-//! intercept its evaluation — an eager slot would short-circuit through `run_bind`'s
+//! intercept its evaluation — an eager slot would short-circuit through the eager-subs
 //! dep-error propagation before `TRY`'s body ever ran. The catching wiring is a
 //! [`NodeWork::Catch`](crate::machine::execute::Scheduler) slot (`add_catch`): TRY
 //! schedules `<expr>` as a sub-dispatch, then registers a finish closure that walks

@@ -47,8 +47,7 @@ fn combine_waits_on_deps_then_runs_finish() {
 fn combine_short_circuits_on_dep_error() {
     // Synthetic state: a Combine whose two deps already hold terminal results — one
     // Value, one Err. Pins the contract that finish does not run when any dep
-    // errored, and that the propagated error carries a "<combine>" frame matching
-    // run_bind's "<bind>" convention.
+    // errored, and that the propagated error carries a "<combine>" frame.
     use crate::machine::{BodyResult, CombineFinish, KError, KErrorKind};
     use std::cell::Cell;
     use std::rc::Rc;

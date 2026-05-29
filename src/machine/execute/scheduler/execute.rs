@@ -45,7 +45,6 @@ impl<'a> Scheduler<'a> {
                 NodeWork::Dispatch { expr, state } => {
                     self.run_dispatch(expr, state, scope, idx)?
                 }
-                NodeWork::Bind { expr, subs } => self.run_bind(expr, subs, scope, idx)?,
                 NodeWork::Combine { deps, park_count, finish } => {
                     self.run_combine(deps, park_count, finish, scope, idx)
                 }

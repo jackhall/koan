@@ -1,85 +1,20 @@
-use crate::machine::model::{KObject, Parseable};
+use crate::machine::model::KObject;
 use crate::machine::{
-    BodyResult, CatchFinish, CombineFinish, Frame, KError, KErrorKind, KFuture, NodeId,
-    ResolveOutcome, Scope,
+    BodyResult, CatchFinish, CombineFinish, Frame, KError, KFuture, NodeId, Scope,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::dispatch::propagate_dep_error;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
 use super::Scheduler;
 
 impl<'a> Scheduler<'a> {
-    pub(super) fn run_bind(
-        &mut self,
-        mut expr: KExpression<'a>,
-        subs: Vec<(usize, NodeId)>,
-        scope: &'a Scope<'a>,
-        idx: usize,
-    ) -> Result<NodeStep<'a>, KError> {
-        // Sub slots stay in `dep_edges[idx]` on the error path so chain-free at
-        // finalize reclaims them; eager free is the success-path optimization.
-        for (_, dep_id) in &subs {
-            if let Err(e) = self.read_result(*dep_id) {
-                let frame = Frame::from_expr("<bind>", &expr);
-                return Ok(NodeStep::Done(NodeOutput::Err(
-                    propagate_dep_error(e, Some(frame)),
-                )));
-            }
-        }
-        let dep_indices: Vec<usize> = subs.iter().map(|(_, d)| d.index()).collect();
-        for (part_idx, dep_id) in subs {
-            let value = self.read(dep_id);
-            expr.parts[part_idx].value = ExpressionPart::Future(value);
-        }
-        // Spliced `Future(&'a KObject)` references survive `results[dep] = None`
-        // because the objects live in arenas tied to lexical scope. Reclaim happens
-        // before resolution so the dispatched body's `add()` calls can recycle the
-        // indices immediately.
-        self.reclaim_deps(idx, dep_indices);
-        let future = match scope.resolve_dispatch(&expr) {
-            ResolveOutcome::Resolved(r) => r.function.bind(expr)?,
-            ResolveOutcome::Ambiguous(n) => {
-                return Err(KError::new(KErrorKind::AmbiguousDispatch {
-                    expr: expr.summarize(),
-                    candidates: n,
-                }));
-            }
-            // `Deferred` shouldn't reach here: every Expression/ListLiteral/DictLiteral
-            // part was scheduled before this Bind, and after reclaim the slots now hold
-            // `Future(_)`. Treat as a defensive dispatch failure rather than re-entering
-            // the eager loop (which would risk a no-progress cycle).
-            ResolveOutcome::Deferred | ResolveOutcome::Unmatched => {
-                return Err(KError::new(KErrorKind::DispatchFailed {
-                    expr: expr.summarize(),
-                    reason: "no matching function".to_string(),
-                }));
-            }
-            // A bare name in the rebuilt expression is still a pending forward
-            // reference: route through the keyworded overload-park track installer
-            // so the resume rebuilds via `KeywordedState::initial` rather than the
-            // deleted legacy re-Dispatch path.
-            ResolveOutcome::ParkOnProducers(producers) => {
-                // `Bind` deps resolved; re-Dispatch carries no `pre_subs` (the
-                // recursive-submission optimization fires only at the original
-                // outermost `add_with_chain`, not at bind-time re-resolve).
-                return Ok(super::dispatch::keyworded::KeywordedState::install_overload_park(
-                    self, producers, expr, Vec::new(), idx,
-                ));
-            }
-            ResolveOutcome::UnboundName(name) => {
-                return Err(KError::new(KErrorKind::UnboundName(name)));
-            }
-        };
-        Ok(self.invoke_to_step(future, scope, idx))
-    }
-
-    /// Success-path eager free; the error path leaves deps for chain-free at slot drop.
-    /// `dep_edges[idx].clear()` is sound here: Bind / Combine slots at reclaim time hold
-    /// only `Owned` edges (their `subs` / `deps`, all spawned by this slot). Notify
-    /// edges land only on Dispatch slots via the bare-name short-circuit / replay-park
-    /// in `run_dispatch`, never on Bind /
-    /// Combine, so clearing the list cannot drop a wake intent.
+    /// Success-path eager free; the error path leaves deps for chain-free
+    /// at slot drop. `dep_edges[idx].clear()` is sound here: Combine /
+    /// Catch slots at reclaim time hold only `Owned` edges (their
+    /// `deps` / `from`, all spawned by this slot). Notify edges land
+    /// only on Dispatch slots via the bare-name short-circuit /
+    /// replay-park in `run_dispatch`, never on Combine / Catch, so
+    /// clearing the list cannot drop a wake intent.
     fn reclaim_deps(&mut self, idx: usize, dep_indices: Vec<usize>) {
         self.deps.clear_dep_edges(idx);
         for d in dep_indices {
@@ -87,10 +22,11 @@ impl<'a> Scheduler<'a> {
         }
     }
 
-    /// Run a `Combine` slot: short-circuit on the first errored dep using the same
-    /// frame-attached propagation as `run_bind`, then call `finish` over the dep values
-    /// and decode the returned `BodyResult` (Value, Tail, or Err) into a `NodeStep`
-    /// using the same dispatch as `invoke_to_step`. Only the `deps[park_count..]`
+    /// Run a `Combine` slot: short-circuit on the first errored dep with
+    /// the standard `<combine>` frame, then call `finish` over the dep
+    /// values and decode the returned `BodyResult` (Value, Tail, or Err)
+    /// into a `NodeStep` using the same dispatch as `invoke_to_step`.
+    /// Only the `deps[park_count..]`
     /// owned-sub suffix is eagerly freed on the success path; the `[..park_count]`
     /// park-producer prefix is kept alive (those slots are sibling producers the
     /// Combine merely read at finish-time). The error path leaves the Combine's
@@ -105,7 +41,7 @@ impl<'a> Scheduler<'a> {
     ) -> NodeStep<'a> {
         // The closure carries its own framing context (e.g. "<list>", "<dict>") via its
         // capture; the Combine machinery only handles dep-error propagation, which uses
-        // the generic "<combine>" frame to match `run_bind`'s "<bind>" convention.
+        // the generic "<combine>" frame.
         let make_frame = || Frame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {

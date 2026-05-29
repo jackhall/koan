@@ -187,9 +187,9 @@ impl<'a> Scope<'a> {
                         // A strict tie whose deciding argument is still an unevaluated literal /
                         // sub-expression may resolve once evaluated: a typed `Future(List …)`
                         // re-dispatch is element-aware (`accepts_part`) where the bare literal is
-                        // shape-only and ties. Defer rather than hard-erroring — `run_bind`
-                        // re-dispatches the rewritten `Future(_)` expression, which carries no eager
-                        // parts, so a genuine tie surfaces as `Ambiguous` on that second pass.
+                        // shape-only and ties. Defer rather than hard-erroring — the eager-subs
+                        // resume re-resolves the rewritten `Future(_)` expression, which carries no
+                        // eager parts, so a genuine tie surfaces as `Ambiguous` on that second pass.
                         PickPass::Tie(n) if expr_has_eager_part(expr) => {
                             let _ = n;
                             Some(ResolveOutcome::Deferred)

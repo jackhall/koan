@@ -305,8 +305,7 @@ impl<'a> KeywordedState<'a> {
     /// and already-errored terminals, install `Notify` park edges, and
     /// transition to `Keyworded(WaitingOverloadPark)`. Cross-shape
     /// entry — also called from `single_poll::constructor_call` for
-    /// forward-reference type-binder parks and from `finish::run_bind`'s
-    /// re-resolve `ParkOnProducers` arm.
+    /// forward-reference type-binder parks.
     pub(in crate::machine::execute::scheduler) fn install_overload_park(
         sched: &mut Scheduler<'a>,
         producers: Vec<NodeId>,

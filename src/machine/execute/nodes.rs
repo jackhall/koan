@@ -78,10 +78,6 @@ pub(super) enum NodeWork<'a> {
         expr: KExpression<'a>,
         state: DispatchState<'a>,
     },
-    Bind {
-        expr: KExpression<'a>,
-        subs: Vec<(usize, NodeId)>,
-    },
     /// `deps` layout is `[park_producers..., owned_subs...]`. `park_count` is the
     /// size of the park-producer prefix — those slots are sibling producers this
     /// Combine merely reads at finish-time and does NOT own. Only the
@@ -170,10 +166,10 @@ pub(super) struct Node<'a> {
 /// prefix is installed separately as `Notify` edges by `Scheduler::add`.
 pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
-        // `pre_subs` are NOT read-deps of the Dispatch itself; they become
-        // owned-deps of the Bind that Phase 4 of `run_dispatch` spawns.
+        // `pre_subs` are NOT read-deps of the Dispatch itself; they ride along
+        // structurally on the slot's `DispatchState::Initialized` so the
+        // keyworded part walk can splice them at the named slot indices.
         NodeWork::Dispatch { .. } => None,
-        NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
         NodeWork::Combine { deps, park_count, .. } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),
         // `Lift` is only installed via `NodeStep::Replace` with deps wired explicitly;

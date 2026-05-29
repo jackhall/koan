@@ -203,7 +203,7 @@ impl<'a> Scheduler<'a> {
     pub fn is_empty(&self) -> bool { self.store.is_empty() }
 
     /// True iff slot `id` holds a terminal result. An errored sub counts as ready — the
-    /// parent short-circuits on it in `run_bind`/`run_combine`.
+    /// parent short-circuits on it in the eager-subs resume path / `run_combine`.
     pub(in crate::machine::execute::scheduler) fn is_result_ready(&self, id: NodeId) -> bool {
         self.store.is_result_ready(id)
     }

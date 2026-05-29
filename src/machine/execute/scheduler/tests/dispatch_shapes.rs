@@ -732,9 +732,8 @@ fn keyworded_unchanged_with_keyword_in_body() {
 /// an overload but whose value-cell parts need sub-Dispatch evaluation
 /// (the Resolved-with-eager-subs arm) terminates correctly under the
 /// stateful driver. Pins that the `KeywordedState::WaitingEagerSubs`
-/// state installed in `stateful_install_eager_subs_track` resumes,
-/// re-resolves, and binds without re-entering the legacy `run_dispatch`
-/// / `run_bind` path.
+/// state installed in `install_eager_subs_track` resumes, re-resolves,
+/// and binds inline through `invoke_to_step_pinned`.
 ///
 /// Program: `LET y = (FIRST [1 2 3])`. The LET binder picks at initial
 /// resolve (LET is a single-overload binder); the RHS `(FIRST [1 2 3])`
@@ -796,8 +795,7 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
 /// does not satisfy the speculatively-picked overload surfaces as
 /// `DispatchFailed` at re-resolve (non-match) rather than a bind-time
 /// `TypeMismatch`. Pins the "re-resolve is authoritative" contract
-/// reified in `EagerSubsTrack`'s doc and matches the legacy
-/// `run_bind` surface. Mirrors the existing
+/// reified in `EagerSubsTrack`'s doc. Mirrors the existing
 /// `fn_typed_list_param_wrong_element_type_finds_no_match` under
 /// explicit toggle-on routing.
 #[test]

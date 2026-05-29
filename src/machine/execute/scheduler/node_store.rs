@@ -228,9 +228,6 @@ impl<'a> NodeStore<'a> {
                         let carrier = state.parked_carrier_expr().unwrap_or(expr);
                         expr_sample = Some(carrier.summarize());
                     }
-                    NodeWork::Bind { expr, .. } if expr_sample.is_none() => {
-                        expr_sample = Some(expr.summarize());
-                    }
                     NodeWork::Combine { .. } if fallback_sample.is_none() => {
                         fallback_sample = Some("<combine>".to_string());
                     }
