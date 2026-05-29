@@ -193,9 +193,9 @@ pub fn body<'a>(
         // Infallible `register_type` matches the prior `bind_value` shape for shipped
         // call sites (placeholder-resolution catches name conflicts upstream before
         // the body runs). The returned `KObject::KTypeValue(kt)` carrier is preserved
-        // so dispatch transport — `lift_kobject`, the `value_lookup`-TypeExprRef
-        // synthesis site, downstream `KType::TypeExprRef`-typed slots — sees the
-        // same shape as before the storage flip.
+        // so dispatch transport — `lift_kobject`, the `BareTypeLeaf` fast lane's
+        // `coerce_type_token_value` synthesis site, downstream `KType::TypeExprRef`-typed
+        // slots — sees the same shape as before the storage flip.
         // Type-class LET RHS — value-side gated (no nominal-binder carve-out): the
         // alias is a let-style alias, not a fresh nominal type declaration.
         scope.register_type(name, kt, bind_index);

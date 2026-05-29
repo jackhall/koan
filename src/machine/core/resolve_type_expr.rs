@@ -23,8 +23,11 @@
 //! a cycle, so a finalized `Foo` guarantees every user‑type embedded in `Foo`'s
 //! payload is also finalized; descending into payloads would only re‑prove that.
 
+use crate::machine::core::kerror::{KError, KErrorKind};
 use crate::machine::core::kfunction::NodeId;
-use crate::machine::model::ast::TypeExpr;
+use crate::machine::core::lexical_frame::LexicalFrame;
+use crate::machine::model::ast::{TypeExpr, TypeParams};
+use crate::machine::model::values::KObject;
 use crate::machine::model::types::KType;
 
 use super::scope::Scope;
@@ -76,6 +79,64 @@ impl<'a> Scope<'a> {
             ElabResult::Park(producers) => ResolveTypeExprOutcome::Park(producers),
             ElabResult::Unbound(msg) => ResolveTypeExprOutcome::Unbound(msg),
         }
+    }
+}
+
+/// Resolve a bare leaf [`TypeExpr`] against `scope`'s type-side bindings and return the
+/// canonical value-side `KObject` carrier. Called by the `BareTypeLeaf` fast lane in
+/// `scheduler::dispatch::single_poll`, the keyworded splice walk for type-token slots
+/// (`resolve_name_part` in `scheduler::dispatch`), and the `ConstructorCall` fast lane
+/// for resolving the head identity's paired value carrier.
+///
+/// Coercions performed:
+/// - Reject parameterized shapes (`List<...>`, `Function<...>` etc.) with `ShapeError`.
+/// - On a `resolve_type` hit reporting a nominal identity (`UserType`,
+///   `SatisfiesSignature`, `Module`, or `Signature`), recover the paired value-side carrier
+///   via `scope.lookup` so downstream operators receive the expected `KSignature` /
+///   `KModule` / `StructType` / `TaggedUnionType` part rather than a synthesized
+///   `KTypeValue`. Nominal binders install the carrier atomically with the type
+///   identity, so the paired-carrier lookup is infallible under normal flow; the
+///   synthesis below covers the defensive case.
+/// - Otherwise (builtin leaves, `LET <Type-class> = <KTypeValue>` aliases) synthesize a
+///   `KObject::KTypeValue(kt.clone())` carrier so the value sits in the same dispatch
+///   transport every other body consumes.
+/// - On `resolve_type` miss surface `UnboundName(name)`.
+pub fn coerce_type_token_value<'a>(
+    scope: &'a Scope<'a>,
+    t: &TypeExpr,
+    chain: Option<&LexicalFrame>,
+) -> Result<&'a KObject<'a>, KError> {
+    if !matches!(t.params, TypeParams::None) {
+        return Err(KError::new(KErrorKind::ShapeError(format!(
+            "parameterized type expression `{}` is not a value-lookup target",
+            t.render()
+        ))));
+    }
+    let name = t.name.as_str();
+    match scope.resolve_type_with_chain(name, chain) {
+        Some(kt) => {
+            // Nominal identity types (`UserType`, `SatisfiesSignature`, `Module`,
+            // `Signature`) are installed with a paired value-side carrier at the same
+            // scope. Recover the carrier so downstream operators (`:|`, `:!`,
+            // ATTR-Module/Struct, `struct_construct`, `MODULE_TYPE_OF`) receive the
+            // expected `KSignature` / `KModule` / `StructType` / `TaggedUnionType`
+            // part rather than a synthesized `KTypeValue`.
+            if matches!(
+                kt,
+                KType::UserType { .. }
+                    | KType::SatisfiesSignature { .. }
+                    | KType::Module { .. }
+                    | KType::Signature(_)
+            ) {
+                if let Some(obj) = scope.lookup_with_chain(name, chain) {
+                    return Ok(obj);
+                }
+                // Unreachable when finalize installed the paired carrier; fall
+                // through to the KTypeValue synthesis below as a defensive recovery.
+            }
+            Ok(scope.arena.alloc(KObject::KTypeValue(kt.clone())))
+        }
+        None => Err(KError::new(KErrorKind::UnboundName(name.to_string()))),
     }
 }
 
@@ -330,5 +391,115 @@ mod tests {
     fn ktype_user_refs_yields_nothing_for_leaf() {
         let mut iter = KTypeUserRefs::of(&KType::Number);
         assert!(iter.next().is_none());
+    }
+
+    mod coerce_type_token_value {
+        use super::super::coerce_type_token_value;
+        use crate::builtins::test_support::run_root_bare;
+        use crate::machine::core::BindingIndex;
+        use crate::machine::model::ast::TypeExpr;
+        use crate::machine::model::{KObject, KType};
+        use crate::machine::{KError, KErrorKind, RuntimeArena};
+
+        #[test]
+        fn builtin_synthesizes_ktypevalue() {
+            let arena = RuntimeArena::new();
+            let scope = run_root_bare(&arena);
+            scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
+            let leaf = TypeExpr::leaf("Number".to_string());
+            let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Number lookup");
+            assert!(matches!(obj, KObject::KTypeValue(KType::Number)));
+        }
+
+        #[test]
+        fn rejects_parameterized_shapes() {
+            use crate::machine::model::ast::TypeParams;
+            let arena = RuntimeArena::new();
+            let scope = run_root_bare(&arena);
+            let parametric = TypeExpr {
+                name: "List".to_string(),
+                params: TypeParams::List(vec![TypeExpr::leaf("Number".to_string())]),
+                builtin_cache: std::cell::OnceCell::new(),
+            };
+            let result = coerce_type_token_value(scope, &parametric, None);
+            match result {
+                Err(KError { kind: KErrorKind::ShapeError(msg), .. }) => {
+                    assert!(
+                        msg.contains("parameterized type expression"),
+                        "expected ShapeError about parameterized type, got `{msg}`",
+                    );
+                }
+                other => panic!("expected ShapeError, got {:?}", other.map(|_| "Ok(_)")),
+            }
+        }
+
+        #[test]
+        fn unbound_returns_error() {
+            let arena = RuntimeArena::new();
+            let scope = run_root_bare(&arena);
+            let leaf = TypeExpr::leaf("Missing".to_string());
+            match coerce_type_token_value(scope, &leaf, None) {
+                Err(KError { kind: KErrorKind::UnboundName(name), .. }) => {
+                    assert_eq!(name, "Missing");
+                }
+                other => panic!("expected UnboundName, got {:?}", other.map(|_| "Ok(_)")),
+            }
+        }
+
+        /// Paired-carrier recovery: a `KType::UserType { .. }` registered in
+        /// `bindings.types` paired with a value-side carrier in `bindings.data` returns
+        /// the paired value, not a synthesized `KTypeValue`.
+        #[test]
+        fn recovers_paired_value() {
+            use crate::machine::model::types::UserTypeKind;
+            let arena = RuntimeArena::new();
+            let scope = run_root_bare(&arena);
+            let kind = UserTypeKind::Struct;
+            let kt = KType::UserType {
+                kind,
+                scope_id: scope.id,
+                name: "Point".to_string(),
+            };
+            scope.register_type("Point".into(), kt.clone(), BindingIndex::BUILTIN);
+            let paired = arena.alloc(KObject::KTypeValue(kt));
+            scope.bind_value("Point".to_string(), paired, BindingIndex::BUILTIN).unwrap();
+
+            let leaf = TypeExpr::leaf("Point".to_string());
+            let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Point lookup");
+            // Identity-equality: the helper hands back the paired carrier rather than
+            // synthesizing a fresh one.
+            assert!(std::ptr::eq(obj, paired));
+        }
+
+        /// Defensive paired-recovery fall-through: `bindings.types[name]` carries a nominal
+        /// identity (`UserType`) but `bindings.data[name]` is empty. Nominal binders
+        /// install the paired carrier atomically with the type identity, so this is
+        /// unreachable through normal flow — the test forces it by `register_type`
+        /// *without* a paired `bind_value`. The helper must not panic; it falls through
+        /// to synthesizing a fresh `KTypeValue(kt)` carrier so the dispatch transport
+        /// stays valid.
+        #[test]
+        fn falls_through_when_paired_value_absent() {
+            use crate::machine::model::types::UserTypeKind;
+            let arena = RuntimeArena::new();
+            let scope = run_root_bare(&arena);
+            let kt = KType::UserType {
+                kind: UserTypeKind::Struct,
+                scope_id: scope.id,
+                name: "Orphan".to_string(),
+            };
+            // types-side only — no paired `bind_value`. Exercises the "paired carrier
+            // missing" defensive fall-through.
+            scope.register_type("Orphan".into(), kt.clone(), BindingIndex::BUILTIN);
+
+            let leaf = TypeExpr::leaf("Orphan".to_string());
+            let obj = coerce_type_token_value(scope, &leaf, None).expect("fall-through must Ok");
+            match obj {
+                KObject::KTypeValue(KType::UserType { name, .. }) => {
+                    assert_eq!(name, "Orphan", "fall-through synthesized carrier for the registered identity");
+                }
+                other => panic!("expected synthesized KTypeValue(UserType(Orphan)), got {:?}", other.ktype()),
+            }
+        }
     }
 }

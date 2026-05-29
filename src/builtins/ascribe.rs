@@ -206,9 +206,8 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // Both ascription operators take already-evaluated `Module` / `Signature` values.
     // Bare Type-token operands (`IntOrd :| OrderedSig`) ride the unified auto-wrap +
     // replay-park rails in [`KFunction::classify_for_pick`] — they sub-dispatch through
-    // the `value_lookup`-TypeExprRef overload to a
-    // `Future(KTypeValue(KType::Module/Signature))` which then matches these slots
-    // strictly. No parallel Type-Type overload required.
+    // the `BareTypeLeaf` fast lane to a `Future(KTypeValue(KType::Module/Signature))`
+    // which then matches these slots strictly. No parallel Type-Type overload required.
     register_builtin(
         scope,
         ":|",

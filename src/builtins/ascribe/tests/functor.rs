@@ -224,7 +224,7 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
 /// Test 7 — bare Type-token argument auto-wraps into a value-lookup. A `LET`-bound
 /// Type-classified name (`IntOrdA`) passed as `MAKESET IntOrdA` should resolve to its
 /// bound `KModule` the same way the lowercase-identifier and parens-wrapped forms do.
-/// Pins the auto-wrap extension to Type-tokens via the `value_lookup`-TypeExprRef overload.
+/// Pins the auto-wrap extension to Type-tokens via the `BareTypeLeaf` fast lane.
 #[test]
 fn functor_argument_bare_type_token_auto_wraps() {
     let arena = RuntimeArena::new();

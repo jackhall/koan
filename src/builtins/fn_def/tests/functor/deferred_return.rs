@@ -21,7 +21,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
     // FN-def must register with `ReturnType::Deferred(TypeExpr(Er))`. The body `(Er)`
-    // returns the bound module value via value_lookup.
+    // returns the bound module value via the `BareTypeLeaf` fast lane.
     run(
         scope,
         "FN (USE_ID Er :OrderedSig) -> Er = (Er)",

@@ -30,9 +30,10 @@ pub(crate) use signature::binder_name;
 /// parameters bound into a per-call child scope.
 ///
 /// At least one `Keyword` is required in the signature: a signature of all-Argument slots
-/// would shadow `value_lookup`/`value_pass`, so the dispatcher needs a fixed token to key
-/// on. Bare identifiers without `: Type`, stray type tokens, literals, and nested
-/// expressions in the signature are rejected with a `ShapeError`.
+/// would shadow `value_pass` (or the `BareIdentifier`/`BareTypeLeaf` fast lanes for the
+/// single-arg case), so the dispatcher needs a fixed token to key on. Bare identifiers
+/// without `: Type`, stray type tokens, literals, and nested expressions in the signature
+/// are rejected with a `ShapeError`.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,

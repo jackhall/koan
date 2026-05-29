@@ -7,8 +7,8 @@
 use std::marker::PhantomData;
 
 use crate::builtins::newtype_def::newtype_construct;
-use crate::builtins::value_lookup::coerce_type_token_value;
 use crate::builtins::{dispatch_constructor, struct_value, tagged_union};
+use crate::machine::core::coerce_type_token_value;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::Parseable;
@@ -67,8 +67,8 @@ impl<'a> SigilState<'a> {
 
 /// Handler for `DispatchShape::BareIdentifier`. Surfaces `UnboundName`
 /// directly for a bare identifier with no binding and no visible
-/// placeholder, rather than falling through to the keyworded
-/// `value_lookup::body_identifier` path.
+/// placeholder. Subsumes the retired `value_lookup` Identifier-slot
+/// overload.
 pub(super) fn bare_identifier<'a>(
     sched: &mut Scheduler<'a>,
     name: String,
@@ -96,8 +96,8 @@ pub(super) fn bare_identifier<'a>(
 }
 
 /// Fast lane for `DispatchShape::BareTypeLeaf`. Routes through
-/// `coerce_type_token_value` so the carrier matches the
-/// `value_lookup::body_type_expr` synthesis.
+/// `coerce_type_token_value`. Subsumes the retired `value_lookup`
+/// TypeExprRef-slot overload.
 pub(super) fn bare_type_leaf<'a>(
     sched: &mut Scheduler<'a>,
     t: &TypeExpr,

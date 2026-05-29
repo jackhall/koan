@@ -1,8 +1,8 @@
 //! Struct construction primitives, paralleling [`tagged_union`](super::tagged_union) for
 //! product types. `apply` is the entry point both surface forms invoke: the
-//! type-token call via [`type_call`](super::type_call), and the identifier-bound
-//! LET-alias call via the dispatch scheduler's stateful FunctionValueCall fast
-//! lane. `apply` synthesizes a tail expression that re-dispatches through the
+//! type-token call via the dispatch scheduler's `ConstructorCall` fast lane, and the
+//! identifier-bound LET-alias call via the stateful `FunctionValueCall` fast lane.
+//! `apply` synthesizes a tail expression that re-dispatches through the
 //! construction-primitive builtin defined here.
 //!
 //! Unlike the tagged-union primitive (3 fixed slots: schema/tag/value), struct construction
@@ -12,9 +12,10 @@
 //! [`NamedPairs`](crate::machine::model::values::NamedPairs)) and consumes one
 //! value per declared field in schema-declaration order. Reordered value-parts are then wrapped in single-part sub-expressions
 //! inside a `ListLiteral`. The scheduler aggregates the list, dispatching each wrapped
-//! sub-expression through `value_lookup`/`value_pass` so identifiers and literals both
-//! resolve to their values before the primitive sees the assembled `KObject::List`. The
-//! primitive then validates per-field types against the schema and emits a `KObject::Struct`.
+//! sub-expression through the `BareIdentifier` fast lane (identifiers) or `value_pass`
+//! (literals), so both resolve to their values before the primitive sees the assembled
+//! `KObject::List`. The primitive then validates per-field types against the schema and
+//! emits a `KObject::Struct`.
 
 use std::rc::Rc;
 
@@ -43,10 +44,10 @@ use super::register_builtin;
 /// empty, the input matched the schema exactly.
 ///
 /// After reordering, each value-part is wrapped in a single-part sub-expression so bare
-/// identifiers route through `value_lookup` and bare literals through `value_pass` —
-/// uniform handling regardless of surface form. The wrapped parts are bundled into an
-/// `ExpressionPart::ListLiteral`, which the scheduler aggregates into a `KObject::List`
-/// before the construction primitive runs.
+/// identifiers route through the `BareIdentifier` fast lane and bare literals through
+/// `value_pass` — uniform handling regardless of surface form. The wrapped parts are
+/// bundled into an `ExpressionPart::ListLiteral`, which the scheduler aggregates into a
+/// `KObject::List` before the construction primitive runs.
 pub fn apply<'a>(
     schema_obj: &'a KObject<'a>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,

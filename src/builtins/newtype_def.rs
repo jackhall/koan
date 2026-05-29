@@ -1,7 +1,7 @@
 //! `NEWTYPE <name: TypeExprRef> = <repr: TypeExprRef>` — declare a fresh nominal
 //! identity over a transparent representation, plus the construction entry
-//! invoked from [`type_call`](super::type_call) when the verb resolves to a
-//! `KType::UserType { kind: Newtype, .. }`.
+//! invoked from the dispatch scheduler's `ConstructorCall` fast lane when the verb
+//! resolves to a `KType::UserType { kind: Newtype, .. }`.
 //!
 //! Stage 4 of the type-identity arc. The declaration mints a per-declaration
 //! [`KType::UserType`] with `kind: UserTypeKind::Newtype { repr }` and writes only
@@ -12,14 +12,13 @@
 //! identity; that carrier is the only way `KType::UserType { kind: Newtype, .. }`
 //! values reach user code today.
 //!
-//! Construction is driven from `type_call::body`'s `Newtype` arm via
+//! Construction is driven from the `ConstructorCall` fast lane's `Newtype` arm via
 //! [`newtype_construct`], which schedules the value sub-expression through
 //! `add_dispatch` and waits on it via a Combine. The Combine's finish closure
 //! validates the resolved inner against the newtype's `repr`, applies the collapse
 //! rule (`Wrapped.inner` is invariantly non-`Wrapped`), and produces the
 //! `KObject::Wrapped`. Same pattern as `module_def::body`, `sig_def::body`, and
-//! `struct_def::defer_struct_via_combine`. No second registered builtin → no
-//! bucket-collision infinite loop with `type_call`.
+//! `struct_def::defer_struct_via_combine`.
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
@@ -48,7 +47,7 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 /// payload value to bind — there is no schema carrier paired with the identity. The
 /// construction
 /// path keys on the identity alone (via [`Scope::resolve_type`]) and routes through
-/// [`newtype_construct`] in [`super::type_call`]'s `Newtype` arm.
+/// [`newtype_construct`] in the `ConstructorCall` fast lane's `Newtype` arm.
 ///
 /// Returns the minted identity as a `KObject::KTypeValue(KType)` so the surface
 /// form `NEWTYPE Distance = Number` evaluates to a Type value, mirroring STRUCT /
@@ -151,8 +150,8 @@ pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
-/// Construction entry point reached from [`super::type_call`]'s `Newtype` arm. The
-/// verb resolved type-side to `identity` (`KType::UserType { kind: Newtype, .. }`);
+/// Construction entry point reached from the `ConstructorCall` fast lane's `Newtype`
+/// arm. The verb resolved type-side to `identity` (`KType::UserType { kind: Newtype, .. }`);
 /// `parts` is the unevaluated argument list from the type-call site
 /// (`Distance(3.0)` → `[Literal(3.0)]`, `Distance(2.0 + 1.0)` → operator-form parts,
 /// `Bar(Foo(3.0))` → `[Type(Foo), Expression([Literal(3.0)])]`).
@@ -190,11 +189,11 @@ pub fn newtype_construct<'a>(
         let value: &'a KObject<'a> = results[0];
         // The identity is `&'a KType`, arena-resident — moved into the closure as a
         // ref, no clone needed. Recover the `repr` for the type-check; the
-        // `unreachable!` is structurally guarded by `type_call::body`'s match arm
-        // that routes only `UserTypeKind::Newtype` here.
+        // `unreachable!` is structurally guarded by the `ConstructorCall` fast lane's
+        // match arm that routes only `UserTypeKind::Newtype` here.
         let repr: &KType = match identity {
             KType::UserType { kind: UserTypeKind::Newtype { repr }, .. } => repr.as_ref(),
-            _ => unreachable!("type_call routed non-Newtype identity into newtype_construct"),
+            _ => unreachable!("ConstructorCall fast lane routed non-Newtype identity into newtype_construct"),
         };
         if !repr.matches_value(value) {
             return BodyResult::Err(KError::new(KErrorKind::TypeMismatch {
@@ -220,9 +219,8 @@ pub fn newtype_construct<'a>(
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
     // Surface declaration form: `NEWTYPE <name> = <repr>`. Construction is driven
-    // from `type_call::body`'s `Newtype` arm via `newtype_construct`; no second
-    // registered builtin (a separate value-side primitive would share `type_call`'s
-    // signature bucket and re-dispatch infinitely).
+    // from the `ConstructorCall` fast lane's `Newtype` arm via `newtype_construct`;
+    // no second registered builtin is needed.
     register_builtin_with_binder(
         scope,
         "NEWTYPE",
@@ -401,10 +399,10 @@ mod tests {
         );
     }
 
-    /// `LET x = 3.0; Distance(x)` resolves the inner identifier through `value_lookup`
-    /// inside the Combine's dispatched dep, then wraps. Pins the non-trivial-dispatch
-    /// path — the Combine waits on the dep's terminalization before the finish
-    /// closure runs.
+    /// `LET x = 3.0; Distance(x)` resolves the inner identifier through the
+    /// `BareIdentifier` fast lane inside the Combine's dispatched dep, then wraps. Pins
+    /// the non-trivial-dispatch path — the Combine waits on the dep's terminalization
+    /// before the finish closure runs.
     #[test]
     fn construct_with_identifier_value() {
         let arena = RuntimeArena::new();

@@ -120,8 +120,8 @@ fn struct_construction_value_type_mismatch() {
 
 #[test]
 fn struct_construction_with_identifier_arg() {
-    // Bare identifiers on the value side resolve through value_lookup because `apply`
-    // wraps each value-part in a single-part sub-expression after reordering.
+    // Bare identifiers on the value side resolve through the `BareIdentifier` fast lane
+    // because `apply` wraps each value-part in a single-part sub-expression after reordering.
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);

@@ -78,9 +78,9 @@ impl<'a> Scheduler<'a> {
     /// through the shared `resolve_name_part` helper (Python-like name resolution applies
     /// to both keys and values): a value-side hit is captured as a `Slot::Static`; a
     /// still-pending placeholder is wired as a park-producer on the Combine slot; an
-    /// unbound name falls back to a sub-Dispatch so the receiving `value_lookup` body
-    /// surfaces `UnboundName` through the Combine's dep-error short-circuit. The closure
-    /// performs `KKey` conversion on each key — non-scalar keys produce
+    /// unbound name falls back to a sub-Dispatch so the receiving `BareIdentifier` fast
+    /// lane surfaces `UnboundName` through the Combine's dep-error short-circuit. The
+    /// closure performs `KKey` conversion on each key — non-scalar keys produce
     /// `KErrorKind::ShapeError`.
     pub(super) fn schedule_dict_literal(
         &mut self,
@@ -168,10 +168,10 @@ impl<'a> Scheduler<'a> {
                 // Eager-resolve a bare Identifier dict key/value: a `Resolved` hit
                 // captures the carrier directly as a static; a `Parked` outcome attaches
                 // a park producer on the Combine; `Unbound` falls back to a sub-Dispatch
-                // so the receiving `value_lookup` body surfaces the `UnboundName` error
-                // through the Combine's dep-error short-circuit. `ProducerErrored` and
-                // `Cycle` fall back the same way — the sub-Dispatch path's terminalized
-                // error / cycle detection still applies.
+                // so the receiving `BareIdentifier` fast lane surfaces the `UnboundName`
+                // error through the Combine's dep-error short-circuit. `ProducerErrored`
+                // and `Cycle` fall back the same way — the sub-Dispatch path's
+                // terminalized error / cycle detection still applies.
                 self.resolve_aggregate_bare_name(p, scope, deps, park_producers)
             }
             ref p @ ExpressionPart::Type(ref t)

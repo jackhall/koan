@@ -263,9 +263,9 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
 
 /// Substrate cross-check: `LET ty = Number` still binds `ty` to a `KTypeValue`
 /// carrying the `Number` leaf. After the unification, the value flows through the
-/// wrap → `value_lookup`-TypeExprRef path rather than the literal `KTypeValue`
-/// carve-out; the observable binding must be identical to the literal path. (Lowercase
-/// LHS because single-letter uppercase tokens don't classify as Type names.)
+/// wrap → `BareTypeLeaf` fast lane rather than the literal `KTypeValue` carve-out;
+/// the observable binding must be identical to the literal path. (Lowercase LHS
+/// because single-letter uppercase tokens don't classify as Type names.)
 #[test]
 fn let_t_equals_number_still_binds_ktype_value() {
     use crate::machine::model::KType;

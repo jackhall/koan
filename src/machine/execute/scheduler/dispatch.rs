@@ -20,7 +20,7 @@
 //! `resolve_name_part`, `extract_named_call_inner`,
 //! `propagate_dep_error`, `stage_all_eager_parts`).
 
-use crate::builtins::value_lookup::coerce_type_token_value;
+use crate::machine::core::coerce_type_token_value;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};

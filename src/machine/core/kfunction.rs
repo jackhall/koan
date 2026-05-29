@@ -305,8 +305,8 @@ mod tests {
     /// A function whose signature is `OP <v:Number>` classified against `OP someName` (where
     /// `someName` is a bare Identifier in a Number-typed slot) returns `wrap_indices = [1]`
     /// and no ref_name_indices — the dispatcher will wrap `someName` as a sub-Dispatch so
-    /// it resolves through `value_lookup` (or the bare-name short-circuit, if the name is
-    /// bound).
+    /// it resolves through the `BareIdentifier` fast lane (or the bare-name short-circuit,
+    /// if the name is bound).
     #[test]
     fn classify_returns_wrap_indices_for_value_slot_identifiers() {
         let arena = RuntimeArena::new();
@@ -473,7 +473,7 @@ mod tests {
 
     /// Companion to the literal-name slot case: a bare leaf Type-token in an `Any` slot of a
     /// non-binder lands in `wrap_indices` so the auto-wrap pass rewrites it into a
-    /// sub-Dispatch that resolves through the TypeExprRef overload of `value_lookup`.
+    /// sub-Dispatch that resolves through the `BareTypeLeaf` fast lane.
     /// `LET T = Number` walks the same wrap path as `LET y = z`.
     #[test]
     fn classify_type_token_in_any_slot_returns_wrap_indices() {

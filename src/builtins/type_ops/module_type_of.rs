@@ -7,9 +7,10 @@ use crate::builtins::err;
 /// under `name` in `m`'s `type_members` table. Surface analogue of `M.Type`, but reachable
 /// as a scheduled call so a functor body can synthesize it from a parameter module value.
 /// The `m` slot is strictly `Module`; bare Type-token operands (`MODULE_TYPE_OF Foo Type`)
-/// ride the auto-wrap rails — they sub-dispatch through `value_lookup` and arrive here
-/// as a `Future(KModule)`. The shared [`crate::machine::model::values::resolve_module`] helper
-/// covers both the direct `KModule` path and the `(KModule, frame)` lifted form.
+/// ride the auto-wrap rails — they sub-dispatch through the `BareTypeLeaf` fast lane and
+/// arrive here as a `Future(KModule)`. The shared
+/// [`crate::machine::model::values::resolve_module`] helper covers both the direct
+/// `KModule` path and the `(KModule, frame)` lifted form.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,

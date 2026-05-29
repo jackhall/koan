@@ -155,8 +155,8 @@ pub fn body<'a>(
                     ElabResult::Done(kt) => pinned.push((slot_name.clone(), kt)),
                     ElabResult::Park(_) => {
                         // Treat a parked leaf as a sub-Dispatch on the bare leaf:
-                        // wrap it in a one-part Expression that the value_lookup
-                        // overload resolves to a `Future(KTypeValue(_))`. Today the
+                        // wrap it in a one-part Expression that the `BareTypeLeaf` fast
+                        // lane resolves to a `Future(KTypeValue(_))`. Today the
                         // SIG_WITH-at-FN-slot path already runs after the outer
                         // FN-def's Combine wake when leaves have terminalized, so
                         // this is a defensive fallback rather than the hot path.

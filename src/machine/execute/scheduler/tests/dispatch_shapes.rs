@@ -382,13 +382,13 @@ fn fast_lane_on_tagged_union_constructs() {
 /// **Counter contract.** `struct_value::apply` synthesizes a tail of shape
 /// `[Future(schema), ListLiteral([(<v_1>), ...])]` re-dispatching through the
 /// `struct_construct` primitive. The list-literal aggregate spawns one
-/// sub-Dispatch per value-cell to route bare identifiers through `value_lookup`
-/// and bare literals through `value_pass`. With two fields (`x`, `y`) bound
-/// to bare-literal values the resulting walks are: 1 for `struct_construct`'s
-/// own dispatch + 1 each for the two value-cell sub-Dispatches + 1 trailing
-/// re-dispatch (the synthesized tail's outermost shape itself) = 4. The
-/// entry-point head walk for `pt` is the one that's removed vs the
-/// pre-migration `call_by_name` path.
+/// sub-Dispatch per value-cell to route bare identifiers through the
+/// `BareIdentifier` fast lane and bare literals through `value_pass`. With two
+/// fields (`x`, `y`) bound to bare-literal values the resulting walks are: 1
+/// for `struct_construct`'s own dispatch + 1 each for the two value-cell
+/// sub-Dispatches + 1 trailing re-dispatch (the synthesized tail's outermost
+/// shape itself) = 4. The entry-point head walk for `pt` is the one that's
+/// removed vs the pre-migration `call_by_name` path.
 #[test]
 fn fast_lane_on_struct_type_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};

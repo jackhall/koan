@@ -133,26 +133,29 @@ internal cache. Both `TypeNameRef` and the fully-resolved `KTypeValue` report
 whether the surface form already lowered to a concrete `KType` at bind time
 or is still in parser-form is an internal detail.
 
-Four downstream consumers each carry a `TypeNameRef` arm beside the existing
+Three downstream consumers each carry a `TypeNameRef` arm beside the existing
 `KTypeValue` arm:
 
 - the shared
   [`extract_bare_type_name`](../../src/machine/core/kfunction/argument_bundle.rs)
-  helper (used by STRUCT/UNION declaration sites and `type_call`'s verb slot);
+  helper (used by STRUCT/UNION declaration sites and the dispatcher's
+  `ConstructorCall` fast lane);
 - [ATTR's `body_type_lhs` and `read_field_name`](../../src/builtins/attr.rs);
 - [`let_binding`'s name slot](../../src/builtins/let_binding.rs), which
   runs the same primitive/container blocklist as the `KTypeValue` arm and
-  routes to `register_type` for type-valued RHSes;
-- [`value_lookup::body_type_expr`](../../src/builtins/value_lookup.rs),
-  which normalizes the incoming carrier (rejecting parameterized
-  `KTypeValue` shapes) and delegates to
-  [`coerce_type_token_value`](../../src/builtins/value_lookup.rs) — the
-  shared coercion seam called both from this builtin overload and from
-  the dispatch driver's eager name-resolve pass
-  ([`scheduler/dispatch.rs`](../../src/machine/execute/scheduler/dispatch.rs)).
-  The helper resolves through `bindings.types` and, on a nominal
-  `UserType` / `SatisfiesSignature` / `Module` / `Signature` hit,
-  recovers the paired value-side carrier from `bindings.data`.
+  routes to `register_type` for type-valued RHSes.
+
+The single-part `<v:TypeExpr>` lookup that those consumers' siblings used to
+need is now folded into the dispatcher's `BareTypeLeaf` fast lane
+([`scheduler/dispatch/single_poll.rs`](../../src/machine/execute/scheduler/dispatch/single_poll.rs)),
+which calls
+[`coerce_type_token_value`](../../src/machine/core/resolve_type_expr.rs)
+directly — the shared coercion seam also called from the keyworded splice
+walk's eager name-resolve pass
+([`scheduler/dispatch.rs`](../../src/machine/execute/scheduler/dispatch.rs)).
+The helper resolves through `bindings.types` and, on a nominal
+`UserType` / `SatisfiesSignature` / `Module` / `Signature` hit, recovers
+the paired value-side carrier from `bindings.data`.
 
 FN's deferred return-type elaboration peeks the slot to pick between
 [`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs)
@@ -161,8 +164,8 @@ FN's deferred return-type elaboration peeks the slot to pick between
 (deferred carrier consuming the parser-preserved `TypeExpr`), then drives the
 existing park-on-placeholder machinery from there. The sole
 `KObject::KTypeValue` synthesis site for dispatch transport lives in
-[`coerce_type_token_value`](../../src/builtins/value_lookup.rs), which
-mints `KObject::KTypeValue(kt.clone())` on a non-nominal `resolve_type`
+[`coerce_type_token_value`](../../src/machine/core/resolve_type_expr.rs),
+which mints `KObject::KTypeValue(kt.clone())` on a non-nominal `resolve_type`
 hit. On a `resolve_type` miss, the bare-leaf arm of `elaborate_type_expr`
 falls through to `Scope::resolve` for compatibility with the small set of
 callers that still consult the value side; the `coerce_type_token_value`

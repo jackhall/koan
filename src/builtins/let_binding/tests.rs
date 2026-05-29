@@ -389,8 +389,8 @@ fn let_value_class_lhs_with_signature_rhs_rejects() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "SIG OrderedSig = (VAL compare :Number)");
-    // `OrderedSig` is a Type-classified token; resolving it through `value_lookup`
-    // returns the signature carrier. The lowercase binder + signature RHS hits
+    // `OrderedSig` is a Type-classified token; resolving it through the `BareTypeLeaf`
+    // fast lane returns the signature carrier. The lowercase binder + signature RHS hits
     // the partition guard.
     let err = run_one_err(scope, parse_one("LET sig_alias = OrderedSig"));
     match &err.kind {

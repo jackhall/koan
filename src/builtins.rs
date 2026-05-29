@@ -26,22 +26,18 @@ mod struct_def;
 pub(crate) mod struct_value;
 pub(crate) mod tagged_union;
 mod try_with;
-mod type_call;
 mod type_constructors;
 mod type_ops;
 mod union;
 mod using_scope;
 mod val_decl;
-pub(crate) mod value_lookup;
 mod value_pass;
 
 /// Route a resolved verb-object to its construction primitive's `apply` function. Returns
-/// `Some(BodyResult)` for `TaggedUnionType` / `StructType`; `None` otherwise. Sole
-/// remaining caller is [`type_call`]; the dispatch scheduler's stateful
-/// FunctionValueCall fast lane calls `struct_value::apply` / `tagged_union::apply`
-/// directly. Phase 2 of `scratch/plan-fast-lane-subsume.md` will inline or
-/// relocate this helper alongside the fast lane once `type_call`'s constructor
-/// arms also migrate.
+/// `Some(BodyResult)` for `TaggedUnionType` / `StructType`; `None` otherwise. Sole caller
+/// is the `ConstructorCall` fast lane's `TypeConstructor` arm (a builtin parameterized
+/// type like `Result` whose schema carrier sits in `bindings.data`). The Struct / Tagged
+/// arms of that fast lane call `struct_value::apply` / `tagged_union::apply` directly.
 pub(crate) fn dispatch_constructor<'a>(
     verb_obj: &'a KObject<'a>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
@@ -198,7 +194,6 @@ pub fn default_scope<'a>(
 
     let_binding::register(scope);
     print::register(scope);
-    value_lookup::register(scope);
     value_pass::register(scope);
     fn_def::register(scope);
     functor_def::register(scope);
@@ -208,7 +203,6 @@ pub fn default_scope<'a>(
     struct_def::register(scope);
     struct_value::register(scope);
     newtype_def::register(scope);
-    type_call::register(scope);
     match_case::register(scope);
     try_with::register(scope);
     using_scope::register(scope);

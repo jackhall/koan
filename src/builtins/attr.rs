@@ -4,9 +4,9 @@
 //! overloads share the bucket `[Keyword, Slot, Slot]` and pick by lhs shape:
 //!
 //! - [`body_identifier`] — `p.x` form. The lhs is still an `Identifier`, so this body
-//!   does the scope lookup itself, mirroring [`value_lookup`](super::value_lookup), and
-//!   then dispatches to either struct-field or module-member access based on what the
-//!   identifier resolved to.
+//!   does the scope lookup itself (the same `Scope::lookup_with_chain` walk the
+//!   `BareIdentifier` fast lane performs) and then dispatches to either struct-field or
+//!   module-member access based on what the identifier resolved to.
 //! - [`body_struct`] — chained access like `p.x.y` for structs *and* the stage-4.C
 //!   NEWTYPE fall-through path. The inner `[ATTR p x]` evaluates first and arrives here
 //!   as `Future(KObject::Struct{..})` (`Struct` slot) or `Future(KObject::Wrapped{..})`

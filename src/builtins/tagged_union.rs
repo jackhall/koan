@@ -4,11 +4,11 @@
 //! it.
 //!
 //! `apply` is the entry point both surface forms invoke: the type-token call via
-//! [`type_call`](super::type_call), and the identifier-bound LET-alias call via
-//! the dispatch scheduler's stateful FunctionValueCall fast lane. `apply`
-//! synthesizes a tail expression that re-dispatches through the
-//! construction-primitive builtin defined here, whose typed slots let the
-//! scheduler resolve sub-expression value-parts before construction runs.
+//! the dispatch scheduler's `ConstructorCall` fast lane, and the identifier-bound
+//! LET-alias call via the stateful `FunctionValueCall` fast lane. `apply` synthesizes
+//! a tail expression that re-dispatches through the construction-primitive builtin
+//! defined here, whose typed slots let the scheduler resolve sub-expression
+//! value-parts before construction runs.
 //!
 //! The primitive builtin has no keyword in its signature — three typed slots
 //! (`Type`, `Identifier`, `Any`) are specific enough to claim its dispatch bucket
@@ -290,6 +290,42 @@ mod tests {
                 assert_eq!(got, "Str");
             }
             _ => panic!("expected TypeMismatch on value, got {err}"),
+        }
+    }
+
+    /// Surface form `Maybe (other 42)` (the `ConstructorCall` fast lane's
+    /// leaf-Type-head shape) propagates the schema's tag check. Companion to
+    /// `primitive_rejects_unknown_tag`, which pins the same diagnostic through the
+    /// `(maybe) other 42` shape.
+    #[test]
+    fn ctor_fast_lane_propagates_tag_validation_error() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "UNION Maybe = (some :Number none :Null)");
+        let err = run_one_err(scope, parse_one("Maybe (other 42)"));
+        assert!(
+            matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`other`")),
+            "expected ShapeError mentioning `other`, got {err}",
+        );
+    }
+
+    /// Surface form `Maybe (some (x))` where the value-cell is a parens-wrapped
+    /// identifier. The inner `(x)` rides the `BareIdentifier` fast lane to resolve
+    /// `x` before the synthesized TAG call sees the typed-slot bind.
+    #[test]
+    fn ctor_fast_lane_with_sub_expression_value() {
+        let arena = RuntimeArena::new();
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let scope = build_scope(&arena, captured);
+        run(scope, "UNION Maybe = (some :Number none :Null)\nLET x = 7");
+        let result = run_one(scope, parse_one("Maybe (some (x))"));
+        match result {
+            KObject::Tagged { tag, value, .. } => {
+                assert_eq!(tag, "some");
+                assert!(matches!(&**value, KObject::Number(n) if *n == 7.0));
+            }
+            other => panic!("expected Tagged, got {:?}", other.ktype()),
         }
     }
 }
