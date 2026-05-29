@@ -250,8 +250,8 @@ fn user_type_specificity_lattice() {
 
 /// `is_type_denoting` returns `true` exactly for the variants enumerated in the
 /// predicate's docstring — the parameters whose declared `KType` makes the bound
-/// value's nominal identity meaningful at the type level. Anchors the dual-write
-/// gate in [`crate::machine::core::kfunction::KFunction::invoke`].
+/// value's nominal identity meaningful at the type level. Anchors the type-side
+/// install gate in [`crate::machine::core::kfunction::KFunction::invoke`].
 #[test]
 fn is_type_denoting_table() {
     // SatisfiesSignature — module ascribed to a signature.

@@ -186,6 +186,52 @@ call-site frame's `Rc` onto the new frame's `outer_frame`, which keeps
 fresh allocation; cross-step reuse resumes once the builtin's frame is in
 turn replaced.
 
+### Ping-pong reserve frame on stateful resume paths
+
+The stateful dispatch driver's eager-subs resume / install-time short-circuit
+sites — keyworded and `FunctionValueCall` invocations routed through
+[`invoke_to_step_pinned`](../src/machine/execute/scheduler/finish.rs) — hold
+the only `Rc<CallArena>` for the arena that the running `scope` borrows
+into. Pinning that frame across the synchronous invoke keeps `strong_count
+>= 2`, which foreclosing tail-reuse on the slot's only frame Rc — without
+the pin, `try_reset_for_tail` would deallocate the arena while `scope`'s
+tree-borrows protector is still live. The cost is one `CallArena::new` per
+resume invoke that the legacy keyworded path could otherwise have skipped.
+
+To recover that allocation, the slot carries a per-iteration **reserve
+frame** in [`Node::reserve_frame`](../src/machine/execute/nodes.rs) that
+ping-pongs across `NodeStep::Replace`. The rotation:
+
+- **Replace arm in
+  [`execute.rs`](../src/machine/execute/scheduler/execute.rs).** On a
+  new-frame Replace, drop the (now two-iterations-old) reserve, rotate
+  the post-step frame into `slot.reserve_frame`, install the new frame
+  as `slot.frame`. First iteration's reserve stays `None`; second
+  iteration fills it; iteration 3+ has a reserve to consume.
+- **Reserve-consuming arm in `invoke_to_step_pinned`.** When the slot's
+  reserve is `Some`, the helper pins `active_frame` (the slot's current
+  frame) via a local clone — still anchoring `scope` — and swaps the
+  reserve into `active_frame`. The reserve's `strong_count` is 1 (only
+  the slot's `reserve_frame` field held it, drained through
+  `enter_slot_step` into `Scheduler::active_reserve`), so
+  `try_take_reusable_frame_for_tail` succeeds, the reset lands, and the
+  body runs in the reset arena. After the invoke returns, the local pin
+  is swapped back into `active_frame` so the Replace arm reads the
+  slot's frame as today.
+
+The two-iteration gap is the safety witness: when iteration N consumes the
+reserve, the reserve's scope was the active scope on iteration N-2 and is
+past every live tree-borrows protector by the time iteration N's invoke
+fires. Miri full-slate green on
+[`recursive_tagged_match_no_uaf`](../src/builtins/match_case.rs) — which
+exercises exactly this pattern at every iteration — under
+`MIRIFLAGS=-Zmiri-tree-borrows` is the structural confirmation.
+
+Steady-state allocation on the stateful keyworded / `FunctionValueCall`
+recursive loop is one `RuntimeArena` per iteration (the inner arena
+`try_reset_for_tail` installs); the `CallArena` shell and its `Rc` reuse
+across iterations after the first two-iteration warmup.
+
 ## Fast path
 
 If a dying arena allocated zero `KFunction`s
@@ -212,7 +258,7 @@ the write through the embedded
 scheduler between dispatch nodes, which calls `PendingQueue::drain(&Bindings)`
 to replay each deferred write through the same validated `Bindings` write path
 as a direct insert. The hot path (no concurrent borrow) is one direct insert
-with the dual-map mirror folded in. Re-entrant writes queue silently and
+with the function-mirror write folded in. Re-entrant writes queue silently and
 become visible after the iterating borrow releases, with snapshot-iteration
 semantics for the iterator. Drain-time `Err` returns trip a `debug_assert!`
 in debug builds (by drain time these are invariant violations); release
@@ -240,11 +286,15 @@ edges](execution-model.md#pushnotify-dependency-edges)) keeps its slot-table
 state in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
 sub-struct that owns `nodes: Vec<Option<Node<'a>>>`, `results:
-Vec<Option<NodeOutput<'a>>>`, and `free_list: Vec<usize>` behind the slot
+Vec<Option<NodeOutput<'a>>>`, `free_list: Vec<usize>`, and
+`recent_wakes: Vec<Vec<NodeId>>` (the per-consumer wake-attribution
+side-channel scoped to `NodeWork::Dispatch` consumers) behind the slot
 lifecycle `alloc_slot → take_for_run → reinstall* → finalize → free_one`. The
-three vectors share an index space; `alloc_slot` is the only path that picks
-an index, `finalize` is the only path that lands a terminal `NodeOutput`,
-and `free_one` is the only path that clears `results[idx]` and pushes onto
+slot-indexed vectors share an index space; `alloc_slot` is the only path that
+picks an index, `finalize` is the only path that lands a terminal `NodeOutput`,
+and `free_one` is the only path that clears `results[idx]`, clears
+`recent_wakes[idx]` (retaining the inner Vec's capacity for the next owner —
+the side-channel's amortized-allocation pattern), and pushes onto
 `free_list`. Dependency bookkeeping lives alongside it in a
 [`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
 that bundles three `Vec`-shaped fields: `notify_list: Vec<Vec<NodeId>>`
@@ -279,8 +329,8 @@ in-flight user-fn call leaves that subtree for that call's own reclamation.
   asserts 50 ECHO calls grow the run-root arena by exactly 50 — one lifted
   return value per call, with all per-call scaffolding freed at call return.
 - Closure-escape tests
-  ([`closure_escapes_outer_call_and_remains_invocable`](../src/builtins/call_by_name.rs),
-  [`escaped_closure_with_param_returns_body_value`](../src/builtins/call_by_name.rs))
+  ([`fast_lane_closure_escapes_outer_call_and_remains_invocable`](../src/machine/execute/scheduler/tests/dispatch_shapes.rs),
+  [`fast_lane_escaped_closure_with_param_returns_body_value`](../src/machine/execute/scheduler/tests/dispatch_shapes.rs))
   confirm a closure returned from its defining frame remains invocable.
 - [`add_during_active_data_borrow_queues_and_drains`](../src/machine/core/scope.rs)
   holds a `data` borrow, calls `bind_value`, drops the borrow, drains, and

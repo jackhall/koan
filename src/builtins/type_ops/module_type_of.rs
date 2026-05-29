@@ -99,12 +99,12 @@ mod tests {
     /// arena churn — the per-call-arena reclamation + lift machinery have to keep storage
     /// live for both the module pointer and the dispatched type-op value. Mirrors the
     /// structure of
-    /// [`crate::builtins::fn_def::tests::functor::dual_write::functor_body_module_dispatch_does_not_dangle`]
+    /// [`crate::builtins::fn_def::tests::functor::per_call_type_side_bind::functor_body_module_dispatch_does_not_dangle`]
     /// but pins the type-op-in-per-call-arena path rather than the plain functor lift.
     ///
     /// Module-system functor-params Stage B: parameter migrated from the lowercase
     /// workaround (`elem`) to the documented Type-class form (`Er`). Stage A's
-    /// per-call dual-write makes the surface form work end-to-end through the
+    /// per-call type-side install makes the surface form work end-to-end through the
     /// signature-typed parameter path that previously parked on a missing top-level
     /// binding.
     #[test]
@@ -143,11 +143,11 @@ mod tests {
         // the audit pins: `child_scope()` (the captured-scope transmute) and
         // `type_members` (the RefCell on the Module).
         let data = scope.bindings().data();
-        let m = match data.get("Held") {
+        let m = match data.get("Held").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
             other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
         };
-        let probe = m.child_scope().bindings().data().get("probe").copied();
+        let probe = m.child_scope().bindings().data().get("probe").map(|(o, _)| *o);
         assert!(
             matches!(probe, Some(KObject::Number(n)) if *n == 11.0),
             "Held.probe must still read 11.0 after subsequent churn",

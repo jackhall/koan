@@ -10,21 +10,24 @@
 //! captures the child scope into a [`Module`] value (`name`, `child_scope`, `type_members`
 //! initially empty), allocates it in the parent's arena, and binds it under the module's
 //! name in the parent. Members reachable as `Foo.<member>` go through ATTR's `KModule`
-//! overload (see `attr.rs`), which looks `<member>` up in the captured
-//! `child_scope.bindings().data()`.
+//! overload (see `attr.rs`), which resolves `<member>` against the captured
+//! `child_scope` via [`Bindings::lookup_value`](crate::machine::core::Bindings::lookup_value).
 //!
 //! The MODULE slot itself returns `BodyResult::DeferTo(combine_id)` so its terminal lifts
 //! off the Combine's terminal — the parent's `Foo` binding lands at Combine-finish time,
 //! not when MODULE's body returns to the dispatcher.
 
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Resolution,
+    Scope, SchedulerHandle,
+};
 use crate::machine::model::values::Module;
 
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder, sig};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -54,7 +57,7 @@ pub fn body<'a>(
     // Plan each top-level body statement onto the outer scheduler. A statement referencing
     // a sibling name dispatched in the same batch parks on its placeholder via the standard
     // notify-walk; the inner-scheduler version of this code couldn't see those placeholders.
-    let deps = sched.plan_body_statements(child_scope, body_expr);
+    let deps = sched.enter_body_block(child_scope, body_expr);
 
     // The closure runs on the outer scheduler's main loop after every body statement has
     // terminalized. `name` is moved in by clone so it lives across the closure's life.
@@ -65,6 +68,14 @@ pub fn body<'a>(
     // would otherwise drop. For top-level MODULEs there's no active frame; the produced
     // `KModule(_, None)` matches the existing behavior.
     let active_frame = sched.current_frame();
+    // MODULE is a nominal binder (D7 carve-out): siblings see one another regardless of
+    // source order. The lexical index is the binder's submission position; siblings on
+    // the same block install at distinct indices but the carve-out flag makes the bind
+    // visible to siblings regardless of cutoff.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::nominal(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
         // Idempotent-finalize guard (stage 3.2 defense-in-depth). MODULE does not
@@ -73,8 +84,10 @@ pub fn body<'a>(
         // entry point that needs to short-circuit. Pinned by
         // `module_finalize_is_idempotent_when_both_maps_populated`.
         let bindings = parent_scope.bindings();
-        if bindings.types().get(&name_for_finish).is_some() {
-            if let Some(existing) = bindings.data().get(&name_for_finish).copied() {
+        if bindings.lookup_type(&name_for_finish, None).is_some() {
+            if let Some(Resolution::Value(existing)) =
+                bindings.lookup_value(&name_for_finish, None)
+            {
                 return BodyResult::Value(existing);
             }
         }
@@ -85,14 +98,14 @@ pub fn body<'a>(
         // table so abstract-type slots declared in the body surface to dispatch-time
         // sharing-constraint checks. `LET Elt = Number` inside a MODULE body writes
         // `bindings.types["Elt"] = KType::Number` *only* (the `register_type` path skips
-        // `data`); nominal sub-declarations like `MODULE Inner = ...` dual-write both
+        // `data`); nominal sub-declarations like `MODULE Inner = ...` install into both
         // `types` and `data` via `register_nominal`. The filter below picks only entries
         // that LIVE on the type side without a value-side counterpart — those are the
         // pure type-class bindings the module's surface treats as abstract-type members.
         // Nominal sub-declarations stay value-only-from-ATTR's-perspective (ATTR's
         // `type_members` lookup runs ahead of the `data` lookup, so a type_members
         // entry would shadow the value-side `KModule` carrier on chained `Outer.Inner.x`
-        // access — that ordering breaks unless we exclude the dual-bound names here).
+        // access — that ordering breaks unless we exclude the type+data names here).
         // Without this mirror the module's `type_members` stays empty and a FN-return-
         // type `(SIG_WITH SetSig ((Elt: Number)))` pin can't admit the returned module.
         // Opaque ascription overwrites the affected entries with freshly-minted
@@ -100,19 +113,20 @@ pub fn body<'a>(
         // the body-side concrete values flow through unascribed and `:!` (transparent)
         // paths.
         {
-            let types_guard = child_scope.bindings().types();
-            let data_guard = child_scope.bindings().data();
+            let bindings = child_scope.bindings();
+            let data_names: std::collections::HashSet<String> =
+                bindings.iter_data().into_iter().map(|(n, _)| n).collect();
             let mut tm = module.type_members.borrow_mut();
-            for (k, v) in types_guard.iter() {
-                if data_guard.contains_key(k) {
+            for (name, kt) in bindings.iter_types() {
+                if data_names.contains(&name) {
                     continue;
                 }
-                tm.insert(k.clone(), (**v).clone());
+                tm.insert(name, kt.clone());
             }
         }
         // Post-collapse: the module value rides `KTypeValue(KType::Module { module, frame })`.
         // The carrier's `ktype()` reports the carried `KType::Module` directly, so the
-        // dual-write into `bindings.types` uses that same shape — no
+        // type-side install uses that same shape — no
         // `UserType { kind: Module, .. }` synthesis.
         let identity = KType::Module {
             module,
@@ -120,7 +134,12 @@ pub fn body<'a>(
         };
         let module_obj: &'a KObject<'a> =
             arena.alloc(KObject::KTypeValue(identity.clone()));
-        match parent_scope.register_nominal(name_for_finish.clone(), identity, module_obj) {
+        match parent_scope.register_nominal(
+            name_for_finish.clone(),
+            identity,
+            module_obj,
+            bind_index,
+        ) {
             Ok(obj) => BodyResult::Value(obj),
             Err(e) => BodyResult::Err(
                 e.with_frame(Frame::bare("<module>", format!("MODULE {} body", name_for_finish))),
@@ -133,12 +152,12 @@ pub fn body<'a>(
 
 /// Dispatch-time placeholder extractor for MODULE. `parts[1]` is the `Type(t)` token of the
 /// module's name slot. Same shape as STRUCT / SIG / named UNION.
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_pre_run(
+    register_nominal_binder(
         scope,
         "MODULE",
         sig(KType::AnyModule, vec![
@@ -148,7 +167,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 
@@ -156,14 +175,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{KErrorKind, RuntimeArena};
+    use crate::machine::{BindingIndex, KErrorKind, RuntimeArena};
 
-    /// Smoke test for MODULE's pre_run extractor: structural extraction of the `Type(_)`
+    /// Smoke test for MODULE's binder_name extractor: structural extraction of the `Type(_)`
     /// token at `parts[1]`.
     #[test]
-    fn pre_run_extracts_module_name() {
+    fn binder_name_extracts_module_name() {
         let expr = parse_one("MODULE Foo = (LET x = 1)");
-        let name = super::pre_run(&expr);
+        let name = super::binder_name(&expr);
         assert_eq!(name.as_deref(), Some("Foo"));
     }
 
@@ -174,7 +193,7 @@ mod tests {
         run(scope, "MODULE Foo = (LET x = 1)");
         let data = scope.bindings().data();
         assert!(matches!(
-            data.get("Foo"),
+            data.get("Foo").map(|(o, _)| *o),
             Some(KObject::KTypeValue(KType::Module { .. }))
         ));
     }
@@ -217,7 +236,7 @@ mod tests {
             "MODULE Foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))",
         );
         let data = scope.bindings().data();
-        let foo = match data.get("Foo") {
+        let foo = match data.get("Foo").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
             _ => panic!("Foo should be a module"),
         };
@@ -302,7 +321,7 @@ mod tests {
         let identity = KType::Module { module, frame: None };
         let module_obj = arena.alloc(KObject::KTypeValue(identity.clone()));
         scope
-            .register_nominal("Foo".into(), identity, module_obj)
+            .register_nominal("Foo".into(), identity, module_obj, BindingIndex::BUILTIN)
             .unwrap();
         // Re-dispatching `MODULE Foo = (...)` against this scope errors at the
         // placeholder install before reaching the Combine-finish guard — `Foo` is
@@ -312,7 +331,7 @@ mod tests {
         // Foo's data binding still points at the pre-seeded module pointer (re-dispatch
         // did not overwrite it).
         let data = scope.bindings().data();
-        let foo = data.get("Foo").copied().expect("Foo still bound");
+        let (foo, _) = data.get("Foo").copied().expect("Foo still bound");
         assert!(std::ptr::eq(foo, module_obj));
     }
 
@@ -328,12 +347,12 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
         let data = scope.bindings().data();
-        let foo = match data.get("Foo") {
+        let foo = match data.get("Foo").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
             _ => panic!("Foo should be a module"),
         };
         let inner = foo.child_scope().bindings().data();
-        assert!(matches!(inner.get("x"), Some(KObject::Number(n)) if *n == 7.0));
-        assert!(matches!(inner.get("z"), Some(KObject::Number(n)) if *n == 11.0));
+        assert!(matches!(inner.get("x").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
+        assert!(matches!(inner.get("z").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 11.0));
     }
 }

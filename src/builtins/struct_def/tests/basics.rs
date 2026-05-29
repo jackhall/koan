@@ -1,15 +1,15 @@
-//! pre_run extraction, type registration, field ordering, schema-rejection errors.
+//! binder_name extraction, type registration, field ordering, schema-rejection errors.
 
 use crate::builtins::test_support::{parse_one, run_one, run_one_err, run_root_silent};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
-/// Smoke test for STRUCT's pre_run extractor: structural extraction of the `Type(_)`
+/// Smoke test for STRUCT's binder_name extractor: structural extraction of the `Type(_)`
 /// token at `parts[1]`.
 #[test]
-fn pre_run_extracts_struct_name() {
+fn binder_name_extracts_struct_name() {
     let expr = parse_one("STRUCT Point = (x :Number, y :Number)");
-    let name = super::super::pre_run(&expr);
+    let name = super::super::binder_name(&expr);
     assert_eq!(name.as_deref(), Some("Point"));
 }
 
@@ -31,7 +31,7 @@ fn struct_named_registers_type_in_scope() {
         other => panic!("expected StructType, got {:?}", other.ktype()),
     }
     let data = scope.bindings().data();
-    let entry = data.get("Point").expect("Point should be bound in scope");
+    let (entry, _) = data.get("Point").expect("Point should be bound in scope");
     assert!(matches!(entry, KObject::StructType { .. }));
 }
 
@@ -49,7 +49,8 @@ fn struct_preserves_field_order() {
     let scope = run_root_silent(&arena);
     run_one(scope, parse_one("STRUCT Backwards = (b :Number, a :Number)"));
     let data = scope.bindings().data();
-    match data.get("Backwards").unwrap() {
+    let (entry, _) = *data.get("Backwards").unwrap();
+    match entry {
         KObject::StructType { fields, .. } => {
             assert_eq!(fields[0].0, "b", "first field should be `b` (declaration order)");
             assert_eq!(fields[1].0, "a");

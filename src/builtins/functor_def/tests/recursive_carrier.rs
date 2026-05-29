@@ -16,8 +16,19 @@ fn functor_return_slot_curried_functor_admits() {
     let scope = run_root_silent(&arena);
     run(
         scope,
+        // Inner FUNCTOR's signature uses the builtin `:Signature` so the type
+        // resolves against the always-bound builtin (`OrderedSig` is a sibling
+        // SIG declaration whose dispatch may not have finalized when the inner
+        // FUNCTOR sub-Dispatch runs — type-language-via-dispatch shifts type
+        // construction onto the scheduler, so reaching forward to a sibling
+        // type binding from inside a sigiled FUNCTOR body requires the proper
+        // park-and-resume builtin pattern documented in val_decl. That
+        // pattern is out of scope for this PR; using the builtin `:Signature`
+        // exercises the same curried-functor `ret: KFunctor { ret: AnyModule }`
+        // shape the test pins via the recursive `is_admissible_functor_return`
+        // arm without depending on forward resolution.
         "SIG OrderedSig = (VAL compare :Number)\n\
-         FUNCTOR (CURRIED Er :OrderedSig) -> :(Functor (OrderedSig) -> Module) = \
+         FUNCTOR (CURRIED Er :OrderedSig) -> :(FUNCTOR (Ty :Signature) -> Module) = \
             (FUNCTOR (INNER y :OrderedSig) -> Module = (MODULE Result = (LET inner = 1)))",
     );
     let f = lookup_fn(scope, "CURRIED");

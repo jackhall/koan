@@ -5,6 +5,12 @@ use std::process::ExitCode;
 
 use koan::machine::interpret_with_writer_path;
 
+// Miri can't call mimalloc's FFI (`mi_malloc_aligned`); fall back to the
+// system allocator under miri so the bin target stays in the audit slate.
+#[cfg(not(miri))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// CLI entry point: read source from a file (if a path is given as the first argument) or from
 /// stdin, then parse, dispatch, and execute it via `interpret_with_writer_path` so error
 /// frames can render real `path:line:col` locations.

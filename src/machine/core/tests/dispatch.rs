@@ -1,5 +1,6 @@
 //! `dispatch` arm of `machine::core` tests.
 
+use crate::machine::BindingIndex;
 use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
@@ -43,7 +44,7 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
         ResolveOutcome::Resolved(r) => {
             assert_eq!(r.slots.wrap_indices, vec![0]);
             assert!(r.slots.ref_name_indices.is_empty());
-            assert!(!r.slots.picked_has_pre_run);
+            assert!(!r.slots.picked_has_binder_name);
         }
         _ => panic!("expected Resolved for known overload"),
     }
@@ -101,11 +102,11 @@ fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     }
 }
 
-/// A pre_run-bearing overload (here a synthetic LET-like binder) populates
+/// A binder_name-bearing overload (here a synthetic LET-like binder) populates
 /// `placeholder_name` from its extractor.
 #[test]
-fn resolve_carries_placeholder_name_for_pre_run_function() {
-    use crate::builtins::register_builtin_with_pre_run;
+fn resolve_carries_placeholder_name_for_binder_function() {
+    use crate::builtins::register_builtin_with_binder;
     fn name_extractor(expr: &KExpression<'_>) -> Option<String> {
         // Mirror LET's shape: expression's 2nd part is the binder Identifier.
         match expr.parts.get(1).map(|p| &p.value) {
@@ -124,7 +125,7 @@ fn resolve_carries_placeholder_name_for_pre_run_function() {
             SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
         ],
     };
-    register_builtin_with_pre_run(scope, "LETLIKE", sig, body_a, Some(name_extractor));
+    register_builtin_with_binder(scope, "LETLIKE", sig, body_a, Some(name_extractor));
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("LETLIKE".into())),
         Spanned::bare(ExpressionPart::Identifier("foo".into())),
@@ -134,7 +135,7 @@ fn resolve_carries_placeholder_name_for_pre_run_function() {
     match scope.resolve_dispatch(&expr) {
         ResolveOutcome::Resolved(r) => {
             assert_eq!(r.placeholder_name.as_deref(), Some("foo"));
-            assert!(r.slots.picked_has_pre_run);
+            assert!(r.slots.picked_has_binder_name);
         }
         _ => panic!("expected Resolved with placeholder_name"),
     }
@@ -223,7 +224,7 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     let bucket_single: UntypedKey =
         vec![UntypedElement::Keyword("MAKESET".into()), UntypedElement::Slot];
     scope
-        .install_pending_overload(bucket_single, NodeId(42))
+        .install_pending_overload(bucket_single, NodeId(42), BindingIndex::BUILTIN)
         .expect("install_pending_overload");
 
     // Bare-arg call: `(MAKESET fwd)` — single-slot bucket matches the entry.
@@ -250,6 +251,59 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         matches!(scope.resolve_dispatch(&multi), ResolveOutcome::Unmatched),
         "different-bucket call must not park on a lead-keyword sibling",
     );
+}
+
+/// Sibling FN/FUNCTOR binders sharing one inner-call bucket key each install
+/// their own `pending_overloads[bucket]` entry into a per-bucket Vec — the
+/// "index-gated bucket parking" pattern. A consumer's `resolve_dispatch` parks
+/// on the earliest-index visible entry; on that producer's finalize the entry
+/// is removed and the consumer re-dispatches against whatever is now visible
+/// (live `functions[bucket]` candidates or remaining pending siblings).
+#[test]
+fn sibling_pending_overloads_park_on_earliest_visible_entry() {
+    use crate::machine::model::types::{UntypedElement, UntypedKey};
+    use crate::machine::NodeId;
+    let arena = RuntimeArena::new();
+    let scope = run_root_bare(&arena);
+    let bucket: UntypedKey =
+        vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
+    // Two sibling FN binders, indices 3 and 4. Each installs its own pending
+    // entry; the second install must NOT be coalesced or rejected — both are
+    // distinct wake sources.
+    scope
+        .install_pending_overload(bucket.clone(), NodeId(101), BindingIndex::value(3))
+        .expect("first install");
+    scope
+        .install_pending_overload(bucket.clone(), NodeId(102), BindingIndex::value(4))
+        .expect("second install must not collide");
+    let entries = scope.bindings().pending_overloads().get(&bucket).cloned();
+    let entries = entries.expect("bucket should be populated");
+    assert_eq!(
+        entries.len(),
+        2,
+        "both sibling installs must coexist as distinct entries; got {:?}",
+        entries,
+    );
+
+    // Consumer at a chain-cutoff strictly greater than both indices: parks on
+    // the earliest-index visible entry (NodeId(101)).
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("PICK".into())),
+        Spanned::bare(ExpressionPart::Identifier("fwd".into())),
+    ]);
+    match scope.resolve_dispatch(&expr) {
+        ResolveOutcome::ParkOnProducers(ps) => {
+            assert_eq!(
+                ps,
+                vec![NodeId(101)],
+                "consumer must park on earliest-index visible pending entry",
+            );
+        }
+        other => panic!(
+            "expected ParkOnProducers([101]), got variant {}",
+            std::any::type_name_of_val(&other),
+        ),
+    }
 }
 
 /// `<Number> OP <Any>` vs `<Any> OP <Number>` against `5 OP 7` are incomparable: each is

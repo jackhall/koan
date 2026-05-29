@@ -72,10 +72,10 @@ pub(crate) fn find_branch_body<'a>(
                 ));
             }
         };
-        // Multi-statement branch desugar: `((s1) (s2) (s3))` becomes a CONS chain so
-        // the branch dispatches as a single tail expression. Single-statement bodies
-        // pass through unchanged. See [`super::cons`] for the contract.
-        let body_expr = super::cons::fold_multi_statement(body_expr);
+        // Multi-statement branch bodies (`((s1) (s2) (s3))`) are split at
+        // MATCH / TRY tail-replace time by the caller (see
+        // [`crate::builtins::match_case`] and [`crate::builtins::try_with`]),
+        // not here — the walker just returns the raw body expression.
         if tag_name == target_tag {
             return Ok(Some(body_expr));
         }

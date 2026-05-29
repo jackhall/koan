@@ -64,7 +64,7 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
          FN (USE_ORD Er :OrderedSig) -> Null = (PRINT \"ok\")",
     );
     let data = scope.bindings().data();
-    let sig_id = match data.get("OrderedSig") {
+    let sig_id = match data.get("OrderedSig").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Signature(s))) => s.sig_id(),
         other => panic!("OrderedSig should be a signature, got {:?}", other.map(|o| o.ktype())),
     };

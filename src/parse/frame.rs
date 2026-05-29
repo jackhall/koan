@@ -8,13 +8,19 @@
 //! opener — so frame close can stamp `Span { start: span_start, end: cursor }` on the
 //! resulting node. The sigiled-Expression variant additionally carries `sigil_cursor`
 //! so the outer `#(...)` / `$(...)` wrapper covers the sigil byte plus the body.
+//!
+//! The `:(...)` type-expression frame (`TypeExpr`) is a *parse-context marker*: it
+//! collects the raw inner parts into a `KExpression` wrapped in
+//! [`ExpressionPart::SigiledTypeExpr`]. Shape recognition (positional `:(List Number)`
+//! vs. keyworded `:(LIST OF Number)` vs. user-functor application
+//! `:(MyFunctor (T = IntOrd))`) is the dispatcher's responsibility — the parser does no
+//! folding inside the sigil.
 
 use crate::machine::core::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 
 use super::dict_literal::DictFrame;
-use super::type_expr_frame::TypeExprFrame;
 
 /// One frame of `build_tree`'s parse stack. `Expression::head` is `Some` only when the frame
 /// was opened by a `#(...)` / `$(...)` sigil; on close such a frame yields the
@@ -35,11 +41,14 @@ pub(super) enum Frame<'a> {
         dict: DictFrame<'a>,
         span_start: u32,
     },
-    /// Opened by a glued `:(` sigil; contents parse as type-expression mode and the close
-    /// folds into `ExpressionPart::Type(TypeExpr { ... })`. `span_start` is the cursor of
+    /// Opened by a glued `:(` sigil; contents parse as a regular expression and the close
+    /// folds into [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`] — a parse-context
+    /// marker for "this slot evaluates to a type". Shape recognition (positional
+    /// `:(List Number)` vs. keyworded `:(LIST OF Number)`) is handled by the dispatcher;
+    /// the parser stores the inner expression verbatim. `span_start` is the cursor of
     /// the leading `:`, so the resulting Spanned wrapper covers the whole `:(...)`.
     TypeExpr {
-        tef: TypeExprFrame<'a>,
+        expr: KExpression<'a>,
         span_start: u32,
     },
 }
@@ -53,7 +62,10 @@ impl<'a> Frame<'a> {
             Frame::Expression { expr, .. } => expr.parts.push(part),
             Frame::List { items, .. } => items.push(part.value),
             Frame::Dict { dict, .. } => dict.push(part.value),
-            Frame::TypeExpr { tef, .. } => tef.parts.push(part.value),
+            // SigiledTypeExpr stores the inner parts as a real `KExpression` (spans
+            // preserved) so the dispatcher's sub-Dispatch through the inner expression
+            // sees the same `Spanned` shape it does for regular expressions.
+            Frame::TypeExpr { expr, .. } => expr.parts.push(part),
         }
     }
 
@@ -100,9 +112,14 @@ impl<'a> Frame<'a> {
                 let span = Span { start: span_start, end };
                 Ok(Spanned::at(ExpressionPart::DictLiteral(dict.finish()?), span))
             }
-            Frame::TypeExpr { tef, span_start } => {
+            Frame::TypeExpr { mut expr, span_start } => {
                 let span = Span { start: span_start, end };
-                Ok(Spanned::at(ExpressionPart::Type(tef.build()?), span))
+                expr.span = Some(span);
+                expr.file = file;
+                Ok(Spanned::at(
+                    ExpressionPart::SigiledTypeExpr(Box::new(expr)),
+                    span,
+                ))
             }
         }
     }

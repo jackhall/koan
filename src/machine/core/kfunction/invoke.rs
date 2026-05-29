@@ -1,8 +1,10 @@
 use std::rc::Rc;
 
 use crate::machine::core::{
-    CallArena, KError, KErrorKind, ResolveTypeExprOutcome, RuntimeArena, Scope,
+    assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, LexicalFrame,
+    ResolveTypeExprOutcome, RuntimeArena, Scope,
 };
+use super::body::split_body_statements;
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
     SignatureElement,
@@ -113,7 +115,7 @@ impl<'a> KFunction<'a> {
                     // `bindings.types`. ATTR-on-type (the `KTypeValue(KType::Module
                     // { .. })` / `KType::Signature(_)` arms in `attr.rs`) projects
                     // through the type-side carrier for `Er.pure(x)`-style references,
-                    // dissolving the previous dual-write into `bindings.data` that
+                    // dissolving the previous paired install into `bindings.data` that
                     // forced the `read_result` race at scheduler/node_store.rs:165-171.
                     //
                     // Value-typed parameters (Number, List<T>, struct types, ...)
@@ -122,16 +124,24 @@ impl<'a> KFunction<'a> {
                     let is_type_denoting = signature_argument_by_name(self, name)
                         .map(|a| a.ktype.is_type_denoting())
                         .unwrap_or(false);
+                    // FN parameters are bound *before* the body block's first
+                    // statement runs. Tag with the nominal-binder carve-out so the
+                    // body's visibility test sees them — same logic the MATCH `it`
+                    // binding uses. Lexically they sit "before" any in-body
+                    // statement; the carve-out is what makes "before the block's
+                    // first statement" work under the chain-cutoff rule.
+                    let param_index =
+                        BindingIndex { idx: 0, nominal_binder: true };
                     if !is_type_denoting {
                         // Signature parser enforces parameter-name uniqueness; a
                         // rebind error here would mean an upstream invariant break.
-                        let _ = child.bind_value(name.clone(), allocated);
+                        let _ = child.bind_value(name.clone(), allocated, param_index);
                     }
                     if let Some(arg) = signature_argument_by_name(self, name) {
                         if arg.ktype.is_type_denoting() {
                             match type_identity_for(name, allocated, &arg.ktype, outer) {
                                 Ok(Some(identity)) => {
-                                    child.register_type(name.clone(), identity);
+                                    child.register_type(name.clone(), identity, param_index);
                                 }
                                 Ok(None) => {}
                                 Err(e) => return BodyResult::Err(e),
@@ -140,6 +150,13 @@ impl<'a> KFunction<'a> {
                     }
                 }
                 let body_expr = expr.clone();
+                // Multi-statement bodies (`((s_0) (s_1) ... (s_{N-1}))`) split into
+                // N statements: the first N-1 run as sibling sub-slots in the body
+                // scope (chain indices 1..N-1), and the FN's slot tail-replaces into
+                // the last one (chain index N). Single-statement bodies take the
+                // length-1 path through the same code.
+                let body_statements = split_body_statements(body_expr);
+                let n = body_statements.len();
 
                 // Deferred return-type path: the per-call return type isn't known
                 // statically. `TypeExpr` is elaborated inline against `child`;
@@ -149,7 +166,33 @@ impl<'a> KFunction<'a> {
                 // per-call return-type check.
                 match &self.signature.return_type {
                     ReturnType::Resolved(_) => {
-                        BodyResult::tail_with_frame(body_expr, frame, self)
+                        // For multi-statement bodies, submit the first N-1 statements
+                        // as siblings via the assembled body chain at indices 1..N-1,
+                        // then tail-replace into the last statement at index N.
+                        if n >= 2 {
+                            let call_site_chain = sched
+                                .current_lexical_chain()
+                                .expect("FN invoke runs inside an enter_block / active_chain");
+                            let body_chain_parent =
+                                assemble_body_chain(child, call_site_chain.clone(), 0).parent.clone();
+                            let mut stmts = body_statements;
+                            let last = stmts.pop().expect("n >= 2");
+                            for (i, stmt) in stmts.into_iter().enumerate() {
+                                let chain = LexicalFrame::push(
+                                    body_chain_parent.clone(),
+                                    child.id,
+                                    i + 1,
+                                );
+                                sched.with_active_frame(frame.clone(), &mut |s| {
+                                    s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
+                                });
+                            }
+                            BodyResult::tail_with_frame_at_index(last, frame, self, n)
+                        } else {
+                            let only = body_statements.into_iter().next()
+                                .expect("split_body_statements always yields >= 1");
+                            BodyResult::tail_with_frame(only, frame, self)
+                        }
                     }
                     ReturnType::Deferred(d) => {
                         let per_call_ret: PerCallReturnType<'a> = match d {
@@ -158,7 +201,7 @@ impl<'a> KFunction<'a> {
                                 let kt = match elaborate_type_expr(&mut el, te) {
                                     ElabResult::Done(kt) => kt,
                                     // Park / Unbound here is a protocol break: the
-                                    // parameter-name dual-write and the fn_def carrier
+                                    // parameter-name install and the fn_def carrier
                                     // scan should jointly guarantee resolution. Assert
                                     // in debug; in release fall back to `Any` so the
                                     // body's own dispatch surfaces the real error.
@@ -188,23 +231,56 @@ impl<'a> KFunction<'a> {
                                 PerCallReturnType::Pending(tid.expect("type dispatch must spawn"))
                             }
                         };
-                        let mut bid = None;
-                        sched.with_active_frame(frame.clone(), &mut |s| {
-                            bid = Some(s.add_dispatch(body_expr.clone(), child));
-                        });
-                        let body_id = bid.expect("body dispatch must spawn");
+                        // FN body runs in its own lexical block (the per-call child
+                        // scope). Assemble the body chain from the call-site chain and
+                        // the FN's lexical outer walk so chain depth tracks lexical
+                        // nesting, not call depth. For multi-statement bodies each
+                        // statement gets its own chain index `1..=N` so the strict
+                        // `b.idx < c` predicate orders siblings correctly; single-
+                        // statement bodies stay at index 0 (today's shape).
+                        let call_site_chain = sched
+                            .current_lexical_chain()
+                            .expect("FN invoke runs inside an enter_block / active_chain");
+                        let body_chain_parent =
+                            assemble_body_chain(child, call_site_chain.clone(), 0).parent.clone();
+                        let mut body_ids: Vec<crate::machine::core::kfunction::NodeId> =
+                            Vec::with_capacity(n);
+                        for (i, stmt) in body_statements.into_iter().enumerate() {
+                            // Single-statement body keeps index 0 (matches the
+                            // assemble_body_chain shape today); multi-statement uses
+                            // `i + 1` so siblings see each other under the gate.
+                            let idx = if n == 1 { 0 } else { i + 1 };
+                            let chain = LexicalFrame::push(
+                                body_chain_parent.clone(),
+                                child.id,
+                                idx,
+                            );
+                            let mut bid = None;
+                            sched.with_active_frame(frame.clone(), &mut |s| {
+                                bid = Some(s.add_dispatch_with_chain(
+                                    stmt.clone(),
+                                    child,
+                                    chain.clone(),
+                                ));
+                            });
+                            body_ids.push(bid.expect("body dispatch must spawn"));
+                        }
+                        let body_terminal_idx = body_ids.len() - 1;
 
-                        // Combine deps: body at [0], optional return-type sub-Dispatch at [1].
-                        let mut deps = vec![body_id];
+                        // Combine deps: body statements at [0..N], optional return-type
+                        // sub-Dispatch at [N]. The finish reads `results[body_terminal_idx]`
+                        // as the body value (last statement) and `results[N]` (if present)
+                        // as the per-call return type carrier.
+                        let mut deps = body_ids;
                         if let PerCallReturnType::Pending(t) = per_call_ret {
                             deps.push(t);
                         }
                         let function_summary = self.summarize();
                         let combine_id = sched.add_combine(deps, vec![], child, Box::new(move |_scope, _sched, results| {
-                            let body_value: &KObject<'_> = results[0];
+                            let body_value: &KObject<'_> = results[body_terminal_idx];
                             let per_call_ret: KType<'_> = match per_call_ret {
                                 PerCallReturnType::Ready(kt) => kt,
-                                PerCallReturnType::Pending(_) => match results.get(1).copied() {
+                                PerCallReturnType::Pending(_) => match results.get(body_terminal_idx + 1).copied() {
                                     Some(KObject::KTypeValue(kt)) => kt.clone(),
                                     Some(other) => {
                                         return BodyResult::Err(KError::new(
@@ -295,7 +371,7 @@ fn signature_argument_by_name<'a>(
 /// | `TypeExprRef`                  | `TypeNameRef(t)`                                 | elaborated via `definition_scope.resolve_type_expr`   |
 ///
 /// `Ok(None)` means the carrier shape didn't match any row (programming error
-/// downstream of an `is_type_denoting`/`matches` disagreement; skip the dual-write).
+/// downstream of an `is_type_denoting`/`matches` disagreement; skip the type-side install).
 ///
 /// `Err(TypeIdentityPendingAtDispatch)` fires when a `TypeNameRef` elaborates against
 /// `definition_scope` (the FN's captured lexical environment) but the result still
@@ -338,8 +414,8 @@ pub(crate) fn type_identity_for<'a>(
                         pending_on,
                     }))
                 }
-                // Unbound: skip the dual-write; the body's own value-side dispatch
-                // will surface the real error.
+                // Unbound: skip the type-side install; the body's own value-side
+                // dispatch will surface the real error.
                 ResolveTypeExprOutcome::Unbound(_) => Ok(None),
             },
             _ => Ok(None),

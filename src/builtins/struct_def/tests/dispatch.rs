@@ -1,5 +1,6 @@
 //! Per-declaration dispatch separation, wildcard slot admission, finalize idempotency.
 
+use crate::machine::BindingIndex;
 use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
 use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
@@ -26,12 +27,13 @@ fn finalize_struct_is_idempotent_when_both_maps_populated() {
         scope_id,
         name: "Foo".into(),
     };
-    scope.register_nominal("Foo".into(), pre_identity, pre_carrier).unwrap();
+    scope.register_nominal("Foo".into(), pre_identity, pre_carrier, BindingIndex::BUILTIN).unwrap();
     // Call finalize_struct directly — it must short-circuit to the existing carrier.
     let outcome = super::super::finalize_struct(
         scope,
         "Foo".into(),
         vec![("x".into(), KType::Number)],
+        BindingIndex::BUILTIN,
     );
     match outcome {
         crate::machine::BodyResult::Value(obj) => {
@@ -54,14 +56,14 @@ fn struct_pair_same_scope_distinct_names_share_scope_id() {
     run_one(scope, parse_one("STRUCT Foo = (x :Number)"));
     run_one(scope, parse_one("STRUCT Bar = (x :Number)"));
     let data = scope.bindings().data();
-    let foo_id = match data.get("Foo") {
+    let foo_id = match data.get("Foo").map(|(o, _)| *o) {
         Some(KObject::StructType { scope_id, name, .. }) => {
             assert_eq!(name, "Foo");
             *scope_id
         }
         other => panic!("expected StructType Foo, got {:?}", other.map(|o| o.ktype())),
     };
-    let bar_id = match data.get("Bar") {
+    let bar_id = match data.get("Bar").map(|(o, _)| *o) {
         Some(KObject::StructType { scope_id, name, .. }) => {
             assert_eq!(name, "Bar");
             *scope_id
@@ -125,23 +127,3 @@ fn wildcard_struct_slot_admits_any_struct_carrier() {
     }
 }
 
-/// STRUCT finalize dual-writes the identity into `bindings.types` AND the carrier
-/// into `bindings.data` via `register_nominal`. Both maps must hold matching entries
-/// for the same name after declaration.
-#[test]
-fn struct_dual_writes_to_types_and_data() {
-    use crate::machine::model::types::UserTypeKind;
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
-    let types = scope.bindings().types();
-    let kt = types.get("Point").expect("Point should be in bindings.types");
-    assert!(matches!(
-        **kt,
-        KType::UserType { kind: UserTypeKind::Struct, ref name, .. } if name == "Point"
-    ));
-    drop(types);
-    let data = scope.bindings().data();
-    let obj = data.get("Point").expect("Point should be in bindings.data");
-    assert!(matches!(obj, KObject::StructType { name, .. } if name == "Point"));
-}

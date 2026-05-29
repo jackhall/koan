@@ -59,7 +59,7 @@ fn combine_short_circuits_on_dep_error() {
     // Allocate two placeholder Dispatch slots, drain the queue so add() doesn't
     // re-enqueue them at execute time, then overwrite their results directly
     // (mirrors the synthetic-state pattern used by `free_reclaims_owned_subtree`).
-    let mk_dispatch = || NodeWork::Dispatch(KExpression::new(Vec::new()));
+    let mk_dispatch = || NodeWork::dispatch(KExpression::new(Vec::new()));
     let dep_ok = sched.add(mk_dispatch(), scope);
     let dep_err = sched.add(mk_dispatch(), scope);
     sched.store.clear_node(dep_ok);

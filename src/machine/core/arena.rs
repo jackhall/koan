@@ -440,6 +440,7 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
+    use crate::machine::BindingIndex;
     use crate::machine::model::types::KType;
 
     #[test]
@@ -500,7 +501,7 @@ mod tests {
         let inner_arena: &RuntimeArena = unsafe { &*(arena_ptr as *const _) };
         let child: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
         let it_obj: &KObject<'_> = inner_arena.alloc(KObject::Number(42.0));
-        child.bind_value("it".to_string(), it_obj).unwrap();
+        child.bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN).unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
     }
 
@@ -604,7 +605,7 @@ mod tests {
 
         // Round-trip: bind a value into the reset scope, read it back.
         let v = frame.arena().alloc(KObject::Number(42.0));
-        frame.scope().bind_value("k".to_string(), v).unwrap();
+        frame.scope().bind_value("k".to_string(), v, BindingIndex::BUILTIN).unwrap();
         assert!(matches!(frame.scope().lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
         assert!(frame.scope().outer.is_some());
     }

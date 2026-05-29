@@ -6,10 +6,47 @@ use crate::machine::model::ast::KExpression;
 use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
 use crate::machine::model::values::KObject;
 use super::arena::RuntimeArena;
-use super::bindings::{ApplyOutcome, Bindings};
+use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
+pub use super::bindings::Resolution;
 use super::kerror::{KError, KErrorKind};
+use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
+
+/// Visibility predicate: is `b` visible from a reference at `chain`?
+///
+/// Canonical reference for the index-gated visibility rule. Production reads
+/// no longer call this directly — they go through
+/// [`crate::machine::core::Bindings::lookup_value`] /
+/// [`crate::machine::core::Bindings::lookup_type`] /
+/// [`crate::machine::core::Bindings::lookup_function`], which translate
+/// `Option<&LexicalFrame>` into a per-scope `chain_cutoff: Option<usize>`
+/// (via [`LexicalFrame::index_for`]) and apply the predicate inside the
+/// lookup. The free function survives as the predicate's documented home and
+/// for downstream PRs (B/C) that may want a freestanding visibility decision.
+///
+/// - `chain = None` (test fixtures, builtin registration paths) ⇒ see everything;
+///   the gate is disabled.
+/// - `chain.index_for(scope_id) = None` ⇒ the scope isn't on the consumer's chain
+///   (the scope is "complete" — a returned-block local or a sibling block fully done).
+///   All entries in that scope are visible.
+/// - `chain.index_for(scope_id) = Some(c)` ⇒ the cutoff is `c` (this consumer's
+///   statement position in the scope). An entry at index `i` is visible iff `i < c`
+///   (strict lexical predecessor) OR `b.nominal_binder` is set (D7 carve-out for
+///   STRUCT / named UNION / SIG / FUNCTOR / MODULE).
+///
+/// Builtins (`BindingIndex::BUILTIN`) sit at index 0 and are visible to every user
+/// statement: top-level user statement at index 1 has cutoff `1`, and `0 < 1`.
+#[allow(dead_code)]
+pub(crate) fn visible(scope_id: ScopeId, b: BindingIndex, chain: Option<&LexicalFrame>) -> bool {
+    let Some(chain) = chain else {
+        return true;
+    };
+    match chain.index_for(scope_id) {
+        None => true,
+        Some(c) => b.nominal_binder || b.idx < c,
+    }
+}
 
 /// A resolved-but-not-yet-executed call: the original expression, the chosen `KFunction`,
 /// and the `ArgumentBundle` from `KFunction::bind`. Unit of deferred work in dispatch.
@@ -28,18 +65,6 @@ impl<'a> KFuture<'a> {
             bundle: self.bundle.deep_clone(),
         }
     }
-}
-
-/// Result of `Scope::resolve`. `Placeholder` carries the producer `NodeId` the consumer
-/// should park on (a binder dispatched the name but its body hasn't finalized).
-///
-/// Invariant: `data` and `placeholders` never both hold the same name in one scope —
-/// `bind_value` removes the placeholder before inserting into `data`. Resolution stops at
-/// the first scope on the chain that has either.
-pub enum Resolution<'a> {
-    Value(&'a KObject<'a>),
-    Placeholder(NodeId),
-    Unbound,
 }
 
 /// Lexical environment. `functions` (inside [`Bindings`]) buckets overloads by their
@@ -259,7 +284,12 @@ impl<'a> Scope<'a> {
     ///
     /// Conditional-defer: direct mutation first, falls back to the `pending` queue iff a
     /// borrow conflict would otherwise panic (caller up the stack iterating `data`).
-    pub fn bind_value(&self, name: String, obj: &'a KObject<'a>) -> Result<(), KError> {
+    pub fn bind_value(
+        &self,
+        name: String,
+        obj: &'a KObject<'a>,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
             // Transparent `USING` window: reads consult the window before the call site,
             // so a local bind whose name is already a surfaced module member would be
@@ -267,18 +297,25 @@ impl<'a> Scope<'a> {
             // there is no divergent-binding hazard the way TRY/MATCH branches have — the
             // only failure mode is this shadowing one). The bind otherwise belongs to the
             // call site, not the read-only module view, so forward it there.
-            if self.bindings.get().data().contains_key(&name) {
+            //
+            // The forwarded write carries the call-site `index` unchanged: the bind
+            // belongs in the call site's lexical block, at the call site's statement
+            // position, not the module's. See D2 in plan-index-gated-resolution.md.
+            if matches!(
+                self.bindings.get().lookup_value(&name, None),
+                Some(Resolution::Value(_))
+            ) {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "USING: local bind `{name}` collides with a surfaced module member; \
                      rename it to avoid silently shadowing the module's `{name}`",
                 ))));
             }
-            return self.write_target().bind_value(name, obj);
+            return self.write_target().bind_value(name, obj, index);
         }
-        match self.bindings.get().try_bind_value(&name, obj)? {
+        match self.bindings.get().try_bind_value(&name, obj, index)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_value(name, obj);
+                self.pending.defer_value(name, obj, index);
                 Ok(())
             }
         }
@@ -295,14 +332,15 @@ impl<'a> Scope<'a> {
         name: String,
         fn_ref: &'a KFunction<'a>,
         obj: &'a KObject<'a>,
+        index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().register_function(name, fn_ref, obj);
+            return self.write_target().register_function(name, fn_ref, obj, index);
         }
-        match self.bindings.get().try_register_function(&name, fn_ref, obj)? {
+        match self.bindings.get().try_register_function(&name, fn_ref, obj, index)? {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
-                self.pending.defer_function(name, fn_ref, obj);
+                self.pending.defer_function(name, fn_ref, obj, index);
                 Ok(())
             }
         }
@@ -313,15 +351,20 @@ impl<'a> Scope<'a> {
     /// [`Self::resolve_type`]. Same conditional-defer shape as [`Self::bind_value`].
     /// Infallible: a name collision at builtin registration is a programming error,
     /// so the [`KError`] from `try_register_type` is dropped.
-    pub fn register_type(&self, name: String, ktype: crate::machine::model::types::KType<'a>) {
+    pub fn register_type(
+        &self,
+        name: String,
+        ktype: crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    ) {
         if self.bindings.is_borrowed() {
-            self.write_target().register_type(name, ktype);
+            self.write_target().register_type(name, ktype, index);
             return;
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(ktype);
-        match self.bindings.get().try_register_type(&name, kt_ref) {
+        match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
-            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref),
+            Ok(ApplyOutcome::Conflict) => self.pending.defer_type(name, kt_ref, index),
             Err(_) => {}
         }
     }
@@ -342,13 +385,14 @@ impl<'a> Scope<'a> {
         &self,
         name: String,
         ktype: crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
     ) {
         if self.bindings.is_borrowed() {
-            self.write_target().cycle_close_install_identity(name, ktype);
+            self.write_target().cycle_close_install_identity(name, ktype, index);
             return;
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(ktype);
-        match self.bindings.get().try_register_type(&name, kt_ref) {
+        match self.bindings.get().try_register_type(&name, kt_ref, index) {
             Ok(ApplyOutcome::Applied) => {}
             Ok(ApplyOutcome::Conflict) => panic!(
                 "cycle_close_install_identity borrow conflict on `{name}` — cycle-close \
@@ -361,8 +405,8 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Transactional dual-write for nominal declarations (STRUCT, named UNION, MODULE,
-    /// SIG). Identity `kt` (a `KType::UserType` or `KType::SatisfiesSignature`) is inserted
+    /// Atomic install for nominal declarations (STRUCT, named UNION, MODULE, SIG).
+    /// Identity `kt` (a `KType::UserType` or `KType::SatisfiesSignature`) is inserted
     /// into [`Bindings::types`] and the runtime carrier `obj` (`StructType`,
     /// `TaggedUnionType`, `KModule`, `KSignature`) into [`Bindings::data`] atomically
     /// via [`Bindings::try_register_nominal`]. Returns the carrier on success so the
@@ -376,12 +420,13 @@ impl<'a> Scope<'a> {
         name: String,
         kt: crate::machine::model::types::KType<'a>,
         obj: &'a KObject<'a>,
+        index: BindingIndex,
     ) -> Result<&'a KObject<'a>, KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().register_nominal(name, kt, obj);
+            return self.write_target().register_nominal(name, kt, obj, index);
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(kt);
-        match self.bindings.get().try_register_nominal(&name, kt_ref, obj)? {
+        match self.bindings.get().try_register_nominal(&name, kt_ref, obj, index)? {
             ApplyOutcome::Applied => Ok(obj),
             ApplyOutcome::Conflict => {
                 panic!(
@@ -411,11 +456,23 @@ impl<'a> Scope<'a> {
     }
 
     /// Walk the `outer` chain for the nearest value binding of `name`. Wrapper over
-    /// [`Scope::resolve`] that collapses `Placeholder` and `Unbound` to `None`.
+    /// [`Scope::resolve`] that collapses `Placeholder` and `UnboundName` to `None`.
+    /// Visibility is unfiltered (test fixtures / builtin paths); use
+    /// [`Self::lookup_with_chain`] from a dispatch-driven path.
     pub fn lookup(&self, name: &str) -> Option<&'a KObject<'a>> {
-        match self.resolve(name) {
+        self.lookup_with_chain(name, None)
+    }
+
+    /// Chain-gated companion to [`Self::lookup`]. Same outcome contract; the visibility
+    /// filter consults `chain` per the predicate in [`visible`].
+    pub fn lookup_with_chain(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<&'a KObject<'a>> {
+        match self.resolve_with_chain(name, chain) {
             Resolution::Value(v) => Some(v),
-            Resolution::Placeholder(_) | Resolution::Unbound => None,
+            Resolution::Placeholder(_) | Resolution::UnboundName => None,
         }
     }
 
@@ -426,48 +483,91 @@ impl<'a> Scope<'a> {
     ///
     /// Type-side bindings (`bindings.types`) are *not* consulted here — type-name reads
     /// go through [`Self::resolve_type`].
+    ///
+    /// Visibility is unfiltered (test fixtures bypass the scheduler). For dispatch-driven
+    /// reads use [`Self::resolve_with_chain`].
     pub fn resolve(&self, name: &str) -> Resolution<'a> {
+        self.resolve_with_chain(name, None)
+    }
+
+    /// Chain-gated companion to [`Self::resolve`]. Per-scope `data` and `placeholders`
+    /// hits are filtered through the visibility predicate (see [`visible`]) before
+    /// being returned. Hidden entries (later siblings, or value-style binders before
+    /// their lexical position) are skipped, so the walk continues to the next ancestor
+    /// scope — matching the index-gated resolution rule:
+    ///
+    /// > a binding is visible iff, walking the consumer's lexical scope chain to the
+    /// > binding's block, the binding's index is strictly less than the consumer's index
+    /// > (or the binding's nominal-binder flag is set, the D7 carve-out).
+    pub fn resolve_with_chain(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Resolution<'a> {
         self.ancestors()
             .find_map(|scope| {
-                if let Some(obj) = scope.bindings().data().get(name).copied() {
-                    return Some(Resolution::Value(obj));
-                }
-                scope.bindings().placeholders().get(name).copied().map(Resolution::Placeholder)
+                let cutoff = chain.and_then(|c| c.index_for(scope.id));
+                scope.bindings().lookup_value(name, cutoff)
             })
-            .unwrap_or(Resolution::Unbound)
+            .unwrap_or(Resolution::UnboundName)
     }
 
     /// Install a dispatch-time placeholder for `name` -> producer slot `idx`. Thin shim
     /// over [`Bindings::try_install_placeholder`] — see that method's docstring for the
     /// `Rebind` rules and the asymmetry with `try_bind_*` (panics on borrow conflict
     /// rather than queueing).
-    pub fn install_placeholder(&self, name: String, idx: NodeId) -> Result<(), KError> {
+    pub fn install_placeholder(
+        &self,
+        name: String,
+        idx: NodeId,
+        index: BindingIndex,
+    ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().install_placeholder(name, idx);
+            return self.write_target().install_placeholder(name, idx, index);
         }
-        self.bindings.get().try_install_placeholder(name, idx)
+        self.bindings.get().try_install_placeholder(name, idx, index)
     }
 
-    /// Bucket-keyed companion to [`Self::install_placeholder`] — installs a
-    /// `pending_overloads[bucket] = NodeId(idx)` entry so `resolve_dispatch`'s
+    /// Bucket-keyed companion to [`Self::install_placeholder`] — appends a
+    /// `pending_overloads[bucket]` entry (per-bucket Vec) so `resolve_dispatch`'s
     /// no-bucket fallback parks bare-arg calls on the producing FN/FUNCTOR
-    /// binder. Forwards through the `Borrowed` window the same way as the
-    /// name-based companion. See [`Bindings::try_install_pending_overload`].
+    /// binder. Sibling installs sharing the same bucket each append a distinct
+    /// entry; the entry is removed on finalize by matching the producing
+    /// binder's `BindingIndex`. Forwards through the `Borrowed` window the same
+    /// way as the name-based companion. See [`Bindings::try_install_pending_overload`].
     pub fn install_pending_overload(
         &self,
         bucket: crate::machine::model::types::UntypedKey,
         idx: NodeId,
+        index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().install_pending_overload(bucket, idx);
+            return self.write_target().install_pending_overload(bucket, idx, index);
         }
-        self.bindings.get().try_install_pending_overload(bucket, idx)
+        self.bindings.get().try_install_pending_overload(bucket, idx, index)
     }
 
     /// Walk the `outer` chain for the nearest `bindings.types[name]`. Type-side
-    /// analogue of [`Self::lookup`] — no `Placeholder` variant.
+    /// analogue of [`Self::lookup`] — no `Placeholder` variant. Visibility unfiltered;
+    /// dispatch-driven reads use [`Self::resolve_type_with_chain`].
     pub fn resolve_type(&self, name: &str) -> Option<&'a crate::machine::model::types::KType<'a>> {
-        self.ancestors().find_map(|scope| scope.bindings().types().get(name).copied())
+        self.resolve_type_with_chain(name, None)
+    }
+
+    /// Chain-gated companion to [`Self::resolve_type`]. Per-scope `types` hits are
+    /// filtered through the same [`visible`] predicate the value-side resolver uses,
+    /// so a type binding declared lexically later in the same block is invisible to
+    /// an earlier sibling (unless the binder is a nominal-binder carve-out — STRUCT,
+    /// SIG, FUNCTOR, MODULE, named UNION).
+    pub fn resolve_type_with_chain(
+        &self,
+        name: &str,
+        chain: Option<&LexicalFrame>,
+    ) -> Option<&'a crate::machine::model::types::KType<'a>> {
+        self.ancestors().find_map(|scope| {
+            let cutoff = chain.and_then(|c| c.index_for(scope.id));
+            scope.bindings().lookup_type(name, cutoff)
+        })
     }
 
     /// Walk the `outer` chain for the nearest scope holding a writer and write `bytes`.

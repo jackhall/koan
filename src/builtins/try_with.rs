@@ -18,13 +18,15 @@
 
 use std::rc::Rc;
 
+use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, CallArena, CatchFinish, KError, KErrorKind, RuntimeArena, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CallArena, CatchFinish, KError, KErrorKind,
+    RuntimeArena, Scope, SchedulerHandle,
 };
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use crate::machine::core::kfunction::body::split_body_statements;
 use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -50,7 +52,14 @@ pub fn body<'a>(
         }
     };
 
-    let sub_id = sched.add_dispatch(expr_inner, scope);
+    // TRY body runs as its own lexical block (own scope_id, fresh frame on the
+    // chain). The lexical structure mirrors MATCH/TRY WITH arms — preventing a LET
+    // inside the body from leaking into the enclosing block on success. The scope
+    // itself is a fresh `child_under` so the body's binds attach to a non-shared
+    // scope; reads still chain out to `scope`.
+    let body_scope: &'a Scope<'a> = scope.arena.alloc_scope(Scope::child_under(scope));
+    let sub_ids = sched.enter_block(body_scope.id, vec![expr_inner], body_scope);
+    let sub_id = sub_ids[0];
     let outer_frame = sched.current_frame();
     let finish: CatchFinish<'a> = Box::new(move |scope, sched, result| {
         dispatch_branch(scope, sched, result, branches_expr, outer_frame)
@@ -114,9 +123,42 @@ fn dispatch_branch<'a>(
     // walking from the per-call child to its outer chain. Pinned by
     // `it_resolves_via_scope_for_eval_of_top_level_quoted_reference`.
     let it_obj: &'a KObject<'a> = inner_arena.alloc(it_value);
-    let _ = child.bind_value("it".to_string(), it_obj);
-    let _ = sched;
-    BodyResult::Tail { expr: body_expr, frame: Some(frame), function: None }
+    // `it` is bound *before* the WITH-arm body block opens — same pre-block bind
+    // pattern MATCH's `it` uses. Tag with the nominal-binder carve-out so the arm
+    // body sees the binding (the chain-cutoff rule would otherwise hide it).
+    let _ = child.bind_value(
+        "it".to_string(),
+        it_obj,
+        BindingIndex { idx: 0, nominal_binder: true },
+    );
+    // WITH-arm body is its own lexical block; chain assembly mirrors MATCH arms.
+    // Multi-statement bodies (`tag -> ((s_0) ... (s_{N-1}))`) split into N
+    // statements: the first N-1 run as siblings into the arm scope at chain
+    // indices `1..N-1`, and the TRY slot tail-replaces into the last at `N`.
+    let arm_scope_id = child.id;
+    let statements = split_body_statements(body_expr);
+    let n = statements.len();
+    if n >= 2 {
+        let call_site_chain = sched
+            .current_lexical_chain()
+            .expect("TRY body runs inside an enter_block / active_chain");
+        let mut stmts = statements;
+        let last = stmts.pop().expect("n >= 2");
+        for (i, stmt) in stmts.into_iter().enumerate() {
+            let chain = LexicalFrame::push(
+                Some(call_site_chain.clone()),
+                arm_scope_id,
+                i + 1,
+            );
+            sched.with_active_frame(frame.clone(), &mut |s| {
+                s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
+            });
+        }
+        BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n)
+    } else {
+        let only = statements.into_iter().next().expect("n >= 1");
+        BodyResult::tail_with_block(only, Some(frame), arm_scope_id)
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {

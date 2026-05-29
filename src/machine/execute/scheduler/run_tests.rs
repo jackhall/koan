@@ -2,6 +2,7 @@
 //! replay-park routing in `run_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
 use crate::builtins::default_scope;
+use crate::machine::SchedulerHandle;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 use super::Scheduler;
@@ -31,18 +32,26 @@ fn single_identifier_short_circuit_returns_value_when_bound() {
     assert!(matches!(sched.read(id), KObject::Number(n) if *n == 42.0));
 }
 
-/// Submission order matters: `LET y = (x)` dispatches first and parks on `x`'s
-/// placeholder; `LET x = 1` then wakes the parked sub.
+/// Under index-gated resolution a later-sibling LET is invisible to an earlier
+/// sibling's reference — `LET y = (x)` at index `i` cannot see `LET x = 1` at
+/// index `i+1` (the strict `b.idx < c` predicate hides the producer's binding,
+/// and LET is value-style gated). The consumer surfaces `UnboundName`.
 #[test]
-fn single_identifier_short_circuit_lift_parks_on_placeholder() {
+fn single_identifier_short_circuit_value_let_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    for e in parse_all("LET y = (x)\nLET x = 1") {
-        sched.add_dispatch(e, scope);
-    }
+    let ids = sched.enter_block(scope.id, parse_all("LET y = (x)\nLET x = 1"), scope);
     sched.execute().unwrap();
-    assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0));
+    let err = sched
+        .read_result(ids[0])
+        .err()
+        .cloned()
+        .expect("forward-ref LET should error");
+    assert!(
+        matches!(&err.kind, KErrorKind::UnboundName(name) if name == "x"),
+        "expected UnboundName('x'), got {err}",
+    );
 }
 
 #[test]
@@ -74,18 +83,32 @@ fn bare_identifier_in_value_slot_auto_wraps_and_resolves() {
     assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 7.0));
 }
 
+/// Index-gated companion: a bare-Identifier wrap-slot reference whose binding is
+/// declared at a later sibling is invisible under the gate. The wrap-slot's
+/// eager-name resolve surfaces `UnboundName` rather than parking and waking when
+/// the later sibling finalizes.
 #[test]
-fn bare_identifier_in_value_slot_parks_when_forward_referenced() {
+fn bare_identifier_in_value_slot_forward_ref_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    for e in parse_all("LET y = z\nLET z = 9") {
-        sched.add_dispatch(e, scope);
-    }
+    let ids = sched.enter_block(scope.id, parse_all("LET y = z\nLET z = 9"), scope);
     sched.execute().unwrap();
-    assert!(matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 9.0));
+    let err = sched
+        .read_result(ids[0])
+        .err()
+        .cloned()
+        .expect("forward-ref wrap-slot should error");
+    assert!(
+        matches!(&err.kind, KErrorKind::UnboundName(name) if name == "z"),
+        "expected UnboundName('z'), got {err}",
+    );
 }
 
+/// Backward-ref companion: putting the LET binders ahead of the consumer keeps the
+/// multi-producer wrap-slot replay-park alive under the gate — the producers'
+/// indices sit strictly less than the consumer's, so the gate doesn't hide them
+/// and the placeholder/park mechanism still wakes the slot once both finalize.
 #[test]
 fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let arena = RuntimeArena::new();
@@ -93,9 +116,9 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     let mut sched = Scheduler::new();
     for e in parse_all(
         "FN (ADD a :Number BY b :Number) -> Number = (a)\n\
-         LET out = (ADD aa BY bb)\n\
          LET aa = 3\n\
-         LET bb = 4",
+         LET bb = 4\n\
+         LET out = (ADD aa BY bb)",
     ) {
         sched.add_dispatch(e, scope);
     }
@@ -103,24 +126,38 @@ fn multiple_value_slot_placeholders_park_on_distinct_producers() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 3.0));
 }
 
-/// The FN binder skips the placeholder install when the name is already a function in
-/// scope (overload model), so the callee must not yet be in `data` when the caller
-/// dispatches for a true forward-reference park.
+/// Under index-gated resolution a forward call to a later-sibling FN is invisible
+/// to the consumer (FN is value-style gated, not a nominal binder). The
+/// dispatch's per-scope `Bindings::lookup_function` filters by the same
+/// visibility predicate (and the `pending_overloads` fall-through it covers
+/// inherits the same gate), so the call surfaces `DispatchFailed` rather than
+/// parking on the not-yet-finalized overload — `execute` returns `Err`
+/// directly (matching the `?` propagation on a dispatch miss; see
+/// `Scheduler::run_dispatch`).
 #[test]
-fn call_by_name_replay_parks_on_forward_function_reference() {
+fn forward_keyword_function_reference_is_unbound() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    for e in parse_all(
-        "LET out = (DOUBLE 7)\n\
-         FN (DOUBLE x :Number) -> Number = (x)",
-    ) {
-        sched.add_dispatch(e, scope);
-    }
-    sched.execute().unwrap();
-    assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0));
+    sched.enter_block(
+        scope.id,
+        parse_all(
+            "LET out = (DOUBLE 7)\n\
+             FN (DOUBLE x :Number) -> Number = (x)",
+        ),
+        scope,
+    );
+    let err = sched.execute().expect_err("forward-FN call should fail dispatch");
+    assert!(
+        matches!(&err.kind, KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_)),
+        "expected DispatchFailed or UnboundName, got {err}",
+    );
 }
 
+/// Backward-ref companion exercising the multi-producer replay-park wake — the
+/// LET binders for `aa`/`bb` precede the consumer, so the gate doesn't hide
+/// them, and the placeholder/park mechanism still wakes the slot once both
+/// finalize.
 #[test]
 fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let arena = RuntimeArena::new();
@@ -128,9 +165,9 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     let mut sched = Scheduler::new();
     for e in parse_all(
         "FN (ADD a :Number BY b :Number) -> Number = (b)\n\
-         LET out = (ADD aa BY bb)\n\
          LET aa = 11\n\
-         LET bb = 22",
+         LET bb = 22\n\
+         LET out = (ADD aa BY bb)",
     ) {
         sched.add_dispatch(e, scope);
     }
@@ -138,15 +175,19 @@ fn multi_producer_replay_park_waits_for_all_then_re_dispatches() {
     assert!(matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 22.0));
 }
 
-/// Miri audit-slate: pins the bare-name-short-circuit Lift-park lifetime contract. The `&KObject<'a>` the
-/// Lift returns is the producer's reference, not a clone — the arena must outlive
-/// the wake and re-run.
+/// Miri audit-slate: pins the bare-name-short-circuit Lift-park lifetime contract.
+/// The `&KObject<'a>` the Lift returns is the producer's reference, not a clone —
+/// the arena must outlive the wake and re-run. Under index-gated resolution the
+/// consumer must sit *after* the producer (otherwise the gate hides the binding),
+/// so this is a backward-ref shape; the parking mechanism still exercises the
+/// Lift/notify lifetimes when a same-block producer hasn't terminalized at the
+/// consumer's submit time.
 #[test]
 fn lift_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    for e in parse_all("LET y = z\nLET z = 11") {
+    for e in parse_all("LET z = 11\nLET y = z") {
         sched.add_dispatch(e, scope);
     }
     sched.execute().unwrap();
@@ -154,15 +195,19 @@ fn lift_park_minimal_program_for_miri() {
 }
 
 /// Miri audit-slate: pins the replay-park scope-lifetime contract — the parked
-/// slot's scope must stay valid across the wake and the re-dispatch.
+/// slot's scope must stay valid across the wake and the re-dispatch. Backward-ref
+/// shape (FN-decl before call) keeps the call dispatchable under the gate; the
+/// call's wrap-slot may still replay-park (e.g. on an `aa` placeholder) when the
+/// arg is a not-yet-bound name, which is what exercises the lifetime contract.
 #[test]
 fn replay_park_minimal_program_for_miri() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     for e in parse_all(
-        "LET out = (DOUBLE 7)\n\
-         FN (DOUBLE x :Number) -> Number = (x)",
+        "FN (DOUBLE x :Number) -> Number = (x)\n\
+         LET aa = 7\n\
+         LET out = (DOUBLE aa)",
     ) {
         sched.add_dispatch(e, scope);
     }

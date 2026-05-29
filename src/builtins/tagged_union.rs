@@ -1,14 +1,14 @@
-//! Tagged-union construction primitives, mirroring
-//! [`KFunction::apply`](crate::machine::core::kfunction::KFunction) in shape: the
-//! synthesis that turns a "call site" into a tail expression lives next to the type,
-//! not inside the dispatch builtins that consume it.
+//! Tagged-union construction primitives. The `apply` helper synthesizes a tail
+//! expression that re-dispatches through the construction-primitive builtin; the
+//! synthesis lives next to the type, not inside the dispatch builtins that consume
+//! it.
 //!
-//! `apply` is the entry point both surface forms (type-token call via
-//! [`type_call`](super::type_call) and identifier-bound type call via
-//! [`call_by_name`](super::call_by_name)) call. It synthesizes a tail expression
-//! that re-dispatches through the construction-primitive builtin defined here, whose
-//! typed slots let the scheduler resolve sub-expression value-parts before construction
-//! runs.
+//! `apply` is the entry point both surface forms invoke: the type-token call via
+//! [`type_call`](super::type_call), and the identifier-bound LET-alias call via
+//! the dispatch scheduler's stateful FunctionValueCall fast lane. `apply`
+//! synthesizes a tail expression that re-dispatches through the
+//! construction-primitive builtin defined here, whose typed slots let the
+//! scheduler resolve sub-expression value-parts before construction runs.
 //!
 //! The primitive builtin has no keyword in its signature — three typed slots
 //! (`Type`, `Identifier`, `Any`) are specific enough to claim its dispatch bucket
@@ -32,10 +32,10 @@ use crate::machine::model::values::KObject;
 
 use super::register_builtin;
 
-/// Mirror of [`KFunction::apply`](crate::machine::core::kfunction::KFunction): take
-/// the args parts captured at the call site and produce a `BodyResult::Tail` re-dispatching
-/// through the construction primitive. `schema_obj` is the looked-up `&'a KObject<'a>`
-/// reference (must be `KObject::TaggedUnionType(_)` — caller's responsibility).
+/// Take the args parts captured at the call site and produce a `BodyResult::Tail`
+/// re-dispatching through the construction primitive. `schema_obj` is the looked-up
+/// `&'a KObject<'a>` reference (must be `KObject::TaggedUnionType(_)` — caller's
+/// responsibility).
 ///
 /// Validates the args shape: exactly two parts, with the first an `Identifier` (the tag
 /// name). The second part rides through unchanged so the scheduler resolves sub-expressions

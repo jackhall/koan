@@ -1,9 +1,14 @@
 use std::rc::Rc;
 
+use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope,
+    SchedulerHandle,
+};
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use crate::machine::core::kfunction::body::split_body_statements;
 use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -84,11 +89,48 @@ pub fn body<'a>(
     let it_obj: &'a KObject<'a> = inner_arena.alloc(value.deep_clone());
     // Fresh per-call child scope: the `it` binding never collides. `bind_value`'s rebind
     // check therefore always passes; the `_` swallow is intentional.
-    let _ = child.bind_value("it".to_string(), it_obj);
-    // Construct the Tail variant directly. `tail_with_frame` requires a `&KFunction` for
-    // return-type enforcement and error-frame attribution; MATCH has no meaningful
-    // function to attach (declared return is `Any`, so the check would be a no-op).
-    BodyResult::Tail { expr: branch_body, frame: Some(frame), function: None }
+    // `it` is the first (and only) sibling in the freshly minted per-MATCH child
+    // scope. Tag it at lexical index 0 — the arm body runs at index 0 too, but
+    // visibility takes care of itself: the consumer's chain prepends `(child.id, 0)`
+    // for the arm body, and the `it` entry's `idx: 0 < c: 0` would fail. We need
+    // `it` to be visible to the arm body, so install with the nominal-binder
+    // carve-out (semantically: it's not a sibling reference, it's the entire
+    // surrounding context for the arm — same logic the FN parameter path uses).
+    let _ = child.bind_value(
+        "it".to_string(),
+        it_obj,
+        BindingIndex { idx: 0, nominal_binder: true },
+    );
+    // The arm body enters a fresh lexical block (its scope is the per-MATCH child
+    // scope, distinct from the call-site scope). For multi-statement arm bodies
+    // (`tag -> ((s_0) (s_1) ... (s_{N-1}))`) split into N statements: submit the
+    // first N-1 as siblings into the arm scope at chain indices `1..N-1`, then
+    // tail-replace into the last statement at index `N`. Single-statement bodies
+    // pass through unchanged at index 0.
+    let arm_scope_id = child.id;
+    let statements = split_body_statements(branch_body);
+    let n = statements.len();
+    if n >= 2 {
+        let call_site_chain = sched
+            .current_lexical_chain()
+            .expect("MATCH body runs inside an enter_block / active_chain");
+        let mut stmts = statements;
+        let last = stmts.pop().expect("n >= 2");
+        for (i, stmt) in stmts.into_iter().enumerate() {
+            let chain = LexicalFrame::push(
+                Some(call_site_chain.clone()),
+                arm_scope_id,
+                i + 1,
+            );
+            sched.with_active_frame(frame.clone(), &mut |s| {
+                s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
+            });
+        }
+        BodyResult::tail_with_block_at_index(last, Some(frame), arm_scope_id, n)
+    } else {
+        let only = statements.into_iter().next().expect("n >= 1");
+        BodyResult::tail_with_block(only, Some(frame), arm_scope_id)
+    }
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
@@ -222,5 +264,43 @@ mod tests {
             matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("inexhaustive") && msg.contains("`true`")),
             "expected inexhaustive ShapeError for missing true branch, got {err}",
         );
+    }
+
+    /// Multi-statement MATCH arm body: each statement runs and the arm's terminal
+    /// is the last statement's value. Effect ordering between statements is
+    /// topological (sibling sub-slots), not strict source-order.
+    #[test]
+    fn multi_statement_match_branch_returns_last_value() {
+        let bytes = run_program(
+            "UNION Maybe = (some :Number none :Null)\n\
+             LET m = (Maybe (some 5))\n\
+             MATCH (m) WITH (\
+                 some -> ((PRINT \"got\") (PRINT it))\
+                 none -> (PRINT \"no\")\
+             )",
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.contains("got"), "missing 'got' in {s:?}");
+        assert!(s.contains("5"), "missing 'it' value in {s:?}");
+    }
+
+    /// FN recursion through a multi-statement MATCH arm: the recursive HOP call is
+    /// the last statement of the `one` arm and gets tail-replaced. Without TCO,
+    /// deep recursion would blow the scheduler.
+    #[test]
+    fn fn_recursion_with_multi_statement_body_via_match_terminates() {
+        let bytes = run_program(
+            "UNION Bit = (one :Null zero :Null)\n\
+             FN (HOP b :Tagged) -> Any = (\
+                 (PRINT \"step\")\
+                 (MATCH (b) WITH (\
+                     one -> (HOP (Bit (zero null)))\
+                     zero -> (PRINT \"done\")\
+                 ))\
+             )\n\
+             HOP (Bit (one null))",
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.contains("done"), "expected 'done' to print, got {s:?}");
     }
 }

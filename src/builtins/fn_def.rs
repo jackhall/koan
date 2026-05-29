@@ -4,7 +4,9 @@ pub(crate) mod return_type;
 pub(crate) mod signature;
 
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+};
 use crate::machine::model::types::Elaborator;
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
@@ -14,7 +16,12 @@ use finalize::{classify, defer_via_combine, finalize_fn, FnPlan, ParamListResult
 use return_type::{classify_return_type, extract_return_type_raw};
 use signature::ParamListOutcome;
 
-pub(crate) use signature::{pre_run, pre_run_bucket};
+pub(crate) use signature::binder_bucket;
+// `binder_name` is kept in the module (signature.rs) for the parser-side smoke
+// test; it is intentionally NOT registered as a hook on FN/FUNCTOR overloads —
+// see the `register` function below for the rationale.
+#[cfg(test)]
+pub(crate) use signature::binder_name;
 
 /// `FN <signature:KExpression> -> <return_type:Type> = <body:KExpression>` — the user-defined
 /// function constructor. Signature and body are captured as raw `KExpression`s; the signature
@@ -51,10 +58,10 @@ pub fn body<'a>(
             )));
         }
     };
-    // A body of bare sub-expressions (`((a) (b) (c))`) right-folds into a `CONS` chain
-    // so the scheduler sees a single tail-callable expression: TCO holds on the last
-    // statement; backward refs across statements work, forward refs do not.
-    let body_expr = super::cons::fold_multi_statement(body_expr);
+    // Multi-statement bodies (`((a) (b) (c))`) are split at FN-invoke time by
+    // `KFunction::invoke`: the first N-1 statements are submitted as siblings into
+    // the per-call body scope via `enter_block`, and the FN slot tail-replaces into
+    // the last statement, preserving TCO. No CONS-fold at construction time.
 
     // Parameter-name scan runs against the raw signature before elaboration so a
     // param type that's still parked on a placeholder still contributes its name.
@@ -82,12 +89,20 @@ pub fn body<'a>(
         }
     };
 
+    // FN's bind_index: lexical position of the executing slot. FN bindings are
+    // value-style gated (no D7 carve-out) — even though FN produces a callable,
+    // the binder itself never registers a sibling-visible nominal identity.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+
     match classify(return_type_state, params) {
         FnPlan::Synchronous { elements, return_type } => {
-            finalize_fn(scope, elements, return_type, body_expr)
+            finalize_fn(scope, elements, return_type, body_expr, bind_index)
         }
         FnPlan::Combine(inputs) => {
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, false)
+            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, false, bind_index)
         }
     }
 }
@@ -103,12 +118,35 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // (`-> (MODULE_TYPE_OF Er Type)`). The strict dispatch pass picks one
     // unambiguously; `Future(KTypeValue(_))` post-Combine wakes admit only against
     // `TypeExprRef`, since `KExpression` doesn't accept `Future(_)`.
-    // Both FN overloads supply `pre_run_bucket` alongside `pre_run`: a bare-arg
-    // call to a sibling FN that's still finalizing (e.g. its signature's parameter
-    // type is parked on a SIG body's Combine) now parks on this binder slot by
-    // *inner-call bucket key* rather than failing dispatch. Symmetry with FUNCTOR
-    // is intentional — both binders produce KFunctions and the wait shape is the
-    // same.
+    // FN registers a function by inner-call bucket key (UntypedKey), NOT by name:
+    // sibling FN overloads (`FN (PICK xs :A) -> ...`, `FN (PICK xs :B) -> ...`)
+    // coexist in `functions[bucket]`. `register_function` mirrors the first such
+    // overload's carrier into `data[name]` as a value-side handle for `LET f = (FN
+    // ...)`-style references, but that mirror is incidental — the dispatch-time
+    // identity is the bucket, not the name.
+    //
+    // Consequently FN supplies only `binder_bucket` (no `binder_name`):
+    // - `binder_bucket` installs a `pending_overloads[key]` entry so a sibling
+    //   bare-arg call parks on this binder's slot by inner-call bucket key while
+    //   the body is still resolving (e.g. parked on a parameter-type sub-Dispatch).
+    //   Multiple sibling FNs sharing one bucket each install their OWN entry
+    //   into the per-bucket Vec; consumers pick the earliest-index visible
+    //   entry to park on. On a sibling's finalize, only its own entry is
+    //   removed from the Vec; other siblings stay pending so the next consumer
+    //   continues to find them as wake sources. This is the "index-gated
+    //   bucket parking" pattern — sibling installs are distinct, not
+    //   coalesced.
+    // - A `binder_name` install would Rebind on the second of two sibling FN
+    //   binders sharing the same head keyword (e.g. two `PICK` overloads): both
+    //   would try to claim `placeholders[PICK]` and the second's install would
+    //   error out the slot, leaving only the first overload registered. Since
+    //   FN binds nothing in `data[name]` that needs a forward-reference wake
+    //   beyond what `binder_bucket` already provides, no name placeholder is
+    //   installed.
+    //
+    // LET / STRUCT / UNION / SIG / MODULE keep `binder_name` because they DO
+    // bind exactly one name to a value-side carrier; sibling collisions there
+    // are real Rebind errors, not overload patterns.
     register_builtin_full(
         scope,
         "FN",
@@ -121,8 +159,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
-        Some(pre_run_bucket),
+        None,
+        Some(binder_bucket),
+        false,
+        // FN is *not* a nominal binder: a `LET f = (FN ...)` form is value-side gated.
         false,
     );
     register_builtin_full(
@@ -137,8 +177,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
-        Some(pre_run_bucket),
+        None,
+        Some(binder_bucket),
+        false,
+        // FN is *not* a nominal binder: a `LET f = (FN ...)` form is value-side gated.
         false,
     );
 }

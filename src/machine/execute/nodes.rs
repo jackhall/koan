@@ -1,8 +1,13 @@
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, KFunction, NodeId, Scope};
+use crate::machine::{
+    CallArena, CatchFinish, CombineFinish, KError, KFunction, LexicalFrame, NodeId, Scope,
+};
+use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
+
+use super::scheduler::dispatch_state::DispatchState;
 
 /// Terminal output of a node's run. Once a slot's `results` entry holds either variant,
 /// no further write to that slot occurs until it is freed and reused.
@@ -17,12 +22,27 @@ pub(super) enum NodeOutput<'a> {
 /// slot's scope and its `arena()` owns per-call allocations; `None` keeps the existing
 /// frame and scope. `function`, when set, names the user-fn whose body the replacement is
 /// entering — any error landing on this slot gets a `Frame` appended for the trace.
+///
+/// `block_entry` is the lexical-block-entry annotation carried over from
+/// `BodyResult::Tail.block_entry`. `None` keeps the slot's current `LexicalFrame` chain
+/// unchanged (CONS-tail, builtin tail continuations). `Some(scope_id)` enters a new
+/// lexical block: when `function` is `None` the reinstall site prepends `(scope_id, 0)`
+/// to the chain; when `function` is `Some(f)` the chain is rebuilt via
+/// `assemble_body_chain` (the FN-body rule that keeps chain depth = lexical nesting
+/// depth, NOT call depth).
 pub(super) enum NodeStep<'a> {
     Done(NodeOutput<'a>),
     Replace {
         work: NodeWork<'a>,
         frame: Option<Rc<CallArena>>,
         function: Option<&'a KFunction<'a>>,
+        block_entry: Option<ScopeId>,
+        /// Body-scope chain index for FN-body / MATCH-arm / TRY-arm tail-replace
+        /// (mirrors [`crate::machine::core::kfunction::body::BodyResult::Tail::body_index`]).
+        /// Read by `compute_replace_chain`'s `block_entry: Some(_)` arms to position
+        /// the freshly-pushed block frame at index `N` for multi-statement
+        /// tail-into-last; `0` (the default) is the single-statement case.
+        body_index: usize,
     },
 }
 
@@ -37,7 +57,27 @@ pub(super) enum NodeStep<'a> {
 /// `Combine` is the dual of `Bind`: a host-side N→1 combinator that waits on a fixed set
 /// of dep slots and runs a host closure over their resolved values.
 pub(super) enum NodeWork<'a> {
-    Dispatch(KExpression<'a>),
+    /// Resolve and schedule a single expression. `state` carries the
+    /// dispatch slot's per-variant cached state, with `Initialized` as the
+    /// universal birth state and one variant per `DispatchShape` for the
+    /// stateful driver to transition into on first classification.
+    /// `state.init.pre_subs` carries any recursively pre-submitted sub-
+    /// Dispatches keyed by their slot index in `expr.parts`; populated by
+    /// submit-time recursion for binder-shaped expressions (so a nested
+    /// binder's placeholders install at the outermost submission point —
+    /// see `roadmap/dispatch_fix/nested-binder-submission.md`), empty
+    /// otherwise. Phase 4 of `run_dispatch` reuses these instead of
+    /// allocating fresh sub-Dispatches for the named slots.
+    ///
+    /// In step 1 of the stateful-dispatch refactor, every Dispatch slot
+    /// reaches `Scheduler::execute` in `state == Initialized` (the legacy
+    /// driver never produces a non-Initialized state, and the park-rebuild
+    /// sites in `dispatch.rs` always reconstruct as `Initialized`). Later
+    /// steps add per-variant re-entry states.
+    Dispatch {
+        expr: KExpression<'a>,
+        state: DispatchState<'a>,
+    },
     Bind {
         expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
@@ -63,6 +103,21 @@ pub(super) enum NodeWork<'a> {
     Lift(LiftState<'a>),
 }
 
+impl<'a> NodeWork<'a> {
+    /// `Dispatch` in the `Initialized` birth state with empty `pre_subs`.
+    /// The common construction path — only the submit-time binder walk
+    /// populates `pre_subs` (via the `add_with_chain` rewrite arm in
+    /// `submit.rs`). Park-rebuild sites in `dispatch.rs` go through
+    /// [`DispatchState::initialized`] directly so they can carry the
+    /// preserved `pre_subs` across re-Dispatch.
+    pub(super) fn dispatch(expr: KExpression<'a>) -> Self {
+        NodeWork::Dispatch {
+            expr,
+            state: DispatchState::initialized(Vec::new()),
+        }
+    }
+}
+
 /// `Pending(from)` parks on `from`'s terminal; `Ready(output)` holds the stamped
 /// producer terminal. The `Pending → Ready` transition is the sole responsibility
 /// of `Scheduler::finalize`; a queued Lift in `Pending` indicates a wake misfire.
@@ -80,6 +135,19 @@ pub(super) struct Node<'a> {
     /// FN's captured scope, so no frame holds references a successor frame at the same
     /// slot needs — TCO drop is immediate with no `prev` chain.
     pub(super) frame: Option<Rc<CallArena>>,
+    /// Per-slot reserve frame for the ping-pong rotation that lets stateful
+    /// eager-subs resumes reuse a `CallArena` across iterations. Filled at the
+    /// second Tail Replace (the first has no prior frame to rotate in; the
+    /// second's `prev_frame` lands here); iteration 3+ consumes it via
+    /// `invoke_to_step_pinned`'s reserve-swap. The reserve is two iterations
+    /// old by construction at consumption time, so its `scope` is past every
+    /// live tree-borrows protector — `try_reset_for_tail` may safely reset it.
+    /// Drops naturally when the slot terminalizes; the Replace arm in
+    /// `execute.rs` rotates `prev_frame` into this field on each new-frame
+    /// Replace, superseding the prior (2-iter-old) reserve. See
+    /// [design/memory-model.md § Ping-pong reserve frame on stateful resume
+    /// paths](../../../design/memory-model.md).
+    pub(super) reserve_frame: Option<Rc<CallArena>>,
     /// Set in lockstep with `frame`. Read on Done to enforce the declared return type
     /// and to append a `Frame` to errors for the call-stack trace.
     ///
@@ -88,6 +156,12 @@ pub(super) struct Node<'a> {
     /// intermediate frames' types agree — to be enforced statically by the future
     /// type-check pass.
     pub(super) function: Option<&'a KFunction<'a>>,
+    /// Immutable cactus-chain naming this node's lexical position. Head frame is the
+    /// innermost enclosing block; tail (`parent: None`) is top-level. Attached by
+    /// `Scheduler::add` from `enter_block`'s explicit chain or the ambient
+    /// `active_chain`. See `core/lexical_frame.rs` and the roadmap item
+    /// `dispatch_fix/lexical-provenance.md`.
+    pub(super) chain: Rc<LexicalFrame>,
 }
 
 /// Owned `NodeId`s a node must read before running, or `None` if it has no
@@ -96,7 +170,9 @@ pub(super) struct Node<'a> {
 /// prefix is installed separately as `Notify` edges by `Scheduler::add`.
 pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
     match work {
-        NodeWork::Dispatch(_) => None,
+        // `pre_subs` are NOT read-deps of the Dispatch itself; they become
+        // owned-deps of the Bind that Phase 4 of `run_dispatch` spawns.
+        NodeWork::Dispatch { .. } => None,
         NodeWork::Bind { subs, .. } => Some(subs.iter().map(|(_, d)| *d).collect()),
         NodeWork::Combine { deps, park_count, .. } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),

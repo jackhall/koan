@@ -36,10 +36,10 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
 
 /// Bare leaf Type-token wrap-slot fast path. `MAKESET (IntOrd :! OrderedSig)` carries
 /// the ascription in parens so the inner sub-Dispatch is well-typed by the time the
-/// MAKESET call dispatches; the wrap-slot eager-resolve path runs over an empty
-/// `wrap_indices` (Future-bearing slot, not bare-name), but the lazy-arm filter still
-/// exercises `schedule_deps_filtered`'s no-subs branch with the picked function. The
-/// returned module's `inner` member is `1`, captured via PRINT.
+/// MAKESET call dispatches; the fused splice/park/eager walk runs over an empty
+/// `wrap_indices` (Future-bearing slot, not bare-name) and binds the picked function
+/// directly with no subs to schedule. The returned module's `inner` member is `1`,
+/// captured via PRINT.
 #[test]
 fn makeset_bare_type_token_resolves_eagerly() {
     let out = run_capturing(
@@ -53,21 +53,22 @@ fn makeset_bare_type_token_resolves_eagerly() {
     assert_eq!(out.trim(), "1", "expected printed `1`, got `{out}`");
 }
 
-/// Forward Identifier reference: a wrap-slot's bare-name part resolves to a still-
-/// pending placeholder, so eager resolve parks the binder on that placeholder and
-/// re-dispatches once the binder runs.
+/// Backward Identifier reference: a wrap-slot's bare-name part resolves to a still-
+/// pending placeholder for an earlier-declared LET whose body hasn't terminalized
+/// yet (the LET's RHS sub-Dispatch may park on a binder of its own). Eager resolve
+/// parks the consumer on that placeholder; once the LET binder finalizes, the
+/// re-dispatch reads the resolved value. Forward references no longer drive this
+/// case under index-gated resolution — a later-sibling LET is invisible to the
+/// consumer.
 #[test]
-fn wrap_slot_forward_identifier_parks_and_resumes() {
-    // `FN (ECHO x :Number) -> Number = (x)` followed by `ECHO fwd` parks the call on
-    // `fwd`'s placeholder via the wrap-slot eager-resolve path; when `fwd = 42` binds,
-    // the LET-binder parks resume and the call re-dispatches with the resolved value.
+fn wrap_slot_backward_identifier_parks_and_resumes() {
     let out = run_capturing(
         "FN (ECHO x :Number) -> Number = (x)\n\
-         LET result = (ECHO fwd)\n\
          LET fwd = 42\n\
+         LET result = (ECHO fwd)\n\
          PRINT result",
     )
-    .expect("forward Identifier wrap-slot should park and resume");
+    .expect("backward Identifier wrap-slot should resolve");
     assert_eq!(out.trim(), "42", "expected printed `42`, got `{out}`");
 }
 
@@ -119,26 +120,26 @@ fn wrap_slot_parens_expression_still_sub_dispatches() {
 /// stay `Static`, not eager-resolved — so the corresponding shape lives only in dict
 /// keys/values.)
 #[test]
-fn dict_literal_forward_identifier_value_parks_through_real_wake() {
+fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
     let out = run_capturing(
-        "LET m = {\"a\": fwd}\n\
-         LET fwd = 99\n\
+        "LET fwd = 99\n\
+         LET m = {\"a\": fwd}\n\
          PRINT m",
     )
-    .expect("forward Identifier in dict literal value should park and resume");
+    .expect("backward Identifier in dict literal value should resolve");
     // Dict serialization wraps keys+values in `{}`.
     assert!(out.trim().contains("99"), "expected output to contain `99`, got `{out}`");
     assert!(out.trim().contains("\"a\""), "expected output to contain `\"a\"`, got `{out}`");
 }
 
-/// `schedule_deps_filtered`'s lazy-arm with a non-empty filter and `picked = Some`.
+/// Lazy-candidate eager filter, exercised end-to-end through the fused walk.
 /// `USING (some_module_expr) SCOPE (body)` makes USING a lazy candidate (its
 /// `body:KExpression` slot binds the trailing parens-Expression), and the `m:AnyModule`
-/// slot's parens-Expression hits the `eager_indices` filter. Phase 4 of `run_dispatch`
-/// calls `schedule_deps_filtered(eager_filter=Some([1]), picked=Some(USING))`: the
-/// m-slot sub-Dispatches, the SCOPE-body slot rides through unscheduled, and the
-/// post-bind Combine re-dispatches with the resolved `Future(KModule)` spliced into
-/// the m-slot. Pins the eager-filter routing that the empty-subs branch ignores.
+/// slot's parens-Expression hits the `eager_indices` filter. The fused walk in
+/// `run_dispatch` reads `resolved.slots.eager_indices` to gate the eager-sub
+/// schedule: the m-slot sub-Dispatches, the SCOPE-body slot rides through
+/// unscheduled, and the post-bind Combine re-dispatches with the resolved
+/// `Future(KModule)` spliced into the m-slot.
 #[test]
 fn using_lazy_arm_with_filter_routes_module_expr_through_filter() {
     let out = run_capturing(

@@ -99,7 +99,7 @@ fn fn_with_user_bound_return_type_works() {
 
 /// Forward reference: `FN (DOIT xs: MyT) -> MyT = (xs)` followed by
 /// `LET MyT = Number` in the same batch. The scheduler installs `MyT`'s placeholder at
-/// submit time (LET's pre_run); the FN's body parks on it via Combine and re-elaborates
+/// submit time (LET's binder_name); the FN's body parks on it via Combine and re-elaborates
 /// against the now-final scope when the LET wakes. Pins that source-order doesn't
 /// matter for placeholder-bearing forward references.
 #[test]

@@ -17,9 +17,10 @@ use super::{arg, err, register_builtin, sig};
 /// so we resolve it through [`Scope::resolve_type`] (which walks `bindings.types`) and
 /// branch on the resolved `KType::UserType { kind, .. }`:
 ///
-/// - `Struct` / `Tagged`: dual-written by stage 3's finalize, so the schema carrier
-///   lives in `bindings.data`. Fetch it and route through [`dispatch_constructor`] (the
-///   existing `tagged_union::apply` / `struct_value::apply` paths).
+/// - `Struct` / `Tagged`: stage 3's finalize installs a schema carrier in
+///   `bindings.data` alongside the type identity. Fetch it and route through
+///   [`dispatch_constructor`] (the existing `tagged_union::apply` /
+///   `struct_value::apply` paths).
 /// - `Newtype` (stage 4): no value-side carrier — NEWTYPE writes only `types`. Route
 ///   through [`newtype_construct`] with the resolved `&'a KType` so the construction
 ///   path can synthesize a tail with the identity riding through.
@@ -28,8 +29,8 @@ use super::{arg, err, register_builtin, sig};
 /// - Anything else: `TypeMismatch` with `expected: "constructible Type"`.
 ///
 /// Pre-rewrite this body looked up `verb` on `scope.lookup` (value-side) and dispatched
-/// on the carrier variant. That worked for STRUCT / UNION because of the dual-write,
-/// but couldn't see NEWTYPE (which has no value-side carrier).
+/// on the carrier variant. That worked for STRUCT / UNION because their finalize installs
+/// a value-side carrier, but couldn't see NEWTYPE (which has no value-side carrier).
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -52,11 +53,10 @@ pub fn body<'a>(
             )));
         }
     };
-    // Type-classed verb: resolve type-side. The stage-3 dual-write invariant
-    // guarantees that for STRUCT/UNION the identity in `types` is paired with a
-    // schema carrier in `data`; NEWTYPE writes only `types`. Branch on the resolved
-    // `kind` so the dispatch contract follows the dual-map model rather than
-    // reaching through `data` first.
+    // Type-classed verb: resolve type-side. STRUCT/UNION finalize installs a schema
+    // carrier in `data` alongside the type identity; NEWTYPE installs only the type
+    // identity. Branch on the resolved `kind` so the dispatch contract drives off
+    // the type identity, not by reaching through `data` first.
     let identity = match scope.resolve_type(&verb) {
         Some(kt) => kt,
         None => return err(KError::new(KErrorKind::UnboundName(verb))),
@@ -64,22 +64,22 @@ pub fn body<'a>(
     match identity {
         KType::UserType { kind: UserTypeKind::Struct, .. }
         | KType::UserType { kind: UserTypeKind::Tagged, .. } => {
-            // Schema lives in `data` via stage 3's dual-write. Walk the outer chain
-            // via `Scope::lookup` (not `bindings().data().get(...)` directly) — a
-            // STRUCT/UNION declared in a parent scope dual-writes both maps locally
-            // to that parent, so a child-scope type-call must reach upward through
-            // the scope chain for the carrier. The `data` borrow is released inside
-            // `lookup` before `dispatch_constructor` re-enters the dispatch loop. A
-            // missing carrier is a dual-write invariant violation — debug-assert in
-            // development, surface as `UnboundName` in release so the consumer still
-            // sees something structured.
+            // Schema lives in `data`; STRUCT/UNION finalize installs it. Walk the
+            // outer chain via `Scope::lookup` (not `bindings().data().get(...)`
+            // directly) — STRUCT/UNION installs both entries in the declaring scope,
+            // so a child-scope type-call must reach upward for the carrier. The
+            // `data` borrow is released inside `lookup` before `dispatch_constructor`
+            // re-enters the dispatch loop. A type identity without its paired carrier
+            // would be a finalize bug — debug-assert in development, surface as
+            // `UnboundName` in release so the consumer still sees something
+            // structured.
             let schema_obj = match scope.lookup(&verb) {
                 Some(obj) => obj,
                 None => {
                     debug_assert!(
                         false,
-                        "dual-write invariant = STRUCT/UNION identity in types \
-                         without matching data carrier for `{verb}`",
+                        "STRUCT/UNION `{verb}` registered its type identity but no \
+                         matching value-side schema carrier",
                     );
                     return err(KError::new(KErrorKind::UnboundName(verb)));
                 }
@@ -97,11 +97,11 @@ pub fn body<'a>(
             newtype_construct(scope, sched, identity, args_expr.parts)
         }
         KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. } => {
-            // A builtin parameterized type registered at prelude (`Result`) dual-writes
-            // a schema carrier into `data`, just like STRUCT/UNION — route through it.
-            // An *opaque* TypeConstructor minted per-call for SIG/functor ascription has
-            // no carrier; for those `lookup` misses and we surface the not-constructible
-            // error rather than debug-asserting a dual-write violation.
+            // A builtin parameterized type registered at prelude (`Result`) installs
+            // a schema carrier in `data` alongside the type identity, like STRUCT/UNION
+            // — route through it. An *opaque* TypeConstructor minted per-call for
+            // SIG/functor ascription has no carrier; for those `lookup` misses and we
+            // surface the not-constructible error rather than debug-asserting.
             match scope.lookup(&verb).and_then(|c| dispatch_constructor(c, args_expr.parts)) {
                 Some(result) => result,
                 None => err(KError::new(KErrorKind::TypeMismatch {
@@ -207,9 +207,10 @@ mod tests {
     /// resolution path. Before the rewrite, `type_call` consulted `scope.lookup`
     /// (value-side); now it consults `scope.resolve_type` first and fetches the
     /// schema carrier from `bindings.data` only after confirming the identity is
-    /// `Struct` / `Tagged`. Pins the dual-write invariant for STRUCT.
+    /// `Struct` / `Tagged`. Pins that STRUCT's schema carrier still routes through
+    /// `dispatch_constructor`.
     #[test]
-    fn struct_dual_write_path_still_works() {
+    fn struct_construct_via_type_token() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "STRUCT Point = (x :Number, y :Number)");
@@ -229,7 +230,7 @@ mod tests {
     /// type-side resolution path. The `Tagged` arm of the new `kind` branch routes
     /// through `dispatch_constructor` identically to the pre-rewrite shape.
     #[test]
-    fn union_dual_write_path_still_works() {
+    fn union_construct_via_type_token() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "UNION Maybe = (some :Number none :Null)");

@@ -7,7 +7,7 @@
 
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
-use crate::machine::model::KObject;
+use crate::machine::model::{KObject, Parseable};
 use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
 use crate::machine::{RuntimeArena, Scope};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
@@ -31,27 +31,6 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 }
 
 
-/// Register the `Identifier` overload AFTER the `Any` overload. Specificity-based
-/// dispatch should still pick `Identifier` for an identifier-shaped input.
-#[test]
-fn dispatch_picks_identifier_over_any_regardless_of_registration_order() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_bare(&arena);
-    register_builtin(scope, "any_first", one_slot_sig("v", KType::Any), body_marker_any);
-    register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
-
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
-    let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(expr, scope);
-    sched.execute().unwrap();
-    let result = sched.read(id);
-    assert!(
-        matches!(result, KObject::KString(s) if s == "identifier"),
-        "Identifier overload should win on an identifier input, got {:?}",
-        summarize_marker(result),
-    );
-}
-
 /// Inner scope's `Any` overload shadows the outer scope's more-specific `Number`
 /// overload — pure lexical shadowing, innermost match wins regardless of specificity
 /// at outer levels.
@@ -73,6 +52,37 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
         matches!(result, KObject::KString(s) if s == "inner_any"),
         "inner Any must shadow outer Number (lexical shadowing > specificity), got {:?}",
         summarize_marker(result),
+    );
+}
+
+/// A bare-identifier slot with no value, no placeholder, and no visible
+/// binding surfaces `UnboundName(name)` directly out of
+/// `stateful_bare_identifier` — no fall-through to a `(v :Identifier)`
+/// overload bucket. Pins the post-cutover contract: bare-name dispatch
+/// is name-resolution-only, not a candidate walk.
+#[test]
+fn stateful_bare_identifier_surfaces_unbound_name_directly() {
+    use crate::machine::KErrorKind;
+    let arena = RuntimeArena::new();
+    let scope = run_root_bare(&arena);
+    register_builtin(scope, "any_first", one_slot_sig("v", KType::Any), body_marker_any);
+    register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
+
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
+    let mut sched = Scheduler::new();
+    let id = sched.add_dispatch(expr, scope);
+    sched.execute().unwrap();
+    let err = match sched.read_result(id) {
+        Err(e) => e.clone(),
+        Ok(v) => panic!(
+            "stateful BareIdentifier must surface UnboundName for an unbound name; \
+             got value {}",
+            v.summarize(),
+        ),
+    };
+    assert!(
+        matches!(&err.kind, KErrorKind::UnboundName(name) if name == "foo"),
+        "expected UnboundName(\"foo\"), got {err}",
     );
 }
 

@@ -16,7 +16,6 @@ mod parse_stack;
 mod quotes;
 mod tokens;
 mod triple_list;
-mod type_expr_frame;
 mod whitespace;
 
 pub use expression_tree::{parse, parse_with_path, parse_with_source};

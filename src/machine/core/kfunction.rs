@@ -9,11 +9,12 @@
 //! - [`argument_bundle`] — the resolved name-to-value map passed to a body, plus the
 //!   slot-extraction helpers used by binder builtins.
 //! - [`scheduler_handle`] — `NodeId`, the `SchedulerHandle` trait, and `CombineFinish`.
-//! - [`body`] — `BodyResult`, `BuiltinFn`, `PreRunFn`, and the `Body` enum.
+//! - [`body`] — `BodyResult`, `BuiltinFn`, `BinderNameFn`, and the `Body` enum.
 //! - [`invoke`] — `KFunction::invoke` (the body-runner) that binds parameters into a
 //!   per-call child scope and returns a tail-call.
-//! - [`pick`] — dispatch-shape classification (`accepts_for_wrap`,
-//!   `classify_for_pick`, `ClassifiedSlots`) used by `resolve_dispatch`.
+//! - [`pick`] — per-slot classification (`classify_for_pick`, `ClassifiedSlots`,
+//!   `lazy_eager_indices`) consumed by the dispatch driver's post-pick fused
+//!   splice/park/eager walk.
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -34,7 +35,7 @@ pub mod pick;
 pub mod scheduler_handle;
 
 pub use argument_bundle::ArgumentBundle;
-pub use body::{Body, BodyResult, BuiltinFn, PreRunBucketFn, PreRunFn};
+pub use body::{Body, BodyResult, BuiltinFn, BinderBucketFn, BinderNameFn};
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
@@ -59,20 +60,20 @@ pub struct KFunction<'a> {
     /// `'a`. Do **not** simplify `_p` to `PhantomData<&'a ()>` — that would make
     /// `KFunction` covariant in `'a` and silently reintroduce the soundness bug the old
     /// `*const Scope<'static>` erasure was working around the wrong way. The constructor
-    /// (`with_pre_run`) takes `&'a Scope<'a>` directly and stores it via `NonNull::from`,
+    /// (`with_binder_name`) takes `&'a Scope<'a>` directly and stores it via `NonNull::from`,
     /// so the only `unsafe` site is the `NonNull::as_ref` deref in `captured_scope`.
     captured: NonNull<Scope<'a>>,
     _p: PhantomData<&'a Scope<'a>>,
     /// `Some(_)` for binder builtins (LET, FN, STRUCT, UNION, SIG, MODULE); `None` for
-    /// everything else. See [`PreRunFn`].
-    pub pre_run: Option<PreRunFn>,
+    /// everything else. See [`BinderNameFn`].
+    pub binder_name: Option<BinderNameFn>,
     /// `Some(_)` for binder builtins whose body registers a callable function — `FN`
     /// and `FUNCTOR`. Returns the *inner-call* bucket key (e.g. `(MAKESET _)`) so the
     /// dispatch driver installs an entry in `bindings.pending_overloads` and a
     /// sibling bare-arg call form like `(MAKESET IntOrd)` parks on the binder slot
-    /// instead of surfacing `DispatchFailed` before finalize. See [`PreRunBucketFn`]
+    /// instead of surfacing `DispatchFailed` before finalize. See [`BinderBucketFn`]
     /// for the rationale on keying by bucket rather than lead keyword.
-    pub pre_run_bucket: Option<PreRunBucketFn>,
+    pub binder_bucket: Option<BinderBucketFn>,
     /// Flipped on by the `FUNCTOR` binder (and stays `false` for `FN`). Distinguishes
     /// the same underlying `KFunction` shape into the two type-language families:
     /// `function_value_ktype` projects `is_functor → KType::KFunctor`, else
@@ -80,6 +81,15 @@ pub struct KFunction<'a> {
     /// directions of the `KFunctor`/`KFunction` mismatch silently — see
     /// [design/typing/functors.md](../../../design/typing/functors.md).
     pub is_functor: bool,
+    /// Flipped on by binder builtins whose binding installs a *nominal* identity —
+    /// `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE`. The placeholder install
+    /// site in [`crate::machine::execute::scheduler::submit`] reads this flag and
+    /// stamps the resulting [`crate::machine::core::BindingIndex`] with
+    /// `nominal_binder: true`, carving the entry out of the strict-lexical-cutoff
+    /// visibility test so siblings on the same block can refer to one another
+    /// regardless of source order (mutual recursion across nominal binders).
+    /// `LET` / `FN` (without FUNCTOR-flagging) and other binders leave this `false`.
+    pub is_nominal_binder: bool,
 }
 
 impl<'a> KFunction<'a> {
@@ -88,30 +98,35 @@ impl<'a> KFunction<'a> {
         body: Body<'a>,
         captured: &'a Scope<'a>,
     ) -> Self {
-        Self::with_pre_run(signature, body, captured, None)
+        Self::with_binder_name(signature, body, captured, None)
     }
 
-    pub fn with_pre_run(
+    pub fn with_binder_name(
         signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
-        pre_run: Option<PreRunFn>,
+        binder_name: Option<BinderNameFn>,
     ) -> Self {
-        Self::with_pre_run_and_functor(signature, body, captured, pre_run, None, false)
+        Self::with_binder_and_functor(signature, body, captured, binder_name, None, false, false)
     }
 
-    /// Like [`Self::with_pre_run`] but lets the caller flip the `is_functor` flag at
-    /// construction time and pass a `pre_run_bucket` extractor (for `FN` / `FUNCTOR`,
+    /// Like [`Self::with_binder_name`] but lets the caller flip the `is_functor` flag at
+    /// construction time and pass a `binder_bucket` extractor (for `FN` / `FUNCTOR`,
     /// whose body registers a callable function and so wants a bucket-keyed
     /// pending-overload entry). Used by the `FUNCTOR` binder; everything else routes
-    /// through `with_pre_run` and leaves both new fields at their defaults.
-    pub fn with_pre_run_and_functor(
+    /// through `with_binder_name` and leaves both new fields at their defaults.
+    ///
+    /// `is_nominal_binder` flips on the D7 visibility carve-out for STRUCT / named
+    /// UNION / SIG / FUNCTOR / MODULE binders. LET / FN binders pass `false`. See
+    /// [`Self::is_nominal_binder`] for the consumer.
+    pub fn with_binder_and_functor(
         mut signature: ExpressionSignature<'a>,
         body: Body<'a>,
         captured: &'a Scope<'a>,
-        pre_run: Option<PreRunFn>,
-        pre_run_bucket: Option<PreRunBucketFn>,
+        binder_name: Option<BinderNameFn>,
+        binder_bucket: Option<BinderBucketFn>,
         is_functor: bool,
+        is_nominal_binder: bool,
     ) -> Self {
         signature.normalize();
         Self {
@@ -119,14 +134,15 @@ impl<'a> KFunction<'a> {
             body,
             captured: NonNull::from(captured),
             _p: PhantomData,
-            pre_run,
-            pre_run_bucket,
+            binder_name,
+            binder_bucket,
             is_functor,
+            is_nominal_binder,
         }
     }
 
     /// Re-borrow the captured scope at `'a`. SAFETY: `captured` was built from
-    /// `NonNull::from(&'a Scope<'a>)` in [`Self::with_pre_run`], so the pointer is non-null
+    /// `NonNull::from(&'a Scope<'a>)` in [`Self::with_binder_name`], so the pointer is non-null
     /// and points at a `Scope<'a>` that outlives this `KFunction<'a>` by the broader
     /// runtime-arena SAFETY argument (see `core/arena.rs::RuntimeArena`).
     pub fn captured_scope(&self) -> &'a Scope<'a> {
@@ -191,19 +207,28 @@ impl<'a> KFunction<'a> {
         })
     }
 
-    /// Apply this function to a named-argument list (the inner parts of `f (a: 1, b: 2)`):
-    /// parse name-value pairs, consume one per declared argument, and emit a
-    /// `BodyResult::Tail` matching the keyword-bucketed signature on re-dispatch.
+    /// Part-reconstruction core for the named-arg invocation path. Parses `args`
+    /// as `<name> = <value>` triples (or the dict-literal surface) and rebuilds the
+    /// positional expression with each signature `Keyword` element re-interleaved at
+    /// its declared position. Bind / dispatch against the returned expression mirrors
+    /// what the original keyword-bearing call site would have produced.
     ///
-    /// Validation precedence (first wins): missing arg → unknown arg. Arity is implicit —
-    /// [`NamedPairs`] rejects duplicate names at parse time, so consuming every declared
-    /// argument and finding the residual empty witnesses an exact match.
-    pub fn apply<'b>(&self, args: Vec<Spanned<ExpressionPart<'b>>>) -> BodyResult<'b> {
+    /// Sole caller is the dispatch scheduler's stateful FunctionValueCall fast
+    /// lane, which calls `bind` on the reconstructed expression directly and
+    /// bypasses `resolve_dispatch_with_chain`.
+    ///
+    /// Validation precedence (first wins): malformed pair shape (`ShapeError` from
+    /// `NamedPairs::parse`) → missing arg (`MissingArg`) → unknown arg
+    /// (`ShapeError("unknown name ...")`). Arity is implicit — `NamedPairs` rejects
+    /// duplicate names at parse time, so consuming every declared argument and
+    /// finding the residual empty witnesses an exact match.
+    pub fn reconstruct_positional<'b>(
+        &self,
+        args: Vec<Spanned<ExpressionPart<'b>>>,
+    ) -> Result<KExpression<'b>, KError> {
         let tmp_expr = KExpression::new(args);
-        let mut pairs = match NamedPairs::parse(&tmp_expr, "function call") {
-            Ok(p) => p,
-            Err(msg) => return BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
-        };
+        let mut pairs = NamedPairs::parse(&tmp_expr, "function call")
+            .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
         let mut parts: Vec<Spanned<ExpressionPart<'b>>> =
             Vec::with_capacity(self.signature.elements.len());
         for el in &self.signature.elements {
@@ -214,17 +239,17 @@ impl<'a> KFunction<'a> {
                 SignatureElement::Argument(a) => match pairs.take(&a.name) {
                     Some(v) => parts.push(Spanned::bare(v)),
                     None => {
-                        return BodyResult::Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
+                        return Err(KError::new(KErrorKind::MissingArg(a.name.clone())));
                     }
                 },
             }
         }
         if let Some(unknown) = pairs.into_unknown() {
-            return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+            return Err(KError::new(KErrorKind::ShapeError(format!(
                 "unknown name `{unknown}` in function call",
             ))));
         }
-        BodyResult::tail(KExpression::new(parts))
+        Ok(KExpression::new(parts))
     }
 }
 
@@ -245,10 +270,14 @@ mod tests {
         BodyResult::Value(marker(s, "any"))
     }
 
-    /// Walk the scope chain and return the first overload whose strict-or-tentative shape
-    /// matches `expr` — the chain-walk half of [`Scope::resolve_dispatch`], factored out
-    /// here so the migrated tests can assert on `f.classify_for_pick(&expr)` directly
-    /// without re-invoking the full resolution outcome.
+    /// Walk the scope chain and return the first overload whose bucket key matches `expr`
+    /// — a coarse, classifier-shape-only lookup. Each migrated test calls
+    /// `f.classify_for_pick(&expr)` on the result to assert the per-slot index buckets
+    /// directly, so the lookup only needs to land on *some* overload registered under
+    /// the right bucket key. The PR C dispatch driver's actual admission (cache-driven
+    /// strict against bare-name outcomes) is exercised end-to-end by the scheduler
+    /// tests; the tests in this mod cover the post-pick classification surface in
+    /// isolation.
     fn find_match<'a>(
         scope: &'a Scope<'a>,
         expr: &KExpression<'a>,
@@ -258,15 +287,14 @@ mod tests {
         while let Some(s) = current {
             let functions = s.bindings().functions();
             if let Some(bucket) = functions.get(&key) {
-                for f in bucket.iter() {
-                    if f.signature.matches(expr) {
-                        return Some(*f);
-                    }
+                // Prefer a strict-shape match when one exists; otherwise fall back to
+                // any overload registered under the bucket so the classification check
+                // still runs against a real `KFunction` shape.
+                if let Some((f, _)) = bucket.iter().find(|(f, _)| f.signature.matches(expr)) {
+                    return Some(*f);
                 }
-                for f in bucket.iter() {
-                    if f.accepts_for_wrap(expr) {
-                        return Some(*f);
-                    }
+                if let Some((f, _)) = bucket.iter().next() {
+                    return Some(*f);
                 }
             }
             current = s.outer;
@@ -299,17 +327,35 @@ mod tests {
         let pick = f.classify_for_pick(&expr);
         assert_eq!(pick.wrap_indices, vec![1]);
         assert!(pick.ref_name_indices.is_empty());
-        assert!(!pick.picked_has_pre_run);
+        assert!(!pick.picked_has_binder_name);
     }
 
-    /// `call_by_name`'s shape — `<verb:Identifier> <args:KExpression>` — picked against
-    /// `myFn (x: 1)` returns ref_name_indices = [0]: the Identifier slot is a literal-name
-    /// reference and the function has no pre_run, so replay-park will check whether `myFn`
-    /// resolves to a placeholder.
+    /// The `<verb:Identifier> <args:KExpression>` shape — picked against `myFn (x: 1)`
+    /// — returns ref_name_indices = [0]: the Identifier slot is a literal-name reference
+    /// and the function has no binder_name, so replay-park will check whether `myFn`
+    /// resolves to a placeholder. (Historically this was `call_by_name`'s registered
+    /// signature; that builtin was deleted in Phase 1 of
+    /// `scratch/plan-fast-lane-subsume.md` and the test registers an equivalent
+    /// `[Identifier, KExpression]` overload locally so the classification check
+    /// remains exercised.)
     #[test]
-    fn classify_returns_ref_name_indices_for_non_pre_run_function() {
+    fn classify_returns_ref_name_indices_for_non_binder_function() {
         let arena = RuntimeArena::new();
-        let scope = default_scope(&arena, Box::new(std::io::sink()));
+        let scope = run_root_bare(&arena);
+        let sig = ExpressionSignature {
+            return_type: ReturnType::Resolved(KType::Any),
+            elements: vec![
+                SignatureElement::Argument(Argument {
+                    name: "verb".into(),
+                    ktype: KType::Identifier,
+                }),
+                SignatureElement::Argument(Argument {
+                    name: "args".into(),
+                    ktype: KType::KExpression,
+                }),
+            ],
+        };
+        register_builtin(scope, "ident_call_probe", sig, body_any);
         let inner = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Identifier("x".into())),
             Spanned::bare(ExpressionPart::Keyword(":".into())),
@@ -320,18 +366,18 @@ mod tests {
             Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
         ]);
         let f = find_match(scope, &expr)
-            .expect("call_by_name should match Identifier-leading expression");
+            .expect("test overload should match an Identifier-leading expression");
         let pick = f.classify_for_pick(&expr);
         assert!(pick.ref_name_indices.contains(&0));
-        assert!(!pick.picked_has_pre_run);
+        assert!(!pick.picked_has_binder_name);
     }
 
-    /// LET's name slot is `Identifier` (or `TypeExprRef`), but LET has `pre_run = Some(_)` —
+    /// LET's name slot is `Identifier` (or `TypeExprRef`), but LET has `binder_name = Some(_)` —
     /// so `classify_for_pick` should NOT include the name slot in `ref_name_indices`.
     /// Binder literal-name slots are *declarations*, not references; replay-park must skip
     /// them.
     #[test]
-    fn classify_skips_ref_name_indices_for_pre_run_function() {
+    fn classify_skips_ref_name_indices_for_binder_function() {
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let expr = KExpression::new(vec![
@@ -342,7 +388,7 @@ mod tests {
         ]);
         let f = find_match(scope, &expr).expect("LET should match");
         let pick = f.classify_for_pick(&expr);
-        assert!(pick.picked_has_pre_run);
+        assert!(pick.picked_has_binder_name);
         assert!(
             pick.ref_name_indices.is_empty(),
             "LET's Identifier name slot is a declaration, not a reference; \
@@ -351,7 +397,7 @@ mod tests {
         );
     }
 
-    /// A non-pre_run function whose slot is `TypeExprRef`, classified against a bare leaf
+    /// A non-binder_name function whose slot is `TypeExprRef`, classified against a bare leaf
     /// Type-token, lands the Type slot in `ref_name_indices` the same way an Identifier in
     /// an Identifier slot does — replay-park parks the call on the Type-token's
     /// placeholder. Symmetry pinned by
@@ -379,7 +425,7 @@ mod tests {
         let pick = f.classify_for_pick(&expr);
         assert_eq!(pick.ref_name_indices, vec![1]);
         assert!(pick.wrap_indices.is_empty());
-        assert!(!pick.picked_has_pre_run);
+        assert!(!pick.picked_has_binder_name);
     }
 
     /// Stage 2: a manually-constructed `KFunction` with the `is_functor` flag set
@@ -402,17 +448,18 @@ mod tests {
             ],
         };
         // Plain FN: `is_functor: false`, projects KFunction.
-        let plain = KFunction::with_pre_run(make_sig(), Body::Builtin(body_any), scope, None);
+        let plain = KFunction::with_binder_name(make_sig(), Body::Builtin(body_any), scope, None);
         let plain_obj = KObject::KFunction(arena.alloc_function(plain), None);
         assert!(matches!(plain_obj.ktype(), KType::KFunction { .. }));
         // Flagged FN: `is_functor: true`, projects KFunctor.
-        let functor = KFunction::with_pre_run_and_functor(
+        let functor = KFunction::with_binder_and_functor(
             make_sig(),
             Body::Builtin(body_any),
             scope,
             None,
             None,
             true,
+            false,
         );
         let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
         match functor_obj.ktype() {
@@ -448,6 +495,6 @@ mod tests {
         let pick = f.classify_for_pick(&expr);
         assert_eq!(pick.wrap_indices, vec![1]);
         assert!(pick.ref_name_indices.is_empty());
-        assert!(!pick.picked_has_pre_run);
+        assert!(!pick.picked_has_binder_name);
     }
 }

@@ -1,27 +1,34 @@
 //! `type_sigil` parse cases for `expression_tree::parse`.
-
+//!
+//! See [type-language-via-dispatch](../../../../design/typing/type-language-via-dispatch.md).
+//! The parser does no shape-folding inside `:(...)`: every sigil emits
+//! `ExpressionPart::SigiledTypeExpr(inner)` whose inner `KExpression`'s parts mirror
+//! whatever appeared between the parens (leaf Types, keywords like `->`, nested
+//! parens, etc.). Shape recognition (positional `:(List Number)` →
+//! `ConstructorCall` arm; keyworded `:(LIST OF Number)` → `Keyworded` arm;
+//! user-functor `:(MyFunctor (T = IntOrd))` → `FunctionValueCall` arm) is the
+//! dispatcher's job. These tests only assert what the parser produces — they do
+//! not run dispatch.
 
 use super::tree;
 
 #[test]
 fn type_with_one_param() {
-    // `List<Number>` parses as one Type part with one nested param. The describe helper
-    // renders TypeExpr via `render()`, so the structural distinction is visible.
-    assert_eq!(tree(":(List Number)").unwrap(), "[T(:(List Number))]");
+    // `:(List Number)` — head Type + one Type arg, wrapped in SigiledTypeExpr.
+    assert_eq!(tree(":(List Number)").unwrap(), "[:(T(List) T(Number))]");
 }
 
 #[test]
 fn type_with_two_params() {
     assert_eq!(
         tree(":(Dict String Number)").unwrap(),
-        "[T(:(Dict String Number))]"
+        "[:(T(Dict) T(String) T(Number))]"
     );
 }
 
 #[test]
 fn type_with_two_params_no_comma() {
-    // Whitespace-only separation is also legal — `,` is a no-op inside expression frames,
-    // and the same precedent applies inside TypeFrames.
+    // Whitespace-only separation is also legal — `,` is a no-op inside expression frames.
     assert_eq!(
         tree(":(Dict String Number)").unwrap(),
         tree(":(Dict String Number)").unwrap(),
@@ -30,19 +37,20 @@ fn type_with_two_params_no_comma() {
 
 #[test]
 fn type_nested_two_levels() {
+    // `:(List :(Dict String Number))` — inner sigil is also a SigiledTypeExpr part.
     assert_eq!(
         tree(":(List :(Dict String Number))").unwrap(),
-        "[T(:(List :(Dict String Number)))]"
+        "[:(T(List) :(T(Dict) T(String) T(Number)))]"
     );
 }
 
 #[test]
 fn function_type_unary() {
-    // Function args are always parenthesized — `Function<(arg) -> ret>` for one arg,
-    // `Function<() -> ret>` for nullary.
+    // The parser does no folding inside `:(...)` — the `Function` head, the args
+    // expression, the `->` keyword, and the return Type are all sibling parts.
     assert_eq!(
         tree(":(Function (Number) -> Str)").unwrap(),
-        "[T(:(Function (Number) -> Str))]"
+        "[:(T(Function) [T(Number)] t(->) T(Str))]"
     );
 }
 
@@ -50,7 +58,7 @@ fn function_type_unary() {
 fn function_type_nullary() {
     assert_eq!(
         tree(":(Function () -> Number)").unwrap(),
-        "[T(:(Function () -> Number))]"
+        "[:(T(Function) [] t(->) T(Number))]"
     );
 }
 
@@ -58,14 +66,13 @@ fn function_type_nullary() {
 fn function_type_multi_arg() {
     assert_eq!(
         tree(":(Function (Number Bool) -> Number)").unwrap(),
-        "[T(:(Function (Number Bool) -> Number))]"
+        "[:(T(Function) [T(Number) T(Bool)] t(->) T(Number))]"
     );
 }
 
 #[test]
 fn function_type_multi_arg_no_comma() {
-    // Inside the `(...)` arg group, commas are no-ops just like elsewhere in expression
-    // frames — whitespace alone separates args.
+    // Inside the `(...)` arg group, commas are no-ops just like elsewhere.
     assert_eq!(
         tree(":(Function (Number Bool) -> Number)").unwrap(),
         tree(":(Function (Number Bool) -> Number)").unwrap(),
@@ -73,28 +80,12 @@ fn function_type_multi_arg_no_comma() {
 }
 
 #[test]
-fn function_type_bare_arrow_no_parens_errors() {
-    // `:(Function -> R)` (no args at all) is rejected — the user must use the explicit
-    // `()` for nullary.
-    assert!(tree(":(Function -> Number)").is_err());
-}
-
-#[test]
-fn function_type_unparenthesized_args_errors() {
-    // `:(Function A -> R)` (no parens around the args) is rejected so the syntax stays
-    // uniform: args are ALWAYS parenthesized, even for the single-arg case.
-    assert!(tree(":(Function Number -> Str)").is_err());
-    assert!(tree(":(Function Number Bool -> Str)").is_err());
-}
-
-#[test]
 fn function_type_arg_nested_parameterized() {
-    // New sigil form: args themselves can be parameterized types. The inner sigil
-    // closes before the outer Function frame's args expression. Render uses Design-B
-    // sigil syntax, so the parsed-and-rendered shape round-trips.
+    // Args themselves can be parameterized types via nested sigils — the inner
+    // SigiledTypeExpr lives as a part inside the args expression.
     assert_eq!(
         tree(":(Function (:(List Number) Str) -> Bool)").unwrap(),
-        "[T(:(Function (:(List Number) Str) -> Bool))]"
+        "[:(T(Function) [:(T(List) T(Number)) T(Str)] t(->) T(Bool))]"
     );
 }
 
@@ -108,8 +99,7 @@ fn lt_after_non_type_with_whitespace_emits_keyword() {
 #[test]
 fn lt_glued_to_non_type_no_longer_special() {
     // Under Design B the `<` / `>` characters carry no type-position meaning, so glued
-    // forms like `a<b` lex into separate tokens `a`, `<`, `b` with no glue error. The
-    // freed-up syntax is reserved for future numeric-comparison operators.
+    // forms like `a<b` lex into separate tokens `a`, `<`, `b` with no glue error.
     assert_eq!(tree("a<b").unwrap(), "[t(a) t(<) t(b)]");
 }
 
@@ -138,45 +128,16 @@ fn unclosed_type_sigil_errors() {
 }
 
 #[test]
-fn function_arrow_in_non_function_type_errors() {
-    // `->` is exclusive to the `Function` head — other parameterized types must reject.
-    assert!(tree(":(List Number -> Str)").is_err());
-}
-
-#[test]
-fn double_arrow_in_function_type_errors() {
-    // Two `->`s inside one Function sigil — `find_arrow` rejects on the second arrow
-    // before the function-builder ever runs. Use multi-letter type names so the tokens
-    // classify as Types (single uppercase letters fail token classification first).
-    let err = tree(":(Function Num -> Str -> Bool)").unwrap_err();
-    assert!(
-        err.contains("more than one `->` arrow"),
-        "expected double-arrow diagnostic, got: {err}",
-    );
-}
-
-#[test]
-fn list_with_whitespace_then_lt_is_three_tokens() {
-    // Under Design B `<` carries no type meaning, so `List <Number>` parses as three
-    // tokens: Type, `<` keyword, Type — not the legacy single TypeFrame.
-    assert_eq!(
-        tree("List <Number>").unwrap(),
-        "[T(List) t(<) T(Number) t(>)]",
-    );
-}
-
-#[test]
 fn comma_outside_type_sigil_unchanged_inside_paren() {
     // Sanity: signatures like `(xs :(List Number), ys :(List Str))` still parse — the
-    // comma is a no-op inside the expression frame, and `)` followed by `,` then `ys`
-    // continues normally.
+    // comma is a no-op inside the expression frame.
     assert_eq!(
         tree("(xs :(List Number), ys :(List Str))").unwrap(),
-        "[[t(xs) T(:(List Number)) t(ys) T(:(List Str))]]",
+        "[[t(xs) :(T(List) T(Number)) t(ys) :(T(List) T(Str))]]",
     );
 }
 
-// --- Type-sigil validation (Design-B `:(...)` and `:T`) ---
+// --- Type-sigil basics (Design-B `:(...)` and `:T`) ---
 
 #[test]
 fn type_sigil_bare_emits_type_part() {
@@ -186,15 +147,19 @@ fn type_sigil_bare_emits_type_part() {
 
 #[test]
 fn type_sigil_parameterized_list() {
-    // `:(List Number)` opens a TypeExpr frame; close folds into a parameterized Type.
-    assert_eq!(tree("LET ns :(List Number)").unwrap(), "[t(LET) t(ns) T(:(List Number))]");
+    // `:(List Number)` opens a SigiledTypeExpr frame; close wraps the inner
+    // [Type(List), Type(Number)] expression in `SigiledTypeExpr`.
+    assert_eq!(
+        tree("LET ns :(List Number)").unwrap(),
+        "[t(LET) t(ns) :(T(List) T(Number))]"
+    );
 }
 
 #[test]
 fn type_sigil_function_nullary() {
     assert_eq!(
         tree("LET f :(Function () -> Str)").unwrap(),
-        "[t(LET) t(f) T(:(Function () -> Str))]",
+        "[t(LET) t(f) :(T(Function) [] t(->) T(Str))]",
     );
 }
 
@@ -202,7 +167,7 @@ fn type_sigil_function_nullary() {
 fn type_sigil_function_unary() {
     assert_eq!(
         tree("LET f :(Function (Number) -> Str)").unwrap(),
-        "[t(LET) t(f) T(:(Function (Number) -> Str))]",
+        "[t(LET) t(f) :(T(Function) [T(Number)] t(->) T(Str))]",
     );
 }
 
@@ -210,15 +175,16 @@ fn type_sigil_function_unary() {
 fn type_sigil_function_multi_arg() {
     assert_eq!(
         tree("LET f :(Function (Number Str) -> Bool)").unwrap(),
-        "[t(LET) t(f) T(:(Function (Number Str) -> Bool))]",
+        "[t(LET) t(f) :(T(Function) [T(Number) T(Str)] t(->) T(Bool))]",
     );
 }
 
 #[test]
 fn type_sigil_nested_dict_of_list() {
+    // No folding — the parser keeps the inner parens as an Expression part.
     assert_eq!(
         tree("LET d :(Dict Str (List Number))").unwrap(),
-        "[t(LET) t(d) T(:(Dict Str :(List Number)))]",
+        "[t(LET) t(d) :(T(Dict) T(Str) [T(List) T(Number)])]",
     );
 }
 
@@ -228,7 +194,7 @@ fn type_sigil_let_type_binding_rhs() {
     // sigil-prefixed.
     assert_eq!(
         tree("LET t = :(List Number)").unwrap(),
-        "[t(LET) t(t) t(=) T(:(List Number))]",
+        "[t(LET) t(t) t(=) :(T(List) T(Number))]",
     );
 }
 
@@ -241,116 +207,42 @@ fn type_sigil_lone_colon_with_eof_errors() {
 #[test]
 fn type_sigil_lone_colon_glued_to_lowercase_errors() {
     // `:` followed by a lowercase identifier is a parse error — type sigils require
-    // an uppercase head.
+    // an uppercase head OR `(`.
     assert!(tree("LET x :foo").is_err());
 }
 
 #[test]
-fn type_sigil_empty_parens_errors() {
-    // `:()` opens a TypeExpr frame with zero parts — `build` rejects with the
-    // empty-type-expression diagnostic.
-    let err = tree("LET x :()").unwrap_err();
-    assert!(
-        err.contains("empty `:(...)` type expression"),
-        "expected empty-type-expression diagnostic, got: {err}",
-    );
-}
-
-#[test]
-fn type_sigil_parameterized_head_errors() {
-    // Head must be a bare type name. `:(:(List Number) Foo)` puts a fully-parsed
-    // parameterized type in the head slot — `build` rejects via the
-    // `Type(t) if matches!(t.params, TypeParams::None)` guard.
-    let err = tree("LET x :(:(List Number) Foo)").unwrap_err();
-    assert!(
-        err.contains("type-expression head must be a bare type name"),
-        "expected bare-type-name diagnostic, got: {err}",
-    );
-}
-
-#[test]
-fn type_sigil_non_type_head_errors() {
-    // `:(Number)` is fine — a bare uppercase token classifies as a Type. To exercise
-    // the non-Type head arm we need a non-Type first part; the literal `5` is a
-    // Literal part.
-    let err = tree("LET x :(5)").unwrap_err();
-    assert!(
-        err.contains("type-expression head must be a type name"),
-        "expected type-name head diagnostic, got: {err}",
-    );
+fn type_sigil_empty_parens_parses() {
+    // `:()` opens a SigiledTypeExpr frame with zero parts — the parser no longer
+    // rejects this shape; the dispatcher will surface the empty-expression error
+    // when it tries to run the inner KExpression.
+    assert_eq!(tree("LET x :()").unwrap(), "[t(LET) t(x) :()]");
 }
 
 #[test]
 fn type_sigil_bare_type_name_in_parens() {
-    // `:(Number)` — single bare Type, no params. Exercises the `rest.is_empty()`
-    // early-return in `build_list_params` (TypeParams::None).
-    assert_eq!(tree("LET x :(Number)").unwrap(), "[t(LET) t(x) T(Number)]");
-}
-
-#[test]
-fn type_sigil_function_without_arrow_errors() {
-    // `:(Function (Number))` — no `->` arrow. `build` matches `(None, true)` and
-    // rejects with the arrow-required diagnostic.
-    let err = tree("LET f :(Function (Number))").unwrap_err();
-    assert!(
-        err.contains("requires `->`"),
-        "expected arrow-required diagnostic, got: {err}",
-    );
-}
-
-#[test]
-fn type_sigil_non_type_param_errors() {
-    // `:(List 5)` — a Literal param flows into `find_arrow`'s walk and trips the
-    // catch-all rejection (not a Type, not an Expression, not the `->` arrow).
-    let err = tree("LET x :(List 5)").unwrap_err();
-    assert!(
-        err.contains("parameter must be a type name"),
-        "expected non-type-param diagnostic, got: {err}",
-    );
-}
-
-#[test]
-fn type_sigil_function_arg_non_type_errors() {
-    // Inside the `(...)` arg group, args are walked by `extract_function_args`.
-    // A literal arg like `5` triggers the function-arg non-type diagnostic
-    // (distinct from the find_arrow rejection, which can't see inside the inner paren).
-    let err = tree("LET f :(Function (5) -> Bool)").unwrap_err();
-    assert!(
-        err.contains("arg must be a type name"),
-        "expected function-arg non-type diagnostic, got: {err}",
-    );
+    // `:(Number)` — single bare Type inside the sigil. The parser's redundant-Expression
+    // peel does NOT apply inside `:(...)` — the sigil is the wrapper.
+    assert_eq!(tree("LET x :(Number)").unwrap(), "[t(LET) t(x) :(T(Number))]");
 }
 
 #[test]
 fn type_sigil_function_nested_arg_unparameterized() {
-    // `:(Function ((List Number)) -> Bool)` — the inner `(List Number)` is itself a
-    // parenthesized type expression without the sigil. `extract_function_args`
-    // recurses through a fresh `TypeExprFrame::build` for the Expression arm.
+    // `:(Function ((List Number)) -> Bool)` — the inner `(List Number)` is a nested
+    // Expression inside the args group. No folding.
     assert_eq!(
         tree("LET f :(Function ((List Number)) -> Bool)").unwrap(),
-        "[t(LET) t(f) T(:(Function (:(List Number)) -> Bool))]",
-    );
-}
-
-#[test]
-fn type_sigil_function_return_wrong_arity_errors() {
-    // `:(Function () -> A B)` — two parts after the arrow. The `[only] = try_from`
-    // pattern in `extract_function_return` rejects with the arity diagnostic.
-    let err = tree("LET f :(Function () -> Number Bool)").unwrap_err();
-    assert!(
-        err.contains("exactly one return type"),
-        "expected return-arity diagnostic, got: {err}",
+        "[t(LET) t(f) :(T(Function) [[T(List) T(Number)]] t(->) T(Bool))]",
     );
 }
 
 #[test]
 fn type_sigil_function_return_parenthesized() {
-    // `:(Function (Number) -> (List Str))` — the return slot is a parenthesized type
-    // expression. `extract_function_return` recurses through `TypeExprFrame::build`
-    // for the Expression arm.
+    // `:(Function (Number) -> (List Str))` — the return slot is a parenthesized
+    // sub-expression. No folding.
     assert_eq!(
         tree("LET f :(Function (Number) -> (List Str))").unwrap(),
-        "[t(LET) t(f) T(:(Function (Number) -> :(List Str)))]",
+        "[t(LET) t(f) :(T(Function) [T(Number)] t(->) [T(List) T(Str)])]",
     );
 }
 

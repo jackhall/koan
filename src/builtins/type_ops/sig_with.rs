@@ -272,7 +272,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
         // Pull the SIG's sig_id out of the scope so we can compare.
-        let sig_id = match scope.bindings().data().get("OrderedSig") {
+        let sig_id = match scope.bindings().data().get("OrderedSig").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Signature(s))) => s.sig_id(),
             _ => panic!("OrderedSig must bind a KSignature"),
         };

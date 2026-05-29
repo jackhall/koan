@@ -2,15 +2,17 @@
 //!
 //! - [`basic`] — registration, dispatch routing, param binding, infix shapes.
 //! - [`arena`] — run-root and scheduler-slot reclamation invariants.
+//! - [`body_block`] — multi-statement body split, sibling visibility, TCO on last.
 //! - [`body_routing`] — selection of the body to evaluate per call.
 //! - [`return_type`] — parsing the `-> Type` slot and runtime return-type checks.
 //! - [`param_type`] — typed-parameter dispatch, overload routing, shape errors.
 //! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
 //! - [`functor`] — FN as a functor: module-typed parameters, `SIG_WITH` sharing,
-//!   per-call type-side dual write, deferred / templated return types.
+//!   per-call type-side install, deferred / templated return types.
 
 mod arena;
 mod basic;
+mod body_block;
 mod body_routing;
 mod container_types;
 mod functor;

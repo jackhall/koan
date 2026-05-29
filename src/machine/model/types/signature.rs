@@ -14,6 +14,7 @@
 //! expression-preserved form for per-call re-elaboration at the dispatch boundary.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::values::NamedPairs;
 
 use super::ktraits::Parseable;
 use super::ktype::KType;
@@ -71,8 +72,8 @@ pub struct ExpressionSignature<'a> {
 /// `Deferred(DeferredReturn)` is the per-call case. The FN body's parameter-name scan
 /// (see [`crate::builtins::fn_def`]) detected at least one leaf matching a
 /// parameter; the captured surface form is held verbatim so the dispatch boundary can
-/// re-elaborate against the per-call scope where Stage A's dual-write has installed the
-/// parameter's type-language identity.
+/// re-elaborate against the per-call scope where Stage A's type-side install has
+/// registered the parameter's type-language identity.
 ///
 /// [1]: ../../../design/module-system.md#functors
 pub enum ReturnType<'a> {
@@ -238,6 +239,50 @@ impl<'a> ExpressionSignature<'a> {
             (SignatureElement::Keyword(_), _) => false,
             (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
         })
+    }
+
+    /// Named-argument call-shape match. Parses `args.parts` as `<name> = <value>`
+    /// triples (or the dict-literal surface — see [`NamedPairs`]) and reports
+    /// `true` iff every `SignatureElement::Argument` in this signature has a
+    /// name-keyed entry with a type-accepting value, with no residual unknown
+    /// names. `SignatureElement::Keyword` entries are *elided* — they appear in
+    /// the reconstructed positional form (see
+    /// [`KFunction::reconstruct_positional`](crate::machine::core::kfunction::KFunction::reconstruct_positional))
+    /// but never appear in the named-arg surface.
+    ///
+    /// Companion to `KFunction::reconstruct_positional`, which rebuilds the
+    /// positional expression by interleaving signature keywords between
+    /// picked-by-name values: that path is the invocation side; this is the
+    /// call-shape probe. Arg-order independence falls out of the named-by-name
+    /// lookup — `(a = 1, b = 2)` and `(b = 2, a = 1)` both satisfy `(a :Number
+    /// PICK b :Number)`.
+    ///
+    /// The dispatch scheduler's FunctionValueCall fast lane calls
+    /// `reconstruct_positional` directly and surfaces its structured `KError`,
+    /// rather than pre-checking with this helper; the helper remains in the
+    /// public API for downstream callers and as a cheap shape probe. There is
+    /// no companion positional `matches_*` admission — koan has no `f 1 2` call
+    /// syntax for function values, so the named-arg shape is the whole
+    /// user-facing surface.
+    pub fn matches_without_keywords(&self, args: &KExpression<'a>) -> bool {
+        let mut pairs = match NamedPairs::parse(args, "function call") {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        // Every Argument must have a name-keyed entry whose value-part is accepted by
+        // the slot's ktype. Skips Keyword elements entirely — they are part of the
+        // dispatch form, not the named-arg surface.
+        for el in &self.elements {
+            if let SignatureElement::Argument(arg) = el {
+                match pairs.take(&arg.name) {
+                    Some(part) if arg.matches(&part) => {}
+                    _ => return false,
+                }
+            }
+        }
+        // Any residual entry is an unknown-name error in the named-arg surface, so the
+        // signature does not admit this call shape.
+        pairs.into_unknown().is_none()
     }
 
     /// Slot types are erased — same shape with different types lives in the same bucket and

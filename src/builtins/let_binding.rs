@@ -1,11 +1,11 @@
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
-    ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 /// `LET <name> = <value:Any>` — copies the bound value into an arena-allocated `KObject`,
 /// inserts it under `name`, and returns that same arena reference. Compound values recurse
@@ -16,9 +16,19 @@ use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 /// bind a name that classifies as a Type token under the parser's token-classification rules).
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
+    // The LET body runs against the executing slot's lexical chain — `index` is the
+    // statement position assigned at submission time. LET binders never carve out the
+    // nominal-binder visibility flag (D7): a LET-bound value is strictly lexically gated.
+    // Direct-body test fixtures that bypass the scheduler have no active chain; fall
+    // back to [`BindingIndex::BUILTIN`] in that case — the visibility filter is "always
+    // visible" so the lower-level rebind/dedupe properties stay testable in isolation.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     let value = match bundle.require("value") {
         Ok(v) => v,
         Err(e) => return err(e),
@@ -40,7 +50,7 @@ pub fn body<'a>(
             // letter, per design/typing/tokens.md) so the type-side binding map is the
             // single home for module values — closes the asymmetry that lets a
             // value-side binding hide a category-mismatched module behind a lowercase
-            // alias. See design/typing/elaboration.md § Binding home and the dual-map.
+            // alias. See design/typing/elaboration.md § Binding-map partition.
             let kind = match value {
                 KObject::KTypeValue(KType::Module { .. }) => Some("module"),
                 KObject::KTypeValue(KType::Signature(_)) => Some("signature"),
@@ -86,11 +96,12 @@ pub fn body<'a>(
                         got: value.ktype().name(),
                     }));
                 }
-                // Storage routing (unchanged): module / signature carriers dual-
-                // write through `nominal_identity`; pure-type `KTypeValue(kt)`
-                // carriers (Number, etc.) take the `register_type` path;
-                // `is_functor` KFunctions and other nominal-identity carriers
-                // (Struct / Tagged) fall through to the value-side binding.
+                // Storage routing (unchanged): module / signature carriers route
+                // through `nominal_identity` (which installs both type-side identity
+                // and value-side carrier); pure-type `KTypeValue(kt)` carriers
+                // (Number, etc.) take the `register_type` path; `is_functor`
+                // KFunctions and other nominal-identity carriers (Struct / Tagged)
+                // fall through to the value-side binding.
                 match value {
                     KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
                         nominal_identity = derive_nominal_identity(value);
@@ -134,7 +145,7 @@ pub fn body<'a>(
                 }
                 // Type-class LHS + value-routing. Module / signature carriers
                 // (`KTypeValue(KType::Module/Signature)`) take the `nominal_identity`
-                // path via `derive_nominal_identity` so they dual-write both
+                // path via `derive_nominal_identity` so they install both into
                 // `bindings.types` (for type-position lookups) AND `bindings.data`
                 // (for value-position lookups like `IntOrdView.compare`). Pure-type
                 // `KTypeValue(kt)` carriers (Number, List<Any>, etc.) take the
@@ -185,14 +196,23 @@ pub fn body<'a>(
         // so dispatch transport — `lift_kobject`, the `value_lookup`-TypeExprRef
         // synthesis site, downstream `KType::TypeExprRef`-typed slots — sees the
         // same shape as before the storage flip.
-        scope.register_type(name, kt);
+        // Type-class LET RHS — value-side gated (no nominal-binder carve-out): the
+        // alias is a let-style alias, not a fresh nominal type declaration.
+        scope.register_type(name, kt, bind_index);
     } else if let Some(identity) = nominal_identity {
-        // Aliasing dual-write: `LET P2 = Point` writes `bindings.types[P2]` carrying
-        // the ORIGINAL carrier's identity (Point's `name`/`scope_id`), not a fresh
-        // identity minted from the alias name. This is what makes
-        // `(PICK x: P2)` and `(PICK x: Point)` dispatch to the same overload — aliasing
-        // preserves type identity rather than introducing a new nominal type.
-        if let Err(e) = scope.register_nominal(name, identity, allocated) {
+        // Identity-preserving alias: `LET P2 = Point` writes `bindings.types[P2]`
+        // carrying the ORIGINAL carrier's identity (Point's `name`/`scope_id`), not
+        // a fresh identity minted from the alias name. This is what makes
+        // `(PICK x: P2)` and `(PICK x: Point)` dispatch to the same overload —
+        // aliasing preserves type identity rather than introducing a new nominal
+        // type. `register_nominal` installs the paired value-side carrier in the
+        // same call.
+        //
+        // LET aliasing is still value-style gating — `nominal_binder` stays `false`. A
+        // proper nominal binder (STRUCT / SIG / FUNCTOR / MODULE / named UNION) sets it
+        // at its own install site; an alias mirrors the value-side install of
+        // `LET x = expr`.
+        if let Err(e) = scope.register_nominal(name, identity, allocated, bind_index) {
             return err(e);
         }
     } else {
@@ -209,7 +229,7 @@ pub fn body<'a>(
                  non-empty literal",
             ))));
         }
-        if let Err(e) = scope.bind_value(name, allocated) {
+        if let Err(e) = scope.bind_value(name, allocated, bind_index) {
             return err(e);
         }
     }
@@ -219,7 +239,7 @@ pub fn body<'a>(
 /// Recover the nominal identity carried by a type-language value `obj`. Returns
 /// `Some(identity)` for the four shapes that came from a STRUCT / UNION / MODULE / SIG
 /// declaration (or an alias of one); `None` for every other carrier shape — those keep
-/// flowing through `Scope::bind_value` and never dual-write to `bindings.types`.
+/// flowing through `Scope::bind_value` and never install a type-side identity.
 ///
 /// Post-collapse: MODULE/SIG carriers ride `KTypeValue(KType::Module/Signature)`; their
 /// identity IS the carried KType, so the alias preserves the original `&Module` /
@@ -272,7 +292,7 @@ fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
 ///
 /// Anything else surfaces `TypeClassBindingExpectsType`. See
 /// [design/typing/elaboration.md](../../design/typing/elaboration.md)
-/// (binding home and the dual-map) for the design rationale.
+/// (binding-map partition) for the design rationale.
 fn is_admissible_type_class_rhs<'a>(value: &KObject<'a>) -> bool {
     if matches!(value, KObject::KTypeValue(_)) {
         return true;
@@ -309,7 +329,7 @@ fn capitalize_identifier(name: &str) -> String {
 /// and `LET <name:TypeExprRef> = ...`) put the bound name at `parts[1]`; pull it out
 /// structurally without dispatching anything. Returns `None` on shape mismatch (the body
 /// will surface a structured error later).
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
         ExpressionPart::Type(t) => Some(t.name.clone()),
@@ -318,7 +338,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_pre_run(
+    register_builtin_with_binder(
         scope,
         "LET",
         sig(KType::Any, vec![
@@ -328,9 +348,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("value", KType::Any),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
-    register_builtin_with_pre_run(
+    register_builtin_with_binder(
         scope,
         "LET",
         sig(KType::Any, vec![
@@ -340,7 +360,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("value", KType::Any),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 

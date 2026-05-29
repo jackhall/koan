@@ -106,7 +106,15 @@ impl<'a> FinalizeGate<'a> {
             if !owner.bindings().pending_types().contains_key(name) {
                 continue;
             }
-            if let Some(node_id) = owner.bindings().placeholders().get(name).copied() {
+            // Unfiltered placeholder lookup: the elaborator is registering a
+            // dependency edge for SCC tracking, not enforcing a consumer's
+            // index-gated visibility, so `chain_cutoff = None` admits every
+            // entry. A `Value`-arm hit would mean the named type already
+            // finalized, which the `pending_types` check above rules out for
+            // any name that reaches this branch.
+            if let Some(crate::machine::core::Resolution::Placeholder(node_id)) =
+                owner.bindings().lookup_value(name, None)
+            {
                 if !pending.contains(&node_id) {
                     pending.push(node_id);
                 }

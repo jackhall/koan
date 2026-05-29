@@ -6,7 +6,8 @@
 //! Stage 4 of the type-identity arc. The declaration mints a per-declaration
 //! [`KType::UserType`] with `kind: UserTypeKind::Newtype { repr }` and writes only
 //! `bindings.types` — there is no value-side schema carrier (unlike STRUCT / UNION,
-//! which dual-write a schema carrier into `bindings.data`). The construction path
+//! which install a schema carrier in `bindings.data` alongside the type identity).
+//! The construction path
 //! produces a [`KObject::Wrapped`] tagging the inner value with the NEWTYPE
 //! identity; that carrier is the only way `KType::UserType { kind: Newtype, .. }`
 //! values reach user code today.
@@ -27,22 +28,25 @@ use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_ktype, extract_type_name_ref,
 };
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, Scope,
+    SchedulerHandle,
 };
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::model::KType;
 
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_builtin_with_binder, sig};
 
 /// Body of `NEWTYPE <name> = <repr>`. Extracts the bare type name, resolves `repr`
 /// to a concrete [`KType`] (rejecting unresolved bare-leaf carriers), mints a
 /// [`KType::UserType`] with `kind: UserTypeKind::Newtype { repr }`, and writes the
 /// identity into `bindings.types` via [`crate::machine::core::Bindings::try_register_type`].
 ///
-/// Unlike STRUCT / named-UNION's [`crate::machine::core::Bindings::try_register_nominal`]
-/// dual-write, NEWTYPE writes *only* `types`. The declaration has no payload value
-/// to bind — there is no schema carrier paired with the identity. The construction
+/// Unlike STRUCT / named-UNION (which install via
+/// [`crate::machine::core::Bindings::try_register_nominal`], pairing a schema carrier
+/// with the type identity), NEWTYPE writes *only* `types`. The declaration has no
+/// payload value to bind — there is no schema carrier paired with the identity. The
+/// construction
 /// path keys on the identity alone (via [`Scope::resolve_type`]) and routes through
 /// [`newtype_construct`] in [`super::type_call`]'s `Newtype` arm.
 ///
@@ -51,7 +55,7 @@ use super::{arg, err, kw, register_builtin_with_pre_run, sig};
 /// UNION declaration returns.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
-    _sched: &mut dyn SchedulerHandle<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
     mut bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     // Same shared helper STRUCT / UNION use — rejects parameterized binder forms
@@ -113,7 +117,15 @@ pub fn body<'a>(
     };
     let arena = scope.arena;
     let kt_ref: &'a KType = arena.alloc(identity);
-    match scope.bindings().try_register_type(&name, kt_ref) {
+    // NEWTYPE is treated as a value-style binding for visibility (no D7 carve-out):
+    // its identity-only install isn't typically referenced by a sibling NEWTYPE
+    // declaration in mutual-recursive fashion. The placeholder install at submission
+    // tagged it the same way; the bindings install carries the same flag.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::value(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+    match scope.bindings().try_register_type(&name, kt_ref, bind_index) {
         Ok(ApplyOutcome::Applied) => {
             // Mirror STRUCT / UNION's declaration return: the value is a `KTypeValue`
             // carrying a clone of the minted identity. Tests inspect `bindings.types`
@@ -135,7 +147,7 @@ pub fn body<'a>(
 
 /// Dispatch-time placeholder extractor. Same shape STRUCT / UNION use — the binder
 /// name lives at `parts[1]` (after the `NEWTYPE` keyword).
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
@@ -211,7 +223,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // from `type_call::body`'s `Newtype` arm via `newtype_construct`; no second
     // registered builtin (a separate value-side primitive would share `type_call`'s
     // signature bucket and re-dispatch infinitely).
-    register_builtin_with_pre_run(
+    register_builtin_with_binder(
         scope,
         "NEWTYPE",
         sig(KType::Type, vec![
@@ -221,7 +233,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("repr", KType::TypeExprRef),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 
@@ -230,21 +242,22 @@ mod tests {
     use crate::builtins::test_support::{
         parse_one, run, run_one, run_one_err, run_root_silent,
     };
-    use crate::machine::{KErrorKind, RuntimeArena, Scheduler};
+    use crate::machine::execute::Scheduler;
+    use crate::machine::{KErrorKind, RuntimeArena};
     use crate::machine::model::types::UserTypeKind;
     use crate::machine::model::{KObject, KType};
 
     /// NEWTYPE declaration writes the per-declaration identity into `bindings.types`
     /// (with `kind: Newtype { repr: <resolved> }`) and writes *nothing* into
-    /// `bindings.data` — the declaration has no payload value to bind. Stage-3-style
-    /// dual-write does not apply to NEWTYPE.
+    /// `bindings.data` — the declaration has no payload value to bind. STRUCT / UNION
+    /// install a paired schema carrier in `data`; NEWTYPE deliberately does not.
     #[test]
     fn declare_mints_newtype_identity() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run_one(scope, parse_one("NEWTYPE Distance = Number"));
         let types = scope.bindings().types();
-        let kt = types
+        let (kt, _) = types
             .get("Distance")
             .expect("Distance should be in bindings.types");
         match **kt {
@@ -268,7 +281,8 @@ mod tests {
 
     /// `Distance(3.0)` returns a `Wrapped` whose `ktype()` reports the `Distance`
     /// identity and whose `inner` is the bare `Number`. The surface NEWTYPE call goes
-    /// through `type_call`'s `Newtype` arm into `newtype_construct`'s Combine.
+    /// through the dispatch driver's `ConstructorCall` Newtype arm into
+    /// `newtype_construct`'s Combine.
     #[test]
     fn construct_wraps_repr_matching_value() {
         let arena = RuntimeArena::new();

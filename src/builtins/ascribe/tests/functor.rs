@@ -26,11 +26,11 @@ fn functor_returns_a_module() {
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
     let data = scope.bindings().data();
-    let m = match data.get("SetValue") {
+    let m = match data.get("SetValue").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
     };
-    let inner = m.child_scope().bindings().data().get("inner").copied();
+    let inner = m.child_scope().bindings().data().get("inner").map(|(o, _)| *o);
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0));
 }
 
@@ -54,11 +54,11 @@ fn functor_body_reads_signature_typed_parameter() {
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
     let data = scope.bindings().data();
-    let m = match data.get("SetValue") {
+    let m = match data.get("SetValue").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
     };
-    let sample = m.child_scope().bindings().data().get("sample").copied();
+    let sample = m.child_scope().bindings().data().get("sample").map(|(o, _)| *o);
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -87,11 +87,11 @@ fn functor_application_is_generative() {
     run(scope, "LET SetTwo = (MAKESET (IntOrdA))");
 
     let data = scope.bindings().data();
-    let m1 = match data.get("SetOne") {
+    let m1 = match data.get("SetOne").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("SetOne should be a module, got ktype={:?}", other.map(|o| o.ktype())),
     };
-    let m2 = match data.get("SetTwo") {
+    let m2 = match data.get("SetTwo").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("SetTwo should be a module"),
     };
@@ -114,7 +114,6 @@ fn functor_application_is_generative() {
 /// admissibility-only path is what's pinned here.)
 #[test]
 fn functor_rejects_unascribed_module_argument() {
-    use crate::machine::execute::Scheduler;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -130,21 +129,24 @@ fn functor_rejects_unascribed_module_argument() {
     // auto-wrap pass triggers when the name appears in the SatisfiesSignature slot.
     // The LET partition guard requires module/signature carriers to ride
     // Type-classified binders only — a lowercase alias would be rejected at the
-    // LET site (see design/typing/elaboration.md § Binding home and the dual-map).
-    // The eager-resolve path splices `Future(KModule(IntOrd, _))` directly into
-    // the wrap-slot, commits to the tentative pick from `resolve_dispatch`, and
-    // surfaces the mismatch through `bind` as a per-slot `TypeMismatch` terminal.
+    // LET site (see design/typing/elaboration.md § Binding-map partition).
+    //
+    // PR C surface: cache-driven strict admission inspects `Unascribed`'s
+    // resolved carrier type against the `SatisfiesSignature` slot and rejects
+    // upfront (unascribed module doesn't satisfy the signature constraint).
+    // The MAKESET overload falls out, no other bucket admits, and the post-walk
+    // surfaces `DispatchFailed` — replacing the pre-PR-C bind-time
+    // `TypeMismatch` that flowed from tentative-admit. See PR C surface-change
+    // audit in `scratch/plan-unified-walk-pr-c.md`.
     run(scope, "LET Unascribed = IntOrd");
     let mut sched = Scheduler::new();
-    let id = sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
-    let err = match sched.read_result(id) {
-        Ok(_) => panic!("MAKESET on unascribed module should fail dispatch"),
-        Err(e) => e,
-    };
+    sched.add_dispatch(parse_one("MAKESET Unascribed"), scope);
+    let err = sched
+        .execute()
+        .expect_err("expected DispatchFailed at execute boundary");
     assert!(
-        matches!(&err.kind, KErrorKind::TypeMismatch { .. }),
-        "expected TypeMismatch, got {err}",
+        matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed (PR C strict-only surface), got {err}",
     );
 }
 
@@ -180,10 +182,10 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     run(scope, "LET HashSet = (MAKESET (IntHashA))");
 
     let data = scope.bindings().data();
-    let mo = match data.get("OrdSet") { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("OrdSet not module") };
-    let mh = match data.get("HashSet") { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("HashSet not module") };
-    let to = mo.child_scope().bindings().data().get("tag").copied();
-    let th = mh.child_scope().bindings().data().get("tag").copied();
+    let mo = match data.get("OrdSet").map(|(o, _)| *o) { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("OrdSet not module") };
+    let mh = match data.get("HashSet").map(|(o, _)| *o) { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("HashSet not module") };
+    let to = mo.child_scope().bindings().data().get("tag").map(|(o, _)| *o);
+    let th = mh.child_scope().bindings().data().get("tag").map(|(o, _)| *o);
     assert!(matches!(to, Some(KObject::Number(n)) if *n == 1.0),
             "OrderedSig call should pick body with tag=1, got {:?}", to.map(|o| o.ktype()));
     assert!(matches!(th, Some(KObject::Number(n)) if *n == 2.0),
@@ -211,11 +213,11 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     run(scope, "LET SetValue = (MAKESET IntView)");
 
     let data = scope.bindings().data();
-    let m = match data.get("SetValue") {
+    let m = match data.get("SetValue").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
     };
-    let sample = m.child_scope().bindings().data().get("sample").copied();
+    let sample = m.child_scope().bindings().data().get("sample").map(|(o, _)| *o);
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -241,11 +243,11 @@ fn functor_argument_bare_type_token_auto_wraps() {
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
     let data = scope.bindings().data();
-    let m = match data.get("SetValue") {
+    let m = match data.get("SetValue").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
     };
-    let sample = m.child_scope().bindings().data().get("sample").copied();
+    let sample = m.child_scope().bindings().data().get("sample").map(|(o, _)| *o);
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
 }
 
@@ -277,11 +279,11 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
         }
     }
     let data = scope.bindings().data();
-    let a = match data.get("First") {
+    let a = match data.get("First").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("First should be a module"),
     };
-    let b = match data.get("Second") {
+    let b = match data.get("Second").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         _ => panic!("Second should be a module"),
     };
@@ -322,7 +324,7 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
 /// Miri audit-slate: pins the opaque-ascription re-bind path under tree borrows.
 /// `body_opaque` allocates a fresh child scope, mirrors the source module's bindings
 /// into it via `try_bulk_install_from` (which replays each entry through `try_apply`
-/// so a `KFunction` entry exercises the `functions`-map dual-write mirror as well as
+/// so a `KFunction` entry exercises the `functions`-map mirror as well as
 /// the plain `data` write), and builds the resulting `Module` over the captured
 /// scope. The captured-reference shape is the per-call analogue of the
 /// `module_child_scope_transmute_does_not_dangle` site, so the slate needs an
@@ -333,7 +335,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     // The source module carries a plain `LET` plus a `LET = FN` so the
-    // `try_bulk_install_from` walk hits the `KFunction → functions` dual-map mirror
+    // `try_bulk_install_from` walk hits the `KFunction → functions` mirror
     // (`LET <name> = (FN ...)` is the canonical shape for module-member functions per
     // `module_member_function_via_let_fn` in `module_def.rs`) as well as the plain
     // `data` write path. The SIG only requires `compare`; `helper` is a non-required
@@ -349,7 +351,7 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     // writes the new dispatches need.
     let held = {
         let data = scope.bindings().data();
-        match data.get("Held") {
+        match data.get("Held").map(|(o, _)| *o) {
             Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
             other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
         }
@@ -372,11 +374,11 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
     let child = held.child_scope();
     let inner = child.bindings().data();
     assert!(
-        matches!(inner.get("compare"), Some(KObject::Number(n)) if *n == 7.0),
+        matches!(inner.get("compare").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0),
         "held.child_scope().compare must still read 7.0 after subsequent churn",
     );
     assert!(
-        matches!(inner.get("helper"), Some(KObject::KFunction(_, _))),
+        matches!(inner.get("helper").map(|(o, _)| *o), Some(KObject::KFunction(_, _))),
         "held.child_scope().helper must still resolve to a KFunction after churn",
     );
 }

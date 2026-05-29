@@ -130,6 +130,13 @@ constrained-signature case (`(SIG_WITH OrderedSig ((Type: Number)))`)
 uses the `SIG_WITH` builtin in
 [functors.md § Type expressions and constraints](functors.md#type-expressions-and-constraints).
 
+Signature-typed FN parameters plus first-class module values give
+**dictionary-style polymorphism** directly: `(FN sort (ord :OrderedSig, xs :List) ...)` accepts any module satisfying `OrderedSig` as a single
+passable value, and the dispatcher checks satisfaction at the call. The
+witness module is passed by hand at every call site; the call-site
+elision layer that drops the manual argument is described in
+[implicits.md](implicits.md).
+
 ## Block-scoped opening (`USING … SCOPE`)
 
 `(USING Module SCOPE (exprs))` evaluates the block with `Module`'s members in

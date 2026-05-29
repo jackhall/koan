@@ -56,7 +56,7 @@ fn let_binds_a_dict_with_string_keys() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(r#"LET d = {"a": 1, "b": 2}"#, &arena, captured);
     let data = scope.bindings().data();
-    match data.get("d") {
+    match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0));
@@ -72,7 +72,7 @@ fn let_binds_a_dict_with_number_keys() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(r#"LET d = {1: "a", 2: "b"}"#, &arena, captured);
     let data = scope.bindings().data();
-    match data.get("d") {
+    match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if s == "a"));
@@ -88,7 +88,7 @@ fn let_binds_a_dict_with_bool_keys() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run("LET d = {true: 1, false: 0}\n", &arena, captured);
     let data = scope.bindings().data();
-    match data.get("d") {
+    match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_bool_key(entries, true), Some(KObject::Number(n)) if *n == 1.0));
@@ -108,7 +108,7 @@ fn bare_identifier_key_is_looked_up() {
         captured,
     );
     let data = scope.bindings().data();
-    match data.get("d") {
+    match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 1);
             // The key should be the looked-up value of `name`, not the literal "name".
@@ -125,13 +125,13 @@ fn sub_expression_as_value_evaluates_eagerly() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(r#"LET d = {"a": (LET y = 7)}"#, &arena, captured);
     let data = scope.bindings().data();
-    match data.get("d") {
+    match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 7.0));
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
-    assert!(matches!(data.get("y"), Some(KObject::Number(n)) if *n == 7.0));
+    assert!(matches!(data.get("y").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn sub_expression_as_key_evaluates() {
         captured,
     );
     let data = scope.bindings().data();
-    match data.get("d") {
+    match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert!(matches!(lookup_string_key(entries, "x"), Some(KObject::Number(n)) if *n == 1.0));
         }
@@ -162,7 +162,7 @@ fn multiline_dict_binds_correctly() {
         captured,
     );
     let data = scope.bindings().data();
-    match data.get("d") {
+    match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
             assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0));
@@ -178,7 +178,7 @@ fn nested_dict_in_list_binds_correctly() {
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     let scope = run(r#"LET xs = [{"a": 1} {"b": 2}]"#, &arena, captured);
     let data = scope.bindings().data();
-    match data.get("xs") {
+    match data.get("xs").map(|(o, _)| *o) {
         Some(KObject::List(outer, _)) => {
             assert_eq!(outer.len(), 2);
             match &outer[0] {

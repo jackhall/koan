@@ -55,10 +55,15 @@ impl<'a> Scheduler<'a> {
                     reason: "no matching function".to_string(),
                 }));
             }
-            // A bare name in the rebuilt expression is still a pending forward reference:
-            // park on its producer and re-dispatch, mirroring the `run_dispatch` path.
+            // A bare name in the rebuilt expression is still a pending forward
+            // reference: route through the stateful overload-park track installer
+            // so the resume rebuilds via `stateful_keyworded_initial` rather than
+            // the deleted legacy re-Dispatch path.
             ResolveOutcome::ParkOnProducers(producers) => {
-                return Ok(self.park_pending_and_redispatch(producers, expr, idx));
+                // `Bind` deps resolved; re-Dispatch carries no `pre_subs` (the
+                // recursive-submission optimization fires only at the original
+                // outermost `add_with_chain`, not at bind-time re-resolve).
+                return Ok(self.stateful_install_overload_park(producers, expr, Vec::new(), idx));
             }
             ResolveOutcome::UnboundName(name) => {
                 return Err(KError::new(KErrorKind::UnboundName(name)));
@@ -116,11 +121,15 @@ impl<'a> Scheduler<'a> {
         self.reclaim_deps(idx, owned_indices);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
-                work: NodeWork::Dispatch(expr),
-                frame,
-                function,
-            },
+            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
+                NodeStep::Replace {
+                    work: NodeWork::dispatch(expr),
+                    frame,
+                    function,
+                    block_entry,
+                    body_index,
+                }
+            }
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
@@ -148,11 +157,15 @@ impl<'a> Scheduler<'a> {
         self.reclaim_deps(idx, vec![from.index()]);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
-                work: NodeWork::Dispatch(expr),
-                frame,
-                function,
-            },
+            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
+                NodeStep::Replace {
+                    work: NodeWork::dispatch(expr),
+                    frame,
+                    function,
+                    block_entry,
+                    body_index,
+                }
+            }
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
@@ -196,13 +209,76 @@ impl<'a> Scheduler<'a> {
     ) -> NodeStep<'a> {
         match future.function.invoke(scope, self, future.bundle) {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function } => NodeStep::Replace {
-                work: NodeWork::Dispatch(expr),
-                frame,
-                function,
-            },
+            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
+                NodeStep::Replace {
+                    work: NodeWork::dispatch(expr),
+                    frame,
+                    function,
+                    block_entry,
+                    body_index,
+                }
+            }
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
+        }
+    }
+
+    /// `invoke_to_step` with the slot's reserve frame consumed when available,
+    /// falling back to the pin-only shape otherwise. Used by the stateful
+    /// resume / install-time short-circuit sites where the dispatch slot holds
+    /// the only `Rc<CallArena>` for the arena `scope` lives in.
+    ///
+    /// **Reserve-consuming arm** (`Some` reserve): the per-slot reserve was
+    /// rotated in two iterations ago by the Replace arm in `execute.rs`, so
+    /// its scope is past every live tree-borrows protector. The helper:
+    ///
+    /// 1. Pins `self.active_frame` (the slot's current frame) via a local
+    ///    clone — this keeps `scope` alive across the invoke.
+    /// 2. Swaps the reserve into `self.active_frame`. The reserve was uniquely
+    ///    held by `active_reserve` (`SchedulerHandle::current_frame` returns
+    ///    `active_frame`, never `active_reserve`; the only other Rc was the
+    ///    `slot.reserve_frame` field, drained by `take_for_run` and routed
+    ///    through `enter_slot_step`), so `strong_count == 1` on the now-active
+    ///    reserve.
+    /// 3. Calls `invoke_to_step`. Inside,
+    ///    `try_take_reusable_frame_for_tail`'s uniqueness check succeeds on
+    ///    the reserve, the reset lands, and the body runs in the reset arena.
+    /// 4. Restores `self.active_frame = local_pin` so the post-step swap in
+    ///    `execute.rs` sees the slot's frame and can rotate it into the next
+    ///    iteration's reserve.
+    ///
+    /// **Pin-only arm** (`None` reserve, first or second iteration): clones
+    /// `self.active_frame` for the duration of the invoke. Without the pin,
+    /// `KFunction::invoke` would successfully take the frame for tail-reuse
+    /// and `try_reset_for_tail` would deallocate the arena while `scope`'s
+    /// tree-borrows protector is still live (UB). The pin keeps
+    /// `strong_count >= 2` across the invoke, foreclosing the tail-reuse on
+    /// the slot's only frame Rc.
+    ///
+    /// See [design/memory-model.md § Ping-pong reserve frame on stateful
+    /// resume paths](../../../../design/memory-model.md) for the rotation
+    /// design and `recursive_tagged_match_no_uaf` for the Miri witness.
+    pub(super) fn invoke_to_step_pinned(
+        &mut self,
+        future: KFuture<'a>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> NodeStep<'a> {
+        if let Some(reserve) = self.active_reserve.take() {
+            // `local_pin` anchors the slot's frame (and therefore `scope`)
+            // across the invoke; the reserve takes its place as `active_frame`
+            // so tail-reuse consumes the reserve, not the slot's only frame
+            // Rc. Restored after the invoke so the post-step swap in
+            // `execute.rs` reads `active_frame == slot.frame` and can rotate
+            // for the next iteration.
+            let local_pin = self.active_frame.clone();
+            self.active_frame = Some(reserve);
+            let step = self.invoke_to_step(future, scope, idx);
+            self.active_frame = local_pin;
+            step
+        } else {
+            let _frame_pin = self.active_frame.clone();
+            self.invoke_to_step(future, scope, idx)
         }
     }
 }

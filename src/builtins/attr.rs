@@ -25,7 +25,9 @@
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::Module;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, Scope, SchedulerHandle,
+};
 
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -52,9 +54,9 @@ pub fn body_identifier<'a>(
     };
     // Value-side lookup first (the `p.x` shipping path). On a miss, fall back to the
     // type-side: a FUNCTOR's signature-typed parameter is bound *only* into
-    // `bindings.types` post-collapse (the dual-write into `bindings.data` was
-    // dropped — see `KFunction::invoke`'s per-call binding loop), so `Er.pure(x)`
-    // inside the functor body must reach the carried `&Module` through `resolve_type`.
+    // `bindings.types` post-collapse (the paired value-side install was dropped — see
+    // `KFunction::invoke`'s per-call binding loop), so `Er.pure(x)` inside the functor
+    // body must reach the carried `&Module` through `resolve_type`.
     if let Some(target) = scope.lookup(&s_name) {
         return access_field(scope, target, &field_name);
     }
@@ -116,7 +118,7 @@ pub fn body_type_lhs<'a>(
     // nominal *value*-side binding — `KObject::KModule` / `StructType` / `TaggedUnionType`
     // — that lives in `bindings.data`. The post-stage-1.5 `Scope::resolve_type` walks
     // `bindings.types`, where those nominal value carriers don't live until stage 3
-    // dual-writes a `KType::UserType` next to them.
+    // installs a `KType::UserType` next to them.
     let target = match scope.lookup(&s_name) {
         Some(obj) => obj,
         None => return err(KError::new(KErrorKind::UnboundName(s_name))),
@@ -206,7 +208,7 @@ fn access_field<'a>(
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
         KObject::KTypeValue(KType::Signature(s)) => {
             let scope = s.decl_scope();
-            if let Some(obj) = scope.bindings().data().get(field).copied() {
+            if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
                 return BodyResult::Value(obj);
             }
             if let Some(kt) = scope.resolve_type(field) {
@@ -248,7 +250,7 @@ fn access_field<'a>(
 ///    time). Stored as a `KType` directly — return it as a `KTypeValue`.
 /// 2. The child scope's `data` (`LET`/`FN`/`MODULE`/`STRUCT`/... value bindings under
 ///    the module body). Nominal binders like `MODULE Sub = (...)` and `STRUCT P = (...)`
-///    dual-write into both `data` and `bindings.types`; preferring `data` here means
+///    install into both `data` and `bindings.types`; preferring `data` here means
 ///    chained access `Outer.Inner.X` reads the inner *module value* from `data` rather
 ///    than its type identity (which `bindings.types` carries), so the next ATTR step
 ///    can recurse into the inner module's child scope.
@@ -269,7 +271,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
         );
     }
     let scope = m.child_scope();
-    if let Some(obj) = scope.bindings().data().get(field).copied() {
+    if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
         return BodyResult::Value(obj);
     }
     if let Some(kt) = scope.resolve_type(field) {
@@ -324,7 +326,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::builtins::test_support::{
+        parse_one, run, run_one, run_one_err, run_root_silent,
+    };
     use crate::machine::model::KObject;
     use crate::machine::{KErrorKind, RuntimeArena};
 

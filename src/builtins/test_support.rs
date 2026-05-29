@@ -61,6 +61,11 @@ pub(crate) fn parse_one<'a>(src: &str) -> KExpression<'a> {
 
 /// Semantic errors surface via `read_result`, not `execute`; reach for [`run_one_err`] when
 /// the test expects a `KError`.
+///
+/// Uses `add_dispatch` (not `enter_block`) so the submission picks up the detached
+/// auto-root chain — visibility is "complete" against `scope`, so every binding from
+/// prior `run(...)` calls reads through. This matches REPL semantics: a single
+/// expression queried against an existing scope sees everything in it.
 pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
@@ -80,6 +85,13 @@ pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KE
     }
 }
 
+/// REPL-style setup: parse `source` and dispatch each top-level statement
+/// individually via `add_dispatch`, so each picks up the detached auto-root chain
+/// and reads through to every previously-bound name. Chained calls
+/// (`run(scope, "...")` then `run(scope, "...")`) compose because each submission's
+/// visibility is "complete" against `scope`. Tests that need to assert top-level
+/// statement *ordering* (e.g. forward-ref-fails behavior) call `enter_block`
+/// directly instead.
 pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
@@ -95,9 +107,8 @@ pub(crate) fn run<'a>(scope: &'a Scope<'a>, source: &str) {
 /// signature read it from the dispatch surface through this helper. Panics if no overload
 /// or more than one is found under `keyword`.
 pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunction<'a> {
-    let funcs = scope.bindings().functions();
     let mut found: Option<&'a KFunction<'a>> = None;
-    for bucket in funcs.values() {
+    for (_, bucket) in scope.bindings().iter_functions() {
         for f in bucket {
             let first_kw = f.signature.elements.iter().find_map(|e| match e {
                 SignatureElement::Keyword(s) => Some(s.as_str()),
@@ -105,7 +116,7 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
             });
             if first_kw == Some(keyword) {
                 assert!(found.is_none(), "ambiguous: multiple overloads under `{keyword}`");
-                found = Some(*f);
+                found = Some(f);
             }
         }
     }
@@ -117,12 +128,13 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 /// (which can no longer be expressed as `data.get(keyword).is_none()` now that bare FN
 /// keywords never land in `data`).
 pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
-    let funcs = scope.bindings().functions();
-    funcs.values().flatten().any(|f| {
-        f.signature.elements.iter().find_map(|e| match e {
-            SignatureElement::Keyword(s) => Some(s.as_str()),
-            _ => None,
-        }) == Some(keyword)
+    scope.bindings().iter_functions().into_iter().any(|(_, bucket)| {
+        bucket.iter().any(|f| {
+            f.signature.elements.iter().find_map(|e| match e {
+                SignatureElement::Keyword(s) => Some(s.as_str()),
+                _ => None,
+            }) == Some(keyword)
+        })
     })
 }
 

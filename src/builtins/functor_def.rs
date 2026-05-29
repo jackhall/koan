@@ -36,7 +36,9 @@ use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 use crate::machine::model::types::Elaborator;
 use crate::machine::model::KType;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+};
 
 use super::fn_def::finalize::{
     classify, defer_via_combine, finalize_fn_with_flag, FnPlan, ParamListResult,
@@ -78,7 +80,8 @@ pub fn body<'a>(
             )));
         }
     };
-    let body_expr = super::cons::fold_multi_statement(body_expr);
+    // Multi-statement FUNCTOR bodies (`((s_0) ... (s_{N-1}))`) split at
+    // `KFunction::invoke` time, same as FN bodies — no CONS-fold here.
 
     let param_names = collect_param_names_from_signature(&signature_expr);
 
@@ -117,16 +120,32 @@ pub fn body<'a>(
         }
     };
 
+    // FUNCTOR's bind_index: lexical position of the executing slot with the D7
+    // nominal-binder carve-out so siblings on the same block see one another
+    // regardless of source order (mutual recursion across FUNCTORs).
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::nominal(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
+
     match classify(return_type_state, params) {
         FnPlan::Synchronous { elements, return_type } => {
-            finalize_fn_with_flag(scope, elements, return_type, body_expr, true)
+            finalize_fn_with_flag(scope, elements, return_type, body_expr, true, bind_index)
         }
         FnPlan::Combine(inputs) => {
             // `is_functor: true` triggers the FUNCTOR-specific resolved-return
             // admissibility check inside `finalize_fn_with_flag` when the
             // Combine finish lands. No `Box<dyn Fn>` closure — the predicate
             // is a method call on `KType` keyed on the flag.
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, true)
+            defer_via_combine(
+                scope,
+                sched,
+                signature_expr,
+                inputs,
+                body_expr,
+                true,
+                bind_index,
+            )
         }
     }
 }
@@ -181,17 +200,19 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     // strict dispatch pass picks one; `Future(KTypeValue(_))` post-Combine
     // wakes admit only against `TypeExprRef`.
     //
-    // Pre-run hook is the same `fn_def::pre_run` extractor — both binders
-    // place the signature at `parts[1]` and the first `Keyword` in that
-    // signature names the registered function.
-    // FUNCTOR mirrors FN: both pre_run (name-based, for forward-reference name
-    // resolution) and pre_run_bucket (inner-call bucket key, for
-    // pending-overload dispatch parks). The bucket key is the same one a future
-    // call to the registered FUNCTOR overload would compute, so
-    // `resolve_dispatch`'s no-bucket fallback finds this slot and parks on it —
-    // the bare-arg call form `(MAKESET IntOrd)` to a still-finalizing FUNCTOR
-    // binder relies on this entry to avoid racing FIFO submission order into
-    // `DispatchFailed`.
+    // FUNCTOR mirrors FN: register a function by inner-call bucket key
+    // (UntypedKey). Both binders supply `binder_bucket` so a sibling bare-arg
+    // call to a still-finalizing FUNCTOR overload parks on this slot's bucket
+    // entry — `(MAKESET IntOrd)` to a `FUNCTOR (MAKESET Er :OrderedSig) ->
+    // (SIG_WITH …)` binder whose body is parked on a SIG-body Combine. Multiple
+    // sibling FUNCTOR overloads sharing one bucket key all install for it; the
+    // first to finalize writes `functions[bucket]` and the others' installs
+    // become idempotent no-ops.
+    //
+    // No `binder_name` install — same rationale as FN (see fn_def::register).
+    // FUNCTOR does not bind a single name to a value-side carrier; it registers
+    // a callable function in `functions[bucket]`. A name placeholder would
+    // Rebind across sibling overloads.
     register_builtin_full(
         scope,
         "FUNCTOR",
@@ -204,9 +225,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(super::fn_def::pre_run),
-        Some(super::fn_def::pre_run_bucket),
+        None,
+        Some(super::fn_def::binder_bucket),
         false,
+        // FUNCTOR is a nominal binder (D7 carve-out): siblings can refer to one
+        // another regardless of source order — `FUNCTOR A` body can mention `B`
+        // declared after it on the same block. The carve-out rides on
+        // `BindingIndex.nominal_binder`, not on the (absent) `binder_name`.
+        true,
     );
     register_builtin_full(
         scope,
@@ -220,9 +246,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("body", KType::KExpression),
         ]),
         body,
-        Some(super::fn_def::pre_run),
-        Some(super::fn_def::pre_run_bucket),
+        None,
+        Some(super::fn_def::binder_bucket),
         false,
+        // See above.
+        true,
     );
 }
 

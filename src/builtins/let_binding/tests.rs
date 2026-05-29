@@ -21,26 +21,26 @@ fn let_inserts_binding_into_scope() {
     let value = body(scope, &mut sched, ArgumentBundle { args }).expect_value("LET");
     assert!(matches!(value, KObject::Number(n) if *n == 42.0));
     let data = scope.bindings().data();
-    let entry = data.get("x").expect("expected binding 'x'");
+    let (entry, _) = data.get("x").expect("expected binding 'x'");
     assert!(matches!(entry, KObject::Number(n) if *n == 42.0));
 }
 
-/// Smoke test for LET's pre_run extractor: structural extraction of `parts[1]`
+/// Smoke test for LET's binder_name extractor: structural extraction of `parts[1]`
 /// returns the bound name without requiring sub-dispatches.
 #[test]
-fn pre_run_extracts_let_name() {
+fn binder_name_extracts_let_name() {
     use crate::parse::parse;
     let mut exprs = parse("LET hello = 1").expect("parse should succeed");
     let expr = exprs.remove(0);
-    let name = super::pre_run(&expr);
+    let name = super::binder_name(&expr);
     assert_eq!(name.as_deref(), Some("hello"));
 }
 
 /// End-to-end install-then-clear: dispatch `LET x = 1` through the scheduler. The
-/// pre_run hook installs `placeholders["x"] = NodeId(...)` before the body runs;
+/// binder_name hook installs `placeholders["x"] = NodeId(...)` before the body runs;
 /// after the body finalizes via `bind_value`, the placeholder is removed.
 #[test]
-fn pre_run_install_then_body_finalize_clears_placeholder() {
+fn binder_name_install_then_body_finalize_clears_placeholder() {
     use crate::machine::RuntimeArena;
     use crate::machine::execute::Scheduler;
     use crate::builtins::default_scope;
@@ -57,34 +57,33 @@ fn pre_run_install_then_body_finalize_clears_placeholder() {
 }
 
 /// Phase 3: `LET T = T` is a trivially cyclic alias — the RHS references the binder
-/// itself. The eager-resolve pass's `would_create_cycle` check catches the
-/// placeholder-points-at-self condition and surfaces a structured `SchedulerDeadlock`
-/// (the cycle-specific error kind) rather than parking the dispatch on its own
-/// ancestor. Same surface as the Identifier-LHS form (`LET x = x`); both shapes route
-/// through the dispatch driver's Phase 3 cycle arm.
+/// itself. Under index-gated resolution the self-reference is the degenerate "value
+/// LET defined at the same lexical position as the reference" case: the producer's
+/// `Ty` placeholder sits at index `i`, the consumer reads at cutoff `i`, and the
+/// strict `b.idx < c` predicate makes the binding invisible — so the consumer
+/// surfaces `UnboundName` rather than the old self-park cycle path. The
+/// non-nominal-binder carve-out does not apply (LET is value-style gated).
+/// Same surface as the Identifier-LHS form (`LET x = x`).
 #[test]
 fn let_t_cycle_errors() {
     use crate::machine::RuntimeArena;
     use crate::machine::execute::Scheduler;
-    use crate::machine::KErrorKind;
+    use crate::machine::{KErrorKind, SchedulerHandle};
     use crate::builtins::default_scope;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let exprs = parse("LET Ty = Ty").unwrap();
-    let mut ids = Vec::new();
-    for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
-    }
+    let ids = sched.enter_block(scope.id, exprs, scope);
     sched.execute().expect("execute does not surface per-slot errors");
     let res = sched.read_result(ids[0]);
     match res {
         Err(e) => assert!(
-            matches!(&e.kind, KErrorKind::SchedulerDeadlock { sample, .. } if sample.contains("cycle")),
-            "expected SchedulerDeadlock mentioning cycle, got {e}",
+            matches!(&e.kind, KErrorKind::UnboundName(name) if name == "Ty"),
+            "expected UnboundName('Ty'), got {e}",
         ),
-        Ok(v) => panic!("expected cycle error, got value {:?}", v.ktype()),
+        Ok(v) => panic!("expected UnboundName error, got value {:?}", v.ktype()),
     }
 }
 
@@ -163,7 +162,7 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     let res = sched.read_result(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let data = scope.bindings().data();
-    let entry = data.get("foo").expect("expected binding 'foo'");
+    let (entry, _) = data.get("foo").expect("expected binding 'foo'");
     assert!(
         matches!(entry, KObject::Number(n) if *n == 1.0),
         "expected Number(1.0), got {:?}",
@@ -182,7 +181,7 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
-    let exprs = parse("LET :(List Number) = 1").unwrap();
+    let exprs = parse("LET :(LIST OF Number) = 1").unwrap();
     let mut ids = Vec::new();
     for e in exprs {
         ids.push(sched.add_dispatch(e, scope));
@@ -196,38 +195,6 @@ fn let_parameterized_type_lhs_still_shape_errors() {
         ),
         Ok(v) => panic!("expected shape error, got value {:?}", v.ktype()),
     }
-}
-
-/// Stage 3.1 dual-write: `LET IntOrdA = (IntOrd :| OrderedSig)` writes the alias
-/// into `bindings.types` (via `register_nominal`) AND `bindings.data` at the same
-/// scope. The identity preserves the ORIGINAL module's `(scope_id, path)` rather
-/// than minting a fresh nominal — aliasing is type-equivalent.
-#[test]
-fn let_type_class_with_module_carrier_dual_writes() {
-    use crate::machine::RuntimeArena;
-    use crate::machine::model::KType;
-    use crate::builtins::test_support::run;
-    let arena = RuntimeArena::new();
-    let scope = default_scope(&arena, Box::new(std::io::sink()));
-    run(
-        scope,
-        "MODULE IntOrd = (LET compare = 0)\n\
-         SIG OrderedSig = (VAL compare :Number)\n\
-         LET IntOrdA = (IntOrd :| OrderedSig)",
-    );
-    let types = scope.bindings().types();
-    let kt = types
-        .get("IntOrdA")
-        .expect("IntOrdA should be in bindings.types");
-    // Post-collapse: MODULE aliases dual-write `KType::Module { .. }` rather than
-    // the old `UserType { kind: Module, .. }` indirection.
-    assert!(matches!(**kt, KType::Module { .. }));
-    drop(types);
-    let data = scope.bindings().data();
-    let obj = data
-        .get("IntOrdA")
-        .expect("IntOrdA should be in bindings.data");
-    assert!(matches!(obj, KObject::KTypeValue(KType::Module { module: _, frame: _ })));
 }
 
 /// Stage 3.1 aliasing-preserves-identity: `LET Pt = Point` writes a `types[Pt]`
@@ -249,11 +216,11 @@ fn let_aliases_struct_preserves_type_identity() {
          LET Pt = Point",
     );
     let types = scope.bindings().types();
-    let pt: &KType = types
+    let (pt, _): (&KType, _) = types
         .get("Pt")
         .copied()
         .expect("Pt should be in bindings.types after alias");
-    let point: &KType = types
+    let (point, _): (&KType, _) = types
         .get("Point")
         .copied()
         .expect("Point should be in bindings.types");
@@ -364,7 +331,7 @@ fn let_type_class_in_sig_body_still_works() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "SIG WithType = ((LET Type = Number) (VAL zero :Number))");
-    let s = match scope.bindings().data().get("WithType") {
+    let s = match scope.bindings().data().get("WithType").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Signature(s))) => *s,
         other => panic!("WithType should be a signature, got {:?}", other.map(|o| o.ktype())),
     };
@@ -375,8 +342,8 @@ fn let_type_class_in_sig_body_still_works() {
     );
 }
 
-/// LET partition guard (design/typing/elaboration.md § Binding home and the
-/// dual-map): `LET <name> = <m>` where `name` is value-classified (lowercase-
+/// LET partition guard (design/typing/elaboration.md § Binding-map partition):
+/// `LET <name> = <m>` where `name` is value-classified (lowercase-
 /// leading) and the RHS evaluates to a module value must reject at the LET
 /// site. Module / signature carriers belong on Type-classified identifiers
 /// only; this test pins the diagnostic so the partition rule has a regression

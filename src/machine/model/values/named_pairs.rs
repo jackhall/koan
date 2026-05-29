@@ -1,7 +1,7 @@
 //! Shared parser for named-argument lists. Used by struct construction
 //! ([`crate::builtins::struct_value::apply`]) and first-class function calls
-//! ([`KFunction::apply`](crate::machine::core::kfunction::KFunction)) — the two
-//! paths that switched from positional to named arguments.
+//! ([`KFunction::reconstruct_positional`](crate::machine::core::kfunction::KFunction::reconstruct_positional)) —
+//! the two paths that switched from positional to named arguments.
 //!
 //! Two surface forms are accepted:
 //!

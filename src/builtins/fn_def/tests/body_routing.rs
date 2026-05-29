@@ -14,26 +14,17 @@ use crate::machine::{KErrorKind, RuntimeArena};
 // `part_references_any`. Each test forces the scan to detect a parameter reference
 // inside a return-type carrier and re-route the FN through `ReturnType::Deferred(_)`. ---
 
-/// `type_expr_references_any` `TypeParams::Function { args, ret }` arm: a Function-arrow
-/// return type whose `args` carry a parameter-name leaf must defer the return type so
-/// per-call elaboration handles the parameter binding. Uses the Type-classified
-/// parameter-name shape (`Er` per Stage A) since Function's `args` slot rejects lowercase
-/// identifier-class tokens at parse time.
-#[test]
-fn fn_def_function_arrow_return_type_with_param_ref_defers() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "SIG OrderedSig = (VAL compare :Number)\n\
-         FN (USE Er :OrderedSig) -> :(Function (Number) -> Er) = (1)",
-    );
-    let f = lookup_fn(scope, "USE");
-    assert!(
-        matches!(f.signature.return_type, ReturnType::Deferred(_)),
-        "USE return type should be Deferred (Function-arrow referencing param `Er`)",
-    );
-}
+// Deleted (Function-arrow-return-type-with-param-ref defers): the
+// pre-type-language-via-dispatch surface `:(Function (Number) -> Er)` relied on
+// parser-fold of the Function-arrow form into a single `TypeExpr` carrying a
+// `TypeParams::Function` shape, then ran `type_expr_references_any` on that
+// folded form to detect `Er`. Post-type-language-via-dispatch the parser does
+// no fold — `:(FN (...) -> Er)` is a `SigiledTypeExpr` whose inner expression
+// sub-dispatches under the parent scope where `Er` resolves to its signature
+// carrier. The Function-arrow `TypeParams::Function` arm of
+// `type_expr_references_any` is now unreachable from any parser-emitted
+// shape; the param-ref-deferral coverage rides on the parens-form sibling
+// tests below (`fn_def_parens_return_type_with_*_param_ref_defers`).
 
 /// `part_references_any` `Identifier` arm: parens-form return type carrying a bare
 /// lowercase identifier matching a parameter name must defer.
@@ -167,25 +158,13 @@ fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
     );
 }
 
-/// `make_capture`'s `TypeParams::List | Function` arm: a parameterized forward-LET
-/// return type (`:(List MyT)`) routes through `ReturnTypeCapture::TypeExpr(te)` so the
-/// parser-preserved structure survives the Combine boundary.
-#[test]
-fn fn_def_forward_let_parameterized_return_type_resolves_after_wake() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "FN (NUMS) -> :(List MyT) = ([1])\n\
-         LET MyT = Number",
-    );
-    let f = lookup_fn(scope, "NUMS");
-    assert_eq!(
-        f.signature.return_type,
-        ReturnType::Resolved(KType::List(Box::new(KType::Number))),
-        "NUMS return type should resolve to List<Number> after LET wakes",
-    );
-}
+// `fn_def_forward_let_parameterized_return_type_resolves_after_wake` removed:
+// the legacy positional `:(List MyT)` form is no longer routed through the
+// dispatcher (the `TypeCall` arm is deleted; only the field-walker's
+// `try_synth_legacy` path serves the legacy positional shape, and FN return
+// types don't go through that path). The keyworded `:(LIST OF MyT)` form
+// resolves through the keyworded dispatch path, which the
+// `make_capture::TypeParams::List | Function` arm doesn't exercise.
 
 // ---------- Combine-finish error paths: a sub-Dispatched param or return-type slot
 // that resolves to a non-`KTypeValue` result. -------------------------------------------

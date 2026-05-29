@@ -179,6 +179,14 @@ bound to a per-variant payload struct. No matching arm and no `_` →
 re-raise the original `KError`. Success with no `ok` arm and no `_` →
 synthetic `ShapeError("TRY missing ok arm")`.
 
+The TRY body and each WITH arm are independent lexical blocks: any
+`LET` introduced inside the body or an arm binds into that arm's own
+scope and does not survive past the `TRY` (see the arm-as-block
+treatment in [execution-model.md § Lexical provenance chain](execution-model.md#lexical-provenance-chain)).
+This is the structural reason a `LET x` inside a TRY body is not a
+`Rebind` of an enclosing `x`, and equally the reason a fresh `LET y`
+inside the body is not visible to code following the `TRY`.
+
 The branch walker is shared with `MATCH`
 ([`branch_walk::find_branch_body`](../src/builtins/branch_walk.rs));
 TRY opts into `_` wildcard support, MATCH does not. The catching wiring

@@ -1,4 +1,4 @@
-//! Per-call type-side dual-write — functor bodies see the right `KType` for module-typed params at dispatch time.
+//! Per-call type-side bind — functor bodies see the right `KType` for module-typed params at dispatch time.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::model::{KObject, KType};
@@ -30,21 +30,22 @@ fn functor_body_module_dispatch_does_not_dangle() {
     run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
 
     let data = scope.bindings().data();
-    let m = match data.get("HeldSet") {
+    let m = match data.get("HeldSet").map(|(o, _)| *o) {
         Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
         other => panic!("HeldSet should be a module, got {:?}", other.map(|o| o.ktype())),
     };
-    let inner = m.child_scope().bindings().data().get("inner").copied();
+    let inner = m.child_scope().bindings().data().get("inner").map(|(o, _)| *o);
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
             "HeldSet.inner must still read 1.0 after subsequent churn");
 }
 
-/// Functor body resolves a type-class parameter via the per-call dual-write: without
-/// it the body's auto-wrapped `(Er)` would hit `UnboundName` against the FN's
-/// captured outer scope. Uses opaque ascription (`:|`) so the bound module carries
-/// an abstract `Type` member for `MODULE_TYPE_OF` to return.
+/// Functor body resolves a type-class parameter via the per-call type-side
+/// bind: without it the body's auto-wrapped `(Er)` would hit `UnboundName`
+/// against the FN's captured outer scope. Uses opaque ascription (`:|`) so
+/// the bound module carries an abstract `Type` member for `MODULE_TYPE_OF`
+/// to return.
 #[test]
-fn functor_body_module_type_of_via_dual_write() {
+fn functor_body_module_type_of_via_per_call_bind() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -73,12 +74,13 @@ fn functor_body_module_type_of_via_dual_write() {
     }
 }
 
-/// Type-side dual-write survives closure escape: an inner FN returned from an outer
-/// functor reads its captured `Er` from the outer's per-call `bindings.types` even
-/// after the outer call has returned. The `KFunction(&fn, Some(Rc<CallArena>))` lift
-/// pins the value-side arena; this test pins the type-side entry alongside it.
+/// Per-call type-side bind survives closure escape: an inner FN returned from
+/// an outer functor reads its captured `Er` from the outer's per-call
+/// `bindings.types` even after the outer call has returned. The
+/// `KFunction(&fn, Some(Rc<CallArena>))` lift pins the value-side arena; this
+/// test pins the type-side entry alongside it.
 #[test]
-fn functor_closure_escape_pins_type_class_dual_write() {
+fn functor_closure_escape_pins_type_class_bind() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(

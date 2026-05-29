@@ -2,7 +2,7 @@
 //! FUNCTOR arguments. Pins the widening to
 //! [`KType::Type::accepts_part`](crate::machine::model::types) — bare
 //! `KTypeValue(_)` carriers other than `Module { .. }` / `Signature(_)`
-//! admit, the per-call dual-write installs the carried `KType` into
+//! admit, the per-call type-side install registers the carried `KType` into
 //! `bindings.types`, and the deferred-return re-elaboration path is
 //! agnostic to whether the bound carrier is a builtin or a nominal
 //! type. See [`roadmap/type_language/bare-type-token-functor-arg.md`].
@@ -88,13 +88,13 @@ fn functor_admits_bare_str_bool_null_tokens_at_type_slot() {
     }
 }
 
-/// Per-call dual-write: with the bare-token admission flipped on, the
+/// Per-call type-side bind: with the bare-token admission flipped on, the
 /// per-call `bindings.types` entry for `Elt` is the carried `KType` (e.g.
 /// `KType::Number`). The body's `(LET ElemType = Elt)` resolves `Elt`
 /// through the per-call type-side scope and registers `ElemType` as that
 /// same `KType` on the returned module's `type_members`. Reading the
-/// registered abstract-type identity back pins that the dual-write landed
-/// and is observable through the lifted module.
+/// registered abstract-type identity back pins that the type-side entry
+/// landed and is observable through the lifted module.
 #[test]
 fn functor_per_call_type_side_bind_is_observable_via_module_type_members() {
     let arena = RuntimeArena::new();

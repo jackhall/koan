@@ -1,7 +1,10 @@
 use std::rc::Rc;
 
 use crate::machine::model::KObject;
-use crate::machine::{CallArena, CatchFinish, CombineFinish, KError, NodeId, Scope, SchedulerHandle};
+use crate::machine::{
+    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, SchedulerHandle,
+};
+use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
 
 use super::nodes::NodeWork;
@@ -11,6 +14,10 @@ use work_queues::WorkQueues;
 
 mod dep_graph;
 mod dispatch;
+/// Carrier shape ridden by every `NodeWork::Dispatch`. Visible up to
+/// `crate::machine::execute` because `nodes.rs` (a sibling of
+/// `scheduler.rs`) names `DispatchState` in `NodeWork::Dispatch`.
+pub(in crate::machine::execute) mod dispatch_state;
 mod execute;
 mod finish;
 mod literal;
@@ -66,6 +73,24 @@ pub struct Scheduler<'a> {
     /// so frame-creating builtins (MATCH) can chain it onto their new frame; see
     /// [memory-model.md § Per-call-frame chaining](../../../design/memory-model.md#per-call-frame-chaining-for-builtin-built-frames).
     pub(in crate::machine::execute::scheduler) active_frame: Option<Rc<CallArena>>,
+    /// Lexical chain of the slot currently executing. Mirrors `active_frame`'s
+    /// save/restore pattern. `Scheduler::add` reads this to attach a chain to every
+    /// sub-slot that doesn't carry an explicit `enter_block` chain — that's how
+    /// internal binder sub-dispatches (CONS-head, FN signature subs, NEWTYPE value
+    /// sub, USING-body) inherit the parent's chain without each call site naming it.
+    pub(in crate::machine::execute::scheduler) active_chain: Option<Rc<LexicalFrame>>,
+    /// Per-slot reserve frame installed for the duration of the running slot's
+    /// step. Read by `invoke_to_step_pinned`'s reserve-swap arm: when `Some`,
+    /// the helper takes it, pins `active_frame` aside, installs the reserve as
+    /// the new `active_frame`, and lets `try_take_reusable_frame_for_tail`
+    /// consume it (its strong count is 1 — the slot's `frame` field carries the
+    /// pinned local, the reserve was uniquely held). The Replace arm rotates
+    /// the post-step frame into the reinstalled `Node`'s `reserve_frame` for
+    /// the next iteration. `None` between slot steps; `enter_slot_step` /
+    /// `exit_slot_step` save and restore around the step. See
+    /// [design/memory-model.md § Ping-pong reserve frame on stateful resume
+    /// paths](../../../design/memory-model.md).
+    pub(in crate::machine::execute::scheduler) active_reserve: Option<Rc<CallArena>>,
     /// Count of tail-reuse opportunities accepted by
     /// `try_take_reusable_frame_for_tail`. Test-only observable; the production
     /// path returns `Some`/`None` without touching this field's gate.
@@ -73,13 +98,90 @@ pub struct Scheduler<'a> {
     pub(in crate::machine::execute::scheduler) tail_reuse_count: usize,
 }
 
+/// RAII-shaped save/restore wrapper around the per-step `active_frame`,
+/// `active_chain`, and `active_reserve` swap that brackets each iteration of
+/// [`Scheduler::execute`].
+///
+/// `enter_slot_step` installs the running slot's `frame`, `chain`, and
+/// reserve into the scheduler's ambient slots, parking the previous values
+/// in the guard. `exit_slot_step` mem-replaces the originals back in and
+/// hands the caller the post-step frame and reserve (the frame may differ
+/// from the entered frame if the step took it via
+/// `try_take_reusable_frame_for_tail`; the reserve is typically `None`
+/// after a reserve-consuming invoke).
+///
+/// This is the bookkeeping spine for the ping-pong reserve frame rotation
+/// (see [design/memory-model.md § Ping-pong reserve frame on stateful
+/// resume paths](../../../design/memory-model.md)).
+pub(in crate::machine::execute::scheduler) struct SlotStepGuard {
+    prev_frame: Option<Rc<CallArena>>,
+    prev_chain: Option<Rc<LexicalFrame>>,
+    /// Saves the scheduler's previous `active_reserve` so a nested slot run
+    /// (today: combinator finish closures) doesn't accidentally inherit the
+    /// outer slot's reserve frame. The Replace arm reads the returned
+    /// post-step reserve from `exit_slot_step` to decide whether to drop or
+    /// carry forward.
+    prev_reserve: Option<Rc<CallArena>>,
+}
+
 impl<'a> Scheduler<'a> {
+    /// Install `node_frame` as `active_frame`, `node_chain` as `active_chain`,
+    /// and `node_reserve` as `active_reserve` for the duration of one slot's
+    /// step. Returns a guard the caller must hand to
+    /// [`Scheduler::exit_slot_step`] when the step returns. The `node_chain`
+    /// Rc is cloned at exactly one point (here) — the caller may retain its
+    /// own clone for the Replace arm without bumping the count a second time.
+    /// `node_reserve` (the slot's `Node::reserve_frame`) is consumed by
+    /// `invoke_to_step_pinned` when present; passing it through the guard
+    /// keeps the reserve scoped to exactly this step and isolates nested slot
+    /// runs from each other.
+    pub(in crate::machine::execute::scheduler) fn enter_slot_step(
+        &mut self,
+        node_frame: Option<Rc<CallArena>>,
+        node_reserve: Option<Rc<CallArena>>,
+        node_chain: Rc<LexicalFrame>,
+    ) -> SlotStepGuard {
+        let prev_frame = std::mem::replace(&mut self.active_frame, node_frame);
+        let prev_chain = self.active_chain.replace(node_chain);
+        let prev_reserve = std::mem::replace(&mut self.active_reserve, node_reserve);
+        SlotStepGuard { prev_frame, prev_chain, prev_reserve }
+    }
+
+    /// Restore the previous `active_frame`/`active_chain`/`active_reserve`
+    /// saved by [`Scheduler::enter_slot_step`] and return
+    /// `(post_step_frame, post_step_reserve)` — the values the Replace and
+    /// Done arms read inline.
+    ///
+    /// `post_step_frame` is `Some(frame)` if the step left the slot's frame
+    /// intact (Done with a frame, or Replace that didn't consume it via
+    /// tail-reuse) and `None` if the step took it via
+    /// `try_take_reusable_frame_for_tail`.
+    ///
+    /// `post_step_reserve` is what's left of `active_reserve` after the step.
+    /// Typically `None` because `invoke_to_step_pinned` consumes the reserve
+    /// when present; carries through unchanged when the step didn't run an
+    /// invoke (e.g. binds/combines that don't go through the pinned helper).
+    /// The Replace arm reads this to decide rotation: with a new frame, the
+    /// post-step reserve is two iterations old and gets dropped; with no new
+    /// frame (carry-through), it rides along on the reinstalled node.
+    pub(in crate::machine::execute::scheduler) fn exit_slot_step(
+        &mut self,
+        guard: SlotStepGuard,
+    ) -> (Option<Rc<CallArena>>, Option<Rc<CallArena>>) {
+        let post_step_frame = std::mem::replace(&mut self.active_frame, guard.prev_frame);
+        self.active_chain = guard.prev_chain;
+        let post_step_reserve = std::mem::replace(&mut self.active_reserve, guard.prev_reserve);
+        (post_step_frame, post_step_reserve)
+    }
+
     pub fn new() -> Self {
         Self {
             queues: WorkQueues::new(),
             deps: DepGraph::new(),
             store: NodeStore::new(),
             active_frame: None,
+            active_chain: None,
+            active_reserve: None,
             #[cfg(test)]
             tail_reuse_count: 0,
         }
@@ -87,6 +189,14 @@ impl<'a> Scheduler<'a> {
 
     #[cfg(test)]
     pub fn tail_reuse_count(&self) -> usize { self.tail_reuse_count }
+
+    /// Test-only chain peek. Returns the `LexicalFrame` chain attached to slot
+    /// `id`. Only valid before the slot terminalizes — once a slot is `Done` the
+    /// payload (and its chain) has been moved out by `take_for_run`.
+    #[cfg(test)]
+    pub fn chain_of(&self, id: NodeId) -> Option<Rc<LexicalFrame>> {
+        self.store.chain_of(id)
+    }
 
     pub fn len(&self) -> usize { self.store.len() }
     pub fn is_empty(&self) -> bool { self.store.is_empty() }
@@ -115,7 +225,12 @@ impl<'a> Default for Scheduler<'a> {
 
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
     fn add_dispatch(&mut self, expr: KExpression<'a>, scope: &'a Scope<'a>) -> NodeId {
-        Scheduler::add(self, NodeWork::Dispatch(expr), scope)
+        // Delegate to the inherent method so both `sched.add_dispatch(...)` (direct
+        // struct call from test harnesses / the interpret driver) and the trait
+        // method (sub-dispatches from inside a builtin body) share the same
+        // auto-root behavior for top-level submissions and ambient-inherit for
+        // sub-dispatches.
+        Scheduler::add_dispatch(self, expr, scope)
     }
 
     fn add_combine(
@@ -173,5 +288,42 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
             self.active_frame = Some(candidate);
             None
         }
+    }
+
+    fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>> {
+        self.active_chain.clone()
+    }
+
+    fn enter_block(
+        &mut self,
+        scope_id: ScopeId,
+        statements: Vec<KExpression<'a>>,
+        scope: &'a Scope<'a>,
+    ) -> Vec<NodeId> {
+        let parent = self.active_chain.clone();
+        // Statement indices start at 1 (not 0): the visibility predicate is strict
+        // less-than (`b.idx < c`), and builtins sit at `idx = 0`. A top-level user
+        // statement at index 1 has cutoff 1, so `0 < 1` makes builtins visible.
+        // Indices reset per `enter_block` call; a REPL / test-fixture submission
+        // against a scope already holding bindings goes through the detached
+        // auto-root path in `add` instead (no ambient chain), which makes those
+        // bindings visible via the `index_for → None ⇒ complete` arm.
+        statements
+            .into_iter()
+            .enumerate()
+            .map(|(i, expr)| {
+                let chain = LexicalFrame::push(parent.clone(), scope_id, i + 1);
+                self.add_dispatch_with_chain(expr, scope, chain)
+            })
+            .collect()
+    }
+
+    fn add_dispatch_with_chain(
+        &mut self,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId {
+        Scheduler::add_with_chain(self, NodeWork::dispatch(expr), scope, Some(chain))
     }
 }

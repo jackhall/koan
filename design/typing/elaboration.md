@@ -65,7 +65,7 @@ Number` finalizes, and writes through `Scope::register_type` to land in
 `bindings.types`. The mutual-recursion SCC sweep covers the cycle case;
 the placeholder-park rail covers the source-order case.
 
-## Binding home and the dual-map
+## Binding-map partition
 
 Type bindings live in a separate map from value bindings. The
 [`Bindings`](../../src/machine/core/bindings.rs) façade owns four maps:
@@ -94,10 +94,11 @@ binder's output). Plain `KFunction` rejects, closing the
 `LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole
 that a pure value-shape gate cannot discriminate; the `is_functor` flag
 is the discrimination signal. Module and signature LET aliases route through
-`register_nominal` to dual-write the identity carrier into `bindings.types`
-(modules preserve their `KType::Module` carrier verbatim; signatures lower
-to the `KType::SatisfiesSignature` constraint form so a slot typed by the
-alias dispatches identically to the original); pure-type `KTypeValue(kt)`
+`register_nominal` to install the identity carrier into `bindings.types`
+alongside the value-side carrier in `bindings.data` (modules preserve their
+`KType::Module` carrier verbatim; signatures lower to the
+`KType::SatisfiesSignature` constraint form so a slot typed by the alias
+dispatches identically to the original); pure-type `KTypeValue(kt)`
 carriers (Number, etc.) take `register_type` directly; `is_functor`
 KFunctions and `Struct` / `Tagged` carriers fall through to `bind_value`.
 

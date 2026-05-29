@@ -3,9 +3,10 @@
 //! Two entry points:
 //! - [`parse_fn_param_list`] — full structural parse at FN construction time. Returns
 //!   [`ParamListOutcome`] so unresolved parameter types can route through a `Combine`.
-//! - [`pre_run`] — dispatch-time placeholder extractor that announces the function's name
+//! - [`binder_name`] — dispatch-time placeholder extractor that announces the function's name
 //!   before its body runs.
 
+use crate::machine::core::source::Spanned;
 use crate::machine::model::{Argument, KObject, SignatureElement};
 use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
 use crate::machine::NodeId;
@@ -33,6 +34,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
                 next,
                 Some(ExpressionPart::Type(_))
                     | Some(ExpressionPart::Expression(_))
+                    | Some(ExpressionPart::SigiledTypeExpr(_))
                     | Some(ExpressionPart::Future(_))
             );
             if next_is_type_slot {
@@ -127,6 +129,23 @@ pub(crate) fn parse_fn_param_list<'a>(
                         sub_dispatches.push((i + 1, (**boxed).clone()));
                         i += 2;
                     }
+                    Some(ExpressionPart::SigiledTypeExpr(boxed)) => {
+                        // `:(...)` slot in `name :(...)` annotation. Always sub-Dispatch
+                        // the wrapped SigiledTypeExpr through the dispatcher — the
+                        // same path the `Expression(_)` arm above takes. The dispatcher
+                        // routes the unwrapped inner expression through its standard
+                        // classifier (Keyworded for `:(LIST OF Number)`, TypeCall for
+                        // legacy positional `:(List Number)`, etc.) and returns a
+                        // type-side carrier the Combine finish splices back as
+                        // `Future(_)`. Synchronous shortcut removed in this iteration —
+                        // any sibling-binder placeholder collision must be diagnosed at
+                        // its real source, not papered over here.
+                        let wrapped = KExpression::new(vec![Spanned::bare(
+                            ExpressionPart::SigiledTypeExpr(boxed.clone()),
+                        )]);
+                        sub_dispatches.push((i + 1, wrapped));
+                        i += 2;
+                    }
                     Some(ExpressionPart::Future(KObject::KTypeValue(kt))) => {
                         elements.push(SignatureElement::Argument(Argument {
                             name: name.clone(),
@@ -179,7 +198,7 @@ pub(crate) fn parse_fn_param_list<'a>(
 /// `Expression(signature_expr)` whose first `Keyword` is the function's registered name.
 /// Returns `None` if the signature slot is missing or malformed — `body`'s full parse
 /// surfaces the real `ShapeError`.
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     let signature_expr = signature_expr_part(expr)?;
     for part in &signature_expr.parts {
         if let ExpressionPart::Keyword(s) = &part.value {
@@ -203,7 +222,7 @@ pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
 ///
 /// Returns `None` only when the signature slot itself is missing or non-expression —
 /// the rare cases where there's no signature to read a key out of.
-pub(crate) fn pre_run_bucket(
+pub(crate) fn binder_bucket(
     expr: &KExpression<'_>,
 ) -> Option<crate::machine::model::types::UntypedKey> {
     use crate::machine::model::types::UntypedElement;
@@ -223,6 +242,7 @@ pub(crate) fn pre_run_bucket(
                         p.value,
                         ExpressionPart::Type(_)
                             | ExpressionPart::Expression(_)
+                            | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::Future(_)
                     )
                 });
@@ -239,6 +259,7 @@ pub(crate) fn pre_run_bucket(
                         p.value,
                         ExpressionPart::Type(_)
                             | ExpressionPart::Expression(_)
+                            | ExpressionPart::SigiledTypeExpr(_)
                             | ExpressionPart::Future(_)
                     )
                 });
@@ -258,7 +279,7 @@ pub(crate) fn pre_run_bucket(
 }
 
 /// Shared "extract the signature expression at `parts[1]`" helper for the two
-/// pre-run extractors. Returns `None` on shape mismatch; the binder body surfaces
+/// binder extractors. Returns `None` on shape mismatch; the binder body surfaces
 /// the structured `ShapeError`.
 fn signature_expr_part<'a, 'e>(expr: &'e KExpression<'a>) -> Option<&'e KExpression<'a>> {
     let sig_part = expr.parts.get(1)?;
@@ -267,3 +288,4 @@ fn signature_expr_part<'a, 'e>(expr: &'e KExpression<'a>) -> Option<&'e KExpress
         _ => None,
     }
 }
+

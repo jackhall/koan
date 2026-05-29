@@ -1,5 +1,23 @@
 # Modular implicits
 
+Implicit module parameters are the **call-site witness-elision layer** over
+koan's existing first-class module + signature machinery. The capability to
+write generic dictionary-style polymorphism is already in the language:
+[`modules.md`](modules.md) covers first-class module values and
+signature-typed slots, and the dispatcher already picks behavior by
+signature satisfaction. What an implicit parameter adds is the ability to
+*omit* the witness module at the call site — a runtime `SEARCH_IMPLICIT`
+builtin walks lexical scope for a module satisfying the parameter's
+signature constraint and threads it in.
+
+That layering matters because it scopes the design surface. The hard work
+— modules and signatures as values, dispatch on signature constraints,
+ascription, opacity — is shared with the explicit-module path. The
+modular-implicits design is just the resolution algorithm, the coherence
+story, and the surface form. Compare OCaml, where signatures aren't
+first-class values at all; modular implicits there have to extend the
+module language itself.
+
 A function can declare an **implicit module parameter**:
 
 ```

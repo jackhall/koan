@@ -11,3 +11,4 @@ observe/test_overlap.json
 observe/test_overlap_raw.json
 observe/.profraw-staging/
 *.profraw
+.claude/scheduled_tasks.lock

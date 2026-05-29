@@ -135,20 +135,41 @@ PRINT msg          # prints "hi" — `msg` in PRINT's value slot resolves to "hi
 LET copy = msg     # binds `copy` to "hi", not to the literal string "msg"
 ```
 
-A name lookup whose binder hasn't run yet — a forward reference between
-sibling top-level expressions — *parks* on the producer rather than
-failing. Once the binder finishes, the consumer wakes and resumes:
+Name resolution is **lexical**: a reference sees a binding only if the
+binding lexically precedes it. A forward value reference between sibling
+top-level expressions is `UnboundName`:
 
 ```
 LET y = x
 LET x = 42
+PRINT y            # UnboundName: x
+```
+
+Reorder to put the binder first and the reference resolves:
+
+```
+LET x = 42
+LET y = x
 PRINT y            # prints 42
 ```
 
-A name that no binder ever introduces still surfaces as `UnboundName`.
+Nominal binders — `STRUCT`, named `UNION`, `SIG`, `FUNCTOR`, `MODULE` —
+carve themselves out of the lexical rule: their declared names are visible
+to siblings on both sides, so mutual references between sibling type
+declarations work without reordering. Function bodies re-dispatch each time
+they're called against the body's own lexical chain, so mutual recursion
+between sibling FNs works (each call resolves the other from inside an
+already-running body, not from the outer block's cutoff).
+
+A name that no binder visibly introduces surfaces as `UnboundName`.
 Re-binding a value name in the same scope surfaces as `Rebind`; shadowing
 across nested scopes (a child block, a function body) is allowed and is
 how lexical scoping works.
+
+A *visible* binding whose producer hasn't finished computing — typically a
+binding whose right-hand side is still running — *parks* the consumer on
+the producer rather than failing; the consumer wakes and resumes once the
+producer's value lands.
 
 When you write an expression, Koan picks which function (builtin or
 user-defined) to run by matching the *shape* of what you wrote — the
@@ -523,7 +544,9 @@ plus `it.frames :List<Str>` (one entry per call frame, rendered
 `"in <expression> (<function>)"`). The `ok` arm binds `it` to the bare
 success value, not a wrapper. No matching arm and no `_` re-raises the
 original error; a successful expression with no `ok` arm raises a
-synthetic `ShapeError`. See
+synthetic `ShapeError`. The TRY body and each WITH arm are their own
+lexical blocks — a `LET` inside the body or an arm is local to that
+arm and is not visible after the `TRY`. See
 [design/error-handling.md](design/error-handling.md) for the full per-arm
 shape table.
 
@@ -567,7 +590,7 @@ One line per surface form. Sources under
 | `MATCH <value:Tagged> WITH (<branches>)` | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/builtins/match_case.rs)          |
 | `TRY (<expr>) WITH (<branches>)`         | Evaluate `<expr>` in a catching context; branch on `ok` / the `KErrorKind` tags / `_`. `it` is the value (success) or per-variant payload (error). | [try_with.rs](src/builtins/try_with.rs)              |
 | `<verb:TypeExprRef> (<args>)`            | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/builtins/type_call.rs)            |
-| `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [call_by_name.rs](src/builtins/call_by_name.rs)      |
+| `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [scheduler/dispatch.rs](src/machine/execute/scheduler/dispatch.rs) (`stateful_fast_lane_function_value_call`) |
 | `<s>.<field>` (`ATTR <s> <field>`)       | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/builtins/attr.rs)                      |
 | `<v:Identifier>` (single-part)           | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/builtins/value_lookup.rs)      |
 | `<v>` (single-part literal/expr)         | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/builtins/value_pass.rs)          |

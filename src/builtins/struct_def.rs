@@ -4,8 +4,8 @@ use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
+    Resolution, Scope, SchedulerHandle,
 };
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
@@ -14,7 +14,7 @@ use crate::machine::model::types::{
 use crate::machine::model::ast::KExpression;
 
 use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
-use super::{arg, err, kw, register_builtin_with_pre_run, sig};
+use super::{arg, err, kw, register_nominal_binder, sig};
 
 /// `STRUCT <name:TypeExprRef> = (<schema>)` — declare a named record type.
 ///
@@ -83,16 +83,26 @@ pub fn body<'a>(
         "STRUCT schema",
         &mut elaborator,
     );
+    // STRUCT is a nominal binder (D7 carve-out): the placeholder install at submission
+    // already stamped `nominal_binder: true`; the eventual `register_nominal` must
+    // carry the same flag so the visibility tag stays consistent across the
+    // placeholder → finalized-binding transition.
+    let bind_index = sched
+        .current_lexical_chain()
+        .map(|chain| BindingIndex::nominal(chain.index))
+        .unwrap_or(BindingIndex::BUILTIN);
     match outcome {
-        FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields),
+        FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields, bind_index),
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
-        FieldListOutcome::Park(producers) => defer_struct_via_combine(
+        FieldListOutcome::Pending { park_producers, sub_dispatches } => defer_struct_via_combine(
             scope,
             sched,
             name,
             schema_expr,
-            producers,
+            park_producers,
+            sub_dispatches,
             pending_guard,
+            bind_index,
         ),
     }
 }
@@ -103,6 +113,7 @@ fn finalize_struct<'a>(
     scope: &'a Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
     // Pending-types lifecycle is owned by the caller's `PendingBinderGuard`; the
     // guard drops on body / Combine-finish return and removes the entry. Cycle-close
@@ -116,8 +127,8 @@ fn finalize_struct<'a>(
     // arm which tolerates a pre-installed identity, but cannot tolerate a
     // pre-installed carrier.
     let bindings = scope.bindings();
-    if bindings.types().get(&name).is_some() {
-        if let Some(existing) = bindings.data().get(&name).copied() {
+    if bindings.lookup_type(&name, None).is_some() {
+        if let Some(Resolution::Value(existing)) = bindings.lookup_value(&name, None) {
             return BodyResult::Value(existing);
         }
     }
@@ -144,29 +155,67 @@ fn finalize_struct<'a>(
         scope_id,
         name: name.clone(),
     };
-    match scope.register_nominal(name, identity, struct_obj) {
+    match scope.register_nominal(name, identity, struct_obj, bind_index) {
         Ok(obj) => BodyResult::Value(obj),
         Err(e) => err(e),
     }
 }
 
-/// Schedule a `Combine` over `producers` and re-run the schema elaboration in the finish
-/// closure. Same shape MODULE / SIG / FN-def use post-phase-3. `pending_guard` is moved
-/// into the closure so the `pending_types` entry survives the wait and is dropped
-/// regardless of which finish arm fires.
+/// Schedule a `Combine` over `park_producers` plus any pending sub-Dispatches
+/// from keyworded sigiled-type-expression slots (`xs :(LIST OF Number)`, etc.)
+/// and re-run the schema elaboration in the finish closure. `pending_guard`
+/// is moved into the closure so the `pending_types` entry survives the wait
+/// and is dropped regardless of which finish arm fires.
+///
+/// Combine layout: `[park_producers ++ owned_subs...]`. `splice_layout[k]
+/// = (slot_idx, results_pos)` says "splice `results[results_pos]` into
+/// `schema_expr.parts[slot_idx]` as `Future(_)` before re-running the walk".
+/// Park producers are existing sibling slots the schema reads but does NOT
+/// own; owned subs are sigil sub-Dispatches scheduled here. Mirrors FN-def's
+/// `defer_via_combine` shape.
+#[allow(clippy::too_many_arguments)] // load-bearing inputs; bundling them in a
+                                     // struct would obscure the data flow.
 fn defer_struct_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     name: String,
     schema_expr: KExpression<'a>,
-    producers: Vec<NodeId>,
+    park_producers: Vec<NodeId>,
+    sub_dispatches: Vec<(usize, KExpression<'a>)>,
     pending_guard: PendingBinderGuard<'a>,
+    bind_index: BindingIndex,
 ) -> BodyResult<'a> {
+    use crate::machine::model::ast::ExpressionPart;
     let name_for_finish = name.clone();
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
+    // Build the splice layout BEFORE scheduling so each sub-Dispatch's
+    // `results_pos` matches its insertion order in the combined deps vector.
+    let park_count = park_producers.len();
+    let mut owned_subs: Vec<NodeId> = Vec::with_capacity(sub_dispatches.len());
+    let mut splice_layout: Vec<(usize, usize)> = Vec::with_capacity(sub_dispatches.len());
+    for (slot_idx, sub_expr) in sub_dispatches {
+        let id = sched.add_dispatch(sub_expr, scope);
+        splice_layout.push((slot_idx, park_count + owned_subs.len()));
+        owned_subs.push(id);
+    }
+    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
         // Move the guard into the closure's frame so its Drop runs on closure exit
         // regardless of finish arm.
         let _pending_guard = pending_guard;
+        // Splice sub-Dispatch results into the schema as `Future(_)` carriers.
+        // The re-walk's `Future(KTypeValue(_))` arm picks them up.
+        let mut spliced_parts = schema_expr.parts.clone();
+        for &(slot_idx, results_pos) in &splice_layout {
+            let obj = results[results_pos];
+            if !matches!(obj, KObject::KTypeValue(_)) {
+                return BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "STRUCT schema slot at part-index {slot_idx} expected a type \
+                     expression, got a {} value",
+                    obj.ktype().name(),
+                ))));
+            }
+            spliced_parts[slot_idx].value = ExpressionPart::Future(obj);
+        }
+        let spliced_schema = KExpression::new(spliced_parts);
         // Producers terminalized — re-elaborate against the now-final scope. The
         // Combine-finish path runs AFTER the dispatch-time park; if cycle-close
         // populated `bindings.types` while we were parked, `resolve_type` resolves
@@ -175,37 +224,35 @@ fn defer_struct_via_combine<'a>(
         // time we're here all producers have terminalized.
         let mut elaborator = Elaborator::new(scope).with_threaded([name_for_finish.clone()]);
         match parse_typed_field_list_via_elaborator(
-            &schema_expr,
+            &spliced_schema,
             "STRUCT schema",
             &mut elaborator,
         ) {
             FieldListOutcome::Done(fields) => {
-                finalize_struct(scope, name_for_finish.clone(), fields)
+                finalize_struct(scope, name_for_finish.clone(), fields, bind_index)
             }
             FieldListOutcome::Err(msg) => BodyResult::Err(
                 KError::new(KErrorKind::ShapeError(msg))
                     .with_frame(Frame::bare("<struct>", format!("STRUCT {} schema", name_for_finish))),
             ),
-            FieldListOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(
+            FieldListOutcome::Pending { .. } => BodyResult::Err(KError::new(KErrorKind::ShapeError(
                 "STRUCT schema elaboration parked again after Combine wake".to_string(),
             ))),
         }
     });
-    // `producers` are sibling slots the schema parked on while elaborating;
-    // this Combine reads their values at finish-time but does NOT own them.
-    let combine_id = sched.add_combine(vec![], producers, scope, finish);
+    let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 
 /// Dispatch-time placeholder extractor for STRUCT. The name slot at `parts[1]` is a
 /// `Type(t)` token (the `TypeExprRef`-typed `name` argument). Only fires for bare leaves —
 /// parameterized forms (`STRUCT Foo<X> = ...`) aren't supported until functors land.
-pub(crate) fn pre_run(expr: &KExpression<'_>) -> Option<String> {
+pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    register_builtin_with_pre_run(
+    register_nominal_binder(
         scope,
         "STRUCT",
         sig(KType::Type, vec![
@@ -215,7 +262,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             arg("schema", KType::KExpression),
         ]),
         body,
-        Some(pre_run),
+        Some(binder_name),
     );
 }
 

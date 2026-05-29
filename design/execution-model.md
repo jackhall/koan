@@ -80,6 +80,21 @@ so the "every terminal write fires the notify" rule is type-enforced
 rather than restated at each call site. Consumers arrive on the run-set
 only when actually ready; there is no poll-and-requeue.
 
+A second fan-out runs alongside the counter-decrement. Each drained
+consumer whose work is `NodeWork::Dispatch` (any `DispatchState`
+variant) gets the producer's `NodeId` appended to its
+`recent_wakes: Vec<NodeId>` side-channel before the counter is
+inspected. `Bind` / `Combine` / `Catch` / `Lift` consumers skip the
+append — they run a fixed closure on counter-zero and have no
+per-edge wake attribution to track. The dispatch driver drains its
+slot's `recent_wakes` on entry so the side-channel never grows stale
+across re-park; the keyworded and `FunctionValueCall` resume handlers
+read the installed track's `subs` Vec directly rather than the wakes
+side-channel — at pop time `pending_deps` is zero, so every recorded
+sub is terminal. `DepGraph::drain_notify` returns the per-consumer
+`hit_zero` flag so the fan-out (always-append plus conditional
+stamp-and-enqueue) runs off a single drain.
+
 The run-set has two priority bands managed by
 [`WorkQueues`](../src/machine/execute/scheduler/work_queues.rs). Internal
 work — notify-walk wake-ups, Replace-arm re-enqueues, and ready-on-arrival
@@ -175,15 +190,22 @@ fanout (the body's transient sub-Dispatches/Binds) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Slot-table state lives in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
-sub-struct on `Scheduler` that owns three private vectors — `nodes:
+sub-struct on `Scheduler` that owns four private vectors — `nodes:
 Vec<Option<Node<'a>>>` (active node payloads), `results:
-Vec<Option<NodeOutput<'a>>>` (terminal results), and `free_list: Vec<usize>`
-(recyclable indices) — and the slot lifecycle that moves each index through
-them: `alloc_slot → take_for_run → reinstall* → finalize → free_one`. Each
-transition is a single atomic mutator body, so the recycle-vs-extend choice,
-the take/reinstall pairing, the terminal write, and reclamation are each
-encapsulated; no call site outside `NodeStore` can grow `nodes` without
-`results` or land a `NodeOutput` without firing the notify-walk.
+Vec<Option<NodeOutput<'a>>>` (terminal results), `free_list: Vec<usize>`
+(recyclable indices), and `recent_wakes: Vec<Vec<NodeId>>` (per-consumer
+side-channel of producers that have fired since the slot's last poll,
+populated only for `NodeWork::Dispatch` consumers) — and the slot
+lifecycle that moves each index through them: `alloc_slot → take_for_run
+→ reinstall* → finalize → free_one`. Each transition is a single atomic
+mutator body, so the recycle-vs-extend choice, the take/reinstall
+pairing, the terminal write, and reclamation are each encapsulated; no
+call site outside `NodeStore` can grow `nodes` without `results` or land
+a `NodeOutput` without firing the notify-walk. `recent_wakes[idx]` is
+cleared in O(1) by `free_one` (inner Vec capacity retained for the next
+owner) and extended in lockstep with `nodes` by `alloc_slot`'s extend
+arm, so every live `NodeId` indexes a valid inner Vec without a separate
+growth pattern.
 Dependency bookkeeping lives alongside it in a single
 [`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs) sub-struct
 that bundles three parallel vectors — `notify_list: Vec<Vec<NodeId>>` (each
@@ -244,105 +266,417 @@ Forward references between sibling top-level expressions, members of a
 `MODULE` body, and (eventually) names imported across files all require the
 same property: a value- or type-position lookup whose target binder has
 dispatched but not yet executed parks on the producer instead of failing with
-`UnboundName`. The park is keyed off `Scope::resolve` consulting the
-`placeholders` table, so it covers every name reached through that path —
-bare-name value slots and type-token slots. A *keyword-headed* function call
-(`ID 7`) is the exception: it resolves through the `functions` bucket, which
-does not consult `placeholders`, so calling a function not yet registered in
-the same scope fails rather than parking (forward calls from a function body
-are unaffected — bodies re-dispatch per call, after every sibling has
-registered). The mechanism lives in two pieces.
+`UnboundName` — **provided the binding is lexically visible from this
+reference's source position.** Visibility is the index gate (see
+[Lexical provenance chain](#lexical-provenance-chain) below): every binding
+carries the lexical statement index it was registered at, and a consumer at
+chain cutoff `c` sees only bindings with index `i < c` plus any binding
+flagged `nominal_binder` (the D7 carve-out for `STRUCT` / named `UNION` /
+`SIG` / `FUNCTOR` / `MODULE`, whose declared names cross the cutoff so
+mutual-recursive nominal references work). A *keyword-headed* function call
+(`ID 7`) resolves through the `functions` bucket, which applies the same
+per-overload visibility filter: a later-sibling overload registered after
+this consumer's statement is hidden, and dispatch falls through to outer
+scopes. Forward calls from a function body are unaffected — bodies re-dispatch
+per call against the body's lexical chain, by which point every sibling
+binder has registered.
 
-A `placeholders` table — a `RefCell<HashMap<String, NodeId>>` — lives
-inside the [`Bindings`](../src/machine/core/scope.rs) façade on
-`Scope`, alongside `data` and `functions`. When a binder dispatches, its
-`pre_run` hook (a per-`KFunction` extractor that pulls the to-be-bound name
-structurally out of the expression's parts) installs `name → producer NodeId`
-in the dispatching scope's placeholders. The six binder builtins (`LET`,
-`FN`, `STRUCT`, `SIG`, `UNION`, `MODULE`) opt in via
-`register_builtin_with_pre_run`; everything else stays placeholder-free.
-`Scope::resolve` walks `data` then `placeholders` in each scope on the chain
-and returns one of three shapes: `Resolution::Value(&KObject)` for a
-finalized binding, `Resolution::Placeholder(NodeId)` for a still-running
-producer, or `Resolution::Unbound` for a genuinely missing name. `bind_value`
-and `register_function` remove their own placeholder before inserting into
+The mechanism lives in two pieces, each routed through a separate install
+channel keyed by the binder's shape.
+
+A `placeholders` table — a `RefCell<HashMap<String, (NodeId, BindingIndex)>>`
+— lives inside the [`Bindings`](../src/machine/core/bindings.rs) façade
+on `Scope` alongside `data`, `types`, `functions`, and
+`pending_overloads`. *Name-keyed binders* (`LET`, `STRUCT`, `UNION`,
+`SIG`, `MODULE`) install through their
+[`binder_name`](../src/machine/core/kfunction/body.rs) hook (a per-
+`KFunction` extractor of type
+[`BinderNameFn`](../src/machine/core/kfunction/body.rs) that pulls the
+to-be-bound name structurally out of the expression's parts), stamping
+`name → producer NodeId` paired with the binder's
+[`BindingIndex`](../src/machine/core/bindings.rs) (the lexical statement
+index, plus the `nominal_binder` flag for `STRUCT` / named `UNION` /
+`SIG` / `MODULE` whose declared names cross the cutoff for
+mutual-recursive references).
+
+*Bucket-keyed binders* (`FN`, `FUNCTOR`) install through a
+[`binder_bucket`](../src/machine/core/kfunction/body.rs) extractor
+([`BinderBucketFn`](../src/machine/core/kfunction/body.rs)) into a
+separate `pending_overloads` table — a
+`RefCell<HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>>` keyed by
+the inner-call bucket key so a later-arriving call expression can park
+on a not-yet-finalized overload. FN/FUNCTOR carry **only** the
+`binder_bucket` extractor — no `binder_name` — because sibling
+overloads under one head keyword (e.g. two `FN (PICK xs :A) ...` /
+`FN (PICK xs :B) ...` declarations) must not collide on a single
+`placeholders[name]` slot. The two channels are mutually exclusive per
+binder: each binder uses exactly one. The submission walk reifies the
+choice as a
+[`BinderKey`](../src/machine/execute/scheduler/submit.rs) enum
+(`Name(String)` vs. `Bucket(UntypedKey)`) so the dichotomy rides in
+the type rather than as a two-Option convention.
+
+The bucket vec is what admits multiple sibling FN/FUNCTOR binders
+sharing one bucket key: each install appends a distinct entry at its
+own `BindingIndex`. A consumer looking up the bucket via
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs) gets
+`FunctionLookup::Pending(NodeId)` for the *earliest-index visible*
+entry — the most-likely-first-finalizer. On that producer's finalize,
+only the matching entry is removed from the vec (others stay
+pending); the consumer wakes, re-dispatches, and either picks from
+the now-live `functions[bucket]` or re-parks on the next-earliest
+pending sibling. Each re-dispatch is cheap, and the expected case
+(consumer's match lands in the first 1–2 siblings) avoids the cost
+entirely.
+
+The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`,
+`MODULE`) opt in via
+[`register_builtin_with_binder`](../src/machine/core/kfunction.rs);
+everything else stays placeholder-free.
+
+Production reads go through three visibility-aware lookups on the façade:
+[`Bindings::lookup_value`](../src/machine/core/bindings.rs) /
+[`Bindings::lookup_type`](../src/machine/core/bindings.rs) /
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs). Each takes
+a `chain_cutoff: Option<usize>` — the consumer's lexical index within
+*this* scope as computed by
+[`LexicalFrame::index_for`](../src/machine/core/lexical_frame.rs) — and
+applies the [`visible`](../src/machine/core/scope.rs) predicate
+(`b.nominal_binder || b.idx < c`) per entry. `lookup_value` consults
+`data` then `placeholders` and returns `Resolution::Value(&KObject)` for
+a finalized visible binding, `Resolution::Placeholder(NodeId)` for a
+still-running visible producer, or `None` (the caller surfaces
+`Resolution::UnboundName` on chain exhaustion). `lookup_function`
+consults `functions[key]` first, filtered per-overload by visibility,
+and falls through to `pending_overloads[key]` only when no live bucket
+admits — returning `FunctionLookup::Bucket(Vec<&KFunction>)` (non-empty,
+pre-filtered), `FunctionLookup::Pending(NodeId)` (an in-flight FN /
+FUNCTOR binder's producer to park on), or `FunctionLookup::None`. The
+dispatcher records the innermost `Pending` arm during its ancestor walk
+and parks on it only if no bucket admits anywhere, so the bucket /
+pending-overload pair surfaces from one traversal rather than two. The raw map accessors (`data` / `types` /
+`functions` / `placeholders` / `pending_overloads`) are gated
+`#[cfg(test)]`; production sites that genuinely sweep all members
+(`MODULE` member mirroring, signature shape-check, REPL reflection)
+consume the value-yielding `iter_data` / `iter_types` / `iter_functions`,
+which release the underlying borrow at the iterator boundary.
+
+[`Scope::resolve_with_chain`](../src/machine/core/scope.rs) and
+[`resolve_type_with_chain`](../src/machine/core/scope.rs) delegate
+per-ancestor to `lookup_value` / `lookup_type`, mapping the consumer's
+`LexicalFrame` chain to each ancestor scope's `chain_cutoff` and returning
+the first visible hit. The `Scope::resolve` shorthand (no chain argument)
+reads as "see everything" and is reserved for test fixtures and
+builtin-registration paths; production dispatch always threads the
+consumer's `LexicalFrame` chain through. `bind_value` and
+`register_function` remove their own placeholder before inserting into
 `data` / `functions`, so the two tables are mutually exclusive at any
 moment.
 
-The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) — is a
-four-phase linear pipeline: a bare-name short-circuit, the chain-walked
-resolution (with a fractional-step `2.5` placeholder install), an eager
-name-resolve pass that splices wrap-slot bindings in place and parks ref-name
-slots on still-pending producers, and the dep schedule. Phase 2 calls
-[`Scope::resolve_dispatch`](../src/machine/core/scope.rs) once and
-matches on its [`ResolveOutcome`](../src/machine/core/scope.rs):
-`Resolved(r)` continues into phase 3 with the tentatively picked function
-plus the per-slot index buckets `r.slots` carries (`wrap_indices`,
+### Submission-time binder install and recursive sub-Dispatch
+
+[`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
+inspects every incoming `NodeWork::Dispatch` against the dispatching
+scope's ancestor chain via `extract_binder_install`: it finds the first
+overload in the matching `functions[expr.untyped_key()]` bucket whose
+`binder_name` OR `binder_bucket` extractor returns `Some(_)` for the
+expression. The picked overload's install channel is reified as
+`BinderKey::Name(name)` (for `LET` / `STRUCT` / `UNION` / `SIG` /
+`MODULE`) or `BinderKey::Bucket(key)` (for `FN` / `FUNCTOR`); the
+install site stamps the corresponding `placeholders[name]` or
+`pending_overloads[bucket]` entry on the dispatching scope before the
+slot is ever popped from the work queues. A later sibling that
+dispatches before the binder's slot pops finds the entry and parks
+rather than surfacing `UnboundName` / `DispatchFailed`.
+
+For binder-shaped Dispatch nodes, the submission walk also recurses into
+the expression's eager Expression-shaped argument slots and submits each
+as a sub-Dispatch *at the same outermost submission point*. The walk
+computes an `eager_slot_mask` over the bucket — a slot is eager only if
+*every* binder overload in the bucket marks it non-`KType::KExpression`;
+any overload tagging a slot lazy keeps that slot out of the recursive
+walk because the eventual dispatch may resolve to that overload. Lazy
+slots — FN body, FN signature/return-type-`KExpression` overload, FUNCTOR
+body, MODULE body — dispatch in the callee's scope at body-invoke time,
+not here. Each recursive `add_with_chain` runs its own
+`extract_binder_install`, so a nested binder's placeholder installs at
+the same outermost step as its parent's; recursion terminates at
+non-binder leaves and at lazy slots, bounded by AST depth.
+
+The collected `(slot_idx, sub_node_id)` pairs ride through into the
+parent's `NodeWork::Dispatch { expr, pre_subs }`
+([`nodes.rs`](../src/machine/execute/nodes.rs)). When the parent runs,
+the fused splice / park / eager-sub walk in
+[`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs) consults
+`pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
+a slot already pre-submitted reuses the existing `NodeId` (and replaces
+the part with an empty-`Identifier` placeholder for the eventual `Bind`
+splice) rather than allocating a fresh sub-Dispatch. The
+`stateful_install_bare_name_park` and `stateful_install_overload_park`
+installers carry `pre_subs` into the `KeywordedState.init.pre_subs`
+field of the parked state, and the matching resume handlers
+(`stateful_keyworded_resume_bare_name_park` /
+`stateful_keyworded_resume_overload_park`) hand it back to
+`stateful_keyworded_initial` on wake — so a park-and-wake cycle does
+not re-allocate the pre-submitted children.
+
+Statement indices are per-`enter_block` call: each call to
+[`Scheduler::enter_block`](../src/machine/execute/scheduler.rs) mints
+chain frames at indices `1..N` for the N statements it submits. A REPL
+or test fixture that submits without an ambient chain (the
+[`Scheduler::add`](../src/machine/execute/scheduler/submit.rs) auto-root
+branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
+— a chain that mentions no real scope, so the visibility predicate's
+`index_for → None ⇒ complete` arm makes every binding in the target
+scope visible. This is what lets a REPL query read through to every
+prior bind without sharing an index space with them.
+
+The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) —
+opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
+expression's parts for any `Keyword` first and, if none, branches on the head
+token's shape, producing one of six `DispatchShape` variants. The five
+no-keyword variants (`BareIdentifier`, `BareTypeLeaf`,
+`ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) run their own
+fast-lane handlers and never enter `Scope::resolve_dispatch_with_chain`:
+there are no candidates in `bindings.functions` for these shapes, so the
+candidate machinery would do no useful work. The `Keyworded` variant
+(anywhere a keyword appears, or any head shape outside the fast-lane set)
+falls into the chain-walked resolution plus eager name-resolve plus
+dep-schedule pipeline below.
+
+The keyworded pipeline runs in four steps. Step 1 builds the bare-name
+outcome cache: one
+[`resolve_name_part`](../src/machine/execute/scheduler/dispatch.rs) call per
+bare-name part of `expr` (`Identifier` or leaf `Type`) into
+`bare_outcomes: Vec<Option<NameOutcome<'a>>>`, with `None` for non-bare-name
+parts. The cache is built with `consumer = None` so cycle detection is
+deferred to Step 4, where it runs only on slots the picked function
+classifies as references (a binder declaration slot like `x` in `LET x = …`
+has the dispatching slot as its own placeholder's producer, so an upfront
+cycle check would false-positive on declarations). Step 2 sweeps the cache
+for `NameOutcome::ProducerErrored`: a bare-name arg whose producer
+terminalized with an error can never resolve, so it propagates upfront with
+a `<wrap-resolve>` frame before any candidate work.
+
+Step 3 calls
+[`Scope::resolve_dispatch_with_chain`](../src/machine/core/scope.rs) once,
+passing the cache as `bare_outcomes: &[Option<NameOutcome<'a>>]`. Admission
+is strict-only: [`signature_admits_strict`](../src/machine/core/resolve_dispatch.rs)
+reads each bare-name slot's cached outcome rather than re-resolving it per
+scope. A `Resolved(obj)` cache entry admits iff
+[`KType::accepts_part`](../src/machine/model/types/ktype_predicates.rs)
+holds for the carried type — a bare name whose value has the wrong carrier
+type strict-rejects the overload, and the call surfaces as `DispatchFailed`
+rather than a bind-time `TypeMismatch`. `Parked` / `Unbound` cache entries
+admit via shape-only `arg.matches(part)`: the post-pick splice/park walk in
+Step 4 is the only place that produces precise per-slot `ParkOnProducers` /
+`UnboundName` diagnostics, so admission must not reject and lose them. The
+match on [`ResolveOutcome`](../src/machine/core/scope.rs) is:
+`Resolved(r)` continues into Step 4 with the strict-picked function plus
+the per-slot index buckets `r.slots` carries (`wrap_indices`,
 `ref_name_indices`, `eager_indices`); `Ambiguous(n)` surfaces as an
 `AmbiguousDispatch` error; `Unmatched` surfaces as `DispatchFailed`;
-`Deferred` (no match against the bare shape but the expression carries
-nested `Expression` / `ListLiteral` / `DictLiteral` parts whose evaluation
-may produce typed `Future(_)` parts that match) jumps to phase 4's lazy
-arm (`schedule_deps_filtered` with no eager filter and no picked function)
-and re-dispatches via [`run_bind`](../src/machine/execute/scheduler/finish.rs)
-after subs resolve.
+`Deferred` (the candidate may match after sub-evaluation yields a typed
+`Future(_)`) routes to `stateful_install_eager_only`, which sub-Dispatches
+every eager-shaped part, installs the eager-subs track on this slot, and
+re-resolves dispatch against the spliced expression at track completion;
+`ParkOnProducers(_)` and `UnboundName(_)` come from the post-walk fallback
+below.
 
-The four rails the resolution feeds:
+The post-walk fallback inside `resolve_dispatch_with_chain` triggers when
+no scope's bucket admitted. It reads the cache by fixed precedence —
+**placeholders > eager > unbound > pending overload > Unmatched**:
 
-- **Bare-name short-circuit** (phase 1, runs before resolution). A
-  single-`Identifier` dispatch slot (`(some_var)`) consults `Scope::resolve`
-  directly: `Value` returns inline, `Placeholder` rewrites the slot's work
-  to `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail` uses for
-  sub-Bind waits), `Unbound` falls through so `value_lookup`'s body
-  produces the structured error.
+1. Any `NameOutcome::Parked(_)` ⇒ `ParkOnProducers` on the deduplicated
+   producer list. Wake re-dispatches; strict admission rebuilds the cache
+   against the now-bound type.
+2. Otherwise, if `expr` carries any eager (`Expression` / `SigiledTypeExpr`
+   / `ListLiteral` / `DictLiteral`) part ⇒ `Deferred`. Eager outranks
+   Unbound because an eager part's evaluation may itself surface the
+   precise diagnostic, and surfacing `UnboundName` here would pre-empt an
+   Expression-in-Type-slot dispatch (`(maybe) some 42`) whose head
+   evaluates to the schema after one sub-Dispatch.
+3. Otherwise, any `NameOutcome::Unbound(name)` ⇒ `UnboundName(name)`.
+4. Otherwise, an innermost-visible `pending_overloads[key]` entry
+   recorded during the walk ⇒ `ParkOnProducers(vec![producer])` (FN /
+   FUNCTOR sibling parked on its own Combine has installed the bucket;
+   wake re-dispatches against the now-registered overload).
+5. Otherwise ⇒ `Unmatched`.
 
-  Forward references resolve through this rail and the eager name-resolve
-  rail (below), both of which route name lookups through `Scope::resolve`
-  and so consult the `placeholders` table. A *keyword-headed* call —
-  `ID 7`, where `ID` is the head Keyword — does not: function dispatch is
-  a `functions` bucket lookup with no placeholder consultation, so a call
-  to a function not yet registered in the same scope surfaces as
-  `DispatchFailed` rather than parking. Forward calls from a function
-  *body* are unaffected: bodies re-dispatch per call, by which point every
-  sibling binder has registered.
-- **Placeholder install** (phase 2.5). If the picked function carries a
-  `pre_run` extractor, `Resolved.placeholder_name` is its result and the
-  driver installs `name → NodeId(idx)` on the dispatching scope. A
-  `Rebind` collision here surfaces as a `Done(Err(_))` step so other slots
-  keep draining.
-- **Eager name-resolve pass** (phase 3, carriers:
-  `Resolved.slots.wrap_indices` and `Resolved.slots.ref_name_indices`).
-  One walk over each index bucket calls the shared
-  [`resolve_name_part`](../src/machine/execute/scheduler/dispatch.rs)
-  helper against the dispatching scope. Both
-  `ExpressionPart::Identifier` and bare leaf `ExpressionPart::Type` (a
-  Type-token with no `<…>` parameters) are bare-name parts here and ride
-  identical rails; Type-tokens route through the shared
-  [`coerce_type_token_value`](../src/builtins/value_lookup.rs) seam so the
-  dispatch phase synthesizes the same `KTypeValue` / paired-carrier shape
-  the `value_lookup::body_type_expr` builtin produces. The helper returns a
-  [`NameOutcome`](../src/machine/execute/scheduler/dispatch.rs) ADT and the
-  caller branches on the variant:
+The rails the dispatch driver feeds:
 
-  - `Resolved(obj)` — for a `wrap_indices` slot, splice
-    `ExpressionPart::Future(obj)` into the slot in place. For a
-    `ref_name_indices` slot, no-op (literal-name slots keep the bare token).
-  - `Parked(producer)` — push onto a shared `producers_to_wait` list.
-  - `ProducerErrored(e)` — propagate via the shared
-    [`propagate_dep_error`](../src/machine/execute/scheduler/dispatch.rs)
-    helper with a `<wrap-resolve>` / `<replay-park>` frame.
-  - `Unbound(name)` — surface as a slot-terminal `UnboundName` (the
-    parent binder's Combine reads this through `read_result(dep)` and
-    short-circuits with the right framing).
-  - `Cycle(name)` — emit `KErrorKind::SchedulerDeadlock { pending: 1,
-    sample: "cycle in type alias …" }`. Catches `LET x = x` and
-    `LET Ty = Ty` uniformly without a special case in the elaborator.
+- **Fast lane** (pre-walk classifier, runs before any resolve walk).
+  `classify_dispatch_shape` is one pass over `expr.parts`: keyword anywhere
+  ⇒ `Keyworded`; single-part `Identifier` ⇒ `BareIdentifier`; single-part
+  leaf `Type` ⇒ `BareTypeLeaf`; single-part `SigiledTypeExpr` ⇒
+  `SigiledTypeExpr`; multi-part with leaf-`Type` head ⇒
+  `ConstructorCall`; multi-part with `Identifier` head ⇒
+  `FunctionValueCall`; everything else ⇒ `Keyworded`. The "sweep first,
+  branch on head second" ordering matters: a mixed shape like `(f IF x)`
+  goes to `Keyworded` because only the candidate machinery knows how to
+  dispatch the `(_ IF _)` bucket.
 
-  After both buckets are walked, a single
-  `install_combined_park(producers_to_wait, …)` call installs every park
-  edge and rewrites the slot to a re-Dispatch on wake. Multi-name forward
-  references compose as one combined park rather than N independent
-  sub-Dispatches.
+  Each fast-lane variant has its own handler:
+
+  - `BareIdentifier` (`(some_var)`) — `stateful_bare_identifier` consults
+    `Scope::resolve_with_chain` against the consumer's `LexicalFrame`:
+    `Value` returns inline, `Placeholder` rewrites the slot's work to
+    `Lift(LiftState::Pending(producer_id))` (the same shim `BodyResult::Tail`
+    uses for sub-Bind waits), `UnboundName` falls through to the keyworded
+    path so `value_lookup`'s body produces the structured error.
+  - `BareTypeLeaf` (`(Number)`, `(IntOrd)`) — `fast_lane_bare_type_leaf`
+    routes through `coerce_type_token_value` so the dispatch-phase carrier
+    matches what `value_lookup::body_type_expr` would synthesize. Failures
+    surface directly; there is no candidate-machinery alternative for a
+    bare leaf type.
+  - `ConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
+    `stateful_constructor_call` resolves the head Type token and
+    routes `StructType` / `TaggedUnionType` / `Newtype` / `TypeConstructor`
+    carriers through their construction primitives via a `Tail` rewrite.
+    Opaque / Module / unbound heads fall through to the keyworded
+    `type_call` builtin. The legacy positional sigil shape
+    (`:(List Number)`) classifies here as well — the dispatcher's
+    `SigiledTypeExpr` handler sub-dispatches the inner expression, which
+    then lands in `ConstructorCall` and routes through the same
+    construction primitives.
+  - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `run_dispatch`
+    arm tail-replaces the slot with a `Dispatch`
+    of the wrapped `KExpression`, so the inner expression runs through the
+    same classifier and produces the same carrier shape any other dispatch
+    site does. See
+    [type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
+    for the full type-language dispatch contract.
+  - `FunctionValueCall` (`f (x = 7)`) — `stateful_fast_lane_function_value_call`
+    resolves the `Identifier` head and handles every admission outcome
+    directly. The call shape admits iff `expr.parts[1..]` is exactly one
+    nested-parens part (the *only* call shape — koan has no `f 1 2`
+    positional call syntax for function values, so the named-arg shape
+    is the whole user-facing surface). Three head-carrier shapes admit:
+    `KFunction(f, _)` runs `KFunction::reconstruct_positional` to
+    interleave the signature's `Keyword` elements between the
+    picked-by-name values and routes through
+    `stateful_dispatch_callable_value`, which either binds and invokes
+    one-shot or installs the eager-subs track via
+    `stateful_install_fn_value_eager_subs_track` when the spliced call
+    carries unresolved eager parts; `StructType { .. }` and `TaggedUnionType
+    { .. }` route through `struct_value::apply` and `tagged_union::apply`
+    respectively, each returning a `BodyResult::Tail` that rewrites the
+    slot as a re-Dispatch through the corresponding construction
+    primitive. Any other carrier (number, string, instance struct,
+    module, …) surfaces `TypeMismatch { arg: "verb", expected:
+    "KFunction or Type", got }` directly. A `Placeholder` head installs
+    the head-placeholder park via `stateful_install_fn_value_head_park`;
+    an unbound head surfaces `UnboundName(name)` directly — this shape
+    never falls through to `Keyworded`. Reconstruction errors from
+    `KFunction::reconstruct_positional` (missing / unknown /
+    duplicate-named args, malformed pair shapes) surface as
+    `NodeOutput::Err` with the same structured wording the keyworded
+    path produces.
+
+  Forward references resolve through the fast lane and the eager
+  name-resolve rail (below), both of which route name lookups through
+  `Scope::resolve_with_chain` against the consumer's `LexicalFrame` and so
+  consult the visibility-gated `placeholders` table. A *keyword-headed*
+  call — `ID 7`, where `ID` is the head Keyword — dispatches through the
+  `functions` bucket, which applies the same per-overload visibility filter
+  (see [ktype.md § Overload bucket visibility filter](typing/ktype.md#overload-bucket-visibility-filter)).
+  A later-sibling overload registered after this consumer's statement is
+  hidden, and dispatch falls through to outer scopes; finding nothing
+  surfaces as `DispatchFailed`. Forward calls between sibling FNs work
+  through the bucket-keyed `pending_overloads` channel: each sibling FN
+  install appends a distinct entry to the per-bucket vec, and a parking
+  consumer wakes on the earliest-index visible producer, re-parking on
+  the next-earliest if its pick doesn't admit. Forward calls from a
+  function *body* are unaffected because bodies re-dispatch per call
+  against the body's lexical chain, by which point every sibling binder
+  has registered.
+- **Placeholder install** (Step 3.5). If the picked function carries a
+  `binder_name` extractor, the driver installs `name → NodeId(idx)` into
+  `placeholders` on the dispatching scope. If it carries a `binder_bucket`
+  extractor, the driver appends a `(NodeId(idx), BindingIndex)` entry
+  into `pending_overloads[bucket]` on the same scope. Each binder uses
+  exactly one of the two channels — the `BinderKey` enum in
+  [`submit.rs`](../src/machine/execute/scheduler/submit.rs) makes the
+  dichotomy a type-level fact. Both installs are lenient against the
+  matching submission-time install (see [Submission-time binder install
+  and recursive sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)
+  below) — a `(name, idx)` pair already installed at submission re-applies
+  cleanly here, and a bucket entry already appended at submission is not
+  re-appended. A `Rebind` collision on the name channel against a
+  different producer surfaces as a `Done(Err(_))` step so other slots
+  keep draining; bucket-channel installs never Rebind (sibling appends
+  are the intended shape).
+- **Fused splice / park / eager-sub walk** (Step 4). One iteration over
+  `expr.parts` co-handles the three per-slot rails the strict pick
+  carries: wrap-slot splice (`resolved.slots.wrap_indices`), ref-name-slot
+  park (`resolved.slots.ref_name_indices`), and eager sub-Dispatch
+  scheduling (filtered by `resolved.slots.eager_indices` when the picked
+  function is a lazy candidate, otherwise every eager-shaped part
+  schedules). Per part, exactly one arm fires.
+
+  Wrap and ref-name arms read the same `bare_outcomes[i]` cache the
+  resolver consumed in Step 3 — so each bare name is resolved once per
+  `run_dispatch` invocation, shared across admission and the walk.
+  Per-arm behavior:
+
+  - **Wrap slot.** `Resolved(obj)` rewrites the slot to
+    `ExpressionPart::Future(obj)` in place. `Parked(p)` cycle-checks
+    via [`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs)
+    and either surfaces `SchedulerDeadlock { sample: "cycle in type alias
+    `<name>`" }` on a self-park or pushes `p` onto the shared
+    `producers_to_wait` list. `Unbound(name)` surfaces a slot-terminal
+    `UnboundName` (the parent binder's Combine reads it through
+    `read_result(dep)` and short-circuits with the right framing — an
+    `Err` from `execute` would break that catch).
+    `Cycle` / `ProducerErrored` are unreachable here: the cache is built
+    with `consumer = None`, and the Step 2 sweep already short-circuited
+    `ProducerErrored`.
+  - **Ref-name slot.** Literal-name slots keep the bare token, so
+    `Resolved` and `Unbound` are no-ops. `Parked(p)` runs the same
+    cycle-check then push as the wrap arm. Only `Identifier` and leaf
+    `Type` parts park here; non-bare-name parts are skipped by
+    classification.
+  - **Eager-sub slot.** `Expression` parts sub-Dispatch; `SigiledTypeExpr`
+    parts wrap into a single-part `KExpression` and sub-Dispatch (the
+    sub-Dispatch enters `run_dispatch`'s `SigiledTypeExpr` arm and
+    tail-replaces with the inner dispatch); `ListLiteral` and `DictLiteral`
+    route through `schedule_list_literal` / `schedule_dict_literal` for the
+    aggregate Combine; any other shape rides through unchanged. Lazy
+    `Expression` parts in `KExpression` slots are filtered out by
+    `eager_indices` and the receiving builtin dispatches them itself.
+
+  **Park-precedence guard.** Sub-Dispatch and aggregate scheduling are
+  staged into a `PendingSub` vec rather than submitted eagerly during the
+  walk. After the loop, if `producers_to_wait` is non-empty the driver
+  calls `stateful_install_bare_name_park` — installing the park edges as
+  `Notify` (via `add_park_edge`), transitioning the slot to
+  `KeywordedState` with the bare-name-park track set, and dropping
+  `NodeWork::Dispatch.expr` to a placeholder so the state-carried
+  `working_expr` becomes the source of truth on wake — **without**
+  submitting any staged subs. Eager submission would
+  leak the sub-nodes on the re-Dispatch wake path, where the new
+  `run_dispatch` invocation would re-stage them.
+  Multi-name forward references compose as one combined park rather than
+  N independent sub-Dispatches.
+
+  If no producer parked, the driver applies each `PendingSub`: `Reuse(id)`
+  for slots already pre-submitted recursively at outermost-submission time
+  (see [Submission-time binder install and recursive
+  sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)),
+  `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
+  for the aggregate. With no subs to schedule the driver binds the picked
+  function directly via `invoke_to_step` (a wrap-slot-only call like
+  `MAKESET IntOrd` resolves bare names in Step 4, leaves no eager parts,
+  and binds in one step — no `Bind` detour). Otherwise it builds a
+  `NodeWork::Bind { expr, subs }` and lifts.
+
+  Dict and list literals (`classify_aggregate_part` in
+  [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
+  ride the same name-resolve rail when their `wrap_identifiers` plan-input
+  is set: bare-name entries call `resolve_name_part` directly and
+  materialize as `Slot::Static` (resolved) or `Slot::Park(i)` (parked
+  producer), with the Combine driving a single wake across all parked
+  siblings.
 
 `Resolved.slots`'s three index vectors (`wrap_indices` / `ref_name_indices` /
 `eager_indices`) are disjoint by construction: each slot's
@@ -350,24 +684,21 @@ The four rails the resolution feeds:
 [`KFunction::classify_for_pick`](../src/machine/core/kfunction.rs) is
 the sole producer of the `ClassifiedSlots` carrier (which `Resolved` holds
 by value), so the disjointness invariant lives in one place rather than as
-comment-enforced rules across the scheduler driver.
+comment-enforced rules across the scheduler driver. Cycle detection runs
+inside the fused walk (not in the cache build) so it sees the picked
+function's slot classification: a binder declaration slot — `x` in
+`LET x = …`, `Foo` in `STRUCT Foo (…)` — is owned by the binder, never
+classified as wrap or ref-name, and so never reaches the cycle-check arm.
+`DepGraph::would_create_cycle` walks the forward `notify_list` graph from
+the consumer; if the producer is reachable, the driver surfaces
+`SchedulerDeadlock` on the slot terminal instead of installing a park edge
+that would close the cycle. That catches the trivially-cyclic
+`LET Ty = Ty` / `LET x = x` shapes uniformly — both Identifier-LHS and
+Type-LHS cycles surface with the same error kind without a special case
+in the elaborator.
 
-Phase 4 commits to the tentative pick from Phase 2 even when wrap-slots
-were spliced in Phase 3: `schedule_deps_filtered(expr, eager_indices,
-Some(picked), …)` schedules the remaining `Expression` / `ListLiteral` /
-`DictLiteral` parts as sub-nodes and builds a `Bind` slot against `picked`.
-A mismatch between the spliced carrier and `picked`'s strict slot type
-surfaces as `TypeMismatch` from `bind` (more specific than the generic
-`DispatchFailed` that a second `resolve_dispatch` would emit), saving a
-resolution walk per wrap-bearing dispatch on the success path. Dict and
-list literals (`classify_aggregate_part` in
-[`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
-ride the same eager rail when their `wrap_identifiers` plan-input is set:
-bare-name entries call `resolve_name_part` directly and materialize as
-`Slot::Static` (resolved) or `Slot::Park(i)` (parked producer), with the
-Combine driving a single wake across all parked siblings.
-
-The bare-name short-circuit and the eager-resolve pass call
+The fast-lane handlers (`stateful_bare_identifier`,
+`stateful_fast_lane_function_value_call`) and the eager-resolve pass call
 `DepGraph::add_park_edge`, which records a `DepEdge::Notify(producer)` in
 the consumer's `dep_edges` entry alongside the `DepEdge::Owned(child)`
 entries that mark sub-slots the consumer owns. `add_park_edge` and its
@@ -398,16 +729,11 @@ finish closure splices each result into
 `signature_expr.parts[slot_idx]` as `Future(KTypeValue(_))` before
 re-running the parameter-list walk against the spliced signature. STRUCT
 and UNION share the same elaborator-and-Combine shape for their
-field-type lists. The eager-resolve pass itself cycle-checks before
-installing each park edge:
-[`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs)
-walks the forward `notify_list` graph from the consumer and, if the
-producer is reachable, `resolve_name_part` returns `NameOutcome::Cycle`
-and the driver surfaces `SchedulerDeadlock` on the slot terminal instead
-of installing a park edge that would close the cycle. That catches the
-trivially-cyclic `LET Ty = Ty` / `LET x = x` shapes uniformly — both
-Identifier-LHS and Type-LHS cycles surface with the same error kind
-without a special case in the elaborator.
+field-type lists. The fused walk's per-park cycle check
+([`DepGraph::would_create_cycle`](../src/machine/execute/scheduler/dep_graph.rs),
+covered above) handles the simple trivially-cyclic cases proactively; the
+elaborator's threaded-set carry-through handles the recursive-type cases
+during STRUCT / UNION body elaboration.
 
 A drain-end guard catches any cycle the proactive check doesn't: after
 [`execute`](../src/machine/execute/scheduler/execute.rs) empties its work
@@ -417,6 +743,142 @@ node parked on a dependency that can no longer fire — and returns
 the top-level result read panic on an unresolved slot. `sample` is the
 source expression of the first parked `Dispatch`/`Bind` node, so the
 diagnostic points at code the reader can act on.
+
+### `DispatchState` — per-variant state envelope
+
+Every `NodeWork::Dispatch` slot carries a
+[`DispatchState`](../src/machine/execute/scheduler/dispatch_state.rs) value
+that records where the slot is in the per-shape state machine. The enum
+has one variant per `DispatchShape` plus a pre-classification birth
+state:
+
+```text
+DispatchState ::= Initialized(Initialized)
+                | BareIdentifier(BareIdState)
+                | BareTypeLeaf(BareTypeState)
+                | ConstructorCall(CtorState)
+                | FunctionValueCall(Box<FnValueState>)
+                | SigiledTypeExpr(SigilState)
+                | Keyworded(Box<KeywordedState>)
+```
+
+Every per-variant struct embeds the `Initialized` birth state by value
+as its `init` field, so any state-carried data (today only `pre_subs`
+from the recursive-binder-submission optimization) rides along
+structurally without each variant restating the field. The submission
+walk hands `Initialized { pre_subs }` to the slot at install time;
+`run_dispatch` reads the field on first entry, classifies via
+`classify_dispatch_shape`, and transitions to the matching per-variant
+struct via a `from_init` / `with_*` constructor that consumes the
+birth state. Variants that don't yet carry borrowed state hold the
+lifetime with a `PhantomData<&'a _>` marker so additional fields can be
+added without churning every pattern site in `execute.rs` /
+`submit.rs` / `dispatch.rs`.
+
+The five fast-lane variants (`BareIdentifier`, `BareTypeLeaf`,
+`ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) terminalize
+or single-producer-park in one poll, so their state structs carry no
+post-classification tracks. The two variants that can park on a fan-in
+of producers — `Keyworded` and `FunctionValueCall` — carry an
+`Option<Track>` field per park shape; the `with_*` constructors install
+exactly one. The variants are boxed because their multi-track shapes
+would otherwise push every `DispatchState`-carrying type
+(`NodeWork::Dispatch`, `NodeStep::Replace`, `Node`, `SlotState`) past
+clippy's `large_enum_variant` threshold; boxing costs one allocation
+per parked slot — a rare path, since the fast-lane variants never
+construct these and one-shot paths terminalize without installing a
+track.
+
+`Keyworded` carries three mutually-exclusive park tracks, installed by
+named installers in [`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs):
+
+- **`eager_subs: Option<EagerSubsTrack>`** — installed by
+  `stateful_install_eager_subs_track` (Resolved-with-eager-subs and
+  `Deferred` arms of `stateful_keyworded_initial`). The track carries
+  the partly-spliced `working_expr` (every non-sub part plus an
+  `Identifier("")` placeholder at every sub index) and the
+  `Vec<(part_idx, sub_id)>` Owned-dep list. Both install arms share
+  the same track shape — the resume handler
+  `stateful_keyworded_resume_eager_subs` re-resolves dispatch against
+  the spliced expression and uses the re-resolve's pick, so neither
+  arm needs to carry a function reference forward. Re-resolve is
+  authoritative: an element-typed `Future(_)` that narrows a
+  typed-slot admission rules a speculative initial pick out, and the
+  call surfaces `DispatchFailed` (non-match) rather than committing
+  and surfacing a bind-time `TypeMismatch`.
+- **`bare_name_park: Option<BareNameParkTrack>`** — installed by
+  `stateful_install_bare_name_park` when the part walk discovers ≥1
+  `NameOutcome::Parked(producer)` on a wrap or ref-name slot. Park
+  edges are installed as `Notify` (via `add_park_edge`) — the
+  producers are sibling forward references, not children of this
+  slot, so the slot's reclaim walk must not transit into them. The
+  resume handler `stateful_keyworded_resume_bare_name_park` re-enters
+  `stateful_keyworded_initial` against the carried `working_expr`;
+  the bare names now resolve through `scope.resolve_with_chain` to
+  bound values, so the rebuilt `bare_outcomes` picks them up and the
+  wrap-slot splice fires `Future(obj)` on the second pass.
+- **`overload_park: Option<OverloadParkTrack>`** — installed by
+  `stateful_install_overload_park` when
+  `resolve_dispatch_with_chain` returns `ParkOnProducers` before the
+  part walk runs — either because a bare-name arg resolved to a
+  still-pending `Placeholder`, or because an innermost-visible
+  `pending_overloads[key]` entry from a sibling FN / FUNCTOR binder
+  is in flight. The track carries the original (unspliced)
+  expression, which `stateful_keyworded_resume_overload_park` hands
+  back to `stateful_keyworded_initial` on wake to rebuild
+  `bare_outcomes` and re-run the resolve against the now-populated
+  bucket.
+
+`FunctionValueCall` carries two mutually-exclusive park tracks:
+
+- **`eager_subs: Option<FnValueEagerSubsTrack>`** — installed by
+  `stateful_install_fn_value_eager_subs_track` from
+  `stateful_dispatch_callable_value`'s `KFunction` head arm when the
+  reconstructed call carries unresolved eager parts. Mirrors
+  `EagerSubsTrack`'s splice and Owned-dep shape, but carries the
+  picked `KFunction` from the head `Resolution::Value` arm directly:
+  `FunctionValueCall` is non-overload-set (the head resolves to a
+  single carrier, not a candidate bucket), so a typed `Future(_)` an
+  eager sub reveals can't narrow to a more specific pick, and the
+  resume binds `picked` without re-running `resolve_dispatch`.
+- **`head_placeholder: Option<FnValueHeadPlaceholderTrack>`** —
+  installed by `stateful_install_fn_value_head_park` when the head
+  identifier resolves to `Resolution::Placeholder(producer)`. The
+  track carries the original (unspliced) call expression; on wake,
+  `stateful_fn_value_resume_head_placeholder` re-runs the
+  fast lane against it, and `scope.resolve_with_chain` now lands in
+  the `Resolution::Value` arm.
+
+**Track exclusivity is enforced at install time, not just by
+construction.** Each track installer in `dispatch.rs` is the only call
+site that writes its corresponding `Option<Track>` field, and the
+install conditions are sequenced so at most one fires per slot per
+poll: `overload_park` installs from a resolve failure *before* the part
+walk runs, so neither sibling track has been staged; the bare-name
+park installs *before* eager subs because the part walk's
+park-precedence guard runs before any sub gets staged (eager
+submission on the park path would leak sub-nodes on the re-Dispatch
+wake). The resume routing in `stateful_keyworded_resume` /
+`stateful_fn_value_resume` reads the tracks in install-precedence order
+(`overload_park` first, then `bare_name_park`, then `eager_subs` for
+Keyworded; `eager_subs` then `head_placeholder` for FunctionValueCall)
+and `debug_assert`s mutual absence at every step, so the install-time
+invariant is checked on every wake.
+
+The state is `pub(in crate::machine::execute)` rather than `pub(super)`
+because `nodes.rs` (which carries the `NodeWork::Dispatch { state }`
+variant) lives at `crate::machine::execute::nodes`, outside the
+`scheduler/` submodule. The wider visibility is the minimum needed for
+`NodeWork` to name `DispatchState`; no caller outside the execute tree
+sees the carrier.
+
+The drain-end cycle-detection guard (`NodeStore::unresolved`)
+summarizes parked slots from the state-carried expression rather than
+`NodeWork::Dispatch.expr`. The Track installers drop the `Dispatch.expr`
+field to an empty placeholder once the slot transitions to a parked
+variant, so `DispatchState::parked_carrier_expr` walks each variant's
+`Option<Track>` fields in install-precedence order to return the
+expression the user-facing diagnostic should sample.
 
 ## `KObject` and the model/core boundary
 
@@ -541,6 +1003,112 @@ loops. What it can't do cheaply:
 The constant factor is the price; the behaviors above are what bought
 it.
 
+## Lexical provenance chain
+
+Every dispatched node carries an immutable
+[`LexicalFrame`](../src/machine/core/lexical_frame.rs) recording its
+position in the source-level block nesting:
+
+```rust
+struct LexicalFrame {
+    scope_id: ScopeId,
+    index: usize,
+    parent: Option<Rc<LexicalFrame>>,
+}
+```
+
+The head is the innermost enclosing block; the chain walks outward
+through every enclosing lexical block; `parent: None` at the tail marks
+a top-level statement. Sibling statements in the same block share their
+`parent` `Rc` (cactus sharing), so the chain is constant-space per
+sibling on top of the shared spine.
+
+### Single entry point: `Scheduler::enter_block`
+
+Every dispatched node has a chain because every new lexical block is
+entered through one primitive. `Scheduler::enter_block(scope_id,
+statements, scope)` prepends a frame `(scope_id, i)` for each
+statement `i` onto the current ambient chain and submits the
+statements as dispatch nodes:
+
+- Top-level statements
+  ([`interpret`](../src/machine/execute/interpret.rs)) enter through
+  `enter_block(root.id, exprs, root)` against an empty parent chain.
+- `MODULE` and `SIG` bodies enter through
+  [`enter_body_block`](../src/machine/core/kfunction/scheduler_handle.rs),
+  which delegates to `enter_block`.
+- FN, FUNCTOR, MATCH-arm, and TRY-arm bodies split via the shared
+  [`split_body_statements`](../src/machine/core/kfunction/body.rs) helper
+  (same all-`Expression` rule that `enter_body_block` uses) — the first
+  N-1 statements submit as siblings into the body / arm scope at chain
+  indices `1..N-1`, and the FN-slot / MATCH-slot / TRY-slot tail-replaces
+  into the last statement at index `N` via
+  [`BodyResult::tail_with_frame_at_index`](../src/machine/core/kfunction/body.rs)
+  or [`BodyResult::tail_with_block_at_index`](../src/machine/core/kfunction/body.rs).
+  TCO is preserved on the last statement. Single-statement bodies pass
+  through at index 0.
+- FN bodies route through `KFunction::invoke` (see below — the chain
+  shape is special because the call site's chain is not the body's
+  lexical chain).
+
+The "every dispatched node has a chain" invariant is a debug
+assertion in the strict
+[`Scheduler::add_with_chain`](../src/machine/execute/scheduler/submit.rs)
+path; the public `add` path auto-roots a chain when no ambient one is
+present via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
+(so REPL-style submissions outside `enter_block` see every prior bind
+in the target scope).
+
+### FN-body chain assembly
+
+A function's body chain depth must equal the **lexical** nesting of
+its definition site, not the **call** depth — otherwise tail-recursion
+and mutual tail-recursion would grow the chain without bound.
+[`assemble_body_chain`](../src/machine/core/lexical_frame.rs) walks
+the FN's captured `outer` scope chain (the lexical-definition path
+set up by `CallArena::new`) and, for each enclosing scope, looks it
+up in the **call-site** chain via `LexicalFrame::index_for`. Hits
+become frames; the result is prepended with the body's own
+`(body_scope.id, body_index)` head — `body_index = 0` for single-
+statement bodies, `N` for the multi-statement tail-into-last path so
+the last statement's cutoff admits every earlier sibling. Misses
+("this enclosing lexical block is not on the call-site chain — it has
+already returned") drop out of the chain rather than adding frames.
+
+A tail-recursive FN therefore produces an identical-shape chain on
+every iteration; a non-tail recursive call does the same; mutual
+tail-recursion across two FNs produces chains bounded by the lexical
+depth of whichever body is currently dispatching, not the call
+stack's depth.
+
+### Arms as own blocks
+
+Each `MATCH` arm and each `TRY` body / `WITH` arm submits through
+`enter_block` against a fresh `child_under` scope. The structural
+consequence: a `LET` inside a `TRY` body binds into the arm-local
+scope and does not survive past the `TRY` (test:
+[`try_body_let_not_visible_after_try`](../src/builtins/try_with/tests.rs)).
+This closes the **divergent-bind hazard** at the source level — a
+binding visible only on one arm's runtime branch can't leak into the
+enclosing block where its visibility would depend on which arm fired.
+
+### Read-side hook
+
+The chain is read by name resolution through
+[`LexicalFrame::index_for(scope_id)`](../src/machine/core/lexical_frame.rs):
+the lookup primitive that returns the consumer's statement index in a
+given scope (or `None` when that scope is not on the chain — "already
+returned", visibility unconstrained). The
+[`visible`](../src/machine/core/scope.rs) predicate consumes it as
+`b.nominal_binder || b.idx < cutoff`; the value-side
+`Scope::resolve_with_chain`, the type-side `resolve_type_with_chain`, the
+bare-identifier `lookup_with_chain`, and the per-scope
+[`Bindings::lookup_value`](../src/machine/core/bindings.rs) /
+`lookup_type` / `lookup_function` lookups (the last covering both the
+overload-bucket filter and the in-flight `pending_overloads` fall-through
+in one pass) all filter through it. The gate is `chain = None`-bypassed
+for test fixtures and builtin-registration paths.
+
 ## Open work
 
 - **Inference and search as scheduler work**
@@ -558,14 +1126,3 @@ it.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
-- **Unified walk + strict-only admission**
-  ([roadmap/dispatch_fix/unified-walk.md](../roadmap/dispatch_fix/unified-walk.md)).
-  Collapse W1 (function-candidate ancestor walk) and N×W3 (per bare-name slot
-  ancestor walks) into a single unified walk; replace strict-then-tentative
-  admission with strict-only, branching the Empty case explicitly on bare-name
-  resolution outcomes (`Deferred` / `ParkOnProducers` / `UnboundName`); carve
-  out no-keyword expressions (single token, type call, function-value call)
-  into a candidate-machinery-free fast lane. Final phase of the dispatch-fix
-  project — see [roadmap/dispatch_fix/](../roadmap/dispatch_fix/) for the
-  preceding lexical-provenance, index-gate, and nested-binder phases this
-  builds on.

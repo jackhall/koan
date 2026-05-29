@@ -82,13 +82,33 @@ types on the variant directly. `KType` is not `Copy`; structural payloads are
 `Box`ed where the variant would otherwise be self-referential.
 
 **Surface syntax** is a glued-right `:` sigil opening an S-expression
-type-expression group. The parser treats `:(...)` as a type-position frame
-anchored to the `:` — `:(List Number)` is one
-[`ExpressionPart::Type`](../../src/machine/model/ast.rs) carrying a structured
-`TypeExpr`, not four tokens. `<` and `>` flow through unencumbered as
-keyword tokens, leaving the arithmetic comparison operators available. The
-framing logic lives in
-[type_expr_frame.rs](../../src/parse/type_expr_frame.rs).
+type-expression group. The parser treats `:(...)` as a parse-context marker
+anchored to the `:` — every sigil emits one
+[`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../../src/machine/model/ast.rs)
+wrapping the raw inner expression verbatim, with no shape recognition at
+parse time. Shape decisions (positional `:(List Number)`, keyworded
+`:(LIST OF Number)`, user-functor `:(MyFunctor (T = IntOrd))`, etc.) are the
+dispatcher's responsibility — the parser's only job is to flag "this slot
+evaluates to a type". `<` and `>` flow through unencumbered as keyword
+tokens, leaving the arithmetic comparison operators available. The framing
+logic lives in [frame.rs](../../src/parse/frame.rs) (`Frame::TypeExpr`);
+the dispatcher's `fast_lane_sigiled_type_expr` handler
+([dispatch.rs](../../src/machine/execute/scheduler/dispatch.rs))
+tail-replaces the slot with a `Dispatch` of the wrapped expression. See
+[type-language-via-dispatch.md](type-language-via-dispatch.md) for the full
+sigil-and-dispatch contract.
+
+**Keyworded surface overloads** for the four builtin parameterized
+constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
+`FUNCTOR <sig> -> _` — register in
+[`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
+alongside the older `LIST_OF` / `DICT_OF` / `FUNCTION_OF` /
+`MODULE_TYPE_OF` builtins in
+[`type_ops/`](../../src/builtins/type_ops.rs). Both surfaces produce
+`KObject::KTypeValue(KType::...)` carriers; the keyworded forms are the
+canonical syntax served by the type-language dispatch path, and the
+`type_ops/` forms are the value-side construction primitives that
+dispatched type-expression sub-expressions assemble through.
 
 ### Variance
 
@@ -104,7 +124,7 @@ Three sites consume parameterized types, and each has its own behavior:
 | Site | What it does | Variance |
 | --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(List Any)` accepts any list because `Any.matches_value(_)` is always true; `:(Dict Str Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(List Number)` ≺ `:(List Any)`, `:(Dict Str Number)` ≺ `:(Dict Str Any)`, `:(Function (Number) -> Str)` ≺ `:(Function (Any) -> Any)`. |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(List Number)` ≺ `:(List Any)`, `:(Dict Str Number)` ≺ `:(Dict Str Any)`, `:(Function (Number) -> Str)` ≺ `:(Function (Any) -> Any)`. |
 | `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(Function (Number) -> Str)`, not `:(Function (Any) -> Str)`. |
 
 The combination is sound for dispatch even though `is_more_specific_than`
@@ -284,53 +304,98 @@ join an empty or heterogeneous literal memoizes) fills `:(List Any)` but not
 boundary.
 
 This makes element-only-differing overloads (`:(List Number)` vs `:(List Str)`)
-dispatchable across the forms a container argument takes:
+dispatchable across the forms a container argument takes. Admission is
+strict-only, driven by a per-`run_dispatch` `bare_outcomes` cache —
+[`signature_admits_strict`](../../src/machine/core/resolve_dispatch.rs)
+reads each bare-name slot's cached
+[`NameOutcome`](../../src/machine/core/resolve_dispatch.rs) once and
+admits accordingly. The forms:
 
 - **Evaluated argument** (`DESCRIBE (xs)`, a call result) — already a typed
-  `Future`; the carried-type check picks directly.
-- **Bare variable** (`DESCRIBE xs`) — the strict pass *peeks*: a bare `Identifier`
-  in a container slot resolves in the dispatch scope, and a name bound to a value is
-  admitted on that value's carried element type (`signature_admits_strict` in
-  [resolve_dispatch.rs](../../src/machine/core/resolve_dispatch.rs)). The peek
-  reuses the `Future` arm of `accepts_part` — `ExpressionPart::Future` holds a
-  reference, so no clone. Only container slots peek; binder (`Identifier` /
-  `TypeExprRef`) and lazy (`KExpression`) slots never do.
-- **Literal** (`DESCRIBE [1 2 3]`) — carries no binding to peek, so it admits both
-  overloads shape-only and the strict pass *ties*. The dispatch driver treats a
-  strict tie whose argument carries unevaluated eager parts as `Deferred` rather
-  than `AmbiguousDispatch`; the literal evaluates and the re-dispatch on the
-  resulting typed `Future` is element-aware. A tie that survives evaluation (e.g. an
-  empty list against two concrete-element overloads, both admitted vacuously)
-  carries no eager parts on the second pass and surfaces as `AmbiguousDispatch`.
+  `Future`; admission runs `arg.matches(part)` and `accepts_part` for the
+  carried-type check.
+- **Bare variable** (`DESCRIBE xs`) — the cache entry is
+  `NameOutcome::Resolved(obj)`. Admission tests
+  [`KType::accepts_part`](../../src/machine/model/types/ktype_predicates.rs)
+  against `ExpressionPart::Future(obj)` (the `Future` arm holds a reference,
+  no clone). A bare name whose value has the wrong carrier type
+  strict-rejects the overload; the call surfaces as `DispatchFailed` rather
+  than a bind-time `TypeMismatch`. Binder (`Identifier` / `TypeExprRef`) and
+  lazy (`KExpression`) slots skip the cache and admit shape-only — the slot
+  owns the name, so admission can't depend on whether `x` happens to be
+  bound or parked.
+- **Literal** (`DESCRIBE [1 2 3]`) — the cache entry is `None` (literals
+  aren't bare names) and admission runs `arg.matches(part)` shape-only.
+  Both element-typed overloads admit and the strict pass *ties*. The
+  dispatch driver treats a strict tie whose argument carries unevaluated
+  eager parts as `Deferred` rather than `AmbiguousDispatch`; the literal
+  evaluates and the re-dispatch on the resulting typed `Future` is
+  element-aware. A tie that survives evaluation (e.g. an empty list
+  against two concrete-element overloads, both admitted vacuously)
+  carries no eager parts on the second pass and surfaces as
+  `AmbiguousDispatch`.
 
-The peek reads only an already-bound value. A `Placeholder` (forward reference) or
-`Unbound` name isn't peeked, so it falls to the tentative pass — and the two diverge
-there:
+`Placeholder` (forward reference) and `Unbound` cache outcomes admit via
+shape-only `arg.matches(part)` rather than carrier-type check. The
+post-pick splice/park walk is the only place that produces precise per-slot
+`ParkOnProducers` / `UnboundName` diagnostics, so admission must not
+reject them. If no bucket admits anywhere, the resolver's post-walk
+fallback reads the cache by fixed precedence — placeholders > eager >
+unbound > pending overload > Unmatched — and surfaces the right
+`ResolveOutcome`:
 
-- A `Placeholder` name *will* bind, so when the tentative pass ties on one, dispatch
-  parks on the binder's producer and re-dispatches once it binds, where the now-bound
-  type lets the strict-pass peek pick (`ResolveOutcome::ParkOnProducers`, parked
-  through the same edges as the resolved-pick replay-park). This keeps dispatch
-  order-independent — `DESCRIBE xs` resolves to the same overload whether or not
-  `LET xs = …` had landed at first dispatch.
-- An `Unbound` name names nothing (no binding *and* no forward-declared placeholder),
-  so a tentative tie over it can never resolve. It surfaces as the precise
-  `UnboundName` error (`ResolveOutcome::UnboundName`), matching what the
-  single-overload path reports once its auto-wrapped name evaluates — not a generic
-  dispatch miss. This relies on every forward-declared name having its placeholder
-  installed before a consumer dispatches, so `Unbound` is definitive rather than
-  transient.
+- A `Placeholder` name *will* bind, so the fallback surfaces
+  `ResolveOutcome::ParkOnProducers(producers)`. Dispatch parks on the
+  binder's producer and re-dispatches once it binds; the rebuilt cache
+  carries `Resolved(obj)` and strict admission picks. This keeps dispatch
+  order-independent within the visibility window — `DESCRIBE xs` resolves
+  to the same overload whether or not `LET xs = …` had landed at first
+  dispatch, provided the binding is lexically visible to the reference
+  (see [Overload bucket visibility filter](#overload-bucket-visibility-filter)).
+  Park parking goes through the same edges as the resolved-pick
+  replay-park.
+- An `Unbound` name names nothing (no visible binding *and* no
+  forward-declared placeholder visible at the consumer's chain position),
+  so the fallback surfaces `ResolveOutcome::UnboundName(name)` — the
+  precise error matching what the single-overload path reports for an
+  unresolved bare name, not a generic dispatch miss.
 
-## Open work
+Specificity ranks `is_more_specific_than` so that concrete carrier types
+beat the unconstrained-name slot types (`Identifier` / `TypeExprRef`). A
+call like `ATTR p z` where `p` resolves to a `Struct` admits both a
+concrete `ATTR <s:Struct>` overload and an `ATTR <s:Identifier>` fallback;
+the concrete overload wins by specificity without tying.
 
-- **Unified walk + strict-only admission**
-  ([roadmap/dispatch_fix/unified-walk.md](../../roadmap/dispatch_fix/unified-walk.md)).
-  Replace strict-then-tentative with strict-only; specificity ranking becomes
-  a per-scope tiebreak. Innermost-scope wins; cross-scope ranking goes away.
-  Final phase of the dispatch-fix project — see
-  [roadmap/dispatch_fix/](../../roadmap/dispatch_fix/) for the index-gated
-  resolution phase that supplies the structural `Placeholder` vs `Unbound`
-  split this admission rule relies on.
+### Overload bucket visibility filter
+
+Function-bucket lookup pre-filters by per-overload visibility before the strict
+admit predicate runs. Each `functions` entry carries a per-overload
+[`BindingIndex`](../../src/machine/core/bindings.rs) — the lexical statement
+index at which the overload was registered, paired with a `nominal_binder` flag.
+[`Bindings::lookup_function`](../../src/machine/core/bindings.rs) consults
+the consumer's `chain_cutoff` (the per-scope translation of its
+[`LexicalFrame`](../../src/machine/core/lexical_frame.rs) chain) and drops any
+overload whose `BindingIndex` is not visible — same strict
+`idx < cutoff` predicate as [`Scope::resolve_with_chain`](../../src/machine/core/scope.rs).
+A consumer between two same-bucket overloads sees only the earlier; the
+later-sibling overload is hidden, and dispatch falls through to outer scopes
+unaffected by the not-yet-visible registration. The `nominal_binder` carve-out
+does **not** apply to FN-bucket overloads — they're value-style gated.
+[`OverloadBucket::pick`](../../src/machine/core/resolve_dispatch.rs) receives
+the pre-filtered survivor list (a non-empty `FunctionLookup::Bucket` arm) and
+runs only the admit predicate over it. When no bucket admits at a given
+scope but a `pending_overloads[key]` entry is visible, the same lookup falls
+through to `FunctionLookup::Pending(NodeId)` and the dispatcher records the
+innermost such producer for a park-and-replay on wake.
+
+The result: an FN reference resolves under the same lexical-position rule as a
+value-LET reference. Forward calls between sibling FNs work through the
+`nominal_binder` carve-out — an FN's name binding is itself nominal so the
+call's *resolve* sees it across the sibling cutoff, while the bucket entry for
+each new overload remains gated on its own `BindingIndex`. A bare value-LET
+forward reference inside a sibling expression surfaces `UnboundName` directly:
+visibility is lexical, and the parking edges are reserved for visible-but-not-ready
+producers.
 
 ## Known limitations
 

@@ -10,6 +10,7 @@ mod arena;
 mod bindings;
 mod kerror;
 pub(crate) mod kfunction;
+mod lexical_frame;
 mod pending;
 mod resolve_dispatch;
 mod resolve_type_expr;
@@ -21,9 +22,15 @@ pub mod source;
 mod tests;
 
 pub use arena::{CallArena, RuntimeArena};
-pub use bindings::{ApplyOutcome, Bindings, PendingBinderGuard, PendingTypeEntry};
+pub use bindings::{
+    ApplyOutcome, BindingIndex, Bindings, FunctionLookup, PendingBinderGuard, PendingTypeEntry,
+    Resolution,
+};
 pub use kerror::{Frame, KError, KErrorKind};
-pub use resolve_dispatch::{ResolveOutcome, Resolved};
+pub use lexical_frame::{assemble_body_chain, LexicalFrame};
+pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
+#[cfg(test)]
+pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_type_expr::ResolveTypeExprOutcome;
-pub use scope::{KFuture, Resolution, Scope, ScopeKind};
+pub use scope::{KFuture, Scope, ScopeKind};
 pub use scope_id::ScopeId;

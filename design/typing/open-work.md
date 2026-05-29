@@ -21,9 +21,11 @@ Future work on the type and module system. Each entry points at a
   of stage 5's implicit dispatch.
 - [Stage 5 — Modular implicits](../../roadmap/predicate_typing/modular-implicits.md)
   — implicit module parameters, lexical resolution, strict-on-ambiguity
-  policy, explicit-application disambiguation. The "real" generic-code
-  ergonomics arrive here, and the multi-parameter dispatch the current
-  slot-specificity ranking can't express on its own.
+  policy, explicit-application disambiguation. The call-site witness-elision
+  layer over the already-first-class module + signature substrate
+  ([modules.md](modules.md)); also lands the signature-bound module-typed
+  dispatch the current `AnyModule` wildcard lacks, plus multi-abstract-type
+  implicit resolution for signatures spanning multiple type slots.
 - [Stage 6 — Equivalence-checked coherence](../../roadmap/predicate_typing/equivalence-checking.md)
   — cross-implicit equivalence testing using the stage-4 engine. The
   coherence story.

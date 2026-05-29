@@ -1,5 +1,5 @@
 //! Scheduler-facing types a builtin body uses to spawn additional work: stable `NodeId`
-//! handles, the `SchedulerHandle` trait (with the default `plan_body_statements` planner
+//! handles, the `SchedulerHandle` trait (with the default `enter_body_block` planner
 //! shared by binder builtins), and the `CombineFinish` closure type for `Combine` slots.
 //! Defined in `kfunction` so `BuiltinFn` / `BodyResult` can name them without `kfunction`
 //! importing from `execute`; `execute/scheduler.rs` impls `SchedulerHandle`.
@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{CallArena, Scope};
+use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::core::kerror::KError;
 use crate::machine::model::values::KObject;
 
@@ -81,14 +81,43 @@ pub trait SchedulerHandle<'a> {
     /// `KFunction(_, Some(rc))`, ...) keeps strong_count > 1 and refuses reuse.
     fn try_take_reusable_frame_for_tail(&mut self) -> Option<Rc<CallArena>>;
 
+    /// Active slot's lexical chain. Mirrors [`Self::current_frame`]. Builtins that
+    /// assemble a new chain (the FN-body invoke path) read this to find the call-
+    /// site chain; nothing else reads it today. See `LexicalFrame`.
+    fn current_lexical_chain(&self) -> Option<Rc<LexicalFrame>>;
+
+    /// Enter a new lexical block. Mints a frame `(scope_id, i)` per statement (parent
+    /// = current `active_chain`) and dispatches each statement against `scope`,
+    /// returning their `NodeId`s. The single primitive every block-entry site funnels
+    /// through: top-level (`interpret.rs`), MODULE / SIG body
+    /// (`enter_body_block`), and TRY body's success-as-block.
+    fn enter_block(
+        &mut self,
+        scope_id: ScopeId,
+        statements: Vec<KExpression<'a>>,
+        scope: &'a Scope<'a>,
+    ) -> Vec<NodeId>;
+
+    /// Schedule `expr` against `scope` with `chain` attached explicitly — escape
+    /// hatch for callers that have already computed the right chain (FN-body invoke,
+    /// `enter_block`'s internals). The ambient `add_dispatch` reads `active_chain`
+    /// instead; this method is the only way to override that default.
+    fn add_dispatch_with_chain(
+        &mut self,
+        expr: KExpression<'a>,
+        scope: &'a Scope<'a>,
+        chain: Rc<LexicalFrame>,
+    ) -> NodeId;
+
     /// Schedule each top-level statement in `body_expr` against `scope` and return their
-    /// `NodeId`s.
+    /// `NodeId`s. Routes through [`Self::enter_block`] with `scope.id`, so the body
+    /// statements get fresh `(scope.id, i)` frames stacked over the call-site chain.
     ///
     /// A body counts as multi-statement only when *every* part is `ExpressionPart::Expression(_)`;
     /// otherwise the whole body is dispatched as a single statement. The stricter all-
     /// Expression rule prevents `LET x = (FN ...)` from being mis-split (its inner
     /// `Expression` part would otherwise look like a second statement).
-    fn plan_body_statements(
+    fn enter_body_block(
         &mut self,
         scope: &'a Scope<'a>,
         body_expr: KExpression<'a>,
@@ -99,18 +128,19 @@ pub trait SchedulerHandle<'a> {
                 .iter()
                 .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
 
-        if is_multi_statement {
+        let statements: Vec<KExpression<'a>> = if is_multi_statement {
             body_expr
                 .parts
                 .into_iter()
                 .filter_map(|p| match p.value {
-                    ExpressionPart::Expression(e) => Some(self.add_dispatch(*e, scope)),
+                    ExpressionPart::Expression(e) => Some(*e),
                     _ => None,
                 })
                 .collect()
         } else {
-            vec![self.add_dispatch(body_expr, scope)]
-        }
+            vec![body_expr]
+        };
+        self.enter_block(scope.id, statements, scope)
     }
 }
 

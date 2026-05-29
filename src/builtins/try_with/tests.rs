@@ -112,15 +112,40 @@ fn wildcard_arm_catches_when_no_specific_match() {
     assert_eq!(bytes, b"caught wildcard\n");
 }
 
+/// Under the lexical-block model the TRY body runs in a fresh `child_under`
+/// scope. `LET x = 2` inside the body creates a local binding (shadow), not a
+/// rebind of the outer `x`, so the TRY succeeds and the WITH arm never fires.
+/// Pinned here as the divergent-bind hazard the lexical structure removes:
+/// pre-refactor this body leaked into the enclosing scope and produced a
+/// hidden Rebind. See roadmap/dispatch_fix/lexical-provenance.md §8.
 #[test]
-fn wildcard_catches_hidden_rebind_kind() {
+fn try_body_let_creates_local_binding_not_rebind() {
     let bytes = run_program(
         "LET x = 1\n\
          TRY (LET x = 2) WITH (\
             _ -> (PRINT it.kind)\
          )",
     );
-    assert_eq!(bytes, b"rebind\n");
+    assert!(
+        bytes.is_empty(),
+        "TRY body's LET should bind locally, not raise Rebind: got {:?}",
+        String::from_utf8_lossy(&bytes),
+    );
+}
+
+/// Companion: the TRY body's local LET must NOT survive past the TRY. The body
+/// scope is `child_under(scope)`, so the binding lives in that child and
+/// disappears when the slot's chain is dropped.
+#[test]
+fn try_body_let_not_visible_after_try() {
+    let bytes = run_program(
+        "LET x = 1\n\
+         TRY (LET y = 99) WITH (_ -> (PRINT it.kind))\n\
+         PRINT x",
+    );
+    // `PRINT x` reads the outer x (still 1), confirming the TRY body's binding
+    // didn't leak and the success path returned normally.
+    assert_eq!(bytes, b"1\n");
 }
 
 #[test]

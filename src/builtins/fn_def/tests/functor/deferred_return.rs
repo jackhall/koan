@@ -85,7 +85,7 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
     // pairing this item exists to enable.
     let data = scope.bindings().data();
     assert!(
-        matches!(data.get("IntOrdView"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
+        matches!(data.get("IntOrdView").map(|(o, _)| *o), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
         "IntOrdView should be an opaquely-ascribed module satisfying WithZero's VAL zero slot",
     );
     drop(data);

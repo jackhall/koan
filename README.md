@@ -134,7 +134,6 @@ src/
 │   ├── frame.rs            Frame enum — per-paren-group parser sub-state
 │   ├── parse_stack.rs      ParseStack — Frame stack with invariant-preserving methods
 │   ├── triple_list.rs      helper for triple-list parsing
-│   ├── type_expr_frame.rs  Frame::TypeExpr sub-state for `:(...)` type-expression groups
 │   ├── tokens.rs           classify tokens, compound-operator desugaring
 │   └── operators.rs        operator registry
 ├── runtime.rs           pub mod builtins / machine
@@ -148,13 +147,12 @@ src/
     │   ├── attr.rs
     │   ├── fn_def.rs
     │   ├── fn_def/signature.rs   parameter-list parsing for FN
-    │   ├── call_by_name.rs
-    │   ├── cons.rs
     │   ├── match_case.rs
     │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
     │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
-    │   ├── type_call.rs
-    │   ├── type_ops.rs            LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF
+    │   ├── type_call.rs           legacy positional-sigil type-token construction path
+    │   ├── type_constructors.rs   keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
+    │   ├── type_ops.rs            LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF / TYPE_CONSTRUCTOR / SIG_WITH
     │   ├── union.rs
     │   ├── struct_def.rs
     │   ├── struct_value.rs        shared struct-construction representation
@@ -192,11 +190,12 @@ src/
         ├── core.rs            module surface for core/
         ├── core/
         │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
-        │   ├── bindings.rs    Bindings façade — four-map (data/functions/placeholders/types) with the validated try_apply write path and try_register_type for nominal type identity
+        │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
         │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
         │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
         │   ├── scope.rs       Scope, KFuture, plus Scope::resolve_dispatch and the Resolved / ResolveOutcome types
         │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
+        │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
         │   ├── kfunction.rs   KFunction, Body, BodyResult — body shapes plus the dispatch-to-execute bridge
         │   └── kfunction/
         │       ├── argument_bundle.rs   ArgumentBundle — resolved-slot carrier

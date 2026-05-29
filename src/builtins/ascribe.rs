@@ -32,8 +32,8 @@ pub fn body_opaque<'a>(
     // Mirror the source module's bindings into the new scope by reference (values are
     // arena-allocated and immutable). The `try_bulk_install_from` helper snapshots
     // `src.data`, releases the source guard, and replays each entry through the shared
-    // `try_apply` so the `KFunction → functions` dual-map mirror happens exactly once per
-    // entry — no separate functions-loop needed.
+    // `try_apply` so the `KFunction → functions` mirror happens exactly once per entry
+    // — no separate functions-loop needed.
     let src = m.child_scope();
     if let Err(e) = new_scope.bindings().try_bulk_install_from(src.bindings()) {
         return BodyResult::Err(e);
@@ -54,9 +54,9 @@ pub fn body_opaque<'a>(
     // default `AbstractType` mint for plain abstract-type slots (`LET Type = Number`).
     let mut minted: Vec<(String, KType<'a>)> = Vec::new();
     {
-        let sig_types = s.decl_scope().bindings().types();
+        let sig_bindings = s.decl_scope().bindings();
         for name in abstract_type_names_of(s.decl_scope()) {
-            let kt = match sig_types.get(&name) {
+            let kt = match sig_bindings.lookup_type(&name, None) {
                 Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }) => {
                     KType::UserType {
                         kind: UserTypeKind::TypeConstructor { param_names: param_names.clone() },
@@ -130,17 +130,26 @@ fn shape_check<'a>(
     sig: &crate::machine::model::values::Signature<'a>,
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
-    // Snapshot abstract-type names first so the helper's `data` borrow releases before
-    // we acquire our own — honors the `types → functions → data` borrow order.
     let abstract_names: std::collections::HashSet<String> =
         abstract_type_names_of(sig.decl_scope()).into_iter().collect();
-    let sig_data = sig.decl_scope().bindings().data();
-    let src_data = src_scope.bindings().data();
-    for name in sig_data.keys() {
+    let sig_names: Vec<String> = sig
+        .decl_scope()
+        .bindings()
+        .iter_data()
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let src_names: std::collections::HashSet<String> = src_scope
+        .bindings()
+        .iter_data()
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    for name in sig_names {
         if abstract_names.contains(name.as_str()) {
             continue;
         }
-        if !src_data.contains_key(name) {
+        if !src_names.contains(&name) {
             return Err(KError::new(KErrorKind::ShapeError(format!(
                 "module does not satisfy signature `{}`: missing member `{}`",
                 sig.path, name
@@ -156,19 +165,16 @@ fn shape_check<'a>(
 /// the helper's answer robust to either binding home; names already in `types` are not
 /// duplicated.
 ///
-/// Goes through the [`Bindings`](crate::machine::core::Bindings) façade — no
-/// raw `RefCell` reach-around. Drops `types_guard` before acquiring `data_guard` to
-/// honor the `types → functions → data` borrow ordering.
+/// Goes through the [`Bindings`](crate::machine::core::Bindings) façade via the
+/// value-yielding `iter_types` / `iter_data` helpers — no raw `RefCell`
+/// reach-around — so the underlying borrows release at the iterator boundary.
 pub(super) fn abstract_type_names_of<'a>(scope: &crate::machine::Scope<'a>) -> Vec<String> {
     let bindings = scope.bindings();
-    let types_guard = bindings.types();
-    let mut names: Vec<String> = types_guard.keys().cloned().collect();
-    drop(types_guard);
+    let mut names: Vec<String> = bindings.iter_types().into_iter().map(|(n, _)| n).collect();
     let types_set: std::collections::HashSet<String> = names.iter().cloned().collect();
-    let data_guard = bindings.data();
-    for k in data_guard.keys() {
-        if is_abstract_type_name(k) && !types_set.contains(k) {
-            names.push(k.clone());
+    for (name, _) in bindings.iter_data() {
+        if is_abstract_type_name(&name) && !types_set.contains(&name) {
+            names.push(name);
         }
     }
     names

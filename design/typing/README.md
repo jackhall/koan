@@ -20,14 +20,14 @@ Type-system mechanics:
   slot-specificity, and the limitations the static-typing work will close.
 - [elaboration.md](elaboration.md) — how a type name resolves to a
   `KType`: the scheduler-driven elaborator, recursion via threaded-set
-  recognition, module-qualified names, the dual-map binding home that
+  recognition, module-qualified names, the binding-map partition that
   separates type-name lookups from value-name lookups, the
   `KObject::TypeNameRef` bare-leaf carrier, and the two-layer
   resolution memo that amortizes elaboration cost.
 - [user-types.md](user-types.md) — `KType::UserType` as the
   per-declaration identity for STRUCT, named UNION, MODULE, opaque
   ascription, and NEWTYPE. Covers specificity stratification with the
-  `AnyUserType` wildcard, finalize-time dual-write through
+  `AnyUserType` wildcard, finalize-time atomic install through
   `Scope::register_nominal`, cycle close for mutually recursive nominals,
   and the `NEWTYPE` keyword's `Wrapped` carrier with its newtype-over-newtype
   collapse invariant encoded in the field type.
@@ -49,6 +49,11 @@ Module-system mechanics:
 - [scheduler.md](scheduler.md) — type inference and implicit search as
   ordinary `Dispatch` / `Bind` scheduler work, with no parallel
   `Infer` / `ImplicitSearch` node-kind track.
+- [type-language-via-dispatch.md](type-language-via-dispatch.md) — the
+  sigil `:(...)` as a parse-context marker; parameterized type
+  construction (`LIST`, `MAP`, `FN`, `Functor`) and user-defined
+  functor application registered as keyworded overloads sharing the
+  value-side candidate-bucket and binder-admission machinery.
 
 [open-work.md](open-work.md) carries the roadmap pointers for the
 module-system stages plus the cross-cutting standard-library,
@@ -56,10 +61,13 @@ group-operators, and JIT items.
 
 ## Properties of this design
 
-- **Multi-parameter dispatch is native.** A signature can declare multiple
-  abstract types; implicit search dispatches on all of them, so binary-operator
-  dispatch (`+`, `==`, `intersect`) and other multi-type predicates have a
-  uniform mechanism rather than a partial-order tiebreak.
+- **Multi-abstract-type implicit resolution is native.** A signature can
+  declare multiple abstract types; implicit search aligns all of them against
+  the call site's argument types simultaneously, so binary-operator dispatch
+  (`+`, `==`, `intersect`) and other multi-type predicates pick the right
+  implicit through one mechanism rather than ranking single-type candidates
+  against each other. (Multi-parameter dispatch on declared types is already
+  native to FN; this property is about the implicit-search layer on top.)
 - **Higher-kinded abstraction is native.** Signatures can declare type
   constructors (`(TYPE_CONSTRUCTOR Type)`); functors can take and return them.
 - **Representation hiding is principled.** Opaque ascription is the

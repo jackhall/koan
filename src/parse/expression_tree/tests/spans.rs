@@ -203,13 +203,15 @@ fn ascription_compound_keyword_spans_two_bytes() {
 
 #[test]
 fn type_sigil_paren_wrapper_starts_at_colon() {
-    // `:(List Number)` — the Spanned wrapper around the resulting `Type` covers the
-    // leading `:` and the closing `)`. span = (0, 14).
+    // `:(List Number)` — the Spanned wrapper around the resulting `SigiledTypeExpr`
+    // covers the leading `:` and the closing `)`. span = (0, 14). Post-
+    // type-language-via-dispatch the parser stores the inner as a raw
+    // `KExpression` (no fold); shape recognition is the dispatcher's job.
     let exprs = top(":(List Number)");
     let outer = &exprs[0];
     assert_eq!(span_of(outer), Some(s(0, 14)));
     assert_eq!(outer.parts[0].span, Some(s(0, 14)));
-    assert!(matches!(outer.parts[0].value, ExpressionPart::Type(_)));
+    assert!(matches!(outer.parts[0].value, ExpressionPart::SigiledTypeExpr(_)));
 }
 
 #[test]
