@@ -30,17 +30,36 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
 
 /// Inner scope's `Any` overload shadows the outer scope's more-specific `Number`
 /// overload — pure lexical shadowing, innermost match wins regardless of specificity
-/// at outer levels.
+/// at outer levels. Triggered via a keyworded shape so the routing reaches bucket
+/// dispatch; bare-literal shapes fast-lane via `LiteralPassThrough` and never
+/// consult overload buckets.
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
     let arena = RuntimeArena::new();
     let outer = run_root_bare(&arena);
-    register_builtin(outer, "outer_specific", one_slot_sig("v", KType::Number), body_outer_number);
+    let outer_sig = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Number }),
+        ],
+    };
+    register_builtin(outer, "outer_specific", outer_sig, body_outer_number);
 
     let inner = arena.alloc_scope(outer.child_for_call());
-    register_builtin(inner, "inner_loose", one_slot_sig("v", KType::Any), body_inner_any);
+    let inner_sig = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
+        ],
+    };
+    register_builtin(inner, "inner_loose", inner_sig, body_inner_any);
 
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0)))]);
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("MARK".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+    ]);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, inner);
     sched.execute().unwrap();

@@ -82,12 +82,16 @@ What's shipped that the open items below build on:
   the unconstrained-name slot types (`Identifier` / `TypeExprRef`) so an
   `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback.
   No-keyword shapes (`BareIdentifier`, `BareTypeLeaf`,
-  `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) ride
-  dedicated fast-lane handlers that never enter the candidate walk.
+  `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`,
+  `LiteralPassThrough`) ride dedicated fast-lane handlers that never
+  enter the candidate walk. With `LiteralPassThrough` covering
+  single-part literal-shaped expressions (`(99)`, `("x")`, `([1 2 3])`,
+  `((inner))`), the fast-lane axis is exhaustive over keyword-free
+  expressions: `Keyworded` ⟺ at-least-one keyword.
 - *Stateful dispatch driver.* Every `DispatchShape` variant runs on the
   state-bearing `run_dispatch` driver, which is now the sole dispatch
   body. The carrier shape (`DispatchState` enum + per-variant
-  structs), `recent_wakes` wake-attribution side-channel, five
+  structs), `recent_wakes` wake-attribution side-channel, six
   fast-lane variants, the `Keyworded` variant with its eager-subs /
   bare-name-park / overload-park tracks, and the `FunctionValueCall`
   fast lane with its eager-subs / head-placeholder tracks all carry
@@ -215,7 +219,7 @@ analysis. The remaining items are source-level — collapse the
 keyword-free dispatch surface and concentrate the nominal dual-write
 protocol:
 
-- [Collapse all keyword-free dispatch into `dispatch.rs`](roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md)
+- [Relocate struct + tagged-union constructors to `dispatch::constructors`](roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md)
 - [Concentrate the nominal dual-write protocol in `core::nominal`](roadmap/refactor/nominal-dual-write-protocol.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

@@ -21,8 +21,9 @@ pub(crate) use signature::binder_bucket;
 pub(crate) use signature::binder_name;
 
 /// At least one `Keyword` is required in the signature: an all-Argument signature
-/// would shadow `value_pass` (or the `BareIdentifier`/`BareTypeLeaf` fast lanes for
-/// the single-arg case), so the dispatcher needs a fixed token to key on.
+/// has no fast-lane shape to key on (every keyword-free expression routes through
+/// `BareIdentifier` / `BareTypeLeaf` / `LiteralPassThrough` / `ConstructorCall` /
+/// `FunctionValueCall` / `SigiledTypeExpr`), so the dispatcher needs a fixed token.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,

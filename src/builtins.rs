@@ -31,7 +31,6 @@ mod type_ops;
 mod union;
 mod using_scope;
 mod val_decl;
-mod value_pass;
 
 /// Route a resolved verb-object to its construction primitive's `apply`. Returns
 /// `Some` for `TaggedUnionType` / `StructType`; `None` otherwise.
@@ -171,7 +170,6 @@ pub fn default_scope<'a>(
 
     let_binding::register(scope);
     print::register(scope);
-    value_pass::register(scope);
     fn_def::register(scope);
     functor_def::register(scope);
     union::register(scope);

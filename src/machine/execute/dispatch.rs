@@ -43,9 +43,9 @@ pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
 pub use resolve_type_expr::{coerce_type_token_value, ResolveTypeExprOutcome};
-use single_poll::{BareIdState, BareTypeState, CtorState, SigilState};
+use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
 
-/// Pre-walk classification of a `KExpression` into the four no-keyword
+/// Pre-walk classification of a `KExpression` into the no-keyword
 /// fast-lane shapes plus the catch-all keyword-bearing shape.
 pub(super) enum DispatchShape {
     BareIdentifier,
@@ -58,6 +58,10 @@ pub(super) enum DispatchShape {
     FunctionValueCall,
     /// Single-part `:(...)` sigiled type-expression wrapper.
     SigiledTypeExpr,
+    /// Single-part literal-shaped expression — `Literal`, `Future`,
+    /// nested `Expression`, `ListLiteral`, or `DictLiteral`. Surfaces
+    /// the inner value without a bucket lookup.
+    LiteralPassThrough,
     /// A keyword appears anywhere in `expr.parts`, OR the expression
     /// doesn't fit any fast-lane shape.
     Keyworded,
@@ -77,6 +81,11 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
                 DispatchShape::BareTypeLeaf
             }
             ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
+            ExpressionPart::Literal(_)
+            | ExpressionPart::Future(_)
+            | ExpressionPart::Expression(_)
+            | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::DictLiteral(_) => DispatchShape::LiteralPassThrough,
             _ => DispatchShape::Keyworded,
         };
     }
@@ -297,6 +306,7 @@ pub(in crate::machine::execute) enum DispatchState<'a> {
     BareTypeLeaf(BareTypeState<'a>),
     ConstructorCall(CtorState<'a>),
     FunctionValueCall(Box<FnValueState<'a>>),
+    LiteralPassThrough(LitState<'a>),
     SigiledTypeExpr(SigilState<'a>),
     Keyworded(Box<KeywordedState<'a>>),
 }
@@ -387,6 +397,10 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         DispatchShape::SigiledTypeExpr => {
             debug_assert!(init.pre_subs.is_empty());
             Ok(single_poll::sigiled_type_expr(expr))
+        }
+        DispatchShape::LiteralPassThrough => {
+            debug_assert!(init.pre_subs.is_empty());
+            Ok(single_poll::literal_pass_through(ctx, expr, scope, idx))
         }
     }
 }

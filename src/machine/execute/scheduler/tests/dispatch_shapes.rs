@@ -356,9 +356,12 @@ fn fast_lane_on_struct_type_constructs() {
     let result = run_one(scope, parse_one("pt (x = 3, y = 4)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
-        4,
-        "struct construction must fast-lane the entry; trailing walks are \
-         the construction primitive + value-cell sub-Dispatches. Counter was {}",
+        2,
+        "struct construction must fast-lane the entry, and each value-cell \
+         sub-Dispatch must `LiteralPassThrough` instead of bucket-dispatching \
+         through `value_pass`. The two remaining entries are the construction \
+         primitive (re-dispatched tail) and the FnValueCall's eager-subs walk. \
+         Counter was {}",
         resolve_dispatch_entry_count(),
     );
     match result {
@@ -368,6 +371,44 @@ fn fast_lane_on_struct_type_constructs() {
             assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));
         }
         other => panic!("expected Struct, got {:?}", other.ktype()),
+    }
+}
+
+/// Single-part literal-shaped expressions — `(99)`, `("x")`, `([1 2 3])`,
+/// `({a = 1})`, `((inner))` — route through `LiteralPassThrough` instead of
+/// bucket-dispatching `value_pass`. The counter must stay at 0 for `(99)`
+/// because the fast lane surfaces the literal without consulting buckets.
+#[test]
+fn literal_pass_through_routes_via_fast_lane() {
+    use crate::builtins::test_support::{run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    reset_resolve_dispatch_entry_count();
+    let result = run_one(scope, parse_one("(99)"));
+    assert_eq!(
+        resolve_dispatch_entry_count(),
+        0,
+        "single-literal must bypass bucket dispatch; counter was {}",
+        resolve_dispatch_entry_count(),
+    );
+    assert!(matches!(result, KObject::Number(n) if *n == 99.0));
+}
+
+/// `([1 2 3])` parks the slot on a scheduler-side list-literal producer via the
+/// `Lift(Pending)` shape, never entering `resolve_dispatch`.
+#[test]
+fn literal_pass_through_routes_list_literal_via_fast_lane() {
+    use crate::builtins::test_support::{run_one, run_root_silent};
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    reset_resolve_dispatch_entry_count();
+    let result = run_one(scope, parse_one("([1 2 3])"));
+    assert_eq!(resolve_dispatch_entry_count(), 0);
+    match result {
+        KObject::List(items, _) => {
+            assert_eq!(items.len(), 3);
+        }
+        other => panic!("expected List, got {:?}", other.ktype()),
     }
 }
 

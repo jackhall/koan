@@ -1,136 +1,78 @@
-# Collapse all keyword-free dispatch into `dispatch.rs`
+# Relocate struct + tagged-union constructors to `dispatch::constructors`
 
-Replace the `value_pass` builtin with a `LiteralPassThrough` fast-lane
-shape, move the struct/tagged-union constructors out of `builtins`
-(they're dispatch-shape implementations, not user-facing builtins),
-flatten the `dispatch::single_poll` wrapper module, and split the
-resulting `dispatch.rs` into per-shape sibling files so the absorbed
-content lives below the size-charge knee. Establishes the invariant
-**keyword-free ⟺ Keyworded shape**, currently one-directional because
-`value_pass` leaks literals into `Keyworded`.
+Move `struct_value` and `tagged_union` out of `builtins/` to a new
+`execute::dispatch::constructors` peer module, drop their registered
+`struct_construct` / `tagged_union_construct` primitives, and route
+`apply` directly through `construct` via an eager-subs track on
+`CtorState` instead of a `BodyResult::Tail` re-dispatch.
 
-**Problem.** The dispatcher classifies expressions into a `Keyworded`
-catch-all plus five no-keyword fast-lane shapes (see
-[`classify_dispatch_shape`](../../src/machine/execute/dispatch.rs)).
-The keyword-absence gate is the principal discriminator: every
-keyword-bearing expression goes through `Keyworded`, and most
-keyword-free ones go through a fast lane (`BareIdentifier`,
-`BareTypeLeaf`, `ConstructorCall`, `FunctionValueCall`,
-`SigiledTypeExpr`). Three legacy details leak this clean partition:
-
-1. **Single-part literals fall through to `Keyworded`** because no
-   fast-lane shape covers them. The `value_pass` builtin
-   ([`src/builtins/value_pass.rs`](../../src/builtins/value_pass.rs))
-   exists purely to give the dispatcher a target for `(99)`,
-   `("x")`, `([1 2 3])`, etc., paying the full bucket-lookup +
-   argument-bundling + builtin-call pipeline for what is conceptually
-   a single arena re-allocation.
-2. **Constructor builtins register dead targets.** `struct_construct`
-   ([`src/builtins/struct_value.rs`](../../src/builtins/struct_value.rs))
-   and `tagged_union_construct`
-   ([`src/builtins/tagged_union.rs`](../../src/builtins/tagged_union.rs))
-   are registered with `register_builtin`, but the `ConstructorCall`
-   fast lane calls `struct_value::apply` / `tagged_union::apply`
-   directly without any name lookup. The `register` and
-   `primitive_body` functions plus the registered names
-   (`"struct_construct"` / `"tagged_union_construct"`) are referenced
-   only by their own registrations — dead code.
-3. **The five existing fast-lane states live in a wrapper module.**
-   [`src/machine/execute/dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)
-   holds `BareIdState`, `BareTypeState`, `CtorState`, `SigilState`
-   plus their `bare_identifier` / `bare_type_leaf` / `sigiled_type_expr`
-   / `constructor_call` / `schedule_constructor_body` functions. The
-   wrapper adds a depth-5 module whose only contents are the fast-lane
-   bodies that conceptually belong next to `classify_dispatch_shape`.
-
-The three are interlocked: collapsing `single_poll` makes
-`dispatch.rs` the natural home for the new `LiteralPassThrough` state;
-moving the constructors out of `builtins` only nets out structurally
-once their destination isn't deep under `single_poll`; the
-`value_pass` deletion is the smallest piece but it's what establishes
-the keywords⟺Keyworded equivalence. The collapse alone grows
-`dispatch.rs` past the per-file size-charge knee, so the final step
-splits the absorbed content into per-shape sibling files (one file
-per fast-lane shape, no new wrapper module).
+**Problem.** Two of the construction primitives are dispatch-shape
+implementations misfiled as user-facing builtins. `struct_construct`
+([`src/builtins/struct_value.rs`](../../src/builtins/struct_value.rs))
+and `tagged_union_construct`
+([`src/builtins/tagged_union.rs`](../../src/builtins/tagged_union.rs))
+are registered with `register_builtin`, but the `ConstructorCall` fast
+lane in
+[`single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)
+calls `struct_value::apply` / `tagged_union::apply` directly without
+any name lookup. The registered names are unreachable by user code —
+the bucket-lookup hit only happens because `apply` synthesizes a
+`BodyResult::Tail` that re-dispatches a `[Future(schema), …]`
+expression, which round-trips through Keyworded dispatch + bucket
+match + the registered primitive body just to call `construct`.
+[`builtins.rs:38`](../../src/builtins.rs)'s `dispatch_constructor`
+helper exists solely to bridge this routing.
 
 **Impact.**
 
-- `Keyworded` becomes a precise shape, not a misnomer: every
-  Keyworded dispatch has at least one keyword. The fast-lane axis
-  is exhaustive over keyword-free expressions.
-- Four whole files retire (`value_pass.rs`, `struct_value.rs`,
-  `tagged_union.rs`, `single_poll.rs`) and the constructor
-  implementations land in a new `dispatch::constructors` peer
-  module next to `dispatch.rs`.
-- Builtins module count drops by three; the dispatch subtree
-  flattens by one wrapper layer.
-- Runtime dispatch on parens-wrapped literals skips bucket lookup +
-  argument bundling + builtin call. Constructor dispatch loses one
-  layer of indirection.
-- Each fast-lane shape becomes a small self-contained file: a
-  reader investigating `BareIdentifier` dispatch loads ~80 lines of
-  one state plus its poll body, not a 700-line dispatch module.
+- Constructor implementations live next to their sole caller. The
+  `ConstructorCall` fast lane no longer reaches across the crate into
+  `builtins/`.
+- `apply` calls `construct` directly via a stateful `CtorState` that
+  parks on eager subs (for nested arg expressions like
+  `Point (x: a + b, y: 4)`), eliminating the tail re-dispatch through
+  the Keyworded path. Constructor dispatch drops the bucket-lookup
+  round-trip plus the `BodyResult::Tail` → `Dispatch` → bucket-match
+  → `primitive_body` → `construct` chain.
+- Builtins module count drops by two; the bridge helper
+  `dispatch_constructor` retires alongside.
 
-**Scoring.** The numbers below were measured via `modgraph` against
-the post-Pass-14 baseline (machine 218.98, crate 228.80) with
-`--reference-loc` fixing the denominator and `--delete` /
-`--delete-file` modelling the deletions. **That baseline is stale:**
-the dispatch-scheduler-facade refactor (hoisted dispatcher up to
-`execute::dispatch`, narrowed the scheduler surface) shipped after
-these measurements and re-shaped both the machine-root and crate
-trees. Re-score against the post-facade baseline before committing
-to a granularity; the relative ordering of the three sub-pieces
-should hold, but the absolute deltas will move.
-
-| Sub-piece | machine Δ | crate Δ |
-|---|---|---|
-| Flatten `single_poll` alone | +0.25 | −3.01 |
-| Delete `value_pass` + relocate constructors alone | +2.43 | +0.61 |
-| **Collapse bundle (all three together)** | **+3.12** | **−9.49** |
-
-The bundle is multiplicative, not additive — each piece enables the
-others. `single_poll` flattening removes the wrapper depth that
-made the constructor relocation costly; the deletions and
-relocations materialize the crate-level coupling drop (−9.20). The
-machine-root regression (+3.12) is the proximate motivation for the
-final split step, which the metric expects to bring machine-root Δ
-back to ≤ 0 without re-introducing the wrapper.
+**Scoring.** Measured against the post-Plan-A baseline
+(crate 306.71, machine::execute ~120.7 per root-loc, γ=50.0, T=325) on
+2026-05-29. Re-score with `tools/modgraph.py --regenerate --baseline
+observe/complexity.txt` after the working-tree edits land — the
+expectation is a small crate-Δ win (two deleted builtins entries net
+out two new `dispatch::constructors::*` entries; the dispatch subtree
+gains one child but the cross-crate `builtins → dispatch` edge
+disappears).
 
 **Directions.**
 
 - **Constructors land at `dispatch::constructors` peer, not merged
-  into `dispatch.rs` — decided.** The peer variant scored crate
-  Δ −9.49 vs the merged variant's −8.84; the peer also keeps
-  `dispatch.rs` smaller after the absorption.
-- **`LiteralPassThrough` state lives inline in `dispatch.rs`,
-  joining `LitState` to the existing per-shape states — decided.**
-  Same shape as the four existing single-poll states after the
-  flattening; no new module needed.
-- **Per-shape file granularity for the split — open.** Either one
-  file per shape (six files: `bare_identifier`, `bare_type_leaf`,
-  `constructor_call`, `sigiled_type_expr`, `function_value_call`,
-  `literal_pass_through`) *or* one file per dispatch *category*
-  (three files: `name_lookup`, `value_construction`,
-  `type_expression`). Recommended: per-shape granularity, since
-  each shape has its own state type and poll body and there are no
-  reusable helpers between shapes.
-- **Where `function_value_call` lives — deferred.** That shape's
-  state is currently in `fn_value.rs`, separate from `single_poll`.
-  After the collapse, it can stay where it is or move into the new
-  per-shape layout for uniformity. Decide alongside the granularity
-  choice; not a blocker.
-- **Re-score after split — decided.** Run `modgraph` with
-  `--reference-loc` against the post-collapse baseline and confirm
-  machine-root Δ ≤ 0. If the split doesn't recover the bundle's
-  +3.12 penalty, reconsider the granularity.
+  into `dispatch.rs` — decided.** Earlier scoring at the pre-facade
+  baseline showed the peer variant beating the merged variant
+  (crate Δ −9.49 vs −8.84). Re-measure but the relative ordering
+  should hold.
+- **Drop the `struct_construct` / `tagged_union_construct`
+  registrations and route `apply` → `construct` directly — decided.**
+  `CtorState` gains an `Option<EagerSubsTrack>` modelled on
+  `FnValueState::eager_subs`; the resume gathers the resolved values
+  and calls `construct` synchronously.
+- **`dispatch_constructor` bridge helper in `builtins.rs` —
+  decided.** Deletes alongside the relocation; its only caller (the
+  `ConstructorCall` fast lane) becomes self-contained.
+- **Per-constructor file granularity — open.** Either one file per
+  constructor (`constructors/struct_value.rs` + `constructors/tagged_union.rs`,
+  preserves the existing `mod tests;` layout) *or* one merged
+  `constructors.rs` (smaller cross-file surface, larger leaf). The
+  per-constructor split is the recommended default; the merge becomes
+  preferable only if the eager-subs walk turns out to share enough
+  code between the two cases to justify a single file.
 
 ## Dependencies
 
-**Requires:** none. All four target files (`value_pass.rs`,
-`struct_value.rs`, `tagged_union.rs`, `single_poll.rs`) are
-self-contained at the module level and only reach into stable
-substrates (arena, scope, ktype, dispatch state). The
-`ConstructorCall` fast lane already calls `apply` directly — no
-name-lookup contract to preserve.
+**Requires:** none. Both target files (`struct_value.rs`,
+`tagged_union.rs`) are self-contained at the module level and only
+reach into stable substrates (arena, scope, ktype, dispatch state).
 
 **Unblocks:** none.

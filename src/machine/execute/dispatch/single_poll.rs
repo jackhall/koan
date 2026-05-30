@@ -38,6 +38,11 @@ pub(in crate::machine::execute) struct SigilState<'a> {
     _ph: PhantomData<&'a ()>,
 }
 
+pub(in crate::machine::execute) struct LitState<'a> {
+    pub(in crate::machine::execute) init: Initialized,
+    _ph: PhantomData<&'a ()>,
+}
+
 impl<'a> BareIdState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
         Self { init, _ph: PhantomData }
@@ -57,6 +62,12 @@ impl<'a> CtorState<'a> {
 }
 
 impl<'a> SigilState<'a> {
+    pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
+        Self { init, _ph: PhantomData }
+    }
+}
+
+impl<'a> LitState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
         Self { init, _ph: PhantomData }
     }
@@ -112,6 +123,66 @@ pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
     };
     NodeStep::Replace {
         work: NodeWork::dispatch(inner),
+        frame: None,
+        function: None,
+        block_entry: None,
+        body_index: 0,
+    }
+}
+
+/// `(99)`, `("x")`, `([1 2 3])`, `((inner))` etc. — single-part
+/// literal-shaped expressions. Skips the bucket lookup + builtin call
+/// the Keyworded path would otherwise route through.
+pub(super) fn literal_pass_through<'a>(
+    ctx: &mut DispatchCtx<'a, '_>,
+    expr: KExpression<'a>,
+    scope: &'a Scope<'a>,
+    idx: usize,
+) -> NodeStep<'a> {
+    let only = expr.parts.into_iter().next().expect("LiteralPassThrough shape implies one part");
+    match only.value {
+        ExpressionPart::Literal(_) => {
+            let allocated = scope.arena.alloc(only.value.resolve());
+            NodeStep::Done(NodeOutput::Value(allocated))
+        }
+        ExpressionPart::Future(obj) => NodeStep::Done(NodeOutput::Value(obj)),
+        ExpressionPart::Expression(boxed) => NodeStep::Replace {
+            work: NodeWork::dispatch(*boxed),
+            frame: None,
+            function: None,
+            block_entry: None,
+            body_index: 0,
+        },
+        ExpressionPart::ListLiteral(items) => {
+            let producer = ctx.schedule_list_literal(items, scope);
+            park_on_literal_producer(ctx, producer, idx)
+        }
+        ExpressionPart::DictLiteral(pairs) => {
+            let producer = ctx.schedule_dict_literal(pairs, scope);
+            park_on_literal_producer(ctx, producer, idx)
+        }
+        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral"),
+    }
+}
+
+/// Either lift the producer's already-ready value, or park on it via a
+/// `Lift(Pending)`. Owned-edge install mirrors `install_eager_subs`.
+fn park_on_literal_producer<'a>(
+    ctx: &mut DispatchCtx<'a, '_>,
+    producer: NodeId,
+    idx: usize,
+) -> NodeStep<'a> {
+    if ctx.is_result_ready(producer) {
+        let outcome = match ctx.read_result(producer) {
+            Ok(v) => NodeOutput::Value(v),
+            Err(e) => NodeOutput::Err(e.clone_for_propagation()),
+        };
+        ctx.free(producer.index());
+        return NodeStep::Done(outcome);
+    }
+    ctx.add_owned_edge(producer, NodeId(idx));
+    NodeStep::Replace {
+        work: NodeWork::Lift(LiftState::Pending(producer)),
         frame: None,
         function: None,
         block_entry: None,

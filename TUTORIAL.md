@@ -593,7 +593,7 @@ One line per surface form. Sources under
 | `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [dispatch/fn_value.rs](src/machine/execute/dispatch/fn_value.rs) (`FunctionValueCall` fast lane) |
 | `<s>.<field>` (`ATTR <s> <field>`)       | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/builtins/attr.rs)                      |
 | `<v:Identifier>` (single-part)           | Look up `<v>` in scope.                                                                         | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`BareIdentifier` fast lane) |
-| `<v>` (single-part literal/expr)         | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/builtins/value_pass.rs)          |
+| `<v>` (single-part literal/expr)         | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`LiteralPassThrough` fast lane) |
 | `#(<expr>)`                              | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/builtins/quote.rs)                    |
 | `$(<expr>)`                              | Eval: resolve `<expr>`; if the result is a `KExpression`, dispatch the captured AST.             | [eval.rs](src/builtins/eval.rs)                      |
 
