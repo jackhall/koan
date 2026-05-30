@@ -36,6 +36,20 @@ against the one-group-per-child partition of its children. For N ≤ 6
 children the best topological order is found by exhaustive search;
 above that, the Eades-Lin-Smyth GR heuristic is used.
 
+A third coupling-flavour term, `fan_out`, rewards provider-side facades.
+For each dst_group at the current partition, let `entries(G)` be the set
+of distinct dst_modules in G that are referenced from any *other* group
+in the partition — i.e. G's external API surface. The term contributes
+`λ · max(0, |entries(G)| − 1)` per dst_group, summed: a group with one
+external entry point (the facade ideal) pays nothing, two entries pay
+λ, and so on. The existing `(src_group, dst_module)` dedup gives a
+consumer-side facade reward — one consumer's many uses collapse into
+one cross-edge when they all hit one entry. `fan_out` is the symmetric
+provider-side signal — many consumers all hitting one entry is cheaper
+than them spreading across the dst_group's submodules. Without it, the
+metric is indifferent to whether 5 consumers all funnel through
+`dispatch::ctx` or each pick a different dispatch internal.
+
 The per-loc number is normalised by the root subtree's LOC (a fixed
 constant for a given root). This is what makes nesting cost something:
 every interior level contributes its own loc to the sum, so adding a
@@ -148,7 +162,7 @@ def classify(module: str, partition: dict[str, list[str]]) -> str | None:
 
 def build_matrix(
     edges: list[tuple[str, str]], partition: dict[str, list[str]]
-) -> tuple[dict[tuple[str, str], int], int, int]:
+) -> tuple[dict[tuple[str, str], int], int, int, dict[str, set[str]]]:
     """Edges are deduplicated by `(source_group, dst_module)` before being
     aggregated to `(source_group, dst_group)`. This counts the number of
     *distinct target modules* a source group reaches in each target group,
@@ -160,11 +174,18 @@ def build_matrix(
     is unchanged. After dedup, "type_ops depends on N distinct things in
     machine" is invariant under how type_ops is internally subdivided —
     the metric measures the subtree-level dependency surface, not the
-    number of `use` sites."""
+    number of `use` sites.
+
+    `external_entries[dst_group]` accumulates the set of distinct
+    dst_modules each dst_group exposes to *other* groups in this partition
+    — i.e. its external API surface. The fan-out term in `score_partition`
+    uses this to reward groups with a thin external interface (the
+    provider-side facade signal)."""
     matrix: dict[tuple[str, str], int] = defaultdict(int)
     cross = 0
     unclassified = 0
     seen: set[tuple[str, str]] = set()
+    external_entries: dict[str, set[str]] = defaultdict(set)
     for src, dst in edges:
         sg = classify(src, partition)
         dg = classify(dst, partition)
@@ -172,13 +193,14 @@ def build_matrix(
             unclassified += 1
             continue
         if sg != dg:
+            external_entries[dg].add(dst)
             key = (sg, dst)
             if key in seen:
                 continue
             seen.add(key)
             matrix[(sg, dg)] += 1
             cross += 1
-    return matrix, cross, unclassified
+    return matrix, cross, unclassified, external_entries
 
 
 def feedback(order: list[str], matrix: dict[tuple[str, str], int]) -> int:
@@ -514,18 +536,20 @@ def score_partition(
     edges: list[tuple[str, str]],
     partition: dict[str, list[str]],
     alpha: float,
+    lambda_facade: float,
     exact_threshold: int,
-) -> tuple[float, int, int]:
-    """Returns (index, cross_edges, feedback_weight)."""
-    matrix, cross, _ = build_matrix(edges, partition)
+) -> tuple[float, int, int, int]:
+    """Returns (index, cross_edges, feedback_weight, fan_out)."""
+    matrix, cross, _, external_entries = build_matrix(edges, partition)
     groups = list(partition.keys())
     if not groups:
-        return 0.0, 0, 0
+        return 0.0, 0, 0, 0
     if len(groups) <= exact_threshold:
         _, fb = best_order_exact(groups, matrix)
     else:
         _, fb = best_order_greedy(groups, matrix)
-    return cross + alpha * fb, cross, fb
+    fan_out = sum(max(0, len(entries) - 1) for entries in external_entries.values())
+    return cross + alpha * fb + lambda_facade * fan_out, cross, fb, fan_out
 
 
 def fractal_report(
@@ -542,6 +566,7 @@ def fractal_report(
     kappa: float,
     epsilon: float,
     owner_pivot: float,
+    lambda_facade: float,
     prose_redirect: dict[Path, Path] | None = None,
     reference_loc: int | None = None,
 ) -> Score:
@@ -583,10 +608,11 @@ def fractal_report(
             return Score(size=size)
 
         partition = {c: [f"{module}::{c}"] for c in children}
-        coupling, cross, fb = score_partition(edges, partition, alpha, exact_threshold)
+        coupling, cross, fb, fan = score_partition(
+            edges, partition, alpha, lambda_facade, exact_threshold)
         beta_scale = max(1.0, beta_children_pivot / len(children)) if beta_children_pivot > 0 else 1.0
         nest = beta * beta_scale
-        print(f"{head}   children {len(children)}   cross {cross}   fb {fb}"
+        print(f"{head}   children {len(children)}   cross {cross}   fb {fb}   fan {fan}"
               f"   nest {nest:.1f}   index {coupling + nest:.1f}{size_tail}")
 
         here = Score(coupling=coupling * loc, nesting=nest * loc, size=size)
@@ -753,6 +779,14 @@ def main() -> int:
     ap.add_argument("--src-root", type=Path, default=Path("src"),
                     help="source root for LOC lookup (default: src)")
     ap.add_argument("--alpha", type=float, default=2.0, help="feedback penalty (default 2.0)")
+    ap.add_argument("--lambda-facade", type=float, default=2.0,
+                    help="provider-side facade penalty λ (default 2.0). At each "
+                         "partition, each dst_group's external API surface "
+                         "(distinct dst_modules referenced from other groups) "
+                         "past the first contributes λ to coupling. A group with "
+                         "one external entry — the facade ideal — pays nothing. "
+                         "Matches α by default so a second entry costs as much "
+                         "as a feedback edge. Set 0 to disable.")
     ap.add_argument("--beta", type=float, default=20.0,
                     help="per-non-leaf charge; "
                          "penalises passthrough wrappers and tree depth (default 20.0)")
@@ -853,6 +887,7 @@ def main() -> int:
         args.exact_threshold,
         args.delta, args.kappa,
         args.epsilon, args.owner_pivot,
+        args.lambda_facade,
         prose_redirect or None,
         reference_loc,
     )
