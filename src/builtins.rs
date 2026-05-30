@@ -1,5 +1,3 @@
-use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::ExpressionPart;
 use crate::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, BinderNameFn};
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::{
@@ -23,27 +21,12 @@ mod quote;
 mod result;
 mod sig_def;
 mod struct_def;
-pub(crate) mod struct_value;
-pub(crate) mod tagged_union;
 mod try_with;
 mod type_constructors;
 mod type_ops;
 mod union;
 mod using_scope;
 mod val_decl;
-
-/// Route a resolved verb-object to its construction primitive's `apply`. Returns
-/// `Some` for `TaggedUnionType` / `StructType`; `None` otherwise.
-pub(crate) fn dispatch_constructor<'a>(
-    verb_obj: &'a KObject<'a>,
-    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
-) -> Option<BodyResult<'a>> {
-    match verb_obj {
-        KObject::TaggedUnionType { .. } => Some(tagged_union::apply(verb_obj, args_parts)),
-        KObject::StructType { .. } => Some(struct_value::apply(verb_obj, args_parts)),
-        _ => None,
-    }
-}
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -174,9 +157,7 @@ pub fn default_scope<'a>(
     functor_def::register(scope);
     union::register(scope);
     result::register(scope);
-    tagged_union::register(scope);
     struct_def::register(scope);
-    struct_value::register(scope);
     newtype_def::register(scope);
     match_case::register(scope);
     try_with::register(scope);

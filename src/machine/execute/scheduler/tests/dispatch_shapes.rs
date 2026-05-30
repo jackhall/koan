@@ -303,14 +303,13 @@ fn fast_lane_on_non_function_returns_error() {
     );
 }
 
-/// Tagged-union construction via a LET-bound lowercase alias. The fast lane
-/// resolves `maybe` to `TaggedUnionType`, calls `tagged_union::apply`, and
-/// schedules the synthesized tail as a sub-Dispatch through the
-/// `tagged_union_construct` primitive.
+/// Tagged-union construction via a LET-bound lowercase alias. The FnValueCall
+/// fast lane resolves `maybe` to `TaggedUnionType` and routes the call
+/// through `constructors::dispatch_construct`.
 ///
-/// Counter contract: entry-point head resolution short-circuits (0 walks); the
-/// synthesized tail `[Future(schema), tag, value]` re-dispatches through
-/// `tagged_union_construct`, a keyworded dispatch that advances the counter once.
+/// Counter contract: every step in the chain (FnValueCall head resolution +
+/// constructors::dispatch_construct + LiteralPassThrough on the value-cell)
+/// is fast-lane; nothing enters `resolve_dispatch`.
 #[test]
 fn fast_lane_on_tagged_union_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -321,9 +320,9 @@ fn fast_lane_on_tagged_union_constructs() {
     let result = run_one(scope, parse_one("maybe (some 42)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
-        1,
-        "tagged-union construction must fast-lane the entry; the trailing walk \
-         is `tagged_union_construct`'s own dispatch. Counter was {}",
+        0,
+        "tagged-union construction is fully fast-lane: no `resolve_dispatch` \
+         entries. Counter was {}",
         resolve_dispatch_entry_count(),
     );
     match result {
@@ -337,15 +336,11 @@ fn fast_lane_on_tagged_union_constructs() {
 
 /// Struct construction via a LET-bound lowercase alias. `(STRUCT Pt = ...)`
 /// returns the `StructType` value which LET binds under `pt`; the fast lane
-/// routes the call through `struct_value::apply`.
+/// routes the call through `constructors::dispatch_construct`.
 ///
-/// Counter contract: `struct_value::apply` synthesizes a tail of shape
-/// `[Future(schema), ListLiteral([(<v_1>), ...])]` re-dispatching through the
-/// `struct_construct` primitive. The list-literal aggregate spawns one
-/// sub-Dispatch per value-cell. With two fields bound to bare-literal values:
-/// 1 (construction primitive) + 2 (value-cell sub-Dispatches) + 1 (synthesized
-/// tail's outermost shape) = 4 walks. The entry-point head walk is the one the
-/// fast lane removes.
+/// Counter contract: every step is fast-lane (FnValueCall head resolution +
+/// constructors::dispatch_construct + LiteralPassThrough per value-cell);
+/// no entry into `resolve_dispatch`.
 #[test]
 fn fast_lane_on_struct_type_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -356,12 +351,9 @@ fn fast_lane_on_struct_type_constructs() {
     let result = run_one(scope, parse_one("pt (x = 3, y = 4)"));
     assert_eq!(
         resolve_dispatch_entry_count(),
-        2,
-        "struct construction must fast-lane the entry, and each value-cell \
-         sub-Dispatch must `LiteralPassThrough` instead of bucket-dispatching \
-         through `value_pass`. The two remaining entries are the construction \
-         primitive (re-dispatched tail) and the FnValueCall's eager-subs walk. \
-         Counter was {}",
+        0,
+        "struct construction is fully fast-lane: no `resolve_dispatch` \
+         entries. Counter was {}",
         resolve_dispatch_entry_count(),
     );
     match result {

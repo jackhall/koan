@@ -116,8 +116,8 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity,
 including `ExpressionSignature::most_specific` for the per-bucket tournament),
 [builtins.rs](src/builtins.rs) (registry),
-[tagged_union.rs](src/builtins/tagged_union.rs) (shared structure),
-[struct_value.rs](src/builtins/struct_value.rs) (shared structure),
+[tagged_union.rs](src/machine/execute/dispatch/constructors/tagged_union.rs) (shared structure),
+[struct_value.rs](src/machine/execute/dispatch/constructors/struct_value.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
 
 ```

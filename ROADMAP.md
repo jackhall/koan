@@ -88,6 +88,17 @@ What's shipped that the open items below build on:
   single-part literal-shaped expressions (`(99)`, `("x")`, `([1 2 3])`,
   `((inner))`), the fast-lane axis is exhaustive over keyword-free
   expressions: `Keyworded` ⟺ at-least-one keyword.
+- *Direct constructor dispatch.* `STRUCT` and `UNION` constructions
+  route through `execute::dispatch::constructors` directly — no
+  registered `struct_construct` / `tagged_union_construct` primitives,
+  no `BodyResult::Tail` re-dispatch through the Keyworded bucket. The
+  `ConstructorCall` fast lane (leaf-Type head) and the
+  `FunctionValueCall` fast lane (Identifier head resolving to a
+  `StructType` / `TaggedUnionType`) both dispatch into
+  `constructors::dispatch_construct`, which stages value-cells as
+  per-slot eager sub-Dispatches and calls
+  `struct_value::construct` / `tagged_union::construct` directly. The
+  parked-on-eager-subs case rides `CtorState`'s resume arm.
 - *Stateful dispatch driver.* Every `DispatchShape` variant runs on the
   state-bearing `run_dispatch` driver, which is now the sole dispatch
   body. The carrier shape (`DispatchState` enum + per-variant
@@ -215,11 +226,9 @@ language through the dispatcher and the user-functor application surface:
 ### Refactor — [roadmap/refactor/](roadmap/refactor/)
 
 Structural cleanups surfaced by the `modgraph` + `doclinks gap`
-analysis. The remaining items are source-level — collapse the
-keyword-free dispatch surface and concentrate the nominal dual-write
-protocol:
+analysis. The remaining item is source-level — concentrate the
+nominal dual-write protocol:
 
-- [Relocate struct + tagged-union constructors to `dispatch::constructors`](roadmap/refactor/collapse-keyword-free-dispatch-into-dispatch-rs.md)
 - [Concentrate the nominal dual-write protocol in `core::nominal`](roadmap/refactor/nominal-dual-write-protocol.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

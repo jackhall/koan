@@ -5,7 +5,8 @@
 //!   - `bindings.types["Result"]` — a [`UserTypeKind::TypeConstructor`] identity, so
 //!     `:(Result Number MyErr)` drives the resolver's `ConstructorApply` arm.
 //!   - `bindings.data["Result"]` — a [`KObject::TaggedUnionType`] carrier with schema
-//!     `{ok: Any, error: Any}`, so `(Result (ok v))` constructs via `dispatch_constructor`.
+//!     `{ok: Any, error: Any}`, so `(Result (ok v))` constructs via
+//!     [`crate::machine::execute::dispatch::constructors::dispatch_construct`].
 //!
 //! Type parameters are erased at runtime (as for `List`/`Dict`): `UserTypeKind`'s
 //! `PartialEq` ignores `param_names`, so every `:(Result …)` resolves to the one carrier.

@@ -26,6 +26,7 @@ use crate::machine::{
 use super::scheduler::Scheduler;
 use super::nodes::{NodeOutput, NodeStep};
 
+mod constructors;
 mod ctx;
 pub(in crate::machine::execute) mod fn_value;
 pub(in crate::machine::execute) mod keyworded;
@@ -362,9 +363,11 @@ pub(in crate::machine::execute) fn run_dispatch<'a>(
         DispatchState::Initialized(i) => i,
         DispatchState::Keyworded(ks) => return ks.resume(ctx, scope, idx),
         DispatchState::FunctionValueCall(fs) => return fs.resume(ctx, scope, idx),
+        DispatchState::ConstructorCall(cs) => return cs.resume(ctx, scope, idx),
         _ => unreachable!(
             "remaining fast-lane stateful variants terminalize in one poll; \
-             only Keyworded and FunctionValueCall re-enter from a parked track"
+             only Keyworded, FunctionValueCall, and ConstructorCall re-enter \
+             from a parked track"
         ),
     };
     match classify_dispatch_shape(&expr) {

@@ -5,7 +5,6 @@
 
 use std::marker::PhantomData;
 
-use crate::builtins::{struct_value, tagged_union};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::Parseable;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -13,11 +12,11 @@ use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
+use super::constructors;
 use super::{
     DispatchCtx, DispatchState, EagerSubsInstall, EagerSubsTrack, Initialized,
     extract_named_call_inner, stage_all_eager_parts,
 };
-use super::single_poll::schedule_constructor_body;
 
 pub(in crate::machine::execute) struct FnValueState<'a> {
     pub(in crate::machine::execute) init: Initialized,
@@ -119,16 +118,9 @@ impl<'a> FnValueState<'a> {
                 Ok(rebuilt) => Self::install_eager_subs_track(ctx, rebuilt, f, scope, idx),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             },
-            KObject::StructType { .. } => Ok(schedule_constructor_body(
-                ctx,
-                struct_value::apply(head_obj, inner_parts),
-                idx,
-            )),
-            KObject::TaggedUnionType { .. } => Ok(schedule_constructor_body(
-                ctx,
-                tagged_union::apply(head_obj, inner_parts),
-                idx,
-            )),
+            KObject::StructType { .. } | KObject::TaggedUnionType { .. } => Ok(
+                constructors::dispatch_construct(ctx, head_obj, inner_parts, scope, idx),
+            ),
             other => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::TypeMismatch {
                     arg: "verb".to_string(),

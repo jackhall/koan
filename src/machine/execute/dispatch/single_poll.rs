@@ -1,14 +1,19 @@
-//! Single-poll dispatch shapes — bare identifier, bare leaf type,
-//! constructor call, sigiled type expression. All four terminalize
-//! (or single-producer-park) in one poll and never re-enter.
+//! Fast-lane dispatch shapes — bare identifier, bare leaf type,
+//! constructor call, sigiled type expression, literal pass-through.
+//! All terminate (or single-producer-park) in one poll except
+//! `ConstructorCall`, which can park on per-value-cell eager-subs and
+//! resume via [`CtorState::resume`].
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use crate::builtins::newtype_def::newtype_construct;
-use crate::builtins::{dispatch_constructor, struct_value, tagged_union};
 use super::coerce_type_token_value;
+use super::constructors;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
+use crate::machine::core::ScopeId;
 use crate::machine::model::Parseable;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::types::UserTypeKind;
@@ -30,7 +35,35 @@ pub(in crate::machine::execute) struct BareTypeState<'a> {
 
 pub(in crate::machine::execute) struct CtorState<'a> {
     pub(in crate::machine::execute) init: Initialized,
-    _ph: PhantomData<&'a ()>,
+    pub(in crate::machine::execute) track: Option<CtorTrack<'a>>,
+}
+
+/// Pending eager-subs for a parked `ConstructorCall`. `staged_values`
+/// already holds the slots whose dispatch short-circuited at install
+/// time (an arena-resident `&KObject`); `subs` carries `(slot_index,
+/// sub_id)` for the remaining parked slots. The resume reads each
+/// sub's terminal, fills the slot, and tail-calls
+/// [`constructors::finish`].
+pub(in crate::machine::execute) struct CtorTrack<'a> {
+    pub(in crate::machine::execute) subs: Vec<(usize, NodeId)>,
+    pub(in crate::machine::execute) staged_values: Vec<Option<&'a KObject<'a>>>,
+    pub(in crate::machine::execute) kind: CtorKind<'a>,
+}
+
+/// Schema-keyed payload the resume needs to materialize the
+/// constructed value once every slot is resolved.
+pub(in crate::machine::execute) enum CtorKind<'a> {
+    Struct {
+        name: String,
+        scope_id: ScopeId,
+        fields: Rc<Vec<(String, KType<'a>)>>,
+    },
+    Tagged {
+        schema: Rc<HashMap<String, KType<'a>>>,
+        name: String,
+        scope_id: ScopeId,
+        tag: String,
+    },
 }
 
 pub(in crate::machine::execute) struct SigilState<'a> {
@@ -57,7 +90,45 @@ impl<'a> BareTypeState<'a> {
 
 impl<'a> CtorState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, _ph: PhantomData }
+        Self { init, track: None }
+    }
+
+    pub(in crate::machine::execute) fn with_track(init: Initialized, track: CtorTrack<'a>) -> Self {
+        Self { init, track: Some(track) }
+    }
+
+    /// Drain the parked subs into `staged_values` and tail-call
+    /// `constructors::finish` once every slot is bound. Errors on a
+    /// dep terminate the resume with that error.
+    pub(in crate::machine::execute) fn resume(
+        self,
+        ctx: &mut DispatchCtx<'a, '_>,
+        scope: &'a Scope<'a>,
+        idx: usize,
+    ) -> Result<NodeStep<'a>, KError> {
+        let CtorState { init, track } = self;
+        let _ = init;
+        let CtorTrack { subs, mut staged_values, kind } =
+            track.expect("ConstructorCall resume only entered after a track is installed");
+        for (slot_idx, sub_id) in &subs {
+            match ctx.read_result(*sub_id) {
+                Ok(v) => staged_values[*slot_idx] = Some(v),
+                Err(e) => {
+                    let err = e.clone_for_propagation();
+                    ctx.clear_dep_edges(idx);
+                    for (_, dep_id) in &subs {
+                        ctx.free(dep_id.index());
+                    }
+                    return Ok(NodeStep::Done(NodeOutput::Err(err)));
+                }
+            }
+        }
+        ctx.clear_dep_edges(idx);
+        for (_, dep_id) in &subs {
+            ctx.free(dep_id.index());
+        }
+        let values: Vec<&'a KObject<'a>> = staged_values.into_iter().map(|o| o.unwrap()).collect();
+        Ok(constructors::finish(scope, &kind, &values))
     }
 }
 
@@ -241,25 +312,14 @@ pub(super) fn constructor_call<'a>(
                 }
                 Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
             };
-            let body = match carrier {
-                KObject::StructType { .. } => struct_value::apply(carrier, inner_parts),
-                KObject::TaggedUnionType { .. } => tagged_union::apply(carrier, inner_parts),
-                other => {
-                    debug_assert!(
-                        false,
-                        "STRUCT/UNION `{}` registered its type identity but no \
-                         matching value-side schema carrier (got `{}`)",
-                        head_t.name,
-                        other.summarize(),
-                    );
-                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-                        arg: "verb".to_string(),
-                        expected: "constructible Type".to_string(),
-                        got: identity.name(),
-                    })));
-                }
-            };
-            schedule_constructor_body(ctx, body, idx)
+            debug_assert!(
+                matches!(carrier, KObject::StructType { .. } | KObject::TaggedUnionType { .. }),
+                "STRUCT/UNION `{}` registered its type identity but no matching \
+                 value-side schema carrier (got `{}`)",
+                head_t.name,
+                carrier.summarize(),
+            );
+            constructors::dispatch_construct(ctx, carrier, inner_parts, scope, idx)
         }
         KType::UserType { kind: UserTypeKind::Newtype { .. }, .. } => {
             let body = newtype_construct(scope, ctx, identity, inner_parts);
@@ -267,9 +327,8 @@ pub(super) fn constructor_call<'a>(
         }
         KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. } => match scope
             .lookup_with_chain(&head_t.name, chain)
-            .and_then(|c| dispatch_constructor(c, inner_parts))
         {
-            Some(body) => schedule_constructor_body(ctx, body, idx),
+            Some(carrier) => constructors::dispatch_construct(ctx, carrier, inner_parts, scope, idx),
             None => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
                 arg: "verb".to_string(),
                 expected: "constructible Type".to_string(),

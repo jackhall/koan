@@ -2,8 +2,8 @@
 //! the [`Module`] / [`Signature`] carriers, and the shared `<name>: <value>`
 //! parser [`NamedPairs`] used by struct construction and first-class calls.
 //!
-//! Construction-primitive builtins for `Struct` and `Tagged` live one layer up
-//! in [`crate::builtins::struct_value`] and [`crate::builtins::tagged_union`].
+//! Construction dispatch for `Struct` and `Tagged` lives in
+//! [`crate::machine::execute::dispatch::constructors`].
 
 mod kkey;
 mod kobject;
