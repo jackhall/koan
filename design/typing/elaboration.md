@@ -106,9 +106,10 @@ cross-link this section rather than restating its slice.
   is the shared coercion seam from a bare-`Type` token to a dispatch-time
   carrier, called from the dispatcher's `BareTypeLeaf` fast lane and the
   keyworded splice walk's eager name-resolve pass. Resolves through
-  `bindings.types` and synthesizes `KObject::KTypeValue(kt.clone())` on a
-  non-nominal hit; nominal hits recover the paired value-side carrier
-  from `bindings.data`. See
+  `bindings.types` and synthesizes `KObject::KTypeValue(kt.clone())` for
+  non-nominal and type-only nominal hits (struct / union / module / Result);
+  only a SIG hit recovers a paired value-side `Signature` carrier from
+  `bindings.data`. See
   [Bare-leaf type-name carrier](#bare-leaf-type-name-carrier) below for
   the downstream consumers.
 - **Layer 5 — surface-form-survives-bind carrier** in
@@ -136,27 +137,35 @@ reachable through
 [`Scope::resolve_type`](../../src/machine/core/scope.rs) on the same
 pointer as the builtin.
 
+STRUCT / UNION / MODULE / Result declarations are single type-namespace
+writes: each installs only its schema-bearing `&KType` identity into
+`bindings.types` (see
+[type-only nominal install](user-types.md#type-only-nominal-install)), so
+`bindings.data` holds only runtime instances. There is no value-side schema
+carrier — construction reads the schema straight off the identity. SIG is the
+lone dual-writer — it keeps a `SatisfiesSignature` constraint in `types` and a
+`Signature` value in `data`, tracked in
+[eliminate SIG's dual-write](../../roadmap/refactor/eliminate-sig-dual-write.md).
+
 [LET routing in `let_binding`](../../src/builtins/let_binding.rs) detects
 Type-class LHS and dispatches through `register_type` for `TypeExprRef`-LHS
 RHSes (type-valued aliases). A bind-time
 `KErrorKind::TypeClassBindingExpectsType` diagnostic gates the RHS via an
 **allowlist**: a Type-class LET admits a value only if it carries
-type-language identity in one of three shapes — `KObject::KTypeValue(_)`
-(pure-type carriers including `KType::Module` / `KType::Signature`),
-`derive_nominal_identity → Some(_)` (`StructType` / `TaggedUnionType`,
-which redundantly subsumes the `Module` / `Signature` `KTypeValue` arm),
-or `KObject::KFunction(f, _)` with `f.is_functor` set (the `FUNCTOR`
-binder's output). Plain `KFunction` rejects, closing the
+type-language identity — any `KObject::KTypeValue(_)` (struct / union / module /
+Result / signature identities all flow as `KTypeValue` now), or
+`KObject::KFunction(f, _)` with `f.is_functor` set (the `FUNCTOR` binder's
+output). Plain `KFunction` rejects, closing the
 `LET Plain = (FN …)`-binds-a-plain-function-under-a-Type-class-name hole
 that a pure value-shape gate cannot discriminate; the `is_functor` flag
-is the discrimination signal. Module and signature LET aliases route through
-`register_nominal` to install the identity carrier into `bindings.types`
-alongside the value-side carrier in `bindings.data` (modules preserve their
-`KType::Module` carrier verbatim; signatures lower to the
-`KType::SatisfiesSignature` constraint form so a slot typed by the alias
-dispatches identically to the original); pure-type `KTypeValue(kt)`
-carriers (Number, etc.) take `register_type` directly; `is_functor`
-KFunctions and `Struct` / `Tagged` carriers fall through to `bind_value`.
+is the discrimination signal. Struct / union / module / Result aliases route
+through `register_type` (type-only): the schema or `&Module` rides the `KType`
+identity, so a plain `types` write preserves dispatch identity without a
+value-side copy. Only the SIG-alias arm keeps `register_nominal`, lowering the
+`Signature` to the `KType::SatisfiesSignature` constraint on the type side while
+retaining the `Signature` value on the data side (via `derive_nominal_identity`,
+now reduced to that single case) so a slot typed by the alias dispatches
+identically to the original.
 
 The partition is one-way: a value-classified LET (lowercase-leading binder
 name) rejects a `KType::Module` or `KType::Signature` RHS at the LET site
@@ -209,9 +218,11 @@ which calls
 directly — the shared coercion seam also called from the keyworded splice
 walk's eager name-resolve pass
 ([`dispatch.rs`](../../src/machine/execute/dispatch.rs)).
-The helper resolves through `bindings.types` and, on a nominal
-`UserType` / `SatisfiesSignature` / `Module` / `Signature` hit, recovers
-the paired value-side carrier from `bindings.data`.
+The helper resolves through `bindings.types` and synthesizes
+`KObject::KTypeValue(identity)` for the now-common type-only nominals
+(struct / union / module / Result); only a SIG (`SatisfiesSignature`) hit
+recovers a paired value-side `Signature` carrier from `bindings.data`, since
+SIG still dual-writes.
 
 FN's deferred return-type elaboration peeks the slot to pick between
 [`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs)

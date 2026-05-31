@@ -42,9 +42,14 @@ pub fn body_opaque<'a>(
         let sig_bindings = s.decl_scope().bindings();
         for name in abstract_type_names_of(s.decl_scope()) {
             let kt = match sig_bindings.lookup_type(&name, None) {
-                Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }) => {
+                Some(KType::UserType {
+                    kind: UserTypeKind::TypeConstructor { schema, param_names }, ..
+                }) => {
                     KType::UserType {
-                        kind: UserTypeKind::TypeConstructor { param_names: param_names.clone() },
+                        kind: UserTypeKind::TypeConstructor {
+                            schema: std::rc::Rc::clone(schema),
+                            param_names: param_names.clone(),
+                        },
                         scope_id: new_module.scope_id(),
                         name: name.clone(),
                     }

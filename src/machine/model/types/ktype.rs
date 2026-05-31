@@ -12,24 +12,38 @@
 
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::values::{Module, Signature};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Surface-keyword classifier shared by `KType::UserType` and `KType::AnyUserType`.
 /// See [per-declaration type identity](../../../../design/typing/user-types.md).
 ///
+/// Each arm carries the declared type's schema as its payload (fields for `Struct`,
+/// tag→type for `Tagged`/`TypeConstructor`, transparent repr for `Newtype`).
+/// Construction reads that payload straight from the identity stored in
+/// `bindings.types`, so there is no separate value-side schema carrier.
+///
 /// The manual `PartialEq` / `Eq` impl below *ignores* the inner payload — identity
-/// equality is by variant tag only. Load-bearing for wildcard admissibility:
-/// `AnyUserType { kind: Newtype { repr: <sentinel> } }` must admit any concrete
-/// `UserType { kind: Newtype { repr: <real> }, .. }`, and the same for `TypeConstructor`.
+/// equality is by variant tag only. Load-bearing two ways: wildcard admissibility
+/// (`AnyUserType { kind: Newtype { repr: <sentinel> } }` admits any concrete
+/// `UserType { kind: Newtype { repr: <real> }, .. }`, same for the others), and the
+/// SCC cycle-close upsert — a payload-empty pre-installed identity compares equal to
+/// the schema-bearing final identity, so finalize can overwrite the payload in place.
 #[derive(Clone, Debug)]
 pub enum UserTypeKind<'a> {
-    Struct,
-    Tagged,
+    /// Record schema in declaration order. The empty `Rc<vec![]>` sentinel is the
+    /// payload an instance's `.ktype()` synthesizes and the cycle-close pre-install
+    /// holds; construction reads the real list from the `bindings.types` identity.
+    Struct { fields: Rc<Vec<(String, KType<'a>)>> },
+    /// Tagged-union schema keyed by tag. Same empty-`Rc` sentinel convention as `Struct`.
+    Tagged { schema: Rc<HashMap<String, KType<'a>>> },
     /// Fresh nominal identity over a transparent representation. `repr` is NOT part of
     /// identity equality.
     Newtype { repr: Box<KType<'a>> },
-    /// Higher-kinded type-constructor slot. `param_names` is NOT part of identity equality.
-    TypeConstructor { param_names: Vec<String> },
+    /// Higher-kinded type-constructor slot. `schema` carries the erased-parameter
+    /// variant schema (e.g. `Result`'s `{ok: Any, error: Any}`); neither `schema` nor
+    /// `param_names` is part of identity equality.
+    TypeConstructor { schema: Rc<HashMap<String, KType<'a>>>, param_names: Vec<String> },
 }
 
 impl<'a> PartialEq for UserTypeKind<'a> {
@@ -37,8 +51,8 @@ impl<'a> PartialEq for UserTypeKind<'a> {
         use UserTypeKind::*;
         matches!(
             (self, other),
-            (Struct, Struct)
-                | (Tagged, Tagged)
+            (Struct { .. }, Struct { .. })
+                | (Tagged { .. }, Tagged { .. })
                 | (Newtype { .. }, Newtype { .. })
                 | (TypeConstructor { .. }, TypeConstructor { .. }),
         )
@@ -50,11 +64,23 @@ impl<'a> UserTypeKind<'a> {
     /// Surface keyword rendered in diagnostics and `AnyUserType::name()`.
     pub fn surface_keyword(&self) -> &'static str {
         match self {
-            UserTypeKind::Struct => "Struct",
-            UserTypeKind::Tagged => "Tagged",
+            UserTypeKind::Struct { .. } => "Struct",
+            UserTypeKind::Tagged { .. } => "Tagged",
             UserTypeKind::Newtype { .. } => "Newtype",
             UserTypeKind::TypeConstructor { .. } => "TypeConstructor",
         }
+    }
+
+    /// Payload-empty `Struct` sentinel — the shape an instance's `.ktype()` reports and
+    /// the cycle-close pre-install holds. Equality ignores the payload, so this stands in
+    /// for any `Struct { fields }` in dispatch.
+    pub fn struct_sentinel() -> Self {
+        UserTypeKind::Struct { fields: Rc::new(Vec::new()) }
+    }
+
+    /// Payload-empty `Tagged` sentinel — companion to [`Self::struct_sentinel`].
+    pub fn tagged_sentinel() -> Self {
+        UserTypeKind::Tagged { schema: Rc::new(HashMap::new()) }
     }
 }
 
@@ -366,14 +392,18 @@ mod tests {
 
     #[test]
     fn user_type_kind_surface_keywords() {
-        assert_eq!(UserTypeKind::Struct.surface_keyword(), "Struct");
-        assert_eq!(UserTypeKind::Tagged.surface_keyword(), "Tagged");
+        assert_eq!(UserTypeKind::struct_sentinel().surface_keyword(), "Struct");
+        assert_eq!(UserTypeKind::tagged_sentinel().surface_keyword(), "Tagged");
         assert_eq!(
             UserTypeKind::Newtype { repr: Box::new(KType::Number) }.surface_keyword(),
             "Newtype",
         );
         assert_eq!(
-            UserTypeKind::TypeConstructor { param_names: vec!["T".into()] }.surface_keyword(),
+            UserTypeKind::TypeConstructor {
+                schema: Rc::new(HashMap::new()),
+                param_names: vec!["T".into()],
+            }
+            .surface_keyword(),
             "TypeConstructor",
         );
     }
@@ -383,29 +413,58 @@ mod tests {
         let a: UserTypeKind<'_> = UserTypeKind::Newtype { repr: Box::new(KType::Number) };
         let b: UserTypeKind<'_> = UserTypeKind::Newtype { repr: Box::new(KType::Str) };
         assert_eq!(a, b);
-        assert_ne!(a, UserTypeKind::Struct);
-        assert_ne!(UserTypeKind::Struct, a);
+        assert_ne!(a, UserTypeKind::struct_sentinel());
+        assert_ne!(UserTypeKind::struct_sentinel(), a);
+    }
+
+    /// `Struct`/`Tagged` equality ignores the fields/schema payload, so a
+    /// payload-empty sentinel compares equal to a schema-bearing identity — the
+    /// property the SCC cycle-close upsert relies on.
+    #[test]
+    fn struct_and_tagged_partial_eq_ignore_payload() {
+        let empty = UserTypeKind::struct_sentinel();
+        let full = UserTypeKind::Struct {
+            fields: Rc::new(vec![("x".into(), KType::Number)]),
+        };
+        assert_eq!(empty, full);
+
+        let empty_t = UserTypeKind::tagged_sentinel();
+        let mut schema = HashMap::new();
+        schema.insert("some".into(), KType::Number);
+        let full_t = UserTypeKind::Tagged { schema: Rc::new(schema) };
+        assert_eq!(empty_t, full_t);
+
+        assert_ne!(empty, empty_t);
     }
 
     #[test]
     fn user_type_kind_type_constructor_partial_eq_ignores_param_names() {
-        let a: UserTypeKind<'_> = UserTypeKind::TypeConstructor { param_names: vec!["T".into()] };
-        let b: UserTypeKind<'_> = UserTypeKind::TypeConstructor { param_names: vec!["U".into()] };
-        let empty: UserTypeKind<'_> = UserTypeKind::TypeConstructor { param_names: Vec::new() };
+        let a: UserTypeKind<'_> = UserTypeKind::TypeConstructor {
+            schema: Rc::new(HashMap::new()),
+            param_names: vec!["T".into()],
+        };
+        let b: UserTypeKind<'_> = UserTypeKind::TypeConstructor {
+            schema: Rc::new(HashMap::new()),
+            param_names: vec!["U".into()],
+        };
+        let empty: UserTypeKind<'_> = UserTypeKind::TypeConstructor {
+            schema: Rc::new(HashMap::new()),
+            param_names: Vec::new(),
+        };
         assert_eq!(a, b);
         assert_eq!(a, empty);
-        assert_ne!(a, UserTypeKind::Struct);
+        assert_ne!(a, UserTypeKind::struct_sentinel());
         assert_ne!(a, UserTypeKind::Newtype { repr: Box::new(KType::Number) });
     }
 
     #[test]
     fn any_user_type_name_renders_kind_keyword() {
         assert_eq!(
-            KType::AnyUserType { kind: UserTypeKind::Struct }.name(),
+            KType::AnyUserType { kind: UserTypeKind::struct_sentinel() }.name(),
             "Struct"
         );
         assert_eq!(
-            KType::AnyUserType { kind: UserTypeKind::Tagged }.name(),
+            KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() }.name(),
             "Tagged"
         );
     }
@@ -423,7 +482,7 @@ mod tests {
         // Renders the declared `name`, not the kind keyword: a `Point` struct slot shows
         // `Point`, not `Struct`.
         let t = KType::UserType {
-            kind: UserTypeKind::Struct,
+            kind: UserTypeKind::struct_sentinel(),
             scope_id: ScopeId::from_raw(0, 0x1234),
             name: "Point".into(),
         };

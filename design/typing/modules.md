@@ -102,6 +102,18 @@ named in expression position evaluates to its value, and `m.compare` is
 ordinary attribute access — ATTR projects through `KType::Module { module,
 .. }` to reach `module.access_module_member(field)`.
 
+A `MODULE` declaration is **type-only**: finalize installs the
+`KType::Module { module, frame }` identity into `bindings.types` via
+[`Scope::register_type_upsert`](../../src/machine/core/scope.rs) and writes no
+value-side carrier. `LET M2 = M1` module aliases likewise route through
+`register_type` against the type entry. Value-position references — a module
+named as an ATTR receiver, or surfaced by `USING … SCOPE` — synthesize the
+`KObject::KTypeValue(KType::Module { .. })` carrier on demand from the type entry
+via
+[`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs);
+ATTR's `body_type_lhs` routes its Type-classed receiver through that seam rather
+than a raw `bindings.data` lookup.
+
 `KType::Module` carries the live `&Module` pointer (plus the per-call
 frame anchor for functor-built modules); `KType::Signature(s)` carries the
 arena-pinned `&Signature`; `KType::AbstractType { source_module, name }`

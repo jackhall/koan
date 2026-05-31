@@ -5,7 +5,7 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    Resolution, Scope, SchedulerHandle,
+    Scope, SchedulerHandle,
 };
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
@@ -47,7 +47,7 @@ pub fn body<'a>(
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
-            kind: UserTypeKind::Struct,
+            kind: UserTypeKind::struct_sentinel(),
             scope_id,
             schema_expr: schema_expr.clone(),
             edges: Vec::new(),
@@ -58,14 +58,15 @@ pub fn body<'a>(
     // SCC edge-recording / cycle-detection arm.
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
-        .with_current_decl(name.clone(), UserTypeKind::Struct, scope_id);
+        .with_current_decl(name.clone(), UserTypeKind::struct_sentinel(), scope_id);
     let outcome = parse_typed_field_list_via_elaborator(
         &schema_expr,
         "STRUCT schema",
         &mut elaborator,
     );
     // Nominal binder: the placeholder install stamped `nominal_binder: true`;
-    // `register_nominal` must carry the same flag for visibility consistency.
+    // the type-only `register_type_upsert` must carry the same flag for visibility
+    // consistency.
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::nominal(chain.index))
@@ -86,22 +87,30 @@ pub fn body<'a>(
     }
 }
 
-/// Build and bind the `KObject::StructType` once every field type has elaborated.
-/// Shared by the synchronous and Combine-finish paths.
+/// Fold the elaborated fields into the `UserType { Struct { fields } }` identity and
+/// upsert it into `bindings.types` — type-only, no value-side carrier. The schema rides
+/// the identity, so construction reads it via a fresh `types[name]` lookup. Shared by the
+/// synchronous and Combine-finish paths.
 fn finalize_struct<'a>(
     scope: &'a Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    // Idempotent-finalize guard: a parallel finalize (cycle-close + Combine-finish,
-    // or two Combine-finishes) may already have produced a carrier. Return it
-    // rather than re-allocating — `try_register_nominal` tolerates a pre-installed
-    // identity but not a pre-installed carrier.
+    // Idempotent-finalize guard: a parallel finalize (cycle-close + Combine-finish, or
+    // two Combine-finishes) may already have upserted the schema-bearing identity. The
+    // cycle-close pre-install carries a payload-empty identity, so the guard must
+    // distinguish them: only short-circuit on a populated `Struct { fields }` payload.
     let bindings = scope.bindings();
-    if bindings.lookup_type(&name, None).is_some() {
-        if let Some(Resolution::Value(existing)) = bindings.lookup_value(&name, None) {
-            return BodyResult::Value(existing);
+    if let Some(KType::UserType { kind: UserTypeKind::Struct { fields }, .. }) =
+        bindings.lookup_type(&name, None)
+    {
+        if !fields.is_empty() {
+            return BodyResult::Value(
+                scope.arena.alloc(KObject::KTypeValue(
+                    bindings.lookup_type(&name, None).unwrap().clone(),
+                )),
+            );
         }
     }
     if fields.is_empty() {
@@ -109,23 +118,14 @@ fn finalize_struct<'a>(
             "STRUCT schema must have at least one field".to_string(),
         )));
     }
-    let arena = scope.arena;
-    // Per-declaration identity: the carrier and the dual-written `KType::UserType`
-    // identity tag share `(scope_id, name)` so dispatch via the carrier's `ktype()`
-    // and dispatch through an identity-typed slot reach the same `UserType` value.
     let scope_id = scope.id;
-    let struct_obj: &'a KObject<'a> = arena.alloc(KObject::StructType {
-        name: name.clone(),
-        scope_id,
-        fields: Rc::new(fields),
-    });
     let identity = KType::UserType {
-        kind: UserTypeKind::Struct,
+        kind: UserTypeKind::Struct { fields: Rc::new(fields) },
         scope_id,
         name: name.clone(),
     };
-    match scope.register_nominal(name, identity, struct_obj, bind_index) {
-        Ok(obj) => BodyResult::Value(obj),
+    match scope.register_type_upsert(name, identity, bind_index) {
+        Ok(kt_ref) => BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
         Err(e) => err(e),
     }
 }

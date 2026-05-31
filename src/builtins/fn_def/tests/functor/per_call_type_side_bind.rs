@@ -29,10 +29,9 @@ fn functor_body_module_dispatch_does_not_dangle() {
     }
     run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
 
-    let data = scope.bindings().data();
-    let m = match data.get("HeldSet").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("HeldSet should be a module, got {:?}", other.map(|o| o.ktype())),
+    let m = match scope.resolve_type("HeldSet") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        other => panic!("HeldSet should be a module identity in types, got {other:?}"),
     };
     let inner = m.child_scope().bindings().data().get("inner").map(|(o, _)| *o);
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0),

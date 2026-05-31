@@ -12,6 +12,7 @@
 use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::Module;
+use crate::machine::execute::coerce_type_token_value;
 use crate::machine::{
     ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, Scope, SchedulerHandle,
 };
@@ -87,13 +88,15 @@ pub fn body_type_lhs<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    // The Type-classed lhs resolves to a nominal value-side binding (KModule /
-    // StructType / TaggedUnionType) in `bindings.data`; `resolve_type` walks
-    // `bindings.types`, which doesn't carry those until a later stage installs a
-    // `KType::UserType` alongside.
-    let target = match scope.lookup(&s_name) {
-        Some(obj) => obj,
-        None => return err(KError::new(KErrorKind::UnboundName(s_name))),
+    // The Type-classed lhs is a nominal type-side binding. Modules / signatures keep
+    // a value-side carrier (`KTypeValue(Module/Signature)`), which `coerce_type_token_value`
+    // recovers; struct / union names are type-only now, so it synthesizes a
+    // `KTypeValue(UserType)` that `access_field` rejects with the same TypeMismatch a
+    // static struct field access has always produced.
+    let leaf = crate::machine::model::ast::TypeExpr::leaf(s_name);
+    let target = match coerce_type_token_value(scope, &leaf, None) {
+        Ok(obj) => obj,
+        Err(e) => return err(e),
     };
     access_field(scope, target, &field_name)
 }
@@ -227,7 +230,7 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let struct_ty = KType::AnyUserType { kind: UserTypeKind::Struct };
+    let struct_ty = KType::AnyUserType { kind: UserTypeKind::struct_sentinel() };
     let module_ty = KType::AnyModule;
     let newtype_ty = KType::AnyUserType {
         kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },

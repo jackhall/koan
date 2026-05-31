@@ -14,7 +14,6 @@ use super::constructors;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::core::ScopeId;
-use crate::machine::model::Parseable;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
@@ -292,6 +291,10 @@ pub(super) fn constructor_call<'a>(
         }
         Resolution::Value(_) | Resolution::UnboundName => {}
     }
+    // Fresh `types[name]` lookup at construction time. The schema payload rides the
+    // identity, so a recursive type whose cycle-close pre-installed a payload-empty
+    // identity reads the schema-bearing one that finalize's upsert replaced it with —
+    // no value-side carrier involved.
     let identity = match scope.resolve_type_with_chain(&head_t.name, chain) {
         Some(kt) => kt,
         None => {
@@ -301,40 +304,43 @@ pub(super) fn constructor_call<'a>(
         }
     };
     match identity {
-        KType::UserType { kind: UserTypeKind::Struct, .. }
-        | KType::UserType { kind: UserTypeKind::Tagged, .. } => {
-            let carrier = match coerce_type_token_value(scope, &head_t, chain) {
-                Ok(obj) => obj,
-                Err(KError { kind: KErrorKind::UnboundName(n), .. }) => {
-                    return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                        n,
-                    ))));
-                }
-                Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
-            };
-            debug_assert!(
-                matches!(carrier, KObject::StructType { .. } | KObject::TaggedUnionType { .. }),
-                "STRUCT/UNION `{}` registered its type identity but no matching \
-                 value-side schema carrier (got `{}`)",
-                head_t.name,
-                carrier.summarize(),
-            );
-            constructors::dispatch_construct(ctx, carrier, inner_parts, scope, idx)
+        KType::UserType { kind: UserTypeKind::Struct { fields }, scope_id, name } => {
+            constructors::dispatch_construct_struct(
+                ctx,
+                name.clone(),
+                *scope_id,
+                Rc::clone(fields),
+                inner_parts,
+                scope,
+                idx,
+            )
+        }
+        KType::UserType { kind: UserTypeKind::Tagged { schema }, scope_id, name } => {
+            constructors::dispatch_construct_tagged(
+                ctx,
+                name.clone(),
+                *scope_id,
+                Rc::clone(schema),
+                inner_parts,
+                scope,
+                idx,
+            )
         }
         KType::UserType { kind: UserTypeKind::Newtype { .. }, .. } => {
             let body = newtype_construct(scope, ctx, identity, inner_parts);
             schedule_constructor_body(ctx, body, idx)
         }
-        KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. } => match scope
-            .lookup_with_chain(&head_t.name, chain)
-        {
-            Some(carrier) => constructors::dispatch_construct(ctx, carrier, inner_parts, scope, idx),
-            None => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-                arg: "verb".to_string(),
-                expected: "constructible Type".to_string(),
-                got: identity.name(),
-            }))),
-        },
+        KType::UserType { kind: UserTypeKind::TypeConstructor { schema, .. }, scope_id, name } => {
+            constructors::dispatch_construct_tagged(
+                ctx,
+                name.clone(),
+                *scope_id,
+                Rc::clone(schema),
+                inner_parts,
+                scope,
+                idx,
+            )
+        }
         _ => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),

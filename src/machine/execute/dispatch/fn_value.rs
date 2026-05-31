@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::Parseable;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::{KType, UserTypeKind};
 use crate::machine::model::KObject;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
@@ -118,9 +119,49 @@ impl<'a> FnValueState<'a> {
                 Ok(rebuilt) => Self::install_eager_subs_track(ctx, rebuilt, f, scope, idx),
                 Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
             },
-            KObject::StructType { .. } | KObject::TaggedUnionType { .. } => Ok(
-                constructors::dispatch_construct(ctx, head_obj, inner_parts, scope, idx),
-            ),
+            // A value-classified alias of a constructible type — `LET outcome = Outcome`
+            // then `(outcome (err "x"))`. The alias carries the type's identity directly
+            // (`KTypeValue(UserType { .. })`); construction reads the schema off that
+            // identity, the same payload `bindings.types[name]` holds.
+            KObject::KTypeValue(KType::UserType { kind, scope_id, name }) => {
+                match kind {
+                    UserTypeKind::Struct { fields } => Ok(constructors::dispatch_construct_struct(
+                        ctx,
+                        name.clone(),
+                        *scope_id,
+                        std::rc::Rc::clone(fields),
+                        inner_parts,
+                        scope,
+                        idx,
+                    )),
+                    UserTypeKind::Tagged { schema }
+                    | UserTypeKind::TypeConstructor { schema, .. } => {
+                        Ok(constructors::dispatch_construct_tagged(
+                            ctx,
+                            name.clone(),
+                            *scope_id,
+                            std::rc::Rc::clone(schema),
+                            inner_parts,
+                            scope,
+                            idx,
+                        ))
+                    }
+                    UserTypeKind::Newtype { .. } => {
+                        let identity_ref: &'a KType<'a> = scope.arena.alloc(KType::UserType {
+                            kind: kind.clone(),
+                            scope_id: *scope_id,
+                            name: name.clone(),
+                        });
+                        let body = crate::builtins::newtype_def::newtype_construct(
+                            scope,
+                            ctx,
+                            identity_ref,
+                            inner_parts,
+                        );
+                        Ok(super::single_poll::schedule_constructor_body(ctx, body, idx))
+                    }
+                }
+            }
             other => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::TypeMismatch {
                     arg: "verb".to_string(),

@@ -334,6 +334,35 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// Upsert install for a type-only nominal finalize (STRUCT / named UNION / Result /
+    /// MODULE). Writes the schema-bearing identity into [`Bindings::types`], overwriting
+    /// a `PartialEq`-equal payload-empty identity the SCC cycle-close pre-installed.
+    /// Returns the arena-allocated `&KType` so the caller can yield it as a
+    /// `KObject::KTypeValue`. Same conditional-defer shape as [`Self::register_type`];
+    /// `Err(Rebind)` on a genuine non-equal collision.
+    ///
+    /// Finalize runs post-Combine, past the re-entrant queue point — a `Conflict` here
+    /// is a programming error, so it panics rather than deferring (deferring would risk
+    /// a window where the type resolves with the pre-install's empty payload).
+    pub fn register_type_upsert(
+        &self,
+        name: String,
+        ktype: crate::machine::model::types::KType<'a>,
+        index: BindingIndex,
+    ) -> Result<&'a crate::machine::model::types::KType<'a>, KError> {
+        if self.bindings.is_borrowed() {
+            return self.write_target().register_type_upsert(name, ktype, index);
+        }
+        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(ktype);
+        match self.bindings.get().try_register_type_upsert(&name, kt_ref, index)? {
+            ApplyOutcome::Applied => Ok(kt_ref),
+            ApplyOutcome::Conflict => panic!(
+                "register_type_upsert borrow conflict on `{name}` — nominal finalize sites \
+                 run post-Combine outside the re-entrant bind hot path",
+            ),
+        }
+    }
+
     /// Synchronous identity install for the SCC cycle-close sweep. Writes `name` →
     /// `ktype` to [`Bindings::types`], but panics on borrow conflict instead of
     /// deferring, and panics on `Rebind` — a cycle member's identity must not already
@@ -341,8 +370,9 @@ impl<'a> Scope<'a> {
     ///
     /// Cycle-close runs from the elaborator's `Resolution::Placeholder` arm with no
     /// outer `bindings` borrow held; a conflict here is a programming error. The
-    /// downstream finalize's [`Bindings::try_register_nominal`] idempotent arm picks
-    /// up the carrier write against this pre-installed identity.
+    /// identity installed here is payload-empty (schema not yet elaborated); the
+    /// downstream finalize overwrites it with the schema-bearing one via
+    /// [`Self::register_type_upsert`].
     pub fn cycle_close_install_identity(
         &self,
         name: String,
@@ -367,10 +397,13 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// Atomic install for nominal declarations (STRUCT, named UNION, MODULE, SIG).
-    /// Identity `kt` goes into [`Bindings::types`] and runtime carrier `obj` into
-    /// [`Bindings::data`] atomically via [`Bindings::try_register_nominal`]. Returns
-    /// the carrier so the caller can yield it via `BodyResult::Value`.
+    /// Atomic `(types, data)` install for a SIG declaration — the lone remaining
+    /// dual-writer (also reached by a SIG-alias `LET`). Identity `kt` (the
+    /// `SatisfiesSignature` constraint) goes into [`Bindings::types`] and the
+    /// `Signature` carrier `obj` into [`Bindings::data`] atomically via
+    /// [`Bindings::try_register_nominal`]. STRUCT / UNION / MODULE / Result install
+    /// type-only via [`Self::register_type_upsert`]. Returns the carrier so the
+    /// caller can yield it via `BodyResult::Value`.
     ///
     /// Finalize runs post-Combine, past the re-entrant queue point: panic on
     /// `Conflict`, return `Err` on `Rebind`.

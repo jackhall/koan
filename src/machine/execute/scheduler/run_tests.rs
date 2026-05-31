@@ -229,8 +229,9 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     }
     sched.execute().unwrap();
     assert!(
-        matches!(scope.lookup("AResult"), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
-        "AResult should bind to a KModule after replay-park on forward-declared MODULE / SIG",
+        matches!(scope.resolve_type("AResult"), Some(KType::Module { module: _, frame: _ })),
+        "AResult should bind to a Module identity (type-only) after replay-park on \
+         forward-declared MODULE / SIG",
     );
 }
 

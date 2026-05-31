@@ -244,7 +244,7 @@ pub fn elaborate_type_expr<'a>(
             // applied recursion needs threaded unfold sets that don't exist yet.
             if let Some(ctor_kt) = el.scope.resolve_type(name) {
                 if let KType::UserType {
-                    kind: UserTypeKind::TypeConstructor { param_names },
+                    kind: UserTypeKind::TypeConstructor { param_names, .. },
                     ..
                 } = ctor_kt
                 {
@@ -319,11 +319,11 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
     None
 }
 
-/// Synchronous SCC cycle-close. Installs each member's identity
-/// (`KType::UserType { kind, scope_id, name }`) into `bindings.types` so cross-member
-/// `resolve_type` lookups succeed on the very next call. Does NOT build carriers or
-/// write `bindings.data` — each member's own finalize path does that via the
-/// idempotent `try_register_nominal` arm.
+/// Synchronous SCC cycle-close. Installs each member's payload-empty identity
+/// (`KType::UserType { kind, scope_id, name }`, schema not yet elaborated) into
+/// `bindings.types` so cross-member `resolve_type` lookups succeed on the very next
+/// call. Each member's own finalize replaces this sentinel with the schema-bearing
+/// identity via `Scope::register_type_upsert`.
 ///
 /// `pending_types` entries are left in place on purpose: each member's finalize is the
 /// sole remover of its own entry. The elaborator rebuilt inside each finalize sees

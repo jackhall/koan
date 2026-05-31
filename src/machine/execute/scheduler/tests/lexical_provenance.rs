@@ -74,14 +74,11 @@ fn module_body_chain_parent_points_at_module_statement_frame() {
     assert!(top_chain.parent.is_none());
     sched.execute().expect("module runs");
     // Body slot has terminalized by now and dropped its chain; the body-chain
-    // shape is exercised end-to-end by the recursive smoke tests below.
-    let data = root.bindings().data();
-    let (foo, _) = data.get("Foo").copied().expect("Foo bound");
-    let module = match foo {
-        crate::machine::model::KObject::KTypeValue(crate::machine::model::KType::Module {
-            module: m, ..
-        }) => *m,
-        _ => panic!("Foo should be a module"),
+    // shape is exercised end-to-end by the recursive smoke tests below. MODULE is
+    // type-only, so the `&Module` rides the identity in `types`.
+    let module = match root.resolve_type("Foo") {
+        Some(crate::machine::model::KType::Module { module: m, .. }) => *m,
+        _ => panic!("Foo should be a module identity in types"),
     };
     let _: &Module<'_> = module;
 }

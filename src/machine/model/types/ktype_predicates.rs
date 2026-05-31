@@ -188,8 +188,8 @@ impl<'a> KType<'a> {
             KType::AnySignature => matches!(obj, KObject::KTypeValue(KType::Signature(_))),
             KType::AnyUserType { kind } => matches!(
                 (kind, obj),
-                (UserTypeKind::Struct, KObject::Struct { .. })
-                    | (UserTypeKind::Tagged, KObject::Tagged { .. })
+                (UserTypeKind::Struct { .. }, KObject::Struct { .. })
+                    | (UserTypeKind::Tagged { .. }, KObject::Tagged { .. })
                     | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
             ),
             // One-unfold. No runtime value carries a `RecursiveRef`, so this can't
@@ -307,9 +307,9 @@ impl<'a> KType<'a> {
                 ExpressionPart::Type(_) => true,
                 ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
                 | ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_))) => false,
+                // Struct / union / Result type tokens flow as `KTypeValue(UserType)` now —
+                // admitted by this arm (no separate schema-carrier variant).
                 ExpressionPart::Future(KObject::KTypeValue(_)) => true,
-                ExpressionPart::Future(KObject::TaggedUnionType { .. })
-                | ExpressionPart::Future(KObject::StructType { .. }) => true,
                 _ => false,
             },
             // Strict equality is the abstraction-barrier check for opaquely-ascribed
@@ -320,8 +320,8 @@ impl<'a> KType<'a> {
             KType::AnyUserType { kind } => match part {
                 ExpressionPart::Future(obj) => matches!(
                     (kind, obj),
-                    (UserTypeKind::Struct, KObject::Struct { .. })
-                        | (UserTypeKind::Tagged, KObject::Tagged { .. })
+                    (UserTypeKind::Struct { .. }, KObject::Struct { .. })
+                        | (UserTypeKind::Tagged { .. }, KObject::Tagged { .. })
                         | (UserTypeKind::Newtype { .. }, KObject::Wrapped { .. })
                 ),
                 _ => false,

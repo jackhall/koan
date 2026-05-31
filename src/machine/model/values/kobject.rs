@@ -60,23 +60,6 @@ pub enum KObject<'a> {
     KExpression(KExpression<'a>),
     KFuture(KFuture<'a>, Option<Rc<CallArena>>),
     KFunction(&'a KFunction<'a>, Option<Rc<CallArena>>),
-    /// Tagged-union schema. `(name, scope_id)` is the declared type's identity (same
-    /// scheme as `Module::scope_id()`). `ktype()` reports `KType::Type` — the schema is
-    /// a value *of* the meta-type; `Tagged` values synthesize
-    /// `KType::UserType { kind: Tagged, .. }` from these identity fields.
-    TaggedUnionType {
-        schema: Rc<HashMap<String, KType<'a>>>,
-        name: String,
-        scope_id: ScopeId,
-    },
-    /// Struct schema. `(scope_id, name)` is the declared type's identity. `ktype()`
-    /// reports `KType::Type`; `Struct` values synthesize
-    /// `KType::UserType { kind: Struct, .. }` from these identity fields.
-    StructType {
-        name: String,
-        scope_id: ScopeId,
-        fields: Rc<Vec<(String, KType<'a>)>>,
-    },
     /// Tagged-union value. `(name, scope_id)` carries the schema's identity through to
     /// the value; `ktype()` synthesizes `KType::UserType { kind: Tagged, .. }` so
     /// dispatch on type identity sees the declared union.
@@ -232,15 +215,12 @@ impl<'a> KObject<'a> {
             KObject::KFunction(f, _) => function_value_ktype(f),
             KObject::KFuture(t, _) => function_value_ktype(t.function),
             KObject::KExpression(_) => KType::KExpression,
-            // Schema carriers are values *of* the meta-type, not user-typed values.
-            KObject::TaggedUnionType { .. } => KType::Type,
-            KObject::StructType { .. } => KType::Type,
             // Erased `type_args` reports the bare `UserType` identity; a populated
             // carrier synthesizes the applied form so dispatch sees the full
             // instantiation (`Result<Number, MyErr>`).
             KObject::Tagged { name, scope_id, type_args, .. } => {
                 let bare = KType::UserType {
-                    kind: UserTypeKind::Tagged,
+                    kind: UserTypeKind::tagged_sentinel(),
                     scope_id: *scope_id,
                     name: name.clone(),
                 };
@@ -254,7 +234,7 @@ impl<'a> KObject<'a> {
                 }
             }
             KObject::Struct { name, scope_id, .. } => KType::UserType {
-                kind: UserTypeKind::Struct,
+                kind: UserTypeKind::struct_sentinel(),
                 scope_id: *scope_id,
                 name: name.clone(),
             },
@@ -288,16 +268,6 @@ impl<'a> KObject<'a> {
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
             KObject::KFunction(f, frame) => KObject::KFunction(f, frame.clone()),
-            KObject::TaggedUnionType { schema, name, scope_id } => KObject::TaggedUnionType {
-                schema: Rc::clone(schema),
-                name: name.clone(),
-                scope_id: *scope_id,
-            },
-            KObject::StructType { name, scope_id, fields } => KObject::StructType {
-                name: name.clone(),
-                scope_id: *scope_id,
-                fields: Rc::clone(fields),
-            },
             KObject::Tagged { tag, value, scope_id, name, type_args } => KObject::Tagged {
                 tag: tag.clone(),
                 value: Rc::clone(value),
@@ -322,22 +292,6 @@ impl<'a> KObject<'a> {
     pub fn as_kexpression(&self) -> Option<&KExpression<'a>> {
         match self {
             KObject::KExpression(e) => Some(e),
-            _ => None,
-        }
-    }
-
-    /// Returns the `Rc` directly so callers can `Rc::clone` the field list.
-    #[allow(clippy::type_complexity)]
-    pub fn as_struct_type(&self) -> Option<(&str, &Rc<Vec<(String, KType<'a>)>>)> {
-        match self {
-            KObject::StructType { name, fields, .. } => Some((name.as_str(), fields)),
-            _ => None,
-        }
-    }
-
-    pub fn as_tagged_union_type(&self) -> Option<&Rc<HashMap<String, KType<'a>>>> {
-        match self {
-            KObject::TaggedUnionType { schema, .. } => Some(schema),
             _ => None,
         }
     }
@@ -429,20 +383,6 @@ impl<'a> Parseable<'a> for KObject<'a> {
             KObject::KExpression(e) => e.summarize(),
             KObject::KFuture(t, _) => t.parsed.summarize(),
             KObject::KFunction(f, _) => f.summarize(),
-            KObject::TaggedUnionType { schema, .. } => {
-                let parts: Vec<String> = schema
-                    .iter()
-                    .map(|(tag, ktype)| format!("{}: {}", tag, ktype.name()))
-                    .collect();
-                format!("Union{{{}}}", parts.join(", "))
-            }
-            KObject::StructType { name, fields, .. } => {
-                let parts: Vec<String> = fields
-                    .iter()
-                    .map(|(field, ktype)| format!("{}: {}", field, ktype.name()))
-                    .collect();
-                format!("{}{{{}}}", name, parts.join(", "))
-            }
             KObject::Tagged { tag, value, .. } => format!("{}({})", tag, value.summarize()),
             KObject::Struct { name, fields, .. } => {
                 let parts: Vec<String> = fields

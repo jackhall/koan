@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType};
+use koan::machine::model::{KObject, KType, UserTypeKind};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -211,10 +211,11 @@ fn sigil_functor_lowers_to_kfunctor() {
 fn struct_field_accepts_keyworded_list_of_sigil() {
     let arena = RuntimeArena::new();
     let scope = run(&arena, "STRUCT Foo = (xs :(LIST OF Number))");
-    let foo = scope.lookup("Foo").expect("Foo should bind");
-    let fields = match foo {
-        KObject::StructType { fields, .. } => fields.clone(),
-        other => panic!("Foo must bind a StructType, got {:?}", other.ktype()),
+    // STRUCT is type-only — its field schema rides the `UserType { Struct { fields } }`
+    // identity in `types`.
+    let fields = match scope.resolve_type("Foo") {
+        Some(KType::UserType { kind: UserTypeKind::Struct { fields }, .. }) => fields.clone(),
+        other => panic!("Foo must be a Struct identity in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].0, "xs");
@@ -233,10 +234,11 @@ fn union_field_accepts_keyworded_map_sigil() {
         &arena,
         "UNION Maybe = (some :(MAP Str -> Number), none :Null)",
     );
-    let maybe = scope.lookup("Maybe").expect("Maybe should bind");
-    let schema = match maybe {
-        KObject::TaggedUnionType { schema, .. } => schema.clone(),
-        other => panic!("Maybe must bind a TaggedUnionType, got {:?}", other.ktype()),
+    // UNION is type-only — its variant schema rides the `UserType { Tagged { schema } }`
+    // identity in `types`.
+    let schema = match scope.resolve_type("Maybe") {
+        Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) => schema.clone(),
+        other => panic!("Maybe must be a Tagged identity in types, got {other:?}"),
     };
     let some_kt = schema.get("some").expect("some tag");
     match some_kt {
@@ -309,9 +311,10 @@ fn sigil_user_functor_application_through_dispatch() {
             (MODULE Result = ((LET tag = 0)))\n\
          LET MySet = (MAKESET IntOrd)",
     );
-    let my_set = scope.lookup("MySet").expect("MySet should bind");
-    match my_set {
-        KObject::KTypeValue(KType::Module { .. }) => {}
-        other => panic!("MySet must bind a Module value, got {:?}", other.ktype()),
+    // `MySet` is a module bound under a Type-classed name — type-only, so its identity
+    // lives in `types`.
+    match scope.resolve_type("MySet") {
+        Some(KType::Module { .. }) => {}
+        other => panic!("MySet must be a Module identity in types, got {other:?}"),
     }
 }

@@ -16,10 +16,11 @@ fn transparent_ascription_returns_module() {
          SIG OrderedSig = (VAL compare :Number)\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
-    let data = scope.bindings().data();
+    // Transparent ascription `:!` of a module is type-only — its module identity lives
+    // in `types`.
     assert!(matches!(
-        data.get("IntOrdView").map(|(o, _)| *o),
-        Some(KObject::KTypeValue(KType::Module { module: _, frame: _ })),
+        scope.resolve_type("IntOrdView"),
+        Some(KType::Module { module: _, frame: _ }),
     ));
 }
 
@@ -60,14 +61,13 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let data = scope.bindings().data();
-    let a = match data.get("FirstAbstract").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("FirstAbstract should be a module"),
+    let a = match scope.resolve_type("FirstAbstract") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("FirstAbstract should be a module identity in types"),
     };
-    let b = match data.get("SecondAbstract").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("SecondAbstract should be a module"),
+    let b = match scope.resolve_type("SecondAbstract") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("SecondAbstract should be a module identity in types"),
     };
     let a_t = a.type_members.borrow().get("Type").cloned();
     let b_t = b.type_members.borrow().get("Type").cloned();
@@ -94,10 +94,9 @@ fn transparent_ascription_does_not_mint_module_types() {
          SIG OrderedSig = (VAL compare :Number)\n\
          LET ViewMod = (IntOrd :! OrderedSig)",
     );
-    let data = scope.bindings().data();
-    let v = match data.get("ViewMod").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("ViewMod should be a module"),
+    let v = match scope.resolve_type("ViewMod") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("ViewMod should be a module identity in types"),
     };
     assert!(v.type_members.borrow().is_empty());
 }
@@ -114,10 +113,9 @@ fn roadmap_example_int_ord_with_ordered_sig() {
          LET IntOrdAbstract = (IntOrd :| OrderedSig)",
     );
 
-    let data = scope.bindings().data();
-    let abstract_mod = match data.get("IntOrdAbstract").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("IntOrdAbstract should be a module, got {:?}", other.map(|o| o.ktype())),
+    let abstract_mod = match scope.resolve_type("IntOrdAbstract") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("IntOrdAbstract should be a module identity in types"),
     };
     let minted = abstract_mod
         .type_members

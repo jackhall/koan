@@ -10,7 +10,7 @@
 
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Resolution,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
     Scope, SchedulerHandle,
 };
 use crate::machine::model::values::Module;
@@ -55,14 +55,11 @@ pub fn body<'a>(
     let name_for_finish = name.clone();
     let finish: CombineFinish<'a> = Box::new(move |parent_scope, _sched, _results| {
         // Idempotent-finalize guard: short-circuits if a future SCC-sweep extension
-        // re-enters MODULE finalize against an already-bound name.
+        // re-enters MODULE finalize against an already-bound name. MODULE is type-only,
+        // so the guard reads `types` (the carrier in `data` is gone).
         let bindings = parent_scope.bindings();
-        if bindings.lookup_type(&name_for_finish, None).is_some() {
-            if let Some(Resolution::Value(existing)) =
-                bindings.lookup_value(&name_for_finish, None)
-            {
-                return BodyResult::Value(existing);
-            }
+        if let Some(kt) = bindings.lookup_type(&name_for_finish, None) {
+            return BodyResult::Value(parent_scope.arena.alloc(KObject::KTypeValue(kt.clone())));
         }
         let arena = parent_scope.arena;
         let module: &'a Module<'a> =
@@ -89,15 +86,17 @@ pub fn body<'a>(
             module,
             frame: active_frame.clone(),
         };
-        let module_obj: &'a KObject<'a> =
-            arena.alloc(KObject::KTypeValue(identity.clone()));
-        match parent_scope.register_nominal(
-            name_for_finish.clone(),
-            identity,
-            module_obj,
-            bind_index,
-        ) {
-            Ok(obj) => BodyResult::Value(obj),
+        // Type-only install: the module's identity (carrying its `&Module` and per-call
+        // frame anchor) lives in `bindings.types`; ATTR access recovers the value-side
+        // `KTypeValue(Module)` via `coerce_type_token_value`. MODULE doesn't join an SCC
+        // type cycle (bodies park on the outer scheduler), so the upsert's overwrite arm
+        // never fires for a module — its insert-if-absent / non-equal-Rebind behaviour is
+        // what carries here, sharing the one nominal-finalize primitive.
+        let _ = arena;
+        match parent_scope.register_type_upsert(name_for_finish.clone(), identity.clone(), bind_index) {
+            Ok(kt_ref) => BodyResult::Value(
+                parent_scope.arena.alloc(KObject::KTypeValue(kt_ref.clone())),
+            ),
             Err(e) => BodyResult::Err(
                 e.with_frame(Frame::bare("<module>", format!("MODULE {} body", name_for_finish))),
             ),
@@ -130,8 +129,18 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 #[cfg(test)]
 mod tests {
     use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
+    use crate::machine::model::values::Module;
     use crate::machine::model::{KObject, KType};
-    use crate::machine::{BindingIndex, KErrorKind, RuntimeArena};
+    use crate::machine::{BindingIndex, KErrorKind, RuntimeArena, Scope};
+
+    /// MODULE is type-only: the `&Module` rides the `KType::Module` identity in
+    /// `bindings.types`. Recover it for inspection.
+    fn resolve_module<'a>(scope: &'a Scope<'a>, name: &str) -> &'a Module<'a> {
+        match scope.resolve_type(name) {
+            Some(KType::Module { module, .. }) => module,
+            other => panic!("expected {name} to be a Module identity in types, got {other:?}"),
+        }
+    }
 
     #[test]
     fn binder_name_extracts_module_name() {
@@ -145,11 +154,11 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "MODULE Foo = (LET x = 1)");
-        let data = scope.bindings().data();
-        assert!(matches!(
-            data.get("Foo").map(|(o, _)| *o),
-            Some(KObject::KTypeValue(KType::Module { .. }))
-        ));
+        assert!(matches!(scope.resolve_type("Foo"), Some(KType::Module { .. })));
+        assert!(
+            scope.bindings().data().get("Foo").is_none(),
+            "MODULE is type-only — no value-side carrier in data",
+        );
     }
 
     #[test]
@@ -183,11 +192,7 @@ mod tests {
             scope,
             "MODULE Foo = (LET double = (FN (DOUBLE x :Number) -> Number = (x)))",
         );
-        let data = scope.bindings().data();
-        let foo = match data.get("Foo").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
-            _ => panic!("Foo should be a module"),
-        };
+        let foo = resolve_module(scope, "Foo");
         assert!(foo.child_scope().bindings().data().contains_key("double"));
     }
 
@@ -239,13 +244,11 @@ mod tests {
         );
     }
 
-    /// Pre-seed a name, then re-dispatching `MODULE Foo = ...` must surface as
-    /// `Rebind` at placeholder install (the finalize guard never has to fire) and
-    /// leave the pre-seeded pointer intact.
+    /// Pre-seed the type-only `Foo` identity, then re-dispatch `MODULE Foo = ...`. The
+    /// finalize guard reads `types`, short-circuits on the existing identity, and leaves
+    /// the pre-seeded `&Module` pointer intact.
     #[test]
     fn module_finalize_short_circuits_on_idempotent_state() {
-        use crate::machine::model::types::KType;
-        use crate::machine::model::values::Module;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let child = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -254,14 +257,13 @@ mod tests {
         ));
         let module: &Module<'_> = arena.alloc_module(Module::new("Foo".into(), child));
         let identity = KType::Module { module, frame: None };
-        let module_obj = arena.alloc(KObject::KTypeValue(identity.clone()));
-        scope
-            .register_nominal("Foo".into(), identity, module_obj, BindingIndex::BUILTIN)
-            .unwrap();
+        // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
+        // guard reads `types`, finds the pre-seeded identity, and short-circuits without
+        // re-binding — the original `&Module` pointer survives.
+        scope.register_type("Foo".into(), identity, BindingIndex::nominal(0));
         run(scope, "MODULE Foo = (LET y = 2)");
-        let data = scope.bindings().data();
-        let (foo, _) = data.get("Foo").copied().expect("Foo still bound");
-        assert!(std::ptr::eq(foo, module_obj));
+        let foo = resolve_module(scope, "Foo");
+        assert!(std::ptr::eq(foo, module));
     }
 
     /// Miri audit-slate: exercises the MODULE Combine continuation's captured
@@ -271,11 +273,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET y = 7\nMODULE Foo = ((LET x = y) (LET z = 11))");
-        let data = scope.bindings().data();
-        let foo = match data.get("Foo").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
-            _ => panic!("Foo should be a module"),
-        };
+        let foo = resolve_module(scope, "Foo");
         let inner = foo.child_scope().bindings().data();
         assert!(matches!(inner.get("x").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
         assert!(matches!(inner.get("z").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 11.0));

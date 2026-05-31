@@ -304,12 +304,13 @@ fn fast_lane_on_non_function_returns_error() {
 }
 
 /// Tagged-union construction via a LET-bound lowercase alias. The FnValueCall
-/// fast lane resolves `maybe` to `TaggedUnionType` and routes the call
-/// through `constructors::dispatch_construct`.
+/// fast lane resolves `maybe` to its `KTypeValue(UserType { Tagged { schema } })`
+/// identity and constructs from the schema payload via
+/// `constructors::dispatch_construct_tagged`.
 ///
 /// Counter contract: every step in the chain (FnValueCall head resolution +
-/// constructors::dispatch_construct + LiteralPassThrough on the value-cell)
-/// is fast-lane; nothing enters `resolve_dispatch`.
+/// construct-from-identity + LiteralPassThrough on the value-cell) is fast-lane;
+/// nothing enters `resolve_dispatch`.
 #[test]
 fn fast_lane_on_tagged_union_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
@@ -335,12 +336,13 @@ fn fast_lane_on_tagged_union_constructs() {
 }
 
 /// Struct construction via a LET-bound lowercase alias. `(STRUCT Pt = ...)`
-/// returns the `StructType` value which LET binds under `pt`; the fast lane
-/// routes the call through `constructors::dispatch_construct`.
+/// returns the `KTypeValue(UserType { Struct { fields } })` identity which LET binds
+/// under `pt`; the fast lane constructs from the fields payload via
+/// `constructors::dispatch_construct_struct`.
 ///
 /// Counter contract: every step is fast-lane (FnValueCall head resolution +
-/// constructors::dispatch_construct + LiteralPassThrough per value-cell);
-/// no entry into `resolve_dispatch`.
+/// construct-from-identity + LiteralPassThrough per value-cell); no entry into
+/// `resolve_dispatch`.
 #[test]
 fn fast_lane_on_struct_type_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};

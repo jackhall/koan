@@ -60,14 +60,14 @@ impl<'a> Scope<'a> {
 /// canonical value-side `KObject` carrier.
 ///
 /// - Parameterized shapes (`List<...>`, `Function<...>` etc.) are rejected with `ShapeError`.
-/// - For a nominal identity (`UserType`, `SatisfiesSignature`, `Module`, `Signature`),
-///   recover the paired value-side carrier so downstream operators see the expected
-///   `KSignature` / `KModule` / `StructType` / `TaggedUnionType` part rather than a
-///   synthesized `KTypeValue`. Nominal binders install the carrier atomically with
-///   the type identity, so the lookup is infallible under normal flow; the synthesis
-///   below covers the defensive case.
+/// - For a SIG nominal identity (`SatisfiesSignature`), recover the paired value-side
+///   `KSignature` carrier when present (SIG still dual-writes), so downstream operators
+///   see the signature value rather than a synthesized `KTypeValue`. The synthesis below
+///   covers the now-common type-only case (struct / union / module / Result), where no
+///   value-side carrier exists.
 /// - Otherwise synthesize `KObject::KTypeValue(kt.clone())` so the value sits in the
-///   same dispatch transport every other body consumes.
+///   same dispatch transport every other body consumes — this is how a struct / union /
+///   module / Result type token reaches a constructor or ATTR call site now.
 /// - Miss surfaces `UnboundName(name)`.
 pub fn coerce_type_token_value<'a>(
     scope: &'a Scope<'a>,
@@ -285,12 +285,12 @@ mod tests {
         let a_id = ScopeId::next();
         let b_id = ScopeId::next();
         let user_a = KType::UserType {
-            kind: UserTypeKind::Struct,
+            kind: UserTypeKind::struct_sentinel(),
             scope_id: a_id,
             name: "A".into(),
         };
         let user_b = KType::UserType {
-            kind: UserTypeKind::Struct,
+            kind: UserTypeKind::struct_sentinel(),
             scope_id: b_id,
             name: "B".into(),
         };
@@ -309,7 +309,7 @@ mod tests {
         let outer_id = ScopeId::next();
         let inner_id = ScopeId::next();
         let inner = KType::UserType {
-            kind: UserTypeKind::Struct,
+            kind: UserTypeKind::struct_sentinel(),
             scope_id: inner_id,
             name: "Inner".into(),
         };
@@ -388,7 +388,7 @@ mod tests {
             use crate::machine::model::types::UserTypeKind;
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
-            let kind = UserTypeKind::Struct;
+            let kind = UserTypeKind::struct_sentinel();
             let kt = KType::UserType {
                 kind,
                 scope_id: scope.id,
@@ -413,7 +413,7 @@ mod tests {
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
             let kt = KType::UserType {
-                kind: UserTypeKind::Struct,
+                kind: UserTypeKind::struct_sentinel(),
                 scope_id: scope.id,
                 name: "Orphan".to_string(),
             };

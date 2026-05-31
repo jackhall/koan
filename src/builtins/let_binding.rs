@@ -1,5 +1,4 @@
 use crate::machine::model::{KObject, KType};
-use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
 };
@@ -68,9 +67,15 @@ pub fn body<'a>(
                     }));
                 }
                 match value {
-                    KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
+                    // SIG stays dual-write (deferred): a signature alias lowers to the
+                    // `SatisfiesSignature` constraint on the type side AND keeps the
+                    // `Signature` value on the value side.
+                    KObject::KTypeValue(KType::Signature(_)) => {
                         nominal_identity = derive_nominal_identity(value);
                     }
+                    // Struct / union / module / Result aliases are type-only: their schema
+                    // (or `&Module`) rides the `KType` identity, so a plain `types` write
+                    // preserves dispatch identity without a value-side copy.
                     KObject::KTypeValue(kt) => {
                         type_for_types_map = Some(kt.clone());
                     }
@@ -103,9 +108,15 @@ pub fn body<'a>(
                     }));
                 }
                 match value {
-                    KObject::KTypeValue(KType::Module { .. } | KType::Signature(_)) => {
+                    // SIG stays dual-write (deferred): a signature alias lowers to the
+                    // `SatisfiesSignature` constraint on the type side AND keeps the
+                    // `Signature` value on the value side.
+                    KObject::KTypeValue(KType::Signature(_)) => {
                         nominal_identity = derive_nominal_identity(value);
                     }
+                    // Struct / union / module / Result aliases are type-only: their schema
+                    // (or `&Module`) rides the `KType` identity, so a plain `types` write
+                    // preserves dispatch identity without a value-side copy.
                     KObject::KTypeValue(kt) => {
                         type_for_types_map = Some(kt.clone());
                     }
@@ -167,13 +178,14 @@ pub fn body<'a>(
     BodyResult::Value(allocated)
 }
 
-/// Recover the nominal identity carried by a type-language value `obj`. Returns
-/// `Some(identity)` for STRUCT / UNION / MODULE / SIG carriers (and aliases of
-/// them); `None` for everything else — those keep flowing through
-/// `Scope::bind_value` without installing a type-side identity.
+/// Recover the nominal identity carried by a type-language value `obj`. Struct / union /
+/// module / Result identities are now type-only `KTypeValue(_)` carriers that the LET body
+/// routes straight to `register_type`, so this handles the only remaining dual-write case:
+/// SIG. A signature alias keeps both the `SatisfiesSignature` constraint (type side) and the
+/// `Signature` value (value side). Everything else returns `None` and flows through
+/// `Scope::bind_value`.
 fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
     match obj {
-        KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
         // Signature carriers lower to the constraint shape `SatisfiesSignature`
         // so `(PICK m: S2)` and `(PICK m: OrderedSig)` dispatch identically.
         KObject::KTypeValue(KType::Signature(s)) => Some(KType::SatisfiesSignature {
@@ -181,24 +193,14 @@ fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
             sig_path: s.path.clone(),
             pinned_slots: Vec::new(),
         }),
-        KObject::StructType { name, scope_id, .. } => Some(KType::UserType {
-            kind: UserTypeKind::Struct,
-            scope_id: *scope_id,
-            name: name.clone(),
-        }),
-        KObject::TaggedUnionType { name, scope_id, .. } => Some(KType::UserType {
-            kind: UserTypeKind::Tagged,
-            scope_id: *scope_id,
-            name: name.clone(),
-        }),
         _ => None,
     }
 }
 
 /// Type-class LET allowlist. A Type-class binder name admits a value only if it
-/// carries a type-language identity: `KTypeValue(_)`, a nominal-identity carrier
-/// (`StructType` / `TaggedUnionType`), or a `is_functor`-flagged `KFunction`.
-/// Plain `KFunction` rejects so `LET Plain = (FN ...)` cannot silently land
+/// carries a type-language identity: any `KTypeValue(_)` (struct / union / module /
+/// Result / signature identities all flow as `KTypeValue` now) or an `is_functor`-flagged
+/// `KFunction`. Plain `KFunction` rejects so `LET Plain = (FN ...)` cannot silently land
 /// under `bindings.data`. See
 /// [design/typing/elaboration.md](../../design/typing/elaboration.md)
 /// § Binding-map partition.

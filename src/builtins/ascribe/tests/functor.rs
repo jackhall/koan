@@ -23,10 +23,9 @@ fn functor_returns_a_module() {
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
-    let data = scope.bindings().data();
-    let m = match data.get("SetValue").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
+    let m = match scope.resolve_type("SetValue") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("SetValue should be a module identity in types"),
     };
     let inner = m.child_scope().bindings().data().get("inner").map(|(o, _)| *o);
     assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0));
@@ -48,10 +47,9 @@ fn functor_body_reads_signature_typed_parameter() {
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
-    let data = scope.bindings().data();
-    let m = match data.get("SetValue").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
+    let m = match scope.resolve_type("SetValue") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("SetValue should be a module identity in types"),
     };
     let sample = m.child_scope().bindings().data().get("sample").map(|(o, _)| *o);
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
@@ -77,14 +75,13 @@ fn functor_application_is_generative() {
     run(scope, "LET SetOne = (MAKESET (IntOrdA))");
     run(scope, "LET SetTwo = (MAKESET (IntOrdA))");
 
-    let data = scope.bindings().data();
-    let m1 = match data.get("SetOne").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("SetOne should be a module, got ktype={:?}", other.map(|o| o.ktype())),
+    let m1 = match scope.resolve_type("SetOne") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("SetOne should be a module identity in types"),
     };
-    let m2 = match data.get("SetTwo").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("SetTwo should be a module"),
+    let m2 = match scope.resolve_type("SetTwo") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("SetTwo should be a module identity in types"),
     };
     assert_ne!(
         m1.scope_id(),
@@ -153,9 +150,8 @@ fn functor_overloads_dispatch_by_signature_bound_param() {
     run(scope, "LET OrdSet = (MAKESET (IntOrdA))");
     run(scope, "LET HashSet = (MAKESET (IntHashA))");
 
-    let data = scope.bindings().data();
-    let mo = match data.get("OrdSet").map(|(o, _)| *o) { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("OrdSet not module") };
-    let mh = match data.get("HashSet").map(|(o, _)| *o) { Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m, _ => panic!("HashSet not module") };
+    let mo = match scope.resolve_type("OrdSet") { Some(KType::Module { module: m, frame: _ }) => *m, _ => panic!("OrdSet not a module identity in types") };
+    let mh = match scope.resolve_type("HashSet") { Some(KType::Module { module: m, frame: _ }) => *m, _ => panic!("HashSet not a module identity in types") };
     let to = mo.child_scope().bindings().data().get("tag").map(|(o, _)| *o);
     let th = mh.child_scope().bindings().data().get("tag").map(|(o, _)| *o);
     assert!(matches!(to, Some(KObject::Number(n)) if *n == 1.0),
@@ -182,10 +178,9 @@ fn transparent_ascription_satisfies_signature_bound_slot() {
     );
     run(scope, "LET SetValue = (MAKESET IntView)");
 
-    let data = scope.bindings().data();
-    let m = match data.get("SetValue").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
+    let m = match scope.resolve_type("SetValue") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("SetValue should be a module identity in types"),
     };
     let sample = m.child_scope().bindings().data().get("sample").map(|(o, _)| *o);
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
@@ -210,10 +205,9 @@ fn functor_argument_bare_type_token_auto_wraps() {
     );
     run(scope, "LET SetValue = (MAKESET IntOrdA)");
 
-    let data = scope.bindings().data();
-    let m = match data.get("SetValue").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("SetValue should be a module, got {:?}", other.map(|o| o.ktype())),
+    let m = match scope.resolve_type("SetValue") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("SetValue should be a module identity in types"),
     };
     let sample = m.child_scope().bindings().data().get("sample").map(|(o, _)| *o);
     assert!(matches!(sample, Some(KObject::Number(n)) if *n == 7.0));
@@ -243,14 +237,13 @@ fn opaque_ascription_mints_fresh_type_constructor_per_call() {
             panic!("expr {} errored: {}", i, e);
         }
     }
-    let data = scope.bindings().data();
-    let a = match data.get("First").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("First should be a module"),
+    let a = match scope.resolve_type("First") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("First should be a module identity in types"),
     };
-    let b = match data.get("Second").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("Second should be a module"),
+    let b = match scope.resolve_type("Second") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("Second should be a module identity in types"),
     };
     let a_wrap = a.type_members.borrow().get("Wrap").cloned();
     let b_wrap = b.type_members.borrow().get("Wrap").cloned();
@@ -296,14 +289,10 @@ fn opaque_ascription_re_binds_do_not_alias_unsoundly() {
          MODULE IntOrd = ((LET compare = 7) (LET helper = (FN (HELP x :Number) -> Number = (x))))\n\
          LET Held = (IntOrd :| OrderedSig)",
     );
-    // Extract before further dispatches: `bindings().data()` returns a `Ref<_>`
-    // and holding it across a `run` would block the RefCell writes.
-    let held = {
-        let data = scope.bindings().data();
-        match data.get("Held").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-            other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
-        }
+    // `Held` is a type-only `:|`-ascribed module alias — its identity lives in `types`.
+    let held = match scope.resolve_type("Held") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        other => panic!("Held should be a module identity in types, got {other:?}"),
     };
 
     // Churn the run-root arena, then re-ascribe to allocate a second re-bind

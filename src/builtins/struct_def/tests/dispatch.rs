@@ -2,45 +2,58 @@
 
 use crate::machine::BindingIndex;
 use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
+use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
 
-/// `finalize_struct` is idempotent when both `bindings.types[name]` and
-/// `bindings.data[name]` are already populated — pins the cycle-close-then-
-/// Combine-finish double-fire safety net.
+/// `finalize_struct` is idempotent against a cycle-close payload-empty pre-install:
+/// finalize upserts the schema-bearing identity over it, and a second finalize against
+/// the now-populated identity short-circuits. Pins the cycle-close-then-Combine-finish
+/// double-fire safety net under the type-only (no value-side carrier) protocol.
 #[test]
-fn finalize_struct_is_idempotent_when_both_maps_populated() {
-    use crate::machine::model::types::UserTypeKind;
-    use std::rc::Rc;
+fn finalize_struct_idempotent_after_cycle_close_pre_install() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    // Pre-seed both maps to mimic the cycle-close-then-finalize state.
     let scope_id = scope.id;
-    let pre_carrier: &KObject<'_> = arena.alloc(KObject::StructType {
-        name: "Foo".into(),
-        scope_id,
-        fields: Rc::new(vec![("x".into(), KType::Number)]),
-    });
+    // Mimic cycle-close: install the payload-empty identity into `types` only.
     let pre_identity = KType::UserType {
-        kind: UserTypeKind::Struct,
+        kind: UserTypeKind::struct_sentinel(),
         scope_id,
         name: "Foo".into(),
     };
-    scope.register_nominal("Foo".into(), pre_identity, pre_carrier, BindingIndex::BUILTIN).unwrap();
-    // Call finalize_struct directly — it must short-circuit to the existing carrier.
-    let outcome = super::super::finalize_struct(
+    scope.cycle_close_install_identity("Foo".into(), pre_identity, BindingIndex::nominal(0));
+    // First finalize: upserts the schema-bearing identity, replacing the empty payload.
+    let first = super::super::finalize_struct(
         scope,
         "Foo".into(),
         vec![("x".into(), KType::Number)],
-        BindingIndex::BUILTIN,
+        BindingIndex::nominal(0),
     );
-    match outcome {
-        crate::machine::BodyResult::Value(obj) => {
-            assert!(std::ptr::eq(obj, pre_carrier),
-                "finalize_struct must return the pre-installed carrier pointer");
+    assert!(matches!(first, crate::machine::BodyResult::Value(_)));
+    let stored = scope.resolve_type("Foo").expect("Foo identity in types");
+    match stored {
+        KType::UserType { kind: UserTypeKind::Struct { fields }, .. } => {
+            assert_eq!(fields.as_ref(), &vec![("x".to_string(), KType::Number)]);
         }
-        _ => panic!("expected Value variant from finalize_struct"),
+        other => panic!("expected populated Struct identity, got {other:?}"),
     }
+    // Second finalize observes the populated payload and short-circuits without re-upsert.
+    let second = super::super::finalize_struct(
+        scope,
+        "Foo".into(),
+        vec![("x".into(), KType::Number)],
+        BindingIndex::nominal(0),
+    );
+    match second {
+        crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType { name, .. })) => {
+            assert_eq!(name, "Foo");
+        }
+        _ => panic!("expected short-circuit Value(KTypeValue(UserType)) from finalize_struct"),
+    }
+    assert!(
+        scope.bindings().data().get("Foo").is_none(),
+        "type-only finalize must not write a value-side carrier",
+    );
 }
 
 /// Two STRUCTs declared in the same scope share `scope_id` but carry distinct
@@ -51,20 +64,19 @@ fn struct_pair_same_scope_distinct_names_share_scope_id() {
     let scope = run_root_silent(&arena);
     run_one(scope, parse_one("STRUCT Foo = (x :Number)"));
     run_one(scope, parse_one("STRUCT Bar = (x :Number)"));
-    let data = scope.bindings().data();
-    let foo_id = match data.get("Foo").map(|(o, _)| *o) {
-        Some(KObject::StructType { scope_id, name, .. }) => {
+    let foo_id = match scope.resolve_type("Foo") {
+        Some(KType::UserType { scope_id, name, .. }) => {
             assert_eq!(name, "Foo");
             *scope_id
         }
-        other => panic!("expected StructType Foo, got {:?}", other.map(|o| o.ktype())),
+        other => panic!("expected UserType Foo identity, got {other:?}"),
     };
-    let bar_id = match data.get("Bar").map(|(o, _)| *o) {
-        Some(KObject::StructType { scope_id, name, .. }) => {
+    let bar_id = match scope.resolve_type("Bar") {
+        Some(KType::UserType { scope_id, name, .. }) => {
             assert_eq!(name, "Bar");
             *scope_id
         }
-        other => panic!("expected StructType Bar, got {:?}", other.map(|o| o.ktype())),
+        other => panic!("expected UserType Bar identity, got {other:?}"),
     };
     assert_eq!(foo_id, bar_id, "same-scope STRUCTs must share scope_id");
 }

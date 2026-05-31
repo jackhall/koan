@@ -4,29 +4,30 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
 
 #[test]
-fn result_registers_type_constructor_and_carrier() {
+fn result_registers_type_constructor_with_schema() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
 
+    // Type-only: `Result`'s `TypeConstructor` identity carries both `param_names` and
+    // the variant `schema` payload; no value-side carrier in `data`.
     let identity = scope.resolve_type("Result").expect("Result type registered");
-    assert!(
-        matches!(
-            identity,
-            KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }
-                if param_names.len() == 2
-        ),
-        "expected arity-2 TypeConstructor, got {identity:?}",
-    );
-
-    let carrier = scope.lookup("Result").expect("Result carrier bound");
-    match carrier {
-        KObject::TaggedUnionType { schema, name, .. } => {
+    match identity {
+        KType::UserType {
+            kind: UserTypeKind::TypeConstructor { param_names, schema },
+            name,
+            ..
+        } => {
             assert_eq!(name, "Result");
+            assert_eq!(param_names.len(), 2);
             assert_eq!(schema.get("ok"), Some(&KType::Any));
             assert_eq!(schema.get("error"), Some(&KType::Any));
         }
-        other => panic!("expected TaggedUnionType, got {:?}", other.ktype()),
+        other => panic!("expected arity-2 TypeConstructor with schema, got {other:?}"),
     }
+    assert!(
+        scope.lookup("Result").is_none(),
+        "Result must not write a value-side carrier into data",
+    );
 }
 
 #[test]

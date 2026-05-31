@@ -5,7 +5,7 @@ use crate::machine::{ArgumentBundle, BodyResult, Scope, ScopeId, SchedulerHandle
 use crate::builtins::err;
 
 /// `TYPE_CONSTRUCTOR <param:TypeExprRef>` → `TypeExprRef` carrying a template
-/// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`
+/// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, .. }`
 /// with `ScopeId::SENTINEL` and a placeholder `name` (`"_typeconstructor"`). The
 /// surrounding opaque ascription (`ascribe.rs:body_opaque`) re-mints both with the
 /// binding's slot name and a per-call `scope_id`. Arity-1 only.
@@ -21,7 +21,12 @@ pub fn body<'a>(
     let param = param_kt.name();
     BodyResult::Value(
         scope.arena.alloc(KObject::KTypeValue(KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names: vec![param] },
+            // Abstract higher-kinded SIG slot — not a constructible union, so the
+            // schema payload is empty (equality ignores it anyway).
+            kind: UserTypeKind::TypeConstructor {
+                schema: std::rc::Rc::new(std::collections::HashMap::new()),
+                param_names: vec![param],
+            },
             scope_id: ScopeId::SENTINEL,
             name: "_typeconstructor".into(),
         })),
@@ -44,7 +49,7 @@ mod tests {
         let result = run_one(scope, parse_one("TYPE_CONSTRUCTOR Type"));
         match result {
             KObject::KTypeValue(kt) => match kt {
-                KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, scope_id, name } => {
+                KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, scope_id, name } => {
                     assert_eq!(*param_names, vec!["Type".to_string()]);
                     assert_eq!(*scope_id, ScopeId::SENTINEL);
                     assert_eq!(name, "_typeconstructor");
@@ -67,7 +72,7 @@ mod tests {
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         match wrap_kt {
-            KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. } => {
+            KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, .. } => {
                 assert_eq!(*param_names, vec!["Type".to_string()]);
             }
             other => panic!("expected UserType(TypeConstructor) under Wrap, got {:?}", other),
@@ -86,7 +91,10 @@ mod tests {
         scope.register_type(
             "Wrap".into(),
             KType::UserType {
-                kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
+                kind: UserTypeKind::TypeConstructor {
+                    schema: std::rc::Rc::new(std::collections::HashMap::new()),
+                    param_names: vec!["Type".into()],
+                },
                 scope_id: ScopeId::from_raw(0, 0xC0DE),
                 name: "Wrap".into(),
             },
@@ -189,13 +197,13 @@ mod tests {
              MODULE IntList = ((LET Wrap = Number))\n\
              LET Mo = (IntList :| MonadSig)",
         );
-        let mo = match scope.bindings().data().get("Mo").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Module { module: m, .. })) => *m,
-            other => panic!("Mo should be a module, got {:?}", other.map(|o| o.ktype())),
+        let mo = match scope.resolve_type("Mo") {
+            Some(KType::Module { module: m, .. }) => *m,
+            other => panic!("Mo should be a module identity in types, got {other:?}"),
         };
         let wrap_t = mo.type_members.borrow().get("Wrap").cloned();
         match wrap_t {
-            Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, name, .. }) => {
+            Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, name, .. }) => {
                 assert_eq!(name, "Wrap");
                 assert_eq!(param_names, vec!["Type".to_string()]);
             }

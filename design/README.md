@@ -65,9 +65,10 @@ Type and module system ([typing/](typing/README.md)):
   recognition.
 - [typing/user-types.md](typing/user-types.md) — `KType::UserType` as
   per-declaration identity for STRUCT, named UNION, MODULE, opaque
-  ascription, and NEWTYPE; the `AnyUserType` wildcard;
-  finalize-time atomic install through `Scope::register_nominal`;
-  cycle close for mutually recursive nominals.
+  ascription, and NEWTYPE; the schema riding the identity payload; the
+  `AnyUserType` wildcard; the type-only finalize install through
+  `Scope::register_type_upsert`; cycle close for mutually recursive
+  nominals.
 - [typing/lookup-protocol.md](typing/lookup-protocol.md) — the
   three-layer foundation (`Scope` chain-walk → `Bindings` per-scope
   lookup → `KType` predicate admit) every dispatch and name-resolution
@@ -124,22 +125,27 @@ this on `core/lookup/` (rejected, +0.4) and `core/scope/` (rejected,
 refused to wrap.
 
 A **seam** is a *contract* restated across docs because no source file
-owns it. The nominal dual-write protocol (transactionally update
-`bindings.types` and `bindings.data` for every STRUCT / UNION /
-MODULE / SIG / FUNCTOR binder, with SCC cycle-close coordination)
-spans five design docs and six builtin callsites; the
-per-call arena protocol (which carriers anchor a `Rc<CallArena>`, how
-lift attaches an anchor, where the alloc cycle gate fires) spans
-five design docs and ~10 source files. In both cases the docs
-restate the rule because no single source file holds the contract —
-the participants implement the protocol independently. The fix is to
-*name* the contract: either a code-level seam (concentrate the
-participants in one module, scored by `modgraph`) or a doc-level seam
-(a single canonical page the participating docs cross-link to, with
-the code staying distributed). The 2026-05 analysis confirmed both
-shapes — `core/nominal/` for the dual-write protocol scored Δ −0.48
-with paired doc consolidation, the per-call arena protocol stays
-code-distributed and gets a single owner doc.
+owns it. The per-call arena protocol (which carriers anchor a
+`Rc<CallArena>`, how lift attaches an anchor, where the alloc cycle gate
+fires) spans five design docs and ~10 source files: the docs restate the
+rule because no single source file holds the contract — the participants
+implement the protocol independently. Two fixes are available: a
+code-level seam (concentrate the participants in one module, scored by
+`modgraph`) or a doc-level seam (a single canonical page the participating
+docs cross-link to, with the code staying distributed). The per-call arena
+protocol took the latter shape — it stays code-distributed and gets a
+single owner doc.
+
+A third, stronger resolution is to *dissolve* the seam: fold the
+duplicated state into a single carrier so the protocol stops being a
+contract-by-convention at all. The nominal types take this path — a
+`STRUCT` / `UNION` / `MODULE` / `Result` declaration carries its schema in
+the `UserTypeKind` identity payload and writes only `bindings.types`, so a
+reader finds the rule in one place (the identity owns the schema) rather
+than as a dual-write contract restated across the typing docs. SIG is the
+lone residual dual-writer (its constraint and value forms genuinely
+differ), tracked in
+[eliminate SIG's dual-write](../roadmap/refactor/eliminate-sig-dual-write.md).
 
 The operational test: if pulling the items into a new module reduces
 the metric (especially under paired doc consolidation), it's a seam.
@@ -178,13 +184,14 @@ proposed structural change:
   drown the seam by dragging unrelated peers along.
 
 Canonical command pattern for scoring a candidate against the
-current baseline:
+current baseline (the `--move` / `--prose-redirect` targets below are
+placeholders — substitute the item and destination module under test):
 
 ```sh
 tools/modgraph.py observe/modules.dot --baseline observe/baseline.txt
 tools/modgraph_rewrite.py item \
-  --move 'koan::machine::core::scope::Scope::register_nominal=koan::machine::core::nominal' \
-  --prose-redirect 'src/machine/core/scope.rs=src/machine/core/nominal.rs' \
+  --move 'koan::machine::core::scope::Scope::SOME_ITEM=koan::machine::core::TARGET' \
+  --prose-redirect 'src/machine/core/scope.rs=src/machine/core/TARGET.rs' \
   observe/modules.dot observe/candidate.dot
 tools/modgraph.py observe/candidate.dot --baseline observe/baseline.txt
 ```

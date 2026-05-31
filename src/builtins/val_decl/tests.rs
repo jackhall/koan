@@ -147,8 +147,9 @@ fn val_slot_satisfied_by_module_let_member() {
          MODULE IntOrd = (LET compare = 0)\n\
          LET Ord = (IntOrd :| WithCompare)",
     );
-    let data = scope.bindings().data();
-    assert!(matches!(data.get("Ord").map(|(o, _)| *o), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))));
+    // The `:|`-ascribed module alias `Ord` is type-only (no value-side carrier), so its
+    // module identity lives in `types`.
+    assert!(matches!(scope.resolve_type("Ord"), Some(KType::Module { module: _, frame: _ })));
 }
 
 /// Pins the canonical SIG form: abstract type via `LET Type = ...` plus a VAL

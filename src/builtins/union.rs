@@ -6,7 +6,7 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    Resolution, Scope, SchedulerHandle,
+    Scope, SchedulerHandle,
 };
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
@@ -21,9 +21,9 @@ use super::{arg, err, kw, register_nominal_binder, sig};
 ///
 /// The schema slot is a parens-wrapped expression of `<tag:Identifier> :<type:Type>`
 /// pairs. Parens keep the parts from dispatching as their own expression so the
-/// elaborator sees identifier/type pairs directly. Registers the type token in the
-/// current scope as a constructor and returns a `KObject::TaggedUnionType` whose
-/// per-declaration identity is shared with the meta-type carried by `STRUCT` schemas.
+/// elaborator sees identifier/type pairs directly. Type-only: the variant schema rides
+/// the `UserType { Tagged { schema } }` identity in `bindings.types`, and the declaration
+/// yields a `KTypeValue(UserType)` first-class type value — no value-side carrier.
 pub fn body<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
@@ -48,7 +48,7 @@ pub fn body<'a>(
     let pending_guard = scope.bindings().insert_pending_type(
         name.clone(),
         PendingTypeEntry {
-            kind: UserTypeKind::Tagged,
+            kind: UserTypeKind::tagged_sentinel(),
             scope_id,
             schema_expr: schema_expr.clone(),
             edges: Vec::new(),
@@ -59,7 +59,7 @@ pub fn body<'a>(
     // parking on its own placeholder.
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
-        .with_current_decl(name.clone(), UserTypeKind::Tagged, scope_id);
+        .with_current_decl(name.clone(), UserTypeKind::tagged_sentinel(), scope_id);
     let outcome =
         parse_typed_field_list_via_elaborator(&schema_expr, "UNION schema", &mut elaborator);
     let bind_index = sched
@@ -82,16 +82,27 @@ pub fn body<'a>(
     }
 }
 
+/// Fold the elaborated variant schema into the `UserType { Tagged { schema } }` identity
+/// and upsert it into `bindings.types` — type-only, no value-side carrier. Mirror of
+/// [`super::struct_def::finalize_struct`].
 fn finalize_union<'a>(
     scope: &'a Scope<'a>,
     name: String,
     fields: Vec<(String, KType<'a>)>,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
+    // Idempotent-finalize guard: short-circuit only on a populated `Tagged { schema }`
+    // payload, distinguishing it from the cycle-close payload-empty pre-install.
     let bindings = scope.bindings();
-    if bindings.lookup_type(&name, None).is_some() {
-        if let Some(Resolution::Value(existing)) = bindings.lookup_value(&name, None) {
-            return BodyResult::Value(existing);
+    if let Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) =
+        bindings.lookup_type(&name, None)
+    {
+        if !schema.is_empty() {
+            return BodyResult::Value(
+                scope.arena.alloc(KObject::KTypeValue(
+                    bindings.lookup_type(&name, None).unwrap().clone(),
+                )),
+            );
         }
     }
     if fields.is_empty() {
@@ -102,20 +113,14 @@ fn finalize_union<'a>(
     // UNION addresses by tag, not by declaration order — flatten the ordered list
     // (shared shape with `STRUCT`) into a HashMap. Duplicates already rejected upstream.
     let schema: HashMap<String, KType<'a>> = fields.into_iter().collect();
-    let arena = scope.arena;
     let scope_id = scope.id;
-    let union_obj: &'a KObject<'a> = arena.alloc(KObject::TaggedUnionType {
-        schema: Rc::new(schema),
-        name: name.clone(),
-        scope_id,
-    });
     let identity = KType::UserType {
-        kind: UserTypeKind::Tagged,
+        kind: UserTypeKind::Tagged { schema: Rc::new(schema) },
         scope_id,
         name: name.clone(),
     };
-    match scope.register_nominal(name, identity, union_obj, bind_index) {
-        Ok(obj) => BodyResult::Value(obj),
+    match scope.register_type_upsert(name, identity, bind_index) {
+        Ok(kt_ref) => BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
         Err(e) => err(e),
     }
 }
@@ -214,22 +219,30 @@ mod tests {
 
     #[test]
     fn union_named_registers_type_in_scope() {
+        use crate::machine::model::types::UserTypeKind;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
+        // UNION is type-only: the declaration yields a `KTypeValue(UserType)` whose
+        // `Tagged { schema }` payload carries the variant schema, registered into `types`.
         let result = run_one(
             scope,
             parse_one("UNION Maybe = (some :Number none :Null)"),
         );
-        assert!(matches!(result, KObject::TaggedUnionType { .. }));
-        let data = scope.bindings().data();
-        let (entry, _) = data.get("Maybe").expect("Maybe should be bound in scope");
-        match entry {
-            KObject::TaggedUnionType { schema, .. } => {
+        assert!(matches!(
+            result,
+            KObject::KTypeValue(KType::UserType { kind: UserTypeKind::Tagged { .. }, .. })
+        ));
+        match scope.resolve_type("Maybe") {
+            Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) => {
                 assert_eq!(schema.get("some"), Some(&KType::Number));
                 assert_eq!(schema.get("none"), Some(&KType::Null));
             }
-            other => panic!("expected TaggedUnionType, got {:?}", other.ktype()),
+            other => panic!("expected Tagged identity for Maybe in types, got {other:?}"),
         }
+        assert!(
+            scope.bindings().data().get("Maybe").is_none(),
+            "UNION must not write a value-side carrier into data",
+        );
     }
 
     /// No anonymous `UNION (...)` form: the inner sub-expression classifies as a
@@ -280,49 +293,50 @@ mod tests {
         );
     }
 
-    /// `finalize_union` is idempotent when both `bindings.types[name]` and
-    /// `bindings.data[name]` are already populated.
+    /// `finalize_union` upserts the schema-bearing identity over a cycle-close
+    /// payload-empty pre-install, then short-circuits on a second finalize once the
+    /// payload is populated — the type-only (no value-side carrier) idempotency net.
     #[test]
-    fn finalize_union_is_idempotent_when_both_maps_populated() {
+    fn finalize_union_idempotent_after_cycle_close_pre_install() {
         use crate::machine::model::types::UserTypeKind;
-        use std::collections::HashMap;
-        use std::rc::Rc;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let scope_id = scope.id;
-        let mut schema: HashMap<String, KType> = HashMap::new();
-        schema.insert("some".into(), KType::Number);
-        let pre_carrier: &KObject<'_> = arena.alloc(KObject::TaggedUnionType {
-            name: "Maybe".into(),
-            scope_id,
-            schema: Rc::new(schema),
-        });
         let pre_identity = KType::UserType {
-            kind: UserTypeKind::Tagged,
+            kind: UserTypeKind::tagged_sentinel(),
             scope_id,
             name: "Maybe".into(),
         };
-        scope
-            .register_nominal(
-                "Maybe".into(),
-                pre_identity,
-                pre_carrier,
-                BindingIndex::BUILTIN,
-            )
-            .unwrap();
-        let outcome = super::finalize_union(
+        scope.cycle_close_install_identity("Maybe".into(), pre_identity, BindingIndex::nominal(0));
+        let first = super::finalize_union(
             scope,
             "Maybe".into(),
             vec![("some".into(), KType::Number)],
-            BindingIndex::BUILTIN,
+            BindingIndex::nominal(0),
         );
-        match outcome {
-            crate::machine::BodyResult::Value(obj) => {
-                assert!(std::ptr::eq(obj, pre_carrier),
-                    "finalize_union must return the pre-installed carrier pointer");
+        assert!(matches!(first, crate::machine::BodyResult::Value(_)));
+        match scope.resolve_type("Maybe") {
+            Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) => {
+                assert_eq!(schema.get("some"), Some(&KType::Number));
             }
-            _ => panic!("expected Value variant from finalize_union"),
+            other => panic!("expected populated Tagged identity, got {other:?}"),
         }
+        let second = super::finalize_union(
+            scope,
+            "Maybe".into(),
+            vec![("some".into(), KType::Number)],
+            BindingIndex::nominal(0),
+        );
+        match second {
+            crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType { name, .. })) => {
+                assert_eq!(name, "Maybe");
+            }
+            _ => panic!("expected short-circuit Value(KTypeValue(UserType)) from finalize_union"),
+        }
+        assert!(
+            scope.bindings().data().get("Maybe").is_none(),
+            "type-only finalize must not write a value-side carrier",
+        );
     }
 
     /// Mutually recursive STRUCT ↔ UNION pair: each binder parks on the other,
@@ -344,23 +358,23 @@ mod tests {
             sched.add_dispatch(e, scope);
         }
         sched.execute().unwrap();
-        let data = scope.bindings().data();
-        let wrap_fields = match data.get("Wrap").map(|(o, _)| *o) {
-            Some(KObject::StructType { fields, .. }) => fields.clone(),
-            other => panic!("expected Wrap StructType, got {:?}", other.map(|o| o.ktype())),
+        // Both are type-only — read schemas off the type-side identities.
+        let wrap_fields = match scope.resolve_type("Wrap") {
+            Some(KType::UserType { kind: UserTypeKind::Struct { fields }, .. }) => fields.clone(),
+            other => panic!("expected Wrap Struct identity, got {other:?}"),
         };
         assert!(
-            matches!(&wrap_fields[0].1, KType::UserType { kind: UserTypeKind::Tagged, name, .. } if name == "Maybe"),
+            matches!(&wrap_fields[0].1, KType::UserType { kind: UserTypeKind::Tagged { .. }, name, .. } if name == "Maybe"),
             "Wrap.m expected UserType{{Tagged Maybe}}, got {:?}",
             wrap_fields[0].1,
         );
-        let maybe_schema = match data.get("Maybe").map(|(o, _)| *o) {
-            Some(KObject::TaggedUnionType { schema, .. }) => schema.clone(),
-            other => panic!("expected Maybe TaggedUnionType, got {:?}", other.map(|o| o.ktype())),
+        let maybe_schema = match scope.resolve_type("Maybe") {
+            Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) => schema.clone(),
+            other => panic!("expected Maybe Tagged identity, got {other:?}"),
         };
         let just_kt = maybe_schema.get("just").expect("just tag");
         assert!(
-            matches!(just_kt, KType::UserType { kind: UserTypeKind::Struct, name, .. } if name == "Wrap"),
+            matches!(just_kt, KType::UserType { kind: UserTypeKind::Struct { .. }, name, .. } if name == "Wrap"),
             "Maybe.just expected UserType{{Struct Wrap}}, got {just_kt:?}",
         );
     }

@@ -98,10 +98,9 @@ mod tests {
         }
         run(scope, "LET Other = (LIFT_TYPE (ElemMod))");
 
-        let data = scope.bindings().data();
-        let m = match data.get("Held").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-            other => panic!("Held should be a module, got {:?}", other.map(|o| o.ktype())),
+        let m = match scope.resolve_type("Held") {
+            Some(KType::Module { module: m, frame: _ }) => *m,
+            other => panic!("Held should be a module identity in types, got {other:?}"),
         };
         let probe = m.child_scope().bindings().data().get("probe").map(|(o, _)| *o);
         assert!(

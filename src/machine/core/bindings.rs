@@ -238,8 +238,9 @@ impl<'a> Bindings<'a> {
 
     /// `BindingIndex` of an installed placeholder, ignoring visibility.
     /// Cycle-close in `model/types/resolver.rs` re-stamps the placeholder's
-    /// lexical position so the downstream `register_nominal`'s idempotent arm
-    /// matches. Other reads should go through [`Self::lookup_value`].
+    /// lexical position so the downstream finalize (`register_type_upsert`, or
+    /// `register_nominal` for SIG) installs at the matching index. Other reads
+    /// should go through [`Self::lookup_value`].
     pub fn placeholder_index(&self, name: &str) -> Option<BindingIndex> {
         self.placeholders.borrow().get(name).map(|(_, idx)| *idx)
     }
@@ -377,15 +378,49 @@ impl<'a> Bindings<'a> {
         self.try_apply_type(name, kt, index)
     }
 
-    /// Atomic install for nominal declarations (STRUCT / UNION / MODULE):
-    /// `types[name] = kt` + `data[name] = obj`. Borrow order `types → data`;
-    /// `functions` is untouched (nominal carriers are not callable verbs).
+    /// Upsert `name` → `kt` in `types` for nominal finalize. Insert-if-absent;
+    /// on a `PartialEq`-equal existing entry **overwrite** the stored `&KType`
+    /// (and `index`) so the payload-empty identity an SCC cycle-close pre-installed
+    /// is replaced by the schema-bearing one finalize built. A non-equal existing
+    /// entry is a genuine collision — `Err(Rebind)`.
     ///
-    /// Cycle-close-idempotent path: if `types[name]` already holds a `KType`
-    /// value-equal to `kt` AND `data[name]` is empty, write only the carrier.
-    /// SCC pre-registration installs each cycle member's identity into `types`
-    /// synchronously before any member's body builds its carrier, so the
-    /// eventual `register_nominal` call hits this arm with matching identity.
+    /// Distinct from [`Self::try_register_type`], whose strict insert-if-absent arm
+    /// would `Rebind` on the cycle-close pre-install rather than overwrite it.
+    /// `Ok(Conflict)` on borrow contention. Best-effort placeholder clear on success.
+    pub fn try_register_type_upsert(
+        &self,
+        name: &str,
+        kt: &'a KType<'a>,
+        index: BindingIndex,
+    ) -> Result<ApplyOutcome, KError> {
+        let mut types = match self.types.try_borrow_mut() {
+            Ok(t) => t,
+            Err(_) => return Ok(ApplyOutcome::Conflict),
+        };
+        match types.get(name).map(|(t, _)| *t) {
+            Some(existing) if *existing != *kt => {
+                return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+            }
+            // Absent, or identity-equal (cycle-close pre-install): write the
+            // schema-bearing identity, replacing any payload-empty pre-install.
+            _ => {
+                types.insert(name.to_string(), (kt, index));
+            }
+        }
+        drop(types);
+        self.clear_placeholder_best_effort(name);
+        Ok(ApplyOutcome::Applied)
+    }
+
+    /// Atomic `(types, data)` install — the lone remaining caller is a SIG
+    /// declaration (and a SIG-alias `LET`): `types[name] = kt` (the
+    /// `SatisfiesSignature` constraint) + `data[name] = obj` (the `Signature`
+    /// value). Borrow order `types → data`; `functions` is untouched. STRUCT /
+    /// UNION / MODULE / Result are type-only now via [`super::Scope::register_type_upsert`];
+    /// retiring this path entirely is the `eliminate-sig-dual-write` roadmap item.
+    ///
+    /// Idempotent path: if `types[name]` already holds a `KType` value-equal to
+    /// `kt` AND `data[name]` is empty, write only the carrier.
     ///
     /// `Ok(Conflict)` on borrow contention. `Err(Rebind)` if `data[name]`
     /// exists OR `types[name]` exists with a different `KType`. The pre-check

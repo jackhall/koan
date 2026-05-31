@@ -56,12 +56,11 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
          MODULE IntOrd = ((LET Type = Number) (LET zero = 0))\n\
          LET IntOrdView = (IntOrd :| WithZero)",
     );
-    let data = scope.bindings().data();
     assert!(
-        matches!(data.get("IntOrdView").map(|(o, _)| *o), Some(KObject::KTypeValue(KType::Module { module: _, frame: _ }))),
-        "IntOrdView should be an opaquely-ascribed module satisfying WithZero's VAL zero slot",
+        matches!(scope.resolve_type("IntOrdView"), Some(KType::Module { module: _, frame: _ })),
+        "IntOrdView should be an opaquely-ascribed module (type-only) satisfying WithZero's \
+         VAL zero slot",
     );
-    drop(data);
     run(
         scope,
         "FN (GET_ZERO Er :WithZero) -> (MODULE_TYPE_OF Er Type) = (Er.zero)",

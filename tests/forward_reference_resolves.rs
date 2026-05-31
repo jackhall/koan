@@ -107,9 +107,10 @@ fn module_body_backward_value_reference_resolves() {
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = run(&arena, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
-    let m = match scope.lookup("Mod") {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("Mod should be a module"),
+    // MODULE is type-only — the `&Module` rides the identity in `types`.
+    let m = match scope.resolve_type("Mod") {
+        Some(KType::Module { module: m, frame: _ }) => *m,
+        _ => panic!("Mod should be a module identity in types"),
     };
     let y = m.child_scope().lookup("y");
     assert!(matches!(y, Some(KObject::Number(n)) if *n == 1.0));

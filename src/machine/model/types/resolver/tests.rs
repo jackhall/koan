@@ -21,7 +21,7 @@ fn wrap_applied_elaborates_to_constructor_apply() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let ctor = KType::UserType {
-        kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
+        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["Type".into()] },
         scope_id: ScopeId::from_raw(0, 0xC0DE),
         name: "Wrap".into(),
     };
@@ -49,12 +49,12 @@ fn wrap_applied_distinct_per_ascription() {
     let scope_a = arena.alloc_scope(crate::machine::core::Scope::child_under(scope));
     let scope_b = arena.alloc_scope(crate::machine::core::Scope::child_under(scope));
     let ctor_a = KType::UserType {
-        kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
+        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["Type".into()] },
         scope_id: ScopeId::from_raw(0, 0xAAAA),
         name: "Wrap".into(),
     };
     let ctor_b = KType::UserType {
-        kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
+        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["Type".into()] },
         scope_id: ScopeId::from_raw(0, 0xBBBB),
         name: "Wrap".into(),
     };
@@ -80,7 +80,7 @@ fn wrap_applied_arity_mismatch_unbound() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let ctor = KType::UserType {
-        kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
+        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["Type".into()] },
         scope_id: ScopeId::from_raw(0, 0xC0DE),
         name: "Wrap".into(),
     };
@@ -216,7 +216,7 @@ fn functor_type_position_sigil_parks_on_forward_ref() {
 #[test]
 fn constructor_apply_name_renders_surface_form() {
     let ctor = KType::UserType {
-        kind: UserTypeKind::TypeConstructor { param_names: vec!["Type".into()] },
+        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["Type".into()] },
         scope_id: ScopeId::from_raw(0, 0xC0DE),
         name: "Wrap".into(),
     };

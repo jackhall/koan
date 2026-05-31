@@ -618,11 +618,15 @@ The rails the dispatch driver feeds:
     [typing/elaboration.md § Layers](typing/elaboration.md#layers)
     § Layer 4 for the shared coercion seam.
   - `ConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
-    `stateful_constructor_call` resolves the head Type token and
-    routes `StructType` / `TaggedUnionType` / `Newtype` / `TypeConstructor`
-    carriers through their construction primitives via a `Tail` rewrite.
-    Opaque / Module / unbound heads fall through to the keyworded
-    `type_call` builtin. The legacy positional sigil shape
+    [`constructor_call`](../src/machine/execute/dispatch/single_poll.rs)
+    resolves the head Type token to its `bindings.types` identity and
+    branches on the `UserTypeKind`: `Struct { fields }` and
+    `Tagged { schema }` / `TypeConstructor { schema, .. }` read the schema
+    straight off the identity and dispatch into
+    `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`,
+    while `Newtype` routes into `newtype_construct`. No value-side carrier is
+    fetched — the schema rides the identity. Opaque / Module / unbound heads
+    surface a `TypeMismatch`. The legacy positional sigil shape
     (`:(List Number)`) classifies here as well — the dispatcher's
     `SigiledTypeExpr` handler sub-dispatches the inner expression, which
     then lands in `ConstructorCall` and routes through the same
@@ -646,12 +650,14 @@ The rails the dispatch driver feeds:
     `stateful_dispatch_callable_value`, which either binds and invokes
     one-shot or installs the eager-subs track via
     `stateful_install_fn_value_eager_subs_track` when the spliced call
-    carries unresolved eager parts; `StructType { .. }` and `TaggedUnionType
-    { .. }` route through `struct_value::apply` and `tagged_union::apply`
-    respectively, each returning a `BodyResult::Tail` that rewrites the
-    slot as a re-Dispatch through the corresponding construction
-    primitive. Any other carrier (number, string, instance struct,
-    module, …) surfaces `TypeMismatch { arg: "verb", expected:
+    carries unresolved eager parts; a `KTypeValue(KType::UserType { kind, .. })`
+    head — the carrier a value-classified alias of a constructible type
+    synthesizes (`LET outcome = Outcome` then `(outcome (err "x"))`) — branches
+    on `kind` and reads the schema off that identity, dispatching into
+    `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`
+    (or `newtype_construct` for `Newtype`), the same identity-borne schema the
+    `ConstructorCall` lane reads. Any other carrier (number, string, instance
+    struct, module, …) surfaces `TypeMismatch { arg: "verb", expected:
     "KFunction or Type", got }` directly. A `Placeholder` head installs
     the head-placeholder park via `stateful_install_fn_value_head_park`;
     an unbound head surfaces `UnboundName(name)` directly — this shape
@@ -978,7 +984,7 @@ expression the user-facing diagnostic should sample.
 
 [`KObject`](../src/machine/model/values/kobject.rs) is the universal
 runtime value type. Pure-data variants (`Number`, `KString`, `Bool`,
-`List`, `Dict`, `KExpression`, `*Type` schema carriers, `Tagged`,
+`List`, `Dict`, `KExpression`, `Tagged`,
 `Struct`, `TypeNameRef`, `Null`) carry no references into
 [`machine::core`](../src/machine/core.rs). The runtime-reference
 variants do — `KFunction`, `KFuture`, `Wrapped`, and `KTypeValue`

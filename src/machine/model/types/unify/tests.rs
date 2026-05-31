@@ -71,12 +71,12 @@ fn constructor_apply_params_bind_args() {
         TypeExpr::leaf("E".into()),
     ]);
     let myerr = KType::UserType {
-        kind: UserTypeKind::Tagged,
+        kind: UserTypeKind::tagged_sentinel(),
         scope_id: ScopeId::from_raw(0, 0x1),
         name: "MyErr".into(),
     };
     let result_ctor = KType::UserType {
-        kind: UserTypeKind::TypeConstructor { param_names: vec!["T".into(), "E".into()] },
+        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["T".into(), "E".into()] },
         scope_id: ScopeId::from_raw(0, 0x2),
         name: "Result".into(),
     };
@@ -138,7 +138,7 @@ fn shape_disagreement_mismatches() {
 fn constructor_arity_mismatch() {
     let declared = ctor_te("Result", vec![TypeExpr::leaf("T".into())]);
     let result_ctor = KType::UserType {
-        kind: UserTypeKind::TypeConstructor { param_names: vec!["T".into(), "E".into()] },
+        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["T".into(), "E".into()] },
         scope_id: ScopeId::from_raw(0, 0x2),
         name: "Result".into(),
     };

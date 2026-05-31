@@ -78,7 +78,8 @@ fn forward_reference_parks_then_resolves_on_wake() {
     sched.enter_block(scope.id, exprs, scope);
     sched.execute().expect("dispatch with bare-name park should complete");
     let captured = buf.borrow().clone();
-    // Exact rendering of the StructType carrier isn't load-bearing here.
+    // `fwd` binds the struct's `KTypeValue(UserType)` identity; exact rendering of
+    // that type value isn't load-bearing here.
     assert!(
         !captured.is_empty(),
         "PRINT fwd should produce output after the forward reference resolves",

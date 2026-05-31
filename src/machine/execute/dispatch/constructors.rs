@@ -5,14 +5,16 @@
 //! validates types and emits the `KObject::Struct` / `KObject::Tagged`
 //! directly — no bucket lookup, no `BodyResult::Tail` re-dispatch.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
-use crate::machine::model::Parseable;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::KType;
 use crate::machine::model::KObject;
-use crate::machine::{KError, KErrorKind, NodeId, Scope};
+use crate::machine::core::ScopeId;
+use crate::machine::{NodeId, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::single_poll::{CtorKind, CtorState, CtorTrack};
@@ -21,55 +23,57 @@ use super::{DispatchCtx, DispatchState, Initialized};
 pub(in crate::machine::execute) mod struct_value;
 pub(in crate::machine::execute) mod tagged_union;
 
-/// Branch on the resolved verb's carrier variant. `StructType` and
-/// `TaggedUnionType` use the direct-construct path; other variants
-/// surface a `TypeMismatch` (the caller usually filters these earlier).
-pub(in crate::machine::execute) fn dispatch_construct<'a>(
+/// Direct-construct a struct from the schema read off its `KType::UserType`
+/// identity — `fields` came straight from `bindings.types[name]`, no value-side
+/// schema carrier. Reorders the call-site args into declaration order, then
+/// `launch`es the per-value eager subs.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::machine::execute) fn dispatch_construct_struct<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
-    carrier: &'a KObject<'a>,
+    name: String,
+    scope_id: ScopeId,
+    fields: Rc<Vec<(String, KType<'a>)>>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    match carrier {
-        KObject::StructType { name, scope_id, fields } => {
-            let name = name.clone();
-            let scope_id = *scope_id;
-            let fields = Rc::clone(fields);
-            let value_parts = match struct_value::prepare_value_parts(&fields, args_parts) {
-                Ok(v) => v,
-                Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
-            };
-            launch(
-                ctx,
-                value_parts,
-                CtorKind::Struct { name, scope_id, fields },
-                scope,
-                idx,
-            )
-        }
-        KObject::TaggedUnionType { schema, name, scope_id } => {
-            let schema = Rc::clone(schema);
-            let name = name.clone();
-            let scope_id = *scope_id;
-            let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
-                Ok(v) => v,
-                Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
-            };
-            launch(
-                ctx,
-                vec![value_part],
-                CtorKind::Tagged { schema, name, scope_id, tag },
-                scope,
-                idx,
-            )
-        }
-        other => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
-            arg: "verb".to_string(),
-            expected: "constructible Type".to_string(),
-            got: other.summarize(),
-        }))),
-    }
+    let value_parts = match struct_value::prepare_value_parts(&fields, args_parts) {
+        Ok(v) => v,
+        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+    };
+    launch(
+        ctx,
+        value_parts,
+        CtorKind::Struct { name, scope_id, fields },
+        scope,
+        idx,
+    )
+}
+
+/// Direct-construct a tagged-union value from the schema read off its
+/// `KType::UserType` identity. Shared by named UNIONs (`Tagged` kind) and the
+/// builtin `Result` constructor (`TypeConstructor` kind) — both carry the schema
+/// payload on the identity.
+pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
+    ctx: &mut DispatchCtx<'a, '_>,
+    name: String,
+    scope_id: ScopeId,
+    schema: Rc<HashMap<String, KType<'a>>>,
+    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
+    scope: &'a Scope<'a>,
+    idx: usize,
+) -> NodeStep<'a> {
+    let (tag, value_part) = match tagged_union::prepare_args(args_parts) {
+        Ok(v) => v,
+        Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
+    };
+    launch(
+        ctx,
+        vec![value_part],
+        CtorKind::Tagged { schema, name, scope_id, tag },
+        scope,
+        idx,
+    )
 }
 
 /// Stage each value part as a sub-Dispatch (single-part `Expression`

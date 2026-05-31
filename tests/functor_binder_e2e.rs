@@ -111,18 +111,16 @@ fn functor_binder_e2e_makeset_produces_module() {
         makeset.is_functor,
         "MAKESET must carry is_functor: true (Stage-2 / Stage-3 plumbing)",
     );
-    // `IntSet` landed as a Module value. The Stage-5 allowlist routes
-    // Module carriers through `derive_nominal_identity`, so it appears in
-    // both bindings.types and bindings.data.
-    let int_set_value = scope
-        .lookup("IntSet")
-        .expect("IntSet should be value-bound (LET allowlist + nominal install)");
-    let m = match int_set_value {
-        KObject::KTypeValue(KType::Module { module, .. }) => *module,
-        other => panic!(
-            "IntSet should resolve to a Module value, got {}",
-            other.ktype().name(),
-        ),
+    // `IntSet` landed as a Module — bound type-only (the LET allowlist routes Module
+    // identities through `register_type`), so the `&Module` rides the `KType::Module`
+    // identity in `bindings.types`, with no value-side carrier in `bindings.data`.
+    assert!(
+        scope.lookup("IntSet").is_none(),
+        "IntSet must be type-only — no value-side carrier in data",
+    );
+    let m = match scope.resolve_type("IntSet") {
+        Some(KType::Module { module, .. }) => *module,
+        other => panic!("IntSet should be a Module identity in types, got {other:?}"),
     };
     // The functor body's `(LET tag = 0)` lifted into the result module's
     // child scope — verifies the per-call body actually ran and the

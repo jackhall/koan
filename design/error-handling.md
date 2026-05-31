@@ -121,17 +121,16 @@ produce modules, whereas `Result` is a type constructor producing a tagged-union
 value.
 
 It is registered once in the root scope by
-[`result::register`](../src/builtins/result.rs), dual-written the way a `UNION`
-declaration is:
+[`result::register`](../src/builtins/result.rs), **type-only** the way a `UNION`
+declaration is: `bindings.types["Result"]` holds a `TypeConstructor` identity
+whose payload carries both the parameter names `T` / `E` and the variant
+`schema` `{ok, error}` (both `Any`). A slot annotated `:(Result T E)` resolves
+through the resolver's constructor-application arm, and `Result (ok v)` /
+`Result (error e)` construct by reading that schema off a fresh
+`types["Result"]` lookup — the same identity-borne path `UNION`-declared
+constructors use, with no value-side carrier.
 
-- the **type side** (`bindings.types`) holds a `TypeConstructor` identity with
-  parameters `T` and `E`, so a slot annotated `:(Result T E)` resolves through
-  the resolver's constructor-application arm;
-- the **value side** (`bindings.data`) holds a `TaggedUnionType` carrier with
-  schema `{ok, error}` (both `Any`), so `Result (ok v)` / `Result (error e)`
-  construct values through the same path `UNION`-declared constructors use.
-
-The carrier's `(name, scope_id)` identity uses the root scope's `ScopeId` — the
+The identity's `(name, scope_id)` fields use the root scope's `ScopeId` — the
 scope that owns the registration, not `ScopeId::SENTINEL` — so every `Result`
 value shares one nominal identity and MATCHes uniformly. Because the name is
 registered at prelude, a user `UNION Result = (...)` is rejected with `Rebind`:
@@ -240,10 +239,10 @@ the caller binds with `LET`, passes as an argument, or returns:
 The [`CATCH`](../src/builtins/catch.rs) builtin reuses the same scheduler
 primitive as `TRY-WITH` (`add_catch` / `CatchFinish`): it schedules `<expr>` as a
 catching sub-dispatch and registers a finish closure that wraps the outcome in
-the `Result` carrier. The carrier's `scope_id` is captured at registration time,
-not read from the call-site scope, so a `CATCH`-produced `Result` and a
-`Result (...)`-constructed one share nominal identity regardless of where the
-`CATCH` runs. `LET` and other eager slots still short-circuit on errors, so the
+a `Result` value. The prelude `Result` identity's `scope_id` is read from
+`bindings.types` (via `scope.resolve_type("Result")`) at body time, not from the
+call-site scope, so a `CATCH`-produced `Result` and a `Result (...)`-constructed
+one share nominal identity regardless of where the `CATCH` runs. `LET` and other eager slots still short-circuit on errors, so the
 lift stays opt-in.
 
 ## Open work

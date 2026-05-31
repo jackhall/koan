@@ -139,12 +139,12 @@ pub fn default_scope<'a>(
     // carrier so the resolver and the parser-side fast path agree.
     scope.register_type(
         "Tagged".into(),
-        KType::AnyUserType { kind: UserTypeKind::Tagged },
+        KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() },
         BindingIndex::BUILTIN,
     );
     scope.register_type(
         "Struct".into(),
-        KType::AnyUserType { kind: UserTypeKind::Struct },
+        KType::AnyUserType { kind: UserTypeKind::struct_sentinel() },
         BindingIndex::BUILTIN,
     );
     scope.register_type("Module".into(), KType::AnyModule, BindingIndex::BUILTIN);

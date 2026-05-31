@@ -94,11 +94,13 @@ What's shipped that the open items below build on:
   no `BodyResult::Tail` re-dispatch through the Keyworded bucket. The
   `ConstructorCall` fast lane (leaf-Type head) and the
   `FunctionValueCall` fast lane (Identifier head resolving to a
-  `StructType` / `TaggedUnionType`) both dispatch into
-  `constructors::dispatch_construct`, which stages value-cells as
-  per-slot eager sub-Dispatches and calls
-  `struct_value::construct` / `tagged_union::construct` directly. The
-  parked-on-eager-subs case rides `CtorState`'s resume arm.
+  `KTypeValue(UserType{..})` alias) both dispatch into
+  `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`,
+  which read the field / variant schema straight from the
+  `UserTypeKind` identity, stage value-cells as per-slot eager
+  sub-Dispatches, and call `struct_value::construct` /
+  `tagged_union::construct` directly. The parked-on-eager-subs case
+  rides `CtorState`'s resume arm.
 - *Stateful dispatch driver.* Every `DispatchShape` variant runs on the
   state-bearing `run_dispatch` driver, which is now the sole dispatch
   body. The carrier shape (`DispatchState` enum + per-variant
@@ -141,6 +143,20 @@ What's shipped that the open items below build on:
   so builtin sub-slot routing inherits the dispatcher's contextual
   frame/chain via the facade rather than re-borrowing the bare
   scheduler.
+- *Type-only nominal identities.* `STRUCT` / `UNION` / `MODULE` / `Result`
+  declarations write only `bindings.types`: each per-declaration
+  `KType::UserType` identity carries its own schema payload
+  (`UserTypeKind::Struct { fields }`, `Tagged { schema }`,
+  `TypeConstructor { schema, param_names }`, alongside the existing
+  `Newtype { repr }`), and construction reads that schema from the type
+  entry rather than a value-side carrier. The `KObject::StructType` /
+  `TaggedUnionType` carrier variants are gone, so `bindings.data` holds
+  only runtime instances; value-position references synthesise
+  `KTypeValue(identity)` on demand via `coerce_type_token_value`, and
+  recursive types ride a cycle-close pre-install plus a schema-bearing
+  upsert at finalize. `SIG` is the lone remaining `(types, data)`
+  dual-writer (tracked in
+  [roadmap/refactor/eliminate-sig-dual-write.md](roadmap/refactor/eliminate-sig-dual-write.md)).
 
 ## Next items
 
@@ -226,10 +242,10 @@ language through the dispatcher and the user-functor application surface:
 ### Refactor — [roadmap/refactor/](roadmap/refactor/)
 
 Structural cleanups surfaced by the `modgraph` + `doclinks gap`
-analysis. The remaining item is source-level — concentrate the
-nominal dual-write protocol:
+analysis. With the type-only nominal identities shipped, the remaining
+item closes out the last `(types, data)` dual-write — the signature case:
 
-- [Concentrate the nominal dual-write protocol in `core::nominal`](roadmap/refactor/nominal-dual-write-protocol.md)
+- [Eliminate SIG's dual-write](roadmap/refactor/eliminate-sig-dual-write.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

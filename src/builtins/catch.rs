@@ -28,11 +28,11 @@ pub fn body<'a>(
             )));
         }
     };
-    // Look up the carrier's prelude scope_id at body time (not in the finish
+    // Read the prelude `Result` identity's scope_id at body time (not in the finish
     // closure) so the CATCH-produced value matches the nominal identity of a
     // `Result (...)`-constructed one. Requires `result::register` to run first.
-    let result_scope_id = match scope.lookup("Result") {
-        Some(KObject::TaggedUnionType { scope_id, .. }) => *scope_id,
+    let result_scope_id = match scope.resolve_type("Result") {
+        Some(KType::UserType { scope_id, .. }) => *scope_id,
         _ => panic!("Result must be registered before CATCH"),
     };
     let sub_id = sched.add_dispatch(expr_inner, scope);
@@ -61,7 +61,7 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "CATCH",
-        sig(KType::AnyUserType { kind: UserTypeKind::Tagged }, vec![
+        sig(KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() }, vec![
             kw("CATCH"),
             arg("expr", KType::KExpression),
         ]),
