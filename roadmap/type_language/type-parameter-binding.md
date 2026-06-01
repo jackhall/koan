@@ -99,7 +99,11 @@ unify trivially with anything.
   `Scope::register_type` before deferred elaboration runs. A
   `KType`-walking unifier handles the argument-extraction case; the
   earlier-parameter case routes through the existing per-call type-side
-  install path for type-denoting parameter values.
+  install path for type-denoting parameter values. Once parameter signatures
+  carry the [record substrate](record-substrate.md)'s shape, the unifier walks
+  the parameter record's field types; the free type-parameter names it
+  collects (`T`) are a distinct axis from the record's field-name keys
+  (`elt`).
 - *Per-call binding site — decided.* The invoke per-call type-side install
   site, before deferred-return elaboration — the seam the unifier targets.
 - *Type-parameter declaration — decided.* Free type-params are declared
@@ -166,7 +170,10 @@ unify trivially with anything.
   Type elt: T)`, the other `(MAKE T: Type elt: Number)`) need a
   comparison rule for "more specific." Today's overload resolution is
   concrete-type-keyed; dependent annotations need a partial-order
-  extension.
+  extension. This is the same `is_more_specific` partial order that
+  [record structural subtyping](record-subtyping.md) grows for width/depth;
+  the two should land as one coherent specificity lattice, not parallel
+  rules.
 - *Tripwire extension — decided.* The existing
   [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
   `debug_assert!` that guards deferred-return Any-coarsening
@@ -199,3 +206,8 @@ parameterized type
 ([error-handling](../../design/error-handling.md)) already function on
 the shipped carriers; this item extends them to generic value-slot
 signatures and to cross-parameter-referencing signatures.
+
+The invoke-path wiring this item adds rebases onto the record
+block-install path if argument-binding unification lands first (a soft
+ordering preference, not a dependency edge); no content is dropped, only
+the bind surface it targets.

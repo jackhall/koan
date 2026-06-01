@@ -226,14 +226,18 @@ Rust builtins:
 
 Engine-level type-language substrate — how modules, signatures, functors,
 deferred-return FNs, dependent parameter annotations, generic value-slot
-binding, and VAL-slot identity are represented in `KType` and routed through
-dispatch. The substrate the predicate-typing stages and the stdlib's
-functor-heavy collections both build on:
+binding, record-shaped parameter binding, and VAL-slot identity are
+represented in `KType` and routed through dispatch. The substrate the
+predicate-typing stages and the stdlib's functor-heavy collections both
+build on:
 
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
+- [Record substrate for identifier-keyed binding](roadmap/type_language/record-substrate.md)
 - [FN/FUNCTOR named identity](roadmap/type_language/fn-named-identity.md)
+- [Record structural subtyping and projection](roadmap/type_language/record-subtyping.md)
+- [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
 
 ### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
 
@@ -242,9 +246,11 @@ unified ancestor walk per call site. The provenance-plumbing, index-gated
 resolution, recursive-binder-submission, type-language-via-dispatch,
 walk-unification, keyworded self-recursion, and positional-type-surface
 retirement phases have shipped (see "What's shipped so far"); the remaining
-item adds the user-functor application surface:
+items add the user-functor application surface and finish the type-surface
+cleanup:
 
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
+- [Collapse TypeExpr and consolidate leaf type-name resolution](roadmap/dispatch_fix/collapse-typeexpr.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

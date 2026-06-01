@@ -1247,3 +1247,8 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Argument-binding unification**
+  ([roadmap/argument-binding-unification.md](../roadmap/type_language/argument-binding-unification.md)).
+  The invoke path's per-entry install into `Bindings.data` collapses to a
+  single record-block install under one frame-level `BindingIndex`, since every
+  parameter of a call shares the same installing position.

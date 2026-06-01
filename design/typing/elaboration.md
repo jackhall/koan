@@ -92,12 +92,17 @@ cross-link this section rather than restating its slice.
   [Strict admission rules](#strict-admission-rules) for the gate and
   the monotonicity argument.
 - **Layer 3 — the elaborator** in
-  [`resolver.rs`](../../src/machine/model/types/resolver.rs). Recursive
-  walk over `TypeExpr` that threads the set of binders currently being
-  elaborated for self-reference recognition (described above), parks on
-  not-yet-finalized leaves via `ElabResult::Park(producers)`, and
-  produces `&'a KType`. FN-signature, STRUCT/UNION field-type, and
-  FUNCTOR per-call return-type Combines all reduce to this walk; see
+  [`resolver.rs`](../../src/machine/model/types/resolver.rs). Resolves a
+  *bare-leaf* `TypeExpr` against the scope into `&'a KType`: a threaded set
+  of binders currently being elaborated turns a self-reference into
+  `KType::RecursiveRef`, an unfinalized placeholder parks via
+  `ElabResult::Park(producers)` (recording the dependency edge and running
+  SCC cycle detection), and a builtin name falls back to `KType::from_name`.
+  Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) sub-Dispatch
+  through the standalone dispatcher rather than recursing here, so the only
+  recursion is the SCC cycle DFS and the sibling-result reduce. FN-signature,
+  STRUCT/UNION field-type, and FUNCTOR per-call return-type Combines reduce
+  to this leaf walk; see
   [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)
   for the parking integration.
 - **Layer 4 — bare-leaf dispatch ingress** in
@@ -311,3 +316,11 @@ forward reference). The dispatch boundary's `type_identity_for` surfaces a
 `KError::TypeIdentityPendingAtDispatch { param, surface, pending_on }` rather
 than silently skipping the per-call bind, so a workload that triggers it is
 debuggable from the error alone.
+
+## Open work
+
+- [Collapse TypeExpr and consolidate leaf type-name resolution](../../roadmap/dispatch_fix/collapse-typeexpr.md) —
+  the bare type-leaf carrier reduces to a name string and the two cache tiers
+  (Layers 1–2) plus the two leaf-lookup entry points (Layers 3–4) fold into
+  one resolution path; the finalize gate, SCC cycle-close, and parking rails
+  are preserved.

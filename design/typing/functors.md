@@ -331,3 +331,14 @@ Sharing constraints, modular-implicit signature constraints, and
 witness-typed instantiations share this one builtin family. The
 implicit *marker* itself (which parameter is implicit) is orthogonal —
 see [implicits.md](implicits.md).
+
+## Open work
+
+- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
+  `KType::KFunctor { params }` becomes an ordered identifier-keyed record,
+  sharing equality and hashing with the struct schema and FN parameter types.
+- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
+  functor parameter names round-trip into `KFunctor` identity.
+- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
+  functor-parameter records admit contravariantly under the same width/depth
+  record subtyping as functions.

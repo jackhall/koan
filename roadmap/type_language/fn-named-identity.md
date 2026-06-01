@@ -1,66 +1,63 @@
 # FN/FUNCTOR named identity
 
-Load parameter names from the sigil surface into `KType` identity so
-function-typed slots can mechanically enforce that callers use the
-declared parameter names.
+Round-trip parameter names from the sigil surface through
+`KType::KFunction` / `KType::KFunctor` identity, built on the shared record
+substrate.
 
 **Problem.** The
 [type-language-via-dispatch](../../design/typing/type-language-via-dispatch.md)
 substrate ships the `:(FN (x :Number, y :Str) -> Bool)` and
-`:(FUNCTOR (T :SomeSig) -> Module)` sigil surfaces, which declare
-parameter names at the type position. Lowering drops the names:
+`:(FUNCTOR (T :SomeSig) -> Module)` sigil surfaces, which declare parameter
+names at the type position. Lowering drops the names:
 [`KType::KFunction { args, ret }`](../../src/machine/model/types/ktype.rs)
-and `KType::KFunctor { params, ret }` store args positionally and
-compare by structural equality, so `:(FN (a :Number) -> Bool)` and
-`:(FN (b :Number) -> Bool)` are identity-equal. Calls through a
-function-typed slot still require named args
-([execution-model.md](../../design/execution-model.md): "koan has no
-`f 1 2` positional call syntax"), but the function-typed slot itself
-has no record of which names the callee expects, so the use-site
-constraint can't be checked against the slot's type.
+and `KType::KFunctor { params, ret }` store `args` / `params` as a bare
+`Vec<KType>`. The names are not missing upstream — every
+[`Argument`](../../src/machine/model/types/signature.rs) slot carries a
+`name` that keys it in the `ArgumentBundle` — they are discarded only at the
+`KType` lowering. So a function-typed slot has no record of which names the
+callee expects, and the use-site constraint (koan has no positional call
+syntax; [execution-model.md](../../design/execution-model.md)) can't be
+checked against the slot's type.
 
 **Impact.**
 
-- Function-typed slot use sites enforce the declared parameter names
-  mechanically — passing `g(a = 1)` through a slot typed
-  `:(FN (b :Number) -> Bool)` is a structural mismatch caught at the
-  slot boundary, not deferred to the dispatch attempt at the callee.
-- Functor-typed slots gain the same enforcement against their declared
-  parameter names.
-- The named sigil surface stops being a documentation hint —
-  parameter names round-trip through `KType` identity and back to the
-  rendered form.
+- `KType::KFunction` / `KFunctor` carry their parameter record (the
+  `(name, type)` pairs the signature already holds), so a function-typed
+  slot records which names the callee expects.
+- `KType::name()` round-trips: `:(FN (x :Number, y :Str) -> Bool)` renders
+  with names and re-parses to the same `KType`.
+- Function- and functor-typed slot identity is the record substrate's
+  equality — same parameters by name and type, order-blind.
 
 **Directions.**
 
-- **Storage shape — open.** Two candidates: (a) a `Vec<(String,
-  KType)>` parallel to today's `Vec<KType>` in `KFunction.args` /
-  `KFunctor.params`; (b) a parallel `param_names: Vec<String>` field
-  on each variant. Option (a) keeps the (name, type) pair grouped at
-  the storage site; option (b) leaves the existing `args` /
-  `params` walks untouched and adds the names alongside.
-  *Recommended: (a).* The walks that care about types-only can map
-  `.map(|(_, t)| t)`; the lookups that care about (name, type) read
-  the pair directly without zipping.
-- **Equality semantics — decided: identity by `(name, type)` pairs in
-  order.** Two `KFunction` types are equal iff their arg sequences
-  agree pairwise on both name and type. Same for `KFunctor`.
-- **Rendering — decided: include names.**
-  `KType::name()` renders as `:(FN (x :Number, y :Str) -> Bool)` so a
-  round-trip through the parser produces the same `KType`.
-- **Builtin / FFI carriers — open.** Builtin function carriers
-  registered without parameter names (most operators) need a synthetic
-  naming convention (`_0`, `_1`, …?) or an opt-out. *Recommended:
-  positional placeholders that admit-equal to any name at the slot
-  boundary, so existing builtin sites don't have to acquire fake
-  names.*
-- **Structural-equality migration — open.** Today's tests in
-  `src/machine/model/types/ktype.rs` (`assert_eq!(t.name(),
-  ":(FN (Number Str) -> Bool)")`) assume names-absent rendering.
-  Every test and every call site that compares function types needs
-  re-checking. Scoped by a grep for `KType::KFunction` / `KFunctor` /
-  the `(FN …)` / `(FUNCTOR …)` rendered forms.
+- *Parameter record — decided.* The arg/param lists become the
+  [record substrate](record-substrate.md)'s shape — an ordered
+  `(name, KType)` map — replacing today's `Vec<KType>`. Type-only walks read
+  the value projection; name-aware lookups read the pair.
+- *Where the names come from — decided.* Build the parameter record from the
+  signature's `Argument.name` + `Argument.ktype` slots. Keywords stay the
+  dispatch bucket key; the parameter record is the typed slots only.
+- *Builtin / FFI carriers — decided: no synthetic names, no wildcards.*
+  Builtins already name their parameters at the `Argument` level; the lossy
+  `KType` was the only thing dropping them. Propagating the names removes the
+  need for placeholder/wildcard names entirely.
+- *Rendered-form test migration — open.* Tests asserting names-absent
+  rendering (`assert_eq!(t.name(), ":(FN (Number Str) -> Bool)")` in
+  `ktype.rs`) and every `KType::KFunction` / `KFunctor` comparison site need
+  re-checking against the named form. Scoped by a grep for
+  `KType::KFunction` / `KFunctor` / the rendered `(FN …)` / `(FUNCTOR …)`
+  forms.
 
 ## Dependencies
 
 **Requires:**
+
+- [Record substrate for identifier-keyed binding](record-substrate.md) —
+  parameter identity is the substrate's order-blind `(name, type)` equality.
+
+**Unblocks:**
+
+- [Record structural subtyping and projection](record-subtyping.md) —
+  width/depth admission over function-parameter records needs the names
+  present in the `KType` first.

@@ -437,3 +437,20 @@ producers.
   declared return types are honest but unenforced.
 The two-phase execution work in [open-work.md](open-work.md) closes both
 uniformly.
+
+## Open work
+
+- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
+  `KType::KFunction { args: Vec<KType> }` / `KFunctor { params: Vec<KType> }`
+  become an ordered identifier-keyed record (the `(name, KType)` shape
+  `UserTypeKind::Struct` already carries), with order-blind equality and a
+  name+type hash; the dict carrier stays a sibling.
+- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
+  parameter names round-trip into `KFunction` / `KFunctor` identity and
+  rendering, so a function-typed slot records the names callers must use.
+- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
+  relaxes the `Function`-invariant / strict-`function_compat` rule (above) to
+  structural record subtyping: width/depth on records (depth sound under value
+  immutability), contravariant parameter records and covariant returns for
+  functions, plus a `FROM` projection builtin to disambiguate incomparable
+  dispatch arms.
