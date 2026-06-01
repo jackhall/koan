@@ -11,6 +11,12 @@
   (order-blind). The sibling `KFunctor { params: Record<KType>, ret }` shares the
   storage and identity rules; the variant tag keeps the two families admissibly
   disjoint (see [functors.md](functors.md)).
+- Structural record: `Record(Box<Record<KType>>)` — an identifier-keyed field schema
+  (`:{x :Number, y :Str}`), distinct from the nominal `UserType { kind: Struct }`
+  (records are structural, structs nominal). A record *value* (`KObject::Record`,
+  surface `{x = 1, y = "a"}`) memoizes its per-field type record as its carried type.
+  Width/depth subtyping orders record *values* in the dispatch lattice — see
+  [Variance](#variance).
 - Other function-like: `KExpression` (a captured-but-unevaluated expression).
 - Meta-type for type-position slots: `TypeExprRef` — see
   [Type-position slot kinds](#type-position-slot-kinds).
@@ -152,6 +158,24 @@ genuinely incomparable — an `(x :Any) -> R` value against both
 dispatch ties and surfaces `AmbiguousDispatch`. The `List` / `Dict` covariance
 is observable the same way: `(xs :(LIST OF Number))` strictly outranks
 `(xs :(LIST OF Any))` for a number-list call.
+
+**Record values subtype the dual way to function params.** A record value is
+ranked by `record_value_more_specific`
+([ktype_predicates.rs](../../src/machine/model/types/ktype_predicates.rs)): a
+*wider* record is **more specific** — a `{x = 1, y = "a"}` value (carried type
+`:{x :Number, y :Str}`) fills a narrower `:{x :Number}` slot by dropping `y`, so the
+superset arm wins a dispatch tie. Depth is **covariant** in the field types
+(`:{x :Number}` ≺ `:{x :Any}`), sound because koan values are immutable
+([memory-model](../memory-model.md)). The relation is the dual of
+`param_record_more_specific` (contravariant params with width-*drop* for
+call-by-name) — records and function params share the `Record` substrate but order
+opposite ways, so the two helpers stay separate. Incomparable record arms
+(`:{x :Number, y :Str}` vs `:{x :Number, z :Str}`, filled by a value carrying all of
+`x`, `y`, `z`) tie as `AmbiguousDispatch`, the gap a [`FROM`
+projection](../../roadmap/type_language/record-subtyping.md) closes. Admission
+mirrors `List` / `Dict`: an unevaluated `{x = …}` literal admits shape-only, while
+an evaluated record compares its memoized field-type record against the slot via
+`satisfied_by` (no field walk).
 
 Concretely:
 
@@ -493,10 +517,14 @@ their stable identity key — `Module` / `AbstractType` hash `scope_id()`, `Sign
 hashes `sig_id()` — never the raw pointer, and `UserTypeKind`'s payload-ignoring
 equality is mirrored by a discriminant-only `Hash`.
 
-The dict carrier (`KType::Dict`, `KObject::Dict`) stays a sibling: records restrict
-keys to identifiers and admit heterogeneous per-field types, while dicts admit
-arbitrary value keys and one homogeneous value type. The two never share a key
-representation.
+The same `Record<V>` substrate also backs the first-class structural record type
+`KType::Record(Record<KType>)` and its value `KObject::Record(Record<KObject>, …)`
+(surface `{x = 1, y = "a"}`). The dict carrier (`KType::Dict`, `KObject::Dict`) stays
+a sibling: records restrict keys to identifiers and admit heterogeneous per-field
+types, while dicts admit arbitrary value keys and one homogeneous value type. The two
+never share a key representation, and the value surfaces disambiguate at parse time —
+a brace literal with `=` pairs (`{x = 1}`) is a record, with `:` pairs (`{k: v}`) a
+dict (see [type-language-via-dispatch.md § Record-type sigil](type-language-via-dispatch.md#record-type-sigil)).
 
 ## Known limitations
 
@@ -510,9 +538,8 @@ uniformly.
 
 ## Open work
 
-- [Standalone record type and projection](../../roadmap/type_language/record-subtyping.md) —
-  adds a `KType::Record` variant and an anonymous record *value* with surface
-  syntax, width/depth subtyping on those record values (depth sound under value
-  immutability), plus a `FROM` projection builtin to disambiguate incomparable
-  dispatch arms. The function subtyping that the [Variance](#variance) section
-  describes has shipped; this item is the standalone-record-type residual.
+- [Record projection](../../roadmap/type_language/record-subtyping.md) — a `FROM`
+  projection builtin that narrows a record value's type to disambiguate the
+  incomparable record arms the [Variance](#variance) lattice can't order. The
+  `KType::Record` type, the anonymous record value, and width/depth subtyping have
+  shipped (described above).

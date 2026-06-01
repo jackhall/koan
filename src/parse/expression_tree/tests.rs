@@ -42,6 +42,13 @@ pub(super) fn describe(e: &KExpression<'_>) -> String {
                     .collect();
                 format!("D{{{}}}", inner.join(", "))
             }
+            ExpressionPart::RecordLiteral(fields) => {
+                let inner: Vec<String> = fields
+                    .iter()
+                    .map(|(name, v)| format!("{} = {}", name, describe_part(v)))
+                    .collect();
+                format!("R{{{}}}", inner.join(", "))
+            }
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),

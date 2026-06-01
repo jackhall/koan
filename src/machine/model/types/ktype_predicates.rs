@@ -63,6 +63,9 @@ impl<'a> KType<'a> {
                 let v_eq = va == vb;
                 (k_more && (v_more || v_eq)) || (k_eq && v_more)
             }
+            // Record-value subtyping: width-superset + covariant depth (the dual of the
+            // contravariant width-drop `param_record_more_specific` for function params).
+            (Record(a), Record(b)) => record_value_more_specific(a, b),
             // Function subtyping: contravariant params with width-subset, covariant
             // return (see `param_record_more_specific`). A param the more-specific side
             // doesn't declare is fine (width drop); a param it declares but the other
@@ -171,6 +174,17 @@ impl<'a> KType<'a> {
                     let k_t = k_key.ktype();
                     (matches!(k_ty.as_ref(), KType::Any) || **k_ty == k_t)
                         && v_ty.matches_value(v_obj)
+                }),
+                _ => false,
+            },
+            // Every slot field must be present in the value and match (depth). Extra value
+            // fields are fine — a wider record value is more specific than a narrower slot.
+            KType::Record(fields) => match obj {
+                KObject::Record(values, _) => fields.iter().all(|(name, ft)| {
+                    values
+                        .get(name)
+                        .map(|v| ft.matches_value(v))
+                        .unwrap_or(false)
                 }),
                 _ => false,
             },
@@ -300,6 +314,17 @@ impl<'a> KType<'a> {
                 ExpressionPart::DictLiteral(_) => true,
                 ExpressionPart::Future(KObject::Dict(_, carried_k, carried_v)) => {
                     k_ty.satisfied_by(carried_k) && v_ty.satisfied_by(carried_v)
+                }
+                _ => false,
+            },
+            // Mirrors the List/Dict split: an unevaluated record literal admits
+            // shape-only (field types unknown until evaluation, so two record-typed
+            // overloads tie and defer-then-reevaluate); an evaluated record compares its
+            // memoized field-type record against the slot via `satisfied_by`.
+            KType::Record(_) => match part {
+                ExpressionPart::RecordLiteral(_) => true,
+                ExpressionPart::Future(KObject::Record(_, carried)) => {
+                    self.satisfied_by(&KType::Record(carried.clone()))
                 }
                 _ => false,
             },
@@ -448,6 +473,34 @@ fn param_record_more_specific<'a>(
     let ret_ok = ra == rb || ret_more;
     let width_strict = pa.len() < pb.len();
     params_ok && ret_ok && (width_strict || params_more || ret_more)
+}
+
+/// Width/depth specificity for *record values* — the **dual** of
+/// [`param_record_more_specific`]. A record value's fields are covariant (the value is
+/// immutable — see [memory-model](../../../../design/memory-model.md)), and a *wider*
+/// record is more specific: a `{x, y}` value fills an `{x}` slot. So `a` is strictly more
+/// specific than `b` iff:
+/// - width-superset: `b.keys() ⊆ a.keys()` (`a` declares every field `b` does, maybe
+///   more — guard returns `false` otherwise);
+/// - per shared name, covariant: `a[name] == b[name] || a[name] ≺ b[name]`;
+/// - at least one strict edge (wider width, or a strictly-more-specific shared field).
+///
+/// Contrast `param_record_more_specific`, which is *contravariant* with width-*drop* for
+/// call-by-name function parameters. Records and function params share the `Record`
+/// substrate but order opposite ways — do **not** unify the two helpers.
+fn record_value_more_specific<'a>(a: &Record<KType<'a>>, b: &Record<KType<'a>>) -> bool {
+    if !b.keys().all(|k| a.get(k).is_some()) {
+        return false;
+    }
+    let depth_ok = b.iter().all(|(name, bt)| {
+        let at = a.get(name).unwrap();
+        at == bt || at.is_more_specific_than(bt)
+    });
+    let depth_more = b
+        .keys()
+        .any(|k| a.get(k).unwrap().is_more_specific_than(b.get(k).unwrap()));
+    let width_strict = a.len() > b.len();
+    depth_ok && (width_strict || depth_more)
 }
 
 /// Field→type-parameter linkage for the builtin `Result` parameterized union:

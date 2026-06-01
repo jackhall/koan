@@ -23,6 +23,34 @@ use crate::machine::{
 
 use super::{arg, err, kw, register_builtin, sig};
 
+/// Which carrier the shared field-list path builds. All three ride the same parser and
+/// Combine/defer machinery; they differ only in the `KType` they fold their fields into,
+/// the diagnostic context string, and the field-name policy (`RECORD` is identifier-only,
+/// like STRUCT; FN/FUNCTOR also admit capitalized `Type` param names).
+#[derive(Clone, Copy)]
+enum CarrierKind {
+    Function,
+    Functor,
+    Record,
+}
+
+impl CarrierKind {
+    fn context(self) -> &'static str {
+        match self {
+            CarrierKind::Function => "FN parameters",
+            CarrierKind::Functor => "FUNCTOR parameters",
+            CarrierKind::Record => "record fields",
+        }
+    }
+
+    fn field_name_kind(self) -> FieldNameKind {
+        match self {
+            CarrierKind::Record => FieldNameKind::Identifier,
+            CarrierKind::Function | CarrierKind::Functor => FieldNameKind::IdentifierOrType,
+        }
+    }
+}
+
 fn body_list_of<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -124,7 +152,7 @@ fn body_fn<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    build_kfunction_carrier(scope, sched, sig_expr, ret, false)
+    build_carrier(scope, sched, sig_expr, ret, CarrierKind::Function)
 }
 
 fn body_functor<'a>(
@@ -140,34 +168,44 @@ fn body_functor<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    build_kfunction_carrier(scope, sched, sig_expr, ret, true)
+    build_carrier(scope, sched, sig_expr, ret, CarrierKind::Functor)
+}
+
+/// `:{x :Number, y :Str}` desugars (in the parser) to `RECORD (x :Number, y :Str)`, so
+/// `schema` is the field-list `KExpression`. No return type — a record is a field schema,
+/// not a function shape — so the unused `ret` slot passes `KType::Any`.
+fn body_record<'a>(
+    scope: &'a Scope<'a>,
+    sched: &mut dyn SchedulerHandle<'a>,
+    bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    let schema_expr = match bundle.require_kexpression("schema") {
+        Ok(e) => e.clone(),
+        Err(e) => return err(e),
+    };
+    build_carrier(scope, sched, schema_expr, KType::Any, CarrierKind::Record)
 }
 
 /// Walk the parameter list through the shared field-list parser (the same one STRUCT /
 /// UNION use), so nested parameterized param types like `xs :(LIST OF Number)` sub-Dispatch
 /// and capitalized FUNCTOR param names like `Ty` are accepted. An anonymous function type
 /// has no self-reference binder, so the elaborator carries no nominal-binder bookkeeping.
-fn build_kfunction_carrier<'a>(
+fn build_carrier<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     sig_expr: KExpression<'a>,
     ret: KType<'a>,
-    is_functor: bool,
+    kind: CarrierKind,
 ) -> BodyResult<'a> {
-    let context = if is_functor {
-        "FUNCTOR parameters"
-    } else {
-        "FN parameters"
-    };
     let mut elaborator = Elaborator::new(scope);
     match parse_typed_field_list_via_elaborator(
         &sig_expr,
-        context,
-        FieldNameKind::IdentifierOrType,
+        kind.context(),
+        kind.field_name_kind(),
         &mut elaborator,
     ) {
         FieldListOutcome::Done(fields) => {
-            BodyResult::Value(finalize_carrier(scope, fields, ret, is_functor))
+            BodyResult::Value(finalize_carrier(scope, fields, ret, kind))
         }
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
         FieldListOutcome::Pending {
@@ -180,31 +218,31 @@ fn build_kfunction_carrier<'a>(
             ret,
             park_producers,
             sub_dispatches,
-            is_functor,
+            kind,
         ),
     }
 }
 
-/// Fold the elaborated `(name, type)` pairs into the parameter record and wrap the
-/// `KFunction` / `KFunctor` identity in a `KTypeValue`. Shared by the synchronous and
-/// Combine-finish paths.
+/// Fold the elaborated `(name, type)` pairs into the field/parameter record and wrap the
+/// `KFunction` / `KFunctor` / `Record` identity in a `KTypeValue`. Shared by the
+/// synchronous and Combine-finish paths. `ret` is unused for `CarrierKind::Record`.
 fn finalize_carrier<'a>(
     scope: &'a Scope<'a>,
     fields: Vec<(String, KType<'a>)>,
     ret: KType<'a>,
-    is_functor: bool,
+    kind: CarrierKind,
 ) -> &'a KObject<'a> {
-    let params = Record::from_pairs(fields);
-    let kt = if is_functor {
-        KType::KFunctor {
-            params,
+    let record = Record::from_pairs(fields);
+    let kt = match kind {
+        CarrierKind::Functor => KType::KFunctor {
+            params: record,
             ret: Box::new(ret),
-        }
-    } else {
-        KType::KFunction {
-            params,
+        },
+        CarrierKind::Function => KType::KFunction {
+            params: record,
             ret: Box::new(ret),
-        }
+        },
+        CarrierKind::Record => KType::Record(Box::new(record)),
     };
     scope.arena.alloc(KObject::KTypeValue(kt))
 }
@@ -222,13 +260,9 @@ fn defer_via_combine<'a>(
     ret: KType<'a>,
     park_producers: Vec<NodeId>,
     sub_dispatches: Vec<(usize, KExpression<'a>)>,
-    is_functor: bool,
+    kind: CarrierKind,
 ) -> BodyResult<'a> {
-    let context = if is_functor {
-        "FUNCTOR parameters"
-    } else {
-        "FN parameters"
-    };
+    let context = kind.context();
     // Build splice_layout before scheduling so each sub-Dispatch's `results_pos` matches
     // its position in the combined deps vector (same `park_count + owned_subs.len()`
     // formula as struct_def).
@@ -260,11 +294,11 @@ fn defer_via_combine<'a>(
         match parse_typed_field_list_via_elaborator(
             &spliced_sig,
             context,
-            FieldNameKind::IdentifierOrType,
+            kind.field_name_kind(),
             &mut elaborator,
         ) {
             FieldListOutcome::Done(fields) => {
-                BodyResult::Value(finalize_carrier(scope, fields, ret.clone(), is_functor))
+                BodyResult::Value(finalize_carrier(scope, fields, ret.clone(), kind))
             }
             FieldListOutcome::Err(msg) => BodyResult::Err(KError::new(KErrorKind::ShapeError(msg))),
             FieldListOutcome::Pending { .. } => {
@@ -343,6 +377,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
             ],
         ),
         body_functor,
+    );
+    // Internal head for the `:{x :Number, y :Str}` record-type sigil (the parser
+    // desugars `:{…}` to `RECORD (…)`). Not a writable surface keyword.
+    register_builtin(
+        scope,
+        "RECORD",
+        sig(
+            KType::Type,
+            vec![kw("RECORD"), arg("schema", KType::KExpression)],
+        ),
+        body_record,
     );
 }
 
@@ -577,9 +622,7 @@ mod tests {
             ret: Box::new(KType::AnyModule),
         };
         // Param name `Ty` (capitalized, a `Type` token) must survive the round-trip.
-        assert!(
-            matches!(&expected, KType::KFunctor { params, .. } if params.get("Ty").is_some()),
-        );
+        assert!(matches!(&expected, KType::KFunctor { params, .. } if params.get("Ty").is_some()),);
         assert_round_trips(scope, expected);
     }
 }

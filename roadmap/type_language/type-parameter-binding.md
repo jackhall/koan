@@ -172,11 +172,11 @@ unify trivially with anything.
   concrete-type-keyed; dependent annotations need a partial-order
   extension. This is the same `is_more_specific` partial order that already
   ranks function-typed slots by contravariant-param/covariant-return
-  width/depth subtyping (see
-  [ktype.md § Variance](../../design/typing/ktype.md#variance)) and that
-  [the standalone record type](record-subtyping.md) extends to record
-  values; the three should land as one coherent specificity lattice, not
-  parallel rules.
+  width/depth subtyping and record values by width-superset/covariant-depth
+  subtyping (both shipped — see
+  [ktype.md § Variance](../../design/typing/ktype.md#variance)); dependent
+  annotations should extend that one coherent specificity lattice, not add a
+  parallel rule.
 - *Tripwire extension — decided.* The existing
   [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
   `debug_assert!` that guards deferred-return Any-coarsening

@@ -138,6 +138,7 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::AbstractType { .. } => Ok(t.name()),
             KType::List(_)
             | KType::Dict(_, _)
+            | KType::Record(_)
             | KType::KFunction { .. }
             | KType::KFunctor { .. }
             | KType::Mu { .. }

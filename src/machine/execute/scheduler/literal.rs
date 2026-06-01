@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::ExpressionPart;
-use crate::machine::model::{KKey, KObject, Serializable};
+use crate::machine::model::{KKey, KObject, Record, Serializable};
 use crate::machine::{
     BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId, Scope,
 };
@@ -100,6 +100,37 @@ impl<'a> Scheduler<'a> {
         self.add_combine(deps, park_producers, scope, finish)
     }
 
+    /// Record literal (`{x = 1, y = "a"}`). Field *names* are literal schema keys (never
+    /// resolved); field *values* are name-resolved like dict values. Materializes a
+    /// `KObject::Record`, which memoizes the per-field type record at construction.
+    pub(in crate::machine::execute) fn schedule_record_literal(
+        &mut self,
+        fields: Vec<(String, ExpressionPart<'a>)>,
+        scope: &'a Scope<'a>,
+    ) -> NodeId {
+        let mut names: Vec<String> = Vec::with_capacity(fields.len());
+        let mut layout: Vec<Slot<'a>> = Vec::with_capacity(fields.len());
+        let mut deps: Vec<NodeId> = Vec::new();
+        let mut park_producers: Vec<NodeId> = Vec::new();
+        for (name, value) in fields {
+            let val_slot =
+                self.classify_aggregate_part(value, scope, &mut deps, &mut park_producers, true);
+            names.push(name);
+            layout.push(val_slot);
+        }
+        let park_count = park_producers.len();
+        let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
+            let record: Record<KObject<'a>> = names
+                .into_iter()
+                .zip(layout)
+                .map(|(name, slot)| (name, slot.materialize(results, park_count)))
+                .collect();
+            let allocated: &'a KObject<'a> = scope.arena.alloc(KObject::record(record));
+            BodyResult::Value(allocated)
+        });
+        self.add_combine(deps, park_producers, scope, finish)
+    }
+
     /// Plan one slot of a list / dict literal. The cycle check in the bare-name path is
     /// suppressed (`consumer = None` to `resolve_name_part`) because the Combine slot
     /// does not yet exist; cycles are caught post-submission against the Combine ID.
@@ -120,6 +151,12 @@ impl<'a> Scheduler<'a> {
             }
             ExpressionPart::DictLiteral(inner) => {
                 let nested_id = self.schedule_dict_literal(inner, scope);
+                let pos = deps.len();
+                deps.push(nested_id);
+                Slot::Owned(pos)
+            }
+            ExpressionPart::RecordLiteral(inner) => {
+                let nested_id = self.schedule_record_literal(inner, scope);
                 let pos = deps.len();
                 deps.push(nested_id);
                 Slot::Owned(pos)

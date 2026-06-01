@@ -257,7 +257,11 @@ pub(super) fn literal_pass_through<'a>(
             let producer = ctx.schedule_dict_literal(pairs, scope);
             park_on_literal_producer(ctx, producer, idx)
         }
-        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral"),
+        ExpressionPart::RecordLiteral(fields) => {
+            let producer = ctx.schedule_record_literal(fields, scope);
+            park_on_literal_producer(ctx, producer, idx)
+        }
+        _ => unreachable!("LiteralPassThrough classifier only routes Literal/Future/Expression/ListLiteral/DictLiteral/RecordLiteral"),
     }
 }
 

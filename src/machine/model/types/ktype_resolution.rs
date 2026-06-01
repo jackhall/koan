@@ -59,24 +59,38 @@ impl<'a> KType<'a> {
             // on the return type. Mismatched key sets fall through to `Any` (the `_` arm).
             // `KFunction` and `KFunctor` share the join shape (`join_param_record`) but
             // stay tag-matched — a function and a functor never join to either family.
-            (KType::KFunction { params: xa, ret: xr }, KType::KFunction { params: ya, ret: yr }) => {
-                match join_param_record(xa, ya) {
-                    Some(params) => KType::KFunction {
-                        params,
-                        ret: Box::new(KType::join(xr, yr)),
-                    },
-                    None => KType::Any,
-                }
-            }
-            (KType::KFunctor { params: xa, ret: xr }, KType::KFunctor { params: ya, ret: yr }) => {
-                match join_param_record(xa, ya) {
-                    Some(params) => KType::KFunctor {
-                        params,
-                        ret: Box::new(KType::join(xr, yr)),
-                    },
-                    None => KType::Any,
-                }
-            }
+            (
+                KType::KFunction {
+                    params: xa,
+                    ret: xr,
+                },
+                KType::KFunction {
+                    params: ya,
+                    ret: yr,
+                },
+            ) => match join_param_record(xa, ya) {
+                Some(params) => KType::KFunction {
+                    params,
+                    ret: Box::new(KType::join(xr, yr)),
+                },
+                None => KType::Any,
+            },
+            (
+                KType::KFunctor {
+                    params: xa,
+                    ret: xr,
+                },
+                KType::KFunctor {
+                    params: ya,
+                    ret: yr,
+                },
+            ) => match join_param_record(xa, ya) {
+                Some(params) => KType::KFunctor {
+                    params,
+                    ret: Box::new(KType::join(xr, yr)),
+                },
+                None => KType::Any,
+            },
             _ => KType::Any,
         }
     }

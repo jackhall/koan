@@ -117,7 +117,10 @@ fn fn_with_typed_function_param_accepts_matching_function() {
 fn fn_with_typed_function_param_rejects_name_mismatch() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
+    run(
+        scope,
+        "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")",
+    );
     let mut sched = Scheduler::new();
     sched.add_dispatch(
         parse_one("USE (FN (SHOW n :Number) -> Str = (\"hi\"))"),

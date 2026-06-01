@@ -10,7 +10,7 @@ use crate::machine::core::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::KError;
 
-use super::dict_literal::DictFrame;
+use super::dict_literal::{BraceContents, DictFrame};
 
 pub(super) enum Frame<'a> {
     /// `head: Some(_)` flags a `#(...)` / `$(...)` sigil; on close such a frame yields
@@ -37,6 +37,14 @@ pub(super) enum Frame<'a> {
         expr: KExpression<'a>,
         span_start: u32,
     },
+    /// Opened by a glued `:{` sigil. Collects a typed field list verbatim and folds into
+    /// `SigiledTypeExpr([Keyword("RECORD"), Expression(<field list>)])` so the internal
+    /// `RECORD` type-constructor overload builds the `KType::Record`. `span_start` is the
+    /// cursor of the leading `:`.
+    RecordTypeExpr {
+        expr: KExpression<'a>,
+        span_start: u32,
+    },
 }
 
 impl<'a> Frame<'a> {
@@ -48,6 +56,7 @@ impl<'a> Frame<'a> {
             Frame::List { items, .. } => items.push(part.value),
             Frame::Dict { dict, .. } => dict.push(part.value),
             Frame::TypeExpr { expr, .. } => expr.parts.push(part),
+            Frame::RecordTypeExpr { expr, .. } => expr.parts.push(part),
         }
     }
 
@@ -118,10 +127,11 @@ impl<'a> Frame<'a> {
                     start: span_start,
                     end,
                 };
-                Ok(Spanned::at(
-                    ExpressionPart::DictLiteral(dict.finish()?),
-                    span,
-                ))
+                let part = match dict.finish()? {
+                    BraceContents::Dict(pairs) => ExpressionPart::DictLiteral(pairs),
+                    BraceContents::Record(fields) => ExpressionPart::RecordLiteral(fields),
+                };
+                Ok(Spanned::at(part, span))
             }
             Frame::TypeExpr {
                 mut expr,
@@ -138,6 +148,35 @@ impl<'a> Frame<'a> {
                     span,
                 ))
             }
+            // `:{x :Number}` → `SigiledTypeExpr([Keyword("RECORD"), Expression(<fields>)])`,
+            // routed through the internal RECORD type-constructor overload.
+            Frame::RecordTypeExpr {
+                mut expr,
+                span_start,
+            } => {
+                let span = Span {
+                    start: span_start,
+                    end,
+                };
+                expr.span = Some(span);
+                expr.file = file;
+                let sigil_span = Span {
+                    start: span_start,
+                    end: span_start + 1,
+                };
+                let wrapped = KExpression {
+                    parts: vec![
+                        Spanned::at(ExpressionPart::Keyword("RECORD".to_string()), sigil_span),
+                        Spanned::at(ExpressionPart::Expression(Box::new(expr)), span),
+                    ],
+                    span: Some(span),
+                    file,
+                };
+                Ok(Spanned::at(
+                    ExpressionPart::SigiledTypeExpr(Box::new(wrapped)),
+                    span,
+                ))
+            }
         }
     }
 
@@ -150,6 +189,7 @@ impl<'a> Frame<'a> {
                 | (Frame::List { .. }, ']')
                 | (Frame::Dict { .. }, '}')
                 | (Frame::TypeExpr { .. }, ')')
+                | (Frame::RecordTypeExpr { .. }, '}')
         )
     }
 }
@@ -163,6 +203,13 @@ pub(super) fn close_paren_to_part<'a>(
     match frame {
         Frame::Expression { .. } => frame.into_part(end),
         Frame::TypeExpr { .. } => frame.into_part(end),
+        Frame::RecordTypeExpr { span_start, .. } => Err(KError::parse(
+            "unclosed ':{': this record type was never closed with a matching '}'",
+            Some(Span {
+                start: span_start,
+                end: span_start + 1,
+            }),
+        )),
         Frame::List { span_start, .. } => Err(KError::parse(
             "unclosed '[': this list literal was never closed with a matching ']'",
             Some(Span {

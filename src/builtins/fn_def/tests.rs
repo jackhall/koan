@@ -16,6 +16,7 @@ mod body_routing;
 mod container_types;
 mod functor;
 mod param_type;
+mod record_types;
 mod return_type;
 
 use crate::builtins::test_support::{run, run_root_with_buf};

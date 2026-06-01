@@ -194,6 +194,14 @@ What's shipped that the open items below build on:
   binder drops surplus named args), and incomparable function slots now tie as
   `AmbiguousDispatch`. See
   [design/typing/ktype.md § Variance](design/typing/ktype.md#variance).
+- *Structural records.* A first-class `KType::Record(Record<KType>)` type
+  (`:{x :Number, y :Str}`) and anonymous record value (`{x = 1, y = "a"}` — `=` pairs;
+  `:` pairs stay a dict, mixing them is a parse error), with width/depth subtyping: a
+  wider record value is more specific (the dual of function-param width-drop), depth
+  covariant (sound under value immutability), so record-typed FN overloads dispatch by
+  width and depth and incomparable arms tie as `AmbiguousDispatch`. Structs stay
+  nominal; the record variant is structural-only. See
+  [design/typing/ktype.md § Variance](design/typing/ktype.md#variance).
 
 ## Next items
 
@@ -263,7 +271,7 @@ build on:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
-- [Standalone record type and projection](roadmap/type_language/record-subtyping.md)
+- [Record projection](roadmap/type_language/record-subtyping.md)
 - [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

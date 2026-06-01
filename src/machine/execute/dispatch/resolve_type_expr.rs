@@ -168,6 +168,12 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                     self.stack.push(v);
                     self.stack.push(k);
                 }
+                // Walk each field's type; `Record::values()` order is immaterial here.
+                KType::Record(fields) => {
+                    for t in fields.values() {
+                        self.stack.push(t);
+                    }
+                }
                 // Order is immaterial (the walker only collects the set of nested
                 // user-type refs), and `Record::values()` is not double-ended, so no `.rev()`.
                 KType::KFunction { params, ret } => {

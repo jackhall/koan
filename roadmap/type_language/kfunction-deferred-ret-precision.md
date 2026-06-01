@@ -4,7 +4,7 @@
 parameter and return slots on FNs. When a `KFunction`'s
 `signature.return_type` is
 [`ReturnType::Deferred(_)`](../../src/machine/model/types/signature.rs),
-the structural `KType::KFunction { args, ret }` synthesis at
+the structural `KType::KFunction { params, ret }` synthesis at
 [`function_value_ktype`](../../src/machine/model/values/kobject.rs)
 collapses `ret` to `KType::Any` because the structural language has
 no surface for "per-call elaboration of this expression." Once
@@ -94,10 +94,6 @@ the structural `KType` would.
   extends the existing `debug_assert!` tripwire over parameter-slot
   deferreds. This item covers parameter and return slots in one pass
   once the tripwire fires.
-- [Standalone record type and projection](record-subtyping.md) — its
-  standalone `KType::Record` is where path (a) records a deferred return's
-  surface form as a deferred field type; this item layers deferred-carrier
-  precision on top.
 
 **Unblocks:**
 

@@ -114,6 +114,37 @@ fn comma_outside_type_sigil_unchanged_inside_paren() {
     );
 }
 
+// --- Record-type sigil `:{...}` (desugars to `RECORD (fields)`) ---
+
+#[test]
+fn record_type_sigil_one_field() {
+    assert_eq!(
+        tree(":{x :Number}").unwrap(),
+        "[:(t(RECORD) [t(x) T(Number)])]",
+    );
+}
+
+#[test]
+fn record_type_sigil_two_fields() {
+    assert_eq!(
+        tree(":{x :Number, y :Str}").unwrap(),
+        "[:(t(RECORD) [t(x) T(Number) t(y) T(Str)])]",
+    );
+}
+
+#[test]
+fn record_type_sigil_in_param_slot() {
+    assert_eq!(
+        tree("(r :{x :Number})").unwrap(),
+        "[[t(r) :(t(RECORD) [t(x) T(Number)])]]",
+    );
+}
+
+#[test]
+fn unclosed_record_type_sigil_errors() {
+    assert!(tree(":{x :Number").is_err());
+}
+
 // --- Type-sigil basics ---
 
 #[test]

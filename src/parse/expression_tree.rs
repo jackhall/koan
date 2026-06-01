@@ -217,6 +217,8 @@ pub fn build_tree<'a>(
     let mut pending_sigil: Option<(char, u32)> = None;
     // Cursor of the leading `:` that opened a `:(` type-expression group.
     let mut pending_type_paren_cursor: Option<u32> = None;
+    // Cursor of the leading `:` that opened a `:{` record-type group.
+    let mut pending_record_type_cursor: Option<u32> = None;
 
     loop {
         // Drain JUMPs up-front so dispatch arms never see them.
@@ -315,17 +317,27 @@ pub fn build_tree<'a>(
             }
             '{' => {
                 let span_start = reader.cursor;
-                open_collection(
-                    &mut stack,
-                    &mut buf,
-                    '{',
-                    prev,
-                    Frame::Dict {
-                        dict: DictFrame::new(),
-                        span_start,
-                    },
-                    &mut token_start,
-                )?;
+                if let Some(type_start) = pending_record_type_cursor.take() {
+                    // `:{...}` record-type sigil — push directly (the `:`-glued opener
+                    // bypasses the collection adjacency check, mirroring `:(`).
+                    flush_token(&mut stack, &mut buf, &mut token_start)?;
+                    stack.push_frame(Frame::RecordTypeExpr {
+                        expr: KExpression::new(Vec::new()),
+                        span_start: type_start,
+                    });
+                } else {
+                    open_collection(
+                        &mut stack,
+                        &mut buf,
+                        '{',
+                        prev,
+                        Frame::Dict {
+                            dict: DictFrame::new(),
+                            span_start,
+                        },
+                        &mut token_start,
+                    )?;
+                }
                 reader.advance_byte();
             }
             '}' => {
@@ -387,6 +399,12 @@ pub fn build_tree<'a>(
                             // TypeExpr frame.
                             pending_type_paren_cursor = Some(colon_cursor);
                         }
+                        Some(b'{') => {
+                            // Leave the '{' for the next iteration; the '{' arm
+                            // sees `pending_record_type_cursor` and opens a
+                            // RecordTypeExpr frame (`:{x :Number}`).
+                            pending_record_type_cursor = Some(colon_cursor);
+                        }
                         Some(byte) if byte.is_ascii_uppercase() => {
                             // Glued `:T`: the regular tokenizer turns the
                             // following uppercase-leading token into a Type.
@@ -424,6 +442,16 @@ pub fn build_tree<'a>(
                 reader.advance_byte();
                 if let Some(d) = stack.top_dict_mut() {
                     d.accept_comma()?;
+                }
+            }
+            // Inside a brace frame `=` is the record-pair separator (`{x = 1}`);
+            // everywhere else it stays a token char (`LET x = 1`, struct / functor
+            // kwargs `(x = 1)`, FN bodies). The frame gate keeps those untouched.
+            '=' if stack.top_dict_mut().is_some() => {
+                flush_token(&mut stack, &mut buf, &mut token_start)?;
+                reader.advance_byte();
+                if let Some(d) = stack.top_dict_mut() {
+                    d.accept_equals()?;
                 }
             }
             // `<` / `>` emit standalone `Keyword` parts. The `prev == Some('-')`
@@ -568,6 +596,12 @@ fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {
             pairs
                 .into_iter()
                 .map(|(k, v)| (peel_part(k), peel_part(v)))
+                .collect(),
+        ),
+        ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(
+            pairs
+                .into_iter()
+                .map(|(name, v)| (name, peel_part(v)))
                 .collect(),
         ),
         other => other,

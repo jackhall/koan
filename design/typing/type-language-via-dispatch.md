@@ -19,6 +19,7 @@ their declared keyword skeletons.
 :(FN (x :Number, y :Str) -> Bool)
 :(FUNCTOR (T :SomeSig) -> Module)
 :(MyFunctor T = IntOrd)
+:{x :Number, y :Str}
 ```
 
 The sigil contributes no syntactic structure beyond the marker — the
@@ -88,6 +89,26 @@ way, and render back through `KType::name()`. FUNCTOR's capitalized
 `Type`-token parameter names (`Ty`, `Er`) are admitted by the
 field-list parser's `FieldNameKind::IdentifierOrType` policy, where
 STRUCT / UNION stay Identifier-only.
+
+## Record-type sigil
+
+`:{x :Number, y :Str}` is the structural record type — an identifier-keyed field
+schema lowering to [`KType::Record(Record<KType>)`](ktype.md#record-fields-and-ktype-hashing),
+distinct from any nominal struct. The `:` type-sigil anchors to `{` (not only `(`),
+and the parser desugars `:{...}` to the keyworded shape `RECORD (...)`: it emits a
+`SigiledTypeExpr` wrapping `[Keyword("RECORD"), Expression(<field list>)]`, so the
+inner expression dispatches against an internal `RECORD` type-constructor overload in
+[`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs) — a direct
+sibling of `LIST` / `MAP` / `FN` / `FUNCTOR` that runs the shared field-list parser
+(`FieldNameKind::Identifier`, like STRUCT) and folds the fields into `KType::Record`.
+`RECORD` is internal-only — the surface is `:{...}`, never a writable keyword. The
+field list parses through the same path STRUCT / FN use, so nested parameterized
+field types sub-Dispatch (`:{xs :(LIST OF Number)}`).
+
+The record *value* surface is `{x = 1, y = "a"}` (`=` pairs); the brace frame routes
+on the first pairing operator, so `:` pairs (`{k: v}`) stay a dict and `=` pairs a
+record, mixing the two is a parse error, and an empty `{}` is a dict. Subtyping over
+record values is width/depth — see [ktype.md § Variance](ktype.md#variance).
 
 ## User-functor application
 
@@ -178,8 +199,8 @@ FN / FUNCTOR do not install on the name channel.
 
 ## Open work
 
-- [Standalone record type and projection](../../roadmap/type_language/record-subtyping.md) —
-  a standalone `KType::Record` value type with width/depth subtyping (depth
-  sound under value immutability) plus a `FROM` projection builtin to
-  disambiguate incomparable arms. (Function-typed slots already admit and rank
-  by width/depth subtyping — see [ktype.md § Variance](ktype.md#variance).)
+- [Record projection](../../roadmap/type_language/record-subtyping.md) — a `FROM`
+  projection builtin to narrow a record value's type and disambiguate incomparable
+  record arms. The `KType::Record` type, the `{x = 1}` value, and width/depth
+  subtyping have shipped (see [Record-type sigil](#record-type-sigil) and
+  [ktype.md § Variance](ktype.md#variance)).

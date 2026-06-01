@@ -83,6 +83,70 @@ fn is_more_specific_function_return_covariant() {
     assert!(!any_ret.is_more_specific_than(&number_ret));
 }
 
+fn record_ty<'a>(fields: Vec<(&str, KType<'a>)>) -> KType<'a> {
+    KType::Record(Box::new(Record::from_pairs(
+        fields.into_iter().map(|(n, t)| (n.to_string(), t)),
+    )))
+}
+
+/// Record-value subtyping is the *dual* of function-param subtyping: a *wider* record is
+/// strictly more specific (a `{x, y}` value fills an `{x}` slot, dropping `y`).
+#[test]
+fn record_width_superset_more_specific() {
+    let wide = record_ty(vec![("x", KType::Number), ("y", KType::Str)]);
+    let narrow = record_ty(vec![("x", KType::Number)]);
+    assert!(wide.is_more_specific_than(&narrow));
+    assert!(!narrow.is_more_specific_than(&wide));
+}
+
+/// Covariant depth: `:{x :Number} ≺ :{x :Any}`.
+#[test]
+fn record_depth_covariant() {
+    let number = record_ty(vec![("x", KType::Number)]);
+    let any = record_ty(vec![("x", KType::Any)]);
+    assert!(number.is_more_specific_than(&any));
+    assert!(!any.is_more_specific_than(&number));
+}
+
+/// Disjoint field sets are incomparable (`{x, y}` vs `{x, z}`) — dispatch ambiguity, not
+/// an ordering.
+#[test]
+fn record_disjoint_fields_incomparable() {
+    let xy = record_ty(vec![("x", KType::Number), ("y", KType::Str)]);
+    let xz = record_ty(vec![("x", KType::Number), ("z", KType::Str)]);
+    assert!(!xy.is_more_specific_than(&xz));
+    assert!(!xz.is_more_specific_than(&xy));
+}
+
+/// A `{x = 1, y = "a"}` value (carried type `:{x :Number, y :Str}`) admits and matches a
+/// narrower `:{x :Number}` slot (width drop); rejects a field-type mismatch (`:{x :Str}`)
+/// and a slot demanding a field the value lacks (`:{x :Number, q :Bool}`). A bare record
+/// literal admits any record slot shape-only.
+#[test]
+fn record_value_admission_and_matches() {
+    use crate::machine::core::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let value: &KObject<'_> = arena.alloc(KObject::record(Record::from_pairs(vec![
+        ("x".to_string(), KObject::Number(1.0)),
+        ("y".to_string(), KObject::KString("a".into())),
+    ])));
+
+    let narrow = record_ty(vec![("x", KType::Number)]);
+    assert!(narrow.accepts_part(&ExpressionPart::Future(value)));
+    assert!(narrow.matches_value(value));
+
+    let mismatch = record_ty(vec![("x", KType::Str)]);
+    assert!(!mismatch.accepts_part(&ExpressionPart::Future(value)));
+    assert!(!mismatch.matches_value(value));
+
+    let extra = record_ty(vec![("x", KType::Number), ("q", KType::Bool)]);
+    assert!(!extra.accepts_part(&ExpressionPart::Future(value)));
+    assert!(!extra.matches_value(value));
+
+    // Unevaluated literal admits shape-only (defer-then-reevaluate on the typed value).
+    assert!(mismatch.accepts_part(&ExpressionPart::RecordLiteral(vec![])));
+}
+
 #[test]
 fn mu_matches_value_via_one_unfold() {
     let t = KType::Mu {

@@ -347,7 +347,8 @@ see [implicits.md](implicits.md).
 
 ## Open work
 
-- [Standalone record type and projection](../../roadmap/type_language/record-subtyping.md) —
-  the standalone `KType::Record` value type and `FROM` projection. (Functor
-  parameter records already admit contravariantly with width-drop under the
-  shipped function subtyping — see [ktype.md § Variance](ktype.md#variance).)
+- [Record projection](../../roadmap/type_language/record-subtyping.md) — a `FROM`
+  projection builtin to disambiguate incomparable record arms. (The `KType::Record`
+  type and width/depth record subtyping have shipped; functor parameter records admit
+  contravariantly with width-drop under the shipped function subtyping — see
+  [ktype.md § Variance](ktype.md#variance).)

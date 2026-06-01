@@ -113,6 +113,14 @@ pub enum KType<'a> {
     List(Box<KType<'a>>),
     /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType<'a>>, Box<KType<'a>>),
+    /// Structural record type (`:{x :Number, y :Str}`) — an identifier-keyed field
+    /// schema with width/depth subtyping, distinct from the nominal
+    /// `UserType { kind: Struct }`. The inner `Record<KType>` is declaration-ordered for
+    /// rendering and order-blind by `(name, type)` for identity. A record *value*
+    /// (`KObject::Record`) memoizes this as its carried type. Subtyping is the dual of
+    /// the function-parameter relation — width-*superset* is more specific, covariant
+    /// depth — see `record_value_more_specific`.
+    Record(Box<Record<KType<'a>>>),
     /// `params` is the parameter record `(name → type)` — order preserved for rendering,
     /// equality order-blind by `(name, type)`. koan has no positional call syntax, so a
     /// function-typed slot records the names a caller must use to invoke the function it
@@ -214,6 +222,9 @@ impl<'a> KType<'a> {
             KType::Null => "Null".into(),
             KType::List(t) => format!(":(LIST OF {})", t.name()),
             KType::Dict(k, v) => format!(":(MAP {} -> {})", k.name(), v.name()),
+            // `:{x :Number y :Str}` — the braced type-sigil surface. Fields render
+            // space-separated like FN params (the field-list parser accepts that).
+            KType::Record(r) => format!(":{{{}}}", render_param_record(r)),
             KType::KFunction { params, ret } => {
                 format!(":(FN ({}) -> {})", render_param_record(params), ret.name())
             }
@@ -304,6 +315,7 @@ impl<'a> PartialEq for KType<'a> {
             | (AnySignature, AnySignature) => true,
             (List(a), List(b)) => a == b,
             (Dict(ka, va), Dict(kb, vb)) => ka == kb && va == vb,
+            (Record(a), Record(b)) => a == b,
             (
                 KFunction {
                     params: p1,
@@ -404,6 +416,7 @@ impl<'a> std::hash::Hash for KType<'a> {
                 k.hash(state);
                 v.hash(state);
             }
+            Record(r) => r.hash(state),
             KFunction { params, ret } => {
                 params.hash(state);
                 ret.hash(state);
@@ -474,10 +487,7 @@ mod tests {
     #[test]
     fn name_renders_function() {
         let t = KType::KFunction {
-            params: Record::from_pairs(vec![
-                ("x".into(), KType::Number),
-                ("y".into(), KType::Str),
-            ]),
+            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
         };
         assert_eq!(t.name(), ":(FN (x :Number y :Str) -> Bool)");
@@ -488,10 +498,7 @@ mod tests {
     #[test]
     fn name_renders_function_with_sigiled_param() {
         let t = KType::KFunction {
-            params: Record::from_pairs(vec![(
-                "xs".into(),
-                KType::List(Box::new(KType::Number)),
-            )]),
+            params: Record::from_pairs(vec![("xs".into(), KType::List(Box::new(KType::Number)))]),
             ret: Box::new(KType::Bool),
         };
         assert_eq!(t.name(), ":(FN (xs :(LIST OF Number)) -> Bool)");
@@ -500,10 +507,7 @@ mod tests {
     #[test]
     fn name_renders_functor() {
         let t = KType::KFunctor {
-            params: Record::from_pairs(vec![
-                ("x".into(), KType::Number),
-                ("y".into(), KType::Str),
-            ]),
+            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
         };
         assert_eq!(t.name(), ":(FUNCTOR (x :Number y :Str) -> Bool)");
@@ -512,17 +516,11 @@ mod tests {
     #[test]
     fn functor_structural_eq_same_shape() {
         let a = KType::KFunctor {
-            params: Record::from_pairs(vec![
-                ("x".into(), KType::Number),
-                ("y".into(), KType::Str),
-            ]),
+            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
         };
         let b = KType::KFunctor {
-            params: Record::from_pairs(vec![
-                ("x".into(), KType::Number),
-                ("y".into(), KType::Str),
-            ]),
+            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
         };
         assert_eq!(a, b);
@@ -574,17 +572,11 @@ mod tests {
     #[test]
     fn function_params_order_blind_equality() {
         let xy = KType::KFunction {
-            params: Record::from_pairs(vec![
-                ("x".into(), KType::Number),
-                ("y".into(), KType::Str),
-            ]),
+            params: Record::from_pairs(vec![("x".into(), KType::Number), ("y".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
         };
         let yx = KType::KFunction {
-            params: Record::from_pairs(vec![
-                ("y".into(), KType::Str),
-                ("x".into(), KType::Number),
-            ]),
+            params: Record::from_pairs(vec![("y".into(), KType::Str), ("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
         };
         assert_eq!(xy, yx);

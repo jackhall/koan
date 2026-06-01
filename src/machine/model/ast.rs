@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use crate::machine::core::source::{FileId, Span, Spanned};
-use crate::machine::model::{KKey, KObject, Parseable, Serializable, UntypedElement, UntypedKey};
+use crate::machine::model::{
+    KKey, KObject, Parseable, Record, Serializable, UntypedElement, UntypedKey,
+};
 
 #[cfg(test)]
 mod tests;
@@ -62,6 +64,10 @@ pub enum ExpressionPart<'a> {
     SigiledTypeExpr(Box<KExpression<'a>>),
     ListLiteral(Vec<ExpressionPart<'a>>),
     DictLiteral(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
+    /// Anonymous record literal (`{x = 1, y = "a"}`) — identifier-keyed `=` pairs. The
+    /// brace frame routes here when the first pair separator is `=`; `:` pairs stay a
+    /// `DictLiteral`. Field names are syntactic identifiers (never name-resolved).
+    RecordLiteral(Vec<(String, ExpressionPart<'a>)>),
     Literal(KLiteral),
     Future(&'a KObject<'a>),
 }
@@ -81,6 +87,9 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
             }
             ExpressionPart::DictLiteral(pairs) => {
                 f.debug_tuple("DictLiteral").field(pairs).finish()
+            }
+            ExpressionPart::RecordLiteral(pairs) => {
+                f.debug_tuple("RecordLiteral").field(pairs).finish()
             }
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
             ExpressionPart::Future(obj) => write!(f, "Future({})", obj.summarize()),
@@ -111,6 +120,13 @@ impl<'a> ExpressionPart<'a> {
                 let inner: Vec<String> = pairs
                     .iter()
                     .map(|(k, v)| format!("{}: {}", k.summarize(), v.summarize()))
+                    .collect();
+                format!("{{{}}}", inner.join(", "))
+            }
+            ExpressionPart::RecordLiteral(pairs) => {
+                let inner: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{} = {}", k, v.summarize()))
                     .collect();
                 format!("{{{}}}", inner.join(", "))
             }
@@ -175,6 +191,13 @@ impl<'a> ExpressionPart<'a> {
                 }
                 KObject::dict(map)
             }
+            ExpressionPart::RecordLiteral(pairs) => {
+                let fields: Record<KObject<'a>> = pairs
+                    .iter()
+                    .map(|(name, v)| (name.clone(), v.resolve()))
+                    .collect();
+                KObject::record(fields)
+            }
             // Deep-clone, don't stringify: a Future-borne List or KExpression must
             // materialize back to its structured form.
             ExpressionPart::Future(obj) => obj.deep_clone(),
@@ -192,6 +215,7 @@ impl<'a> Clone for ExpressionPart<'a> {
             ExpressionPart::SigiledTypeExpr(e) => ExpressionPart::SigiledTypeExpr(e.clone()),
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(items.clone()),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(pairs.clone()),
+            ExpressionPart::RecordLiteral(pairs) => ExpressionPart::RecordLiteral(pairs.clone()),
             ExpressionPart::Literal(l) => ExpressionPart::Literal(l.clone()),
             ExpressionPart::Future(o) => ExpressionPart::Future(o),
         }

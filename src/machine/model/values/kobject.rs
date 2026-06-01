@@ -7,7 +7,7 @@ use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture, ScopeId};
 use crate::machine::model::ast::{KExpression, TypeName};
 use crate::machine::model::types::{
-    KType, Parseable, Serializable, SignatureElement, UserTypeKind,
+    KType, Parseable, Record, Serializable, SignatureElement, UserTypeKind,
 };
 
 #[cfg(test)]
@@ -84,6 +84,14 @@ pub enum KObject<'a> {
         scope_id: ScopeId,
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
+    /// Anonymous structural record value (`{x = 1, y = "a"}`). The first field is the
+    /// `Rc`-shared field record (identifier-keyed, declaration-ordered, order-blind
+    /// equality); the second is the memoized/ascribed per-field type record — the join
+    /// of each field's `ktype()` at fresh construction, re-stamped to a declared
+    /// `KType::Record` at an annotated boundary (mirrors `List` / `Dict`). Construct via
+    /// [`KObject::record`] / [`KObject::record_with_type`]. Distinct from the nominal
+    /// `Struct`: a record carries no `(name, scope_id)` identity, only its structure.
+    Record(Rc<Record<KObject<'a>>>, Box<Record<KType<'a>>>),
     /// First-class type value carrying the elaborated `KType` directly. The parser's
     /// surface `TypeName` is lowered at the seam so downstream consumers never see
     /// surface syntax again. Slot kind is still `KType::TypeExprRef`; the slot is the
@@ -148,6 +156,24 @@ impl<'a> KObject<'a> {
         KObject::Dict(map, Box::new(key), Box::new(value))
     }
 
+    /// Fresh `Record` carrier: memoizes the per-field type record as each field's
+    /// `ktype()`. Field order follows declaration; equality is order-blind per the
+    /// `Record` substrate.
+    pub fn record(fields: Record<KObject<'a>>) -> KObject<'a> {
+        let types = fields.map(|v| v.ktype());
+        KObject::Record(Rc::new(fields), Box::new(types))
+    }
+
+    /// `Record` carrier with an explicitly supplied per-field type record — for
+    /// ascription stamping (re-tag to the declared field types, coarsening included).
+    /// See [`Self::list_with_type`].
+    pub fn record_with_type(
+        fields: Rc<Record<KObject<'a>>>,
+        types: Record<KType<'a>>,
+    ) -> KObject<'a> {
+        KObject::Record(fields, Box::new(types))
+    }
+
     /// Ascription stamping at an annotated boundary (FN return type, argument slot,
     /// LET ascription). Callers have already checked the value satisfies `declared`;
     /// this re-tags the carrier to *exactly* the declared parameter types — a
@@ -181,6 +207,9 @@ impl<'a> KObject<'a> {
                 name,
                 type_args: Rc::new(args.clone()),
             },
+            (KObject::Record(fields, _), KType::Record(types)) => {
+                KObject::Record(fields, types.clone())
+            }
             (other, _) => other,
         }
     }
@@ -247,6 +276,9 @@ impl<'a> KObject<'a> {
                 scope_id: *scope_id,
                 name: name.clone(),
             },
+            // O(1): read the memoized per-field type record rather than re-walking the
+            // fields, mirroring `List` / `Dict`.
+            KObject::Record(_, field_types) => KType::Record(field_types.clone()),
             // Module/signature values carry the identity directly — report it rather
             // than the meta-type marker, so dispatch sees the same shape as a
             // type-position carrier. Other `KTypeValue` carriers fill the
@@ -297,6 +329,9 @@ impl<'a> KObject<'a> {
                 scope_id: *scope_id,
                 fields: Rc::clone(fields),
             },
+            KObject::Record(fields, field_types) => {
+                KObject::Record(Rc::clone(fields), field_types.clone())
+            }
             KObject::KTypeValue(t) => KObject::KTypeValue(t.clone()),
             KObject::TypeNameRef(t) => KObject::TypeNameRef(t.clone()),
             KObject::Wrapped { inner, type_id } => KObject::Wrapped {
@@ -411,6 +446,14 @@ impl<'a> Parseable<'a> for KObject<'a> {
                     .map(|(field, value)| format!("{}: {}", field, value.summarize()))
                     .collect();
                 format!("{}({})", name, parts.join(", "))
+            }
+            // Round-trips the `{x = 1, y = "a"}` value surface (`=` pairs).
+            KObject::Record(fields, _) => {
+                let parts: Vec<String> = fields
+                    .iter()
+                    .map(|(field, value)| format!("{} = {}", field, value.summarize()))
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
             }
             KObject::Null => "null".to_string(),
             // Module / signature carriers render as `module <path>` / `sig <path>`.

@@ -86,7 +86,8 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
             | ExpressionPart::Future(_)
             | ExpressionPart::Expression(_)
             | ExpressionPart::ListLiteral(_)
-            | ExpressionPart::DictLiteral(_) => DispatchShape::LiteralPassThrough,
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_) => DispatchShape::LiteralPassThrough,
             _ => DispatchShape::Keyworded,
         };
     }
@@ -162,6 +163,7 @@ pub(in crate::machine::execute) enum PendingSub<'a> {
     Dispatch(KExpression<'a>),
     ListLit(Vec<ExpressionPart<'a>>),
     DictLit(Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>),
+    RecordLit(Vec<(String, ExpressionPart<'a>)>),
 }
 
 /// Result of a successful keyworded part walk.
@@ -237,6 +239,10 @@ pub(super) fn stage_all_eager_parts<'a>(
             }
             ExpressionPart::DictLiteral(pairs) => {
                 staged.push((i, PendingSub::DictLit(pairs)));
+                new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
+            }
+            ExpressionPart::RecordLiteral(fields) => {
+                staged.push((i, PendingSub::RecordLit(fields)));
                 new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
             }
             other => new_parts.push(Spanned { value: other, span }),

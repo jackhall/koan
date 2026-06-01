@@ -285,6 +285,7 @@ fn expr_has_eager_part(expr: &KExpression<'_>) -> bool {
                 | ExpressionPart::SigiledTypeExpr(_)
                 | ExpressionPart::ListLiteral(_)
                 | ExpressionPart::DictLiteral(_)
+                | ExpressionPart::RecordLiteral(_)
         )
     })
 }

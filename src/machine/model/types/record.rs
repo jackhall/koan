@@ -69,6 +69,19 @@ impl<V> Record<V> {
         self.fields.get(name)
     }
 
+    /// Map each field's value through `f`, preserving names and declaration order.
+    /// Used to derive a value-level record's memoized type record
+    /// (`Record<KObject>` → `Record<KType>` via `ktype()`).
+    pub fn map<U>(&self, f: impl Fn(&V) -> U) -> Record<U> {
+        Record {
+            fields: self
+                .fields
+                .iter()
+                .map(|(name, value)| (name.clone(), f(value)))
+                .collect(),
+        }
+    }
+
     /// Number of fields.
     pub fn len(&self) -> usize {
         self.fields.len()

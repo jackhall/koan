@@ -129,12 +129,15 @@ mod tests {
     #[test]
     fn identifier_or_type_accepts_type_token_name() {
         let expr = type_named_pair();
-        let out = parse_pair_list(&expr, "FN parameters", FieldNameKind::IdentifierOrType, |p, _| {
-            match p {
+        let out = parse_pair_list(
+            &expr,
+            "FN parameters",
+            FieldNameKind::IdentifierOrType,
+            |p, _| match p {
                 ExpressionPart::Type(t) => Ok(t.render()),
                 _ => Err("unexpected slot".to_string()),
-            }
-        })
+            },
+        )
         .expect("Type-token name accepted under IdentifierOrType");
         assert_eq!(out, vec![("Ty".to_string(), "Signature".to_string())]);
     }

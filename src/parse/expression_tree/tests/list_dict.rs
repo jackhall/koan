@@ -274,3 +274,80 @@ fn multiline_dict_via_top_level_pipeline() {
         vec!["[t(LET) t(d) t(=) D{t(a): n(1), t(b): n(2)}]"],
     );
 }
+
+// --- Record literal tests (`=` pairs; `:` pairs stay a dict) ---
+
+#[test]
+fn single_field_record() {
+    assert_eq!(tree("{x = 1}").unwrap(), "[R{x = n(1)}]");
+}
+
+#[test]
+fn two_fields_with_comma() {
+    assert_eq!(
+        tree(r#"{x = 1, y = "a"}"#).unwrap(),
+        "[R{x = n(1), y = s(a)}]",
+    );
+}
+
+#[test]
+fn two_fields_without_comma_auto_commit() {
+    assert_eq!(tree("{x = 1 y = 2}").unwrap(), "[R{x = n(1), y = n(2)}]");
+}
+
+#[test]
+fn record_comma_and_no_comma_match() {
+    assert_eq!(
+        tree("{x = 1, y = 2}").unwrap(),
+        tree("{x = 1 y = 2}").unwrap()
+    );
+}
+
+#[test]
+fn record_value_as_sub_expression() {
+    assert_eq!(
+        tree("{x = (LET y = 7)}").unwrap(),
+        "[R{x = [t(LET) t(y) t(=) n(7)]}]",
+    );
+}
+
+#[test]
+fn nested_record_in_record() {
+    assert_eq!(tree("{a = {b = 1}}").unwrap(), "[R{a = R{b = n(1)}}]");
+}
+
+#[test]
+fn record_trailing_comma_allowed() {
+    assert_eq!(tree("{x = 1,}").unwrap(), "[R{x = n(1)}]");
+}
+
+#[test]
+fn empty_braces_stay_dict() {
+    // No separator to disambiguate → dict; an empty record needs a `:{}` ascription.
+    assert_eq!(tree("{}").unwrap(), "[D{}]");
+}
+
+#[test]
+fn mixed_record_then_dict_delimiters_errors() {
+    let err = tree("{x = 1, y: 2}").unwrap_err();
+    assert!(
+        err.contains("mixed"),
+        "expected mixed-delimiter error, got: {err}"
+    );
+}
+
+#[test]
+fn mixed_dict_then_record_delimiters_errors() {
+    assert!(tree("{x: 1, y = 2}").is_err());
+}
+
+#[test]
+fn record_field_without_value_errors() {
+    assert!(tree("{x =}").is_err());
+}
+
+#[test]
+fn non_identifier_record_field_errors() {
+    let err = tree("{1 = 2}").unwrap_err();
+    assert!(err.contains("bare identifier"), "got: {err}");
+}
