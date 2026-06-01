@@ -97,6 +97,16 @@ What's shipped that the open items below build on:
   width and depth and incomparable arms tie as `AmbiguousDispatch`. Structs stay
   nominal; the record variant is structural-only. See
   [design/typing/ktype.md § Variance](design/typing/ktype.md#variance).
+- *Named-argument surface.* The record literal `{x = 1}` is the sole named-argument form
+  across struct construction (`Point {x = 1, y = 2}`), function-value calls (`f {x = 1}`),
+  and functor application (`:(MyFunctor {T = IntOrd})`); the `(x = 1)` paren-kwarg and
+  `{x: 3}` dict forms are retired, and an empty `{}` is the empty record so a nullary call
+  spells `f {}`. The dispatch lanes classify a call body as named (record literal) or
+  positional (paren group — tagged-union / newtype construction) via `extract_call_body`,
+  and the resolved [`ArgumentBundle`](src/machine/core/kfunction/argument_bundle.rs) carries
+  its arguments on the same [`Record<V>`](src/machine/model/types/record.rs) shape as the
+  surface literal and the struct value. See
+  [design/typing/type-language-via-dispatch.md](design/typing/type-language-via-dispatch.md).
 
 ## Next items
 
@@ -164,7 +174,6 @@ build on:
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
 - [Record projection](roadmap/type_language/record-subtyping.md)
-- [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 
