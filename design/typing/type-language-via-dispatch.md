@@ -118,16 +118,22 @@ reaches a `TypeExprRef` / `Type` / `AnyModule` / `AnySignature` slot
 and surfaces a standard `TypeMismatch`. The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 
-The legacy positional sigil shape (`:(List Number)` →
-`[Type(List), Type(Number)]`) now classifies as `ConstructorCall`
-inside the wrapper. Standalone parameterized-type elaboration is
-served by the keyworded overloads in every freshly-written
-annotation; the field-walker inside `typed_field_list` retains an
-inline `try_synth_legacy` path for legacy positional shapes embedded
-in `STRUCT` / `UNION` field schemas, because the elaborator there
-carries SCC threading context (current declaration name + threaded
-set) that the standalone dispatcher does not yet plumb (see
-[Open work](#open-work)).
+A positional sigil shape (`:(List Number)` → `[Type(List),
+Type(Number)]`) classifies as `ConstructorCall` inside the wrapper;
+the keyworded overloads serve standalone parameterized-type
+elaboration. The field-walker inside `typed_field_list` handles the
+two sigil shapes embedded in `STRUCT` / `UNION` field schemas
+distinctly. Positional shapes elaborate inline through the threaded
+elaborator (`try_synth_legacy`), keeping the body's SCC context so a
+self-reference lowers to `RecursiveRef`. Keyworded shapes
+(`:(LIST OF Tree)`, `:(MAP Tree -> _)`) sub-Dispatch through the
+standalone dispatcher, which carries no SCC context, so
+`rewrite_threaded_self_refs` first rewrites every threaded
+self-reference to a `Future(KTypeValue(RecursiveRef(name)))` carrier
+— the same type-side transport `:(LIST OF Number)` rides — before the
+sub-Dispatch. Both routes lower `STRUCT Tree = (children :(LIST OF
+Tree))`'s field to `List(RecursiveRef("Tree"))` rather than parking
+on `Tree`'s own placeholder and closing a scheduler-deadlock cycle.
 
 ## Binder install: name-keyed vs bucket-keyed
 
@@ -164,14 +170,12 @@ FN / FUNCTOR do not install on the name channel.
   surface into `KType::KFunction` / `KType::KFunctor` identity so a
   function-typed slot can enforce that callers use the declared
   parameter names.
-- [SCC-aware dispatcher for parameterized self-recursive
-  types](../../roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md) —
-  plumb the elaborator's threaded set + current-declaration context
-  into the dispatcher's bare-Type-leaf and sub-Dispatch paths so a
-  self-reference inside `:(LIST OF Tree)` inside `STRUCT Tree`'s body
-  short-circuits `Tree` to `RecursiveRef` rather than `UnboundName`.
-  Closes the field-walker / dispatcher split and retires the
-  `try_synth_legacy` inline path.
+- [Remove positional type syntax and prune
+  TypeParams](../../roadmap/dispatch_fix/remove-positional-type-syntax.md) —
+  retire the legacy positional sigil (`:(List X)`) so the keyworded
+  form is the single surface, unify `try_synth_legacy` into the
+  `rewrite_threaded_self_refs` sigil path, and delete the
+  now-producerless `TypeParams::List` / `Function` arms.
 - [User-defined TypeConstructor keyworded
   application](../../roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md) —
   give a user `LET Wrap = (TYPE_CONSTRUCTOR T)` a keyworded

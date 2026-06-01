@@ -18,20 +18,34 @@ fn struct_fields<'a>(scope: &'a Scope<'a>, name: &str) -> Rc<Vec<(String, KType<
     }
 }
 
-/// Self-recursive STRUCT: `STRUCT Tree = (children :(List Tree))` should elaborate
-/// the field as `List(RecursiveRef("Tree"))` via the elaborator's binder-name
-/// threading.
-///
-/// Disabled: a parameterized self-reference sub-Dispatches through the
-/// standalone dispatcher, which has no SCC threading context — `Tree` reaches
-/// the bare-Type-leaf fast lane and errors `UnboundName`. See
-/// [roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md](../../../../roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md).
-#[ignore = "blocked on SCC-aware dispatcher for self-recursive parameterized types"]
+/// Self-recursive STRUCT, positional sigil: `STRUCT Tree = (children :(List Tree))`
+/// elaborates the field as `List(RecursiveRef("Tree"))` inline through the threaded
+/// elaborator (`try_synth_legacy`), without ever leaving the body's SCC context.
 #[test]
 fn recursive_struct_tree_elaborates_with_recursive_ref_on_field() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run_one(scope, parse_one("STRUCT Tree = (children :(List Tree))"));
+    let fields = struct_fields(scope, "Tree");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].0, "children");
+    assert_eq!(
+        fields[0].1,
+        KType::List(Box::new(KType::RecursiveRef("Tree".into()))),
+    );
+}
+
+/// Self-recursive STRUCT, keyworded sigil: `STRUCT Tree = (children :(LIST OF Tree))`.
+/// The keyworded sigil sub-Dispatches through the standalone dispatcher, which carries
+/// no SCC context; `rewrite_threaded_self_refs` pre-resolves the `Tree` self-reference
+/// to a `RecursiveRef` carrier before the sub-Dispatch, so the field lowers to
+/// `List(RecursiveRef("Tree"))` rather than closing a scheduler-deadlock cycle on
+/// `Tree`'s own placeholder.
+#[test]
+fn recursive_struct_tree_keyworded_list_of_lowers_to_recursive_ref() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run_one(scope, parse_one("STRUCT Tree = (children :(LIST OF Tree))"));
     let fields = struct_fields(scope, "Tree");
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].0, "children");

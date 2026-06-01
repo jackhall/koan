@@ -68,10 +68,13 @@ Two test ignores pin the gap:
   `KTypeValue` carrier.
 - **SCC-recursion handling — deferred.** Self-recursive
   declarations like `LET RoseTree = (TYPE_CONSTRUCTOR T)` followed
-  by `STRUCT (RoseTree T) = (kids :(LIST OF (RoseTree T)))` need
-  the SCC threading work to compose. See
-  [SCC-aware dispatcher for parameterized self-recursive
-  types](scc-aware-dispatcher-for-self-recursive-types.md).
+  by `STRUCT (RoseTree T) = (kids :(LIST OF (RoseTree T)))` build on
+  the shipped bare-leaf self-reference pre-resolution (see
+  [type-language-via-dispatch](../../design/typing/type-language-via-dispatch.md)),
+  but additionally need a threaded constructor *application* head
+  (`(RoseTree T)`), not just a bare leaf name, rewritten to a
+  recursive carrier — that composes on top of this item's keyworded
+  application surface.
 - **Per-call generativity — decided: per
   [functors.md § Higher-kinded type slots](../../design/typing/functors.md#higher-kinded-type-slots).**
   Each `:(Wrap Number)` application produces a fresh

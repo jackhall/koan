@@ -91,7 +91,6 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
     );
 }
 
-#[ignore = "legacy positional :(List X, Y) form deleted with TypeCall arm"]
 #[test]
 fn fn_with_invalid_list_arity_errors_at_definition() {
     let arena = RuntimeArena::new();

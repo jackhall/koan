@@ -68,7 +68,11 @@ What's shipped that the open items below build on:
   `BinderKey::Name` (`LET` / `STRUCT` / `UNION` / `SIG` / `MODULE`) vs.
   `BinderKey::Bucket` (`FN` / `FUNCTOR`), and `pending_overloads` carries a
   per-bucket Vec so sibling FN / FUNCTOR overloads coexist as distinct
-  wake sources with earliest-index-visible parking.
+  wake sources with earliest-index-visible parking. A self-reference inside
+  a keyworded field sigil (`STRUCT Tree = (children :(LIST OF Tree))`) is
+  pre-resolved to a `RecursiveRef` carrier by `rewrite_threaded_self_refs`
+  before the sub-Dispatch, so it lowers to `List(RecursiveRef("Tree"))`
+  instead of deadlocking on its own placeholder.
 - *Unified walk + strict-only admission.* Each `run_dispatch` builds a
   per-call `bare_outcomes` cache (one `NameOutcome` per bare-name part)
   shared between the resolver's strict admission and the fused
@@ -235,12 +239,12 @@ functor-heavy collections both build on:
 
 Untangle dispatch into queue-order-independent name resolution plus a single
 unified ancestor walk per call site. The provenance-plumbing, index-gated
-resolution, recursive-binder-submission, type-language-via-dispatch, and
-walk-unification phases have shipped (see "What's shipped so far"); the
-remaining items pick up the SCC-context gap surfaced by routing the type
-language through the dispatcher and the user-functor application surface:
+resolution, recursive-binder-submission, type-language-via-dispatch,
+walk-unification, and keyworded self-recursion phases have shipped (see
+"What's shipped so far"); the remaining items retire the legacy positional
+type surface and add the user-functor application surface:
 
-- [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
+- [Remove positional type syntax and prune TypeParams](roadmap/dispatch_fix/remove-positional-type-syntax.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

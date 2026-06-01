@@ -8,7 +8,9 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::machine::model::Parseable;
 use crate::parse::parse_pair_list;
-use crate::machine::NodeId;
+use crate::machine::{NodeId, Scope};
+use crate::machine::model::KObject;
+use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {
     Done(Vec<(String, KType<'a>)>),
@@ -51,10 +53,10 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             },
             // Legacy positional sigils (`:(List Tree)`) elaborate inline through the
             // threaded elaborator to keep the body's SCC context — `STRUCT Tree =
-            // (children :(List Tree))` must lower Tree to `RecursiveRef("Tree")`. A
-            // sub-Dispatch would lose that context and park on Tree's own slot.
-            // Keyworded shapes (`:(LIST OF _)`, `:(FN ...)`) can't name the recursing
-            // type and route through the standalone dispatcher safely.
+            // (children :(List Tree))` must lower Tree to `RecursiveRef("Tree")`.
+            // Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`) sub-Dispatch
+            // through the standalone dispatcher, which carries no SCC context, so
+            // self-references are pre-resolved to `RecursiveRef` carriers first.
             ExpressionPart::SigiledTypeExpr(boxed) => {
                 if let Some(te) = try_synth_legacy(boxed) {
                     match elaborate_type_expr(elaborator, &te) {
@@ -68,8 +70,10 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                         }
                     }
                 } else {
+                    let rewritten =
+                        rewrite_threaded_self_refs(boxed, &elaborator.threaded, elaborator.scope);
                     let wrapped = KExpression::new(vec![Spanned::bare(
-                        ExpressionPart::SigiledTypeExpr(boxed.clone()),
+                        ExpressionPart::SigiledTypeExpr(Box::new(rewritten)),
                     )]);
                     sub_dispatches.push((slot_idx, wrapped));
                     Ok(KType::Any)
@@ -98,6 +102,43 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
             }
         }
     }
+}
+
+/// Pre-resolve self-references inside a keyworded sigil body before it sub-Dispatches
+/// into the standalone dispatcher, which carries no SCC threading context. Every bare
+/// `Type(name)` leaf whose `name` is in `threaded` becomes a `Future(KTypeValue(
+/// RecursiveRef(name)))` carrier — the same type-side transport `:(LIST OF Number)`
+/// rides — so `STRUCT Tree = (children :(LIST OF Tree))` lowers `Tree` to
+/// `RecursiveRef("Tree")` instead of parking on its own placeholder and closing a
+/// scheduler-deadlock cycle. Recurses into nested sigils (`:(LIST OF (LIST OF Tree))`,
+/// `:(MAP Tree -> Number)`); non-threaded names are left for the dispatcher to resolve.
+fn rewrite_threaded_self_refs<'a>(
+    inner: &KExpression<'a>,
+    threaded: &HashSet<String>,
+    scope: &Scope<'a>,
+) -> KExpression<'a> {
+    let parts = inner
+        .parts
+        .iter()
+        .map(|p| {
+            let value = match &p.value {
+                ExpressionPart::Type(t)
+                    if matches!(t.params, TypeParams::None) && threaded.contains(&t.name) =>
+                {
+                    let obj = scope
+                        .arena
+                        .alloc(KObject::KTypeValue(KType::RecursiveRef(t.name.clone())));
+                    ExpressionPart::Future(obj)
+                }
+                ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(
+                    rewrite_threaded_self_refs(b, threaded, scope),
+                )),
+                other => other.clone(),
+            };
+            Spanned { value, span: p.span }
+        })
+        .collect();
+    KExpression::new(parts)
 }
 
 /// Synthesize the `TypeExpr` for a positional `:(<Head> <Arg>...)` sigil so the
