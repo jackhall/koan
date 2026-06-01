@@ -12,6 +12,7 @@
 //! parameterized type.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle, Scope,
@@ -52,6 +53,54 @@ fn body_map<'a>(
         scope
             .arena
             .alloc(KObject::KTypeValue(KType::Dict(Box::new(k), Box::new(v)))),
+    )
+}
+
+/// `:(<arg> AS <Ctor>)` → `KTypeValue(KType::ConstructorApply { ctor, args })`.
+/// The constructor rides in as an ordinary `:Type` arg (the `AS` right-hand slot),
+/// so a user-declared `TEMPLATE` head dispatches through the keyworded path like any
+/// other parameterized type — no value-construction (`ConstructorCall`) lane involved.
+/// Binary form, so arity-1 only; multi-parameter application is the
+/// [type-parameter-binding](../../roadmap/type_language/type-parameter-binding.md) follow-up.
+fn body_apply_as<'a>(
+    scope: &'a Scope<'a>,
+    _sched: &mut dyn SchedulerHandle<'a>,
+    bundle: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    let applied = match bundle.require_ktype("applied") {
+        Ok(t) => t.clone(),
+        Err(e) => return err(e),
+    };
+    let ctor = match bundle.require_ktype("ctor") {
+        Ok(t) => t.clone(),
+        Err(e) => return err(e),
+    };
+    let param_count = match &ctor {
+        KType::UserType {
+            kind: UserTypeKind::TypeConstructor { param_names, .. },
+            ..
+        } => param_names.len(),
+        other => {
+            return err(KError::new(KErrorKind::ShapeError(format!(
+                "right-hand side of `AS` must be a type constructor, got `{}`",
+                other.name(),
+            ))));
+        }
+    };
+    if param_count != 1 {
+        return err(KError::new(KErrorKind::ShapeError(format!(
+            "`{}` takes {param_count} type arguments; the `AS` form supplies one, so \
+             multi-parameter application is not yet supported",
+            ctor.name(),
+        ))));
+    }
+    BodyResult::Value(
+        scope
+            .arena
+            .alloc(KObject::KTypeValue(KType::ConstructorApply {
+                ctor: Box::new(ctor),
+                args: vec![applied],
+            })),
     )
 }
 
@@ -261,6 +310,19 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     );
     register_builtin(
         scope,
+        "AS",
+        sig(
+            KType::Type,
+            vec![
+                arg("applied", KType::Type),
+                kw("AS"),
+                arg("ctor", KType::Type),
+            ],
+        ),
+        body_apply_as,
+    );
+    register_builtin(
+        scope,
         "FN",
         sig(
             KType::Type,
@@ -305,6 +367,45 @@ mod tests {
                 assert_eq!(*kt, KType::List(Box::new(KType::Number)));
             }
             other => panic!("expected KTypeValue, got {:?}", other.ktype()),
+        }
+    }
+
+    // A root-scope-bound `Wrap` TypeConstructor applied with `:(Number AS Wrap)`
+    // lowers to `ConstructorApply(Wrap, [Number])`.
+    #[test]
+    fn apply_as_lowers_to_constructor_apply() {
+        use crate::machine::model::types::UserTypeKind;
+        use crate::machine::{BindingIndex, ScopeId};
+        let arena = RuntimeArena::new();
+        let scope = run_root_silent(&arena);
+        scope.register_type(
+            "Wrap".into(),
+            KType::UserType {
+                kind: UserTypeKind::TypeConstructor {
+                    schema: std::rc::Rc::new(std::collections::HashMap::new()),
+                    param_names: vec!["Type".into()],
+                },
+                scope_id: ScopeId::from_raw(0, 0xC0DE),
+                name: "Wrap".into(),
+            },
+            BindingIndex::BUILTIN,
+        );
+        let result = run_one(scope, parse_one(":(Number AS Wrap)"));
+        match result {
+            KObject::KTypeValue(KType::ConstructorApply { ctor, args }) => {
+                assert!(matches!(
+                    ctor.as_ref(),
+                    KType::UserType {
+                        kind: UserTypeKind::TypeConstructor { .. },
+                        ..
+                    }
+                ));
+                assert_eq!(*args, vec![KType::Number]);
+            }
+            other => panic!(
+                "expected ConstructorApply KTypeValue, got {:?}",
+                other.ktype()
+            ),
         }
     }
 

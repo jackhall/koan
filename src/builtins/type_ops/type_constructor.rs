@@ -87,11 +87,9 @@ mod tests {
         }
     }
 
-    /// Pins the dispatch path for an FN return type `Wrap<Number>` against a
-    /// root-scope-bound TypeConstructor. Re-enable once user-defined constructor
-    /// application gets a keyworded overload — see
-    /// `roadmap/type_language/type-parameter-binding.md`.
-    #[ignore = "user-defined TypeConstructor `:(Wrap T)` needs a keyworded application overload"]
+    /// Pins the dispatch path for an FN return type `:(Number AS Wrap)` against a
+    /// root-scope-bound TypeConstructor — the `AS` keyworded builtin lowers it to a
+    /// `ConstructorApply` carrier.
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
         let arena = RuntimeArena::new();
@@ -110,13 +108,13 @@ mod tests {
         );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(
-            parse_one("LET pure = (FN (PURE a :Number) -> :(Wrap Number) = (1))"),
+            parse_one("LET pure = (FN (PURE a :Number) -> :(Number AS Wrap) = (1))"),
             scope,
         );
         sched.execute().expect("scheduler should run");
         match sched.read_result(id) {
             Ok(_) => {}
-            Err(e) => panic!("FN with :(Wrap Number) return failed: {}", e),
+            Err(e) => panic!("FN with :(Number AS Wrap) return failed: {}", e),
         }
         let pure = scope.bindings().expect_value("pure");
         let f = match pure {
@@ -133,18 +131,15 @@ mod tests {
     }
 
     /// End-to-end smoke for a monad-shaped signature: `LET Wrap` precedes
-    /// `VAL pure` so the inner `Wrap<Number>` resolves synchronously against the
-    /// SIG decl-scope's `bindings.types["Wrap"]` entry. Re-enable once user-defined
-    /// constructor application gets a keyworded overload — see
-    /// `roadmap/type_language/type-parameter-binding.md`.
-    #[ignore = "user-defined TypeConstructor `:(Wrap T)` needs a keyworded application overload"]
+    /// `VAL pure` so the inner `:(Number AS Wrap)` resolves synchronously against the
+    /// SIG decl-scope's `bindings.types["Wrap"]` entry.
     #[test]
     fn monad_signature_smoke() {
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         let src = "SIG Monad = ((LET Wrap = (TEMPLATE Type)) \
-             (VAL pure :(FN (x :Number) -> :(Wrap Number))))";
+             (VAL pure :(FN (x :Number) -> :(Number AS Wrap))))";
         let exprs = parse(src).expect("parse should succeed");
         let mut sched = Scheduler::new();
         let mut ids = Vec::new();

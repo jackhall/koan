@@ -124,11 +124,14 @@ It is registered once in the root scope by
 [`result::register`](../src/builtins/result.rs), **type-only** the way a `UNION`
 declaration is: `bindings.types["Result"]` holds a `TypeConstructor` identity
 whose payload carries both the parameter names `T` / `E` and the variant
-`schema` `{ok, error}` (both `Any`). A slot annotated `:(Result T E)` resolves
-through the resolver's constructor-application arm, and `Result (ok v)` /
-`Result (error e)` construct by reading that schema off a fresh
-`types["Result"]` lookup — the same identity-borne path `UNION`-declared
-constructors use, with no value-side carrier.
+`schema` `{ok, error}` (both `Any`). `Result (ok v)` / `Result (error e)`
+construct by reading that schema off a fresh `types["Result"]` lookup — the
+same identity-borne path `UNION`-declared constructors use, with no value-side
+carrier. Type-position application of `Result`'s two parameters is not yet
+wired: the `AS` constructor-application form
+([functors.md § Higher-kinded type slots](typing/functors.md#higher-kinded-type-slots))
+is arity-1, and multi-parameter application is tracked in
+[type-parameter-binding](../roadmap/type_language/type-parameter-binding.md).
 
 The identity's `(name, scope_id)` fields use the root scope's `ScopeId` — the
 scope that owns the registration, not `ScopeId::SENTINEL` — so every `Result`

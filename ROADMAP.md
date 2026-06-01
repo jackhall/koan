@@ -18,7 +18,8 @@ covering the type and module systems end-to-end.
 What's shipped that the open items below build on:
 
 - *Module language.* `MODULE` / `SIG` declarators, `:|` / `:!` ascription, `SIG_WITH`
-  sharing constraints, higher-kinded type-constructor slots, and the type-language
+  sharing constraints, higher-kinded type-constructor slots (declared with `TEMPLATE`,
+  applied as `:(arg AS Ctor)`), and the type-language
   collapse that puts modules and signatures in `KType` directly via `KType::Module`,
   `KType::Signature`, and `KType::AbstractType` carriers. Values carry runtime
   type-parameter carriers, stamped at FN return, argument, and `LET` boundaries.
@@ -248,18 +249,6 @@ build on:
 - [FN/FUNCTOR named identity](roadmap/type_language/fn-named-identity.md)
 - [Record structural subtyping and projection](roadmap/type_language/record-subtyping.md)
 - [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
-
-### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
-
-Untangle dispatch into queue-order-independent name resolution plus a single
-unified ancestor walk per call site. The provenance-plumbing, index-gated
-resolution, recursive-binder-submission, type-language-via-dispatch,
-walk-unification, keyworded self-recursion, and positional-type-surface
-retirement phases have shipped (see "What's shipped so far"); the remaining
-items add the user-functor application surface and finish the type-surface
-cleanup:
-
-- [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

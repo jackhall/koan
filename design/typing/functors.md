@@ -246,8 +246,8 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (LET Wrap = (TEMPLATE Type))
-  (VAL pure :(FN (Number) -> :(Wrap Number)))
-  (VAL bind :(FN (:(Wrap Number), :(FN (Number) -> :(Wrap Number))) -> :(Wrap Number)))
+  (VAL pure :(FN (Number) -> :(Number AS Wrap)))
+  (VAL bind :(FN (:(Number AS Wrap), :(FN (Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
 )
 ```
 
@@ -257,15 +257,17 @@ binds the slot name (`Wrap` above) to a template
 carrying the parameter symbol list. The builtin lives in
 [`type_ops.rs`](../../src/builtins/type_ops.rs).
 
-Application uses the type-expression sigil:
-`:(Wrap Number)` in a type-position slot elaborates through
-[`elaborate_type_expr`](../../src/machine/model/types/resolver.rs)'s
-constructor-application arm into
+Application uses the `AS` keyworded builtin through the type-expression sigil:
+`:(Number AS Wrap)` in a type-position slot lowers to
 `KType::ConstructorApply { ctor: <the Wrap UserType>, args: [Number] }` —
 structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.
-The arm arity-checks against the constructor's `param_names.len()` and
-parks on a placeholder when the outer name is an in-flight `LET`, the same
-forward-reference path bare-leaf type names use.
+The constructor rides in as the `AS` right-hand `:Type` argument, not as a
+dispatch verb, so the call routes through the ordinary keyworded path the
+same way `:(LIST OF Number)` does; the
+[`AS` builtin](../../src/builtins/type_constructors.rs) checks the right-hand
+side is a `TypeConstructor` and arity-checks against its `param_names.len()`.
+A forward reference to an in-flight `LET` constructor name parks on its
+producer through the same bare-name arg resolution every `:Type` slot uses.
 
 Higher-kinded slots are **per-call generative on the same path as ordinary
 abstract type slots**. Two opaque ascriptions of the same source module
@@ -292,9 +294,9 @@ parser-level cause.
 machinery (FN return-type elaboration, signature-body ascription) and the
 value-level admissibility — wrapping a concrete value in `Wrap<Number>` and
 unwrapping it — and cross-module application (`M.Wrap<Number>` reached via
-ATTR-then-apply) are tracked in [open-work.md](open-work.md). Bare `Wrap<T>`
-in a signature body or against a root-scope-bound constructor is the path
-the test suite pins.
+ATTR-then-apply) are tracked in [open-work.md](open-work.md). A bare
+`:(T AS Wrap)` in a signature body or against a root-scope-bound constructor
+is the path the test suite pins.
 
 ## Type expressions and constraints
 

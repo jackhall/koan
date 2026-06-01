@@ -137,7 +137,9 @@ pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> Ela
             // edge. Trivial self-cycles (`LET T = T`) are caught earlier by the
             // dispatch driver's eager-resolve pass.
             if let Some(decl) = el.current_decl_name.clone() {
-                el.scope.bindings().record_pending_edge(&decl, name.to_string());
+                el.scope
+                    .bindings()
+                    .record_pending_edge(&decl, name.to_string());
                 if let Some(members) = detect_pending_cycle(el.scope, &decl) {
                     close_type_cycle(el.scope, &members);
                     if let Some(kt) = el.scope.resolve_type(name) {

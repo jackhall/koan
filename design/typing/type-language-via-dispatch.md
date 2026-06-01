@@ -174,10 +174,3 @@ FN / FUNCTOR do not install on the name channel.
   extend dispatch's specificity lattice with width/depth record subtyping
   (depth sound under value immutability) plus a `FROM` projection builtin to
   disambiguate incomparable arms.
-- [User-defined TypeConstructor keyworded
-  application](../../roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md) —
-  give a user `LET Wrap = (TEMPLATE T)` a keyworded
-  application surface so `:(Wrap Number)` routes through dispatch
-  the same way `:(LIST OF Number)` does. Today only the four builtin
-  parameterized types (`LIST`, `MAP`, `FN`, `FUNCTOR`) have
-  keyworded overloads.
