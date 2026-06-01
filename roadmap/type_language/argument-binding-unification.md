@@ -43,8 +43,11 @@ stores one index redundantly across the whole parameter block.
 
 **Requires:**
 
-None — the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)
-shape it consolidates the runtime carriers onto has shipped.
+- [Standalone record type and projection](record-subtyping.md) — its anonymous
+  record value is the runtime carrier a call's arguments install into as one
+  record block. The [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)
+  shape this consolidates the runtime carriers onto has already shipped; this
+  edge tracks the record *value* the install path binds.
 
 **Unblocks:**
 

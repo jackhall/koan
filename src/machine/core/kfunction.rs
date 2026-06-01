@@ -170,10 +170,13 @@ impl<'a> KFunction<'a> {
     }
 
     /// Validation precedence (first wins): malformed pair shape (`ShapeError` from
-    /// `NamedPairs::parse`) → missing arg (`MissingArg`) → unknown arg
-    /// (`ShapeError("unknown name ...")`). Arity is implicit — `NamedPairs` rejects
-    /// duplicate names at parse time, so consuming every declared argument and
-    /// finding the residual empty witnesses an exact match.
+    /// `NamedPairs::parse`) → missing arg (`MissingArg`). Width-drop semantics: a
+    /// named arg with no matching declared parameter is ignored, not an error — this
+    /// is the value side of function-subtyping width drop, where a value fills a slot
+    /// that promised extra parameters and the surplus named args simply go unbound on
+    /// the reconstructed exact-arity expression. `NamedPairs` rejects duplicate names
+    /// at parse time, so consuming every declared argument witnesses an exact-arity
+    /// reconstruction regardless of leftover (now-dropped) names.
     pub fn reconstruct_positional<'b>(
         &self,
         args: Vec<Spanned<ExpressionPart<'b>>>,
@@ -196,11 +199,8 @@ impl<'a> KFunction<'a> {
                 },
             }
         }
-        if let Some(unknown) = pairs.into_unknown() {
-            return Err(KError::new(KErrorKind::ShapeError(format!(
-                "unknown name `{unknown}` in function call",
-            ))));
-        }
+        // Leftover named args (no matching declared param) are dropped, not rejected:
+        // call-by-name width drop.
         Ok(KExpression::new(parts))
     }
 }

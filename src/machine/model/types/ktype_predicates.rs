@@ -63,11 +63,13 @@ impl<'a> KType<'a> {
                 let v_eq = va == vb;
                 (k_more && (v_more || v_eq)) || (k_eq && v_more)
             }
-            // Parameters match by name (koan has no positional calls): equal length and
-            // the same key set, then covariance per-name. Disjoint key sets are
-            // incomparable, so the helper's `keys()` guard returns `false`. The variant
-            // tags stay matched separately (KFunction never compares against KFunctor),
-            // but the shared `params`/`ret` shape lets both arms delegate to one helper.
+            // Function subtyping: contravariant params with width-subset, covariant
+            // return (see `param_record_more_specific`). A param the more-specific side
+            // doesn't declare is fine (width drop); a param it declares but the other
+            // side lacks makes them incomparable, so the helper's `keys()` guard returns
+            // `false`. The variant tags stay matched separately (KFunction never compares
+            // against KFunctor), but the shared `params`/`ret` shape lets both arms
+            // delegate to one helper.
             (
                 KFunction {
                     params: pa,
@@ -414,26 +416,38 @@ impl<'a> KType<'a> {
 }
 
 /// Shared name-keyed specificity for the structurally-identical `KFunction` /
-/// `KFunctor` arms of [`KType::is_more_specific_than`]. Parameters match by name (koan
-/// has no positional calls): mismatched length or key set is incomparable (`false`);
-/// otherwise covariance per-name and on the return type, with the standard
-/// "strictly-more-specific in at least one slot, equal-or-more in the rest" rule.
+/// `KFunctor` arms of [`KType::is_more_specific_than`]. Function subtyping is
+/// contravariant in parameters (with width-subset) and covariant in the return,
+/// matching the value-into-slot gate in [`function_compat`] so most-specific-wins
+/// stays consistent. `self` (the `a` side) is strictly more specific than `other`
+/// (the `b` side) iff:
+/// - width-subset: `pa.keys() ⊆ pb.keys()` (the more-specific function declares no
+///   more parameters — guard returns `false` otherwise);
+/// - per shared name, contravariant: `pb[name] == pa[name] || pb[name] ≺ pa[name]`
+///   (the more-specific function's params are equal-or-more-general);
+/// - covariant return: `ra == rb || ra ≺ rb`;
+/// - at least one strict edge (narrower width, a strictly-more-general param, or a
+///   strictly-more-specific return).
 fn param_record_more_specific<'a>(
     pa: &Record<KType<'a>>,
     ra: &KType<'a>,
     pb: &Record<KType<'a>>,
     rb: &KType<'a>,
 ) -> bool {
-    if pa.len() != pb.len() || !pa.keys().all(|k| pb.get(k).is_some()) {
+    if !pa.keys().all(|k| pb.get(k).is_some()) {
         return false;
     }
+    let params_ok = pa.iter().all(|(name, s)| {
+        let o = pb.get(name).unwrap();
+        o == s || o.is_more_specific_than(s)
+    });
     let params_more = pa
-        .iter()
-        .any(|(name, x)| x.is_more_specific_than(pb.get(name).unwrap()));
-    let params_eq = pa == pb;
+        .keys()
+        .any(|k| pb.get(k).unwrap().is_more_specific_than(pa.get(k).unwrap()));
     let ret_more = ra.is_more_specific_than(rb);
-    let ret_eq = ra == rb;
-    (params_more && (ret_more || ret_eq)) || (params_eq && ret_more)
+    let ret_ok = ra == rb || ret_more;
+    let width_strict = pa.len() < pb.len();
+    params_ok && ret_ok && (width_strict || params_more || ret_more)
 }
 
 /// Field→type-parameter linkage for the builtin `Result` parameterized union:
@@ -449,13 +463,21 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
     }
 }
 
-/// Strict, order-blind, name-keyed equality between `sig`'s declared parameters and the
-/// slot's parameter record — not subtyping. A function declared `(x :Number) -> Str` fills
-/// a slot typed `:(FN (x :Number) -> Str)` only: every `Argument` must appear in `params`
-/// under its own name with an equal `KType`, the matched count must exhaust `params`
-/// (so an extra slot parameter is a non-match), and the return types must be equal. A
-/// `Deferred(_)` return collapses to `KType::Any` for this check; see
-/// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
+/// Sound, order-blind, name-keyed function subtyping: does the value function `sig`
+/// fill the slot whose params record is `params` and return type is `ret`? Reasoned
+/// against call-by-name invocation (params arrive name-keyed), so the variance is:
+/// - Return covariant: `sig_ret == ret || sig_ret ≺ ret` — a value returning a subtype
+///   of the slot's promised return fills the slot. A `Deferred(_)` return collapses to
+///   `KType::Any`, and `Any ≺ _` is `false`, so a deferred-return candidate still only
+///   fills an `Any`-return slot; the covariant `false` is its safety net (no expansion
+///   into deferred-ret precision here — see
+///   [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md)).
+/// - Params contravariant with width-drop: every `Argument` the value declares must
+///   appear in `params` (a value-required param the slot doesn't promise is a width
+///   violation → `false`); for a shared name, the slot's param must be equal-or-more-
+///   specific than the value's (`slot_pt == &a.ktype || slot_pt ≺ &a.ktype`). Extra
+///   slot params the value doesn't declare are fine — under call-by-name they arrive
+///   unbound (width drop), so there is no exhaustiveness check.
 pub(super) fn function_compat<'a>(
     sig: &ExpressionSignature<'a>,
     params: &Record<KType<'a>>,
@@ -475,19 +497,22 @@ pub(super) fn function_compat<'a>(
             &KType::Any
         }
     };
-    if sig_ret_kt != ret {
+    if !(sig_ret_kt == ret || sig_ret_kt.is_more_specific_than(ret)) {
         return false;
     }
-    let mut matched = 0;
     for el in &sig.elements {
         if let SignatureElement::Argument(a) = el {
-            if params.get(&a.name) != Some(&a.ktype) {
-                return false;
+            match params.get(&a.name) {
+                None => return false,
+                Some(slot_pt) => {
+                    if !(slot_pt == &a.ktype || slot_pt.is_more_specific_than(&a.ktype)) {
+                        return false;
+                    }
+                }
             }
-            matched += 1;
         }
     }
-    matched == params.len()
+    true
 }
 
 #[cfg(test)]

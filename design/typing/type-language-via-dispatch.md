@@ -67,11 +67,11 @@ distinct types, and the function/return surface re-parses from
 `KType::name()` back to the same `KType` — `:(FN () -> Any)`,
 `:(FN (xs :(LIST OF Number)) -> Bool)` included. Slot identity is the
 record substrate's order-blind equality (same parameters by name and
-type regardless of declaration order); a param-name mismatch is a
-dispatch non-match. Admission itself stays strict-invariant
-(`function_compat`) — structural subtyping over the parameter record is
-the [record-subtyping](../../roadmap/type_language/record-subtyping.md)
-follow-up.
+type regardless of declaration order). Admission (`function_compat`) is
+sound function subtyping — contravariant params with width-drop,
+covariant return (see [ktype.md § Variance](ktype.md#variance)) — so a
+value requiring a param the slot doesn't promise is a non-match, while
+extra slot params arrive unbound under call-by-name.
 
 The parameter list parses through the shared field-list parser STRUCT /
 UNION use (`parse_typed_field_list_via_elaborator`), so nested
@@ -178,7 +178,8 @@ FN / FUNCTOR do not install on the name channel.
 
 ## Open work
 
-- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
-  extend dispatch's specificity lattice with width/depth record subtyping
-  (depth sound under value immutability) plus a `FROM` projection builtin to
-  disambiguate incomparable arms.
+- [Standalone record type and projection](../../roadmap/type_language/record-subtyping.md) —
+  a standalone `KType::Record` value type with width/depth subtyping (depth
+  sound under value immutability) plus a `FROM` projection builtin to
+  disambiguate incomparable arms. (Function-typed slots already admit and rank
+  by width/depth subtyping — see [ktype.md § Variance](ktype.md#variance).)

@@ -84,10 +84,11 @@ round-trip through `KType::name()`. Identity is the record's order-blind
 equality: `:(FUNCTOR (T :Sig, U :Sig2) -> M)` equals the same two parameters
 declared in either order. The admissibility helper at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
-matches `KFunctor → KFunctor` on the same structural rules used for
-`KFunction → KFunction`, but refuses both directions of the
-`KFunctor`/`KFunction` cross — a functor cannot be passed where a function
-is expected, and vice versa. The wall lives entirely at the type-admission
+matches `KFunctor → KFunctor` on the same function-subtyping rules used for
+`KFunction → KFunction` — contravariant params with width-drop, covariant
+return (see [ktype.md § Variance](ktype.md#variance)) — but refuses both
+directions of the `KFunctor`/`KFunction` cross — a functor cannot be passed
+where a function is expected, and vice versa. The wall lives entirely at the type-admission
 layer; the underlying `KFunctionValue` is shared. `KType::join` mirrors the
 wall: it joins two same-shape `KFunctor`s to a shared `KFunctor` (so a list
 literal of same-shape functors infers `List<:(FUNCTOR …)>`) and two
@@ -346,6 +347,7 @@ see [implicits.md](implicits.md).
 
 ## Open work
 
-- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
-  functor-parameter records admit contravariantly under the same width/depth
-  record subtyping as functions.
+- [Standalone record type and projection](../../roadmap/type_language/record-subtyping.md) —
+  the standalone `KType::Record` value type and `FROM` projection. (Functor
+  parameter records already admit contravariantly with width-drop under the
+  shipped function subtyping — see [ktype.md § Variance](ktype.md#variance).)

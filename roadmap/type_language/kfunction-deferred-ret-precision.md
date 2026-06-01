@@ -15,8 +15,11 @@ coarsening on the admission side lives at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs) —
 when a deferred candidate is admission-checked against a slot typed
 `:(FN (SpecificArgs) -> SpecificT)`, the comparison reads the
-deferred position as `Any` and the strict `==` refuses admission
-silently.
+deferred return position as `Any`. Function admission is covariant in
+the return (see [ktype.md § Variance](../../design/typing/ktype.md#variance)),
+and `Any.is_more_specific_than(_)` is `false`, so a deferred-return
+candidate still fills only an `Any`-return slot — the covariant `false`
+refuses the precise slot silently.
 
 Today's behavior is safe: Stage B never lifts a deferred-return FN
 into a structural `KFunction` slot whose `ret` is more specific than
@@ -66,11 +69,12 @@ the structural `KType` would.
     language; doesn't help consumers that only see the synthesized
     `KType` (e.g. structural slot ascription that's already lost the
     `KFunction` carrier).
-- *Admission side — open.* Function-type admission moves to structural
-  record subtyping
-  ([record-subtyping](record-subtyping.md)); this item's remaining
-  question is how a *deferred* field admits under that relation (it reads
-  as `Any` until elaborated). The
+- *Admission side — open.* Function-type admission is structural function
+  subtyping — contravariant params, covariant return (see
+  [ktype.md § Variance](../../design/typing/ktype.md#variance)); this item's
+  remaining question is how a *deferred* field admits under that relation (it
+  reads as `Any` until elaborated, and `Any.is_more_specific_than(_)` is
+  `false`, so it fills only an `Any`-return slot today). The
   [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
   `debug_assert!` stays the tripwire that forces the (a)/(b) decision when
   a non-`Any` slot-ret comparison first appears.
@@ -90,9 +94,10 @@ the structural `KType` would.
   extends the existing `debug_assert!` tripwire over parameter-slot
   deferreds. This item covers parameter and return slots in one pass
   once the tripwire fires.
-- [Record structural subtyping and projection](record-subtyping.md) —
-  function-type admission is redefined as structural record subtyping
-  there; this item layers deferred-carrier precision on top.
+- [Standalone record type and projection](record-subtyping.md) — its
+  standalone `KType::Record` is where path (a) records a deferred return's
+  surface form as a deferred field type; this item layers deferred-carrier
+  precision on top.
 
 **Unblocks:**
 

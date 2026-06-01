@@ -240,12 +240,13 @@ fn fast_lane_named_args_order_independent() {
     assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
 
-/// Unknown named-arg fires after missing-arg precedence is satisfied. `(a = 1,
-/// b = 2, c = 3)` covers required names plus an extra `c`.
+/// Width-drop: a named arg with no matching declared parameter is dropped, not
+/// rejected. `(a = 1, b = 2, c = 3)` covers the required names plus an extra `c`; the
+/// surplus `c` goes unbound on the reconstructed exact-arity expression and the call
+/// returns `Number(1)`.
 #[test]
-fn fast_lane_unknown_named_arg() {
-    use crate::builtins::test_support::{run, run_one_err, run_root_silent};
-    use crate::machine::KErrorKind;
+fn fast_lane_extra_named_arg_dropped() {
+    use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(
@@ -253,12 +254,9 @@ fn fast_lane_unknown_named_arg() {
         "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
     );
     reset_resolve_dispatch_entry_count();
-    let err = run_one_err(scope, parse_one("f (a = 1, b = 2, c = 3)"));
+    let result = run_one(scope, parse_one("f (a = 1, b = 2, c = 3)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
-    assert!(
-        matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("unknown name") && msg.contains("`c`")),
-        "expected ShapeError on unknown name c, got {err}",
-    );
+    assert!(matches!(result, KObject::Number(n) if *n == 1.0));
 }
 
 /// Malformed pair shape (`f (a 1)` — missing `=` / `:`-separator) surfaces a

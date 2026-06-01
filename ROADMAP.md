@@ -186,6 +186,14 @@ What's shipped that the open items below build on:
   gained a hand-written `Hash` consistent with its manual `PartialEq`, so a record type
   can key a dispatch / memo map. The dict carrier stays a sibling. See
   [design/typing/ktype.md](design/typing/ktype.md#record-fields-and-ktype-hashing).
+- *Function subtyping.* `function_compat` and `is_more_specific_than` admit and rank
+  function-typed slots by sound function subtyping — contravariant parameter records
+  with width-drop, covariant return — instead of strict structural equality. A value
+  `(x :Any) -> Str` fills a `:(FN (x :Number) -> Str)` slot, a unary value fills a binary
+  slot (the surplus slot param arrives unbound under call-by-name, and the call-by-name
+  binder drops surplus named args), and incomparable function slots now tie as
+  `AmbiguousDispatch`. See
+  [design/typing/ktype.md § Variance](design/typing/ktype.md#variance).
 
 ## Next items
 
@@ -255,7 +263,7 @@ build on:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
-- [Record structural subtyping and projection](roadmap/type_language/record-subtyping.md)
+- [Standalone record type and projection](roadmap/type_language/record-subtyping.md)
 - [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

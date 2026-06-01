@@ -32,8 +32,12 @@ fn is_more_specific_dict_refines_value() {
     assert!(!loose.is_more_specific_than(&strict));
 }
 
+/// Width-subset specificity: a nullary function `{}` is strictly more specific than a
+/// unary `{x}` (its param key set is a subset, so it fills the wider slot under
+/// call-by-name width drop), and the unary is not more specific than the nullary
+/// (the unary declares a param the nullary lacks → contravariant width violation).
 #[test]
-fn is_more_specific_function_arity_mismatch_incomparable() {
+fn is_more_specific_function_width_subset() {
     let unary = KType::KFunction {
         params: Record::from_pairs(vec![("x".into(), KType::Number)]),
         ret: Box::new(KType::Number),
@@ -42,8 +46,41 @@ fn is_more_specific_function_arity_mismatch_incomparable() {
         params: Record::new(),
         ret: Box::new(KType::Number),
     };
+    assert!(nullary.is_more_specific_than(&unary));
     assert!(!unary.is_more_specific_than(&nullary));
-    assert!(!nullary.is_more_specific_than(&unary));
+}
+
+/// Depth-contravariant function specificity: `(x :Any) -> R ≺ (x :Number) -> R`. The
+/// more-general param (`Any` ⊐ `Number`) makes the function more specific, because a
+/// value accepting `Any` fills a slot that promised only `Number`.
+#[test]
+fn is_more_specific_function_param_contravariant() {
+    let any_param = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Any)]),
+        ret: Box::new(KType::Str),
+    };
+    let number_param = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Str),
+    };
+    assert!(any_param.is_more_specific_than(&number_param));
+    assert!(!number_param.is_more_specific_than(&any_param));
+}
+
+/// Return-covariant function specificity: `(x) -> Number ≺ (x) -> Any`. The narrower
+/// return makes the function more specific.
+#[test]
+fn is_more_specific_function_return_covariant() {
+    let number_ret = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Number),
+    };
+    let any_ret = KType::KFunction {
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+        ret: Box::new(KType::Any),
+    };
+    assert!(number_ret.is_more_specific_than(&any_ret));
+    assert!(!any_ret.is_more_specific_than(&number_ret));
 }
 
 #[test]
