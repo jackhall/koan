@@ -22,10 +22,11 @@ machinery ordinary FNs use.
   `KType::KFunctor { params, ret }` surfaced by the value's `ktype()`. The
   dispatch path, scheduler integration, per-call scope, and `KFunction::invoke`
   are unchanged — FUNCTOR is a thin definition-time façade over FN mechanics.
-  Type-position references to functor types use the `:(Functor (params) -> R)`
-  sigil — a Type-class token paralleling `:(Function (args) -> R)` — kept
-  surface-disjoint from the `FUNCTOR` binder keyword on the same rule that
-  keeps `FN` (binder) and `Function` (type) disjoint.
+  Type-position references to functor types use the `:(FUNCTOR (params) -> R)`
+  sigil — a Type-class token paralleling `:(FN (args) -> R)` — kept
+  surface-disjoint from the `FUNCTOR` binder keyword by the `:(...)` sigil
+  context, the same way `:(FN ...)` in type position is disjoint from the
+  bare `FN` binder.
 
 ```
 LET MakeSet = (FUNCTOR (MAKESET Er :OrderedSig) -> SetSig = (
@@ -220,11 +221,11 @@ see [open-work.md](open-work.md) for the precision refinement.
 
 Multi-argument FUNCTORs are ordinary multi-parameter binders. Currying is
 just nested FUNCTORs whose outer return type is the inner functor's type,
-written with the `:(Functor (params) -> R)` sigil:
+written with the `:(FUNCTOR (params) -> R)` sigil:
 
 ```
 LET MakeMap = (FUNCTOR (MAKEMAP Er :OrderedSig)
-                -> :(Functor (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type)))) = (
+                -> :(FUNCTOR (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type)))) = (
   FUNCTOR (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type))) = (
     MODULE Result = ( ... )
   )
@@ -245,8 +246,8 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (LET Wrap = (TYPE_CONSTRUCTOR Type))
-  (VAL pure :(Function (Number) -> :(Wrap Number)))
-  (VAL bind :(Function (:(Wrap Number), :(Function (Number) -> :(Wrap Number))) -> :(Wrap Number)))
+  (VAL pure :(FN (Number) -> :(Wrap Number)))
+  (VAL bind :(FN (:(Wrap Number), :(FN (Number) -> :(Wrap Number))) -> :(Wrap Number)))
 )
 ```
 
@@ -297,8 +298,8 @@ the test suite pins.
 
 ## Type expressions and constraints
 
-The `:(...)` type-expression sigil parameterizes `:(List T)`, `:(Dict K V)`,
-and `:(Function (args) -> R)`
+The `:(...)` type-expression sigil parameterizes `:(LIST OF T)`, `:(MAP K -> V)`,
+and `:(FN (args) -> R)`
 ([ktype.md § Container type parameterization](ktype.md#container-type-parameterization))
 for positional structural types. Sharing constraints,
 modular-implicit signature constraints, and witness-typed

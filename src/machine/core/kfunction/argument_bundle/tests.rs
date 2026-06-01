@@ -8,12 +8,8 @@ fn one_slot_bundle<'a>(name: &str, obj: KObject<'a>) -> ArgumentBundle<'a> {
     ArgumentBundle { args }
 }
 
-fn type_name_ref<'a>(name: &str, params: TypeParams) -> KObject<'a> {
-    KObject::TypeNameRef(TypeExpr {
-        name: name.into(),
-        params,
-        builtin_cache: std::cell::OnceCell::new(),
-    })
+fn type_name_ref<'a>(name: &str) -> KObject<'a> {
+    KObject::TypeNameRef(TypeExpr::leaf(name.into()))
 }
 
 // ---------- shared-Rc clone paths on the extract_* helpers ----------
@@ -23,17 +19,23 @@ fn extract_kexpression_clones_when_rc_is_shared() {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("k".into()))]);
     let shared = Rc::new(KObject::KExpression(expr));
     let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle { args: HashMap::new() };
+    let mut bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     bundle.args.insert("e".into(), shared);
     let got = extract_kexpression(&mut bundle, "e").expect("clone path should return Some");
-    assert!(matches!(got.parts.as_slice(), [Spanned { value: ExpressionPart::Identifier(n), .. }] if n == "k"));
+    assert!(
+        matches!(got.parts.as_slice(), [Spanned { value: ExpressionPart::Identifier(n), .. }] if n == "k")
+    );
 }
 
 #[test]
 fn extract_kexpression_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::Number(1.0));
     let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle { args: HashMap::new() };
+    let mut bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     bundle.args.insert("e".into(), shared);
     assert!(extract_kexpression(&mut bundle, "e").is_none());
 }
@@ -42,7 +44,9 @@ fn extract_kexpression_shared_non_matching_variant_returns_none() {
 fn extract_ktype_clones_when_rc_is_shared() {
     let shared = Rc::new(KObject::KTypeValue(KType::Number));
     let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle { args: HashMap::new() };
+    let mut bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     bundle.args.insert("t".into(), shared);
     assert_eq!(extract_ktype(&mut bundle, "t"), Some(KType::Number));
 }
@@ -51,16 +55,20 @@ fn extract_ktype_clones_when_rc_is_shared() {
 fn extract_ktype_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::Number(2.0));
     let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle { args: HashMap::new() };
+    let mut bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     bundle.args.insert("t".into(), shared);
     assert!(extract_ktype(&mut bundle, "t").is_none());
 }
 
 #[test]
 fn extract_type_name_ref_clones_when_rc_is_shared() {
-    let shared = Rc::new(type_name_ref("Foo", TypeParams::None));
+    let shared = Rc::new(type_name_ref("Foo"));
     let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle { args: HashMap::new() };
+    let mut bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     bundle.args.insert("t".into(), shared);
     let got = extract_type_name_ref(&mut bundle, "t").expect("clone path should return Some");
     assert_eq!(got.name, "Foo");
@@ -70,49 +78,21 @@ fn extract_type_name_ref_clones_when_rc_is_shared() {
 fn extract_type_name_ref_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::KTypeValue(KType::Number));
     let _outside = Rc::clone(&shared);
-    let mut bundle = ArgumentBundle { args: HashMap::new() };
+    let mut bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     bundle.args.insert("t".into(), shared);
     assert!(extract_type_name_ref(&mut bundle, "t").is_none());
 }
 
 // ---------- extract_bare_type_name arms ----------
 
+/// A bare-leaf `TypeNameRef` carrier resolves to its name.
 #[test]
-fn extract_bare_type_name_rejects_parameterized_type_name_ref_list() {
-    let bundle = one_slot_bundle(
-        "T",
-        type_name_ref("Foo", TypeParams::List(vec![TypeExpr::leaf("Bar".into())])),
-    );
-    let err = extract_bare_type_name(&bundle, "T", "STRUCT").expect_err("should reject");
-    match err.kind {
-        KErrorKind::ShapeError(msg) => {
-            assert!(msg.contains("STRUCT T must be a bare type name"));
-            assert!(msg.contains(":(Foo Bar)"));
-        }
-        other => panic!("expected ShapeError, got {:?}", std::mem::discriminant(&other)),
-    }
-}
-
-#[test]
-fn extract_bare_type_name_rejects_parameterized_type_name_ref_function() {
-    let bundle = one_slot_bundle(
-        "T",
-        type_name_ref(
-            "Foo",
-            TypeParams::Function {
-                args: vec![TypeExpr::leaf("A".into())],
-                ret: Box::new(TypeExpr::leaf("R".into())),
-            },
-        ),
-    );
-    let err = extract_bare_type_name(&bundle, "T", "UNION").expect_err("should reject");
-    match err.kind {
-        KErrorKind::ShapeError(msg) => {
-            assert!(msg.contains("UNION T must be a bare type name"));
-            assert!(msg.contains("Foo"));
-        }
-        other => panic!("expected ShapeError, got {:?}", std::mem::discriminant(&other)),
-    }
+fn extract_bare_type_name_accepts_type_name_ref_leaf() {
+    let bundle = one_slot_bundle("T", type_name_ref("Foo"));
+    let name = extract_bare_type_name(&bundle, "T", "STRUCT").expect("leaf should be accepted");
+    assert_eq!(name, "Foo");
 }
 
 /// `KType::Number` stands in for every leaf variant — the match arm shares one
@@ -134,7 +114,10 @@ fn extract_bare_type_name_rejects_ktypevalue_structural() {
             assert!(msg.contains("STRUCT T must be a bare type name"));
             assert!(msg.contains(":(LIST OF Number)"));
         }
-        other => panic!("expected ShapeError, got {:?}", std::mem::discriminant(&other)),
+        other => panic!(
+            "expected ShapeError, got {:?}",
+            std::mem::discriminant(&other)
+        ),
     }
 }
 
@@ -148,17 +131,25 @@ fn extract_bare_type_name_rejects_non_type_carrier() {
             assert_eq!(expected, "TypeExprRef");
             assert_eq!(got, "Number");
         }
-        other => panic!("expected TypeMismatch, got {:?}", std::mem::discriminant(&other)),
+        other => panic!(
+            "expected TypeMismatch, got {:?}",
+            std::mem::discriminant(&other)
+        ),
     }
 }
 
 #[test]
 fn extract_bare_type_name_missing_slot_returns_missing_arg() {
-    let bundle = ArgumentBundle { args: HashMap::new() };
+    let bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     let err = extract_bare_type_name(&bundle, "T", "STRUCT").expect_err("should reject");
     match err.kind {
         KErrorKind::MissingArg(name) => assert_eq!(name, "T"),
-        other => panic!("expected MissingArg, got {:?}", std::mem::discriminant(&other)),
+        other => panic!(
+            "expected MissingArg, got {:?}",
+            std::mem::discriminant(&other)
+        ),
     }
 }
 
@@ -181,7 +172,10 @@ fn require_kexpression_mismatch_routes_through_mismatch_helper() {
             assert_eq!(expected, "KExpression");
             assert_eq!(got, "Number");
         }
-        other => panic!("expected TypeMismatch, got {:?}", std::mem::discriminant(&other)),
+        other => panic!(
+            "expected TypeMismatch, got {:?}",
+            std::mem::discriminant(&other)
+        ),
     }
 }
 
@@ -208,11 +202,16 @@ fn require_signature_mismatch_routes_through_mismatch_helper() {
 
 #[test]
 fn require_missing_slot_returns_missing_arg() {
-    let bundle = ArgumentBundle { args: HashMap::new() };
+    let bundle = ArgumentBundle {
+        args: HashMap::new(),
+    };
     let err = unwrap_err(bundle.require("x"));
     match err.kind {
         KErrorKind::MissingArg(name) => assert_eq!(name, "x"),
-        other => panic!("expected MissingArg, got {:?}", std::mem::discriminant(&other)),
+        other => panic!(
+            "expected MissingArg, got {:?}",
+            std::mem::discriminant(&other)
+        ),
     }
 }
 

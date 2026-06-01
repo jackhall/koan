@@ -6,20 +6,18 @@
 //! means "value slot whose declared type is `kt`" rather than "name bound to a type
 //! value"; the disambiguation is by scope context.
 //!
-//! Type resolution dispatches on the `ty` carrier shape: leaf carriers re-dispatch
-//! against decl_scope so a SIG-local `LET <name> = ...` shadow wins over the
-//! builtin table; structural carriers (`KFunction`, `List`, ...) are lifted
-//! directly; parameterized `TypeNameRef` is elaborated synchronously and, on park,
-//! sub-Dispatches each leaf before re-elaborating in the Combine finish.
+//! Type resolution dispatches on the `ty` carrier shape: leaf carriers (builtin
+//! `KTypeValue` or unresolved-leaf `TypeNameRef`) re-dispatch against decl_scope so a
+//! SIG-local `LET <name> = ...` shadow wins over the builtin table; structural
+//! carriers (`KFunction`, `List`, ...) are lifted directly.
 
-use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
-    SchedulerHandle,
-};
 use crate::machine::model::{KObject, KType};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId,
+    SchedulerHandle, Scope,
+};
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
@@ -120,71 +118,17 @@ pub fn body<'a>(
             let resolve_id = schedule_type_resolve(sched, scope, &te);
             defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index)
         }
+        // A `TypeNameRef` carrier always holds a bare-leaf `TypeExpr` now —
+        // parameterized surface forms sub-Dispatch and never reach this slot — so the
+        // leaf is the only shape and always re-dispatches against decl_scope. The
+        // `matches!` guard is a Phase-2 tautology (the enum is single-variant); the
+        // structural-park branch that used to follow it was dead and is deleted.
         CarrierForm::Raw(te) => {
-            if matches!(te.params, TypeParams::None) {
-                let resolve_id = schedule_type_resolve(sched, scope, &te);
-                return defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index);
-            }
-            match scope.resolve_type_expr(&te) {
-                ResolveTypeExprOutcome::Done(kt) => {
-                    finalize_val(scope, name, kt.clone(), bind_index)
-                }
-                ResolveTypeExprOutcome::Park(_) => {
-                    let leaves = collect_leaf_names(&te);
-                    let mut dep_ids: Vec<NodeId> = Vec::with_capacity(leaves.len());
-                    for leaf in &leaves {
-                        let leaf_te = TypeExpr::leaf(leaf.clone());
-                        dep_ids.push(schedule_type_resolve(sched, scope, &leaf_te));
-                    }
-                    defer_val_structural_via_combine(
-                        scope, sched, name, te, dep_ids, bind_index,
-                    )
-                }
-                ResolveTypeExprOutcome::Unbound(msg) => {
-                    err(KError::new(KErrorKind::ShapeError(format!("VAL type: {msg}"))))
-                }
-            }
+            debug_assert!(matches!(te.params, TypeParams::None));
+            let resolve_id = schedule_type_resolve(sched, scope, &te);
+            defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index)
         }
     }
-}
-
-/// Each leaf sub-Dispatches independently so the dispatcher installs one Notify
-/// edge per placeholder hit.
-fn collect_leaf_names(te: &TypeExpr) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    fn walk(
-        te: &TypeExpr,
-        out: &mut Vec<String>,
-        seen: &mut std::collections::HashSet<String>,
-    ) {
-        match &te.params {
-            TypeParams::None => {
-                if seen.insert(te.name.clone()) {
-                    out.push(te.name.clone());
-                }
-            }
-            TypeParams::List(items) => {
-                // Constructor name is itself a leaf (e.g. `Wrap` in `Wrap<Number>`).
-                if seen.insert(te.name.clone()) {
-                    out.push(te.name.clone());
-                }
-                for it in items {
-                    walk(it, out, seen);
-                }
-            }
-            TypeParams::Function { args, ret } => {
-                // `Function<...>` is a builtin keyword, not a resolvable name —
-                // skip the outer name, walk only the operands.
-                for a in args {
-                    walk(a, out, seen);
-                }
-                walk(ret, out, seen);
-            }
-        }
-    }
-    walk(te, &mut out, &mut seen);
-    out
 }
 
 fn finalize_val<'a>(
@@ -232,38 +176,6 @@ fn defer_val_via_combine<'a>(
     BodyResult::DeferTo(combine_id)
 }
 
-/// Re-elaborates the structural `TypeExpr` once every leaf has terminalized.
-/// Per-leaf parks use Notify edges so the SIG outer Combine keeps exclusive
-/// cascade-free ownership of sibling LET producers.
-fn defer_val_structural_via_combine<'a>(
-    scope: &'a Scope<'a>,
-    sched: &mut dyn SchedulerHandle<'a>,
-    name: String,
-    te: TypeExpr,
-    dep_ids: Vec<NodeId>,
-    bind_index: BindingIndex,
-) -> BodyResult<'a> {
-    let name_for_finish = name;
-    let te_for_finish = te;
-    let finish: CombineFinish<'a> = Box::new(move |scope, _sched, _results| {
-        match scope.resolve_type_expr(&te_for_finish) {
-            ResolveTypeExprOutcome::Done(kt) => {
-                finalize_val(scope, name_for_finish.clone(), kt.clone(), bind_index)
-            }
-            ResolveTypeExprOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                "VAL type `{}` elaboration parked again after all leaf sub-Dispatches \
-                 terminalized — internal scheduling invariant violated",
-                te_for_finish.render(),
-            )))),
-            ResolveTypeExprOutcome::Unbound(msg) => {
-                BodyResult::Err(KError::new(KErrorKind::ShapeError(format!("VAL type: {msg}"))))
-            }
-        }
-    });
-    let combine_id = sched.add_combine(dep_ids, vec![], scope, finish);
-    BodyResult::DeferTo(combine_id)
-}
-
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
@@ -276,11 +188,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_binder(
         scope,
         "VAL",
-        sig(KType::Any, vec![
-            kw("VAL"),
-            arg("name", KType::Identifier),
-            arg("ty", KType::TypeExprRef),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("VAL"),
+                arg("name", KType::Identifier),
+                arg("ty", KType::TypeExprRef),
+            ],
+        ),
         body,
         Some(binder_name),
     );

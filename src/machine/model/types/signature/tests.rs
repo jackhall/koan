@@ -1,7 +1,5 @@
 use super::*;
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::TypeParams;
-use std::cell::OnceCell;
 
 fn one_slot<'a>(kt: KType<'a>) -> ExpressionSignature<'a> {
     ExpressionSignature {
@@ -10,22 +8,6 @@ fn one_slot<'a>(kt: KType<'a>) -> ExpressionSignature<'a> {
             name: "v".into(),
             ktype: kt,
         })],
-    }
-}
-
-fn list_te(name: &str, items: Vec<TypeExpr>) -> TypeExpr {
-    TypeExpr {
-        name: name.into(),
-        params: TypeParams::List(items),
-        builtin_cache: OnceCell::new(),
-    }
-}
-
-fn fn_te(args: Vec<TypeExpr>, ret: TypeExpr) -> TypeExpr {
-    TypeExpr {
-        name: "Function".into(),
-        params: TypeParams::Function { args, ret: Box::new(ret) },
-        builtin_cache: OnceCell::new(),
     }
 }
 
@@ -95,54 +77,12 @@ fn deferred_return_eq_matches_per_carrier() {
 }
 
 #[test]
-fn type_expr_eq_covers_all_param_arms() {
+fn type_expr_eq_compares_leaf_names() {
     let leaf_a = TypeExpr::leaf("A".into());
     let leaf_a2 = TypeExpr::leaf("A".into());
     let leaf_b = TypeExpr::leaf("B".into());
     assert!(type_expr_eq(&leaf_a, &leaf_a2));
     assert!(!type_expr_eq(&leaf_a, &leaf_b));
-
-    let list_a = list_te("List", vec![TypeExpr::leaf("A".into())]);
-    let list_a2 = list_te("List", vec![TypeExpr::leaf("A".into())]);
-    let list_diff = list_te("List", vec![TypeExpr::leaf("X".into())]);
-    let list_two = list_te(
-        "List",
-        vec![TypeExpr::leaf("A".into()), TypeExpr::leaf("B".into())],
-    );
-    assert!(type_expr_eq(&list_a, &list_a2));
-    assert!(!type_expr_eq(&list_a, &list_diff));
-    assert!(!type_expr_eq(&list_a, &list_two));
-
-    let fn_a = fn_te(vec![TypeExpr::leaf("A".into())], TypeExpr::leaf("R".into()));
-    let fn_a2 = fn_te(vec![TypeExpr::leaf("A".into())], TypeExpr::leaf("R".into()));
-    let fn_arg_diff =
-        fn_te(vec![TypeExpr::leaf("X".into())], TypeExpr::leaf("R".into()));
-    let fn_ret_diff =
-        fn_te(vec![TypeExpr::leaf("A".into())], TypeExpr::leaf("X".into()));
-    let fn_arity = fn_te(
-        vec![TypeExpr::leaf("A".into()), TypeExpr::leaf("B".into())],
-        TypeExpr::leaf("R".into()),
-    );
-    assert!(type_expr_eq(&fn_a, &fn_a2));
-    assert!(!type_expr_eq(&fn_a, &fn_arg_diff));
-    assert!(!type_expr_eq(&fn_a, &fn_ret_diff));
-    assert!(!type_expr_eq(&fn_a, &fn_arity));
-
-    // Same name across both sides so the name short-circuit doesn't pre-empt
-    // the params-shape fallthrough.
-    let same_name_leaf = TypeExpr::leaf("Shape".into());
-    let same_name_list = list_te("Shape", vec![TypeExpr::leaf("A".into())]);
-    let same_name_fn =
-        TypeExpr {
-            name: "Shape".into(),
-            params: TypeParams::Function {
-                args: vec![TypeExpr::leaf("A".into())],
-                ret: Box::new(TypeExpr::leaf("R".into())),
-            },
-            builtin_cache: OnceCell::new(),
-        };
-    assert!(!type_expr_eq(&same_name_leaf, &same_name_list));
-    assert!(!type_expr_eq(&same_name_list, &same_name_fn));
 }
 
 #[test]

@@ -1,16 +1,16 @@
 use std::rc::Rc;
 
+use super::body::split_body_statements;
 use crate::machine::core::{
     assemble_body_chain, BindingIndex, CallArena, KError, KErrorKind, LexicalFrame, RuntimeArena,
     Scope,
 };
-use crate::machine::ResolveTypeExprOutcome;
-use super::body::split_body_statements;
 use crate::machine::model::types::{
     elaborate_type_expr, DeferredReturn, ElabResult, Elaborator, KType, ReturnType,
     SignatureElement,
 };
 use crate::machine::model::values::KObject;
+use crate::machine::ResolveTypeExprOutcome;
 
 use super::argument_bundle::ArgumentBundle;
 use super::body::{Body, BodyResult};
@@ -68,23 +68,26 @@ impl<'a> KFunction<'a> {
                 for (name, rc) in bundle.args.iter() {
                     let mut cloned = rc.deep_clone();
                     // Splice-time element check + stamp for parameterized carriers
-                    // (`:(List T)`, `:(Dict K V)`, `:(Result T E)`). Dispatch-time
+                    // (`:(LIST OF T)`, `:(MAP K -> V)`, `:(Result T E)`). Dispatch-time
                     // admission is shape-only and cannot do content-recursive element
                     // checking, so it lands here, symmetric with the return boundary
                     // in the Deferred Combine below.
                     if let Some(arg) = signature_argument_by_name(self, name) {
                         if is_parameterized_carrier(&arg.ktype) {
                             if !arg.ktype.matches_value(&cloned) {
-                                return BodyResult::Err(KError::new(
-                                    KErrorKind::TypeMismatch {
+                                return BodyResult::Err(
+                                    KError::new(KErrorKind::TypeMismatch {
                                         arg: name.clone(),
                                         expected: arg.ktype.name(),
                                         got: cloned.ktype().name(),
-                                    },
-                                ).with_frame(crate::machine::Frame::bare(
-                                    self.summarize(),
-                                    self.summarize(),
-                                )));
+                                    })
+                                    .with_frame(
+                                        crate::machine::Frame::bare(
+                                            self.summarize(),
+                                            self.summarize(),
+                                        ),
+                                    ),
+                                );
                             }
                             cloned = cloned.stamp_type(&arg.ktype);
                         }
@@ -99,8 +102,10 @@ impl<'a> KFunction<'a> {
                     // FN parameters bind *before* the body block's first statement.
                     // The nominal-binder carve-out is what makes "before the block's
                     // first statement" satisfy the chain-cutoff rule (same as MATCH `it`).
-                    let param_index =
-                        BindingIndex { idx: 0, nominal_binder: true };
+                    let param_index = BindingIndex {
+                        idx: 0,
+                        nominal_binder: true,
+                    };
                     if !is_type_denoting {
                         // Signature parser enforces parameter-name uniqueness.
                         let _ = child.bind_value(name.clone(), allocated, param_index);
@@ -131,22 +136,23 @@ impl<'a> KFunction<'a> {
                                 .current_lexical_chain()
                                 .expect("FN invoke runs inside an enter_block / active_chain");
                             let body_chain_parent =
-                                assemble_body_chain(child, call_site_chain.clone(), 0).parent.clone();
+                                assemble_body_chain(child, call_site_chain.clone(), 0)
+                                    .parent
+                                    .clone();
                             let mut stmts = body_statements;
                             let last = stmts.pop().expect("n >= 2");
                             for (i, stmt) in stmts.into_iter().enumerate() {
-                                let chain = LexicalFrame::push(
-                                    body_chain_parent.clone(),
-                                    child.id,
-                                    i + 1,
-                                );
+                                let chain =
+                                    LexicalFrame::push(body_chain_parent.clone(), child.id, i + 1);
                                 sched.with_active_frame(frame.clone(), &mut |s| {
                                     s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
                                 });
                             }
                             BodyResult::tail_with_frame_at_index(last, frame, self, n)
                         } else {
-                            let only = body_statements.into_iter().next()
+                            let only = body_statements
+                                .into_iter()
+                                .next()
                                 .expect("split_body_statements always yields >= 1");
                             BodyResult::tail_with_frame(only, frame, self)
                         }
@@ -199,16 +205,15 @@ impl<'a> KFunction<'a> {
                             .current_lexical_chain()
                             .expect("FN invoke runs inside an enter_block / active_chain");
                         let body_chain_parent =
-                            assemble_body_chain(child, call_site_chain.clone(), 0).parent.clone();
+                            assemble_body_chain(child, call_site_chain.clone(), 0)
+                                .parent
+                                .clone();
                         let mut body_ids: Vec<crate::machine::core::kfunction::NodeId> =
                             Vec::with_capacity(n);
                         for (i, stmt) in body_statements.into_iter().enumerate() {
                             let idx = if n == 1 { 0 } else { i + 1 };
-                            let chain = LexicalFrame::push(
-                                body_chain_parent.clone(),
-                                child.id,
-                                idx,
-                            );
+                            let chain =
+                                LexicalFrame::push(body_chain_parent.clone(), child.id, idx);
                             let mut bid = None;
                             sched.with_active_frame(frame.clone(), &mut |s| {
                                 bid = Some(s.add_dispatch_with_chain(
@@ -230,45 +235,54 @@ impl<'a> KFunction<'a> {
                             deps.push(t);
                         }
                         let function_summary = self.summarize();
-                        let combine_id = sched.add_combine(deps, vec![], child, Box::new(move |_scope, _sched, results| {
-                            let body_value: &KObject<'_> = results[body_terminal_idx];
-                            let per_call_ret: KType<'_> = match per_call_ret {
-                                PerCallReturnType::Ready(kt) => kt,
-                                PerCallReturnType::Pending(_) => match results.get(body_terminal_idx + 1).copied() {
-                                    Some(KObject::KTypeValue(kt)) => kt.clone(),
-                                    Some(other) => {
-                                        return BodyResult::Err(KError::new(
-                                            KErrorKind::ShapeError(format!(
-                                                "FN deferred return-type expression \
+                        let combine_id =
+                            sched.add_combine(
+                                deps,
+                                vec![],
+                                child,
+                                Box::new(move |_scope, _sched, results| {
+                                    let body_value: &KObject<'_> = results[body_terminal_idx];
+                                    let per_call_ret: KType<'_> = match per_call_ret {
+                                        PerCallReturnType::Ready(kt) => kt,
+                                        PerCallReturnType::Pending(_) => {
+                                            match results.get(body_terminal_idx + 1).copied() {
+                                                Some(KObject::KTypeValue(kt)) => kt.clone(),
+                                                Some(other) => {
+                                                    return BodyResult::Err(KError::new(
+                                                        KErrorKind::ShapeError(format!(
+                                                            "FN deferred return-type expression \
                                                  produced a non-type {} value",
-                                                other.ktype().name(),
+                                                            other.ktype().name(),
+                                                        )),
+                                                    ));
+                                                }
+                                                None => KType::Any,
+                                            }
+                                        }
+                                    };
+                                    if !per_call_ret.matches_value(body_value) {
+                                        return BodyResult::Err(
+                                            KError::new(KErrorKind::TypeMismatch {
+                                                arg: "<return>".to_string(),
+                                                expected: format!(
+                                                    "{} (per-call return type)",
+                                                    per_call_ret.name(),
+                                                ),
+                                                got: body_value.ktype().name(),
+                                            })
+                                            .with_frame(crate::machine::Frame::bare(
+                                                function_summary.clone(),
+                                                function_summary.clone(),
                                             )),
-                                        ));
+                                        );
                                     }
-                                    None => KType::Any,
-                                },
-                            };
-                            if !per_call_ret.matches_value(body_value) {
-                                return BodyResult::Err(KError::new(
-                                    KErrorKind::TypeMismatch {
-                                        arg: "<return>".to_string(),
-                                        expected: format!(
-                                            "{} (per-call return type)",
-                                            per_call_ret.name(),
-                                        ),
-                                        got: body_value.ktype().name(),
-                                    },
-                                ).with_frame(crate::machine::Frame::bare(
-                                    function_summary.clone(),
-                                    function_summary.clone(),
-                                )));
-                            }
-                            // Stamp the carrier to the resolved per-call return type
-                            // at the return boundary, symmetric with the param-bind
-                            // stamp above.
-                            let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
-                            BodyResult::Value(_scope.arena.alloc(stamped))
-                        }));
+                                    // Stamp the carrier to the resolved per-call return type
+                                    // at the return boundary, symmetric with the param-bind
+                                    // stamp above.
+                                    let stamped = body_value.deep_clone().stamp_type(&per_call_ret);
+                                    BodyResult::Value(_scope.arena.alloc(stamped))
+                                }),
+                            );
                         // Rc clones inside `with_active_frame` above keep the per-call
                         // arena alive across sub-slot lifetimes; the FN's slot retains
                         // its own `frame` via `defer_to_lift`'s frame-stay-attached
@@ -364,4 +378,3 @@ pub(crate) fn type_identity_for<'a>(
         _ => Ok(None),
     }
 }
-

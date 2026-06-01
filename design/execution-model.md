@@ -626,11 +626,9 @@ The rails the dispatch driver feeds:
     `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`,
     while `Newtype` routes into `newtype_construct`. No value-side carrier is
     fetched — the schema rides the identity. Opaque / Module / unbound heads
-    surface a `TypeMismatch`. The legacy positional sigil shape
-    (`:(List Number)`) classifies here as well — the dispatcher's
-    `SigiledTypeExpr` handler sub-dispatches the inner expression, which
-    then lands in `ConstructorCall` and routes through the same
-    construction primitives.
+    surface a `TypeMismatch`. A head token that isn't a registered `UserType`
+    (the shape a removed positional `:(List Number)` would take) finds no
+    `bindings.types` identity and surfaces an unbound-name error.
   - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `run_dispatch`
     arm tail-replaces the slot with a `Dispatch`
     of the wrapped `KExpression`, so the inner expression runs through the

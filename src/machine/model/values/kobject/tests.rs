@@ -4,17 +4,13 @@ use std::collections::HashMap;
 
 #[test]
 fn ktype_of_homogeneous_number_list() {
-    let l: KObject<'_> =
-        KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
+    let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
     assert_eq!(l.ktype(), KType::List(Box::new(KType::Number)));
 }
 
 #[test]
 fn ktype_of_mixed_list_is_list_any() {
-    let l: KObject<'_> = KObject::list(vec![
-        KObject::Number(1.0),
-        KObject::KString("x".into()),
-    ]);
+    let l: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
     assert_eq!(l.ktype(), KType::List(Box::new(KType::Any)));
 }
 
@@ -36,7 +32,8 @@ fn ktype_of_nested_list() {
 
 #[test]
 fn ktype_of_dict_string_number() {
-    let mut map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> = HashMap::new();
+    let mut map: HashMap<Box<dyn Serializable<'static> + 'static>, KObject<'static>> =
+        HashMap::new();
     map.insert(Box::new(KKey::String("a".into())), KObject::Number(1.0));
     map.insert(Box::new(KKey::String("b".into())), KObject::Number(2.0));
     let d: KObject<'_> = KObject::dict(map);
@@ -59,30 +56,22 @@ fn ktype_of_empty_dict_is_dict_any_any() {
 #[test]
 fn matches_value_list_number_rejects_string_element() {
     let t = KType::List(Box::new(KType::Number));
-    let bad: KObject<'_> = KObject::list(vec![
-        KObject::Number(1.0),
-        KObject::KString("x".into()),
-    ]);
+    let bad: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
     assert!(!t.matches_value(&bad));
 }
 
 #[test]
 fn matches_value_list_number_accepts_all_numbers() {
     let t = KType::List(Box::new(KType::Number));
-    let good: KObject<'_> = KObject::list(vec![
-        KObject::Number(1.0),
-        KObject::Number(2.0),
-    ]);
+    let good: KObject<'_> = KObject::list(vec![KObject::Number(1.0), KObject::Number(2.0)]);
     assert!(t.matches_value(&good));
 }
 
 #[test]
 fn matches_value_list_any_accepts_any_list() {
     let t = KType::List(Box::new(KType::Any));
-    let mixed: KObject<'_> = KObject::list(vec![
-        KObject::Number(1.0),
-        KObject::KString("x".into()),
-    ]);
+    let mixed: KObject<'_> =
+        KObject::list(vec![KObject::Number(1.0), KObject::KString("x".into())]);
     assert!(t.matches_value(&mixed));
 }
 
@@ -133,8 +122,8 @@ fn stamp_type_coarsens_list_carrier() {
 
 #[test]
 fn unstamped_empty_container_detection() {
-    use std::rc::Rc;
     use std::collections::HashMap;
+    use std::rc::Rc;
     assert!(KObject::list(vec![]).is_unstamped_empty_container());
     let stamped = KObject::list_with_type(Rc::new(vec![]), KType::Number);
     assert!(!stamped.is_unstamped_empty_container());
@@ -178,13 +167,22 @@ fn wrapped_ktype_reports_clone_of_type_id() {
     let arena = RuntimeArena::new();
     let inner = arena.alloc(KObject::Number(3.0));
     let type_id: &KType = arena.alloc(KType::UserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Number),
+        },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     });
-    let w = KObject::Wrapped { inner: NonWrappedRef::peel(inner), type_id };
+    let w = KObject::Wrapped {
+        inner: NonWrappedRef::peel(inner),
+        type_id,
+    };
     match w.ktype() {
-        KType::UserType { kind: UserTypeKind::Newtype { .. }, name, scope_id } => {
+        KType::UserType {
+            kind: UserTypeKind::Newtype { .. },
+            name,
+            scope_id,
+        } => {
             assert_eq!(name, "Distance");
             assert_eq!(scope_id, ScopeId::from_raw(0, 0xAA));
         }
@@ -194,16 +192,21 @@ fn wrapped_ktype_reports_clone_of_type_id() {
 
 #[test]
 fn wrapped_summarize_renders_surface_form() {
-    use crate::machine::RuntimeArena;
     use crate::machine::model::types::Parseable;
+    use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let inner = arena.alloc(KObject::Number(3.0));
     let type_id = arena.alloc(KType::UserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Number),
+        },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     });
-    let w = KObject::Wrapped { inner: NonWrappedRef::peel(inner), type_id };
+    let w = KObject::Wrapped {
+        inner: NonWrappedRef::peel(inner),
+        type_id,
+    };
     assert_eq!(w.summarize(), "Distance(3)");
 }
 
@@ -215,14 +218,22 @@ fn wrapped_deep_clone_preserves_arena_references() {
     let arena = RuntimeArena::new();
     let inner = arena.alloc(KObject::Number(3.0));
     let type_id = arena.alloc(KType::UserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Number),
+        },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     });
-    let original = KObject::Wrapped { inner: NonWrappedRef::peel(inner), type_id };
+    let original = KObject::Wrapped {
+        inner: NonWrappedRef::peel(inner),
+        type_id,
+    };
     let cloned = original.deep_clone();
     match cloned {
-        KObject::Wrapped { inner: ci, type_id: ct } => {
+        KObject::Wrapped {
+            inner: ci,
+            type_id: ct,
+        } => {
             assert!(std::ptr::eq(ci.get(), inner));
             assert!(std::ptr::eq(ct, type_id));
         }

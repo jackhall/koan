@@ -4,8 +4,8 @@
 
 use super::ktype::{KType, UserTypeKind};
 use super::signature::{ExpressionSignature, SignatureElement};
-use crate::machine::model::values::KObject;
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
+use crate::machine::model::values::KObject;
 
 impl<'a> KType<'a> {
     /// True iff a parameter declared with this `KType` carries a value whose nominal
@@ -62,22 +62,32 @@ impl<'a> KType<'a> {
                 let v_eq = va == vb;
                 (k_more && (v_more || v_eq)) || (k_eq && v_more)
             }
-            (
-                KFunction { args: aa, ret: ar },
-                KFunction { args: ba, ret: br },
-            ) if aa.len() == ba.len() => {
-                let args_more = aa.iter().zip(ba.iter()).any(|(x, y)| x.is_more_specific_than(y));
+            (KFunction { args: aa, ret: ar }, KFunction { args: ba, ret: br })
+                if aa.len() == ba.len() =>
+            {
+                let args_more = aa
+                    .iter()
+                    .zip(ba.iter())
+                    .any(|(x, y)| x.is_more_specific_than(y));
                 let args_eq = aa == ba;
                 let ret_more = ar.is_more_specific_than(br);
                 let ret_eq = ar == br;
                 (args_more && (ret_more || ret_eq)) || (args_eq && ret_more)
             }
             (
-                KFunctor { params: pa, ret: ra },
-                KFunctor { params: pb, ret: rb },
+                KFunctor {
+                    params: pa,
+                    ret: ra,
+                },
+                KFunctor {
+                    params: pb,
+                    ret: rb,
+                },
             ) if pa.len() == pb.len() => {
-                let params_more =
-                    pa.iter().zip(pb.iter()).any(|(x, y)| x.is_more_specific_than(y));
+                let params_more = pa
+                    .iter()
+                    .zip(pb.iter())
+                    .any(|(x, y)| x.is_more_specific_than(y));
                 let params_eq = pa == pb;
                 let ret_more = ra.is_more_specific_than(rb);
                 let ret_eq = ra == rb;
@@ -94,8 +104,14 @@ impl<'a> KType<'a> {
             // with equal `KType` AND carries at least one constraint `pb` lacks.
             // Disjoint or same-key-different-`KType` pin sets are incomparable.
             (
-                Signature { sig: sa, pinned_slots: pa },
-                Signature { sig: sb, pinned_slots: pb },
+                Signature {
+                    sig: sa,
+                    pinned_slots: pa,
+                },
+                Signature {
+                    sig: sb,
+                    pinned_slots: pb,
+                },
             ) if sa.sig_id() == sb.sig_id() => {
                 if pa.len() <= pb.len() {
                     return false;
@@ -109,14 +125,23 @@ impl<'a> KType<'a> {
                 true
             }
             (UserType { kind: a, .. }, AnyUserType { kind: b }) if a == b => true,
-            (Mu { binder: ba, body: a }, Mu { binder: bb, body: b }) if ba == bb => {
-                a.is_more_specific_than(b)
-            }
             (
-                ConstructorApply { ctor: ca, args: aa },
-                ConstructorApply { ctor: cb, args: ab },
-            ) if ca == cb && aa.len() == ab.len() => {
-                let any_more = aa.iter().zip(ab.iter()).any(|(x, y)| x.is_more_specific_than(y));
+                Mu {
+                    binder: ba,
+                    body: a,
+                },
+                Mu {
+                    binder: bb,
+                    body: b,
+                },
+            ) if ba == bb => a.is_more_specific_than(b),
+            (ConstructorApply { ctor: ca, args: aa }, ConstructorApply { ctor: cb, args: ab })
+                if ca == cb && aa.len() == ab.len() =>
+            {
+                let any_more = aa
+                    .iter()
+                    .zip(ab.iter())
+                    .any(|(x, y)| x.is_more_specific_than(y));
                 let all_eq_or_more = aa
                     .iter()
                     .zip(ab.iter())
@@ -129,7 +154,7 @@ impl<'a> KType<'a> {
 
     /// True iff `carried` satisfies a slot declared as `self` — exact match or covariant
     /// refinement. A `List<Any>` value (the join an empty or heterogeneous literal
-    /// memoizes) does not satisfy `:(List Number)`.
+    /// memoizes) does not satisfy `:(LIST OF Number)`.
     pub fn satisfied_by(&self, carried: &KType<'a>) -> bool {
         *self == *carried || carried.is_more_specific_than(self)
     }
@@ -185,7 +210,9 @@ impl<'a> KType<'a> {
                     }
                     let tm = m.type_members.borrow();
                     pinned_slots.iter().all(|(name, expected)| {
-                        tm.get(name).map(|actual| actual == expected).unwrap_or(false)
+                        tm.get(name)
+                            .map(|actual| actual == expected)
+                            .unwrap_or(false)
                     })
                 }
                 _ => false,
@@ -207,7 +234,13 @@ impl<'a> KType<'a> {
             // inhabited tag's payload against the arg that field maps to (see
             // `result_field_param_index`).
             KType::ConstructorApply { ctor, args } => match obj {
-                KObject::Tagged { tag, value, name, scope_id, type_args } => {
+                KObject::Tagged {
+                    tag,
+                    value,
+                    name,
+                    scope_id,
+                    type_args,
+                } => {
                     let ctor_matches = matches!(
                         ctor.as_ref(),
                         KType::UserType { name: cn, scope_id: cs, .. }
@@ -218,9 +251,10 @@ impl<'a> KType<'a> {
                     }
                     if !type_args.is_empty() {
                         return type_args.len() == args.len()
-                            && type_args.iter().zip(args.iter()).all(|(a, b)| {
-                                matches!(b, KType::Any) || a == b
-                            });
+                            && type_args
+                                .iter()
+                                .zip(args.iter())
+                                .all(|(a, b)| matches!(b, KType::Any) || a == b);
                     }
                     match result_field_param_index(name, tag).and_then(|i| args.get(i)) {
                         Some(arg) => arg.matches_value(value),
@@ -353,7 +387,9 @@ impl<'a> KType<'a> {
             // match; they must pass through `:|` / `:!` first. A signature *value* is
             // admitted by `AnySignature` above, never here.
             KType::Signature { sig, pinned_slots } => match part {
-                ExpressionPart::Future(KObject::KTypeValue(KType::Module { module: m, .. })) => {
+                ExpressionPart::Future(KObject::KTypeValue(KType::Module {
+                    module: m, ..
+                })) => {
                     if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
                         return false;
                     }
@@ -362,7 +398,9 @@ impl<'a> KType<'a> {
                     }
                     let tm = m.type_members.borrow();
                     pinned_slots.iter().all(|(name, expected)| {
-                        tm.get(name).map(|actual| actual == expected).unwrap_or(false)
+                        tm.get(name)
+                            .map(|actual| actual == expected)
+                            .unwrap_or(false)
                     })
                 }
                 _ => false,

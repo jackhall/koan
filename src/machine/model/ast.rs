@@ -61,14 +61,13 @@ impl std::hash::Hash for TypeExpr {
     }
 }
 
-/// Inner-type carrier on a `TypeExpr`. The variant split bakes the `Function` arrow rule
-/// into the shape so downstream consumers don't special-case `Function`.
+/// Inner-type carrier on a `TypeExpr`. Parameterized surface forms (`:(LIST OF X)`,
+/// `:(MAP K -> V)`, `:(FN (args) -> R)`) route through the dispatcher, not this carrier,
+/// so the only remaining variant is the bare-leaf marker. The field is staged for full
+/// removal (Phase 2).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeParams {
     None,
-    /// `List<X>`, `Dict<K, V>`. Arity validation lives at the KType-construction layer.
-    List(Vec<TypeExpr>),
-    Function { args: Vec<TypeExpr>, ret: Box<TypeExpr> },
 }
 
 impl TypeExpr {
@@ -82,17 +81,7 @@ impl TypeExpr {
 
     /// Render in surface syntax so the output round-trips through the parser unchanged.
     pub fn render(&self) -> String {
-        match &self.params {
-            TypeParams::None => self.name.clone(),
-            TypeParams::List(items) => {
-                let inner: Vec<String> = items.iter().map(|t| t.render()).collect();
-                format!(":({} {})", self.name, inner.join(" "))
-            }
-            TypeParams::Function { args, ret } => {
-                let inner: Vec<String> = args.iter().map(|t| t.render()).collect();
-                format!(":({} ({}) -> {})", self.name, inner.join(" "), ret.render())
-            }
-        }
+        self.name.clone()
     }
 }
 
@@ -121,9 +110,15 @@ impl<'a> std::fmt::Debug for ExpressionPart<'a> {
             ExpressionPart::Identifier(s) => f.debug_tuple("Identifier").field(s).finish(),
             ExpressionPart::Type(t) => f.debug_tuple("Type").field(t).finish(),
             ExpressionPart::Expression(e) => f.debug_tuple("Expression").field(e).finish(),
-            ExpressionPart::SigiledTypeExpr(e) => f.debug_tuple("SigiledTypeExpr").field(e).finish(),
-            ExpressionPart::ListLiteral(items) => f.debug_tuple("ListLiteral").field(items).finish(),
-            ExpressionPart::DictLiteral(pairs) => f.debug_tuple("DictLiteral").field(pairs).finish(),
+            ExpressionPart::SigiledTypeExpr(e) => {
+                f.debug_tuple("SigiledTypeExpr").field(e).finish()
+            }
+            ExpressionPart::ListLiteral(items) => {
+                f.debug_tuple("ListLiteral").field(items).finish()
+            }
+            ExpressionPart::DictLiteral(pairs) => {
+                f.debug_tuple("DictLiteral").field(pairs).finish()
+            }
             ExpressionPart::Literal(l) => f.debug_tuple("Literal").field(l).finish(),
             ExpressionPart::Future(obj) => write!(f, "Future({})", obj.summarize()),
         }
@@ -181,9 +176,8 @@ impl<'a> ExpressionPart<'a> {
                 // wildcards. None of those reach a `Module` / `Signature` arena ref
                 // through cloning, so the transmute is sound.
                 let cloned: KType<'static> = kt.clone();
-                let lifted: KType<'a> = unsafe {
-                    std::mem::transmute::<KType<'static>, KType<'a>>(cloned)
-                };
+                let lifted: KType<'a> =
+                    unsafe { std::mem::transmute::<KType<'static>, KType<'a>>(cloned) };
                 return KObject::KTypeValue(lifted);
             }
             // Rebuild at the caller's lifetime, then stash a `'static` copy for the
@@ -279,7 +273,11 @@ pub struct KExpression<'a> {
 impl<'a> KExpression<'a> {
     /// Spanless constructor; `span`/`file` populated by later phases.
     pub fn new(parts: Vec<Spanned<ExpressionPart<'a>>>) -> Self {
-        KExpression { parts, span: None, file: None }
+        KExpression {
+            parts,
+            span: None,
+            file: None,
+        }
     }
 
     /// Bucket key: `Keyword` parts contribute `Keyword(s)`; every other variant contributes
@@ -332,7 +330,10 @@ impl<'a> KExpression<'a> {
         let mut last: KExpression<'a> = match first.value {
             ExpressionPart::Expression(b) => *b,
             other => {
-                let mut parts = vec![Spanned { value: other, span: first.span }];
+                let mut parts = vec![Spanned {
+                    value: other,
+                    span: first.span,
+                }];
                 parts.extend(iter);
                 return Err(KExpression::new(parts));
             }
@@ -349,7 +350,10 @@ impl<'a> KExpression<'a> {
                         .map(|e| Spanned::bare(ExpressionPart::Expression(Box::new(e))))
                         .collect();
                     parts.push(Spanned::bare(ExpressionPart::Expression(Box::new(last))));
-                    parts.push(Spanned { value: other, span: p.span });
+                    parts.push(Spanned {
+                        value: other,
+                        span: p.span,
+                    });
                     parts.extend(iter);
                     return Err(KExpression::new(parts));
                 }
@@ -361,18 +365,24 @@ impl<'a> KExpression<'a> {
 
 impl<'a> std::fmt::Debug for KExpression<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KExpression").field("parts", &self.parts).finish()
+        f.debug_struct("KExpression")
+            .field("parts", &self.parts)
+            .finish()
     }
 }
 
 impl<'a> Parseable<'a> for KExpression<'a> {
-    fn equal(&self, other: &dyn Parseable<'a>) -> bool { self.summarize() == other.summarize() }
-    fn ktype(&self) -> crate::machine::model::KType<'a> { crate::machine::model::KType::KExpression }
+    fn equal(&self, other: &dyn Parseable<'a>) -> bool {
+        self.summarize() == other.summarize()
+    }
+    fn ktype(&self) -> crate::machine::model::KType<'a> {
+        crate::machine::model::KType::KExpression
+    }
     fn summarize(&self) -> String {
-        self.parts.iter()
+        self.parts
+            .iter()
             .map(|p| p.value.summarize())
             .collect::<Vec<_>>()
             .join(" ")
     }
 }
-

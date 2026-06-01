@@ -9,19 +9,14 @@ mod ktype_resolution;
 mod resolver;
 mod signature;
 mod typed_field_list;
-mod unify;
 
 pub use ktraits::{Parseable, Serializable};
 pub use ktype::{KType, UserTypeKind};
 pub use resolver::{elaborate_type_expr, ElabResult, Elaborator};
-pub use signature::{
-    Argument, DeferredReturn, ExpressionSignature, ReturnType, SignatureElement, UntypedElement,
-    UntypedKey, is_keyword_token,
-};
 #[allow(unused_imports)]
 pub use signature::Specificity;
+pub use signature::{
+    is_keyword_token, Argument, DeferredReturn, ExpressionSignature, ReturnType, SignatureElement,
+    UntypedElement, UntypedKey,
+};
 pub use typed_field_list::{parse_typed_field_list_via_elaborator, FieldListOutcome};
-// Generic-destructuring unifier; re-exported as the seam for FN-signature deferral but
-// not yet consumed at the crate level.
-#[allow(unused_imports)]
-pub use unify::{unify_slot, UnifyResult};

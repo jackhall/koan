@@ -3,10 +3,12 @@ use std::rc::Rc;
 
 use indexmap::IndexMap;
 
-use crate::machine::model::ast::{KExpression, TypeExpr};
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture, ScopeId};
-use crate::machine::model::types::{KType, Parseable, Serializable, SignatureElement, UserTypeKind};
+use crate::machine::model::ast::{KExpression, TypeExpr};
+use crate::machine::model::types::{
+    KType, Parseable, Serializable, SignatureElement, UserTypeKind,
+};
 
 #[cfg(test)]
 mod tests;
@@ -149,7 +151,7 @@ impl<'a> KObject<'a> {
     /// Ascription stamping at an annotated boundary (FN return type, argument slot,
     /// LET ascription). Callers have already checked the value satisfies `declared`;
     /// this re-tags the carrier to *exactly* the declared parameter types — a
-    /// `List<Number>` returned through `:(List Any)` re-tags to `List<Any>`, so
+    /// `List<Number>` returned through `:(LIST OF Any)` re-tags to `List<Any>`, so
     /// downstream dispatch sees the contract rather than the implementation's
     /// incidental precision.
     ///
@@ -159,14 +161,18 @@ impl<'a> KObject<'a> {
     /// `type_args` are replaced with the declared args.
     pub fn stamp_type(self, declared: &KType<'a>) -> KObject<'a> {
         match (self, declared) {
-            (KObject::List(items, _), KType::List(elem)) => {
-                KObject::List(items, elem.clone())
-            }
+            (KObject::List(items, _), KType::List(elem)) => KObject::List(items, elem.clone()),
             (KObject::Dict(map, _, _), KType::Dict(k, v)) => {
                 KObject::Dict(map, k.clone(), v.clone())
             }
             (
-                KObject::Tagged { tag, value, scope_id, name, .. },
+                KObject::Tagged {
+                    tag,
+                    value,
+                    scope_id,
+                    name,
+                    ..
+                },
                 KType::ConstructorApply { args, .. },
             ) => KObject::Tagged {
                 tag,
@@ -187,12 +193,10 @@ impl<'a> KObject<'a> {
     ///
     /// A stamped empty container is not flagged (its carrier carries a non-`Any`
     /// element type), nor is a non-empty heterogeneous literal `List<Any>` (it carries
-    /// information and is legal where `:(List Any)` is declared).
+    /// information and is legal where `:(LIST OF Any)` is declared).
     pub fn is_unstamped_empty_container(&self) -> bool {
         match self {
-            KObject::List(items, elem) => {
-                items.is_empty() && matches!(elem.as_ref(), KType::Any)
-            }
+            KObject::List(items, elem) => items.is_empty() && matches!(elem.as_ref(), KType::Any),
             KObject::Dict(map, k, v) => {
                 map.is_empty()
                     && matches!(k.as_ref(), KType::Any)
@@ -218,7 +222,12 @@ impl<'a> KObject<'a> {
             // Erased `type_args` reports the bare `UserType` identity; a populated
             // carrier synthesizes the applied form so dispatch sees the full
             // instantiation (`Result<Number, MyErr>`).
-            KObject::Tagged { name, scope_id, type_args, .. } => {
+            KObject::Tagged {
+                name,
+                scope_id,
+                type_args,
+                ..
+            } => {
                 let bare = KType::UserType {
                     kind: UserTypeKind::tagged_sentinel(),
                     scope_id: *scope_id,
@@ -262,20 +271,28 @@ impl<'a> KObject<'a> {
             KObject::Bool(b) => KObject::Bool(*b),
             KObject::Null => KObject::Null,
             KObject::List(items, elem) => KObject::List(Rc::clone(items), elem.clone()),
-            KObject::Dict(entries, k, v) => {
-                KObject::Dict(Rc::clone(entries), k.clone(), v.clone())
-            }
+            KObject::Dict(entries, k, v) => KObject::Dict(Rc::clone(entries), k.clone(), v.clone()),
             KObject::KExpression(e) => KObject::KExpression(e.clone()),
             KObject::KFuture(t, frame) => KObject::KFuture(t.deep_clone(), frame.clone()),
             KObject::KFunction(f, frame) => KObject::KFunction(f, frame.clone()),
-            KObject::Tagged { tag, value, scope_id, name, type_args } => KObject::Tagged {
+            KObject::Tagged {
+                tag,
+                value,
+                scope_id,
+                name,
+                type_args,
+            } => KObject::Tagged {
                 tag: tag.clone(),
                 value: Rc::clone(value),
                 scope_id: *scope_id,
                 name: name.clone(),
                 type_args: Rc::clone(type_args),
             },
-            KObject::Struct { name, scope_id, fields } => KObject::Struct {
+            KObject::Struct {
+                name,
+                scope_id,
+                fields,
+            } => KObject::Struct {
                 name: name.clone(),
                 scope_id: *scope_id,
                 fields: Rc::clone(fields),
@@ -402,11 +419,9 @@ impl<'a> Parseable<'a> for KObject<'a> {
             KObject::TypeNameRef(t) => t.render(),
             // Render as `Distance(<inner summary>)`; `type_id.name()` returns the bare
             // declared name (per `user_type_name_renders_bare_name`).
-            KObject::Wrapped { inner, type_id } => format!(
-                "{}({})",
-                type_id.name(),
-                Parseable::summarize(inner.get()),
-            ),
+            KObject::Wrapped { inner, type_id } => {
+                format!("{}({})", type_id.name(), Parseable::summarize(inner.get()),)
+            }
         }
     }
 }

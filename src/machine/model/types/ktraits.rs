@@ -19,7 +19,9 @@ pub trait Parseable<'a> {
 pub trait Serializable<'a>: Parseable<'a> {
     fn hash(&self, state: &mut dyn Hasher);
     fn encode(&self) -> Vec<u8>;
-    fn decode(bytes: &[u8]) -> Self where Self: Sized;
+    fn decode(bytes: &[u8]) -> Self
+    where
+        Self: Sized;
     fn clone_box(&self) -> Box<dyn Serializable<'a>>;
 }
 

@@ -71,7 +71,9 @@ fn any_user_type_struct_accepts_struct_future_only() {
     // `KObject` is invariant in `'a`, so stack locals trip dropck; arena
     // allocation hands out `&'a KObject<'a>` tied to the arena's lifetime.
     let arena = RuntimeArena::new();
-    let t = KType::AnyUserType { kind: UserTypeKind::struct_sentinel() };
+    let t = KType::AnyUserType {
+        kind: UserTypeKind::struct_sentinel(),
+    };
     let s: &KObject<'_> = arena.alloc(KObject::Struct {
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
@@ -115,12 +117,16 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
     // Struct / union type tokens flow as `KTypeValue(UserType { .. })` now — a `:Type`
     // slot admits them via the generic `Future(KTypeValue(_))` arm.
     let tagged_token: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::UserType {
-        kind: UserTypeKind::Tagged { schema: Rc::new(HashMap::new()) },
+        kind: UserTypeKind::Tagged {
+            schema: Rc::new(HashMap::new()),
+        },
         name: "Maybe".into(),
         scope_id: ScopeId::SENTINEL,
     }));
     let struct_token: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::UserType {
-        kind: UserTypeKind::Struct { fields: Rc::new(Vec::new()) },
+        kind: UserTypeKind::Struct {
+            fields: Rc::new(Vec::new()),
+        },
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
     }));
@@ -131,12 +137,16 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         "IntMod".into(),
     ));
     let module = arena.alloc_module(Module::new("IntMod".into(), child));
-    let kt_module: &KObject<'_> =
-        arena.alloc(KObject::KTypeValue(KType::Module { module, frame: None }));
+    let kt_module: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Module {
+        module,
+        frame: None,
+    }));
     assert!(!t.accepts_part(&ExpressionPart::Future(kt_module)));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let kt_sig: &KObject<'_> =
-        arena.alloc(KObject::KTypeValue(KType::Signature { sig, pinned_slots: Vec::new() }));
+    let kt_sig: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    }));
     assert!(!t.accepts_part(&ExpressionPart::Future(kt_sig)));
     let n: &KObject<'_> = arena.alloc(KObject::Number(7.0));
     let s: &KObject<'_> = arena.alloc(KObject::KString("hi".into()));
@@ -152,11 +162,15 @@ fn any_user_type_newtype_accepts_wrapped_only() {
     use crate::machine::core::RuntimeArena;
     let arena = RuntimeArena::new();
     let t = KType::AnyUserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Any),
+        },
     };
     let inner: &KObject<'_> = arena.alloc(KObject::Number(3.0));
     let type_id: &KType = arena.alloc(KType::UserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Number),
+        },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     });
@@ -181,11 +195,17 @@ fn any_user_type_newtype_accepts_wrapped_only() {
 #[test]
 fn user_type_newtype_specificity_lattice() {
     let any_newtype = KType::AnyUserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Any),
+        },
     };
-    let any_struct = KType::AnyUserType { kind: UserTypeKind::struct_sentinel() };
+    let any_struct = KType::AnyUserType {
+        kind: UserTypeKind::struct_sentinel(),
+    };
     let dist = KType::UserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Number) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Number),
+        },
         scope_id: ScopeId::from_raw(0, 0xAA),
         name: "Distance".into(),
     };
@@ -202,8 +222,12 @@ fn user_type_newtype_specificity_lattice() {
 ///   (sibling families).
 #[test]
 fn user_type_specificity_lattice() {
-    let any_struct = KType::AnyUserType { kind: UserTypeKind::struct_sentinel() };
-    let any_tagged = KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() };
+    let any_struct = KType::AnyUserType {
+        kind: UserTypeKind::struct_sentinel(),
+    };
+    let any_tagged = KType::AnyUserType {
+        kind: UserTypeKind::tagged_sentinel(),
+    };
     let point = KType::UserType {
         kind: UserTypeKind::struct_sentinel(),
         scope_id: ScopeId::from_raw(0, 0xAA),
@@ -230,7 +254,10 @@ fn is_type_denoting_table() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let sb = KType::Signature { sig, pinned_slots: Vec::new() };
+    let sb = KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    };
     assert!(sb.is_type_denoting());
     let sb_pinned = KType::Signature {
         sig,
@@ -243,8 +270,14 @@ fn is_type_denoting_table() {
     assert!(KType::AnyModule.is_type_denoting());
     // Wildcard struct/tagged slots don't make their parameter a type binder —
     // the value carries no nominal identity the caller hasn't already named.
-    assert!(!KType::AnyUserType { kind: UserTypeKind::struct_sentinel() }.is_type_denoting());
-    assert!(!KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() }.is_type_denoting());
+    assert!(!KType::AnyUserType {
+        kind: UserTypeKind::struct_sentinel()
+    }
+    .is_type_denoting());
+    assert!(!KType::AnyUserType {
+        kind: UserTypeKind::tagged_sentinel()
+    }
+    .is_type_denoting());
     // Per-declaration UserType: nominal identity already lives in the declaring
     // scope's `bindings.types`; rebinding per-call would be a no-op or shadow.
     let ut = KType::UserType {
@@ -261,11 +294,7 @@ fn is_type_denoting_table() {
     assert!(!KType::Identifier.is_type_denoting());
     assert!(!KType::KExpression.is_type_denoting());
     assert!(!KType::List(Box::new(KType::Number)).is_type_denoting());
-    assert!(!KType::Dict(
-        Box::new(KType::Str),
-        Box::new(KType::Number),
-    )
-    .is_type_denoting());
+    assert!(!KType::Dict(Box::new(KType::Str), Box::new(KType::Number),).is_type_denoting());
     assert!(!KType::KFunction {
         args: vec![KType::Number],
         ret: Box::new(KType::Number),
@@ -299,7 +328,10 @@ fn is_more_specific_for_pinned_signature_bound() {
     let ordered = arena.alloc_signature(Signature::new("OrderedSig".into(), ordered_scope));
     let hashed = arena.alloc_signature(Signature::new("HashedSig".into(), hashed_scope));
 
-    let bare = KType::Signature { sig: ordered, pinned_slots: Vec::new() };
+    let bare = KType::Signature {
+        sig: ordered,
+        pinned_slots: Vec::new(),
+    };
     let pinned_number = KType::Signature {
         sig: ordered,
         pinned_slots: vec![("Type".into(), KType::Number)],
@@ -373,7 +405,10 @@ fn constructor_apply_result_checks_inhabited_error_param() {
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
 
     let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["T".into(), "E".into()] },
+        kind: UserTypeKind::TypeConstructor {
+            schema: std::rc::Rc::new(std::collections::HashMap::new()),
+            param_names: vec!["T".into(), "E".into()],
+        },
         scope_id: result_sid,
         name: "Result".into(),
     });
@@ -413,7 +448,10 @@ fn constructor_apply_result_ok_admits_any_error_param() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
     let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["T".into(), "E".into()] },
+        kind: UserTypeKind::TypeConstructor {
+            schema: std::rc::Rc::new(std::collections::HashMap::new()),
+            param_names: vec!["T".into(), "E".into()],
+        },
         scope_id: result_sid,
         name: "Result".into(),
     });
@@ -454,7 +492,10 @@ fn constructor_apply_covariant_admission_and_specificity() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let myerr_sid = ScopeId::from_raw(0, 0x9003);
     let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["T".into(), "E".into()] },
+        kind: UserTypeKind::TypeConstructor {
+            schema: std::rc::Rc::new(std::collections::HashMap::new()),
+            param_names: vec!["T".into(), "E".into()],
+        },
         scope_id: result_sid,
         name: "Result".into(),
     });
@@ -490,7 +531,10 @@ fn constructor_apply_covariant_admission_and_specificity() {
 fn constructor_apply_stamped_type_args_checked_structurally() {
     let result_sid = ScopeId::from_raw(0, 0x9001);
     let ctor = Box::new(KType::UserType {
-        kind: UserTypeKind::TypeConstructor { schema: std::rc::Rc::new(std::collections::HashMap::new()), param_names: vec!["T".into(), "E".into()] },
+        kind: UserTypeKind::TypeConstructor {
+            schema: std::rc::Rc::new(std::collections::HashMap::new()),
+            param_names: vec!["T".into(), "E".into()],
+        },
         scope_id: result_sid,
         name: "Result".into(),
     });

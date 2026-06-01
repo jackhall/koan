@@ -3,13 +3,13 @@
 
 use std::collections::HashMap;
 
-use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType};
+use crate::machine::ResolveTypeExprOutcome;
 use crate::machine::{ArgumentBundle, KError, KErrorKind, NodeId, Scope};
 
 use super::param_refs::{kexpression_references_any, type_expr_references_any};
@@ -27,7 +27,10 @@ pub(crate) enum ReturnTypeRaw<'a> {
 /// Per-call elaboration runs at the dispatch boundary instead.
 pub(crate) enum ReturnTypeState<'a> {
     Done(KType<'a>),
-    Pending { te: TypeExpr, producers: Vec<NodeId> },
+    Pending {
+        te: TypeExpr,
+        producers: Vec<NodeId>,
+    },
     Deferred(DeferredReturn<'a>),
     /// `Expression(_)` carrier (e.g. `-> (Mo.Ty)`) that doesn't reference any FN
     /// parameter; safe to resolve once at FN-def time. Scheduling happens via
@@ -36,15 +39,17 @@ pub(crate) enum ReturnTypeState<'a> {
     ExprToSubDispatch(KExpression<'a>),
 }
 
-/// `TypeExpr` plumbs the structured form so `TypeParams::List` / `TypeParams::Function`
-/// survive verbatim — rendering and re-parsing would strip the structure.
+/// `TypeExpr` plumbs the structured form verbatim so a re-elaboration sees the same
+/// surface shape — rendering and re-parsing would strip it.
 pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType<'a>),
     Unresolved(String),
     TypeExpr(TypeExpr),
     Deferred(DeferredReturn<'a>),
     /// `results_pos` indexes the Combine closure's `&[&'a KObject<'a>]` slice.
-    ReturnTypeExpr { results_pos: usize },
+    ReturnTypeExpr {
+        results_pos: usize,
+    },
 }
 
 /// `unreachable!` arms guard the `get(kind) → extract_kind` pairing — an internal
@@ -66,7 +71,7 @@ pub(crate) fn extract_return_type_raw<'a>(
             None => unreachable!("get(KExpression) then extract_kexpression must succeed"),
         },
         _ => Err(KError::new(KErrorKind::ShapeError(
-            "FN return-type slot must be a type expression (e.g. `Number`, `:(List Str)`)"
+            "FN return-type slot must be a type expression (e.g. `Number`, `:(LIST OF Str)`)"
                 .to_string(),
         ))),
     }
@@ -109,7 +114,10 @@ pub(crate) fn classify_return_type<'a>(
                     Some(map) => verdict_for_deferred_type_expr(&te, map),
                     None => AdmissibleVerdict::Admissible,
                 };
-                return Ok((ReturnTypeState::Deferred(DeferredReturn::TypeExpr(te)), verdict));
+                return Ok((
+                    ReturnTypeState::Deferred(DeferredReturn::TypeExpr(te)),
+                    verdict,
+                ));
             }
             let name = te.name.clone();
             let state = match scope.resolve_type_expr(&te) {
@@ -140,9 +148,15 @@ pub(crate) fn classify_return_type<'a>(
                     Some(_) => verdict_for_deferred_expression(&e),
                     None => AdmissibleVerdict::Admissible,
                 };
-                Ok((ReturnTypeState::Deferred(DeferredReturn::Expression(e)), verdict))
+                Ok((
+                    ReturnTypeState::Deferred(DeferredReturn::Expression(e)),
+                    verdict,
+                ))
             } else {
-                Ok((ReturnTypeState::ExprToSubDispatch(e), AdmissibleVerdict::DeferredToCombine))
+                Ok((
+                    ReturnTypeState::ExprToSubDispatch(e),
+                    AdmissibleVerdict::DeferredToCombine,
+                ))
             }
         }
     }
@@ -187,13 +201,6 @@ fn verdict_for_deferred_type_expr<'a>(
                 AdmissibleVerdict::Admissible
             }
         }
-        TypeParams::Function { .. } if te.name == "Functor" => AdmissibleVerdict::Admissible,
-        TypeParams::Function { .. } | TypeParams::List(_) => {
-            AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
-                "FUNCTOR return-type slot must denote a module, signature, or functor; got `{}`",
-                te.render(),
-            ))))
-        }
     }
 }
 
@@ -227,7 +234,6 @@ fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
 pub(super) fn make_capture<'a>(te: TypeExpr) -> ReturnTypeCapture<'a> {
     match te.params {
         TypeParams::None => ReturnTypeCapture::Unresolved(te.name),
-        TypeParams::List(_) | TypeParams::Function { .. } => ReturnTypeCapture::TypeExpr(te),
     }
 }
 

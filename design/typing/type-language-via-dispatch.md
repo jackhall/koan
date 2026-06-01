@@ -118,22 +118,18 @@ reaches a `TypeExprRef` / `Type` / `AnyModule` / `AnySignature` slot
 and surfaces a standard `TypeMismatch`. The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 
-A positional sigil shape (`:(List Number)` → `[Type(List),
-Type(Number)]`) classifies as `ConstructorCall` inside the wrapper;
-the keyworded overloads serve standalone parameterized-type
-elaboration. The field-walker inside `typed_field_list` handles the
-two sigil shapes embedded in `STRUCT` / `UNION` field schemas
-distinctly. Positional shapes elaborate inline through the threaded
-elaborator (`try_synth_legacy`), keeping the body's SCC context so a
-self-reference lowers to `RecursiveRef`. Keyworded shapes
-(`:(LIST OF Tree)`, `:(MAP Tree -> _)`) sub-Dispatch through the
-standalone dispatcher, which carries no SCC context, so
-`rewrite_threaded_self_refs` first rewrites every threaded
-self-reference to a `Future(KTypeValue(RecursiveRef(name)))` carrier
-— the same type-side transport `:(LIST OF Number)` rides — before the
-sub-Dispatch. Both routes lower `STRUCT Tree = (children :(LIST OF
-Tree))`'s field to `List(RecursiveRef("Tree"))` rather than parking
-on `Tree`'s own placeholder and closing a scheduler-deadlock cycle.
+Every parameterized type rides one surface: the keyworded sigil
+(`:(LIST OF Number)`, `:(MAP K -> V)`, `:(FN … -> R)`), served by the
+type-constructor overloads. The field-walker inside `typed_field_list`
+handles the sigil embedded in `STRUCT` / `UNION` field schemas through a
+single path. Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`)
+sub-Dispatch through the standalone dispatcher, which carries no SCC
+context, so `rewrite_threaded_self_refs` first rewrites every threaded
+self-reference to a `Future(KTypeValue(RecursiveRef(name)))` carrier —
+the same type-side transport `:(LIST OF Number)` rides — before the
+sub-Dispatch. This lowers `STRUCT Tree = (children :(LIST OF Tree))`'s
+field to `List(RecursiveRef("Tree"))` rather than parking on `Tree`'s own
+placeholder and closing a scheduler-deadlock cycle.
 
 ## Binder install: name-keyed vs bucket-keyed
 
@@ -172,10 +168,10 @@ FN / FUNCTOR do not install on the name channel.
   parameter names.
 - [Remove positional type syntax and prune
   TypeParams](../../roadmap/dispatch_fix/remove-positional-type-syntax.md) —
-  retire the legacy positional sigil (`:(List X)`) so the keyworded
-  form is the single surface, unify `try_synth_legacy` into the
-  `rewrite_threaded_self_refs` sigil path, and delete the
-  now-producerless `TypeParams::List` / `Function` arms.
+  Phase 1 (retiring the positional sigil, folding `try_synth_legacy`
+  into the `rewrite_threaded_self_refs` path, and deleting the
+  `TypeParams::List` / `Function` arms) has landed; Phase 2 strips the
+  now-vestigial `params` field down to its `TypeParams::None` marker.
 - [User-defined TypeConstructor keyworded
   application](../../roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md) —
   give a user `LET Wrap = (TYPE_CONSTRUCTOR T)` a keyworded

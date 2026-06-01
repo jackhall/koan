@@ -24,7 +24,7 @@ The mechanism:
   subsequent FN signatures with no per-lookup re-elaboration.
 - **Type expressions in source position re-elaborate to a synthesized
   call.** A parameter or return type written as `(LIST_OF Number)` (or
-  `:(List Number)`) is dispatched directly as a sub-expression whose value
+  `:(LIST OF Number)`) is dispatched directly as a sub-expression whose value
   is a `KType`. Bare type identifiers in FN signatures park on the
   binding's scheduler placeholder via the same `notify_list` /
   `pending_deps` machinery value-name forward references use; recursive

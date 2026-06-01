@@ -1,6 +1,6 @@
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, Scope, ScopeId, SchedulerHandle};
+use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope, ScopeId};
 
 use crate::builtins::err;
 
@@ -19,18 +19,16 @@ pub fn body<'a>(
         Err(e) => return err(e),
     };
     let param = param_kt.name();
-    BodyResult::Value(
-        scope.arena.alloc(KObject::KTypeValue(KType::UserType {
-            // Abstract higher-kinded SIG slot — not a constructible union, so the
-            // schema payload is empty (equality ignores it anyway).
-            kind: UserTypeKind::TypeConstructor {
-                schema: std::rc::Rc::new(std::collections::HashMap::new()),
-                param_names: vec![param],
-            },
-            scope_id: ScopeId::SENTINEL,
-            name: "_typeconstructor".into(),
-        })),
-    )
+    BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::UserType {
+        // Abstract higher-kinded SIG slot — not a constructible union, so the
+        // schema payload is empty (equality ignores it anyway).
+        kind: UserTypeKind::TypeConstructor {
+            schema: std::rc::Rc::new(std::collections::HashMap::new()),
+            param_names: vec![param],
+        },
+        scope_id: ScopeId::SENTINEL,
+        name: "_typeconstructor".into(),
+    })))
 }
 
 #[cfg(test)]
@@ -49,7 +47,11 @@ mod tests {
         let result = run_one(scope, parse_one("TYPE_CONSTRUCTOR Type"));
         match result {
             KObject::KTypeValue(kt) => match kt {
-                KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, scope_id, name } => {
+                KType::UserType {
+                    kind: UserTypeKind::TypeConstructor { param_names, .. },
+                    scope_id,
+                    name,
+                } => {
                     assert_eq!(*param_names, vec!["Type".to_string()]);
                     assert_eq!(*scope_id, ScopeId::SENTINEL);
                     assert_eq!(name, "_typeconstructor");
@@ -72,17 +74,23 @@ mod tests {
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         match wrap_kt {
-            KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, .. } => {
+            KType::UserType {
+                kind: UserTypeKind::TypeConstructor { param_names, .. },
+                ..
+            } => {
                 assert_eq!(*param_names, vec!["Type".to_string()]);
             }
-            other => panic!("expected UserType(TypeConstructor) under Wrap, got {:?}", other),
+            other => panic!(
+                "expected UserType(TypeConstructor) under Wrap, got {:?}",
+                other
+            ),
         }
     }
 
     /// Pins the dispatch path for an FN return type `Wrap<Number>` against a
     /// root-scope-bound TypeConstructor. Re-enable once user-defined constructor
     /// application gets a keyworded overload — see
-    /// `roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md`.
+    /// `roadmap/type_language/type-parameter-binding.md`.
     #[ignore = "user-defined TypeConstructor `:(Wrap T)` needs a keyworded application overload"]
     #[test]
     fn fn_return_type_constructor_apply_root_scope() {
@@ -126,7 +134,9 @@ mod tests {
 
     /// End-to-end smoke for a monad-shaped signature: `LET Wrap` precedes
     /// `VAL pure` so the inner `Wrap<Number>` resolves synchronously against the
-    /// SIG decl-scope's `bindings.types["Wrap"]` entry.
+    /// SIG decl-scope's `bindings.types["Wrap"]` entry. Re-enable once user-defined
+    /// constructor application gets a keyworded overload — see
+    /// `roadmap/type_language/type-parameter-binding.md`.
     #[ignore = "user-defined TypeConstructor `:(Wrap T)` needs a keyworded application overload"]
     #[test]
     fn monad_signature_smoke() {
@@ -157,7 +167,10 @@ mod tests {
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         assert!(matches!(
             wrap_kt,
-            KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }
+            KType::UserType {
+                kind: UserTypeKind::TypeConstructor { .. },
+                ..
+            }
         ));
         let pure = s.decl_scope().bindings().expect_value("pure");
         let kt = match pure {
@@ -169,10 +182,17 @@ mod tests {
                 assert_eq!(*args, vec![KType::Number]);
                 match ret.as_ref() {
                     KType::ConstructorApply { ctor, args } => {
-                        assert!(matches!(
-                            ctor.as_ref(),
-                            KType::UserType { kind: UserTypeKind::TypeConstructor { .. }, .. }
-                        ), "ConstructorApply.ctor must be a TypeConstructor, got {:?}", ctor);
+                        assert!(
+                            matches!(
+                                ctor.as_ref(),
+                                KType::UserType {
+                                    kind: UserTypeKind::TypeConstructor { .. },
+                                    ..
+                                }
+                            ),
+                            "ConstructorApply.ctor must be a TypeConstructor, got {:?}",
+                            ctor
+                        );
                         assert_eq!(*args, vec![KType::Number]);
                     }
                     other => panic!(
@@ -203,7 +223,11 @@ mod tests {
         };
         let wrap_t = mo.type_members.borrow().get("Wrap").cloned();
         match wrap_t {
-            Some(KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, name, .. }) => {
+            Some(KType::UserType {
+                kind: UserTypeKind::TypeConstructor { param_names, .. },
+                name,
+                ..
+            }) => {
                 assert_eq!(name, "Wrap");
                 assert_eq!(param_names, vec!["Type".to_string()]);
             }

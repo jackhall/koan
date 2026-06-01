@@ -13,26 +13,12 @@ use crate::machine::{RuntimeArena, Scope};
 /// full schema, not the cycle-close empty pre-install" invariant.
 fn struct_fields<'a>(scope: &'a Scope<'a>, name: &str) -> Rc<Vec<(String, KType<'a>)>> {
     match scope.resolve_type(name) {
-        Some(KType::UserType { kind: UserTypeKind::Struct { fields }, .. }) => Rc::clone(fields),
+        Some(KType::UserType {
+            kind: UserTypeKind::Struct { fields },
+            ..
+        }) => Rc::clone(fields),
         other => panic!("expected {name} to be a Struct identity in types, got {other:?}"),
     }
-}
-
-/// Self-recursive STRUCT, positional sigil: `STRUCT Tree = (children :(List Tree))`
-/// elaborates the field as `List(RecursiveRef("Tree"))` inline through the threaded
-/// elaborator (`try_synth_legacy`), without ever leaving the body's SCC context.
-#[test]
-fn recursive_struct_tree_elaborates_with_recursive_ref_on_field() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    run_one(scope, parse_one("STRUCT Tree = (children :(List Tree))"));
-    let fields = struct_fields(scope, "Tree");
-    assert_eq!(fields.len(), 1);
-    assert_eq!(fields[0].0, "children");
-    assert_eq!(
-        fields[0].1,
-        KType::List(Box::new(KType::RecursiveRef("Tree".into()))),
-    );
 }
 
 /// Self-recursive STRUCT, keyworded sigil: `STRUCT Tree = (children :(LIST OF Tree))`.
@@ -122,9 +108,11 @@ fn three_way_mutual_recursion_struct_chain() {
         sched.add_dispatch(e, scope);
     }
     sched.execute().unwrap();
-    for (from, expected_field, expected_target) in
-        [("Aaa", "b", "Bbb"), ("Bbb", "c", "Ccc"), ("Ccc", "a", "Aaa")]
-    {
+    for (from, expected_field, expected_target) in [
+        ("Aaa", "b", "Bbb"),
+        ("Bbb", "c", "Ccc"),
+        ("Ccc", "a", "Aaa"),
+    ] {
         let fields = struct_fields(scope, from);
         assert_eq!(fields[0].0, expected_field);
         assert!(

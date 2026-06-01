@@ -1,8 +1,8 @@
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
@@ -53,12 +53,6 @@ pub fn body<'a>(
             s.clone()
         }
         Some(KObject::TypeNameRef(t)) => match &t.params {
-            crate::machine::model::ast::TypeParams::List(_) | crate::machine::model::ast::TypeParams::Function { .. } => {
-                return err(KError::new(KErrorKind::ShapeError(format!(
-                    "LET name must be a bare type name, got `{}`",
-                    t.render(),
-                ))));
-            }
             crate::machine::model::ast::TypeParams::None => {
                 let resolved_name = t.name.clone();
                 if !is_admissible_type_class_rhs(value) {
@@ -202,24 +196,30 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_binder(
         scope,
         "LET",
-        sig(KType::Any, vec![
-            kw("LET"),
-            arg("name", KType::Identifier),
-            kw("="),
-            arg("value", KType::Any),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("LET"),
+                arg("name", KType::Identifier),
+                kw("="),
+                arg("value", KType::Any),
+            ],
+        ),
         body,
         Some(binder_name),
     );
     register_builtin_with_binder(
         scope,
         "LET",
-        sig(KType::Any, vec![
-            kw("LET"),
-            arg("name", KType::TypeExprRef),
-            kw("="),
-            arg("value", KType::Any),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("LET"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("value", KType::Any),
+            ],
+        ),
         body,
         Some(binder_name),
     );

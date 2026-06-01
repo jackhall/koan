@@ -112,9 +112,7 @@ impl<'a> Eq for ReturnType<'a> {}
 impl<'a> PartialEq for DeferredReturn<'a> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (DeferredReturn::TypeExpr(a), DeferredReturn::TypeExpr(b)) => {
-                type_expr_eq(a, b)
-            }
+            (DeferredReturn::TypeExpr(a), DeferredReturn::TypeExpr(b)) => type_expr_eq(a, b),
             (DeferredReturn::Expression(a), DeferredReturn::Expression(b)) => {
                 // `KExpression` doesn't impl `Eq` (parts carry `&'a KObject` futures);
                 // canonical render is sufficient for duplicate-overload detection.
@@ -126,25 +124,7 @@ impl<'a> PartialEq for DeferredReturn<'a> {
 }
 
 fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
-    if a.name != b.name {
-        return false;
-    }
-    use crate::machine::model::ast::TypeParams;
-    match (&a.params, &b.params) {
-        (TypeParams::None, TypeParams::None) => true,
-        (TypeParams::List(xs), TypeParams::List(ys)) => {
-            xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(x, y)| type_expr_eq(x, y))
-        }
-        (
-            TypeParams::Function { args: ax, ret: ar },
-            TypeParams::Function { args: bx, ret: br },
-        ) => {
-            ax.len() == bx.len()
-                && ax.iter().zip(bx.iter()).all(|(x, y)| type_expr_eq(x, y))
-                && type_expr_eq(ar, br)
-        }
-        _ => false,
-    }
+    a.name == b.name
 }
 
 impl<'a> std::fmt::Debug for ReturnType<'a> {
@@ -197,11 +177,14 @@ impl<'a> ExpressionSignature<'a> {
         if self.elements.len() != expr.parts.len() {
             return false;
         }
-        self.elements.iter().zip(&expr.parts).all(|(el, part)| match (el, &part.value) {
-            (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
-            (SignatureElement::Keyword(_), _) => false,
-            (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
-        })
+        self.elements
+            .iter()
+            .zip(&expr.parts)
+            .all(|(el, part)| match (el, &part.value) {
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
+                (SignatureElement::Keyword(_), _) => false,
+                (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
+            })
     }
 
     /// Named-argument call-shape probe. Parses `args.parts` as `<name> = <value>` (or
@@ -298,11 +281,16 @@ impl<'a> ExpressionSignature<'a> {
         if self.elements.len() != other.elements.len() {
             return false;
         }
-        self.elements.iter().zip(other.elements.iter()).all(|(x, y)| match (x, y) {
-            (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => s == t,
-            (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => ax.ktype == ay.ktype,
-            _ => false,
-        })
+        self.elements
+            .iter()
+            .zip(other.elements.iter())
+            .all(|(x, y)| match (x, y) {
+                (SignatureElement::Keyword(s), SignatureElement::Keyword(t)) => s == t,
+                (SignatureElement::Argument(ax), SignatureElement::Argument(ay)) => {
+                    ax.ktype == ay.ktype
+                }
+                _ => false,
+            })
     }
 }
 

@@ -56,10 +56,10 @@ constraint can't be checked against the slot's type.
   names.*
 - **Structural-equality migration — open.** Today's tests in
   `src/machine/model/types/ktype.rs` (`assert_eq!(t.name(),
-  ":(Function (Number Str) -> Bool)")`) assume positional rendering.
+  ":(FN (Number Str) -> Bool)")`) assume names-absent rendering.
   Every test and every call site that compares function types needs
   re-checking. Scoped by a grep for `KType::KFunction` / `KFunctor` /
-  the `(Function …)` / `(Functor …)` rendered forms.
+  the `(FN …)` / `(FUNCTOR …)` rendered forms.
 
 ## Dependencies
 

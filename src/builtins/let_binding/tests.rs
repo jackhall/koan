@@ -4,9 +4,9 @@ use std::rc::Rc;
 use super::body;
 use crate::builtins::default_scope;
 use crate::builtins::test_support::run_root_bare;
+use crate::machine::execute::Scheduler;
 use crate::machine::model::{KObject, KType};
 use crate::machine::ArgumentBundle;
-use crate::machine::execute::Scheduler;
 
 #[test]
 fn let_inserts_binding_into_scope() {
@@ -38,15 +38,17 @@ fn binder_name_extracts_let_name() {
 /// before the body runs; `bind_value` clears it on finalize.
 #[test]
 fn binder_name_install_then_body_finalize_clears_placeholder() {
-    use crate::machine::RuntimeArena;
-    use crate::machine::execute::Scheduler;
     use crate::builtins::default_scope;
+    use crate::machine::execute::Scheduler;
+    use crate::machine::RuntimeArena;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let exprs = parse("LET hello = 1").unwrap();
-    for e in exprs { sched.add_dispatch(e, scope); }
+    for e in exprs {
+        sched.add_dispatch(e, scope);
+    }
     sched.execute().unwrap();
     assert!(scope.bindings().placeholders().get("hello").is_none());
     assert!(matches!(scope.lookup("hello"), Some(KObject::Number(n)) if *n == 1.0));
@@ -57,17 +59,19 @@ fn binder_name_install_then_body_finalize_clears_placeholder() {
 /// consumer surfaces `UnboundName` rather than self-parking on a cycle.
 #[test]
 fn let_t_cycle_errors() {
-    use crate::machine::RuntimeArena;
-    use crate::machine::execute::Scheduler;
-    use crate::machine::{KErrorKind, SchedulerHandle};
     use crate::builtins::default_scope;
+    use crate::machine::execute::Scheduler;
+    use crate::machine::RuntimeArena;
+    use crate::machine::{KErrorKind, SchedulerHandle};
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     let exprs = parse("LET Ty = Ty").unwrap();
     let ids = sched.enter_block(scope.id, exprs, scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let res = sched.read_result(ids[0]);
     match res {
         Err(e) => assert!(
@@ -83,8 +87,8 @@ fn let_t_cycle_errors() {
 /// so removing either primitive variant from the allowlist regresses here.
 #[test]
 fn let_type_class_with_non_type_value_errors() {
-    use crate::machine::RuntimeArena;
     use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
     use crate::parse::parse;
     for (src, expected) in [("LET Foo = 1", "Number"), ("LET Foo = \"hello\"", "Str")] {
         let arena = RuntimeArena::new();
@@ -92,7 +96,9 @@ fn let_type_class_with_non_type_value_errors() {
         let mut sched = Scheduler::new();
         let exprs = parse(src).unwrap();
         let id = sched.add_dispatch(exprs.into_iter().next().unwrap(), scope);
-        sched.execute().expect("execute does not surface per-slot errors");
+        sched
+            .execute()
+            .expect("execute does not surface per-slot errors");
         match sched.read_result(id) {
             Err(e) => assert!(
                 matches!(&e.kind, KErrorKind::TypeClassBindingExpectsType { name, got }
@@ -108,8 +114,8 @@ fn let_type_class_with_non_type_value_errors() {
 /// via `register_type`, reachable through `Scope::resolve_type`.
 #[test]
 fn let_type_class_with_type_value_still_binds() {
-    use crate::machine::RuntimeArena;
     use crate::machine::model::KType;
+    use crate::machine::RuntimeArena;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -119,7 +125,9 @@ fn let_type_class_with_type_value_still_binds() {
     for e in exprs {
         ids.push(sched.add_dispatch(e, scope));
     }
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let res = sched.read_result(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let kt = scope
@@ -142,7 +150,9 @@ fn let_identifier_lhs_with_non_type_still_binds() {
     for e in exprs {
         ids.push(sched.add_dispatch(e, scope));
     }
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let res = sched.read_result(ids[0]);
     assert!(res.is_ok(), "expected bind to succeed, got {:?}", res.err());
     let data = scope.bindings().data();
@@ -158,8 +168,8 @@ fn let_identifier_lhs_with_non_type_still_binds() {
 /// before the type-class allowlist — regression guard for ordering.
 #[test]
 fn let_parameterized_type_lhs_still_shape_errors() {
-    use crate::machine::RuntimeArena;
     use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
     use crate::parse::parse;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
@@ -169,7 +179,9 @@ fn let_parameterized_type_lhs_still_shape_errors() {
     for e in exprs {
         ids.push(sched.add_dispatch(e, scope));
     }
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let res = sched.read_result(ids[0]);
     match res {
         Err(e) => assert!(
@@ -185,9 +197,9 @@ fn let_parameterized_type_lhs_still_shape_errors() {
 /// fresh one from the alias name.
 #[test]
 fn let_aliases_struct_preserves_type_identity() {
-    use crate::machine::RuntimeArena;
-    use crate::machine::model::KType;
     use crate::builtins::test_support::run;
+    use crate::machine::model::KType;
+    use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     run(
@@ -213,8 +225,8 @@ fn let_aliases_struct_preserves_type_identity() {
 #[test]
 fn let_lowercase_in_sig_body_rejected_with_val_diagnostic() {
     use crate::builtins::test_support::{parse_one, run_one_err, run_root_silent};
-    use crate::machine::RuntimeArena;
     use crate::machine::KErrorKind;
+    use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     let _err = run_one_err(scope, parse_one("SIG Bad = (LET compare = 0)"));
@@ -297,7 +309,10 @@ fn let_type_class_in_sig_body_still_works() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "SIG WithType = ((LET Type = Number) (VAL zero :Number))");
+    run(
+        scope,
+        "SIG WithType = ((LET Type = Number) (VAL zero :Number))",
+    );
     let s = match scope.resolve_type("WithType") {
         Some(KType::Signature { sig, .. }) => *sig,
         other => panic!("WithType should be a Signature KType, got {:?}", other),
@@ -320,8 +335,13 @@ fn let_type_class_signature_alias_preserves_identity() {
     use crate::machine::RuntimeArena;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "SIG OrderedSig = (VAL compare :Number)\nLET Po = OrderedSig");
-    let original = scope.resolve_type("OrderedSig").expect("OrderedSig type binding");
+    run(
+        scope,
+        "SIG OrderedSig = (VAL compare :Number)\nLET Po = OrderedSig",
+    );
+    let original = scope
+        .resolve_type("OrderedSig")
+        .expect("OrderedSig type binding");
     let aliased = scope.resolve_type("Po").expect("Po type binding");
     assert!(
         matches!(aliased, KType::Signature { .. }),

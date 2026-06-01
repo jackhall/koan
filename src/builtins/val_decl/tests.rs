@@ -1,8 +1,6 @@
-use crate::builtins::test_support::{
-    parse_one, run, run_one_err, run_root_silent,
-};
-use crate::machine::{KErrorKind, RuntimeArena};
+use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::model::{KObject, KType};
+use crate::machine::{KErrorKind, RuntimeArena};
 
 /// Smoke: the VAL slot lives in `bindings.data` so `ascribe::shape_check` will
 /// require it of an ascribed module.
@@ -40,7 +38,8 @@ fn val_resolves_sig_local_type_shadow() {
     let zero = s.decl_scope().bindings().expect_value("zero");
     match zero {
         KObject::KTypeValue(kt) => assert_eq!(
-            *kt, KType::Number,
+            *kt,
+            KType::Number,
             "SIG-local `LET Type = Number` must shadow the meta-type builtin",
         ),
         other => panic!("expected KTypeValue, got {:?}", other.ktype()),
@@ -70,10 +69,7 @@ fn val_outside_sig_errors() {
 fn val_inside_module_errors() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let err = run_one_err(
-        scope,
-        parse_one("MODULE Foo = ((VAL x :Number))"),
-    );
+    let err = run_one_err(scope, parse_one("MODULE Foo = ((VAL x :Number))"));
     match &err.kind {
         KErrorKind::ShapeError(msg) => {
             assert!(
@@ -149,7 +145,13 @@ fn val_slot_satisfied_by_module_let_member() {
     );
     // The `:|`-ascribed module alias `Ord` is type-only (no value-side carrier), so its
     // module identity lives in `types`.
-    assert!(matches!(scope.resolve_type("Ord"), Some(KType::Module { module: _, frame: _ })));
+    assert!(matches!(
+        scope.resolve_type("Ord"),
+        Some(KType::Module {
+            module: _,
+            frame: _
+        })
+    ));
 }
 
 /// Pins the canonical SIG form: abstract type via `LET Type = ...` plus a VAL

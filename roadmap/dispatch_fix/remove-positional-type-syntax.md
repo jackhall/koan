@@ -5,6 +5,11 @@ Retire the legacy positional parameterized-type form (`:(List X)`,
 is the single surface, then delete the now-producerless `TypeParams`
 arms.
 
+> Phase 1 landed: positional INPUT syntax is removed, `try_synth_legacy`
+> and the `TypeParams::List` / `Function` consumer arms are deleted (the
+> `unify.rs` module went with them), and `enum TypeParams` is now `{ None }`.
+> Phase 2 — stripping the now-vestigial `params` field — is still pending.
+
 **Problem.** Parameterized types have two surface forms. The keyworded
 sigil (`:(LIST OF X)`, `:(MAP K -> V)`, `:(FN … -> X)`) is the canonical
 dispatch-routed form, served by the type-constructor builtins in
@@ -23,7 +28,6 @@ parallel elaboration route alongside the dispatcher, plus a
 `Function` arms are matched in roughly a dozen sites
 ([`resolver`](../../src/machine/model/types/resolver.rs),
 [`ktype_resolution`](../../src/machine/model/types/ktype_resolution.rs),
-[`unify`](../../src/machine/model/types/unify.rs),
 [`val_decl`](../../src/builtins/val_decl.rs),
 [`let_binding`](../../src/builtins/let_binding.rs),
 [`return_type`](../../src/builtins/fn_def/return_type.rs),

@@ -14,7 +14,7 @@ synthesis Anys out *parameter* slots on the same rule. The symmetric
 coarsening on the admission side lives at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs) —
 when a deferred candidate is admission-checked against a slot typed
-`:(Function (SpecificArgs) -> SpecificT)`, the comparison reads the
+`:(FN (SpecificArgs) -> SpecificT)`, the comparison reads the
 deferred position as `Any` and the strict `==` refuses admission
 silently.
 
@@ -33,9 +33,9 @@ the structural `KType` would.
 
 **Impact.**
 
-- *Precise `:(Function (_) -> SpecificT)` slot ascription against
+- *Precise `:(FN (_) -> SpecificT)` slot ascription against
   deferred-return candidates becomes well-defined.* A binding like
-  `LET cb :(Function (Er) -> Er) = make_fn` where `make_fn` returns a
+  `LET cb :(FN (Er) -> Er) = make_fn` where `make_fn` returns a
   `Deferred(Expression)`-carrying FN admits-or-rejects with a real
   shape comparison, not a silent refusal.
 - *Modular-implicit search

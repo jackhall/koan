@@ -15,8 +15,8 @@
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{KError, KErrorKind, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::ast::{TypeExpr, TypeParams};
-use crate::machine::model::values::KObject;
 use crate::machine::model::types::KType;
+use crate::machine::model::values::KObject;
 
 /// Outcome of [`Scope::resolve_type_expr`]. Mirrors
 /// [`crate::machine::model::types::ElabResult`] but `Done` carries an
@@ -163,7 +163,10 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 KType::Module { module, .. } => {
                     return Some((module.scope_id(), module.path.as_str()));
                 }
-                KType::AbstractType { source_module, name } => {
+                KType::AbstractType {
+                    source_module,
+                    name,
+                } => {
                     return Some((source_module.scope_id(), name.as_str()));
                 }
                 KType::List(inner) => self.stack.push(inner),
@@ -230,7 +233,10 @@ mod tests {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done on second call"),
         };
-        assert!(std::ptr::eq(first, second), "second call should hit the memo");
+        assert!(
+            std::ptr::eq(first, second),
+            "second call should hit the memo"
+        );
     }
 
     #[test]
@@ -286,8 +292,9 @@ mod tests {
         };
         // Dict<A, List<B>>
         let kt = KType::Dict(Box::new(user_a), Box::new(KType::List(Box::new(user_b))));
-        let refs: Vec<(ScopeId, String)> =
-            KTypeUserRefs::of(&kt).map(|(id, n)| (id, n.to_string())).collect();
+        let refs: Vec<(ScopeId, String)> = KTypeUserRefs::of(&kt)
+            .map(|(id, n)| (id, n.to_string()))
+            .collect();
         assert_eq!(refs, vec![(a_id, "A".into()), (b_id, "B".into())]);
     }
 
@@ -304,12 +311,15 @@ mod tests {
             name: "Inner".into(),
         };
         let outer = KType::UserType {
-            kind: UserTypeKind::Newtype { repr: Box::new(inner) },
+            kind: UserTypeKind::Newtype {
+                repr: Box::new(inner),
+            },
             scope_id: outer_id,
             name: "Outer".into(),
         };
-        let refs: Vec<(ScopeId, String)> =
-            KTypeUserRefs::of(&outer).map(|(id, n)| (id, n.to_string())).collect();
+        let refs: Vec<(ScopeId, String)> = KTypeUserRefs::of(&outer)
+            .map(|(id, n)| (id, n.to_string()))
+            .collect();
         assert_eq!(refs, vec![(outer_id, "Outer".into())]);
     }
 
@@ -339,34 +349,15 @@ mod tests {
         }
 
         #[test]
-        fn rejects_parameterized_shapes() {
-            use crate::machine::model::ast::TypeParams;
-            let arena = RuntimeArena::new();
-            let scope = run_root_bare(&arena);
-            let parametric = TypeExpr {
-                name: "List".to_string(),
-                params: TypeParams::List(vec![TypeExpr::leaf("Number".to_string())]),
-                builtin_cache: std::cell::OnceCell::new(),
-            };
-            let result = coerce_type_token_value(scope, &parametric, None);
-            match result {
-                Err(KError { kind: KErrorKind::ShapeError(msg), .. }) => {
-                    assert!(
-                        msg.contains("parameterized type expression"),
-                        "expected ShapeError about parameterized type, got `{msg}`",
-                    );
-                }
-                other => panic!("expected ShapeError, got {:?}", other.map(|_| "Ok(_)")),
-            }
-        }
-
-        #[test]
         fn unbound_returns_error() {
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
             let leaf = TypeExpr::leaf("Missing".to_string());
             match coerce_type_token_value(scope, &leaf, None) {
-                Err(KError { kind: KErrorKind::UnboundName(name), .. }) => {
+                Err(KError {
+                    kind: KErrorKind::UnboundName(name),
+                    ..
+                }) => {
                     assert_eq!(name, "Missing");
                 }
                 other => panic!("expected UnboundName, got {:?}", other.map(|_| "Ok(_)")),
@@ -386,7 +377,9 @@ mod tests {
             };
             scope.register_type("Point".into(), kt.clone(), BindingIndex::BUILTIN);
             let paired = arena.alloc(KObject::KTypeValue(kt));
-            scope.bind_value("Point".to_string(), paired, BindingIndex::BUILTIN).unwrap();
+            scope
+                .bind_value("Point".to_string(), paired, BindingIndex::BUILTIN)
+                .unwrap();
 
             let leaf = TypeExpr::leaf("Point".to_string());
             let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Point lookup");
@@ -416,7 +409,10 @@ mod tests {
                 KObject::KTypeValue(KType::UserType { name, .. }) => {
                     assert_eq!(name, "Orphan");
                 }
-                other => panic!("expected synthesized KTypeValue(UserType(Orphan)), got {:?}", other.ktype()),
+                other => panic!(
+                    "expected synthesized KTypeValue(UserType(Orphan)), got {:?}",
+                    other.ktype()
+                ),
             }
         }
     }

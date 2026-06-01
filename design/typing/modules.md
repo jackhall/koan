@@ -29,7 +29,7 @@ A **signature** (declared with `SIG`) is a module type — an interface
 specifying what a structure must contain:
 
 ```
-SIG OrderedSig = ((LET Type = Number) (VAL compare :(Function (Type, Type) -> Number)))
+SIG OrderedSig = ((LET Type = Number) (VAL compare :(FN (Type, Type) -> Number)))
 ```
 
 Module and signature names use the **Type-token** spelling: first character

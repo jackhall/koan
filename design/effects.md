@@ -17,8 +17,8 @@ system rather than implicit in builtin internals.
 ```
 SIG Monad = (
   (LET Wrap = (TYPE_CONSTRUCTOR Type))   -- type constructor: T → :(Wrap T)
-  (VAL pure :(Function (Number) -> :(Wrap Number)))
-  (VAL bind :(Function (:(Wrap Number), :(Function (Number) -> :(Wrap Number))) -> :(Wrap Number)))
+  (VAL pure :(FN (Number) -> :(Wrap Number)))
+  (VAL bind :(FN (:(Wrap Number), :(FN (Number) -> :(Wrap Number))) -> :(Wrap Number)))
 )
 ```
 

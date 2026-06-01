@@ -25,7 +25,7 @@ What's shipped that the open items below build on:
 - *Block-scoped module opening.* `USING … SCOPE` surfaces a module value's members as
   bare names for the duration of a block, splitting reads and writes across the
   transparent-scope `outer` chain.
-- *FUNCTOR binder.* A dedicated `FUNCTOR` binder with its `:(Functor (params) -> R)`
+- *FUNCTOR binder.* A dedicated `FUNCTOR` binder with its `:(FUNCTOR (params) -> R)`
   type-position sigil and the one-way `KFunctor` / `KFunction` admissibility wall.
 - *Effects design.* [design/effects.md](design/effects.md) captures the in-language
   monadic side-effects design (tracked in

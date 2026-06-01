@@ -5,11 +5,11 @@
 use super::ktype::KType;
 use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
-use crate::machine::model::Parseable;
-use crate::parse::parse_pair_list;
-use crate::machine::{NodeId, Scope};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
 use crate::machine::model::KObject;
+use crate::machine::model::Parseable;
+use crate::machine::{NodeId, Scope};
+use crate::parse::parse_pair_list;
 use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {
@@ -51,35 +51,22 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
                 }
                 ElabResult::Unbound(msg) => Err(format!("{msg} in {context} for `{}`", name)),
             },
-            // Legacy positional sigils (`:(List Tree)`) elaborate inline through the
-            // threaded elaborator to keep the body's SCC context — `STRUCT Tree =
-            // (children :(List Tree))` must lower Tree to `RecursiveRef("Tree")`.
-            // Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`) sub-Dispatch
-            // through the standalone dispatcher, which carries no SCC context, so
-            // self-references are pre-resolved to `RecursiveRef` carriers first.
+            // Sigils (`:(LIST OF Tree)`, `:(MAP Tree -> _)`) sub-Dispatch through the
+            // standalone dispatcher, which carries no SCC context, so self-references
+            // are pre-resolved to `RecursiveRef` carriers first — `STRUCT Tree =
+            // (children :(LIST OF Tree))` must lower Tree to `RecursiveRef("Tree")`.
             ExpressionPart::SigiledTypeExpr(boxed) => {
-                if let Some(te) = try_synth_legacy(boxed) {
-                    match elaborate_type_expr(elaborator, &te) {
-                        ElabResult::Done(kt) => Ok(kt),
-                        ElabResult::Park(producers) => {
-                            parks.extend(producers);
-                            Ok(KType::Any)
-                        }
-                        ElabResult::Unbound(msg) => {
-                            Err(format!("{msg} in {context} for `{}`", name))
-                        }
-                    }
-                } else {
-                    let rewritten =
-                        rewrite_threaded_self_refs(boxed, &elaborator.threaded, elaborator.scope);
-                    let wrapped = KExpression::new(vec![Spanned::bare(
-                        ExpressionPart::SigiledTypeExpr(Box::new(rewritten)),
-                    )]);
-                    sub_dispatches.push((slot_idx, wrapped));
-                    Ok(KType::Any)
-                }
+                let rewritten =
+                    rewrite_threaded_self_refs(boxed, &elaborator.threaded, elaborator.scope);
+                let wrapped = KExpression::new(vec![Spanned::bare(
+                    ExpressionPart::SigiledTypeExpr(Box::new(rewritten)),
+                )]);
+                sub_dispatches.push((slot_idx, wrapped));
+                Ok(KType::Any)
             }
-            ExpressionPart::Future(crate::machine::model::KObject::KTypeValue(kt)) => Ok(kt.clone()),
+            ExpressionPart::Future(crate::machine::model::KObject::KTypeValue(kt)) => {
+                Ok(kt.clone())
+            }
             ExpressionPart::Future(other) => Err(format!(
                 "{context} type for `{}` resolved to non-type value `{}`",
                 name,
@@ -96,7 +83,10 @@ pub fn parse_typed_field_list_via_elaborator<'a>(
         Err(msg) => FieldListOutcome::Err(msg),
         Ok(fields) => {
             if !parks.is_empty() || !sub_dispatches.is_empty() {
-                FieldListOutcome::Pending { park_producers: parks, sub_dispatches }
+                FieldListOutcome::Pending {
+                    park_producers: parks,
+                    sub_dispatches,
+                }
             } else {
                 FieldListOutcome::Done(fields)
             }
@@ -135,37 +125,11 @@ fn rewrite_threaded_self_refs<'a>(
                 )),
                 other => other.clone(),
             };
-            Spanned { value, span: p.span }
+            Spanned {
+                value,
+                span: p.span,
+            }
         })
         .collect();
     KExpression::new(parts)
-}
-
-/// Synthesize the `TypeExpr` for a positional `:(<Head> <Arg>...)` sigil so the
-/// field walker can elaborate self-recursive forms inline against the body's
-/// threaded elaborator, preserving the SCC `current_decl` context that lowers
-/// recursive names to `RecursiveRef`. Returns `None` for non-positional shapes;
-/// the caller falls back to a sub-Dispatch for those.
-fn try_synth_legacy(inner: &KExpression<'_>) -> Option<TypeExpr> {
-    let parts = &inner.parts;
-    let head = match &parts.first()?.value {
-        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => t,
-        _ => return None,
-    };
-    let mut args: Vec<TypeExpr> = Vec::new();
-    for p in &parts[1..] {
-        match &p.value {
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => args.push(t.clone()),
-            ExpressionPart::SigiledTypeExpr(boxed) => {
-                args.push(try_synth_legacy(boxed)?);
-            }
-            _ => return None,
-        }
-    }
-    let params = if args.is_empty() { TypeParams::None } else { TypeParams::List(args) };
-    Some(TypeExpr {
-        name: head.name.clone(),
-        params,
-        builtin_cache: std::cell::OnceCell::new(),
-    })
 }

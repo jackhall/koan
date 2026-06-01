@@ -10,9 +10,9 @@
 
 use std::collections::HashSet;
 
+use crate::machine::core::{Resolution, Scope, ScopeId};
 use crate::machine::model::ast::{TypeExpr, TypeParams};
 use crate::machine::NodeId;
-use crate::machine::core::{Resolution, Scope, ScopeId};
 
 use super::ktype::{KType, UserTypeKind};
 
@@ -114,16 +114,13 @@ impl<'s, 'a> Elaborator<'s, 'a> {
     }
 }
 
-/// Walk a `TypeExpr` against the elaborator's scope. Container / function shapes
-/// recurse and merge inner `Park` producers so the caller can register every dep at
-/// once. Bare leaves route through the threaded set first (recursive back-edge),
-/// then `Scope::resolve_type`, then `Scope::resolve` for the placeholder path, and
-/// finally `KType::from_name` so fixture scopes that skip builtin registration still
-/// resolve builtin names.
-pub fn elaborate_type_expr<'a>(
-    el: &mut Elaborator<'_, 'a>,
-    t: &TypeExpr,
-) -> ElabResult<'a> {
+/// Walk a `TypeExpr` against the elaborator's scope. Bare leaves route through the
+/// threaded set first (recursive back-edge), then `Scope::resolve_type`, then
+/// `Scope::resolve` for the placeholder path, and finally `KType::from_name` so
+/// fixture scopes that skip builtin registration still resolve builtin names.
+/// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
+/// walk — they sub-Dispatch through the standalone dispatcher.
+pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeExpr) -> ElabResult<'a> {
     match (&t.name, &t.params) {
         (name, TypeParams::None) => {
             if el.threaded.contains(name) {
@@ -170,113 +167,6 @@ pub fn elaborate_type_expr<'a>(
                 },
             }
         }
-        (name, TypeParams::List(items)) if name == "List" && items.len() == 1 => {
-            match elaborate_type_expr(el, &items[0]) {
-                ElabResult::Done(kt) => ElabResult::Done(KType::List(Box::new(kt))),
-                other => other,
-            }
-        }
-        (name, TypeParams::List(items)) if name == "List" => ElabResult::Unbound(format!(
-            ":(List ...) expects exactly 1 type parameter, got {}",
-            items.len()
-        )),
-        (name, TypeParams::List(items)) if name == "Dict" && items.len() == 2 => {
-            let k = elaborate_type_expr(el, &items[0]);
-            let v = elaborate_type_expr(el, &items[1]);
-            match ElabResult::collect([k, v]) {
-                Ok(mut kts) => {
-                    let vt = kts.pop().expect("two slots");
-                    let kt = kts.pop().expect("two slots");
-                    ElabResult::Done(KType::Dict(Box::new(kt), Box::new(vt)))
-                }
-                Err(e) => e,
-            }
-        }
-        (name, TypeParams::List(items)) if name == "Dict" => ElabResult::Unbound(format!(
-            ":(Dict ...) expects exactly 2 type parameters, got {}",
-            items.len()
-        )),
-        (name, TypeParams::Function { args, ret }) if name == "Function" => {
-            // Return slot rides as the last `collect` entry so its result shares the
-            // Unbound > Park > Done precedence with the args.
-            let mut slots: Vec<ElabResult> = args
-                .iter()
-                .map(|a| elaborate_type_expr(el, a))
-                .collect();
-            slots.push(elaborate_type_expr(el, ret));
-            match ElabResult::collect(slots) {
-                Ok(mut kts) => {
-                    let ret_kt = kts.pop().expect("ret slot pushed above");
-                    ElabResult::Done(KType::KFunction {
-                        args: kts,
-                        ret: Box::new(ret_kt),
-                    })
-                }
-                Err(e) => e,
-            }
-        }
-        // `Functor` type-position sigil: same shape rule as `Function` above but lowers
-        // to `KType::KFunctor`. The Type-class token (the head of the `:(Functor ...)`
-        // surface form) stays disjoint from the `FUNCTOR` binder keyword on the same
-        // rule that keeps `Function`/`FN` disjoint — no shared spelling, no shared lex
-        // class. See [design/typing/functors.md](../../../../design/typing/functors.md).
-        (name, TypeParams::Function { args, ret }) if name == "Functor" => {
-            let mut slots: Vec<ElabResult> = args
-                .iter()
-                .map(|a| elaborate_type_expr(el, a))
-                .collect();
-            slots.push(elaborate_type_expr(el, ret));
-            match ElabResult::collect(slots) {
-                Ok(mut kts) => {
-                    let ret_kt = kts.pop().expect("ret slot pushed above");
-                    ElabResult::Done(KType::KFunctor {
-                        params: kts,
-                        ret: Box::new(ret_kt),
-                    })
-                }
-                Err(e) => e,
-            }
-        }
-        (name, TypeParams::List(items)) => {
-            // Scope-aware constructor application. A self-reference of the form
-            // `Wrap<T>` is currently rejected: the threaded set only fires on bare
-            // leaves (the `TypeParams::None` arm) and emits `RecursiveRef` there;
-            // applied recursion needs threaded unfold sets that don't exist yet.
-            if let Some(ctor_kt) = el.scope.resolve_type(name) {
-                if let KType::UserType {
-                    kind: UserTypeKind::TypeConstructor { param_names, .. },
-                    ..
-                } = ctor_kt
-                {
-                    if items.len() != param_names.len() {
-                        return ElabResult::Unbound(format!(
-                            "type constructor `{name}` expects {} type parameter(s), got {}",
-                            param_names.len(),
-                            items.len(),
-                        ));
-                    }
-                    let item_results = items.iter().map(|it| elaborate_type_expr(el, it));
-                    return match ElabResult::collect(item_results) {
-                        Ok(arg_kts) => ElabResult::Done(KType::ConstructorApply {
-                            ctor: Box::new(ctor_kt.clone()),
-                            args: arg_kts,
-                        }),
-                        Err(e) => e,
-                    };
-                }
-            }
-            // Forward reference to an in-flight `LET Wrap = ...` whose placeholder is
-            // registered but whose body hasn't dispatched. Trivial self-cycles
-            // (`LET Wrap = Wrap<...>`) are caught earlier by the dispatch driver's
-            // eager-resolve pass.
-            if let Resolution::Placeholder(id) = el.scope.resolve(name) {
-                return ElabResult::Park(vec![id]);
-            }
-            ElabResult::Unbound(format!("type `{name}` does not take type parameters"))
-        }
-        (name, TypeParams::Function { .. }) => ElabResult::Unbound(format!(
-            "only `Function` / `Functor` accept a `(args) -> ret` shape; got `{name}`"
-        )),
     }
 }
 
@@ -296,7 +186,10 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
     on_path.insert(start.to_string());
 
     while let Some((node, idx)) = stack.last().cloned() {
-        let edges = pending.get(&node).map(|e| e.edges.clone()).unwrap_or_default();
+        let edges = pending
+            .get(&node)
+            .map(|e| e.edges.clone())
+            .unwrap_or_default();
         if idx >= edges.len() {
             stack.pop();
             on_path.remove(&node);
@@ -365,7 +258,10 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
                 }
                 s.bindings().placeholder_index(&name)
             })
-            .unwrap_or(crate::machine::core::BindingIndex { idx: 0, nominal_binder: true });
+            .unwrap_or(crate::machine::core::BindingIndex {
+                idx: 0,
+                nominal_binder: true,
+            });
         scope.cycle_close_install_identity(name, identity, bind_index);
     }
 }

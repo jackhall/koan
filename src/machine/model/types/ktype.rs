@@ -34,16 +34,23 @@ pub enum UserTypeKind<'a> {
     /// Record schema in declaration order. The empty `Rc<vec![]>` sentinel is the
     /// payload an instance's `.ktype()` synthesizes and the cycle-close pre-install
     /// holds; construction reads the real list from the `bindings.types` identity.
-    Struct { fields: Rc<Vec<(String, KType<'a>)>> },
+    Struct {
+        fields: Rc<Vec<(String, KType<'a>)>>,
+    },
     /// Tagged-union schema keyed by tag. Same empty-`Rc` sentinel convention as `Struct`.
-    Tagged { schema: Rc<HashMap<String, KType<'a>>> },
+    Tagged {
+        schema: Rc<HashMap<String, KType<'a>>>,
+    },
     /// Fresh nominal identity over a transparent representation. `repr` is NOT part of
     /// identity equality.
     Newtype { repr: Box<KType<'a>> },
     /// Higher-kinded type-constructor slot. `schema` carries the erased-parameter
     /// variant schema (e.g. `Result`'s `{ok: Any, error: Any}`); neither `schema` nor
     /// `param_names` is part of identity equality.
-    TypeConstructor { schema: Rc<HashMap<String, KType<'a>>>, param_names: Vec<String> },
+    TypeConstructor {
+        schema: Rc<HashMap<String, KType<'a>>>,
+        param_names: Vec<String>,
+    },
 }
 
 impl<'a> PartialEq for UserTypeKind<'a> {
@@ -75,12 +82,16 @@ impl<'a> UserTypeKind<'a> {
     /// the cycle-close pre-install holds. Equality ignores the payload, so this stands in
     /// for any `Struct { fields }` in dispatch.
     pub fn struct_sentinel() -> Self {
-        UserTypeKind::Struct { fields: Rc::new(Vec::new()) }
+        UserTypeKind::Struct {
+            fields: Rc::new(Vec::new()),
+        }
     }
 
     /// Payload-empty `Tagged` sentinel — companion to [`Self::struct_sentinel`].
     pub fn tagged_sentinel() -> Self {
-        UserTypeKind::Tagged { schema: Rc::new(HashMap::new()) }
+        UserTypeKind::Tagged {
+            schema: Rc::new(HashMap::new()),
+        }
     }
 }
 
@@ -117,12 +128,18 @@ pub enum KType<'a> {
     /// Per-declaration identity tag for a user-declared type. The `(scope_id, name)` pair
     /// is the dispatch identity; `kind` carries the surface keyword so the wildcard
     /// `AnyUserType { kind }` can admit only the matching family.
-    UserType { kind: UserTypeKind<'a>, scope_id: ScopeId, name: String },
+    UserType {
+        kind: UserTypeKind<'a>,
+        scope_id: ScopeId,
+        name: String,
+    },
     /// Wildcard tag matching any user-declared carrier of the given `kind`. Strictly more
     /// specific than `Any`; specificity to a concrete `UserType { kind: K, .. }` is
     /// one-direction only — `UserType` is more specific than `AnyUserType` of the same
     /// kind, not the reverse.
-    AnyUserType { kind: UserTypeKind<'a> },
+    AnyUserType {
+        kind: UserTypeKind<'a>,
+    },
     /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
     /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
     /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
@@ -156,11 +173,17 @@ pub enum KType<'a> {
     /// Recursive type binder. `body` describes the unfolded shape with `binder` in scope as a
     /// `RecursiveRef` for self-references. `name()` renders as the binder name so diagnostics
     /// stay readable (e.g. `Tree` rather than `Mu Tree. List<Tree>`).
-    Mu { binder: String, body: Box<KType<'a>> },
+    Mu {
+        binder: String,
+        body: Box<KType<'a>>,
+    },
     /// Application of a higher-kinded type constructor to arg types. `ctor` is a
     /// `UserType` with `TypeConstructor` kind; `args` are the elaborated arg types.
     /// Structural equality by `(ctor, args)`.
-    ConstructorApply { ctor: Box<KType<'a>>, args: Vec<KType<'a>> },
+    ConstructorApply {
+        ctor: Box<KType<'a>>,
+        args: Vec<KType<'a>>,
+    },
     /// Back-reference to an enclosing `Mu`'s binder. Equality is by binder name only.
     RecursiveRef(String),
     Any,
@@ -234,42 +257,82 @@ impl<'a> PartialEq for KType<'a> {
     fn eq(&self, other: &Self) -> bool {
         use KType::*;
         match (self, other) {
-            (Number, Number) | (Str, Str) | (Bool, Bool) | (Null, Null)
-            | (Identifier, Identifier) | (KExpression, KExpression)
-            | (TypeExprRef, TypeExprRef) | (Type, Type) | (Any, Any)
-            | (AnyModule, AnyModule) | (AnySignature, AnySignature) => true,
+            (Number, Number)
+            | (Str, Str)
+            | (Bool, Bool)
+            | (Null, Null)
+            | (Identifier, Identifier)
+            | (KExpression, KExpression)
+            | (TypeExprRef, TypeExprRef)
+            | (Type, Type)
+            | (Any, Any)
+            | (AnyModule, AnyModule)
+            | (AnySignature, AnySignature) => true,
             (List(a), List(b)) => a == b,
             (Dict(ka, va), Dict(kb, vb)) => ka == kb && va == vb,
             (KFunction { args: a1, ret: r1 }, KFunction { args: a2, ret: r2 }) => {
                 a1 == a2 && r1 == r2
             }
-            (KFunctor { params: p1, ret: r1 }, KFunctor { params: p2, ret: r2 }) => {
-                p1 == p2 && r1 == r2
-            }
             (
-                UserType { kind: k1, scope_id: s1, name: n1 },
-                UserType { kind: k2, scope_id: s2, name: n2 },
+                KFunctor {
+                    params: p1,
+                    ret: r1,
+                },
+                KFunctor {
+                    params: p2,
+                    ret: r2,
+                },
+            ) => p1 == p2 && r1 == r2,
+            (
+                UserType {
+                    kind: k1,
+                    scope_id: s1,
+                    name: n1,
+                },
+                UserType {
+                    kind: k2,
+                    scope_id: s2,
+                    name: n2,
+                },
             ) => k1 == k2 && s1 == s2 && n1 == n2,
             (AnyUserType { kind: k1 }, AnyUserType { kind: k2 }) => k1 == k2,
             (
-                Signature { sig: s1, pinned_slots: p1 },
-                Signature { sig: s2, pinned_slots: p2 },
+                Signature {
+                    sig: s1,
+                    pinned_slots: p1,
+                },
+                Signature {
+                    sig: s2,
+                    pinned_slots: p2,
+                },
             ) => s1.sig_id() == s2.sig_id() && p1 == p2,
             // `frame` is a lifecycle anchor, not part of identity.
             (Module { module: m1, .. }, Module { module: m2, .. }) => {
                 m1.scope_id() == m2.scope_id()
             }
             (
-                AbstractType { source_module: m1, name: n1 },
-                AbstractType { source_module: m2, name: n2 },
+                AbstractType {
+                    source_module: m1,
+                    name: n1,
+                },
+                AbstractType {
+                    source_module: m2,
+                    name: n2,
+                },
             ) => m1.scope_id() == m2.scope_id() && n1 == n2,
-            (Mu { binder: b1, body: bd1 }, Mu { binder: b2, body: bd2 }) => {
-                b1 == b2 && bd1 == bd2
-            }
             (
-                ConstructorApply { ctor: c1, args: a1 },
-                ConstructorApply { ctor: c2, args: a2 },
-            ) => c1 == c2 && a1 == a2,
+                Mu {
+                    binder: b1,
+                    body: bd1,
+                },
+                Mu {
+                    binder: b2,
+                    body: bd2,
+                },
+            ) => b1 == b2 && bd1 == bd2,
+            (ConstructorApply { ctor: c1, args: a1 }, ConstructorApply { ctor: c2, args: a2 }) => {
+                c1 == c2 && a1 == a2
+            }
             (RecursiveRef(n1), RecursiveRef(n2)) => n1 == n2,
             _ => false,
         }
@@ -392,7 +455,10 @@ mod tests {
         assert_eq!(UserTypeKind::struct_sentinel().surface_keyword(), "Struct");
         assert_eq!(UserTypeKind::tagged_sentinel().surface_keyword(), "Tagged");
         assert_eq!(
-            UserTypeKind::Newtype { repr: Box::new(KType::Number) }.surface_keyword(),
+            UserTypeKind::Newtype {
+                repr: Box::new(KType::Number)
+            }
+            .surface_keyword(),
             "Newtype",
         );
         assert_eq!(
@@ -407,8 +473,12 @@ mod tests {
 
     #[test]
     fn newtype_kind_partial_eq_ignores_repr() {
-        let a: UserTypeKind<'_> = UserTypeKind::Newtype { repr: Box::new(KType::Number) };
-        let b: UserTypeKind<'_> = UserTypeKind::Newtype { repr: Box::new(KType::Str) };
+        let a: UserTypeKind<'_> = UserTypeKind::Newtype {
+            repr: Box::new(KType::Number),
+        };
+        let b: UserTypeKind<'_> = UserTypeKind::Newtype {
+            repr: Box::new(KType::Str),
+        };
         assert_eq!(a, b);
         assert_ne!(a, UserTypeKind::struct_sentinel());
         assert_ne!(UserTypeKind::struct_sentinel(), a);
@@ -428,7 +498,9 @@ mod tests {
         let empty_t = UserTypeKind::tagged_sentinel();
         let mut schema = HashMap::new();
         schema.insert("some".into(), KType::Number);
-        let full_t = UserTypeKind::Tagged { schema: Rc::new(schema) };
+        let full_t = UserTypeKind::Tagged {
+            schema: Rc::new(schema),
+        };
         assert_eq!(empty_t, full_t);
 
         assert_ne!(empty, empty_t);
@@ -451,17 +523,28 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a, empty);
         assert_ne!(a, UserTypeKind::struct_sentinel());
-        assert_ne!(a, UserTypeKind::Newtype { repr: Box::new(KType::Number) });
+        assert_ne!(
+            a,
+            UserTypeKind::Newtype {
+                repr: Box::new(KType::Number)
+            }
+        );
     }
 
     #[test]
     fn any_user_type_name_renders_kind_keyword() {
         assert_eq!(
-            KType::AnyUserType { kind: UserTypeKind::struct_sentinel() }.name(),
+            KType::AnyUserType {
+                kind: UserTypeKind::struct_sentinel()
+            }
+            .name(),
             "Struct"
         );
         assert_eq!(
-            KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() }.name(),
+            KType::AnyUserType {
+                kind: UserTypeKind::tagged_sentinel()
+            }
+            .name(),
             "Tagged"
         );
     }

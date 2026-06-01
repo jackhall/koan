@@ -17,13 +17,25 @@ fn type_identity_for_signature_bound_yields_module_carrier() {
         "Foo".into(),
     ));
     let module = arena.alloc_module(Module::new("Foo".into(), child));
-    let obj = arena.alloc(KObject::KTypeValue(KType::Module { module, frame: None }));
+    let obj = arena.alloc(KObject::KTypeValue(KType::Module {
+        module,
+        frame: None,
+    }));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let declared = KType::Signature { sig, pinned_slots: Vec::new() };
+    let declared = KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    };
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("module identity expected");
-    assert_eq!(identity, KType::Module { module, frame: None });
+    assert_eq!(
+        identity,
+        KType::Module {
+            module,
+            frame: None
+        }
+    );
 }
 
 #[test]
@@ -35,12 +47,21 @@ fn type_identity_for_any_module_yields_module_carrier() {
         "Bar".into(),
     ));
     let module = arena.alloc_module(Module::new("Bar".into(), child));
-    let obj = arena.alloc(KObject::KTypeValue(KType::Module { module, frame: None }));
+    let obj = arena.alloc(KObject::KTypeValue(KType::Module {
+        module,
+        frame: None,
+    }));
     let declared = KType::AnyModule;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("module identity expected");
-    assert_eq!(identity, KType::Module { module, frame: None });
+    assert_eq!(
+        identity,
+        KType::Module {
+            module,
+            frame: None
+        }
+    );
 }
 
 #[test]
@@ -48,13 +69,21 @@ fn type_identity_for_signature_yields_signature_carrier() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let obj =
-        arena.alloc(KObject::KTypeValue(KType::Signature { sig, pinned_slots: Vec::new() }));
+    let obj = arena.alloc(KObject::KTypeValue(KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    }));
     let declared = KType::AnySignature;
     let identity = type_identity_for("p", obj, &declared, scope)
         .expect("Ok expected")
         .expect("signature identity expected");
-    assert_eq!(identity, KType::Signature { sig, pinned_slots: Vec::new() });
+    assert_eq!(
+        identity,
+        KType::Signature {
+            sig,
+            pinned_slots: Vec::new()
+        }
+    );
 }
 
 #[test]
@@ -92,6 +121,11 @@ fn type_identity_for_carrier_mismatch_returns_none() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let obj = arena.alloc(KObject::Number(1.0));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let declared = KType::Signature { sig, pinned_slots: Vec::new() };
-    assert!(type_identity_for("p", obj, &declared, scope).expect("Ok expected").is_none());
+    let declared = KType::Signature {
+        sig,
+        pinned_slots: Vec::new(),
+    };
+    assert!(type_identity_for("p", obj, &declared, scope)
+        .expect("Ok expected")
+        .is_none());
 }

@@ -1,12 +1,14 @@
-use std::cell::OnceCell;
-
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeExpr, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeExpr};
 use crate::machine::model::types::KType;
 use crate::machine::model::{KObject, Parseable};
 
-fn kw(s: &str) -> ExpressionPart<'static> { ExpressionPart::Keyword(s.into()) }
-fn ident(s: &str) -> ExpressionPart<'static> { ExpressionPart::Identifier(s.into()) }
+fn kw(s: &str) -> ExpressionPart<'static> {
+    ExpressionPart::Keyword(s.into())
+}
+fn ident(s: &str) -> ExpressionPart<'static> {
+    ExpressionPart::Identifier(s.into())
+}
 fn expr(parts: Vec<ExpressionPart<'static>>) -> ExpressionPart<'static> {
     ExpressionPart::expression(parts)
 }
@@ -59,7 +61,9 @@ fn builtin_cache_lifetime_lift_does_not_dangle() {
     use crate::machine::core::RuntimeArena;
 
     let te = TypeExpr::leaf("Number".into());
-    te.builtin_cache.set(KType::Number).expect("OnceCell is empty");
+    te.builtin_cache
+        .set(KType::Number)
+        .expect("OnceCell is empty");
 
     {
         let arena_a = RuntimeArena::new();
@@ -105,9 +109,18 @@ fn summarize_atomic_variants() {
 
 #[test]
 fn summarize_literal_variants() {
-    assert_eq!(ExpressionPart::Literal(KLiteral::Number(1.5)).summarize(), "1.5");
-    assert_eq!(ExpressionPart::Literal(KLiteral::String("hi".into())).summarize(), "hi");
-    assert_eq!(ExpressionPart::Literal(KLiteral::Boolean(true)).summarize(), "true");
+    assert_eq!(
+        ExpressionPart::Literal(KLiteral::Number(1.5)).summarize(),
+        "1.5"
+    );
+    assert_eq!(
+        ExpressionPart::Literal(KLiteral::String("hi".into())).summarize(),
+        "hi"
+    );
+    assert_eq!(
+        ExpressionPart::Literal(KLiteral::Boolean(true)).summarize(),
+        "true"
+    );
     assert_eq!(ExpressionPart::Literal(KLiteral::Null).summarize(), "null");
 }
 
@@ -145,7 +158,10 @@ fn parseable_equal_and_ktype_for_kexpression() {
     let c = KExpression::new(parts_of(vec![kw("LET"), ident("y")]));
     assert!(a.equal(&b));
     assert!(!a.equal(&c));
-    assert!(matches!(a.ktype(), crate::machine::model::KType::KExpression));
+    assert!(matches!(
+        a.ktype(),
+        crate::machine::model::KType::KExpression
+    ));
 }
 
 #[test]
@@ -169,7 +185,9 @@ fn borrow_inner_expressions_success_and_mismatch() {
         expr(vec![ident("a")]),
         expr(vec![ident("b")]),
     ]));
-    let borrowed = all_exprs.borrow_inner_expressions().expect("all parts are expressions");
+    let borrowed = all_exprs
+        .borrow_inner_expressions()
+        .expect("all parts are expressions");
     assert_eq!(borrowed.len(), 2);
     assert_eq!(borrowed[0].summarize(), "a");
     assert_eq!(borrowed[1].summarize(), "b");
@@ -181,14 +199,18 @@ fn borrow_inner_expressions_success_and_mismatch() {
 #[test]
 fn try_take_inner_expressions_split_empty_returns_err() {
     let e: KExpression<'static> = KExpression::new(vec![]);
-    let err = e.try_take_inner_expressions_split().expect_err("empty must Err");
+    let err = e
+        .try_take_inner_expressions_split()
+        .expect_err("empty must Err");
     assert!(err.parts.is_empty());
 }
 
 #[test]
 fn try_take_inner_expressions_split_first_non_expression_returns_err() {
     let e = KExpression::new(parts_of(vec![ident("a"), expr(vec![ident("b")])]));
-    let err = e.try_take_inner_expressions_split().expect_err("non-expr head must Err");
+    let err = e
+        .try_take_inner_expressions_split()
+        .expect_err("non-expr head must Err");
     assert_eq!(err.summarize(), "a b");
 }
 
@@ -199,7 +221,9 @@ fn try_take_inner_expressions_split_middle_non_expression_returns_err() {
         ident("b"),
         expr(vec![ident("c")]),
     ]));
-    let err = e.try_take_inner_expressions_split().expect_err("non-expr middle must Err");
+    let err = e
+        .try_take_inner_expressions_split()
+        .expect_err("non-expr middle must Err");
     assert_eq!(err.summarize(), "a b c");
 }
 
@@ -210,31 +234,13 @@ fn try_take_inner_expressions_split_all_expressions_returns_ok() {
         expr(vec![ident("b")]),
         expr(vec![ident("c")]),
     ]));
-    let (preceding, last) = e.try_take_inner_expressions_split().expect("all-expr is Ok");
+    let (preceding, last) = e
+        .try_take_inner_expressions_split()
+        .expect("all-expr is Ok");
     assert_eq!(preceding.len(), 2);
     assert_eq!(preceding[0].summarize(), "a");
     assert_eq!(preceding[1].summarize(), "b");
     assert_eq!(last.summarize(), "c");
-}
-
-#[test]
-fn type_expr_render_parameterized_and_function() {
-    let list_of_number = TypeExpr {
-        name: "List".into(),
-        params: TypeParams::List(vec![TypeExpr::leaf("Number".into())]),
-        builtin_cache: OnceCell::new(),
-    };
-    assert_eq!(list_of_number.render(), ":(List Number)");
-
-    let fn_expr = TypeExpr {
-        name: "Function".into(),
-        params: TypeParams::Function {
-            args: vec![TypeExpr::leaf("Number".into()), TypeExpr::leaf("Str".into())],
-            ret: Box::new(TypeExpr::leaf("Bool".into())),
-        },
-        builtin_cache: OnceCell::new(),
-    };
-    assert_eq!(fn_expr.render(), ":(Function (Number Str) -> Bool)");
 }
 
 #[test]

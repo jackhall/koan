@@ -1,10 +1,10 @@
 //! Signature parsing for the `FN` builtin.
 
 use crate::machine::core::source::Spanned;
-use crate::machine::model::{Argument, KObject, SignatureElement};
-use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
-use crate::machine::NodeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
+use crate::machine::model::{Argument, KObject, SignatureElement};
+use crate::machine::NodeId;
 
 /// Must run before any outer-scope elaboration: the eager path would otherwise surface
 /// `Unbound` against a parameter name.
@@ -15,9 +15,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
     while i < parts.len() {
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-                Some(t.name.clone())
-            }
+            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => Some(t.name.clone()),
             _ => None,
         };
         if let Some(name) = param_name {
@@ -74,9 +72,7 @@ pub(crate) fn parse_fn_param_list<'a>(
         // parameter-name position denotes a binder, not a type reference.
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-                Some(t.name.clone())
-            }
+            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => Some(t.name.clone()),
             _ => None,
         };
         match (param_name, &parts[i].value) {
@@ -99,9 +95,8 @@ pub(crate) fn parse_fn_param_list<'a>(
                                 parks.extend(producers);
                             }
                             ElabResult::Unbound(msg) if first_err.is_none() => {
-                                first_err = Some(format!(
-                                    "{msg} in FN signature for parameter `{name}`"
-                                ));
+                                first_err =
+                                    Some(format!("{msg} in FN signature for parameter `{name}`"));
                             }
                             ElabResult::Unbound(_) => {}
                         }
@@ -131,7 +126,7 @@ pub(crate) fn parse_fn_param_list<'a>(
                     Some(ExpressionPart::Future(other)) => {
                         return ParamListOutcome::Err(format!(
                             "FN signature parameter `{name}` type slot resolved to a non-type \
-                             value `{}` (expected a type expression like `:Number` or `:(List Str)`)",
+                             value `{}` (expected a type expression like `:Number` or `:(LIST OF Str)`)",
                             other.summarize(),
                         ));
                     }
@@ -252,4 +247,3 @@ fn signature_expr_part<'a, 'e>(expr: &'e KExpression<'a>) -> Option<&'e KExpress
         _ => None,
     }
 }
-

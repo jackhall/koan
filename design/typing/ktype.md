@@ -84,7 +84,7 @@ against it.
 
 ## Container type parameterization
 
-`:(List T)`, `:(Dict K V)`, and `:(Function (args) -> ret)` carry their inner
+`:(LIST OF T)`, `:(MAP K -> V)`, and `:(FN (args) -> ret)` carry their inner
 types on the variant directly. `KType` is not `Copy`; structural payloads are
 `Box`ed where the variant would otherwise be self-referential.
 
@@ -93,10 +93,9 @@ type-expression group. The parser treats `:(...)` as a parse-context marker
 anchored to the `:` — every sigil emits one
 [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../../src/machine/model/ast.rs)
 wrapping the raw inner expression verbatim, with no shape recognition at
-parse time. Shape decisions (positional `:(List Number)`, keyworded
-`:(LIST OF Number)`, user-functor `:(MyFunctor (T = IntOrd))`, etc.) are the
-dispatcher's responsibility — the parser's only job is to flag "this slot
-evaluates to a type". `<` and `>` flow through unencumbered as keyword
+parse time. Shape decisions (keyworded `:(LIST OF Number)`, user-functor
+`:(MyFunctor (T = IntOrd))`, etc.) are the dispatcher's responsibility — the
+parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../src/parse/frame.rs) (`Frame::TypeExpr`);
 the dispatcher's `fast_lane_sigiled_type_expr` handler
@@ -130,9 +129,9 @@ Three sites consume parameterized types, and each has its own behavior:
 
 | Site | What it does | Variance |
 | --- | --- | --- |
-| `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(List Any)` accepts any list because `Any.matches_value(_)` is always true; `:(Dict Str Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(List Number)` ≺ `:(List Any)`, `:(Dict Str Number)` ≺ `:(Dict Str Any)`, `:(Function (Number) -> Str)` ≺ `:(Function (Any) -> Any)`. |
-| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(Function (Number) -> Str)`, not `:(Function (Any) -> Str)`. |
+| `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(LIST OF Any)` accepts any list because `Any.matches_value(_)` is always true; `:(MAP Str -> Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`, `:(FN (Number) -> Str)` ≺ `:(FN (Any) -> Any)`. |
+| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(FN (Number) -> Str)`, not `:(FN (Any) -> Str)`. |
 
 The combination is sound for dispatch even though `is_more_specific_than`
 ranks `Function`-typed slots covariantly while `function_compat` is invariant.
@@ -140,7 +139,7 @@ The covariant ranking only matters when two parameterized function slots both
 match the same call; with `function_compat`'s strict equality, a function
 value matches at most one parameterized function slot, so the ranking has no
 tie to break in that case. The covariance is observable for `List` / `Dict`
-tournaments — `(xs :(List Number))` strictly outranks `(xs :(List Any))` for a
+tournaments — `(xs :(LIST OF Number))` strictly outranks `(xs :(LIST OF Any))` for a
 number-list call — and benign for `Function`.
 
 Concretely:
@@ -148,21 +147,21 @@ Concretely:
 ```
 LET nums = [1 2 3]
 
-FN (PICK xs :(List Any))    -> Str = ("any")
-FN (PICK xs :(List Number)) -> Str = ("number")
+FN (PICK xs :(LIST OF Any))    -> Str = ("any")
+FN (PICK xs :(LIST OF Number)) -> Str = ("number")
 
-PICK nums   # → "number"   (covariant: :(List Number) ≺ :(List Any))
+PICK nums   # → "number"   (covariant: :(LIST OF Number) ≺ :(LIST OF Any))
 ```
 
 ```
-FN (BAD) -> :(List Number) = ([1 "x"])
-BAD   # → TypeMismatch: expected :(List Number), got :(List Any)
+FN (BAD) -> :(LIST OF Number) = ([1 "x"])
+BAD   # → TypeMismatch: expected :(LIST OF Number), got :(LIST OF Any)
         # (matches_value walks elements; covariant — Any.matches_value(_) is true,
         #  Number.matches_value("x") is false)
 ```
 
 ```
-FN (USE f :(Function (Number) -> Str)) -> Str = ("got fn")
+FN (USE f :(FN (Number) -> Str)) -> Str = ("got fn")
 
 USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal)
 USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → DispatchFailed
@@ -186,9 +185,9 @@ read off `f.signature`).
 **error** at an untyped resolution boundary — an untyped value-route `LET`, a
 bare top-level expression result. The producing boundary must annotate the value
 (e.g. a typed FN return) or use a non-empty literal. A *stamped* empty container
-(an `FN -> :(List Number) = ([])` whose carrier is re-tagged to element `Number`)
+(an `FN -> :(LIST OF Number) = ([])` whose carrier is re-tagged to element `Number`)
 is fine; a heterogeneous non-empty literal (`[2, "hello"]` → `List<Any>`) is
-unaffected — it carries information and is legal where `:(List Any)` is declared.
+unaffected — it carries information and is legal where `:(LIST OF Any)` is declared.
 
 ### Runtime type-parameter carriers
 
@@ -217,14 +216,14 @@ the builtin registration owns.
 **Ascription is authoritative at annotated boundaries.** A parameterized-carrier
 value crossing an annotated boundary is checked via `matches_value` and then
 re-tagged (`KObject::stamp_type`) to *exactly* the declared type, **coarsening
-included** — a `List<Number>` value returned through `:(List Any)` re-tags to
+included** — a `List<Number>` value returned through `:(LIST OF Any)` re-tags to
 `List<Any>`, so downstream dispatch sees the contract rather than the
 implementation's incidental precision. An unannotated value keeps its precise
 memoized type; surrendering precision is the deliberate act of writing an
 annotation. The three boundaries are:
 
 - **FN return** — the scheduler walks `matches_value` over the returned value
-  (a list literal `[1, "x"]` returned where `:(List Number)` was declared fails
+  (a list literal `[1, "x"]` returned where `:(LIST OF Number)` was declared fails
   with a structured `TypeMismatch` naming both types), then stamps the carrier to
   the resolved per-call return type. Both the resolved and deferred-return paths
   stamp in [`invoke.rs`](../../src/machine/core/kfunction/invoke.rs).
@@ -239,14 +238,17 @@ annotation. The three boundaries are:
   [Dispatch and slot-specificity](#dispatch-and-slot-specificity)).
 - **`LET`** ascription — same check-then-stamp on the bound value.
 
-**Arity is enforced at FN-definition time** by `KType::from_type_expr`:
-`:(List A B)` rejects with a precise error before the function is ever
-called. (See [elaboration.md § Layers](elaboration.md#layers) § Layer 1
-for where `from_type_expr` sits in the elaboration pipeline.)
+**Parameter arity is fixed by the keyworded sigil shape.** `:(LIST OF X)`
+carries exactly one element slot and `:(MAP K -> V)` exactly two, so an
+arity mismatch isn't expressible at the surface — the type-constructor
+overloads only match the well-formed shape, and any other arrangement
+fails to resolve as a parameterized type at all. (See
+[elaboration.md § Layers](elaboration.md#layers) § Layer 1 for where type
+elaboration sits in the pipeline.)
 
 `KFunction` is not a surface-declarable type name — there's no "any function"
 KType, since a function with no signature has nothing to dispatch on. Use
-`:(Function (args) -> R)` for typed shapes or `Any` for unconstrained values.
+`:(FN (args) -> R)` for typed shapes or `Any` for unconstrained values.
 FN's own registered return type is `KType::Any` for the same reason: the
 constructed function's projected `ktype()` carries its real shape at runtime.
 
@@ -256,7 +258,7 @@ constructed function's projected `ktype()` carries its real shape at runtime.
 token (`ExpressionPart::Type(_)`). The slot resolves to a
 `KObject::KTypeValue(KType)` carrying the elaborated type — name, nested
 parameters, and (for recursive types) `Mu` / `RecursiveRef` structure — so
-parameterized types like `:(List Number)` and recursive types like `Tree`
+parameterized types like `:(LIST OF Number)` and recursive types like `Tree`
 survive the parser → dispatch boundary as a single canonical value. Used by
 FN's return-type slot, by STRUCT and UNION's name slots, and by `type_call`'s
 verb slot. Slots that want only a bare name (STRUCT/UNION) check the elaborated
@@ -328,14 +330,14 @@ shape-only — its element types aren't known until it evaluates. An *evaluated*
 container (`Future(List/Dict)`) is admitted only when its memoized carried element
 type *satisfies* the slot (`KType::satisfied_by`: exact match or covariant
 refinement) — a pure type-level comparison against the value's `ktype()`, with no
-element walk. A `List<Number>` value fills `:(List Any)`; a `List<Any>` value (the
-join an empty or heterogeneous literal memoizes) fills `:(List Any)` but not
-`:(List Number)`. A container whose carried type doesn't satisfy a slot is a
+element walk. A `List<Number>` value fills `:(LIST OF Any)`; a `List<Any>` value (the
+join an empty or heterogeneous literal memoizes) fills `:(LIST OF Any)` but not
+`:(LIST OF Number)`. A container whose carried type doesn't satisfy a slot is a
 *non-match*: dispatch falls through to outer scopes and, finding nothing, surfaces
 `DispatchFailed` rather than committing to a slot that would fail at the bind
 boundary.
 
-This makes element-only-differing overloads (`:(List Number)` vs `:(List Str)`)
+This makes element-only-differing overloads (`:(LIST OF Number)` vs `:(LIST OF Str)`)
 dispatchable across the forms a container argument takes. Admission is
 strict-only, driven by a per-`run_dispatch` `bare_outcomes` cache —
 [`signature_admits_strict`](../../src/machine/execute/dispatch/resolve_dispatch.rs)

@@ -2,11 +2,10 @@
 //! `List<T>`, `Dict<K, V>`, `Function<…>`, plus specificity tournaments.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
-use crate::machine::RuntimeArena;
 use crate::machine::core::KErrorKind;
 use crate::machine::execute::Scheduler;
 use crate::machine::model::types::KType;
-use crate::parse::parse;
+use crate::machine::RuntimeArena;
 
 use super::capture_program_output;
 
@@ -88,23 +87,6 @@ fn fn_returning_typed_list_rejects_wrong_element_type() {
     assert!(
         res.is_err(),
         "expected return-type mismatch when body produces :(LIST OF Any) for declared :(LIST OF Number)"
-    );
-}
-
-#[test]
-fn fn_with_invalid_list_arity_errors_at_definition() {
-    let arena = RuntimeArena::new();
-    let scope = run_root_silent(&arena);
-    let mut sched = Scheduler::new();
-    let exprs = parse("FN (BAD xs :(List Number, Str)) -> Null = (xs)").expect("parse ok");
-    let mut ids = Vec::new();
-    for e in exprs {
-        ids.push(sched.add_dispatch(e, scope));
-    }
-    sched.execute().expect("scheduler runs");
-    assert!(
-        ids.iter().any(|id| sched.read_result(*id).is_err()),
-        "FN definition with `:(List Number, Str)` should fail with an arity error"
     );
 }
 
@@ -217,8 +199,14 @@ fn dispatch_disambiguates_element_only_overloads_on_bound_variable() {
 fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
-    run(scope, "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
+    run(
+        scope,
+        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
+    );
+    run(
+        scope,
+        "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
+    );
     let mut sched = Scheduler::new();
     sched.add_dispatch(parse_one("DESCRIBE nope"), scope);
     let error = sched
@@ -237,8 +225,14 @@ fn dispatch_unbound_name_across_tied_overloads_is_unbound_error() {
 fn dispatch_heterogeneous_literal_matches_no_concrete_element_overload() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")");
-    run(scope, "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")");
+    run(
+        scope,
+        "FN (DESCRIBE xs :(LIST OF Number)) -> Str = (\"numbers\")",
+    );
+    run(
+        scope,
+        "FN (DESCRIBE xs :(LIST OF Str)) -> Str = (\"strings\")",
+    );
     let mut sched = Scheduler::new();
     sched.add_dispatch(parse_one("DESCRIBE [1 \"a\"]"), scope);
     let error = sched
@@ -303,9 +297,9 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
     run(scope, "FN (HEAD xs :(LIST OF Number)) -> Number = (1)");
     let mut sched = Scheduler::new();
     sched.add_dispatch(parse_one("HEAD [\"a\"]"), scope);
-    let error = sched.execute().expect_err(
-        "List<Str> against a :(LIST OF Number)-only overload must fail to dispatch",
-    );
+    let error = sched
+        .execute()
+        .expect_err("List<Str> against a :(LIST OF Number)-only overload must fail to dispatch");
     assert!(
         matches!(error.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed (no matching overload), got {error:?}",
@@ -319,7 +313,10 @@ fn fn_typed_list_param_wrong_element_type_finds_no_match() {
 fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)");
+    run(
+        scope,
+        "FN (ECHO xs :(LIST OF Any)) -> :(LIST OF Any) = (xs)",
+    );
     let result = run_one(scope, parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), KType::List(Box::new(KType::Any)));
 }
@@ -329,7 +326,10 @@ fn fn_typed_list_param_stamps_bound_arg_to_declared_element() {
 fn fn_typed_list_param_accepts_matching_element_at_call() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)");
+    run(
+        scope,
+        "FN (ECHO xs :(LIST OF Number)) -> :(LIST OF Number) = (xs)",
+    );
     let result = run_one(scope, parse_one("ECHO [1]"));
     assert_eq!(result.ktype(), KType::List(Box::new(KType::Number)));
 }

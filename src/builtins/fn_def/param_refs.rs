@@ -6,27 +6,16 @@
 //! `ReturnType::Deferred(_)` that re-elaborates per call against the dispatch-boundary
 //! scope.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 
 pub(super) fn type_expr_references_any(te: &TypeExpr, param_names: &[String]) -> bool {
-    if param_names.iter().any(|n| n == &te.name) {
-        return true;
-    }
-    match &te.params {
-        TypeParams::None => false,
-        TypeParams::List(items) => items.iter().any(|t| type_expr_references_any(t, param_names)),
-        TypeParams::Function { args, ret } => {
-            args.iter().any(|t| type_expr_references_any(t, param_names))
-                || type_expr_references_any(ret, param_names)
-        }
-    }
+    param_names.iter().any(|n| n == &te.name)
 }
 
-pub(super) fn kexpression_references_any(
-    expr: &KExpression<'_>,
-    param_names: &[String],
-) -> bool {
-    expr.parts.iter().any(|p| part_references_any(&p.value, param_names))
+pub(super) fn kexpression_references_any(expr: &KExpression<'_>, param_names: &[String]) -> bool {
+    expr.parts
+        .iter()
+        .any(|p| part_references_any(&p.value, param_names))
 }
 
 fn part_references_any(part: &ExpressionPart<'_>, param_names: &[String]) -> bool {

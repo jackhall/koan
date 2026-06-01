@@ -32,12 +32,14 @@ impl<'a> ArgumentBundle<'a> {
 
     pub fn require_kexpression(&self, name: &str) -> Result<&KExpression<'a>, KError> {
         let obj = self.get_or_missing(name)?;
-        obj.as_kexpression().ok_or_else(|| mismatch(name, "KExpression", obj))
+        obj.as_kexpression()
+            .ok_or_else(|| mismatch(name, "KExpression", obj))
     }
 
     pub fn require_ktype(&self, name: &str) -> Result<&KType<'a>, KError> {
         let obj = self.get_or_missing(name)?;
-        obj.as_ktype().ok_or_else(|| mismatch(name, "TypeExprRef", obj))
+        obj.as_ktype()
+            .ok_or_else(|| mismatch(name, "TypeExprRef", obj))
     }
 
     pub fn require_module(&self, name: &str) -> Result<&'a Module<'a>, KError> {
@@ -47,7 +49,8 @@ impl<'a> ArgumentBundle<'a> {
 
     pub fn require_signature(&self, name: &str) -> Result<&'a Signature<'a>, KError> {
         let obj = self.get_or_missing(name)?;
-        obj.as_signature().ok_or_else(|| mismatch(name, "Signature", obj))
+        obj.as_signature()
+            .ok_or_else(|| mismatch(name, "Signature", obj))
     }
 
     /// Untyped variant of the `require_*` family; caller dispatches on `KObject` arms.
@@ -92,10 +95,7 @@ pub(crate) fn extract_kexpression<'a>(
 ///
 /// Both extractors consume the slot via `remove`; callers that try both must peek with
 /// `bundle.get(...)` first.
-pub(crate) fn extract_ktype<'a>(
-    bundle: &mut ArgumentBundle<'a>,
-    name: &str,
-) -> Option<KType<'a>> {
+pub(crate) fn extract_ktype<'a>(bundle: &mut ArgumentBundle<'a>, name: &str) -> Option<KType<'a>> {
     let rc = bundle.args.remove(name)?;
     match Rc::try_unwrap(rc) {
         Ok(KObject::KTypeValue(t)) => Some(t),
@@ -120,12 +120,6 @@ pub(crate) fn extract_bare_type_name<'a>(
     match bundle.get(name) {
         Some(KObject::TypeNameRef(t)) => match &t.params {
             TypeParams::None => Ok(t.name.clone()),
-            TypeParams::List(_) | TypeParams::Function { .. } => {
-                Err(KError::new(KErrorKind::ShapeError(format!(
-                    "{surface} {name} must be a bare type name, got `{}`",
-                    t.render(),
-                ))))
-            }
         },
         Some(KObject::KTypeValue(t)) => match t {
             KType::Number

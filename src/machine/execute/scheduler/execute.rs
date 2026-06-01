@@ -19,11 +19,8 @@ impl<'a> Scheduler<'a> {
             let work = node.work;
             let prev_function = node.function;
             let prev_chain_carrier = node.chain;
-            let guard = self.enter_slot_step(
-                node.frame,
-                node.reserve_frame,
-                prev_chain_carrier.clone(),
-            );
+            let guard =
+                self.enter_slot_step(node.frame, node.reserve_frame, prev_chain_carrier.clone());
             let step = match work {
                 NodeWork::Dispatch { expr, state } => {
                     let mut ctx = crate::machine::execute::dispatch::DispatchCtx::new(self);
@@ -31,9 +28,11 @@ impl<'a> Scheduler<'a> {
                         &mut ctx, expr, state, scope, idx,
                     )?
                 }
-                NodeWork::Combine { deps, park_count, finish } => {
-                    self.run_combine(deps, park_count, finish, scope, idx)
-                }
+                NodeWork::Combine {
+                    deps,
+                    park_count,
+                    finish,
+                } => self.run_combine(deps, park_count, finish, scope, idx),
                 NodeWork::Catch { from, finish } => self.run_catch(from, finish, scope, idx),
                 NodeWork::Lift(state) => NodeStep::Done(Self::run_lift(state)),
             };
@@ -57,8 +56,9 @@ impl<'a> Scheduler<'a> {
                                 // elaborated `KType`; the static carrier here can't see
                                 // that resolution.
                                 let rt = &f.signature.return_type;
-                                if let crate::machine::model::types::ReturnType::Resolved(declared) =
-                                    rt
+                                if let crate::machine::model::types::ReturnType::Resolved(
+                                    declared,
+                                ) = rt
                                 {
                                     if !declared.matches_value(&lifted_obj) {
                                         let err = KError::new(KErrorKind::TypeMismatch {
@@ -72,7 +72,7 @@ impl<'a> Scheduler<'a> {
                                     }
                                     // Re-tag to the declared return type so downstream
                                     // dispatch sees the contract (may coarsen, e.g.
-                                    // `List<Number>` through `:(List Any)` -> `List<Any>`).
+                                    // `List<Number>` through `:(LIST OF Any)` -> `List<Any>`).
                                     lifted_obj = lifted_obj.stamp_type(declared);
                                 }
                             }
@@ -124,14 +124,17 @@ impl<'a> Scheduler<'a> {
                             );
                         }
                         None => {
-                            self.store.reinstall(id, Node {
-                                work: new_work,
-                                scope,
-                                frame: prev_frame,
-                                reserve_frame: post_step_reserve,
-                                function: next_function,
-                                chain: new_chain,
-                            });
+                            self.store.reinstall(
+                                id,
+                                Node {
+                                    work: new_work,
+                                    scope,
+                                    frame: prev_frame,
+                                    reserve_frame: post_step_reserve,
+                                    function: next_function,
+                                    chain: new_chain,
+                                },
+                            );
                         }
                     }
                     // Replace return sites install their own edges (or clear
@@ -147,7 +150,10 @@ impl<'a> Scheduler<'a> {
         // no longer fire — surface the cycle rather than panic on the caller's
         // top-level result read.
         if let Some((pending, sample)) = self.store.unresolved() {
-            return Err(KError::new(KErrorKind::SchedulerDeadlock { pending, sample }));
+            return Err(KError::new(KErrorKind::SchedulerDeadlock {
+                pending,
+                sample,
+            }));
         }
         Ok(())
     }
@@ -158,7 +164,11 @@ impl<'a> Scheduler<'a> {
     ///
     /// Stamps must all land before any queue push: a later stamp re-reading the
     /// slot must observe the prior transition.
-    pub(in crate::machine::execute::scheduler) fn finalize(&mut self, idx: usize, output: NodeOutput<'a>) {
+    pub(in crate::machine::execute::scheduler) fn finalize(
+        &mut self,
+        idx: usize,
+        output: NodeOutput<'a>,
+    ) {
         let id = NodeId(idx);
         self.store.finalize(id, output);
         let drained = self.deps.drain_notify(idx);
@@ -184,7 +194,9 @@ impl<'a> Scheduler<'a> {
     pub(in crate::machine::execute) fn free(&mut self, idx: usize) {
         let mut stack: Vec<NodeId> = vec![NodeId(idx)];
         while let Some(id) = stack.pop() {
-            if self.store.is_live(id) { continue; }
+            if self.store.is_live(id) {
+                continue;
+            }
             if self.store.is_reclaimed(id) && self.deps.is_dep_edges_empty(id.index()) {
                 continue;
             }
@@ -202,7 +214,11 @@ impl<'a> Scheduler<'a> {
     /// After a replay-park, `dep_edges[idx]` can take the mixed shape
     /// `[Notify(producer), …, Owned(bind_id)]`; `free` handles that correctly via
     /// its Owned-only recursion.
-    pub(in crate::machine::execute) fn defer_to_lift(&mut self, idx: usize, bind_id: NodeId) -> NodeStep<'a> {
+    pub(in crate::machine::execute) fn defer_to_lift(
+        &mut self,
+        idx: usize,
+        bind_id: NodeId,
+    ) -> NodeStep<'a> {
         self.deps.add_owned_edge(bind_id, NodeId(idx));
         NodeStep::Replace {
             work: NodeWork::Lift(LiftState::Pending(bind_id)),
