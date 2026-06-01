@@ -105,7 +105,7 @@ anchored to the `:` — every sigil emits one
 [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../../src/machine/model/ast.rs)
 wrapping the raw inner expression verbatim, with no shape recognition at
 parse time. Shape decisions (keyworded `:(LIST OF Number)`, user-functor
-`:(MyFunctor (T = IntOrd))`, etc.) are the dispatcher's responsibility — the
+`:(MyFunctor {T = IntOrd})`, etc.) are the dispatcher's responsibility — the
 parser's only job is to flag "this slot evaluates to a type". `<` and `>` flow through unencumbered as keyword
 tokens, leaving the arithmetic comparison operators available. The framing
 logic lives in [frame.rs](../../src/parse/frame.rs) (`Frame::TypeExpr`);

@@ -208,7 +208,7 @@ fn type_side_gate_struct_forward_resolves() {
         &arena,
         "FN (TAKES p :Pt) -> Number = (p.x)\n\
          STRUCT Pt = (x :Number, y :Number)\n\
-         LET p = (Pt (x = 5, y = 6))\n\
+         LET p = (Pt {x = 5, y = 6})\n\
          LET result = (TAKES p)",
     );
     assert!(

@@ -79,7 +79,7 @@ The `:(...)` glued-right sigil opens a *parse-context marker* group. The
 parser collects the inner tokens into a regular `KExpression` and wraps it as
 [`ExpressionPart::SigiledTypeExpr(Box<KExpression>)`](../src/machine/model/ast.rs)
 — no inner-shape recognition runs at parse time. Shape decisions
-(keyworded `:(LIST OF Number)`, user-functor `:(MyFunctor (T = IntOrd))`,
+(keyworded `:(LIST OF Number)`, user-functor `:(MyFunctor {T = IntOrd})`,
 etc.) are the dispatcher's responsibility: the
 sigil's only job is to flag "this slot evaluates to a type, not a value". The
 framing logic lives in [frame.rs](../src/parse/frame.rs)

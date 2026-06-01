@@ -636,7 +636,7 @@ The rails the dispatch driver feeds:
     site does. See
     [type-language-via-dispatch.md](typing/type-language-via-dispatch.md)
     for the full type-language dispatch contract.
-  - `FunctionValueCall` (`f (x = 7)`) — `stateful_fast_lane_function_value_call`
+  - `FunctionValueCall` (`f {x = 7}`) — `stateful_fast_lane_function_value_call`
     resolves the `Identifier` head and handles every admission outcome
     directly. The call shape admits iff `expr.parts[1..]` is exactly one
     nested-parens part (the *only* call shape — koan has no `f 1 2`

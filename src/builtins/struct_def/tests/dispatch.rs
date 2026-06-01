@@ -102,12 +102,12 @@ fn per_declaration_dispatch_separates_overloads() {
          FN (PICK x :Foo) -> Str = (\"foo\")\n\
          FN (PICK x :Bar) -> Str = (\"bar\")",
     );
-    let foo_result = run_one(scope, parse_one("PICK (Foo (a = 1))"));
+    let foo_result = run_one(scope, parse_one("PICK (Foo {a = 1})"));
     match foo_result {
         KObject::KString(s) => assert_eq!(s, "foo"),
         other => panic!("expected \"foo\", got {:?}", other.ktype()),
     }
-    let bar_result = run_one(scope, parse_one("PICK (Bar (a = 1))"));
+    let bar_result = run_one(scope, parse_one("PICK (Bar {a = 1})"));
     match bar_result {
         KObject::KString(s) => assert_eq!(s, "bar"),
         other => panic!("expected \"bar\", got {:?}", other.ktype()),
@@ -127,8 +127,8 @@ fn wildcard_struct_slot_admits_any_struct_carrier() {
          STRUCT Bar = (a :Number)\n\
          FN (PICK x :Struct) -> Str = (\"any\")",
     );
-    let foo_result = run_one(scope, parse_one("PICK (Foo (a = 1))"));
-    let bar_result = run_one(scope, parse_one("PICK (Bar (a = 1))"));
+    let foo_result = run_one(scope, parse_one("PICK (Foo {a = 1})"));
+    let bar_result = run_one(scope, parse_one("PICK (Bar {a = 1})"));
     match (foo_result, bar_result) {
         (KObject::KString(a), KObject::KString(b)) => {
             assert_eq!(a, "any");

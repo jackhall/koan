@@ -33,11 +33,11 @@ pub(in crate::machine::execute) fn dispatch_construct_struct<'a>(
     name: String,
     scope_id: ScopeId,
     fields: Rc<Record<KType<'a>>>,
-    args_parts: Vec<Spanned<ExpressionPart<'a>>>,
+    record_fields: Vec<(String, ExpressionPart<'a>)>,
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    let value_parts = match struct_value::prepare_value_parts(&fields, args_parts) {
+    let value_parts = match struct_value::prepare_value_parts(&fields, record_fields) {
         Ok(v) => v,
         Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
     };

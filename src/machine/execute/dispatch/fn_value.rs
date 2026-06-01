@@ -15,8 +15,8 @@ use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::constructors;
 use super::{
-    extract_named_call_inner, stage_all_eager_parts, DispatchCtx, DispatchState, EagerSubsInstall,
-    EagerSubsTrack, Initialized,
+    body_shape_err, extract_call_body, stage_all_eager_parts, CallBody, DispatchCtx, DispatchState,
+    EagerSubsInstall, EagerSubsTrack, Initialized, NAMED_ONLY, POSITIONAL_ONLY,
 };
 
 pub(in crate::machine::execute) struct FnValueState<'a> {
@@ -129,14 +129,17 @@ impl<'a> FnValueState<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let inner_parts = match extract_named_call_inner(&expr) {
-            Ok(parts) => parts,
+        let body = match extract_call_body(&expr) {
+            Ok(b) => b,
             Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
         };
         match head_obj {
-            KObject::KFunction(f, _) => match f.reconstruct_positional(inner_parts) {
-                Ok(rebuilt) => Self::install_eager_subs_track(ctx, rebuilt, f, scope, idx),
-                Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+            KObject::KFunction(f, _) => match body {
+                CallBody::Named(fields) => match f.reconstruct_positional(fields) {
+                    Ok(rebuilt) => Self::install_eager_subs_track(ctx, rebuilt, f, scope, idx),
+                    Err(e) => Ok(NodeStep::Done(NodeOutput::Err(e))),
+                },
+                CallBody::Positional(_) => Ok(body_shape_err(&expr, NAMED_ONLY)),
             },
             // A value-classified alias of a constructible type — `LET outcome = Outcome`
             // then `(outcome (err "x"))`. The alias carries the type's identity directly
@@ -147,42 +150,55 @@ impl<'a> FnValueState<'a> {
                 scope_id,
                 name,
             }) => match kind {
-                UserTypeKind::Struct { fields } => Ok(constructors::dispatch_construct_struct(
-                    ctx,
-                    name.clone(),
-                    *scope_id,
-                    std::rc::Rc::clone(fields),
-                    inner_parts,
-                    scope,
-                    idx,
-                )),
+                UserTypeKind::Struct { fields } => match body {
+                    CallBody::Named(record_fields) => {
+                        Ok(constructors::dispatch_construct_struct(
+                            ctx,
+                            name.clone(),
+                            *scope_id,
+                            std::rc::Rc::clone(fields),
+                            record_fields,
+                            scope,
+                            idx,
+                        ))
+                    }
+                    CallBody::Positional(_) => Ok(body_shape_err(&expr, NAMED_ONLY)),
+                },
                 UserTypeKind::Tagged { schema } | UserTypeKind::TypeConstructor { schema, .. } => {
-                    Ok(constructors::dispatch_construct_tagged(
-                        ctx,
-                        name.clone(),
-                        *scope_id,
-                        std::rc::Rc::clone(schema),
-                        inner_parts,
-                        scope,
-                        idx,
-                    ))
+                    match body {
+                        CallBody::Positional(parts) => {
+                            Ok(constructors::dispatch_construct_tagged(
+                                ctx,
+                                name.clone(),
+                                *scope_id,
+                                std::rc::Rc::clone(schema),
+                                parts,
+                                scope,
+                                idx,
+                            ))
+                        }
+                        CallBody::Named(_) => Ok(body_shape_err(&expr, POSITIONAL_ONLY)),
+                    }
                 }
-                UserTypeKind::Newtype { .. } => {
-                    let identity_ref: &'a KType<'a> = scope.arena.alloc(KType::UserType {
-                        kind: kind.clone(),
-                        scope_id: *scope_id,
-                        name: name.clone(),
-                    });
-                    let body = crate::builtins::newtype_def::newtype_construct(
-                        scope,
-                        ctx,
-                        identity_ref,
-                        inner_parts,
-                    );
-                    Ok(super::single_poll::schedule_constructor_body(
-                        ctx, body, idx,
-                    ))
-                }
+                UserTypeKind::Newtype { .. } => match body {
+                    CallBody::Positional(parts) => {
+                        let identity_ref: &'a KType<'a> = scope.arena.alloc(KType::UserType {
+                            kind: kind.clone(),
+                            scope_id: *scope_id,
+                            name: name.clone(),
+                        });
+                        let body = crate::builtins::newtype_def::newtype_construct(
+                            scope,
+                            ctx,
+                            identity_ref,
+                            parts,
+                        );
+                        Ok(super::single_poll::schedule_constructor_body(
+                            ctx, body, idx,
+                        ))
+                    }
+                    CallBody::Named(_) => Ok(body_shape_err(&expr, POSITIONAL_ONLY)),
+                },
             },
             other => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::TypeMismatch {

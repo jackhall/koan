@@ -173,23 +173,51 @@ pub(in crate::machine::execute) struct PartWalkResult<'a> {
     pub staged_subs: Vec<(usize, PendingSub<'a>)>,
 }
 
-/// Pull the inner parts of a `f (...)` call out of `expr.parts[1..]`.
-/// `FunctionValueCall` only guarantees ≥1 non-keyword body part; the
-/// body must be exactly one nested-parens or this is a non-match.
-pub(super) fn extract_named_call_inner<'a>(
-    expr: &KExpression<'a>,
-) -> Result<Vec<Spanned<ExpressionPart<'a>>>, KError> {
-    let [Spanned {
-        value: ExpressionPart::Expression(inner),
-        ..
-    }] = expr.parts[1..].as_ref()
-    else {
-        return Err(KError::new(KErrorKind::DispatchFailed {
+/// The argument body of a `head (...)` / `head {...}` call, classified by surface shape.
+///
+/// - `Named` — a `{x = 1}` record literal: the sole named-argument surface (function and
+///   functor calls, struct construction).
+/// - `Positional` — a `(err "x")` paren group: positional construction (tagged unions,
+///   newtypes). The verb-carrier decides which shape it admits; the mismatched shape
+///   surfaces a loud `DispatchFailed`.
+pub(super) enum CallBody<'a> {
+    Named(Vec<(String, ExpressionPart<'a>)>),
+    Positional(Vec<Spanned<ExpressionPart<'a>>>),
+}
+
+/// Classify the single body part of a `head (...)` / `head {...}` call from
+/// `expr.parts[1..]`. The body must be exactly one nested-parens (`Positional`) or one
+/// record literal (`Named`); anything else is a non-match.
+pub(super) fn extract_call_body<'a>(expr: &KExpression<'a>) -> Result<CallBody<'a>, KError> {
+    match expr.parts[1..].as_ref() {
+        [Spanned {
+            value: ExpressionPart::RecordLiteral(fields),
+            ..
+        }] => Ok(CallBody::Named(fields.clone())),
+        [Spanned {
+            value: ExpressionPart::Expression(inner),
+            ..
+        }] => Ok(CallBody::Positional(inner.parts.clone())),
+        _ => Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
             reason: "no matching function".to_string(),
-        }));
-    };
-    Ok(inner.parts.clone())
+        })),
+    }
+}
+
+/// Reason strings for the loud `DispatchFailed` raised when a call body's surface shape
+/// doesn't match what the resolved verb-carrier admits.
+pub(super) const NAMED_ONLY: &str =
+    "named arguments use a record literal `{name = value}`, not a parenthesized group";
+pub(super) const POSITIONAL_ONLY: &str =
+    "positional construction takes `(value)`, not a record literal `{name = value}`";
+
+/// Loud non-match for a call body whose surface shape the resolved carrier doesn't admit.
+pub(super) fn body_shape_err<'a>(expr: &KExpression<'a>, reason: &str) -> NodeStep<'a> {
+    NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::DispatchFailed {
+        expr: expr.summarize(),
+        reason: reason.to_string(),
+    })))
 }
 
 /// Clone a dep's terminal error and attach a caller-chosen frame.

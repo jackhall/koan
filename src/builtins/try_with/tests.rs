@@ -58,7 +58,7 @@ fn shape_error_arm_catches_shape_error() {
 fn type_mismatch_arm_catches_struct_field_type_mismatch() {
     let bytes = run_program(
         "STRUCT Point = (x :Number, y :Number)\n\
-         TRY (Point (x = \"hi\", y = 4)) WITH (\
+         TRY (Point {x = \"hi\", y = 4}) WITH (\
             type_mismatch -> (PRINT it.expected)\
          )",
     );
@@ -165,7 +165,7 @@ fn nested_try_catches_inner_separately_from_outer() {
     let bytes = run_program(
         "STRUCT Point = (x :Number, y :Number)\n\
          TRY (\
-            TRY (Point (x = \"hi\", y = 4)) WITH (\
+            TRY (Point {x = \"hi\", y = 4}) WITH (\
                 type_mismatch -> (PRINT \"inner\")\
             )\
          ) WITH (\

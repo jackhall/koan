@@ -10,7 +10,6 @@
 //! FN-definition without sub-dispatching against the outer scope.
 
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
-use crate::machine::model::values::NamedPairs;
 
 use super::ktraits::Parseable;
 use super::ktype::KType;
@@ -181,27 +180,6 @@ impl<'a> ExpressionSignature<'a> {
                 (SignatureElement::Keyword(_), _) => false,
                 (SignatureElement::Argument(arg), part_value) => arg.matches(part_value),
             })
-    }
-
-    /// Named-argument call-shape probe. Parses `args.parts` as `<name> = <value>` (or
-    /// the dict-literal surface — see [`NamedPairs`]) and reports `true` iff every
-    /// `Argument` has a name-keyed entry with a type-accepting value, with no residual
-    /// unknown names. `Keyword` elements are elided — they belong to the dispatch form,
-    /// not the named-arg surface.
-    pub fn matches_without_keywords(&self, args: &KExpression<'a>) -> bool {
-        let mut pairs = match NamedPairs::parse(args, "function call") {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        for el in &self.elements {
-            if let SignatureElement::Argument(arg) = el {
-                match pairs.take(&arg.name) {
-                    Some(part) if arg.matches(&part) => {}
-                    _ => return false,
-                }
-            }
-        }
-        pairs.into_unknown().is_none()
     }
 
     /// Slot types are erased — same shape with different types lives in the same bucket and

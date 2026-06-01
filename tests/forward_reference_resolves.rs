@@ -198,7 +198,7 @@ fn forward_attr_lookup_through_value_let_is_unbound() {
     let err = run_collecting_first_err(
         "LET v = p.x\n\
          STRUCT Pt = (x :Number, y :Number)\n\
-         LET p = (Pt (x = 7, y = 9))",
+         LET p = (Pt {x = 7, y = 9})",
     )
     .expect("forward ATTR on value LET should surface UnboundName");
     assert!(
@@ -221,7 +221,7 @@ fn backward_attr_lookup_resolves_after_struct_binding() {
         &arena,
         captured,
         "STRUCT Pt = (x :Number, y :Number)\n\
-         LET p = (Pt (x = 7, y = 9))\n\
+         LET p = (Pt {x = 7, y = 9})\n\
          LET v = p.x",
     );
     assert!(matches!(scope.lookup("v"), Some(KObject::Number(n)) if *n == 7.0));
@@ -373,7 +373,7 @@ fn producer_error_propagates_to_parked_consumer() {
 ///      is a forward reference to the STRUCT below — visible because STRUCT is a
 ///      nominal-binder carve-out.
 ///   2. `STRUCT Wrap = (n :Number)`.
-///   3. `LET w = (Wrap (n = 9))`.
+///   3. `LET w = (Wrap {n = 9})`.
 ///   4. `LET out = (LIFT_BARE w)`.
 #[test]
 fn fn_bare_arg_call_parks_on_pending_overload_bucket() {
@@ -384,7 +384,7 @@ fn fn_bare_arg_call_parks_on_pending_overload_bucket() {
         captured,
         "FN (LIFT_BARE arg :Wrap) -> Number = (7)\n\
          STRUCT Wrap = (n :Number)\n\
-         LET w = (Wrap (n = 9))\n\
+         LET w = (Wrap {n = 9})\n\
          LET out = (LIFT_BARE w)",
     );
     assert!(

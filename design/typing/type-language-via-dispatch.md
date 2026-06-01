@@ -18,7 +18,7 @@ their declared keyword skeletons.
 :(MAP Str -> Number)
 :(FN (x :Number, y :Str) -> Bool)
 :(FUNCTOR (T :SomeSig) -> Module)
-:(MyFunctor T = IntOrd)
+:(MyFunctor {T = IntOrd})
 :{x :Number, y :Str}
 ```
 
@@ -115,11 +115,11 @@ record values is width/depth — see [ktype.md § Variance](ktype.md#variance).
 `FUNCTOR MyFunctor (T :SomeSig) = ...` binds `MyFunctor` to a
 `KFunction` carrier under both the value-side name and the keyword
 skeleton declared at `FUNCTOR` time. Applying the functor at any
-surface — value-side `(MyFunctor (T = IntOrd))`, sigiled
-`:(MyFunctor (T = IntOrd))` — uses one nested-parens kwarg group
-inheriting the parameter names from the declaration. Symmetric with
-the value-side function-value call shape, which admits one
-nested-parens part holding the kwargs.
+surface — value-side `(MyFunctor {T = IntOrd})`, sigiled
+`:(MyFunctor {T = IntOrd})` — passes one record literal whose fields
+inherit the parameter names from the declaration. Symmetric with the
+value-side function-value call shape, which admits one record-literal
+part holding the named arguments.
 
 ## Classifier
 
@@ -145,7 +145,7 @@ inner expression's parts decide its shape:
   (`:(MyStruct 1 2 3)`) — routes Struct / Tagged / Newtype heads
   through their construction primitives.
 - `FunctionValueCall` for user-functor application
-  (`:(MyFunctor (T = IntOrd))`).
+  (`:(MyFunctor {T = IntOrd})`).
 
 The sigil boundary — "the returned carrier must be type-side
 (`KTypeValue`, `Module`, `Signature`, `UserType`, `KFunctor`)" — is

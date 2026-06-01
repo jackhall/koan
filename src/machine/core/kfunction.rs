@@ -169,20 +169,20 @@ impl<'a> KFunction<'a> {
         })
     }
 
-    /// Validation precedence (first wins): malformed pair shape (`ShapeError` from
-    /// `NamedPairs::parse`) → missing arg (`MissingArg`). Width-drop semantics: a
-    /// named arg with no matching declared parameter is ignored, not an error — this
-    /// is the value side of function-subtyping width drop, where a value fills a slot
-    /// that promised extra parameters and the surplus named args simply go unbound on
-    /// the reconstructed exact-arity expression. `NamedPairs` rejects duplicate names
-    /// at parse time, so consuming every declared argument witnesses an exact-arity
-    /// reconstruction regardless of leftover (now-dropped) names.
+    /// Reorder a call's named arguments (the `{name = value}` record literal's fields)
+    /// into this signature's positional element order. Validation precedence (first
+    /// wins): duplicate name (`ShapeError` from `NamedPairs::from_fields`) → missing arg
+    /// (`MissingArg`). Width-drop semantics: a named arg with no matching declared
+    /// parameter is ignored, not an error — this is the value side of function-subtyping
+    /// width drop, where a value fills a slot that promised extra parameters and the
+    /// surplus named args simply go unbound on the reconstructed exact-arity expression.
+    /// `NamedPairs` rejects duplicate names, so consuming every declared argument
+    /// witnesses an exact-arity reconstruction regardless of leftover (now-dropped) names.
     pub fn reconstruct_positional<'b>(
         &self,
-        args: Vec<Spanned<ExpressionPart<'b>>>,
+        fields: Vec<(String, ExpressionPart<'b>)>,
     ) -> Result<KExpression<'b>, KError> {
-        let tmp_expr = KExpression::new(args);
-        let mut pairs = NamedPairs::parse(&tmp_expr, "function call")
+        let mut pairs = NamedPairs::from_fields(fields)
             .map_err(|msg| KError::new(KErrorKind::ShapeError(msg)))?;
         let mut parts: Vec<Spanned<ExpressionPart<'b>>> =
             Vec::with_capacity(self.signature.elements.len());
