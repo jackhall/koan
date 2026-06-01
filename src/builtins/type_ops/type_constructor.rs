@@ -4,7 +4,7 @@ use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope, ScopeId
 
 use crate::builtins::err;
 
-/// `TYPE_CONSTRUCTOR <param:TypeExprRef>` → `TypeExprRef` carrying a template
+/// `TEMPLATE <param:TypeExprRef>` → `TypeExprRef` carrying a template
 /// `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names, .. }, .. }`
 /// with `ScopeId::SENTINEL` and a placeholder `name` (`"_typeconstructor"`). The
 /// surrounding opaque ascription (`ascribe.rs:body_opaque`) re-mints both with the
@@ -44,7 +44,7 @@ mod tests {
     fn type_constructor_builtin_returns_ktype_value() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let result = run_one(scope, parse_one("TYPE_CONSTRUCTOR Type"));
+        let result = run_one(scope, parse_one("TEMPLATE Type"));
         match result {
             KObject::KTypeValue(kt) => match kt {
                 KType::UserType {
@@ -67,7 +67,7 @@ mod tests {
     fn sig_declares_higher_kinded_slot() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))");
+        run(scope, "SIG Monad = ((LET Wrap = (TEMPLATE Type)))");
         let s = match scope.resolve_type("Monad") {
             Some(KType::Signature { sig, .. }) => *sig,
             _ => panic!("Monad must bind a Signature KType"),
@@ -143,7 +143,7 @@ mod tests {
         use crate::parse::parse;
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let src = "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)) \
+        let src = "SIG Monad = ((LET Wrap = (TEMPLATE Type)) \
              (VAL pure :(FN (x :Number) -> :(Wrap Number))))";
         let exprs = parse(src).expect("parse should succeed");
         let mut sched = Scheduler::new();
@@ -213,7 +213,7 @@ mod tests {
         let scope = run_root_silent(&arena);
         run(
             scope,
-            "SIG MonadSig = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))\n\
+            "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
              MODULE IntList = ((LET Wrap = Number))\n\
              LET Mo = (IntList :| MonadSig)",
         );

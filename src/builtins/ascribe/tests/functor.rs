@@ -280,14 +280,14 @@ fn functor_argument_bare_type_token_auto_wraps() {
 }
 
 /// Two opaque ascriptions of a module satisfying a SIG with `LET Wrap =
-/// (TYPE_CONSTRUCTOR T)` mint distinct per-call `TypeConstructor` slots —
+/// (TEMPLATE T)` mint distinct per-call `TypeConstructor` slots —
 /// the higher-kinded analogue of `functor_application_is_generative`.
 #[test]
 fn opaque_ascription_mints_fresh_type_constructor_per_call() {
     use crate::machine::model::types::UserTypeKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    let src = "SIG MonadSig = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))\n\
+    let src = "SIG MonadSig = ((LET Wrap = (TEMPLATE Type)))\n\
                MODULE IntList = ((LET Wrap = Number))\n\
                LET First = (IntList :| MonadSig)\n\
                LET Second = (IntList :| MonadSig)";

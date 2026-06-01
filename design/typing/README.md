@@ -75,7 +75,7 @@ group-operators, and JIT items.
   against each other. (Multi-parameter dispatch on declared types is already
   native to FN; this property is about the implicit-search layer on top.)
 - **Higher-kinded abstraction is native.** Signatures can declare type
-  constructors (`(TYPE_CONSTRUCTOR Type)`); functors can take and return them.
+  constructors (`(TEMPLATE Type)`); functors can take and return them.
 - **Representation hiding is principled.** Opaque ascription is the
   abstraction barrier — privacy is an outcome of the type system rather than
   a separate visibility mechanism.

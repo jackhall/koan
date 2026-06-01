@@ -149,7 +149,7 @@ src/
 │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
 │   ├── result.rs             Result tagged-union builtin
 │   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
-│   ├── type_ops.rs           LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF / TYPE_CONSTRUCTOR / SIG_WITH
+│   ├── type_ops.rs           LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF / TEMPLATE / SIG_WITH
 │   ├── union.rs
 │   ├── struct_def.rs
 │   ├── struct_value.rs       shared struct-construction representation

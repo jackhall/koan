@@ -245,13 +245,13 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 
 ```
 SIG Monad = (
-  (LET Wrap = (TYPE_CONSTRUCTOR Type))
+  (LET Wrap = (TEMPLATE Type))
   (VAL pure :(FN (Number) -> :(Wrap Number)))
   (VAL bind :(FN (:(Wrap Number), :(FN (Number) -> :(Wrap Number))) -> :(Wrap Number)))
 )
 ```
 
-`(TYPE_CONSTRUCTOR <param>)` is the declaration form: inside a SIG body it
+`(TEMPLATE <param>)` is the declaration form: inside a SIG body it
 binds the slot name (`Wrap` above) to a template
 `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`
 carrying the parameter symbol list. The builtin lives in
@@ -283,8 +283,8 @@ entry; multi-parameter constructors (`Functor F G`) are tracked in
 [open-work.md](open-work.md). The parameter symbol must be a Type-classified
 token (≥1 lowercase character): the parser rejects single-letter capitals
 (`T`, `E`) at lex time, so surface forms in this section using `T` are
-conceptual — real code writes `(TYPE_CONSTRUCTOR Type)` or
-`(TYPE_CONSTRUCTOR Elt)`. The [token-class rule](tokens.md) is the
+conceptual — real code writes `(TEMPLATE Type)` or
+`(TEMPLATE Elt)`. The [token-class rule](tokens.md) is the
 parser-level cause.
 
 `ConstructorApply` is a type-language-only variant: no `KObject` reports a

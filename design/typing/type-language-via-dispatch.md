@@ -176,7 +176,7 @@ FN / FUNCTOR do not install on the name channel.
   disambiguate incomparable arms.
 - [User-defined TypeConstructor keyworded
   application](../../roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md) —
-  give a user `LET Wrap = (TYPE_CONSTRUCTOR T)` a keyworded
+  give a user `LET Wrap = (TEMPLATE T)` a keyworded
   application surface so `:(Wrap Number)` routes through dispatch
   the same way `:(LIST OF Number)` does. Today only the four builtin
   parameterized types (`LIST`, `MAP`, `FN`, `FUNCTOR`) have

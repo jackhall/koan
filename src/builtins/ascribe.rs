@@ -34,7 +34,7 @@ pub fn body_opaque<'a>(
     }
 
     let new_module: &'a Module<'a> = arena.alloc_module(Module::new(m.path.clone(), new_scope));
-    // Per-slot kind: a SIG-declared `LET Wrap = (TYPE_CONSTRUCTOR T)` mints a fresh
+    // Per-slot kind: a SIG-declared `LET Wrap = (TEMPLATE T)` mints a fresh
     // `TypeConstructor` rather than the default `AbstractType` arm, preserving the
     // higher-kinded shape across the ascription barrier.
     let mut minted: Vec<(String, KType<'a>)> = Vec::new();

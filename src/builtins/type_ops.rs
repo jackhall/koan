@@ -1,5 +1,5 @@
 //! Type-constructor builtins — `LIST_OF`, `DICT_OF`, `FUNCTION_OF`,
-//! `MODULE_TYPE_OF`, `TYPE_CONSTRUCTOR`, `SIG_WITH`. Each ships as a
+//! `MODULE_TYPE_OF`, `TEMPLATE`, `SIG_WITH`. Each ships as a
 //! scheduled `KFunction` over `TypeExprRef`-typed slots, so a
 //! parameterized type assembles via sub-expression evaluation:
 //! `(LIST_OF (MODULE_TYPE_OF M Type))` wakes the outer slot only after
@@ -70,10 +70,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     );
     register_builtin(
         scope,
-        "TYPE_CONSTRUCTOR",
+        "TEMPLATE",
         sig(
             KType::TypeExprRef,
-            vec![kw("TYPE_CONSTRUCTOR"), arg("param", KType::TypeExprRef)],
+            vec![kw("TEMPLATE"), arg("param", KType::TypeExprRef)],
         ),
         type_constructor::body,
     );
