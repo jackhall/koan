@@ -1,7 +1,7 @@
 //! Brace-literal sub-state-machine for `build_tree`. One `{…}` frame serves both
 //! containers: a **dict** (`{k: v}`, `:` pairs) and a **record** (`{x = 1}`, `=` pairs).
 //! The first pairing operator selects the mode (`accept_colon` / `accept_equals`); mixing
-//! the two is an error, and an empty `{}` stays a dict. The surrounding character handlers
+//! the two is an error, and an empty `{}` is the empty record. The surrounding character handlers
 //! delegate to `accept_colon`, `accept_equals`, `accept_comma`, and `finish`; multi-part
 //! keys/values collapse into a sub-expression via `single_or_wrapped`.
 
@@ -15,7 +15,7 @@ pub(super) struct DictFrame<'a> {
 }
 
 /// Which pairing operator the brace frame committed to. `Unknown` until the first
-/// separator — an empty `{}` finishes as an empty dict.
+/// separator — an empty `{}` finishes as an empty record (the top of the record lattice).
 #[derive(PartialEq, Clone, Copy)]
 enum BraceMode {
     Unknown,
@@ -182,7 +182,9 @@ impl<'a> DictFrame<'a> {
     /// a record's `(field, value)` list. Errors for a key/field without its separator, a
     /// separator without a value, or (record mode) a non-identifier field name.
     pub(super) fn finish(mut self) -> Result<BraceContents<'a>, KError> {
-        let is_record = self.mode == BraceMode::Record;
+        // Only an explicit `:` commits the frame to a dict; `Record` and the
+        // separator-less `Unknown` (empty `{}`) both finish as a record.
+        let is_record = self.mode != BraceMode::Dict;
         match self.state {
             DictPairState::Empty => {}
             DictPairState::Key(parts) if parts.is_empty() => {}

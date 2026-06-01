@@ -107,7 +107,7 @@ field types sub-Dispatch (`:{xs :(LIST OF Number)}`).
 
 The record *value* surface is `{x = 1, y = "a"}` (`=` pairs); the brace frame routes
 on the first pairing operator, so `:` pairs (`{k: v}`) stay a dict and `=` pairs a
-record, mixing the two is a parse error, and an empty `{}` is a dict. Subtyping over
+record, mixing the two is a parse error, and an empty `{}` is the empty record. Subtyping over
 record values is width/depth — see [ktype.md § Variance](ktype.md#variance).
 
 ## User-functor application

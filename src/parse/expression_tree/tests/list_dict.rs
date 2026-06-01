@@ -136,8 +136,10 @@ fn adjacent_brackets_in_nested_list_are_fine() {
 // --- Dict literal tests ---
 
 #[test]
-fn empty_dict_literal() {
-    assert_eq!(tree("{}").unwrap(), "[D{}]");
+fn empty_braces_are_record() {
+    // No separator to disambiguate → the empty record (top of the record lattice).
+    // An empty dict needs a non-`{}` spelling (deferred `EMPTY MAP`).
+    assert_eq!(tree("{}").unwrap(), "[R{}]");
 }
 
 #[test]
@@ -319,12 +321,6 @@ fn nested_record_in_record() {
 #[test]
 fn record_trailing_comma_allowed() {
     assert_eq!(tree("{x = 1,}").unwrap(), "[R{x = n(1)}]");
-}
-
-#[test]
-fn empty_braces_stay_dict() {
-    // No separator to disambiguate → dict; an empty record needs a `:{}` ascription.
-    assert_eq!(tree("{}").unwrap(), "[D{}]");
 }
 
 #[test]
