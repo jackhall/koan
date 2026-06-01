@@ -12,7 +12,7 @@
 //! carriers (`KFunction`, `List`, ...) are lifted directly.
 
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId,
@@ -24,7 +24,7 @@ use super::{arg, err, kw, register_builtin_with_binder, sig};
 fn schedule_type_resolve<'a>(
     sched: &mut dyn SchedulerHandle<'a>,
     decl_scope: &'a Scope<'a>,
-    te: &TypeExpr,
+    te: &TypeName,
 ) -> crate::machine::NodeId {
     let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Type(te.clone()))]);
     sched.add_dispatch(expr, decl_scope)
@@ -43,7 +43,7 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm<'a>, KErro
             | KType::Any
             | KType::Identifier
             | KType::KExpression
-            | KType::TypeExprRef => Ok(CarrierForm::Leaf(TypeExpr::leaf(kt.name()))),
+            | KType::TypeExprRef => Ok(CarrierForm::Leaf(TypeName::leaf(kt.name()))),
             _ => Ok(CarrierForm::Direct(kt.clone())),
         },
         KObject::TypeNameRef(te) => Ok(CarrierForm::Raw(te.clone())),
@@ -58,8 +58,8 @@ fn typeexpr_from_carrier<'a>(obj: &KObject<'a>) -> Result<CarrierForm<'a>, KErro
 enum CarrierForm<'a> {
     /// Builtin leaf synthesized from `kt.name()`; re-elaborated against decl_scope
     /// so a SIG-local shadow wins over the builtin table.
-    Leaf(TypeExpr),
-    Raw(TypeExpr),
+    Leaf(TypeName),
+    Raw(TypeName),
     /// Structural carrier accepted as-is; inner names are not re-bound.
     Direct(KType<'a>),
 }
@@ -118,7 +118,7 @@ pub fn body<'a>(
             let resolve_id = schedule_type_resolve(sched, scope, &te);
             defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index)
         }
-        // A `TypeNameRef` carrier always holds a bare-leaf `TypeExpr` now —
+        // A `TypeNameRef` carrier always holds a bare-leaf `TypeName` now —
         // parameterized surface forms sub-Dispatch and never reach this slot — so the
         // leaf is the only shape and always re-dispatches against decl_scope.
         CarrierForm::Raw(te) => {
@@ -147,7 +147,7 @@ fn defer_val_via_combine<'a>(
     scope: &'a Scope<'a>,
     sched: &mut dyn SchedulerHandle<'a>,
     name: String,
-    te: TypeExpr,
+    te: TypeName,
     resolve_id: NodeId,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {

@@ -9,7 +9,7 @@ fn one_slot_bundle<'a>(name: &str, obj: KObject<'a>) -> ArgumentBundle<'a> {
 }
 
 fn type_name_ref<'a>(name: &str) -> KObject<'a> {
-    KObject::TypeNameRef(TypeExpr::leaf(name.into()))
+    KObject::TypeNameRef(TypeName::leaf(name.into()))
 }
 
 // ---------- shared-Rc clone paths on the extract_* helpers ----------
@@ -71,7 +71,7 @@ fn extract_type_name_ref_clones_when_rc_is_shared() {
     };
     bundle.args.insert("t".into(), shared);
     let got = extract_type_name_ref(&mut bundle, "t").expect("clone path should return Some");
-    assert_eq!(got.name, "Foo");
+    assert_eq!(got.as_str(), "Foo");
 }
 
 #[test]

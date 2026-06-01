@@ -15,7 +15,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
     while i < parts.len() {
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) => Some(t.name.clone()),
+            ExpressionPart::Type(t) => Some(t.render()),
             _ => None,
         };
         if let Some(name) = param_name {
@@ -72,7 +72,7 @@ pub(crate) fn parse_fn_param_list<'a>(
         // parameter-name position denotes a binder, not a type reference.
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) => Some(t.name.clone()),
+            ExpressionPart::Type(t) => Some(t.render()),
             _ => None,
         };
         match (param_name, &parts[i].value) {

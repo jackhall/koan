@@ -1,5 +1,5 @@
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeExpr};
+use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral, TypeName};
 use crate::machine::model::types::KType;
 use crate::machine::model::{KObject, Parseable};
 
@@ -20,81 +20,21 @@ fn parts_of(items: Vec<ExpressionPart<'static>>) -> Vec<Spanned<ExpressionPart<'
 }
 
 #[test]
-fn resolve_for_populates_builtin_cache() {
-    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeExpr::leaf("Number".into()));
+fn resolve_for_lowers_builtin_leaf_to_ktypevalue() {
+    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("Number".into()));
     let slot = KType::TypeExprRef;
-    let _ = part.resolve_for(&slot);
-    if let ExpressionPart::Type(t) = &part {
-        assert_eq!(t.builtin_cache.get(), Some(&KType::Number));
-    } else {
-        panic!("expected Type part");
-    }
-    let r2 = part.resolve_for(&slot);
-    match r2 {
+    match part.resolve_for(&slot) {
         KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
         _ => panic!("expected KTypeValue"),
     }
 }
 
 #[test]
-fn resolve_for_skips_cache_for_user_bound_leaf() {
-    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeExpr::leaf("MyType".into()));
+fn resolve_for_defers_user_bound_leaf_to_typenameref() {
+    let part: ExpressionPart<'static> = ExpressionPart::Type(TypeName::leaf("MyType".into()));
     let slot = KType::TypeExprRef;
     let r = part.resolve_for(&slot);
     assert!(matches!(r, KObject::TypeNameRef(_)));
-    if let ExpressionPart::Type(t) = &part {
-        assert!(t.builtin_cache.get().is_none());
-    } else {
-        panic!("expected Type part");
-    }
-}
-
-/// Miri coverage for the `TypeExpr::builtin_cache` lifetime-lift in
-/// [`crate::machine::model::ast::ExpressionPart::resolve_for`]. The cache holds
-/// `KType<'static>` and the cache-hit path clones-then-transmutes to `KType<'a>`.
-/// SAFETY: the transmute is sound because only owned variants (`Number`,
-/// `List<Any>`, `Function<...>`, wildcards) — never `Module` / `Signature`
-/// arena references — reach the cache. Two pre-seeded runs against distinct
-/// non-`'static` arenas exercise the cache-hit transmute under tree borrows.
-#[test]
-fn builtin_cache_lifetime_lift_does_not_dangle() {
-    use crate::machine::core::RuntimeArena;
-
-    let te = TypeExpr::leaf("Number".into());
-    te.builtin_cache
-        .set(KType::Number)
-        .expect("OnceCell is empty");
-
-    {
-        let arena_a = RuntimeArena::new();
-        let part_a: ExpressionPart<'_> = ExpressionPart::Type(te.clone());
-        let slot_a: KType<'_> = KType::TypeExprRef;
-        let r = part_a.resolve_for(&slot_a);
-        match r {
-            KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
-            _ => panic!("expected KTypeValue from cache-hit path"),
-        }
-        // Sibling alloc defeats any single-arena address-stability assumption
-        // tree borrows might exploit.
-        let _other = arena_a.alloc(KObject::Number(1.0));
-        let _ = arena_a;
-    }
-
-    // Fresh arena with a different `'a`; the lift must be independent of
-    // arena_a's now-dead lifetime.
-    {
-        let arena_b = RuntimeArena::new();
-        let part_b: ExpressionPart<'_> = ExpressionPart::Type(te.clone());
-        let slot_b: KType<'_> = KType::TypeExprRef;
-        let r = part_b.resolve_for(&slot_b);
-        match r {
-            KObject::KTypeValue(kt) => assert_eq!(kt, KType::Number),
-            _ => panic!("expected KTypeValue from cache-hit path"),
-        }
-        let _ = arena_b;
-    }
-
-    assert_eq!(te.builtin_cache.get(), Some(&KType::Number));
 }
 
 #[test]
@@ -102,7 +42,7 @@ fn summarize_atomic_variants() {
     assert_eq!(kw("LET").summarize(), "LET");
     assert_eq!(ident("x").summarize(), "x");
     assert_eq!(
-        ExpressionPart::Type(TypeExpr::leaf("Number".into())).summarize(),
+        ExpressionPart::Type(TypeName::leaf("Number".into())).summarize(),
         "Number",
     );
 }
@@ -168,7 +108,7 @@ fn parseable_equal_and_ktype_for_kexpression() {
 fn binder_name_from_type_part_extracts_or_none() {
     let with_type = KExpression::new(parts_of(vec![
         kw("STRUCT"),
-        ExpressionPart::Type(TypeExpr::leaf("Point".into())),
+        ExpressionPart::Type(TypeName::leaf("Point".into())),
     ]));
     assert_eq!(with_type.binder_name_from_type_part(), Some("Point".into()));
 
@@ -249,7 +189,7 @@ fn debug_for_expression_part_and_kexpression() {
     let parts: Vec<ExpressionPart<'static>> = vec![
         kw("LET"),
         ident("x"),
-        ExpressionPart::Type(TypeExpr::leaf("Number".into())),
+        ExpressionPart::Type(TypeName::leaf("Number".into())),
         ExpressionPart::Literal(KLiteral::Number(1.0)),
         ExpressionPart::ListLiteral(vec![ident("a")]),
         ExpressionPart::DictLiteral(vec![(ident("k"), ident("v"))]),

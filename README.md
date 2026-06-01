@@ -168,12 +168,12 @@ src/
 └── machine/
     ├── model.rs            re-exports from model::types and model::values
     ├── model/
-    │   ├── ast.rs                 parsed-expression types (KExpression, ExpressionPart, KLiteral, TypeExpr)
+    │   ├── ast.rs                 parsed-expression types (KExpression, ExpressionPart, KLiteral, TypeName)
     │   ├── types.rs
     │   ├── types/
     │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
-    │   │   ├── ktype_resolution.rs   surface-name and TypeExpr elaboration (from_name, from_type_expr, join)
+    │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
     │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
     │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic

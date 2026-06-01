@@ -7,7 +7,7 @@
 //! captures the populated scope into a [`Signature`] value, allocates it in the
 //! parent's arena, and binds it under the signature's name. Body declarations are
 //! `LET name = (FN <signature> -> <return> = ...)` for operations and
-//! `LET Type = TypeExpr` for abstract type declarations. The ascription operators
+//! `LET Type = TypeName` for abstract type declarations. The ascription operators
 //! (`:|` / `:!`) iterate the stored scope at ascription time.
 
 use crate::machine::model::values::Signature;

@@ -111,7 +111,7 @@ pub(super) fn resolve_name_part<'a>(
 ) -> NameOutcome<'a> {
     let (name, is_type) = match part {
         ExpressionPart::Identifier(n) => (n.as_str(), None),
-        ExpressionPart::Type(t) => (t.name.as_str(), Some(t)),
+        ExpressionPart::Type(t) => (t.as_str(), Some(t)),
         _ => unreachable!("resolve_name_part only called on bare-name parts"),
     };
     let chain = scheduler.chain_deref();
@@ -151,7 +151,7 @@ pub(super) fn resolve_name_part<'a>(
 pub(super) fn bare_name_of<'a>(part: &ExpressionPart<'a>) -> Option<String> {
     match part {
         ExpressionPart::Identifier(n) => Some(n.clone()),
-        ExpressionPart::Type(t) => Some(t.name.clone()),
+        ExpressionPart::Type(t) => Some(t.render()),
         _ => None,
     }
 }

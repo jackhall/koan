@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::model::ast::{KExpression, TypeExpr};
+use crate::machine::model::ast::{KExpression, TypeName};
 
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::types::KType;
@@ -108,7 +108,7 @@ pub(crate) fn extract_ktype<'a>(bundle: &mut ArgumentBundle<'a>, name: &str) -> 
 }
 
 /// Resolve a `KType::TypeExprRef` slot to its bare type name. Either carrier may occupy
-/// the slot: a `KTypeValue` (parser `TypeExpr` resolved to a builtin) or a `TypeNameRef`
+/// the slot: a `KTypeValue` (parser `TypeName` resolved to a builtin) or a `TypeNameRef`
 /// (unresolved-leaf fallback). Structural / parameterized shapes from either carrier are
 /// rejected as `ShapeError`. `surface` is the keyword (`"STRUCT"`, `"UNION"`, …) embedded
 /// in the message.
@@ -118,7 +118,7 @@ pub(crate) fn extract_bare_type_name<'a>(
     surface: &str,
 ) -> Result<String, KError> {
     match bundle.get(name) {
-        Some(KObject::TypeNameRef(t)) => Ok(t.name.clone()),
+        Some(KObject::TypeNameRef(t)) => Ok(t.render()),
         Some(KObject::KTypeValue(t)) => match t {
             KType::Number
             | KType::Str
@@ -156,13 +156,13 @@ pub(crate) fn extract_bare_type_name<'a>(
     }
 }
 
-/// Move a `TypeNameRef` carrier's `TypeExpr` out of `bundle.args`, cloning only if the
+/// Move a `TypeNameRef` carrier's `TypeName` out of `bundle.args`, cloning only if the
 /// `Rc` is shared. `None` for missing slot or non-`TypeNameRef` variant — pair with
 /// [`extract_ktype`] for the resolved-leaf fallthrough.
 pub(crate) fn extract_type_name_ref<'a>(
     bundle: &mut ArgumentBundle<'a>,
     name: &str,
-) -> Option<TypeExpr> {
+) -> Option<TypeName> {
     let rc = bundle.args.remove(name)?;
     match Rc::try_unwrap(rc) {
         Ok(KObject::TypeNameRef(t)) => Some(t),

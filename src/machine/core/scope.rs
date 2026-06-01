@@ -198,12 +198,12 @@ impl<'a> Scope<'a> {
         self.bindings.get()
     }
 
-    /// Scope-bound `TypeExpr → &KType` memo read. A transparent `USING` window returns
+    /// Scope-bound `TypeName → &KType` memo read. A transparent `USING` window returns
     /// `None`: its resolutions depend on the call-site chain, so caching them into the
     /// module's shared memo would poison the module's own def-site resolution.
     pub(crate) fn type_expr_memo_get(
         &self,
-        te: &crate::machine::model::ast::TypeExpr,
+        te: &crate::machine::model::ast::TypeName,
     ) -> Option<&'a crate::machine::model::types::KType<'a>> {
         if self.bindings.is_borrowed() {
             return None;
@@ -215,7 +215,7 @@ impl<'a> Scope<'a> {
     /// [`Self::type_expr_memo_get`]).
     pub(crate) fn type_expr_memo_insert(
         &self,
-        te: crate::machine::model::ast::TypeExpr,
+        te: crate::machine::model::ast::TypeName,
         kt: &'a crate::machine::model::types::KType<'a>,
     ) {
         if self.bindings.is_borrowed() {

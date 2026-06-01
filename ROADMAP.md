@@ -165,6 +165,16 @@ What's shipped that the open items below build on:
   the `register_nominal` / `try_register_nominal` / `derive_nominal_identity`
   machinery deleted. No nominal binder dual-writes; the type-language /
   value-language partition is total.
+- *TypeName carrier collapse.* The parser's bare type-leaf carrier is a
+  `TypeName(String)` newtype (`Deref` to `str`, derived eq/hash) in place of the
+  old `TypeExpr` struct, so the `ExpressionPart::Type` / `KObject::TypeNameRef`
+  variants carry the name directly. Dropping `TypeExpr`'s per-token
+  `OnceCell` builtin cache removed the `KType<'static>` → `KType<'a>` transmute
+  in `resolve_for` (one fewer unsafe site), leaving the scope-bound
+  `type_expr_memo` as the sole cache tier; bind-time builtin lowering re-runs the
+  `from_type_expr` → `from_name` match per call. The three leaf-resolution
+  contexts (`elaborate_type_expr`, `coerce_type_token_value`, `resolve_for`) stay
+  distinct but share one `resolve_type_with_chain` + `from_name` lookup.
 
 ## Next items
 
@@ -250,7 +260,6 @@ items add the user-functor application surface and finish the type-surface
 cleanup:
 
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
-- [Collapse TypeExpr and consolidate leaf type-name resolution](roadmap/dispatch_fix/collapse-typeexpr.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

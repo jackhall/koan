@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::machine::core::source::{Span, Spanned};
-use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeExpr};
+use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeName};
 use crate::machine::model::is_keyword_token;
 use crate::machine::KError;
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
@@ -87,7 +87,7 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
                 Some(token_span),
             ));
         }
-        return Ok(ExpressionPart::Type(TypeExpr::leaf(tok.to_string())));
+        return Ok(ExpressionPart::Type(TypeName::leaf(tok.to_string())));
     }
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
         return Err(KError::parse(

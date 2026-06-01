@@ -1,10 +1,8 @@
 //! AST node types shared across the parse module.
 
-use std::cell::OnceCell;
 use std::collections::HashMap;
 
 use crate::machine::core::source::{FileId, Span, Spanned};
-use crate::machine::model::types::KType;
 use crate::machine::model::{KKey, KObject, Parseable, Serializable, UntypedElement, UntypedKey};
 
 #[cfg(test)]
@@ -18,57 +16,35 @@ pub enum KLiteral {
     Null,
 }
 
-/// Surface representation of a type token.
+/// Surface representation of a bare type-name leaf (`Number`, `Point`, `T`, `Mo.Ty`).
 ///
-/// `builtin_cache` memoizes the scope-independent builtin-resolution result so repeat
-/// `resolve_for` calls against the same surface form skip the recursive walk. User-bound
-/// names miss the cache and route through the scope-owned memo on `Scope`. Storage is
-/// `KType<'static>` because the builtin-only path produces only owned-data variants
-/// (no arena-pinned `Module` / `Signature` refs).
-#[derive(Debug)]
-pub struct TypeExpr {
-    pub name: String,
-    pub builtin_cache: OnceCell<KType<'static>>,
-}
+/// A thin newtype over the source name: `Deref`s to `str`, derives eq/hash by string.
+/// Compound shapes (`:(LIST OF X)`, `:(FN … -> …)`) are dispatch expressions, not
+/// `TypeName` structure, so this carries no information the name string wouldn't. The
+/// position tag rides on the carrier variant (`ExpressionPart::Type`,
+/// `KObject::TypeNameRef`), not on this struct.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeName(String);
 
-impl Clone for TypeExpr {
-    fn clone(&self) -> Self {
-        let cache = OnceCell::new();
-        if let Some(kt) = self.builtin_cache.get() {
-            let _ = cache.set(kt.clone());
-        }
-        TypeExpr {
-            name: self.name.clone(),
-            builtin_cache: cache,
-        }
+impl std::ops::Deref for TypeName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
     }
 }
 
-impl PartialEq for TypeExpr {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+impl TypeName {
+    pub fn leaf(name: String) -> TypeName {
+        TypeName(name)
     }
-}
 
-impl Eq for TypeExpr {}
-
-impl std::hash::Hash for TypeExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-    }
-}
-
-impl TypeExpr {
-    pub fn leaf(name: String) -> TypeExpr {
-        TypeExpr {
-            name,
-            builtin_cache: OnceCell::new(),
-        }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 
     /// Render in surface syntax so the output round-trips through the parser unchanged.
     pub fn render(&self) -> String {
-        self.name.clone()
+        self.0.clone()
     }
 }
 
@@ -77,7 +53,7 @@ impl TypeExpr {
 pub enum ExpressionPart<'a> {
     Keyword(String),
     Identifier(String),
-    Type(TypeExpr),
+    Type(TypeName),
     Expression(Box<KExpression<'a>>),
     /// Parse-context marker for a `:(...)` group: the wrapped `KExpression` must dispatch
     /// in type-context, returning a type-side carrier. Shape recognition is the
@@ -156,26 +132,10 @@ impl<'a> ExpressionPart<'a> {
     pub fn resolve_for(&self, slot: &crate::machine::model::KType<'a>) -> KObject<'a> {
         use crate::machine::model::types::KType;
         if let (ExpressionPart::Type(t), KType::TypeExprRef) = (self, slot) {
-            if let Some(kt) = t.builtin_cache.get() {
-                // SAFETY: `KType<'static>` and `KType<'a>` have identical layout
-                // (lifetimes are zero-sized); the cache's `KType<'static>` carries
-                // only owned-data variants — `Number`, `List<Any>`, `Function<...>`,
-                // wildcards. None of those reach a `Module` / `Signature` arena ref
-                // through cloning, so the transmute is sound.
-                let cloned: KType<'static> = kt.clone();
-                let lifted: KType<'a> =
-                    unsafe { std::mem::transmute::<KType<'static>, KType<'a>>(cloned) };
-                return KObject::KTypeValue(lifted);
-            }
-            // Rebuild at the caller's lifetime, then stash a `'static` copy for the
-            // next hit. Keeps the cache soundness contract local to this function.
+            // Builtin shapes lower directly at the caller's lifetime; bare user names
+            // defer to `Scope::resolve_type_expr` via the `TypeNameRef` carrier.
             return match KType::<'a>::from_type_expr(t) {
-                Ok(kt) => {
-                    if let Ok(static_kt) = KType::<'static>::from_type_expr(t) {
-                        let _ = t.builtin_cache.set(static_kt);
-                    }
-                    KObject::KTypeValue(kt)
-                }
+                Ok(kt) => KObject::KTypeValue(kt),
                 Err(_) => KObject::TypeNameRef(t.clone()),
             };
         }
@@ -285,7 +245,7 @@ impl<'a> KExpression<'a> {
     /// mismatch. The builtin body surfaces the structured error.
     pub fn binder_name_from_type_part(&self) -> Option<String> {
         match &self.parts.get(1)?.value {
-            ExpressionPart::Type(t) => Some(t.name.clone()),
+            ExpressionPart::Type(t) => Some(t.render()),
             _ => None,
         }
     }

@@ -49,12 +49,12 @@ pub fn body<'a>(
                 Some(te) => te,
                 None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
             };
-            match scope.resolve_type(&te.name) {
+            match scope.resolve_type(te.as_str()) {
                 Some(kt) => kt.clone(),
                 None => {
                     return err(KError::new(KErrorKind::ShapeError(format!(
                         "NEWTYPE repr slot = unknown type name `{}`",
-                        te.name,
+                        te.as_str(),
                     ))));
                 }
             }

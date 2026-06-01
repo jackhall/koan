@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::{CallArena, KFuture, ScopeId};
-use crate::machine::model::ast::{KExpression, TypeExpr};
+use crate::machine::model::ast::{KExpression, TypeName};
 use crate::machine::model::types::{
     KType, Parseable, Serializable, SignatureElement, UserTypeKind,
 };
@@ -85,7 +85,7 @@ pub enum KObject<'a> {
         fields: Rc<IndexMap<String, KObject<'a>>>,
     },
     /// First-class type value carrying the elaborated `KType` directly. The parser's
-    /// surface `TypeExpr` is lowered at the seam so downstream consumers never see
+    /// surface `TypeName` is lowered at the seam so downstream consumers never see
     /// surface syntax again. Slot kind is still `KType::TypeExprRef`; the slot is the
     /// dispatch-position marker, the variant is the runtime value.
     ///
@@ -93,13 +93,13 @@ pub enum KObject<'a> {
     /// value is `KTypeValue(KType::Module { module, frame })`, a signature value is
     /// `KTypeValue(KType::Signature { sig, pinned_slots })`.
     KTypeValue(KType<'a>),
-    /// Bind-time carrier for a `TypeExprRef`-slot value whose surface `TypeExpr` couldn't
+    /// Bind-time carrier for a `TypeExprRef`-slot value whose surface `TypeName` couldn't
     /// be lowered to a concrete `KType` at `ExpressionPart::resolve_for` time — a
     /// bare-leaf name not in [`KType::from_name`]'s builtin table (`Point`, `IntOrd`,
-    /// `MyList`). Preserves the parser-side `TypeExpr` for consumers that want the
+    /// `MyList`). Preserves the parser-side `TypeName` for consumers that want the
     /// surface name; scope-aware resolution + memoization lives on
     /// [`crate::machine::core::Scope::resolve_type_expr`].
-    TypeNameRef(TypeExpr),
+    TypeNameRef(TypeName),
     /// NEWTYPE carrier: tags a representation value with a NEWTYPE type identity.
     /// `inner` is invariantly *not* a `Wrapped` — the [`NonWrappedRef`] field type
     /// enforces newtype-over-newtype collapse at the construction path. `type_id` is

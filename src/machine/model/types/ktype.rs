@@ -121,7 +121,7 @@ pub enum KType<'a> {
     /// when (or whether) to run it.
     KExpression,
     /// Meta-type for slots capturing a parsed type-name token. Carries the full structured
-    /// `TypeExpr` rather than flattening to a name string.
+    /// `TypeName` rather than flattening to a name string.
     TypeExprRef,
     /// Meta-type for first-class type-values; both tagged-union and struct schemas report this.
     Type,

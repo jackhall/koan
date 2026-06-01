@@ -183,7 +183,7 @@ ride a *deferred* return-type carrier through the per-call scope.
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
 every static case (return types that don't reference a parameter), while
 `Deferred(DeferredReturn<'a>)` holds the surface form verbatim — either
-`TypeExpr(TypeExpr)` for parser-preserved structured forms or
+`TypeExpr(TypeName)` for parser-preserved leaf forms or
 `Expression(KExpression<'a>)` for captured parens-form expressions. Routing
 happens at binder construction in
 [`fn_def.rs`](../../src/builtins/fn_def.rs): a parameter-name scan over the

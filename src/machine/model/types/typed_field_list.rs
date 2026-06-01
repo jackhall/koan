@@ -112,10 +112,10 @@ fn rewrite_threaded_self_refs<'a>(
         .iter()
         .map(|p| {
             let value = match &p.value {
-                ExpressionPart::Type(t) if threaded.contains(&t.name) => {
+                ExpressionPart::Type(t) if threaded.contains(t.as_str()) => {
                     let obj = scope
                         .arena
-                        .alloc(KObject::KTypeValue(KType::RecursiveRef(t.name.clone())));
+                        .alloc(KObject::KTypeValue(KType::RecursiveRef(t.render())));
                     ExpressionPart::Future(obj)
                 }
                 ExpressionPart::SigiledTypeExpr(b) => ExpressionPart::SigiledTypeExpr(Box::new(

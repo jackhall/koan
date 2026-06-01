@@ -14,7 +14,7 @@ use crate::builtins::newtype_def::newtype_construct;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::core::ScopeId;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
@@ -191,7 +191,7 @@ pub(super) fn bare_identifier<'a>(
 
 pub(super) fn bare_type_leaf<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
-    t: &TypeExpr,
+    t: &TypeName,
     scope: &'a Scope<'a>,
 ) -> NodeStep<'a> {
     let chain = ctx.chain_deref();
@@ -305,7 +305,7 @@ pub(super) fn constructor_call<'a>(
         Err(e) => return NodeStep::Done(NodeOutput::Err(e)),
     };
     let chain = ctx.chain_deref();
-    match scope.resolve_with_chain(&head_t.name, chain) {
+    match scope.resolve_with_chain(head_t.as_str(), chain) {
         Resolution::Placeholder(producer) => {
             return KeywordedState::install_overload_park(
                 ctx,
@@ -321,11 +321,11 @@ pub(super) fn constructor_call<'a>(
     // identity, so a recursive type whose cycle-close pre-installed a payload-empty
     // identity reads the schema-bearing one that finalize's upsert replaced it with —
     // no value-side carrier involved.
-    let identity = match scope.resolve_type_with_chain(&head_t.name, chain) {
+    let identity = match scope.resolve_type_with_chain(head_t.as_str(), chain) {
         Some(kt) => kt,
         None => {
             return NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(
-                head_t.name.clone(),
+                head_t.render(),
             ))));
         }
     };

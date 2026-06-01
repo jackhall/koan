@@ -74,7 +74,7 @@ pub fn body_type_lhs<'a>(
 ) -> BodyResult<'a> {
     let s_name = match bundle.get("s") {
         Some(KObject::KTypeValue(t)) => t.name(),
-        Some(KObject::TypeNameRef(t)) => t.name.clone(),
+        Some(KObject::TypeNameRef(t)) => t.render(),
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
@@ -93,7 +93,7 @@ pub fn body_type_lhs<'a>(
     // recovers; struct / union names are type-only now, so it synthesizes a
     // `KTypeValue(UserType)` that `access_field` rejects with the same TypeMismatch a
     // static struct field access has always produced.
-    let leaf = crate::machine::model::ast::TypeExpr::leaf(s_name);
+    let leaf = crate::machine::model::ast::TypeName::leaf(s_name);
     let target = match coerce_type_token_value(scope, &leaf, None) {
         Ok(obj) => obj,
         Err(e) => return err(e),
@@ -147,7 +147,7 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
     match bundle.get("field") {
         Some(KObject::KString(s)) => Ok(s.clone()),
         Some(KObject::KTypeValue(t)) => Ok(t.name()),
-        Some(KObject::TypeNameRef(t)) => Ok(t.name.clone()),
+        Some(KObject::TypeNameRef(t)) => Ok(t.render()),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "field".to_string(),
             expected: "Identifier".to_string(),

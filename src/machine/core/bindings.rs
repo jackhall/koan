@@ -21,7 +21,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
 use crate::machine::core::kfunction::{KFunction, NodeId};
-use crate::machine::model::ast::TypeExpr;
+use crate::machine::model::ast::TypeName;
 use crate::machine::model::types::{KType, UntypedKey};
 use crate::machine::model::values::KObject;
 
@@ -116,11 +116,11 @@ pub struct Bindings<'a> {
     /// elaborator's `Resolution::Placeholder` arm to record dependency edges
     /// and run DFS cycle detection. See [`pending`] for the surface methods.
     pending: PendingTypes<'a>,
-    /// Scope-bound `TypeExpr` → `&KType` resolution cache. Monotonic — entries
+    /// Scope-bound `TypeName` → `&KType` resolution cache. Monotonic — entries
     /// are written only when the elaborated `KType` and every user-type it
     /// references are fully finalized; the finalize gate prevents caching
     /// mid-SCC pre-close identities.
-    type_expr_memo: RefCell<HashMap<TypeExpr, &'a KType<'a>>>,
+    type_expr_memo: RefCell<HashMap<TypeName, &'a KType<'a>>>,
 }
 
 impl<'a> Bindings<'a> {
@@ -136,7 +136,7 @@ impl<'a> Bindings<'a> {
         }
     }
 
-    pub fn type_expr_memo_get(&self, te: &TypeExpr) -> Option<&'a KType<'a>> {
+    pub fn type_expr_memo_get(&self, te: &TypeName) -> Option<&'a KType<'a>> {
         self.type_expr_memo.borrow().get(te).copied()
     }
 
@@ -259,7 +259,7 @@ impl<'a> Bindings<'a> {
     /// Insert `(te → kt)` into the resolution cache. Caller arena-allocates
     /// `kt` and gates on finalize. Monotonic: a collision means equal values,
     /// so we keep the existing entry rather than panic.
-    pub fn type_expr_memo_insert(&self, te: TypeExpr, kt: &'a KType<'a>) {
+    pub fn type_expr_memo_insert(&self, te: TypeName, kt: &'a KType<'a>) {
         let mut memo = self.type_expr_memo.borrow_mut();
         memo.entry(te).or_insert(kt);
     }

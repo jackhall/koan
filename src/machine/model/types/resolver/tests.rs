@@ -1,11 +1,11 @@
 use super::*;
 use crate::builtins::test_support::run_root_silent;
-use crate::machine::model::ast::TypeExpr;
+use crate::machine::model::ast::TypeName;
 use crate::machine::BindingIndex;
 use crate::machine::RuntimeArena;
 
-fn leaf(n: &str) -> TypeExpr {
-    TypeExpr::leaf(n.into())
+fn leaf(n: &str) -> TypeName {
+    TypeName::leaf(n.into())
 }
 
 /// A Type-class leaf bound only in the value language reports the layering

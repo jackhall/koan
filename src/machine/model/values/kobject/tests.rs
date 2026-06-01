@@ -137,8 +137,8 @@ fn unstamped_empty_container_detection() {
 /// consumers have resolved the carrier.
 #[test]
 fn type_name_ref_summarize_renders_surface_form() {
-    use crate::machine::model::ast::TypeExpr;
-    let v = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()));
+    use crate::machine::model::ast::TypeName;
+    let v = KObject::TypeNameRef(TypeName::leaf("MyT".into()));
     use crate::machine::model::types::Parseable;
     assert_eq!(v.summarize(), "MyT");
 }
@@ -147,8 +147,8 @@ fn type_name_ref_summarize_renders_surface_form() {
 /// the fully-elaborated `KTypeValue` carrier.
 #[test]
 fn type_name_ref_ktype_is_type_expr_ref() {
-    use crate::machine::model::ast::TypeExpr;
-    let v = KObject::TypeNameRef(TypeExpr::leaf("MyT".into()));
+    use crate::machine::model::ast::TypeName;
+    let v = KObject::TypeNameRef(TypeName::leaf("MyT".into()));
     assert_eq!(v.ktype(), KType::TypeExprRef);
 }
 

@@ -9,7 +9,7 @@
 //! that reference a per-call parameter (`-> Er`, `-> (MODULE_TYPE_OF Er Type)`) survive
 //! FN-definition without sub-dispatching against the outer scope.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::values::NamedPairs;
 
 use super::ktraits::Parseable;
@@ -75,7 +75,7 @@ pub enum ReturnType<'a> {
 ///   as a sub-Dispatch under the per-call scope; the resulting `KTypeValue`'s inner
 ///   `KType` is the per-call return type.
 pub enum DeferredReturn<'a> {
-    TypeExpr(TypeExpr),
+    TypeExpr(TypeName),
     Expression(KExpression<'a>),
 }
 
@@ -112,7 +112,7 @@ impl<'a> Eq for ReturnType<'a> {}
 impl<'a> PartialEq for DeferredReturn<'a> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (DeferredReturn::TypeExpr(a), DeferredReturn::TypeExpr(b)) => type_expr_eq(a, b),
+            (DeferredReturn::TypeExpr(a), DeferredReturn::TypeExpr(b)) => a == b,
             (DeferredReturn::Expression(a), DeferredReturn::Expression(b)) => {
                 // `KExpression` doesn't impl `Eq` (parts carry `&'a KObject` futures);
                 // canonical render is sufficient for duplicate-overload detection.
@@ -121,10 +121,6 @@ impl<'a> PartialEq for DeferredReturn<'a> {
             _ => false,
         }
     }
-}
-
-fn type_expr_eq(a: &TypeExpr, b: &TypeExpr) -> bool {
-    a.name == b.name
 }
 
 impl<'a> std::fmt::Debug for ReturnType<'a> {

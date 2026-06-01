@@ -6,10 +6,10 @@
 //! `ReturnType::Deferred(_)` that re-elaborates per call against the dispatch-boundary
 //! scope.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 
-pub(super) fn type_expr_references_any(te: &TypeExpr, param_names: &[String]) -> bool {
-    param_names.iter().any(|n| n == &te.name)
+pub(super) fn type_expr_references_any(te: &TypeName, param_names: &[String]) -> bool {
+    param_names.iter().any(|n| n.as_str() == te.as_str())
 }
 
 pub(super) fn kexpression_references_any(expr: &KExpression<'_>, param_names: &[String]) -> bool {

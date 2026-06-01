@@ -1,4 +1,4 @@
-//! Scheduler-aware type-name elaboration. Walks a [`TypeExpr`] against a [`Scope`],
+//! Scheduler-aware type-name elaboration. Walks a [`TypeName`] against a [`Scope`],
 //! threads a "currently elaborating" set so recursive type definitions short-circuit to
 //! [`KType::RecursiveRef`] instead of deadlocking on their own placeholder, and returns
 //! [`ElabResult::Park`] when a referenced type-binding placeholder hasn't finalized so
@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use crate::machine::core::{Resolution, Scope, ScopeId};
-use crate::machine::model::ast::TypeExpr;
+use crate::machine::model::ast::TypeName;
 use crate::machine::NodeId;
 
 use super::ktype::{KType, UserTypeKind};
@@ -19,7 +19,7 @@ use super::ktype::{KType, UserTypeKind};
 #[cfg(test)]
 mod tests;
 
-/// Outcome of one elaboration walk over a `TypeExpr`.
+/// Outcome of one elaboration walk over a `TypeName`.
 #[derive(Debug)]
 pub enum ElabResult<'a> {
     /// Fully elaborated. Whether to `Mu`-wrap rides on the elaborator's
@@ -114,17 +114,17 @@ impl<'s, 'a> Elaborator<'s, 'a> {
     }
 }
 
-/// Walk a `TypeExpr` against the elaborator's scope. Bare leaves route through the
+/// Walk a `TypeName` against the elaborator's scope. Bare leaves route through the
 /// threaded set first (recursive back-edge), then `Scope::resolve_type`, then
 /// `Scope::resolve` for the placeholder path, and finally `KType::from_name` so
 /// fixture scopes that skip builtin registration still resolve builtin names.
 /// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
 /// walk — they sub-Dispatch through the standalone dispatcher.
-pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeExpr) -> ElabResult<'a> {
-    let name = &t.name;
+pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> ElabResult<'a> {
+    let name = t.as_str();
     if el.threaded.contains(name) {
-        el.fired_self_ref_for.insert(name.clone());
-        return ElabResult::Done(KType::RecursiveRef(name.clone()));
+        el.fired_self_ref_for.insert(name.to_string());
+        return ElabResult::Done(KType::RecursiveRef(name.to_string()));
     }
     if let Some(kt) = el.scope.resolve_type(name) {
         return ElabResult::Done(kt.clone());
@@ -137,7 +137,7 @@ pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeExpr) -> Ela
             // edge. Trivial self-cycles (`LET T = T`) are caught earlier by the
             // dispatch driver's eager-resolve pass.
             if let Some(decl) = el.current_decl_name.clone() {
-                el.scope.bindings().record_pending_edge(&decl, name.clone());
+                el.scope.bindings().record_pending_edge(&decl, name.to_string());
                 if let Some(members) = detect_pending_cycle(el.scope, &decl) {
                     close_type_cycle(el.scope, &members);
                     if let Some(kt) = el.scope.resolve_type(name) {

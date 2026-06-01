@@ -211,7 +211,7 @@ mod tests {
     use crate::builtins::test_support::{marker, run_root_bare};
     use crate::builtins::{default_scope, register_builtin};
     use crate::machine::core::{RuntimeArena, Scope};
-    use crate::machine::model::ast::{KLiteral, TypeExpr};
+    use crate::machine::model::ast::{KLiteral, TypeName};
     use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
 
     fn body_any<'a>(
@@ -353,7 +353,7 @@ mod tests {
         register_builtin(scope, "OP", sig, body_any);
         let expr = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Keyword("OP".into())),
-            Spanned::bare(ExpressionPart::Type(TypeExpr::leaf("IntOrd".into()))),
+            Spanned::bare(ExpressionPart::Type(TypeName::leaf("IntOrd".into()))),
         ]);
         let f = find_match(scope, &expr).expect("OP <TypeExprRef> should match");
         let pick = f.classify_for_pick(&expr);
@@ -421,7 +421,7 @@ mod tests {
         register_builtin(scope, "OP", sig, body_any);
         let expr = KExpression::new(vec![
             Spanned::bare(ExpressionPart::Keyword("OP".into())),
-            Spanned::bare(ExpressionPart::Type(TypeExpr::leaf("Number".into()))),
+            Spanned::bare(ExpressionPart::Type(TypeName::leaf("Number".into()))),
         ]);
         let f = find_match(scope, &expr).expect("OP <Any> should match");
         let pick = f.classify_for_pick(&expr);

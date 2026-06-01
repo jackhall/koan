@@ -1,4 +1,4 @@
-//! Scope-bound resolution of a surface [`TypeExpr`] into an arena-allocated `&KType`.
+//! Scope-bound resolution of a surface [`TypeName`] into an arena-allocated `&KType`.
 //!
 //! Read-only consumer of the bindings façade: never touches `data`, `functions`,
 //! `placeholders`, `pending`, `out`, or `kind` — the read-only dependency is what
@@ -14,7 +14,7 @@
 
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{KError, KErrorKind, LexicalFrame, Scope, ScopeId};
-use crate::machine::model::ast::TypeExpr;
+use crate::machine::model::ast::TypeName;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
 
@@ -28,12 +28,12 @@ pub enum ResolveTypeExprOutcome<'a> {
 }
 
 impl<'a> Scope<'a> {
-    /// Layer-2 scope-bound TypeExpr resolution memo. On miss, runs
+    /// Layer-2 scope-bound TypeName resolution memo. On miss, runs
     /// [`crate::machine::model::types::elaborate_type_expr`] against `self`, asks a
     /// [`FinalizeGate`] whether the result is safe to share, and writes the cache
     /// only when the gate admits. The Park arm — elaborator-parked or gate-rejected —
     /// never writes the cache: caching mid-SCC would observe pre-close opaque identity.
-    pub fn resolve_type_expr(&'a self, te: &TypeExpr) -> ResolveTypeExprOutcome<'a> {
+    pub fn resolve_type_expr(&'a self, te: &TypeName) -> ResolveTypeExprOutcome<'a> {
         use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
         if let Some(kt) = self.type_expr_memo_get(te) {
             return ResolveTypeExprOutcome::Done(kt);
@@ -56,7 +56,7 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// Resolve a bare leaf [`TypeExpr`] against `scope`'s type-side bindings and return the
+/// Resolve a bare leaf [`TypeName`] against `scope`'s type-side bindings and return the
 /// canonical value-side `KObject` carrier.
 ///
 /// - Parameterized shapes (`List<...>`, `Function<...>` etc.) are rejected with `ShapeError`.
@@ -70,10 +70,10 @@ impl<'a> Scope<'a> {
 /// - Miss surfaces `UnboundName(name)`.
 pub fn coerce_type_token_value<'a>(
     scope: &'a Scope<'a>,
-    t: &TypeExpr,
+    t: &TypeName,
     chain: Option<&LexicalFrame>,
 ) -> Result<&'a KObject<'a>, KError> {
-    let name = t.name.as_str();
+    let name = t.as_str();
     match scope.resolve_type_with_chain(name, chain) {
         Some(kt) => {
             if matches!(kt, KType::UserType { .. } | KType::Module { .. }) {
@@ -217,7 +217,7 @@ mod tests {
     fn resolve_type_expr_builtin_leaf_caches() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let te = TypeExpr::leaf("Number".into());
+        let te = TypeName::leaf("Number".into());
         let first = match scope.resolve_type_expr(&te) {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done"),
@@ -237,7 +237,7 @@ mod tests {
     fn resolve_type_expr_unbound_returns_unbound() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        let te = TypeExpr::leaf("NotABuiltin".into());
+        let te = TypeName::leaf("NotABuiltin".into());
         match scope.resolve_type_expr(&te) {
             ResolveTypeExprOutcome::Unbound(_) => {}
             _ => panic!("expected Unbound for unknown leaf"),
@@ -252,7 +252,7 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
-        let te = TypeExpr::leaf("Point".into());
+        let te = TypeName::leaf("Point".into());
         let kt = match scope.resolve_type_expr(&te) {
             ResolveTypeExprOutcome::Done(kt) => kt,
             _ => panic!("expected Done after STRUCT declaration"),
@@ -328,7 +328,7 @@ mod tests {
         use super::super::coerce_type_token_value;
         use crate::builtins::test_support::run_root_bare;
         use crate::machine::core::BindingIndex;
-        use crate::machine::model::ast::TypeExpr;
+        use crate::machine::model::ast::TypeName;
         use crate::machine::model::{KObject, KType};
         use crate::machine::{KError, KErrorKind, RuntimeArena};
 
@@ -337,7 +337,7 @@ mod tests {
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
             scope.register_type("Number".into(), KType::Number, BindingIndex::BUILTIN);
-            let leaf = TypeExpr::leaf("Number".to_string());
+            let leaf = TypeName::leaf("Number".to_string());
             let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Number lookup");
             assert!(matches!(obj, KObject::KTypeValue(KType::Number)));
         }
@@ -346,7 +346,7 @@ mod tests {
         fn unbound_returns_error() {
             let arena = RuntimeArena::new();
             let scope = run_root_bare(&arena);
-            let leaf = TypeExpr::leaf("Missing".to_string());
+            let leaf = TypeName::leaf("Missing".to_string());
             match coerce_type_token_value(scope, &leaf, None) {
                 Err(KError {
                     kind: KErrorKind::UnboundName(name),
@@ -375,7 +375,7 @@ mod tests {
                 .bind_value("Point".to_string(), paired, BindingIndex::BUILTIN)
                 .unwrap();
 
-            let leaf = TypeExpr::leaf("Point".to_string());
+            let leaf = TypeName::leaf("Point".to_string());
             let obj = coerce_type_token_value(scope, &leaf, None).expect("expected Point lookup");
             assert!(std::ptr::eq(obj, paired));
         }
@@ -397,7 +397,7 @@ mod tests {
             // types-side only — no paired `bind_value`.
             scope.register_type("Orphan".into(), kt.clone(), BindingIndex::BUILTIN);
 
-            let leaf = TypeExpr::leaf("Orphan".to_string());
+            let leaf = TypeName::leaf("Orphan".to_string());
             let obj = coerce_type_token_value(scope, &leaf, None).expect("fall-through must Ok");
             match obj {
                 KObject::KTypeValue(KType::UserType { name, .. }) => {

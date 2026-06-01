@@ -39,13 +39,13 @@ layering this design preserves.
 **One canonical runtime type representation.** Type bindings finalize to
 `KObject::KTypeValue(KType)`. Consumers read the elaborated type
 directly; there is no surface/elaborated split, no per-lookup
-re-elaboration, no parallel `TypeExpr` representation flowing through
+re-elaboration, no parallel surface-name representation flowing through
 dispatch. Cycle-aware traversals (equality, printing, hashing) carry an
 "inside this `Mu` binder" set so back-references terminate after one
 unfold. Trivially cyclic aliases (`LET Ty = Ty`) surface as a structured
 error rather than a stack overflow.
 
-**Module-qualified type names.** A TypeExpr like `Mo.Ty` or chained
+**Module-qualified type names.** A `TypeName` like `Mo.Ty` or chained
 `Outer.Inner.T` resolves through the value-side ATTR walker:
 [`access_module_member`](../../src/builtins/attr.rs) tries the
 module's `type_members` table (opaque-ascription type bindings), then
@@ -67,24 +67,26 @@ the placeholder-park rail covers the source-order case.
 
 ## Layers
 
-The pipeline from parser [`TypeExpr`](../../src/machine/model/ast.rs) to
-fully-elaborated `&'a KType` runs through five layers, each with a
-distinct source-file home. Other typing docs that touch a single layer
+The parser's bare type-leaf carrier is
+[`TypeName`](../../src/machine/model/ast.rs), a thin newtype over the source
+name (`Deref`s to `str`, derives eq/hash by string). The pipeline from a
+`TypeName` to a fully-elaborated `&'a KType` runs through five layers, each with
+a distinct source-file home. Other typing docs that touch a single layer
 cross-link this section rather than restating its slice.
 
-- **Layer 1 — surface-form builtin cache** in
-  [`ast.rs`](../../src/machine/model/ast.rs). A `OnceCell<KType>` on
-  `TypeExpr` itself memoizes scope-independent builtin lowering.
-  `ExpressionPart::resolve_for` reads the cell first; misses run
+- **Layer 1 — bind-time builtin lowering** in
+  [`ast.rs`](../../src/machine/model/ast.rs).
+  `ExpressionPart::resolve_for` lowers a bare `Type` token against the
+  builtin table via
   [`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs)
-  and write back when the surface form resolves against the builtin
-  table. Arity is enforced here, before binder install. See
-  [Strict admission rules](#strict-admission-rules) below for the cache
-  mechanics.
-- **Layer 2 — scope-bound elaboration memo** in
+  (a match over the ~10-entry builtin map, re-run per call). A hit lowers to
+  `KObject::KTypeValue`; a miss — a user-bound leaf — defers to
+  `KObject::TypeNameRef`. Runs at `KFunction::bind` time, which has no `Scope`
+  in hand, so it is builtin-only and scope-independent.
+- **Layer 2 — scope-bound elaboration memo (the sole cache tier)** in
   [`bindings.rs`](../../src/machine/core/bindings.rs). A
-  `RefCell<HashMap<TypeExpr, &'a KType>>` on `Bindings` (`type_expr_memo`)
-  caches resolved `TypeExpr → &'a KType` per scope, gated by a finalize
+  `RefCell<HashMap<TypeName, &'a KType>>` on `Bindings` (`type_expr_memo`)
+  caches resolved `TypeName → &'a KType` per scope, gated by a finalize
   check on every embedded user-type. Reached through
   [`Scope::resolve_type_expr`](../../src/machine/core/scope.rs), which
   returns the three-outcome
@@ -93,7 +95,7 @@ cross-link this section rather than restating its slice.
   the monotonicity argument.
 - **Layer 3 — the elaborator** in
   [`resolver.rs`](../../src/machine/model/types/resolver.rs). Resolves a
-  *bare-leaf* `TypeExpr` against the scope into `&'a KType`: a threaded set
+  *bare-leaf* `TypeName` against the scope into `&'a KType`: a threaded set
   of binders currently being elaborated turns a self-reference into
   `KType::RecursiveRef`, an unfinalized placeholder parks via
   `ElabResult::Park(producers)` (recording the dependency edge and running
@@ -119,7 +121,7 @@ cross-link this section rather than restating its slice.
   the downstream consumers.
 - **Layer 5 — surface-form-survives-bind carrier** in
   [`kobject.rs`](../../src/machine/model/values/kobject.rs).
-  `KObject::TypeNameRef(TypeExpr)` preserves the parser-side `TypeExpr`
+  `KObject::TypeNameRef(TypeName)` preserves the parser-side `TypeName`
   verbatim for bare-leaf type names not in the builtin table — so
   diagnostics quote the user's identifier exactly as written rather than
   the elaborated canonical form. See
@@ -195,10 +197,10 @@ Bare-leaf type names that aren't in
 [`KType::from_name`](../../src/machine/model/types/ktype.rs)'s builtin
 table (`Point`, `IntOrd`, `MyList`) are lowered by
 [`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) into
-`KObject::TypeNameRef(TypeExpr)` rather than a placeholder `KType` variant.
-The carrier preserves the parser-side `TypeExpr` for diagnostics and for
-consumers that want the user's surface identifier verbatim; it carries no
-internal cache. Both `TypeNameRef` and the fully-resolved `KTypeValue` report
+`KObject::TypeNameRef(TypeName)` rather than a placeholder `KType` variant.
+The carrier preserves the parser-side `TypeName` for diagnostics and for
+consumers that want the user's surface identifier verbatim. Both `TypeNameRef`
+and the fully-resolved `KTypeValue` report
 `ktype() = KType::TypeExprRef`, so the slot's dispatch position is identical —
 whether the surface form already lowered to a concrete `KType` at bind time
 or is still in parser-form is an internal detail.
@@ -215,8 +217,8 @@ Three downstream consumers each carry a `TypeNameRef` arm beside the existing
   runs the same primitive/container blocklist as the `KTypeValue` arm and
   routes to `register_type` for type-valued RHSes.
 
-The single-part `<v:TypeExpr>` lookup that those consumers' siblings used to
-need is now folded into the dispatcher's `BareTypeLeaf` fast lane
+The single-part bare-`Type` lookup that those consumers' siblings need is
+folded into the dispatcher's `BareTypeLeaf` fast lane
 ([`dispatch/single_poll.rs`](../../src/machine/execute/dispatch/single_poll.rs)),
 which calls
 [`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs)
@@ -232,7 +234,7 @@ FN's deferred return-type elaboration peeks the slot to pick between
 [`extract_ktype`](../../src/machine/core/kfunction/argument_bundle.rs)
 (resolved carrier) and the sibling
 [`extract_type_name_ref`](../../src/machine/core/kfunction/argument_bundle.rs)
-(deferred carrier consuming the parser-preserved `TypeExpr`), then drives the
+(deferred carrier consuming the parser-preserved `TypeName`), then drives the
 existing park-on-placeholder machinery from there. The sole
 `KObject::KTypeValue` synthesis site for dispatch transport lives in
 [`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs),
@@ -268,23 +270,14 @@ admits speculatively in such a slot — it sub-dispatches to a type-side
 carrier downstream. The same shape-only-on-binder-slot rule covers
 `KExpression` slots: the slot owns its body, not a name lookup.
 
-Two complementary caches amortize the elaboration cost rather than one cell
-on the carrier:
+A single cache tier amortizes the elaboration cost. Bind-time builtin lowering
+([`ExpressionPart::resolve_for`](../../src/machine/model/ast.rs) →
+[`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs))
+re-runs the ~10-entry builtin match per call rather than memoizing it — the
+match is cheap and a shared table would be added back only if profiling shows
+it hot. The scope-bound resolution memo is therefore the only cache:
 
-- **Layer 1 — surface-form, scope-independent.** A `OnceCell<KType>` lives on
-  [`TypeExpr`](../../src/machine/model/ast.rs) itself
-  (`TypeExpr.builtin_cache`, excluded from `PartialEq` / `Hash`).
-  `ExpressionPart::resolve_for` reads the cell first; on miss it runs
-  [`KType::from_type_expr`](../../src/machine/model/types/ktype_resolution.rs)
-  and writes the result back when the surface form resolves against the
-  builtin table. `from_type_expr` failures (user-bound leaves) are
-  intentionally not cached here — those flow through Layer 2. Subsequent
-  `KFunction::bind` passes against the same `TypeExpr` pay one
-  `OnceCell::get`. No scope keying needed: the cached `KType` depends solely
-  on the surface form.
-
-- **Layer 2 — scope-bound resolution memo.** A
-  `RefCell<HashMap<TypeExpr, &'a KType>>` lives on
+- A `RefCell<HashMap<TypeName, &'a KType>>` lives on
   [`Bindings`](../../src/machine/core/bindings.rs) (`type_expr_memo`).
   Reached through
   [`Scope::resolve_type_expr`](../../src/machine/core/scope.rs), which
@@ -300,7 +293,7 @@ on the carrier:
   is written, neither key nor value changes for the scope's lifetime (Koan
   data is immutable, and the finalize gate prevents caching mid-SCC opaque
   identities). No invalidation, no staleness window. Cache size is bounded
-  by the scope's source-form TypeExpr corpus, which is syntactically bounded.
+  by the scope's source-form `TypeName` corpus, which is syntactically bounded.
 
 Consumers that need the scope-resolved identity —
 [`type_identity_for`](../../src/machine/core/kfunction/invoke.rs)
@@ -316,11 +309,3 @@ forward reference). The dispatch boundary's `type_identity_for` surfaces a
 `KError::TypeIdentityPendingAtDispatch { param, surface, pending_on }` rather
 than silently skipping the per-call bind, so a workload that triggers it is
 debuggable from the error alone.
-
-## Open work
-
-- [Collapse TypeExpr and consolidate leaf type-name resolution](../../roadmap/dispatch_fix/collapse-typeexpr.md) —
-  the bare type-leaf carrier reduces to a name string and the two cache tiers
-  (Layers 1–2) plus the two leaf-lookup entry points (Layers 3–4) fold into
-  one resolution path; the finalize gate, SCC cycle-close, and parking rails
-  are preserved.

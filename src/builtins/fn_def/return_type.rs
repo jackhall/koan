@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType};
 use crate::machine::ResolveTypeExprOutcome;
@@ -18,7 +18,7 @@ use super::param_refs::{kexpression_references_any, type_expr_references_any};
 /// overload 2's expression may reference a parameter that is unbound there.
 pub(crate) enum ReturnTypeRaw<'a> {
     Resolved(KType<'a>),
-    TypeExprCarrier(TypeExpr),
+    TypeExprCarrier(TypeName),
     ExprCarrier(KExpression<'a>),
 }
 
@@ -28,7 +28,7 @@ pub(crate) enum ReturnTypeRaw<'a> {
 pub(crate) enum ReturnTypeState<'a> {
     Done(KType<'a>),
     Pending {
-        te: TypeExpr,
+        te: TypeName,
         producers: Vec<NodeId>,
     },
     Deferred(DeferredReturn<'a>),
@@ -44,7 +44,7 @@ pub(crate) enum ReturnTypeState<'a> {
 pub(crate) enum ReturnTypeCapture<'a> {
     Resolved(KType<'a>),
     Unresolved(String),
-    TypeExpr(TypeExpr),
+    TypeExpr(TypeName),
     Deferred(DeferredReturn<'a>),
     /// `results_pos` indexes the Combine closure's `&[&'a KObject<'a>]` slice.
     ReturnTypeExpr {
@@ -119,7 +119,7 @@ pub(crate) fn classify_return_type<'a>(
                     verdict,
                 ));
             }
-            let name = te.name.clone();
+            let name = te.render();
             let state = match scope.resolve_type_expr(&te) {
                 ResolveTypeExprOutcome::Done(kt) => ReturnTypeState::Done(kt.clone()),
                 ResolveTypeExprOutcome::Park(producers) => {
@@ -179,19 +179,19 @@ fn verdict_for_resolved<'a>(kt: &KType<'a>, is_functor: bool) -> AdmissibleVerdi
 /// parameterized form admits via the type-position sigil; other shapes are rejected
 /// so the diagnostic surfaces at the FUNCTOR site.
 fn verdict_for_deferred_type_expr<'a>(
-    te: &TypeExpr,
+    te: &TypeName,
     param_type_map: &HashMap<String, KType<'a>>,
 ) -> AdmissibleVerdict {
     // Map miss means the param-type slot didn't elaborate eagerly; admit
     // conservatively and let downstream resolution surface any structured error.
-    if let Some(param_kt) = param_type_map.get(&te.name) {
+    if let Some(param_kt) = param_type_map.get(te.as_str()) {
         if param_kt.is_type_denoting() {
             AdmissibleVerdict::Admissible
         } else {
             AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
                 "FUNCTOR return-type slot must denote a module, signature, or functor; \
                  parameter `{}` is declared as `{}`, which is not type-denoting",
-                te.name,
+                te.as_str(),
                 param_kt.name(),
             ))))
         }
@@ -227,8 +227,8 @@ fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
     }
 }
 
-pub(super) fn make_capture<'a>(te: TypeExpr) -> ReturnTypeCapture<'a> {
-    ReturnTypeCapture::Unresolved(te.name)
+pub(super) fn make_capture<'a>(te: TypeName) -> ReturnTypeCapture<'a> {
+    ReturnTypeCapture::Unresolved(te.render())
 }
 
 /// Park-arm outcomes from `Scope::resolve_type_expr` are protocol errors here: every
@@ -242,7 +242,7 @@ pub(super) fn resolve_capture_at_finish<'a>(
     match capture {
         ReturnTypeCapture::Resolved(kt) => Ok(ReturnType::Resolved(kt)),
         ReturnTypeCapture::Unresolved(name) => {
-            let te = TypeExpr::leaf(name.clone());
+            let te = TypeName::leaf(name.clone());
             match scope.resolve_type_expr(&te) {
                 ResolveTypeExprOutcome::Done(kt) => Ok(ReturnType::Resolved(kt.clone())),
                 ResolveTypeExprOutcome::Park(_) => Err(KError::new(KErrorKind::ShapeError(

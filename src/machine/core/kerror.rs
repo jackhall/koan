@@ -65,7 +65,7 @@ pub enum KErrorKind {
         name: String,
         got: String,
     },
-    /// A `TypeNameRef` carrier reached `type_identity_for` but its `TypeExpr`
+    /// A `TypeNameRef` carrier reached `type_identity_for` but its `TypeName`
     /// couldn't elaborate because some referenced type-binding is still
     /// pending finalization.
     TypeIdentityPendingAtDispatch {

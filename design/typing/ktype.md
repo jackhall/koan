@@ -70,7 +70,7 @@
 - Higher-kinded application: `ConstructorApply { ctor: Box<KType>, args:
   Vec<KType> }` — structural identity by `(ctor, args)`, mirror of `List(_)`
   / `Dict(_, _)`. Emitted by `elaborate_type_expr` when the outer name of a
-  parameterized `TypeExpr` resolves to a
+  parameterized type expression resolves to a
   `UserType { kind: TypeConstructor { .. }, .. }`; renders as `ctor<arg1,
   arg2>` in diagnostics. See
   [functors.md § Higher-kinded type slots](functors.md#higher-kinded-type-slots)
@@ -267,12 +267,12 @@ than at the slot kind.
 
 ### `TypeNameRef` — surface form survives bind
 
-A `TypeExprRef`-slot value whose surface `TypeExpr` doesn't resolve at
+A `TypeExprRef`-slot value whose surface `TypeName` doesn't resolve at
 `ExpressionPart::resolve_for` time — a bare-leaf name outside
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs)'s
 builtin table (`Point`, `IntOrd`, `MyList`, or an unknown name like
 `SomeWeirdName`) — rides through bind as
-[`KObject::TypeNameRef(TypeExpr)`](../../src/machine/model/values/kobject.rs)
+[`KObject::TypeNameRef(TypeName)`](../../src/machine/model/values/kobject.rs)
 rather than `KTypeValue(_)`. See
 [elaboration.md § Layers](elaboration.md#layers) § Layer 5 for where this
 carrier sits in the pipeline and the eventual scope-aware elaboration

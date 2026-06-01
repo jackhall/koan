@@ -53,7 +53,7 @@ pub fn body<'a>(
             s.clone()
         }
         Some(KObject::TypeNameRef(t)) => {
-            let resolved_name = t.name.clone();
+            let resolved_name = t.render();
             if !is_admissible_type_class_rhs(value) {
                 return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
                     name: resolved_name,
@@ -185,7 +185,7 @@ fn capitalize_identifier(name: &str) -> String {
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     match &expr.parts.get(1)?.value {
         ExpressionPart::Identifier(s) => Some(s.clone()),
-        ExpressionPart::Type(t) => Some(t.name.clone()),
+        ExpressionPart::Type(t) => Some(t.render()),
         _ => None,
     }
 }

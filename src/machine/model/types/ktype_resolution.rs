@@ -1,8 +1,8 @@
-//! Surface-name and `TypeExpr` → `KType` elaboration, plus join (LUB) for inferring
+//! Surface-name and `TypeName` → `KType` elaboration, plus join (LUB) for inferring
 //! container element types from heterogeneous values.
 
 use super::ktype::{KType, UserTypeKind};
-use crate::machine::model::ast::TypeExpr;
+use crate::machine::model::ast::TypeName;
 
 impl<'a> KType<'a> {
     /// Look up a `KType` by the textual name a user can write in source (e.g. `Number`,
@@ -34,13 +34,13 @@ impl<'a> KType<'a> {
         }
     }
 
-    /// Lower a parser `TypeExpr` into a `KType` against the builtin table only — no
+    /// Lower a parser `TypeName` into a `KType` against the builtin table only — no
     /// scope-aware resolver. The leaf name goes through [`KType::from_name`]; unknown
     /// names surface as `Err(_)`, and the caller either falls back to a `TypeNameRef`
     /// carrier or routes through the scheduler-aware
     /// [`crate::machine::model::types::elaborate_type_expr`].
-    pub fn from_type_expr(t: &TypeExpr) -> Result<KType<'a>, String> {
-        KType::from_name(&t.name).ok_or_else(|| format!("unknown type name `{}`", t.name))
+    pub fn from_type_expr(t: &TypeName) -> Result<KType<'a>, String> {
+        KType::from_name(t.as_str()).ok_or_else(|| format!("unknown type name `{}`", t.as_str()))
     }
 
     /// Least-upper-bound of two types. `[1, 2]` → `List<Number>`, `[1, "x"]` →
@@ -81,8 +81,8 @@ impl<'a> KType<'a> {
 mod tests {
     use super::*;
 
-    fn leaf(n: &str) -> TypeExpr {
-        TypeExpr::leaf(n.into())
+    fn leaf(n: &str) -> TypeName {
+        TypeName::leaf(n.into())
     }
 
     #[test]

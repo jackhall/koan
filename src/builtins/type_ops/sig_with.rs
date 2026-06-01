@@ -46,7 +46,7 @@ pub fn body<'a>(
             ))));
         }
         let slot_name = match &parts[0].value {
-            ExpressionPart::Type(t) => t.name.clone(),
+            ExpressionPart::Type(t) => t.render(),
             ExpressionPart::Identifier(name) => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "SIG_WITH binding name `{name}` must be a Type token (Capital-first, with \
