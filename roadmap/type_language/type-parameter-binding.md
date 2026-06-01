@@ -100,7 +100,7 @@ unify trivially with anything.
   `KType`-walking unifier handles the argument-extraction case; the
   earlier-parameter case routes through the existing per-call type-side
   install path for type-denoting parameter values. Once parameter signatures
-  carry the [record substrate](record-substrate.md)'s shape, the unifier walks
+  carry the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)'s shape, the unifier walks
   the parameter record's field types; the free type-parameter names it
   collects (`T`) are a distinct axis from the record's field-name keys
   (`elt`).

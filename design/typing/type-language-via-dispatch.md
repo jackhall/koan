@@ -161,15 +161,11 @@ FN / FUNCTOR do not install on the name channel.
 
 ## Open work
 
-- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
-  one ordered identifier-keyed map shape, with order-blind equality and a
-  name+type hash, shared by the struct schema, FN/FUNCTOR parameter types,
-  and the runtime binding carriers.
 - [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
   round-trip parameter names from the `:(FN ...)` / `:(FUNCTOR ...)` sigil
   surface into `KType::KFunction` / `KType::KFunctor` identity, against the
-  record substrate's equality, so a function-typed slot records the names
-  callers must use.
+  shipped [record substrate](ktype.md#record-fields-and-ktype-hashing)'s
+  equality, so a function-typed slot records the names callers must use.
 - [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
   extend dispatch's specificity lattice with width/depth record subtyping
   (depth sound under value immutability) plus a `FROM` projection builtin to

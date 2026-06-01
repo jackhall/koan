@@ -213,8 +213,9 @@ fn struct_field_accepts_keyworded_list_of_sigil() {
         other => panic!("Foo must be a Struct identity in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
-    assert_eq!(fields[0].0, "xs");
-    match &fields[0].1 {
+    let (xs_name, xs_type) = fields.iter().next().expect("one field");
+    assert_eq!(xs_name, "xs");
+    match xs_type {
         KType::List(elem) => assert_eq!(**elem, KType::Number),
         other => panic!("xs must be KType::List(Number), got {other:?}"),
     }

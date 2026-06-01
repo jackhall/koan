@@ -1,7 +1,3 @@
 # columns: date  short-sha  line-pct  function-pct
 # managed by tools/coverage.py --baseline; newest first, capped to 5 entries
-2026-06-01 6eabe90+ 88.04 94.57
-2026-06-01 1a94365+ 87.62 94.39
-2026-06-01 5f2ab9d+ 87.62 94.39
-2026-06-01 0c1c0b9+ 87.67 94.49
-2026-05-31 54324ef+ 87.67 94.49
+2026-06-01 08a80fc+ 88.10 94.41

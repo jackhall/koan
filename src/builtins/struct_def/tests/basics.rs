@@ -27,8 +27,12 @@ fn struct_named_registers_type_in_scope() {
         }) => {
             assert_eq!(name, "Point");
             assert_eq!(fields.len(), 2);
-            assert_eq!(fields[0], ("x".to_string(), KType::Number));
-            assert_eq!(fields[1], ("y".to_string(), KType::Number));
+            assert_eq!(
+                fields.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["x", "y"]
+            );
+            assert_eq!(fields.get("x"), Some(&KType::Number));
+            assert_eq!(fields.get("y"), Some(&KType::Number));
         }
         other => panic!(
             "expected KTypeValue(UserType Struct), got {:?}",
@@ -75,11 +79,12 @@ fn struct_preserves_field_order() {
             kind: UserTypeKind::Struct { fields },
             ..
         } => {
+            let names: Vec<&str> = fields.keys().map(String::as_str).collect();
             assert_eq!(
-                fields[0].0, "b",
+                names[0], "b",
                 "first field should be `b` (declaration order)"
             );
-            assert_eq!(fields[1].0, "a");
+            assert_eq!(names[1], "a");
         }
         _ => panic!("expected UserType Struct identity for Backwards"),
     }

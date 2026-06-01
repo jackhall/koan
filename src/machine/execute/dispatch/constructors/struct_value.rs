@@ -11,14 +11,14 @@ use indexmap::IndexMap;
 use crate::machine::core::source::Spanned;
 use crate::machine::core::{KError, KErrorKind, ScopeId};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::types::KType;
+use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{KObject, NamedPairs};
 
 /// Reorder call-site args into schema declaration order. Error
 /// precedence is missing-field before unknown-field: telling the user
 /// "you forgot `y`" is more actionable than "you have a stray `z`".
 pub(in crate::machine::execute) fn prepare_value_parts<'a>(
-    fields: &Rc<Vec<(String, KType<'a>)>>,
+    fields: &Rc<Record<KType<'a>>>,
     args_parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> Result<Vec<ExpressionPart<'a>>, KError> {
     let tmp_expr = KExpression::new(args_parts);
@@ -45,7 +45,7 @@ pub(in crate::machine::execute) fn prepare_value_parts<'a>(
 pub(in crate::machine::execute) fn construct<'a>(
     type_name: &str,
     scope_id: ScopeId,
-    fields: &[(String, KType<'a>)],
+    fields: &Record<KType<'a>>,
     values: &[&'a KObject<'a>],
 ) -> Result<KObject<'a>, KError> {
     if values.len() != fields.len() {

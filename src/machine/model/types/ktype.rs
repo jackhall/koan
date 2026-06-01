@@ -10,6 +10,7 @@
 //! `AbstractType`, `AnyModule`, `AnySignature`) hold `&'a Module<'a>` / `&'a Signature<'a>`
 //! arena pointers; every other variant is owned data and ignores the parameter.
 
+use super::record::Record;
 use crate::machine::core::{CallArena, ScopeId};
 use crate::machine::model::values::{Module, Signature};
 use std::collections::HashMap;
@@ -31,12 +32,10 @@ use std::rc::Rc;
 /// the schema-bearing final identity, so finalize can overwrite the payload in place.
 #[derive(Clone, Debug)]
 pub enum UserTypeKind<'a> {
-    /// Record schema in declaration order. The empty `Rc<vec![]>` sentinel is the
-    /// payload an instance's `.ktype()` synthesizes and the cycle-close pre-install
-    /// holds; construction reads the real list from the `bindings.types` identity.
-    Struct {
-        fields: Rc<Vec<(String, KType<'a>)>>,
-    },
+    /// Record schema in declaration order. The empty-`Record` sentinel is the payload
+    /// an instance's `.ktype()` synthesizes and the cycle-close pre-install holds;
+    /// construction reads the real record from the `bindings.types` identity.
+    Struct { fields: Rc<Record<KType<'a>>> },
     /// Tagged-union schema keyed by tag. Same empty-`Rc` sentinel convention as `Struct`.
     Tagged {
         schema: Rc<HashMap<String, KType<'a>>>,
@@ -67,6 +66,15 @@ impl<'a> PartialEq for UserTypeKind<'a> {
 }
 impl<'a> Eq for UserTypeKind<'a> {}
 
+/// Mirror the tag-only `PartialEq`: identity is the variant tag, the payload is
+/// ignored. Two `Struct`s with different `fields` compare equal, so they must hash
+/// equal — hashing the discriminant alone keeps `Hash` consistent with `Eq`.
+impl<'a> std::hash::Hash for UserTypeKind<'a> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+    }
+}
+
 impl<'a> UserTypeKind<'a> {
     /// Surface keyword rendered in diagnostics and `AnyUserType::name()`.
     pub fn surface_keyword(&self) -> &'static str {
@@ -83,7 +91,7 @@ impl<'a> UserTypeKind<'a> {
     /// for any `Struct { fields }` in dispatch.
     pub fn struct_sentinel() -> Self {
         UserTypeKind::Struct {
-            fields: Rc::new(Vec::new()),
+            fields: Rc::new(Record::new()),
         }
     }
 
@@ -340,6 +348,72 @@ impl<'a> PartialEq for KType<'a> {
 }
 impl<'a> Eq for KType<'a> {}
 
+/// Manual `Hash`, kept consistent with the hand-written `PartialEq` above:
+/// `a == b` ⟹ `hash(a) == hash(b)`. The discriminant goes in first so distinct
+/// variants never alias and the unit variants need no further mixing; each
+/// compound arm then hashes exactly the fields its `PartialEq` arm compares.
+///
+/// The arena-pointer variants hash their stable identity key — `Module` and
+/// `AbstractType` hash `scope_id()`, `Signature` hashes `sig_id()` — never the raw
+/// pointer, matching how `PartialEq` resolves them. `Module`'s `frame` lifecycle
+/// anchor and the payload-only `UserTypeKind` fields stay excluded (the latter via
+/// `UserTypeKind`'s discriminant-only `Hash`). Recursion bottoms out at the leaf
+/// `RecursiveRef`, so `Mu` / `ConstructorApply` hashing is bounded.
+impl<'a> std::hash::Hash for KType<'a> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        use KType::*;
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Number | Str | Bool | Null | Identifier | KExpression | TypeExprRef | Type | Any
+            | AnyModule | AnySignature => {}
+            List(t) => t.hash(state),
+            Dict(k, v) => {
+                k.hash(state);
+                v.hash(state);
+            }
+            KFunction { args, ret } => {
+                args.hash(state);
+                ret.hash(state);
+            }
+            KFunctor { params, ret } => {
+                params.hash(state);
+                ret.hash(state);
+            }
+            UserType {
+                kind,
+                scope_id,
+                name,
+            } => {
+                kind.hash(state);
+                scope_id.hash(state);
+                name.hash(state);
+            }
+            AnyUserType { kind } => kind.hash(state),
+            Signature { sig, pinned_slots } => {
+                sig.sig_id().hash(state);
+                pinned_slots.hash(state);
+            }
+            Module { module, .. } => module.scope_id().hash(state),
+            AbstractType {
+                source_module,
+                name,
+            } => {
+                source_module.scope_id().hash(state);
+                name.hash(state);
+            }
+            Mu { binder, body } => {
+                binder.hash(state);
+                body.hash(state);
+            }
+            ConstructorApply { ctor, args } => {
+                ctor.hash(state);
+                args.hash(state);
+            }
+            RecursiveRef(n) => n.hash(state),
+        }
+    }
+}
+
 /// Manual `Debug` — `derive` is blocked because `Module` / `Signature` / `CallArena`
 /// don't implement `Debug` and recursing through module-typed KTypes is unbounded.
 impl<'a> std::fmt::Debug for KType<'a> {
@@ -491,7 +565,7 @@ mod tests {
     fn struct_and_tagged_partial_eq_ignore_payload() {
         let empty = UserTypeKind::struct_sentinel();
         let full = UserTypeKind::Struct {
-            fields: Rc::new(vec![("x".into(), KType::Number)]),
+            fields: Rc::new(Record::from_pairs(vec![("x".into(), KType::Number)])),
         };
         assert_eq!(empty, full);
 
@@ -555,6 +629,144 @@ mod tests {
         let asg: KType<'_> = KType::AnySignature;
         assert_eq!(am.name(), "Module");
         assert_eq!(asg.name(), "Signature");
+    }
+
+    fn hash_of(t: &KType<'_>) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        t.hash(&mut h);
+        h.finish()
+    }
+
+    /// `a == b` ⟹ `hash(a) == hash(b)` across every arena-free variant. Each pair is
+    /// built independently so a stray identity-from-pointer bug would surface.
+    #[test]
+    fn hash_agrees_with_eq_for_arena_free_variants() {
+        let sid = ScopeId::from_raw(0, 0xBEEF);
+        let pairs: Vec<(KType<'_>, KType<'_>)> = vec![
+            (KType::Number, KType::Number),
+            (KType::Str, KType::Str),
+            (KType::Bool, KType::Bool),
+            (KType::Null, KType::Null),
+            (KType::Identifier, KType::Identifier),
+            (KType::KExpression, KType::KExpression),
+            (KType::TypeExprRef, KType::TypeExprRef),
+            (KType::Type, KType::Type),
+            (KType::Any, KType::Any),
+            (KType::AnyModule, KType::AnyModule),
+            (KType::AnySignature, KType::AnySignature),
+            (
+                KType::List(Box::new(KType::Number)),
+                KType::List(Box::new(KType::Number)),
+            ),
+            (
+                KType::Dict(Box::new(KType::Str), Box::new(KType::Number)),
+                KType::Dict(Box::new(KType::Str), Box::new(KType::Number)),
+            ),
+            (
+                KType::KFunction {
+                    args: vec![KType::Number],
+                    ret: Box::new(KType::Bool),
+                },
+                KType::KFunction {
+                    args: vec![KType::Number],
+                    ret: Box::new(KType::Bool),
+                },
+            ),
+            (
+                KType::KFunctor {
+                    params: vec![KType::Number],
+                    ret: Box::new(KType::Bool),
+                },
+                KType::KFunctor {
+                    params: vec![KType::Number],
+                    ret: Box::new(KType::Bool),
+                },
+            ),
+            (
+                KType::UserType {
+                    kind: UserTypeKind::struct_sentinel(),
+                    scope_id: sid,
+                    name: "Point".into(),
+                },
+                KType::UserType {
+                    kind: UserTypeKind::struct_sentinel(),
+                    scope_id: sid,
+                    name: "Point".into(),
+                },
+            ),
+            (
+                KType::AnyUserType {
+                    kind: UserTypeKind::tagged_sentinel(),
+                },
+                KType::AnyUserType {
+                    kind: UserTypeKind::tagged_sentinel(),
+                },
+            ),
+            (
+                KType::Mu {
+                    binder: "Tree".into(),
+                    body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
+                },
+                KType::Mu {
+                    binder: "Tree".into(),
+                    body: Box::new(KType::List(Box::new(KType::RecursiveRef("Tree".into())))),
+                },
+            ),
+            (
+                KType::RecursiveRef("Tree".into()),
+                KType::RecursiveRef("Tree".into()),
+            ),
+        ];
+        for (a, b) in &pairs {
+            assert_eq!(a, b, "values must be equal: {:?}", a);
+            assert_eq!(
+                hash_of(a),
+                hash_of(b),
+                "equal values must hash equal: {:?}",
+                a
+            );
+        }
+    }
+
+    /// `UserType` identity is `(kind-tag, scope_id, name)` and `Struct`'s `fields`
+    /// payload is *not* part of it. Two `UserType`s with different field payloads but
+    /// the same identity compare equal — so `Hash` must agree (the property the SCC
+    /// cycle-close upsert and `.ktype()` sentinel synthesis depend on).
+    #[test]
+    fn hash_ignores_struct_payload_like_eq() {
+        let sid = ScopeId::from_raw(0, 0x1234);
+        let empty = KType::UserType {
+            kind: UserTypeKind::struct_sentinel(),
+            scope_id: sid,
+            name: "Point".into(),
+        };
+        let full = KType::UserType {
+            kind: UserTypeKind::Struct {
+                fields: Rc::new(Record::from_pairs(vec![("x".into(), KType::Number)])),
+            },
+            scope_id: sid,
+            name: "Point".into(),
+        };
+        assert_eq!(empty, full);
+        assert_eq!(hash_of(&empty), hash_of(&full));
+    }
+
+    /// Distinct variants must not collide structurally — the leading discriminant
+    /// keeps e.g. `KFunction` and `KFunctor` of the same shape apart in both `Eq`
+    /// and `Hash`.
+    #[test]
+    fn hash_distinguishes_function_from_functor() {
+        let f = KType::KFunction {
+            args: vec![KType::Number],
+            ret: Box::new(KType::Bool),
+        };
+        let g = KType::KFunctor {
+            params: vec![KType::Number],
+            ret: Box::new(KType::Bool),
+        };
+        assert_ne!(f, g);
+        assert_ne!(hash_of(&f), hash_of(&g));
     }
 
     #[test]

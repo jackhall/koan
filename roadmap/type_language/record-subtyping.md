@@ -5,7 +5,7 @@ add a projection builtin to coerce among incomparable record arms.
 
 **Problem.** Record and function-parameter types admit only by exact
 identity. Once [fn-named-identity](fn-named-identity.md) puts parameter names
-in `KType::KFunction` and the [record substrate](record-substrate.md) defines
+in `KType::KFunction` and the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing) defines
 record equality, a value typed `{x :Number, y :Str}` cannot be admitted where
 `{x :Number}` is expected, and a function requiring fewer named parameters
 cannot sit in a slot that supplies more — even though koan's values are
@@ -62,8 +62,6 @@ order.
 
 **Requires:**
 
-- [Record substrate for identifier-keyed binding](record-substrate.md) —
-  width/depth is defined over the substrate's shape and equality.
 - [FN/FUNCTOR named identity](fn-named-identity.md) — contravariant function
   subtyping needs parameter names in the `KType`.
 

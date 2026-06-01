@@ -55,7 +55,7 @@ the structural `KType` would.
   `Deferred(_)`:
   - *(a) Precision-aware carrier.* Record the deferred expression's
     surface form as a deferred field type inside `KFunction`'s parameter
-    record (per the [record substrate](record-substrate.md)). Equality
+    record (per the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)). Equality
     compares the carriers directly. A *parallel* `KType::DeferredKFunction`
     variant is ruled out — it would fork the very `KFunction` arg
     representation the record work unifies.

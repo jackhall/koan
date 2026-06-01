@@ -32,7 +32,7 @@ checked against the slot's type.
 **Directions.**
 
 - *Parameter record — decided.* The arg/param lists become the
-  [record substrate](record-substrate.md)'s shape — an ordered
+  [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)'s shape — an ordered
   `(name, KType)` map — replacing today's `Vec<KType>`. Type-only walks read
   the value projection; name-aware lookups read the pair.
 - *Where the names come from — decided.* Build the parameter record from the
@@ -53,8 +53,8 @@ checked against the slot's type.
 
 **Requires:**
 
-- [Record substrate for identifier-keyed binding](record-substrate.md) —
-  parameter identity is the substrate's order-blind `(name, type)` equality.
+None — the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)
+this builds on has shipped.
 
 **Unblocks:**
 

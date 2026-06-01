@@ -124,9 +124,7 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         scope_id: ScopeId::SENTINEL,
     }));
     let struct_token: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::UserType {
-        kind: UserTypeKind::Struct {
-            fields: Rc::new(Vec::new()),
-        },
+        kind: UserTypeKind::struct_sentinel(),
         name: "Point".into(),
         scope_id: ScopeId::SENTINEL,
     }));

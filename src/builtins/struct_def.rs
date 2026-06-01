@@ -5,7 +5,7 @@ use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
 };
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Record};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
     SchedulerHandle, Scope,
@@ -123,7 +123,9 @@ fn finalize_struct<'a>(
     let scope_id = scope.id;
     let identity = KType::UserType {
         kind: UserTypeKind::Struct {
-            fields: Rc::new(fields),
+            // The `Vec`→`Record` boundary: the parser hands back declaration-ordered
+            // pairs (duplicate-free, `parse_pair_list` rejects dups), wrapped once here.
+            fields: Rc::new(Record::from_pairs(fields)),
         },
         scope_id,
         name: name.clone(),

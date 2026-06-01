@@ -36,7 +36,8 @@ fn finalize_struct_idempotent_after_cycle_close_pre_install() {
             kind: UserTypeKind::Struct { fields },
             ..
         } => {
-            assert_eq!(fields.as_ref(), &vec![("x".to_string(), KType::Number)]);
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields.get("x"), Some(&KType::Number));
         }
         other => panic!("expected populated Struct identity, got {other:?}"),
     }

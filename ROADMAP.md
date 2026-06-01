@@ -176,6 +176,14 @@ What's shipped that the open items below build on:
   `from_type_expr` → `from_name` match per call. The three leaf-resolution
   contexts (`elaborate_type_expr`, `coerce_type_token_value`, `resolve_for`) stay
   distinct but share one `resolve_type_with_chain` + `from_name` lookup.
+- *Record substrate.* [`Record<V>`](src/machine/model/types/record.rs) — an ordered
+  identifier-keyed map with order-blind equality and a commutative name+value hash
+  (`wrapping_add` fold over `mix(hash(name), hash(value))`) — backs the struct schema
+  (`UserTypeKind::Struct` now carries `Rc<Record<KType>>`). `KType` gained a
+  hand-written `Hash` consistent with its manual `PartialEq`, so a record type can key
+  a dispatch / memo map. The dict carrier stays a sibling. FN/FUNCTOR parameter and
+  runtime-carrier adoption are the unblocked follow-ons. See
+  [design/typing/ktype.md](design/typing/ktype.md#record-fields-and-ktype-hashing).
 
 ## Next items
 
@@ -245,7 +253,6 @@ build on:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
-- [Record substrate for identifier-keyed binding](roadmap/type_language/record-substrate.md)
 - [FN/FUNCTOR named identity](roadmap/type_language/fn-named-identity.md)
 - [Record structural subtyping and projection](roadmap/type_language/record-subtyping.md)
 - [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)

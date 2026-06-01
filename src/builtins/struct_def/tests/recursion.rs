@@ -1,7 +1,5 @@
 //! Self-recursive and mutually-recursive struct elaboration.
 
-use std::rc::Rc;
-
 use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::KType;
@@ -11,12 +9,12 @@ use crate::machine::{RuntimeArena, Scope};
 /// STRUCT is type-only now — the fields ride the `UserType { Struct { fields } }`
 /// payload, not a value-side carrier. Pins the "fresh `types[name]` lookup returns the
 /// full schema, not the cycle-close empty pre-install" invariant.
-fn struct_fields<'a>(scope: &'a Scope<'a>, name: &str) -> Rc<Vec<(String, KType<'a>)>> {
+fn struct_fields<'a>(scope: &'a Scope<'a>, name: &str) -> Vec<(String, KType<'a>)> {
     match scope.resolve_type(name) {
         Some(KType::UserType {
             kind: UserTypeKind::Struct { fields },
             ..
-        }) => Rc::clone(fields),
+        }) => fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         other => panic!("expected {name} to be a Struct identity in types, got {other:?}"),
     }
 }

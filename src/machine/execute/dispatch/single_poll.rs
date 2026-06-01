@@ -16,7 +16,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeName};
 use crate::machine::model::types::UserTypeKind;
-use crate::machine::model::{KObject, KType};
+use crate::machine::model::{KObject, KType, Record};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -55,7 +55,7 @@ pub(in crate::machine::execute) enum CtorKind<'a> {
     Struct {
         name: String,
         scope_id: ScopeId,
-        fields: Rc<Vec<(String, KType<'a>)>>,
+        fields: Rc<Record<KType<'a>>>,
     },
     Tagged {
         schema: Rc<HashMap<String, KType<'a>>>,

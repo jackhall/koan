@@ -428,6 +428,42 @@ forward reference inside a sibling expression surfaces `UnboundName` directly:
 visibility is lexical, and the parking edges are reserved for visible-but-not-ready
 producers.
 
+## Record fields and `KType` hashing
+
+A struct schema's fields are a [`Record<V>`](../../src/machine/model/types/record.rs) —
+an ordered identifier-keyed map, generic over its value, so the type level stores
+`Record<KType>` and a value level can later store `Record<KObject>`.
+`UserTypeKind::Struct` carries `Rc<Record<KType>>`; the `STRUCT` elaborator wraps the
+parser's declaration-ordered `(name, KType)` pairs into a `Record` once, at the
+`finalize_struct` boundary.
+
+The shape has two defining properties:
+
+- **Insertion order is preserved** for rendering and positional construction
+  (`Record::iter` walks declaration order), but **equality ignores it**:
+  `(x :Number, y :Str)` and `(y :Str, x :Number)` are the same record. The
+  order-blind `PartialEq` is `IndexMap`'s, forwarded directly. Names are unique
+  within a record — a structural property `IndexMap` keys carry for free, and one
+  `parse_pair_list` already enforces by rejecting a duplicate field name.
+- **Hashing agrees with that order-blind equality**: a commutative fold
+  (`wrapping_add`) over a per-field `mix(hash(name), hash(value))`. The `mix` binds
+  name to value before the fold, so `{x: Number}` and `{y: Number}` hash apart; the
+  symmetric accumulator makes the result independent of field order. Wrapping-add
+  rather than XOR, which would cancel on a duplicate.
+
+`Record<V>: Hash` needs `V: Hash`, so `KType` implements `Hash`, kept consistent with
+its hand-written `PartialEq` arm-for-arm: the discriminant leads (so distinct variants
+never alias and the unit variants need no further mixing), then each compound arm
+hashes exactly the fields its `PartialEq` arm compares. The arena-pointer variants hash
+their stable identity key — `Module` / `AbstractType` hash `scope_id()`, `Signature`
+hashes `sig_id()` — never the raw pointer, and `UserTypeKind`'s payload-ignoring
+equality is mirrored by a discriminant-only `Hash`.
+
+The dict carrier (`KType::Dict`, `KObject::Dict`) stays a sibling: records restrict
+keys to identifiers and admit heterogeneous per-field types, while dicts admit
+arbitrary value keys and one homogeneous value type. The two never share a key
+representation.
+
 ## Known limitations
 
 - **TCO collapses frames.** When A tail-calls B, only B's return type is
@@ -440,11 +476,6 @@ uniformly.
 
 ## Open work
 
-- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
-  `KType::KFunction { args: Vec<KType> }` / `KFunctor { params: Vec<KType> }`
-  become an ordered identifier-keyed record (the `(name, KType)` shape
-  `UserTypeKind::Struct` already carries), with order-blind equality and a
-  name+type hash; the dict carrier stays a sibling.
 - [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
   parameter names round-trip into `KFunction` / `KFunctor` identity and
   rendering, so a function-typed slot records the names callers must use.

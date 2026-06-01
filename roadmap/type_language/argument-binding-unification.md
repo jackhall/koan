@@ -20,7 +20,7 @@ stores one index redundantly across the whole parameter block.
   binding index, so the per-entry index tagging disappears from the
   parameter-bind path.
 - The resolved-argument carrier and the scope's value map share the
-  [record substrate](record-substrate.md) shape, so binding is an
+  [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing) shape, so binding is an
   extend/move of the argument record rather than an entry-by-entry copy into
   a differently-shaped container.
 - A field's binding-index lookup, where still needed, derives from its
@@ -43,8 +43,8 @@ stores one index redundantly across the whole parameter block.
 
 **Requires:**
 
-- [Record substrate for identifier-keyed binding](record-substrate.md) — the
-  shared shape the argument record and scope map both adopt.
+None — the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)
+shape it consolidates the runtime carriers onto has shipped.
 
 **Unblocks:**
 

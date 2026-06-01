@@ -386,10 +386,10 @@ mod tests {
             }) => fields.clone(),
             other => panic!("expected Wrap Struct identity, got {other:?}"),
         };
+        let wrap_m = wrap_fields.get("m").expect("Wrap.m field");
         assert!(
-            matches!(&wrap_fields[0].1, KType::UserType { kind: UserTypeKind::Tagged { .. }, name, .. } if name == "Maybe"),
-            "Wrap.m expected UserType{{Tagged Maybe}}, got {:?}",
-            wrap_fields[0].1,
+            matches!(wrap_m, KType::UserType { kind: UserTypeKind::Tagged { .. }, name, .. } if name == "Maybe"),
+            "Wrap.m expected UserType{{Tagged Maybe}}, got {wrap_m:?}",
         );
         let maybe_schema = match scope.resolve_type("Maybe") {
             Some(KType::UserType {
