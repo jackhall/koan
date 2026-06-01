@@ -179,10 +179,12 @@ What's shipped that the open items below build on:
 - *Record substrate.* [`Record<V>`](src/machine/model/types/record.rs) — an ordered
   identifier-keyed map with order-blind equality and a commutative name+value hash
   (`wrapping_add` fold over `mix(hash(name), hash(value))`) — backs the struct schema
-  (`UserTypeKind::Struct` now carries `Rc<Record<KType>>`). `KType` gained a
-  hand-written `Hash` consistent with its manual `PartialEq`, so a record type can key
-  a dispatch / memo map. The dict carrier stays a sibling. FN/FUNCTOR parameter and
-  runtime-carrier adoption are the unblocked follow-ons. See
+  (`UserTypeKind::Struct` carries `Rc<Record<KType>>`) and FN/FUNCTOR parameter
+  identity (`KType::KFunction` / `KFunctor` carry `params: Record<KType>`, so parameter
+  names round-trip through `KType::name()` and slot identity is order-blind by name and
+  type; the retired `FUNCTION_OF` builtin gives way to the `:(FN …)` carrier). `KType`
+  gained a hand-written `Hash` consistent with its manual `PartialEq`, so a record type
+  can key a dispatch / memo map. The dict carrier stays a sibling. See
   [design/typing/ktype.md](design/typing/ktype.md#record-fields-and-ktype-hashing).
 
 ## Next items
@@ -253,7 +255,6 @@ build on:
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
-- [FN/FUNCTOR named identity](roadmap/type_language/fn-named-identity.md)
 - [Record structural subtyping and projection](roadmap/type_language/record-subtyping.md)
 - [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
 

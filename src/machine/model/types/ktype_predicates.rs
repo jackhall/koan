@@ -3,6 +3,7 @@
 //! [design/typing/ktype.md](../../../../design/typing/ktype.md).
 
 use super::ktype::{KType, UserTypeKind};
+use super::record::Record;
 use super::signature::{ExpressionSignature, SignatureElement};
 use crate::machine::model::ast::{ExpressionPart, KLiteral};
 use crate::machine::model::values::KObject;
@@ -62,18 +63,21 @@ impl<'a> KType<'a> {
                 let v_eq = va == vb;
                 (k_more && (v_more || v_eq)) || (k_eq && v_more)
             }
-            (KFunction { args: aa, ret: ar }, KFunction { args: ba, ret: br })
-                if aa.len() == ba.len() =>
-            {
-                let args_more = aa
-                    .iter()
-                    .zip(ba.iter())
-                    .any(|(x, y)| x.is_more_specific_than(y));
-                let args_eq = aa == ba;
-                let ret_more = ar.is_more_specific_than(br);
-                let ret_eq = ar == br;
-                (args_more && (ret_more || ret_eq)) || (args_eq && ret_more)
-            }
+            // Parameters match by name (koan has no positional calls): equal length and
+            // the same key set, then covariance per-name. Disjoint key sets are
+            // incomparable, so the helper's `keys()` guard returns `false`. The variant
+            // tags stay matched separately (KFunction never compares against KFunctor),
+            // but the shared `params`/`ret` shape lets both arms delegate to one helper.
+            (
+                KFunction {
+                    params: pa,
+                    ret: ra,
+                },
+                KFunction {
+                    params: pb,
+                    ret: rb,
+                },
+            ) => param_record_more_specific(pa, ra, pb, rb),
             (
                 KFunctor {
                     params: pa,
@@ -83,16 +87,7 @@ impl<'a> KType<'a> {
                     params: pb,
                     ret: rb,
                 },
-            ) if pa.len() == pb.len() => {
-                let params_more = pa
-                    .iter()
-                    .zip(pb.iter())
-                    .any(|(x, y)| x.is_more_specific_than(y));
-                let params_eq = pa == pb;
-                let ret_more = ra.is_more_specific_than(rb);
-                let ret_eq = ra == rb;
-                (params_more && (ret_more || ret_eq)) || (params_eq && ret_more)
-            }
+            ) => param_record_more_specific(pa, ra, pb, rb),
             // Constraint role: `:S` (a module satisfying `S`) is more specific than the
             // `:Module` wildcard.
             (Signature { .. }, AnyModule) => true,
@@ -177,12 +172,12 @@ impl<'a> KType<'a> {
                 }),
                 _ => false,
             },
-            KType::KFunction { args, ret } => match obj {
+            KType::KFunction { params, ret } => match obj {
                 KObject::KFunction(f, _) => {
                     if f.is_functor {
                         return false;
                     }
-                    function_compat(&f.signature, args, ret, false)
+                    function_compat(&f.signature, params, ret, false)
                 }
                 KObject::KFuture(_, _) => true,
                 _ => false,
@@ -306,12 +301,12 @@ impl<'a> KType<'a> {
                 }
                 _ => false,
             },
-            KType::KFunction { args, ret } => match part {
+            KType::KFunction { params, ret } => match part {
                 ExpressionPart::Future(KObject::KFunction(f, _)) => {
                     if f.is_functor {
                         return false;
                     }
-                    function_compat(&f.signature, args, ret, false)
+                    function_compat(&f.signature, params, ret, false)
                 }
                 ExpressionPart::Future(KObject::KFuture(_, _)) => true,
                 _ => false,
@@ -418,6 +413,29 @@ impl<'a> KType<'a> {
     }
 }
 
+/// Shared name-keyed specificity for the structurally-identical `KFunction` /
+/// `KFunctor` arms of [`KType::is_more_specific_than`]. Parameters match by name (koan
+/// has no positional calls): mismatched length or key set is incomparable (`false`);
+/// otherwise covariance per-name and on the return type, with the standard
+/// "strictly-more-specific in at least one slot, equal-or-more in the rest" rule.
+fn param_record_more_specific<'a>(
+    pa: &Record<KType<'a>>,
+    ra: &KType<'a>,
+    pb: &Record<KType<'a>>,
+    rb: &KType<'a>,
+) -> bool {
+    if pa.len() != pb.len() || !pa.keys().all(|k| pb.get(k).is_some()) {
+        return false;
+    }
+    let params_more = pa
+        .iter()
+        .any(|(name, x)| x.is_more_specific_than(pb.get(name).unwrap()));
+    let params_eq = pa == pb;
+    let ret_more = ra.is_more_specific_than(rb);
+    let ret_eq = ra == rb;
+    (params_more && (ret_more || ret_eq)) || (params_eq && ret_more)
+}
+
 /// Field→type-parameter linkage for the builtin `Result` parameterized union:
 /// `ok`→0 (`T`), `error`→1 (`E`), mirroring the `param_names: ["T", "E"]` registered
 /// in [`crate::builtins::result`]. Returns `None` for any other carrier — user UNIONs
@@ -431,14 +449,16 @@ pub fn result_field_param_index(carrier_name: &str, tag: &str) -> Option<usize> 
     }
 }
 
-/// Strict structural equality between `sig`'s declared arg/return types and the
-/// slot's expectations — not subtyping. A function declared `(x: Number) -> Str`
-/// only fills a slot typed `Function<(Number) -> Str>`, not `Function<(Any) -> Str>`.
-/// A `Deferred(_)` return collapses to `KType::Any` for this check; see
+/// Strict, order-blind, name-keyed equality between `sig`'s declared parameters and the
+/// slot's parameter record — not subtyping. A function declared `(x :Number) -> Str` fills
+/// a slot typed `:(FN (x :Number) -> Str)` only: every `Argument` must appear in `params`
+/// under its own name with an equal `KType`, the matched count must exhaust `params`
+/// (so an extra slot parameter is a non-match), and the return types must be equal. A
+/// `Deferred(_)` return collapses to `KType::Any` for this check; see
 /// [roadmap/kfunction-deferred-ret-precision.md](../../../../roadmap/type_language/kfunction-deferred-ret-precision.md).
 pub(super) fn function_compat<'a>(
     sig: &ExpressionSignature<'a>,
-    args: &[KType<'a>],
+    params: &Record<KType<'a>>,
     ret: &KType<'a>,
     _slot_is_functor: bool,
 ) -> bool {
@@ -458,16 +478,16 @@ pub(super) fn function_compat<'a>(
     if sig_ret_kt != ret {
         return false;
     }
-    let mut i = 0;
+    let mut matched = 0;
     for el in &sig.elements {
         if let SignatureElement::Argument(a) = el {
-            if i >= args.len() || a.ktype != args[i] {
+            if params.get(&a.name) != Some(&a.ktype) {
                 return false;
             }
-            i += 1;
+            matched += 1;
         }
     }
-    i == args.len()
+    matched == params.len()
 }
 
 #[cfg(test)]

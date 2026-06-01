@@ -21,4 +21,6 @@ pub use signature::{
     is_keyword_token, Argument, DeferredReturn, ExpressionSignature, ReturnType, SignatureElement,
     UntypedElement, UntypedKey,
 };
-pub use typed_field_list::{parse_typed_field_list_via_elaborator, FieldListOutcome};
+pub use typed_field_list::{
+    parse_typed_field_list_via_elaborator, FieldListOutcome, FieldNameKind,
+};

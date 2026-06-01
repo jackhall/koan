@@ -394,7 +394,8 @@ mod tests {
         let functor_obj = KObject::KFunction(arena.alloc_function(functor), None);
         match functor_obj.ktype() {
             KType::KFunctor { params, ret } => {
-                assert_eq!(params, vec![KType::Number]);
+                assert_eq!(params.get("x"), Some(&KType::Number));
+                assert_eq!(params.len(), 1);
                 assert_eq!(*ret, KType::Number);
             }
             other => panic!("expected KFunctor, got {:?}", other),

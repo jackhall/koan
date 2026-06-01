@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
 };
 use crate::machine::model::{KObject, KType, Record};
 use crate::machine::{
@@ -61,8 +61,12 @@ pub fn body<'a>(
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
         .with_current_decl(name.clone(), UserTypeKind::struct_sentinel(), scope_id);
-    let outcome =
-        parse_typed_field_list_via_elaborator(&schema_expr, "STRUCT schema", &mut elaborator);
+    let outcome = parse_typed_field_list_via_elaborator(
+        &schema_expr,
+        "STRUCT schema",
+        FieldNameKind::Identifier,
+        &mut elaborator,
+    );
     // Nominal binder: the placeholder install stamped `nominal_binder: true`;
     // the type-only `register_type_upsert` must carry the same flag for visibility
     // consistency.
@@ -191,6 +195,7 @@ fn defer_struct_via_combine<'a>(
         match parse_typed_field_list_via_elaborator(
             &spliced_schema,
             "STRUCT schema",
+            FieldNameKind::Identifier,
             &mut elaborator,
         ) {
             FieldListOutcome::Done(fields) => {

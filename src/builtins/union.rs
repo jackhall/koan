@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::types::{
-    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+    parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome, FieldNameKind,
 };
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
@@ -62,8 +62,12 @@ pub fn body<'a>(
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
         .with_current_decl(name.clone(), UserTypeKind::tagged_sentinel(), scope_id);
-    let outcome =
-        parse_typed_field_list_via_elaborator(&schema_expr, "UNION schema", &mut elaborator);
+    let outcome = parse_typed_field_list_via_elaborator(
+        &schema_expr,
+        "UNION schema",
+        FieldNameKind::Identifier,
+        &mut elaborator,
+    );
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::nominal(chain.index))
@@ -172,6 +176,7 @@ fn defer_union_via_combine<'a>(
         match parse_typed_field_list_via_elaborator(
             &spliced_schema,
             "UNION schema",
+            FieldNameKind::Identifier,
             &mut elaborator,
         ) {
             FieldListOutcome::Done(fields) => {

@@ -113,15 +113,20 @@ pub enum KType<'a> {
     List(Box<KType<'a>>),
     /// Bare `Dict` lowers to `Dict<Any, Any>`.
     Dict(Box<KType<'a>>, Box<KType<'a>>),
+    /// `params` is the parameter record `(name → type)` — order preserved for rendering,
+    /// equality order-blind by `(name, type)`. koan has no positional call syntax, so a
+    /// function-typed slot records the names a caller must use to invoke the function it
+    /// receives. Field name matches `KFunctor::params` so the two arms share join /
+    /// specificity logic; the variant tag still keeps the two families admissibly disjoint.
     KFunction {
-        args: Vec<KType<'a>>,
+        params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
     },
     /// Structural functor type — mirrors `KFunction` storage and rendering, but
     /// carries no admissibility against `KFunction` (the cross-arms in
     /// `function_compat` refuse both directions).
     KFunctor {
-        params: Vec<KType<'a>>,
+        params: Record<KType<'a>>,
         ret: Box<KType<'a>>,
     },
     Identifier,
@@ -209,13 +214,15 @@ impl<'a> KType<'a> {
             KType::Null => "Null".into(),
             KType::List(t) => format!(":(LIST OF {})", t.name()),
             KType::Dict(k, v) => format!(":(MAP {} -> {})", k.name(), v.name()),
-            KType::KFunction { args, ret } => {
-                let arg_names: Vec<String> = args.iter().map(|a| a.name()).collect();
-                format!(":(FN ({}) -> {})", arg_names.join(" "), ret.name())
+            KType::KFunction { params, ret } => {
+                format!(":(FN ({}) -> {})", render_param_record(params), ret.name())
             }
             KType::KFunctor { params, ret } => {
-                let param_names: Vec<String> = params.iter().map(|p| p.name()).collect();
-                format!(":(FUNCTOR ({}) -> {})", param_names.join(" "), ret.name())
+                format!(
+                    ":(FUNCTOR ({}) -> {})",
+                    render_param_record(params),
+                    ret.name()
+                )
             }
             KType::Identifier => "Identifier".into(),
             KType::KExpression => "KExpression".into(),
@@ -255,6 +262,25 @@ impl<'a> KType<'a> {
     }
 }
 
+/// Render an FN/FUNCTOR parameter record as the comma-free `name <:type>` group the
+/// `:(FN (...) -> _)` surface re-parses. Each field is `name` then the type surface:
+/// `kt.name()` prefixed with `:` for a leaf (`:Number`), left as-is when it already opens
+/// a sigil (`:(LIST OF Number)` — no `::`). Declaration order is preserved.
+fn render_param_record(params: &Record<KType<'_>>) -> String {
+    params
+        .iter()
+        .map(|(name, kt)| {
+            let surface = kt.name();
+            if surface.starts_with(':') {
+                format!("{name} {surface}")
+            } else {
+                format!("{name} :{surface}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Manual `PartialEq` — `Module`, `Signature`, and `AbstractType` carry arena pointers
 /// whose identity is the pointee's stable `scope_id()` / `sig_id()` rather than the raw
 /// pointer. Two opaque ascriptions of the same source module produce different `&Module`
@@ -278,9 +304,16 @@ impl<'a> PartialEq for KType<'a> {
             | (AnySignature, AnySignature) => true,
             (List(a), List(b)) => a == b,
             (Dict(ka, va), Dict(kb, vb)) => ka == kb && va == vb,
-            (KFunction { args: a1, ret: r1 }, KFunction { args: a2, ret: r2 }) => {
-                a1 == a2 && r1 == r2
-            }
+            (
+                KFunction {
+                    params: p1,
+                    ret: r1,
+                },
+                KFunction {
+                    params: p2,
+                    ret: r2,
+                },
+            ) => p1 == p2 && r1 == r2,
             (
                 KFunctor {
                     params: p1,
@@ -371,8 +404,8 @@ impl<'a> std::hash::Hash for KType<'a> {
                 k.hash(state);
                 v.hash(state);
             }
-            KFunction { args, ret } => {
-                args.hash(state);
+            KFunction { params, ret } => {
+                params.hash(state);
                 ret.hash(state);
             }
             KFunctor { params, ret } => {
@@ -441,29 +474,55 @@ mod tests {
     #[test]
     fn name_renders_function() {
         let t = KType::KFunction {
-            args: vec![KType::Number, KType::Str],
+            params: Record::from_pairs(vec![
+                ("x".into(), KType::Number),
+                ("y".into(), KType::Str),
+            ]),
             ret: Box::new(KType::Bool),
         };
-        assert_eq!(t.name(), ":(FN (Number Str) -> Bool)");
+        assert_eq!(t.name(), ":(FN (x :Number y :Str) -> Bool)");
+    }
+
+    /// A nested sigiled parameter type already opens with `:`, so the renderer must not
+    /// prefix a second colon (`xs :(LIST OF Number)`, not `xs ::(LIST OF Number)`).
+    #[test]
+    fn name_renders_function_with_sigiled_param() {
+        let t = KType::KFunction {
+            params: Record::from_pairs(vec![(
+                "xs".into(),
+                KType::List(Box::new(KType::Number)),
+            )]),
+            ret: Box::new(KType::Bool),
+        };
+        assert_eq!(t.name(), ":(FN (xs :(LIST OF Number)) -> Bool)");
     }
 
     #[test]
     fn name_renders_functor() {
         let t = KType::KFunctor {
-            params: vec![KType::Number, KType::Str],
+            params: Record::from_pairs(vec![
+                ("x".into(), KType::Number),
+                ("y".into(), KType::Str),
+            ]),
             ret: Box::new(KType::Bool),
         };
-        assert_eq!(t.name(), ":(FUNCTOR (Number Str) -> Bool)");
+        assert_eq!(t.name(), ":(FUNCTOR (x :Number y :Str) -> Bool)");
     }
 
     #[test]
     fn functor_structural_eq_same_shape() {
         let a = KType::KFunctor {
-            params: vec![KType::Number, KType::Str],
+            params: Record::from_pairs(vec![
+                ("x".into(), KType::Number),
+                ("y".into(), KType::Str),
+            ]),
             ret: Box::new(KType::Bool),
         };
         let b = KType::KFunctor {
-            params: vec![KType::Number, KType::Str],
+            params: Record::from_pairs(vec![
+                ("x".into(), KType::Number),
+                ("y".into(), KType::Str),
+            ]),
             ret: Box::new(KType::Bool),
         };
         assert_eq!(a, b);
@@ -472,15 +531,15 @@ mod tests {
     #[test]
     fn functor_structural_neq_when_params_or_ret_differ() {
         let base = KType::KFunctor {
-            params: vec![KType::Number],
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
         };
         let diff_params = KType::KFunctor {
-            params: vec![KType::Str],
+            params: Record::from_pairs(vec![("x".into(), KType::Str)]),
             ret: Box::new(KType::Bool),
         };
         let diff_ret = KType::KFunctor {
-            params: vec![KType::Number],
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Null),
         };
         assert_ne!(base, diff_params);
@@ -490,11 +549,11 @@ mod tests {
     #[test]
     fn functor_and_function_are_disjoint_types() {
         let f = KType::KFunction {
-            args: vec![KType::Number],
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
         };
         let g = KType::KFunctor {
-            params: vec![KType::Number],
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
         };
         assert_ne!(f, g);
@@ -503,10 +562,48 @@ mod tests {
     #[test]
     fn name_renders_function_nullary() {
         let t = KType::KFunction {
-            args: vec![],
+            params: Record::new(),
             ret: Box::new(KType::Any),
         };
         assert_eq!(t.name(), ":(FN () -> Any)");
+    }
+
+    /// Function-slot identity is the record substrate's order-blind equality: the same
+    /// parameters by `(name, type)` in a different declaration order compare equal and
+    /// hash equal.
+    #[test]
+    fn function_params_order_blind_equality() {
+        let xy = KType::KFunction {
+            params: Record::from_pairs(vec![
+                ("x".into(), KType::Number),
+                ("y".into(), KType::Str),
+            ]),
+            ret: Box::new(KType::Bool),
+        };
+        let yx = KType::KFunction {
+            params: Record::from_pairs(vec![
+                ("y".into(), KType::Str),
+                ("x".into(), KType::Number),
+            ]),
+            ret: Box::new(KType::Bool),
+        };
+        assert_eq!(xy, yx);
+        assert_eq!(hash_of(&xy), hash_of(&yx));
+    }
+
+    /// Identity is name-sensitive: same type, different parameter name is a different
+    /// function type.
+    #[test]
+    fn function_params_name_sensitive_inequality() {
+        let x = KType::KFunction {
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
+            ret: Box::new(KType::Bool),
+        };
+        let a = KType::KFunction {
+            params: Record::from_pairs(vec![("a".into(), KType::Number)]),
+            ret: Box::new(KType::Bool),
+        };
+        assert_ne!(x, a);
     }
 
     #[test]
@@ -665,21 +762,21 @@ mod tests {
             ),
             (
                 KType::KFunction {
-                    args: vec![KType::Number],
+                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
                     ret: Box::new(KType::Bool),
                 },
                 KType::KFunction {
-                    args: vec![KType::Number],
+                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
                     ret: Box::new(KType::Bool),
                 },
             ),
             (
                 KType::KFunctor {
-                    params: vec![KType::Number],
+                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
                     ret: Box::new(KType::Bool),
                 },
                 KType::KFunctor {
-                    params: vec![KType::Number],
+                    params: Record::from_pairs(vec![("x".into(), KType::Number)]),
                     ret: Box::new(KType::Bool),
                 },
             ),
@@ -758,11 +855,11 @@ mod tests {
     #[test]
     fn hash_distinguishes_function_from_functor() {
         let f = KType::KFunction {
-            args: vec![KType::Number],
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
         };
         let g = KType::KFunctor {
-            params: vec![KType::Number],
+            params: Record::from_pairs(vec![("x".into(), KType::Number)]),
             ret: Box::new(KType::Bool),
         };
         assert_ne!(f, g);

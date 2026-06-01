@@ -149,7 +149,7 @@ src/
 │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
 │   ├── result.rs             Result tagged-union builtin
 │   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
-│   ├── type_ops.rs           LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF / TEMPLATE / SIG_WITH
+│   ├── type_ops.rs           LIST_OF / DICT_OF / MODULE_TYPE_OF / TEMPLATE / SIG_WITH
 │   ├── union.rs
 │   ├── struct_def.rs
 │   ├── struct_value.rs       shared struct-construction representation
@@ -172,6 +172,7 @@ src/
     │   ├── types.rs
     │   ├── types/
     │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+    │   │   ├── record.rs          Record<V> — ordered identifier-keyed map backing struct schemas and FN/FUNCTOR parameter identity
     │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
     │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
     │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo

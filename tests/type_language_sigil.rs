@@ -129,10 +129,10 @@ fn sigil_map_lowers_to_dict_carrier() {
 
 // --- FN ---
 
-/// `:(FN (x :Number, y :Str) -> Bool)` lowers to a positional
-/// `KType::KFunction { args, ret }`. Parameter names are surface-only this PR.
+/// `:(FN (x :Number, y :Str) -> Bool)` lowers to a `KType::KFunction { params, ret }`
+/// whose `params` record keys each parameter type by its declared name.
 #[test]
-fn sigil_fn_lowers_to_kfunction_positional() {
+fn sigil_fn_lowers_to_kfunction_named() {
     let arena = RuntimeArena::new();
     let scope = run(
         &arena,
@@ -140,10 +140,10 @@ fn sigil_fn_lowers_to_kfunction_positional() {
     );
     let cmp = lookup_sig_value_kt(scope, "Sig", "compare");
     match cmp {
-        KType::KFunction { args, ret } => {
-            assert_eq!(args.len(), 2);
-            assert_eq!(args[0], KType::Number);
-            assert_eq!(args[1], KType::Str);
+        KType::KFunction { params, ret } => {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params.get("x"), Some(&KType::Number));
+            assert_eq!(params.get("y"), Some(&KType::Str));
             assert_eq!(*ret, KType::Bool);
         }
         other => panic!("compare must be KType::KFunction, got {other:?}"),
@@ -157,8 +157,8 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let scope = run(&arena, "SIG Sig = ((VAL gen :(FN () -> Number)))");
     let gen = lookup_sig_value_kt(scope, "Sig", "gen");
     match gen {
-        KType::KFunction { args, ret } => {
-            assert!(args.is_empty());
+        KType::KFunction { params, ret } => {
+            assert!(params.is_empty());
             assert_eq!(*ret, KType::Number);
         }
         other => panic!("gen must be KType::KFunction, got {other:?}"),
@@ -167,8 +167,8 @@ fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
 
 // --- FUNCTOR ---
 
-/// `:(FUNCTOR (Ty :Signature) -> Module)` lowers to a `KType::KFunctor`. The
-/// param-name is surface-only; the underlying identity stays positional.
+/// `:(FUNCTOR (Ty :Signature) -> Module)` lowers to a `KType::KFunctor` whose `params`
+/// record keys the parameter type by its (capitalized) declared name `Ty`.
 #[test]
 fn sigil_functor_lowers_to_kfunctor() {
     let arena = RuntimeArena::new();
@@ -180,7 +180,7 @@ fn sigil_functor_lowers_to_kfunctor() {
     match mk {
         KType::KFunctor { params, ret } => {
             assert_eq!(params.len(), 1);
-            assert_eq!(params[0], KType::AnySignature);
+            assert_eq!(params.get("Ty"), Some(&KType::AnySignature));
             assert_eq!(*ret, KType::AnyModule);
         }
         other => panic!("mk must be KType::KFunctor, got {other:?}"),
@@ -279,10 +279,10 @@ fn sigil_functor_forward_reference_defers_via_combine() {
             // OrderedSig resolves to its `Signature { .. }` identity post-Combine.
             // The carrier type's name (`OrderedSig`) is enough to confirm the
             // forward reference resolved through the deferral path.
+            let ty = params.get("Ty").expect("param `Ty` must be present");
             assert!(
-                params[0].name().contains("OrderedSig") || params[0] == KType::AnySignature,
-                "param 0 should carry OrderedSig identity, got {:?}",
-                params[0]
+                ty.name().contains("OrderedSig") || *ty == KType::AnySignature,
+                "param `Ty` should carry OrderedSig identity, got {ty:?}",
             );
             assert_eq!(*ret, KType::AnyModule);
         }

@@ -4,8 +4,13 @@
 
 - Scalars: `Number`, `Str`, `Bool`, `Null`.
 - Containers: `List(Box<KType>)`, `Dict(Box<KType>, Box<KType>)`,
-  `KFunction { args: Vec<KType>, ret: Box<KType> }`. Always parameterized; see
+  `KFunction { params: Record<KType>, ret: Box<KType> }`. Always parameterized; see
   [Container type parameterization](#container-type-parameterization) below.
+  `params` is a name-keyed [parameter `Record<KType>`](#record-fields-and-ktype-hashing),
+  so a function-typed slot's identity is its parameters by name and type
+  (order-blind). The sibling `KFunctor { params: Record<KType>, ret }` shares the
+  storage and identity rules; the variant tag keeps the two families admissibly
+  disjoint (see [functors.md](functors.md)).
 - Other function-like: `KExpression` (a captured-but-unevaluated expression).
 - Meta-type for type-position slots: `TypeExprRef` — see
   [Type-position slot kinds](#type-position-slot-kinds).
@@ -108,7 +113,7 @@ sigil-and-dispatch contract.
 constructors — `LIST OF`, `MAP _ -> _`, `FN <sig> -> _`, and
 `FUNCTOR <sig> -> _` — register in
 [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs)
-alongside the older `LIST_OF` / `DICT_OF` / `FUNCTION_OF` /
+alongside the older `LIST_OF` / `DICT_OF` /
 `MODULE_TYPE_OF` builtins in
 [`type_ops/`](../../src/builtins/type_ops.rs). Both surfaces produce
 `KObject::KTypeValue(KType::...)` carriers; the keyworded forms are the
@@ -130,8 +135,8 @@ Three sites consume parameterized types, and each has its own behavior:
 | Site | What it does | Variance |
 | --- | --- | --- |
 | `matches_value` | Walks a runtime value against a declared type at an ascription boundary (FN return, FN argument, `LET`). | **Covariant** for `List` / `Dict`: `:(LIST OF Any)` accepts any list because `Any.matches_value(_)` is always true; `:(MAP Str -> Any)` accepts a `{a: 1, b: "x"}` value. **Invariant** for `Function`: delegates to `function_compat`. |
-| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant in every parameter position** (element, key, value, arg, ret): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`, `:(FN (Number) -> Str)` ≺ `:(FN (Any) -> Any)`. |
-| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(FN (Number) -> Str)`, not `:(FN (Any) -> Str)`. |
+| `is_more_specific_than` | Ranks two slot types when multiple overloads match the same call. Used by `specificity_vs` to break dispatch ties. Concrete carrier types also outrank the unconstrained-name slot types `Identifier` and `TypeExprRef`, so an `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback when both admit. | **Covariant in every parameter position** (element, key, value, param, ret): `:(LIST OF Number)` ≺ `:(LIST OF Any)`, `:(MAP Str -> Number)` ≺ `:(MAP Str -> Any)`, `:(FN (x :Number) -> Str)` ≺ `:(FN (x :Any) -> Any)`. |
+| `function_compat` | The dispatch-time check that a `KObject::KFunction` value fills a typed function-shaped slot. | **Strict structural equality** — invariant. A function declared `(x :Number) -> Str` fills only `:(FN (x :Number) -> Str)`, not `:(FN (x :Any) -> Str)`. |
 
 The combination is sound for dispatch even though `is_more_specific_than`
 ranks `Function`-typed slots covariantly while `function_compat` is invariant.
@@ -161,9 +166,9 @@ BAD   # → TypeMismatch: expected :(LIST OF Number), got :(LIST OF Any)
 ```
 
 ```
-FN (USE f :(FN (Number) -> Str)) -> Str = ("got fn")
+FN (USE f :(FN (x :Number) -> Str)) -> Str = ("got fn")
 
-USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal)
+USE (FN (SHOW x :Number) -> Str = ("hi"))   # → "got fn"   (function_compat: equal by name+type)
 USE (FN (SHOW x :Any)    -> Str = ("hi"))   # → DispatchFailed
                                             #   (function_compat: invariant, not equal)
 ```
@@ -177,8 +182,10 @@ each carry their element types directly (`List(Rc<Vec<…>>, Box<KType>)`,
 [`KObject::ktype`](../../src/machine/model/values/kobject.rs) reads the carried
 type in O(1) rather than re-walking the contents on every call. Values are
 immutable `Rc`, so the join is sound to compute exactly once. Functions project
-their declared signature (`KObject::KFunction(f, _)` → `KFunction { args, ret }`
-read off `f.signature`).
+their declared signature (`KObject::KFunction(f, _)` → `KFunction { params, ret }`,
+the parameter record read off `f.signature`'s named slots). `KType::join` joins
+two same-shape `KFunction`s (and same-shape `KFunctor`s) name-keyed, coarsening a
+mismatched parameter-name set or a function-vs-functor pair to `Any`.
 
 **Empty containers carry no element type to infer**, so an unstamped empty `[]`
 / `{}` (element type memoized as `Any`, never stamped by an annotation) is an
@@ -437,6 +444,16 @@ an ordered identifier-keyed map, generic over its value, so the type level store
 parser's declaration-ordered `(name, KType)` pairs into a `Record` once, at the
 `finalize_struct` boundary.
 
+The same `Record<KType>` substrate backs `KFunction` / `KFunctor` parameter
+identity: both variants store their parameters as `params: Record<KType>`
+(`(name → type)`), built by `finalize_carrier` in
+[`type_constructors.rs`](../../src/builtins/type_constructors.rs) from the
+shared field-list parser STRUCT / UNION use. A function-typed slot is thus
+identified by its parameter names and types order-blind — `:(FN (x :Number,
+y :Str) -> Bool)` equals `:(FN (y :Str, x :Number) -> Bool)` — and a
+parameter-name mismatch is a dispatch non-match. `KType::join` reuses the
+record join for both arms.
+
 The shape has two defining properties:
 
 - **Insertion order is preserved** for rendering and positional construction
@@ -476,9 +493,6 @@ uniformly.
 
 ## Open work
 
-- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
-  parameter names round-trip into `KFunction` / `KFunctor` identity and
-  rendering, so a function-typed slot records the names callers must use.
 - [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
   relaxes the `Function`-invariant / strict-`function_compat` rule (above) to
   structural record subtyping: width/depth on records (depth sound under value

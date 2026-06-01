@@ -346,12 +346,16 @@ impl<'a> KObject<'a> {
 
 fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
     use crate::machine::model::types::ReturnType;
-    let args: Vec<KType<'a>> = f
+    use crate::machine::model::Record;
+    // The parameter record keys each `Argument` by its declared name — the names the
+    // signature already holds, never the dispatch keywords. So a function value projects
+    // the same `(name → type)` record a `:(FN (name :Type) -> _)` slot declares.
+    let params: Record<KType<'a>> = f
         .signature
         .elements
         .iter()
         .filter_map(|el| match el {
-            SignatureElement::Argument(a) => Some(a.ktype.clone()),
+            SignatureElement::Argument(a) => Some((a.name.clone(), a.ktype.clone())),
             _ => None,
         })
         .collect();
@@ -368,9 +372,9 @@ fn function_value_ktype<'a>(f: &KFunction<'a>) -> KType<'a> {
     // admissibility is refused in `function_compat` — see
     // [design/typing/functors.md](../../../../design/typing/functors.md).
     if f.is_functor {
-        KType::KFunctor { params: args, ret }
+        KType::KFunctor { params, ret }
     } else {
-        KType::KFunction { args, ret }
+        KType::KFunction { params, ret }
     }
 }
 

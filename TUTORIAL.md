@@ -206,7 +206,7 @@ type of a tagged-union variant (`some :Number`). Ascriptions use the
 glued-right `:` sigil with no space between the `:` and the type — `x :Number`,
 not `x: Number`. Parameterized type expressions extend the same form into an
 S-expression group: `:(LIST OF Number)`, `:(MAP Str -> Number)`,
-`:(FN (Number) -> Str)`. Bare non-parameterized type tokens in
+`:(FN (x :Number) -> Str)`. Bare non-parameterized type tokens in
 non-ascription positions (e.g. the RHS of `LET Type = Number`) keep working
 without the sigil.
 

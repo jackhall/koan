@@ -110,6 +110,28 @@ fn fn_with_typed_function_param_accepts_matching_function() {
     assert_eq!(bytes, b"got fn\n");
 }
 
+/// `function_compat` is name-keyed: a function whose parameter name differs from the
+/// slot's (`n` vs `x`) does not fill the slot. With no other overload, the call surfaces
+/// `DispatchFailed` rather than binding the structurally-similar function.
+#[test]
+fn fn_with_typed_function_param_rejects_name_mismatch() {
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "FN (USE f :(FN (x :Number) -> Str)) -> Str = (\"got fn\")");
+    let mut sched = Scheduler::new();
+    sched.add_dispatch(
+        parse_one("USE (FN (SHOW n :Number) -> Str = (\"hi\"))"),
+        scope,
+    );
+    let error = sched
+        .execute()
+        .expect_err("a function with param name `n` must not fill a `(x :Number)` slot");
+    assert!(
+        matches!(error.kind, KErrorKind::DispatchFailed { .. }),
+        "expected DispatchFailed on parameter-name mismatch, got {error:?}",
+    );
+}
+
 /// When two overloads share the same untyped shape and both match, the more
 /// specific one wins: `(xs: List<Number>)` over `(xs: List<Any>)` for a number-list
 /// call.

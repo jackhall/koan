@@ -10,6 +10,7 @@ use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::{NodeId, Scope};
 use crate::parse::parse_pair_list;
+pub use crate::parse::FieldNameKind;
 use std::collections::HashSet;
 
 pub enum FieldListOutcome<'a> {
@@ -24,20 +25,23 @@ pub enum FieldListOutcome<'a> {
     Err(String),
 }
 
-/// Entry point used by STRUCT / UNION. Routes each field type through the
+/// Entry point used by STRUCT / UNION / FN / FUNCTOR. Routes each field type through the
 /// scheduler-aware [`elaborate_type_expr`], accumulating parking producers and
 /// pending sub-Dispatches across the whole walk so the caller can install one
-/// Combine for the merged set.
+/// Combine for the merged set. `name_kind` selects which token shapes are valid as a
+/// field/parameter name (STRUCT / UNION pass `Identifier`; FN / FUNCTOR pass
+/// `IdentifierOrType` so capitalized type-parameter names like `Ty` are accepted).
 pub fn parse_typed_field_list_via_elaborator<'a>(
     expr: &KExpression<'a>,
     context: &str,
+    name_kind: FieldNameKind,
     elaborator: &mut Elaborator<'_, 'a>,
 ) -> FieldListOutcome<'a> {
     let mut parks: Vec<NodeId> = Vec::new();
     let mut sub_dispatches: Vec<(usize, KExpression<'a>)> = Vec::new();
     // `parse_pair_list` walks `[name, slot, name, slot, ...]`; slot index is `2*pair_idx + 1`.
     let mut pair_idx: usize = 0;
-    let parsed = parse_pair_list(expr, context, |part, name| {
+    let parsed = parse_pair_list(expr, context, name_kind, |part, name| {
         let slot_idx = 2 * pair_idx + 1;
         pair_idx += 1;
         match part {

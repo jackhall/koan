@@ -59,18 +59,35 @@ changes.
 `:(FN (x :Number, y :Str) -> Bool)` declares parameter names at the
 sigil surface, symmetric with the FN declaration form and the
 value-side rule that function-value calls are named (no positional
-`f 1 2` shape). Lowering drops the names: `KType::KFunction { args,
-ret }` stores args positionally, and `:(FN (a :Number) -> Bool)` is
-identity-equal to `:(FN (b :Number) -> Bool)`. Until names load into
-identity, a function-typed slot can't mechanically enforce that the
-call site uses the declared parameter names — see open work.
+`f 1 2` shape). The names round-trip into identity:
+`KType::KFunction { params, ret }` carries `params` as a
+[parameter `Record<KType>`](ktype.md#record-fields-and-ktype-hashing),
+so `:(FN (a :Number) -> Bool)` and `:(FN (b :Number) -> Bool)` are
+distinct types, and the function/return surface re-parses from
+`KType::name()` back to the same `KType` — `:(FN () -> Any)`,
+`:(FN (xs :(LIST OF Number)) -> Bool)` included. Slot identity is the
+record substrate's order-blind equality (same parameters by name and
+type regardless of declaration order); a param-name mismatch is a
+dispatch non-match. Admission itself stays strict-invariant
+(`function_compat`) — structural subtyping over the parameter record is
+the [record-subtyping](../../roadmap/type_language/record-subtyping.md)
+follow-up.
+
+The parameter list parses through the shared field-list parser STRUCT /
+UNION use (`parse_typed_field_list_via_elaborator`), so nested
+parameterized param types sub-Dispatch — `:(FN (xs :(LIST OF Number))
+-> Bool)` elaborates its element type rather than failing on the bare
+identifier.
 
 ## Functor-type sigil
 
 Symmetric with the function-type rule:
-`:(FUNCTOR (T :SomeSig) -> Module)`. Parameter names appear at the
-sigil surface; `KType::KFunctor { params, ret }` stores params
-positionally for now.
+`:(FUNCTOR (T :SomeSig) -> Module)`. Parameter names round-trip into
+`KType::KFunctor { params, ret }`'s parameter `Record<KType>` the same
+way, and render back through `KType::name()`. FUNCTOR's capitalized
+`Type`-token parameter names (`Ty`, `Er`) are admitted by the
+field-list parser's `FieldNameKind::IdentifierOrType` policy, where
+STRUCT / UNION stay Identifier-only.
 
 ## User-functor application
 
@@ -161,11 +178,6 @@ FN / FUNCTOR do not install on the name channel.
 
 ## Open work
 
-- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
-  round-trip parameter names from the `:(FN ...)` / `:(FUNCTOR ...)` sigil
-  surface into `KType::KFunction` / `KType::KFunctor` identity, against the
-  shipped [record substrate](ktype.md#record-fields-and-ktype-hashing)'s
-  equality, so a function-typed slot records the names callers must use.
 - [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
   extend dispatch's specificity lattice with width/depth record subtyping
   (depth sound under value immutability) plus a `FROM` projection builtin to

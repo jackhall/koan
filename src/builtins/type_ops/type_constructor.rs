@@ -173,8 +173,9 @@ mod tests {
             other => panic!("pure must be a KTypeValue, got {:?}", other.ktype()),
         };
         match kt {
-            KType::KFunction { args, ret } => {
-                assert_eq!(*args, vec![KType::Number]);
+            KType::KFunction { params, ret } => {
+                assert_eq!(params.get("x"), Some(&KType::Number));
+                assert_eq!(params.len(), 1);
                 match ret.as_ref() {
                     KType::ConstructorApply { ctor, args } => {
                         assert!(

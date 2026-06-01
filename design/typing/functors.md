@@ -76,13 +76,23 @@ dispatch.
 
 ## Type identity and the one-way wall
 
-`KType::KFunctor { params, ret }` is a distinct structural variant. The
-admissibility helper at [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
+`KType::KFunctor { params, ret }` is a distinct structural variant.
+`params` is a name-keyed [parameter `Record<KType>`](ktype.md#record-fields-and-ktype-hashing) —
+the same substrate `KFunction` uses — so a functor's parameter names (including
+capitalized `Type`-token names like `Ty` / `Er`) are part of its identity and
+round-trip through `KType::name()`. Identity is the record's order-blind
+equality: `:(FUNCTOR (T :Sig, U :Sig2) -> M)` equals the same two parameters
+declared in either order. The admissibility helper at
+[`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
 matches `KFunctor → KFunctor` on the same structural rules used for
 `KFunction → KFunction`, but refuses both directions of the
 `KFunctor`/`KFunction` cross — a functor cannot be passed where a function
 is expected, and vice versa. The wall lives entirely at the type-admission
-layer; the underlying `KFunctionValue` is shared.
+layer; the underlying `KFunctionValue` is shared. `KType::join` mirrors the
+wall: it joins two same-shape `KFunctor`s to a shared `KFunctor` (so a list
+literal of same-shape functors infers `List<:(FUNCTOR …)>`) and two
+`KFunction`s to a shared `KFunction`, but a function joined with a functor
+falls through to `Any`.
 
 This rules out the surface-level confusion of "I have a value that returns
 a module, can I pass it to something expecting a functor?" — the answer is
@@ -246,8 +256,8 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 ```
 SIG Monad = (
   (LET Wrap = (TEMPLATE Type))
-  (VAL pure :(FN (Number) -> :(Number AS Wrap)))
-  (VAL bind :(FN (:(Number AS Wrap), :(FN (Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
+  (VAL pure :(FN (x :Number) -> :(Number AS Wrap)))
+  (VAL bind :(FN (m :(Number AS Wrap), f :(FN (x :Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
 )
 ```
 
@@ -336,10 +346,6 @@ see [implicits.md](implicits.md).
 
 ## Open work
 
-- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
-  functor parameter names round-trip into `KFunctor` identity, replacing today's
-  `Vec<KType>` with the shipped [record substrate](ktype.md#record-fields-and-ktype-hashing)
-  so `KFunctor` shares equality and hashing with the struct schema.
 - [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
   functor-parameter records admit contravariantly under the same width/depth
   record subtyping as functions.

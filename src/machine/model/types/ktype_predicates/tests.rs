@@ -1,5 +1,6 @@
 use super::*;
 use crate::machine::core::ScopeId;
+use crate::machine::model::Record;
 
 #[test]
 fn is_more_specific_concrete_beats_any() {
@@ -34,11 +35,11 @@ fn is_more_specific_dict_refines_value() {
 #[test]
 fn is_more_specific_function_arity_mismatch_incomparable() {
     let unary = KType::KFunction {
-        args: vec![KType::Number],
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
         ret: Box::new(KType::Number),
     };
     let nullary = KType::KFunction {
-        args: vec![],
+        params: Record::new(),
         ret: Box::new(KType::Number),
     };
     assert!(!unary.is_more_specific_than(&nullary));
@@ -294,7 +295,7 @@ fn is_type_denoting_table() {
     assert!(!KType::List(Box::new(KType::Number)).is_type_denoting());
     assert!(!KType::Dict(Box::new(KType::Str), Box::new(KType::Number),).is_type_denoting());
     assert!(!KType::KFunction {
-        args: vec![KType::Number],
+        params: Record::from_pairs(vec![("x".into(), KType::Number)]),
         ret: Box::new(KType::Number),
     }
     .is_type_denoting());

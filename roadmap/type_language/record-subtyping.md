@@ -4,15 +4,15 @@ Extend dispatch's specificity lattice with width/depth record subtyping, and
 add a projection builtin to coerce among incomparable record arms.
 
 **Problem.** Record and function-parameter types admit only by exact
-identity. Once [fn-named-identity](fn-named-identity.md) puts parameter names
-in `KType::KFunction` and the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing) defines
-record equality, a value typed `{x :Number, y :Str}` cannot be admitted where
-`{x :Number}` is expected, and a function requiring fewer named parameters
-cannot sit in a slot that supplies more — even though koan's values are
-immutable ([memory-model](../../design/memory-model.md)), which makes a
-covariant field-type relation sound. There is also no way for a caller to
-*choose* among dispatch arms whose record types overlap but the lattice can't
-order.
+identity. Parameter names already ride in `KType::KFunction` and the
+[record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)
+defines record equality, but admission is still strict equality: a value typed
+`{x :Number, y :Str}` cannot be admitted where `{x :Number}` is expected, and a
+function requiring fewer named parameters cannot sit in a slot that supplies
+more — even though koan's values are immutable
+([memory-model](../../design/memory-model.md)), which makes a covariant
+field-type relation sound. There is also no way for a caller to *choose* among
+dispatch arms whose record types overlap but the lattice can't order.
 
 **Impact.**
 
@@ -62,8 +62,8 @@ order.
 
 **Requires:**
 
-- [FN/FUNCTOR named identity](fn-named-identity.md) — contravariant function
-  subtyping needs parameter names in the `KType`.
+None — the [record substrate](../../design/typing/ktype.md#record-fields-and-ktype-hashing)
+and parameter-record identity this builds on have shipped.
 
 **Unblocks:**
 
