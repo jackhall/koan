@@ -198,7 +198,7 @@ fn verdict_for_deferred_type_expr<'a>(
 }
 
 /// Head-keyword classification for parens-form return-type carriers: `SIG_WITH`
-/// admits (yields `SatisfiesSignature`); `MODULE_TYPE_OF` rejects (yields
+/// admits (yields `Signature { .. }`); `MODULE_TYPE_OF` rejects (yields
 /// `AbstractType`); other heads fall through to a generic rejection.
 fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
     let head_keyword = e.parts.iter().find_map(|p| match &p.value {

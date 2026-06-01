@@ -238,9 +238,9 @@ impl<'a> Bindings<'a> {
 
     /// `BindingIndex` of an installed placeholder, ignoring visibility.
     /// Cycle-close in `model/types/resolver.rs` re-stamps the placeholder's
-    /// lexical position so the downstream finalize (`register_type_upsert`, or
-    /// `register_nominal` for SIG) installs at the matching index. Other reads
-    /// should go through [`Self::lookup_value`].
+    /// lexical position so the downstream finalize (`register_type_upsert`)
+    /// installs at the matching index. Other reads should go through
+    /// [`Self::lookup_value`].
     pub fn placeholder_index(&self, name: &str) -> Option<BindingIndex> {
         self.placeholders.borrow().get(name).map(|(_, idx)| *idx)
     }
@@ -412,59 +412,6 @@ impl<'a> Bindings<'a> {
         Ok(ApplyOutcome::Applied)
     }
 
-    /// Atomic `(types, data)` install — the lone remaining caller is a SIG
-    /// declaration (and a SIG-alias `LET`): `types[name] = kt` (the
-    /// `SatisfiesSignature` constraint) + `data[name] = obj` (the `Signature`
-    /// value). Borrow order `types → data`; `functions` is untouched. STRUCT /
-    /// UNION / MODULE / Result are type-only now via [`super::Scope::register_type_upsert`];
-    /// retiring this path entirely is the `eliminate-sig-dual-write` roadmap item.
-    ///
-    /// Idempotent path: if `types[name]` already holds a `KType` value-equal to
-    /// `kt` AND `data[name]` is empty, write only the carrier.
-    ///
-    /// `Ok(Conflict)` on borrow contention. `Err(Rebind)` if `data[name]`
-    /// exists OR `types[name]` exists with a different `KType`. The pre-check
-    /// runs before any insert, so a collision leaves both maps untouched.
-    pub fn try_register_nominal(
-        &self,
-        name: &str,
-        kt: &'a KType<'a>,
-        obj: &'a KObject<'a>,
-        index: BindingIndex,
-    ) -> Result<ApplyOutcome, KError> {
-        let mut types = match self.types.try_borrow_mut() {
-            Ok(t) => t,
-            Err(_) => return Ok(ApplyOutcome::Conflict),
-        };
-        let mut data = match self.data.try_borrow_mut() {
-            Ok(d) => d,
-            Err(_) => {
-                drop(types);
-                return Ok(ApplyOutcome::Conflict);
-            }
-        };
-        if data.contains_key(name) {
-            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
-        }
-        match types.get(name).map(|(t, _)| *t) {
-            None => {
-                types.insert(name.to_string(), (kt, index));
-            }
-            Some(existing) if existing == kt => {
-                // Cycle-close-idempotent: keep the pre-installed index so
-                // cycle members agree on one visibility tag for both maps.
-            }
-            Some(_) => {
-                return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
-            }
-        }
-        data.insert(name.to_string(), (obj, index));
-        drop(data);
-        drop(types);
-        self.clear_placeholder_best_effort(name);
-        Ok(ApplyOutcome::Applied)
-    }
-
     /// Install a dispatch-time placeholder for `name` → producer slot `idx`.
     ///
     /// Lenient when `data[name]` already holds a `KObject::KFunction`: silent
@@ -552,8 +499,7 @@ impl<'a> Bindings<'a> {
         Ok(())
     }
 
-    /// Shared write path for type-only bindings. `try_register_nominal`
-    /// inlines its own `types → data` transaction rather than reusing this.
+    /// Shared write path for type-only bindings.
     /// `Conflict` is borrow contention; `Err(Rebind)` is semantic rejection.
     fn try_apply_type(
         &self,

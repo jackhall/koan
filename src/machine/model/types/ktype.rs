@@ -6,7 +6,7 @@
 //!
 //! Predicates live in `ktype_predicates.rs`; elaboration lives in `ktype_resolution.rs`.
 //!
-//! Lifetime parameter `'a`: the five module/signature variants (`Module`, `Signature`,
+//! Lifetime parameter `'a`: the module/signature variants (`Module`, `Signature`,
 //! `AbstractType`, `AnyModule`, `AnySignature`) hold `&'a Module<'a>` / `&'a Signature<'a>`
 //! arena pointers; every other variant is owned data and ignores the parameter.
 
@@ -123,16 +123,17 @@ pub enum KType<'a> {
     /// one-direction only — `UserType` is more specific than `AnyUserType` of the same
     /// kind, not the reverse.
     AnyUserType { kind: UserTypeKind<'a> },
-    /// First-class module value tagged with the signature it satisfies. `sig_id` addresses
-    /// are stable for the run (the arena pins the `Signature`) and rebind in the same scope
-    /// already errors, so the cast is collision-free. Equality is by `sig_id` plus
-    /// `pinned_slots`; `sig_path` is diagnostic-only.
+    /// A module signature: both the introspectable value (`decl_scope` via `sig`) and the
+    /// dispatch constraint ("any module satisfying `sig`"). Disambiguated by position — as a
+    /// parameter slot it matches a module whose `compatible_sigs` contains `sig.sig_id()`; as
+    /// a value (`KTypeValue(Signature { .. })`) it is matched by the `AnySignature` wildcard.
     ///
-    /// `pinned_slots` carries abstract-type slots pinned to concrete `KType`s. The vec is
+    /// `pinned_slots` carries `SIG_WITH` abstract-type specializations (empty for a bare
+    /// signature), each an abstract-type slot pinned to a concrete `KType`. The vec is
     /// order-preserving (rather than a `HashMap`) so structural equality is deterministic.
-    SatisfiesSignature {
-        sig_id: ScopeId,
-        sig_path: String,
+    /// Identity is `sig.sig_id()` + `pinned_slots`; `sig.path` is diagnostic-only.
+    Signature {
+        sig: &'a Signature<'a>,
         pinned_slots: Vec<(String, KType<'a>)>,
     },
     /// First-class module value's type. `frame` carries the per-call `Rc<CallArena>`
@@ -141,8 +142,6 @@ pub enum KType<'a> {
         module: &'a Module<'a>,
         frame: Option<Rc<CallArena>>,
     },
-    /// First-class module signature value's type.
-    Signature(&'a Signature<'a>),
     /// Abstract type member of a module, minted by opaque ascription (`Foo.Type`). Manual
     /// `PartialEq` compares `(source_module.scope_id(), name)` so two opaque-ascriptions of
     /// the same source module with the same abstract name compare equal.
@@ -193,20 +192,19 @@ impl<'a> KType<'a> {
             KType::Type => "Type".into(),
             KType::UserType { name, .. } => name.clone(),
             KType::AnyUserType { kind } => kind.surface_keyword().into(),
-            KType::SatisfiesSignature { sig_path, pinned_slots, .. } => {
+            KType::Signature { sig, pinned_slots } => {
                 if pinned_slots.is_empty() {
-                    sig_path.clone()
+                    sig.path.clone()
                 } else {
                     // Display-only; does not round-trip through the parser.
                     let inner: Vec<String> = pinned_slots
                         .iter()
                         .map(|(name, kt)| format!("({}: {})", name, kt.name()))
                         .collect();
-                    format!("(SIG_WITH {} ({}))", sig_path, inner.join(" "))
+                    format!("(SIG_WITH {} ({}))", sig.path, inner.join(" "))
                 }
             }
             KType::Module { module, .. } => module.path.clone(),
-            KType::Signature(s) => s.path.clone(),
             KType::AbstractType { name, .. } => name.clone(),
             KType::AnyModule => "Module".into(),
             KType::AnySignature => "Signature".into(),
@@ -254,14 +252,13 @@ impl<'a> PartialEq for KType<'a> {
             ) => k1 == k2 && s1 == s2 && n1 == n2,
             (AnyUserType { kind: k1 }, AnyUserType { kind: k2 }) => k1 == k2,
             (
-                SatisfiesSignature { sig_id: i1, pinned_slots: p1, .. },
-                SatisfiesSignature { sig_id: i2, pinned_slots: p2, .. },
-            ) => i1 == i2 && p1 == p2,
+                Signature { sig: s1, pinned_slots: p1 },
+                Signature { sig: s2, pinned_slots: p2 },
+            ) => s1.sig_id() == s2.sig_id() && p1 == p2,
             // `frame` is a lifecycle anchor, not part of identity.
             (Module { module: m1, .. }, Module { module: m2, .. }) => {
                 m1.scope_id() == m2.scope_id()
             }
-            (Signature(s1), Signature(s2)) => s1.sig_id() == s2.sig_id(),
             (
                 AbstractType { source_module: m1, name: n1 },
                 AbstractType { source_module: m2, name: n2 },

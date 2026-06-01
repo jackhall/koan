@@ -154,9 +154,13 @@ What's shipped that the open items below build on:
   only runtime instances; value-position references synthesise
   `KTypeValue(identity)` on demand via `coerce_type_token_value`, and
   recursive types ride a cycle-close pre-install plus a schema-bearing
-  upsert at finalize. `SIG` is the lone remaining `(types, data)`
-  dual-writer (tracked in
-  [roadmap/refactor/eliminate-sig-dual-write.md](roadmap/refactor/eliminate-sig-dual-write.md)).
+  upsert at finalize. `SIG` followed the same path by merging its
+  constraint variant (`SatisfiesSignature`) and value variant
+  (`Signature(s)`) into one `KType::Signature { sig, pinned_slots }` —
+  disambiguated by position — so it writes a single type-side identity and
+  the `register_nominal` / `try_register_nominal` / `derive_nominal_identity`
+  machinery deleted. No nominal binder dual-writes; the type-language /
+  value-language partition is total.
 
 ## Next items
 
@@ -238,14 +242,6 @@ language through the dispatcher and the user-functor application surface:
 
 - [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
-
-### Refactor — [roadmap/refactor/](roadmap/refactor/)
-
-Structural cleanups surfaced by the `modgraph` + `doclinks gap`
-analysis. With the type-only nominal identities shipped, the remaining
-item closes out the last `(types, data)` dual-write — the signature case:
-
-- [Eliminate SIG's dual-write](roadmap/refactor/eliminate-sig-dual-write.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

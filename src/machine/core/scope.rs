@@ -68,8 +68,8 @@ pub struct Scope<'a> {
     pub out: RefCell<Option<Box<dyn Write + 'a>>>,
     pub arena: &'a RuntimeArena,
     /// Position-independent identity captured into `KType::UserType { scope_id, .. }` /
-    /// `KType::SatisfiesSignature { sig_id, .. }` so dispatch on user-declared types compares
-    /// ids rather than scope pointers.
+    /// `KType::Signature { sig, .. }` (via `sig.sig_id()`) so dispatch on user-declared
+    /// types compares ids rather than scope pointers.
     pub id: ScopeId,
     pending: PendingQueue<'a>,
     pub kind: ScopeKind,
@@ -394,39 +394,6 @@ impl<'a> Scope<'a> {
                 "cycle_close_install_identity Rebind for `{name}`: {e} — cycle member \
                  identity should not already be in bindings.types",
             ),
-        }
-    }
-
-    /// Atomic `(types, data)` install for a SIG declaration — the lone remaining
-    /// dual-writer (also reached by a SIG-alias `LET`). Identity `kt` (the
-    /// `SatisfiesSignature` constraint) goes into [`Bindings::types`] and the
-    /// `Signature` carrier `obj` into [`Bindings::data`] atomically via
-    /// [`Bindings::try_register_nominal`]. STRUCT / UNION / MODULE / Result install
-    /// type-only via [`Self::register_type_upsert`]. Returns the carrier so the
-    /// caller can yield it via `BodyResult::Value`.
-    ///
-    /// Finalize runs post-Combine, past the re-entrant queue point: panic on
-    /// `Conflict`, return `Err` on `Rebind`.
-    pub fn register_nominal(
-        &self,
-        name: String,
-        kt: crate::machine::model::types::KType<'a>,
-        obj: &'a KObject<'a>,
-        index: BindingIndex,
-    ) -> Result<&'a KObject<'a>, KError> {
-        if self.bindings.is_borrowed() {
-            return self.write_target().register_nominal(name, kt, obj, index);
-        }
-        let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(kt);
-        match self.bindings.get().try_register_nominal(&name, kt_ref, obj, index)? {
-            ApplyOutcome::Applied => Ok(obj),
-            ApplyOutcome::Conflict => {
-                panic!(
-                    "register_nominal borrow conflict on `{name}` — finalize sites run \
-                     post-Combine outside the re-entrant bind hot path, so a conflict \
-                     here indicates a programming error",
-                );
-            }
         }
     }
 

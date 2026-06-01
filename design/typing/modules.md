@@ -92,7 +92,7 @@ newtype-with-private-fields pattern that a trait system would need.
 The type language is first-class; modules and signatures live there. A
 module value rides
 [`KObject::KTypeValue(KType::Module { module, frame })`](../../src/machine/model/values/kobject.rs)
-and a signature value rides `KObject::KTypeValue(KType::Signature(s))` —
+and a signature value rides `KObject::KTypeValue(KType::Signature { sig, pinned_slots })` —
 the same `KTypeValue` carrier that holds `Number`, `Str`, and builtin
 type values, with the identity-bearing module/signature variants living
 inside `KType` itself. A module value flows through `LET`, ATTR, and function
@@ -102,28 +102,42 @@ named in expression position evaluates to its value, and `m.compare` is
 ordinary attribute access — ATTR projects through `KType::Module { module,
 .. }` to reach `module.access_module_member(field)`.
 
-A `MODULE` declaration is **type-only**: finalize installs the
-`KType::Module { module, frame }` identity into `bindings.types` via
+`MODULE` and `SIG` declarations are both **type-only**: finalize installs the
+identity (`KType::Module { module, frame }` for MODULE, `KType::Signature {
+sig, pinned_slots }` for SIG) into `bindings.types` via
 [`Scope::register_type_upsert`](../../src/machine/core/scope.rs) and writes no
-value-side carrier. `LET M2 = M1` module aliases likewise route through
-`register_type` against the type entry. Value-position references — a module
-named as an ATTR receiver, or surfaced by `USING … SCOPE` — synthesize the
-`KObject::KTypeValue(KType::Module { .. })` carrier on demand from the type entry
-via
+value-side carrier — `bindings.data` carries zero type carriers. `LET M2 = M1`
+module aliases and `LET S2 = OrderedSig` signature aliases likewise route
+through `register_type` against the type entry. Value-position references — a
+module named as an ATTR receiver, a signature introspected by `:|` or `SIG_WITH`,
+or either surfaced by `USING … SCOPE` — synthesize the
+`KObject::KTypeValue(KType::Module { .. } | KType::Signature { .. })` carrier on
+demand from the type entry via
 [`coerce_type_token_value`](../../src/machine/execute/dispatch/resolve_type_expr.rs);
 ATTR's `body_type_lhs` routes its Type-classed receiver through that seam rather
 than a raw `bindings.data` lookup.
 
 `KType::Module` carries the live `&Module` pointer (plus the per-call
-frame anchor for functor-built modules); `KType::Signature(s)` carries the
-arena-pinned `&Signature`; `KType::AbstractType { source_module, name }`
-carries the abstract-type member of an opaquely-ascribed module. Module
-identity is by `module.scope_id()`; signature identity by `s.sig_id()`;
+frame anchor for functor-built modules); `KType::Signature { sig, pinned_slots }`
+carries the arena-pinned `&Signature` plus any `SIG_WITH` abstract-type
+pins; `KType::AbstractType { source_module, name }` carries the
+abstract-type member of an opaquely-ascribed module. Module identity is by
+`module.scope_id()`; signature identity by `sig.sig_id()` + `pinned_slots`;
 abstract-type identity by `(source_module.scope_id(), name)`. The
 type-position wildcards `KType::AnyModule` and `KType::AnySignature`
 admit any first-class module or signature value — the surface keywords
 `Module` and `Signature` lower to them in
 [`KType::from_name`](../../src/machine/model/types/ktype_resolution.rs).
+
+The single `KType::Signature` variant serves both the constraint and the
+value role, disambiguated by **position** rather than by variant. A
+`Signature { .. }` *slot annotation* — `(PICK m :OrderedSig)` — matches a
+*module* whose `compatible_sigs` records `sig.sig_id()`, so `:OrderedSig`
+means "any module satisfying OrderedSig." A signature *value* —
+`KTypeValue(KType::Signature { .. })`, what `OrderedSig` evaluates to in
+expression position — is matched by the `:Signature` (`AnySignature`)
+wildcard. A slot typed `:OrderedSig` therefore never admits the signature
+value itself, and `:Signature` never admits a satisfying module.
 
 Module-typed bindings reuse the existing ascription operators:
 

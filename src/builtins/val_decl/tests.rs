@@ -11,9 +11,9 @@ fn val_inside_sig_binds_typeexpr_carrier() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "SIG OrderedSig = ((VAL zero :Number))");
-    let s = match scope.bindings().data().get("OrderedSig").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-        _ => panic!("OrderedSig must bind a KSignature"),
+    let s = match scope.resolve_type("OrderedSig") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => panic!("OrderedSig must bind a Signature KType"),
     };
     let zero = s.decl_scope().bindings().expect_value("zero");
     match zero {
@@ -33,9 +33,9 @@ fn val_resolves_sig_local_type_shadow() {
         scope,
         "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
     );
-    let s = match scope.bindings().data().get("WithZero").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-        _ => panic!("WithZero must bind a KSignature"),
+    let s = match scope.resolve_type("WithZero") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => panic!("WithZero must bind a Signature KType"),
     };
     let zero = s.decl_scope().bindings().expect_value("zero");
     match zero {
@@ -95,9 +95,9 @@ fn val_function_typed_slot() {
         scope,
         "SIG OrderedSig = ((VAL compare :(FN (x :Number, y :Number) -> Number)))",
     );
-    let s = match scope.bindings().data().get("OrderedSig").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-        _ => panic!("OrderedSig must bind a KSignature"),
+    let s = match scope.resolve_type("OrderedSig") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => panic!("OrderedSig must bind a Signature KType"),
     };
     let compare = s.decl_scope().bindings().expect_value("compare");
     match compare {
@@ -163,9 +163,9 @@ fn val_with_abstract_type_member_declaration() {
         scope,
         "SIG WithZero = ((LET Type = Number) (VAL zero :Type))",
     );
-    let s = match scope.bindings().data().get("WithZero").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-        _ => panic!("WithZero must bind a KSignature"),
+    let s = match scope.resolve_type("WithZero") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        _ => panic!("WithZero must bind a Signature KType"),
     };
     let type_kt = s.decl_scope().bindings().expect_type("Type");
     assert_eq!(*type_kt, KType::Number);

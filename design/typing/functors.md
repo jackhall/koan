@@ -54,11 +54,12 @@ a functor; the binder makes that knowledge legible to the engine.
 ## Definition-time validation
 
 FUNCTOR's return-type slot must denote a module, signature, or functor
-kind. The admissible carriers are `KType::AnySignature`, `SatisfiesSignature`,
-`(SIG_WITH …)`, `KType::AnyModule`, `KType::Module { .. }`,
-`KType::Signature(_)`, and `KType::KFunctor { … }` (recursively — the
-inner `ret` is validated the same way, so curried multi-module functors
-and any deeper nesting flow through one rule). Any
+kind. The admissible carriers are `KType::AnySignature`,
+`KType::Signature { .. }` (the unified constraint-and-value variant,
+covering both a bare `:OrderedSig` and a `(SIG_WITH …)` pin),
+`KType::AnyModule`, `KType::Module { .. }`, and `KType::KFunctor { … }`
+(recursively — the inner `ret` is validated the same way, so curried
+multi-module functors and any deeper nesting flow through one rule). Any
 other denotation — `Number`, a structural function type, a plain user
 type — is a definition-time error at the FUNCTOR binder, surfaced with
 `FUNCTOR return-type slot must denote a module, signature, or functor`
@@ -126,7 +127,7 @@ a type-language binder at the call site: at each call,
 writes the per-call argument into the child scope's `bindings.types` only
 (not `bindings.data`). The
 [`KType::is_type_denoting`](../../src/machine/model/types/ktype_predicates.rs)
-predicate gates the write — `SatisfiesSignature`, `Type`, `TypeExprRef`,
+predicate gates the write — `Signature { .. }`, `Type`, `TypeExprRef`,
 `KType::AnyModule`, and `KType::AnySignature` all carry meaningful
 type-language identity at the binder, and the corresponding argument is
 admitted as a single carrier shape. Body-position references to the
@@ -166,8 +167,8 @@ builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
 resolves to `KType::Number` through `Scope::resolve_type`, and a deferred
 return like `-> :Elt` re-elaborates through the same Combine-finish slot
 check the nominal-keyed path uses. The wall on `KType::Module { .. }` /
-`KType::Signature(_)` carriers stays in place — those route through
-`AnyModule` / `AnySignature` / `SatisfiesSignature` slots, keeping the
+`KType::Signature { .. }` carriers stays in place — those route through
+`AnyModule` / `AnySignature` / `Signature { .. }` slots, keeping the
 `:Type` vs `:Module` overload distinction. OCaml structurally cannot match
 this without modular implicits, because its module language is stratified
 above the value language.

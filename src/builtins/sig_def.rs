@@ -54,19 +54,16 @@ pub fn body<'a>(
         let arena = parent_scope.arena;
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
-        // The signature value rides `KTypeValue(KType::Signature(s))`; the type-side
-        // identity carries the *constraint* form `SatisfiesSignature` so slot
-        // annotations `:OrderedSig` mean "any module satisfying OrderedSig" rather
-        // than "this signature value itself."
-        let identity = KType::SatisfiesSignature {
-            sig_id: sig.sig_id(),
-            sig_path: name_for_finish.clone(),
-            pinned_slots: Vec::new(),
-        };
-        let sig_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Signature(sig)));
-        match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj, bind_index)
-        {
-            Ok(obj) => BodyResult::Value(obj),
+        // One unified identity in `bindings.types`: `KType::Signature { sig, pinned_slots }`
+        // is both the introspectable value (`decl_scope` via `sig`) and the dispatch
+        // constraint. A slot annotation `:OrderedSig` means "any module satisfying
+        // OrderedSig"; the signature value is recovered via `coerce_type_token_value`,
+        // which synthesizes `KTypeValue(KType::Signature { .. })`. SIG doesn't join an SCC
+        // type cycle, so the upsert's overwrite arm never fires — its insert-if-absent /
+        // non-equal-Rebind behaviour (two `SIG Foo` in one scope error) carries here.
+        let identity = KType::Signature { sig, pinned_slots: Vec::new() };
+        match parent_scope.register_type_upsert(name_for_finish.clone(), identity, bind_index) {
+            Ok(kt_ref) => BodyResult::Value(arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
             Err(e) => BodyResult::Err(
                 e.with_frame(Frame::bare("<signature>", format!("SIG {} body", name_for_finish))),
             ),
@@ -118,10 +115,11 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
-        let data = scope.bindings().data();
+        // SIG installs a single type-side identity; nothing lands in `bindings.data`.
+        assert!(scope.bindings().data().get("OrderedSig").is_none());
         assert!(matches!(
-            data.get("OrderedSig").map(|(o, _)| *o),
-            Some(KObject::KTypeValue(KType::Signature(_)))
+            scope.resolve_type("OrderedSig"),
+            Some(KType::Signature { .. })
         ));
     }
 
@@ -131,9 +129,8 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
-        let data = scope.bindings().data();
-        let sig = match data.get("OrderedSig").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
+        let sig = match scope.resolve_type("OrderedSig") {
+            Some(KType::Signature { sig, .. }) => *sig,
             _ => panic!("OrderedSig should be a signature"),
         };
         assert_eq!(sig.path, "OrderedSig");
@@ -146,10 +143,9 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
-        let data = scope.bindings().data();
         use crate::machine::model::types::KType;
-        let sig = match data.get("Foo").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
+        let sig = match scope.resolve_type("Foo") {
+            Some(KType::Signature { sig, .. }) => *sig,
             _ => panic!("Foo should be a signature"),
         };
         let inner = sig.decl_scope().bindings().data();
@@ -162,15 +158,15 @@ mod tests {
     }
 
     /// A failing body statement surfaces as the SIG node's error and must not bind
-    /// `Foo` in the parent scope.
+    /// `Foo` (type side) in the parent scope.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG Foo = (VAL x :NonexistentType)");
         assert!(
-            scope.bindings().data().get("Foo").is_none(),
-            "Foo must not bind when its body errors",
+            scope.resolve_type("Foo").is_none(),
+            "Foo must not bind (type side) when its body errors",
         );
     }
 

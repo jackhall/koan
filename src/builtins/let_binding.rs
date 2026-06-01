@@ -25,10 +25,11 @@ pub fn body<'a>(
         Ok(v) => v,
         Err(e) => return err(e),
     };
-    // Exactly one of these is `Some` at a time — they pick storage routing:
-    // `type_for_types_map` -> `register_type`; `nominal_identity` -> `register_nominal`.
+    // `Some` routes the bind to `register_type` (type-side); `None` routes to
+    // `bind_value` (value-side). No nominal binder dual-writes anymore, so a
+    // type-language alias (struct / union / module / Result / signature) is always a
+    // single type-side write.
     let mut type_for_types_map: Option<KType<'a>> = None;
-    let mut nominal_identity: Option<KType<'a>> = None;
     let name = match bundle.get("name") {
         Some(KObject::KString(s)) => {
             // Partition guard: value-classified binder names cannot carry a module
@@ -36,7 +37,7 @@ pub fn body<'a>(
             // partition.
             let kind = match value {
                 KObject::KTypeValue(KType::Module { .. }) => Some("module"),
-                KObject::KTypeValue(KType::Signature(_)) => Some("signature"),
+                KObject::KTypeValue(KType::Signature { .. }) => Some("signature"),
                 _ => None,
             };
             if let Some(kind) = kind {
@@ -66,22 +67,12 @@ pub fn body<'a>(
                         got: value.ktype().name(),
                     }));
                 }
-                match value {
-                    // SIG stays dual-write (deferred): a signature alias lowers to the
-                    // `SatisfiesSignature` constraint on the type side AND keeps the
-                    // `Signature` value on the value side.
-                    KObject::KTypeValue(KType::Signature(_)) => {
-                        nominal_identity = derive_nominal_identity(value);
-                    }
-                    // Struct / union / module / Result aliases are type-only: their schema
-                    // (or `&Module`) rides the `KType` identity, so a plain `types` write
-                    // preserves dispatch identity without a value-side copy.
-                    KObject::KTypeValue(kt) => {
-                        type_for_types_map = Some(kt.clone());
-                    }
-                    _ => {
-                        nominal_identity = derive_nominal_identity(value);
-                    }
+                // Struct / union / module / Result / signature aliases are type-only:
+                // their schema (or `&Module` / `&Signature`) rides the `KType` identity,
+                // so a plain `types` write preserves dispatch identity without a
+                // value-side copy.
+                if let KObject::KTypeValue(kt) = value {
+                    type_for_types_map = Some(kt.clone());
                 }
                 resolved_name
             }
@@ -107,22 +98,12 @@ pub fn body<'a>(
                         got: value.ktype().name(),
                     }));
                 }
-                match value {
-                    // SIG stays dual-write (deferred): a signature alias lowers to the
-                    // `SatisfiesSignature` constraint on the type side AND keeps the
-                    // `Signature` value on the value side.
-                    KObject::KTypeValue(KType::Signature(_)) => {
-                        nominal_identity = derive_nominal_identity(value);
-                    }
-                    // Struct / union / module / Result aliases are type-only: their schema
-                    // (or `&Module`) rides the `KType` identity, so a plain `types` write
-                    // preserves dispatch identity without a value-side copy.
-                    KObject::KTypeValue(kt) => {
-                        type_for_types_map = Some(kt.clone());
-                    }
-                    _ => {
-                        nominal_identity = derive_nominal_identity(value);
-                    }
+                // Struct / union / module / Result / signature aliases are type-only:
+                // their schema (or `&Module` / `&Signature`) rides the `KType` identity,
+                // so a plain `types` write preserves dispatch identity without a
+                // value-side copy.
+                if let KObject::KTypeValue(kt) = value {
+                    type_for_types_map = Some(kt.clone());
                 }
                 resolved_name
             }
@@ -139,7 +120,7 @@ pub fn body<'a>(
     // Value slots inside a SIG body must use `(VAL <name>: <Type>)`. The check
     // fires only for the value-route so `LET Type = Number` and
     // `LET MyAlias = (some_module :| Sig)` keep working.
-    if type_for_types_map.is_none() && nominal_identity.is_none() && scope.is_in_sig_body() {
+    if type_for_types_map.is_none() && scope.is_in_sig_body() {
         return err(KError::new(KErrorKind::ShapeError(format!(
             "inside a SIG body, value slots must use VAL — write \
              `(VAL {name}: <Type>)` instead of `(LET {name} = <example-value>)`",
@@ -149,17 +130,12 @@ pub fn body<'a>(
     let arena = scope.arena;
     let allocated: &'a KObject<'a> = arena.alloc(cloned);
     if let Some(kt) = type_for_types_map {
-        // LET aliasing is value-style gated — no `nominal_binder` carve-out; that's
-        // reserved for STRUCT / SIG / FUNCTOR / MODULE / named UNION at their own
-        // install sites.
+        // Identity-preserving alias: `LET P2 = OrderedSig` writes `bindings.types[P2]`
+        // carrying the aliased type's original identity so `(PICK x: P2)` and
+        // `(PICK x: OrderedSig)` dispatch to the same overload. LET aliasing is
+        // value-style gated — no `nominal_binder` carve-out; that's reserved for
+        // STRUCT / SIG / FUNCTOR / MODULE / named UNION at their own install sites.
         scope.register_type(name, kt, bind_index);
-    } else if let Some(identity) = nominal_identity {
-        // Identity-preserving alias: `LET P2 = Point` writes `bindings.types[P2]`
-        // carrying Point's original identity so `(PICK x: P2)` and `(PICK x: Point)`
-        // dispatch to the same overload.
-        if let Err(e) = scope.register_nominal(name, identity, allocated, bind_index) {
-            return err(e);
-        }
     } else {
         // An untyped LET is a resolution boundary; an empty container with no
         // stamped element type would silently fix `List<Any>` / `Dict<Any, Any>`.
@@ -178,25 +154,6 @@ pub fn body<'a>(
     BodyResult::Value(allocated)
 }
 
-/// Recover the nominal identity carried by a type-language value `obj`. Struct / union /
-/// module / Result identities are now type-only `KTypeValue(_)` carriers that the LET body
-/// routes straight to `register_type`, so this handles the only remaining dual-write case:
-/// SIG. A signature alias keeps both the `SatisfiesSignature` constraint (type side) and the
-/// `Signature` value (value side). Everything else returns `None` and flows through
-/// `Scope::bind_value`.
-fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
-    match obj {
-        // Signature carriers lower to the constraint shape `SatisfiesSignature`
-        // so `(PICK m: S2)` and `(PICK m: OrderedSig)` dispatch identically.
-        KObject::KTypeValue(KType::Signature(s)) => Some(KType::SatisfiesSignature {
-            sig_id: s.sig_id(),
-            sig_path: s.path.clone(),
-            pinned_slots: Vec::new(),
-        }),
-        _ => None,
-    }
-}
-
 /// Type-class LET allowlist. A Type-class binder name admits a value only if it
 /// carries a type-language identity: any `KTypeValue(_)` (struct / union / module /
 /// Result / signature identities all flow as `KTypeValue` now) or an `is_functor`-flagged
@@ -206,9 +163,6 @@ fn derive_nominal_identity<'a>(obj: &KObject<'a>) -> Option<KType<'a>> {
 /// § Binding-map partition.
 fn is_admissible_type_class_rhs<'a>(value: &KObject<'a>) -> bool {
     if matches!(value, KObject::KTypeValue(_)) {
-        return true;
-    }
-    if derive_nominal_identity(value).is_some() {
         return true;
     }
     if let KObject::KFunction(f, _) = value {

@@ -2,25 +2,33 @@
 
 use crate::builtins::test_support::{lookup_fn, parse_one, run, run_root_silent};
 use crate::machine::model::KObject;
-use crate::machine::{RuntimeArena, ScopeId};
+use crate::machine::RuntimeArena;
 
-/// Sharing-constraint admissibility: a `SatisfiesSignature` slot with a pinned
+/// Sharing-constraint admissibility: a `Signature { .. }` slot with a pinned
 /// `type_members["Type"] = Number` rejects modules whose pin disagrees, is absent,
-/// or whose `compatible_sigs` set doesn't contain the slot's `sig_id`.
+/// or whose `compatible_sigs` set doesn't contain the slot's `sig.sig_id()`.
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::ast::ExpressionPart;
     use crate::machine::model::KType;
-    use crate::machine::model::values::Module;
+    use crate::machine::model::values::{Module, Signature};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
+    // Real signature so the slot's `sig.sig_id()` is the one modules `mark_satisfies`.
+    let sig_scope = arena.alloc_scope(crate::machine::Scope::child_under_sig(
+        scope,
+        "OrderedSig".into(),
+    ));
+    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), sig_scope));
+    let sig_id = sig.sig_id();
+
     let child_a = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
         "NumPinned".into(),
     ));
     let m_num: &Module<'_> = arena.alloc_module(Module::new("NumPinned".into(), child_a));
     m_num.type_members.borrow_mut().insert("Type".into(), KType::Number);
-    m_num.mark_satisfies(ScopeId::from_raw(0, 42)); // arbitrary sig_id matching the slot below
+    m_num.mark_satisfies(sig_id);
     let m_num_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_num, frame: None }));
 
     let child_b = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -29,7 +37,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_str: &Module<'_> = arena.alloc_module(Module::new("StrPinned".into(), child_b));
     m_str.type_members.borrow_mut().insert("Type".into(), KType::Str);
-    m_str.mark_satisfies(ScopeId::from_raw(0, 42));
+    m_str.mark_satisfies(sig_id);
     let m_str_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_str, frame: None }));
 
     let child_c = arena.alloc_scope(crate::machine::Scope::child_under_module(
@@ -37,12 +45,11 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         "NoTypePin".into(),
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
-    m_none.mark_satisfies(ScopeId::from_raw(0, 42));
+    m_none.mark_satisfies(sig_id);
     let m_none_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_none, frame: None }));
 
-    let slot = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 42),
-        sig_path: "OrderedSig".into(),
+    let slot = KType::Signature {
+        sig,
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
 
@@ -68,7 +75,7 @@ fn sharing_constraint_rejects_mismatched_module_type() {
 
 /// Pure-type pinned slots (no parameter references) resolve synchronously at
 /// FN-construction and land on the FN's stored return type as a
-/// `SatisfiesSignature` with both pins captured.
+/// `Signature { .. }` with both pins captured.
 #[test]
 fn functor_with_two_pinned_slots_round_trips() {
     use crate::machine::model::KType;
@@ -89,8 +96,8 @@ fn functor_with_two_pinned_slots_round_trips() {
     let f = lookup_fn(scope, "TWOPIN");
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
-        ReturnType::Resolved(KType::SatisfiesSignature { sig_path, pinned_slots, .. }) => {
-            assert_eq!(sig_path, "Set");
+        ReturnType::Resolved(KType::Signature { sig, pinned_slots }) => {
+            assert_eq!(sig.path, "Set");
             assert_eq!(pinned_slots.len(), 2);
             assert_eq!(pinned_slots[0].0, "Elt");
             assert_eq!(pinned_slots[0].1, KType::Number);
@@ -98,7 +105,7 @@ fn functor_with_two_pinned_slots_round_trips() {
             assert_eq!(pinned_slots[1].1, KType::Number);
         }
         other => panic!(
-            "expected Resolved(SatisfiesSignature) on TWOPIN's return type, got {:?}",
+            "expected Resolved(Signature) on TWOPIN's return type, got {:?}",
             other,
         ),
     }
@@ -126,19 +133,19 @@ fn functor_return_with_sharing_constraint_pins_output_type() {
     let f = lookup_fn(scope, "MAKESETN");
     use crate::machine::model::ReturnType;
     match &f.signature.return_type {
-        ReturnType::Resolved(KType::SatisfiesSignature { sig_path, pinned_slots, .. }) => {
-            assert_eq!(sig_path, "SetSig");
+        ReturnType::Resolved(KType::Signature { sig, pinned_slots }) => {
+            assert_eq!(sig.path, "SetSig");
             assert_eq!(pinned_slots, &vec![("Elt".to_string(), KType::Number)]);
         }
         other => panic!(
-            "expected Resolved(SatisfiesSignature) on MAKESETN's return type, got {:?}",
+            "expected Resolved(Signature) on MAKESETN's return type, got {:?}",
             other,
         ),
     }
 }
 
 /// Return-type admissibility rejects a body whose module fails the
-/// `SatisfiesSignature` check — here via an unascribed body module (empty
+/// `Signature { .. }` constraint check — here via an unascribed body module (empty
 /// `compatible_sigs`), which trips the sig-membership gate before pin comparison.
 /// The pin comparison itself is covered by `sharing_constraint_rejects_mismatched_module_type`.
 #[test]

@@ -1005,7 +1005,7 @@ read the concrete runtime shape directly:
 - [`KObject::ktype()`](../src/machine/model/values/kobject.rs)
   projects the carried `KType` directly out of a `KTypeValue`
   carrier — a module value reports `KType::Module { module, .. }`,
-  a signature value reports `KType::Signature(s)` — so the
+  a signature value reports `KType::Signature { sig, .. }` — so the
   dispatcher reads the same identity the carrier holds rather than
   a synthesized shadow.
 - `Parseable::summarize` and `deep_clone` recurse into the variants

@@ -32,10 +32,10 @@ pub struct Module<'a> {
     /// is alloc'd. `Module` is arena-pinned and never moved, so a `&'a Module<'a>` borrow
     /// stays valid alongside interior mutation.
     pub type_members: RefCell<HashMap<String, KType<'a>>>,
-    /// Sigs this module shape-checks against. `accepts_part` for
-    /// `KType::SatisfiesSignature { sig_id }` is an O(1) membership check against this
-    /// set. `RefCell` for the same reason as `type_members` — ascription writes after
-    /// the surrounding `KObject::KModule` is already alloc'd.
+    /// Sigs this module shape-checks against. `accepts_part` for a
+    /// `KType::Signature { sig, .. }` slot is an O(1) `sig.sig_id()` membership check
+    /// against this set. `RefCell` for the same reason as `type_members` — ascription
+    /// writes after the surrounding `KObject::KModule` is already alloc'd.
     pub compatible_sigs: RefCell<Vec<ScopeId>>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
@@ -108,10 +108,10 @@ impl<'a> Signature<'a> {
         }
     }
 
-    /// Stable identity used to seed `KType::SatisfiesSignature { sig_id, .. }`. Each
-    /// `SIG` declares its own decl_scope and thus a fresh `ScopeId`; two `SIG Foo = (...)`
-    /// in the same lexical scope already error (`Rebind`), so distinct `Signature`s
-    /// always have distinct ids.
+    /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is
+    /// `sig.sig_id()` + `pinned_slots`). Each `SIG` declares its own decl_scope and thus a
+    /// fresh `ScopeId`; two `SIG Foo = (...)` in the same lexical scope already error
+    /// (`Rebind`), so distinct `Signature`s always have distinct ids.
     pub fn sig_id(&self) -> ScopeId {
         self.decl_scope().id
     }

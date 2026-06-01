@@ -141,9 +141,8 @@ pub(crate) fn extract_bare_type_name<'a>(
             | KType::Any
             | KType::UserType { .. }
             | KType::AnyUserType { .. }
-            | KType::SatisfiesSignature { .. }
+            | KType::Signature { .. }
             | KType::Module { .. }
-            | KType::Signature(_)
             | KType::AbstractType { .. } => Ok(t.name()),
             KType::List(_)
             | KType::Dict(_, _)

@@ -89,7 +89,7 @@ pub enum KObject<'a> {
     ///
     /// Also the value-side carrier for first-class modules and signatures: a module
     /// value is `KTypeValue(KType::Module { module, frame })`, a signature value is
-    /// `KTypeValue(KType::Signature(s))`.
+    /// `KTypeValue(KType::Signature { sig, pinned_slots })`.
     KTypeValue(KType<'a>),
     /// Bind-time carrier for a `TypeExprRef`-slot value whose surface `TypeExpr` couldn't
     /// be lowered to a concrete `KType` at `ExpressionPart::resolve_for` time — a
@@ -243,7 +243,7 @@ impl<'a> KObject<'a> {
             // type-position carrier. Other `KTypeValue` carriers fill the
             // `TypeExprRef` dispatch-position marker.
             KObject::KTypeValue(kt) => match kt {
-                KType::Module { .. } | KType::Signature(_) => kt.clone(),
+                KType::Module { .. } | KType::Signature { .. } => kt.clone(),
                 _ => KType::TypeExprRef,
             },
             // Dispatch-equivalent to `KTypeValue` — both fill a `TypeExprRef`-typed slot.
@@ -304,10 +304,10 @@ impl<'a> KObject<'a> {
         }
     }
 
-    /// Projects through the `KTypeValue(KType::Signature(_))` carrier.
+    /// Projects through the `KTypeValue(KType::Signature { .. })` carrier.
     pub fn as_signature(&self) -> Option<&'a super::module::Signature<'a>> {
         match self {
-            KObject::KTypeValue(KType::Signature(s)) => Some(*s),
+            KObject::KTypeValue(KType::Signature { sig, .. }) => Some(*sig),
             _ => None,
         }
     }
@@ -394,7 +394,7 @@ impl<'a> Parseable<'a> for KObject<'a> {
             KObject::Null => "null".to_string(),
             // Module / signature carriers render as `module <path>` / `sig <path>`.
             KObject::KTypeValue(KType::Module { module, .. }) => format!("module {}", module.path),
-            KObject::KTypeValue(KType::Signature(s)) => format!("sig {}", s.path),
+            KObject::KTypeValue(KType::Signature { sig, .. }) => format!("sig {}", sig.path),
             KObject::KTypeValue(t) => t.render(),
             // Preserve the surface form the user wrote (`Point`, `Foo<Bar>`) — going
             // through the scope-resolved `&KType` would route via `name()` and might

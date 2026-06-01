@@ -170,7 +170,7 @@ fn access_field<'a>(
         },
         KObject::KTypeValue(KType::Module { module: m, .. }) => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
-        KObject::KTypeValue(KType::Signature(s)) => {
+        KObject::KTypeValue(KType::Signature { sig: s, .. }) => {
             let scope = s.decl_scope();
             if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
                 return BodyResult::Value(obj);

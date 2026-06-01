@@ -127,8 +127,9 @@ visibility-pre-filtered bucket.
 ## Why this is a foundation, not a seam
 
 A *seam* is a contract restated across docs because no source file
-owns it — the nominal dual-write protocol and the per-call arena
-protocol are seams, and each got a single canonical doc owner. A
+owns it — the per-call arena protocol was a seam that got a single
+canonical doc owner, while the nominal dual-write was a seam *dissolved*
+outright by folding each binder's two entries into one `KType` identity. A
 *foundation* is a source file every operation in some concern *has*
 to go through; it's correctly cited everywhere because the concept
 the doc is explaining genuinely passes through that file. Wrapping a
@@ -156,7 +157,7 @@ What each topic doc adds beyond this protocol:
   predicates, container parameterization, and the overload-bucket
   visibility filter as it interacts with slot-specificity.
 - [user-types.md](user-types.md) — nominal-identity install through
-  `Scope::register_nominal`, the specificity stratification for
+  `Scope::register_type_upsert`, the specificity stratification for
   `UserType` vs `AnyUserType` vs `Any`, and the
   `placeholders`-driven cycle close for mutually recursive nominals.
 - [execution-model.md § Dispatch-time name placeholders](../execution-model.md#dispatch-time-name-placeholders)

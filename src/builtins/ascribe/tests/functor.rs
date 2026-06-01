@@ -91,7 +91,7 @@ fn functor_application_is_generative() {
 }
 
 /// Dispatch admissibility rejects an unascribed module against a
-/// `SatisfiesSignature { sig_id }` slot.
+/// `Signature { sig, .. }` (constraint-role) slot.
 #[test]
 fn functor_rejects_unascribed_module_argument() {
     let arena = RuntimeArena::new();
@@ -106,7 +106,7 @@ fn functor_rejects_unascribed_module_argument() {
         "FN (MAKESET elem :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
     );
     // Type-classified binder so the auto-wrap pass triggers in the
-    // `SatisfiesSignature` slot. The LET partition guard requires module carriers
+    // `Signature { .. }` slot. The LET partition guard requires module carriers
     // to ride Type-classified names (design/typing/elaboration.md § Binding-map
     // partition).
     run(scope, "LET Unascribed = IntOrd");

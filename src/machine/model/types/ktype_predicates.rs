@@ -14,7 +14,7 @@ impl<'a> KType<'a> {
     pub fn is_type_denoting(&self) -> bool {
         matches!(
             self,
-            KType::SatisfiesSignature { .. }
+            KType::Signature { .. }
                 | KType::AnySignature
                 | KType::Type
                 | KType::TypeExprRef
@@ -30,10 +30,9 @@ impl<'a> KType<'a> {
     pub fn is_admissible_functor_return(&self) -> bool {
         match self {
             KType::AnySignature
-            | KType::SatisfiesSignature { .. }
+            | KType::Signature { .. }
             | KType::AnyModule
-            | KType::Module { .. }
-            | KType::Signature(_) => true,
+            | KType::Module { .. } => true,
             KType::KFunctor { ret, .. } => ret.is_admissible_functor_return(),
             _ => false,
         }
@@ -84,16 +83,20 @@ impl<'a> KType<'a> {
                 let ret_eq = ra == rb;
                 (params_more && (ret_more || ret_eq)) || (params_eq && ret_more)
             }
-            (SatisfiesSignature { .. }, AnyModule) => true,
+            // Constraint role: `:S` (a module satisfying `S`) is more specific than the
+            // `:Module` wildcard.
+            (Signature { .. }, AnyModule) => true,
             (Module { .. }, AnyModule) => true,
-            (Signature(_), AnySignature) => true,
+            // Value role: a concrete signature type is more specific than the
+            // `:Signature` wildcard.
+            (Signature { .. }, AnySignature) => true,
             // Same-sig: strict refinement iff `pa` covers every `(name, kt)` in `pb`
             // with equal `KType` AND carries at least one constraint `pb` lacks.
             // Disjoint or same-key-different-`KType` pin sets are incomparable.
             (
-                SatisfiesSignature { sig_id: ia, pinned_slots: pa, .. },
-                SatisfiesSignature { sig_id: ib, pinned_slots: pb, .. },
-            ) if ia == ib => {
+                Signature { sig: sa, pinned_slots: pa },
+                Signature { sig: sb, pinned_slots: pb },
+            ) if sa.sig_id() == sb.sig_id() => {
                 if pa.len() <= pb.len() {
                     return false;
                 }
@@ -169,9 +172,12 @@ impl<'a> KType<'a> {
                 KObject::KFuture(_, _) => true,
                 _ => false,
             },
-            KType::SatisfiesSignature { sig_id, pinned_slots, .. } => match obj {
+            // Constraint role: a `Signature { .. }` slot matches a *module* whose
+            // `compatible_sigs` contains `sig.sig_id()` (+ pinned-slot check). A signature
+            // *value* is matched by `AnySignature` below, never here.
+            KType::Signature { sig, pinned_slots } => match obj {
                 KObject::KTypeValue(KType::Module { module: m, .. }) => {
-                    if !m.compatible_sigs.borrow().contains(sig_id) {
+                    if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
                         return false;
                     }
                     if pinned_slots.is_empty() {
@@ -185,7 +191,7 @@ impl<'a> KType<'a> {
                 _ => false,
             },
             KType::AnyModule => matches!(obj, KObject::KTypeValue(KType::Module { .. })),
-            KType::AnySignature => matches!(obj, KObject::KTypeValue(KType::Signature(_))),
+            KType::AnySignature => matches!(obj, KObject::KTypeValue(KType::Signature { .. })),
             KType::AnyUserType { kind } => matches!(
                 (kind, obj),
                 (UserTypeKind::Struct { .. }, KObject::Struct { .. })
@@ -296,7 +302,7 @@ impl<'a> KType<'a> {
             KType::TypeExprRef => match part {
                 ExpressionPart::Type(_) => true,
                 ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
-                | ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_))) => false,
+                | ExpressionPart::Future(KObject::KTypeValue(KType::Signature { .. })) => false,
                 ExpressionPart::Future(KObject::KTypeValue(_)) => true,
                 _ => false,
             },
@@ -306,7 +312,7 @@ impl<'a> KType<'a> {
             KType::Type => match part {
                 ExpressionPart::Type(_) => true,
                 ExpressionPart::Future(KObject::KTypeValue(KType::Module { .. }))
-                | ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_))) => false,
+                | ExpressionPart::Future(KObject::KTypeValue(KType::Signature { .. })) => false,
                 // Struct / union / Result type tokens flow as `KTypeValue(UserType)` now —
                 // admitted by this arm (no separate schema-carrier variant).
                 ExpressionPart::Future(KObject::KTypeValue(_)) => true,
@@ -332,13 +338,9 @@ impl<'a> KType<'a> {
             ),
             KType::AnySignature => matches!(
                 part,
-                ExpressionPart::Future(KObject::KTypeValue(KType::Signature(_)))
+                ExpressionPart::Future(KObject::KTypeValue(KType::Signature { .. }))
             ),
             KType::Module { .. } => matches!(
-                part,
-                ExpressionPart::Future(obj) if obj.ktype() == *self
-            ),
-            KType::Signature(_) => matches!(
                 part,
                 ExpressionPart::Future(obj) if obj.ktype() == *self
             ),
@@ -346,11 +348,13 @@ impl<'a> KType<'a> {
                 part,
                 ExpressionPart::Future(obj) if obj.ktype() == *self
             ),
-            // Unascribed source modules carry an empty `compatible_sigs` and never match;
-            // they must pass through `:|` / `:!` first.
-            KType::SatisfiesSignature { sig_id, pinned_slots, .. } => match part {
+            // Constraint role: a `:S` slot admits a *module* satisfying `S` (+ pinned-slot
+            // check). Unascribed source modules carry an empty `compatible_sigs` and never
+            // match; they must pass through `:|` / `:!` first. A signature *value* is
+            // admitted by `AnySignature` above, never here.
+            KType::Signature { sig, pinned_slots } => match part {
                 ExpressionPart::Future(KObject::KTypeValue(KType::Module { module: m, .. })) => {
-                    if !m.compatible_sigs.borrow().contains(sig_id) {
+                    if !m.compatible_sigs.borrow().contains(&sig.sig_id()) {
                         return false;
                     }
                     if pinned_slots.is_empty() {

@@ -8,8 +8,9 @@ wildcard accepts any `UserType` of the matching kind. Modules and
 signatures live in their own KType variants —
 [`KType::Module { module, frame }`](../../src/machine/model/types/ktype.rs)
 for first-class module values,
-[`KType::Signature(s)`](../../src/machine/model/types/ktype.rs) for
-first-class signature values, and
+[`KType::Signature { sig, pinned_slots }`](../../src/machine/model/types/ktype.rs) for
+first-class signature values (and for the satisfies-this-signature slot
+constraint — one variant, disambiguated by position), and
 [`KType::AbstractType { source_module, name }`](../../src/machine/model/types/ktype.rs)
 for the abstract-type members opaque ascription mints — with
 `KType::AnyModule` and `KType::AnySignature` as the matching wildcards
@@ -43,7 +44,7 @@ matches any `KObject::Struct` / `Tagged` of the matching kind. Each kind
 ranks alongside the others with no per-kind branching at the dispatcher.
 The module/signature variants follow the parallel stratification:
 `KType::Module { .. }` ≺ `KType::AnyModule` ≺ `Any`, and
-`KType::Signature(_)` ≺ `KType::AnySignature` ≺ `Any`. This is the
+`KType::Signature { .. }` ≺ `KType::AnySignature` ≺ `Any`. This is the
 identity-and-wildcard slice of Layer 3 of the
 [lookup → admit protocol](lookup-protocol.md); the predicate is the same
 one every dispatch admit pass runs.
@@ -60,7 +61,7 @@ and [`KObject::Tagged`](../../src/machine/model/values/kobject.rs) — carry
 the `(scope_id, name)` discriminant, not the schema. Module and signature
 values ride
 [`KObject::KTypeValue(KType::Module { .. })`](../../src/machine/model/values/kobject.rs) /
-`KObject::KTypeValue(KType::Signature(_))`; `ktype()` projects the carried
+`KObject::KTypeValue(KType::Signature { .. })`; `ktype()` projects the carried
 `KType` directly, so the identity is the carrier rather than a synthesized
 shadow.
 
@@ -84,24 +85,26 @@ no second-namespace write to keep in sync. The single-home invariant —
 Type-classed name lookups go through `Scope::resolve_type` only — holds because
 the identity *is* the only entry.
 
-SIG is the lone exception: it still dual-writes via
-[`Scope::register_nominal`](../../src/machine/core/scope.rs), `KType::SatisfiesSignature
-{ sig_id, sig_path }` on the type side and `KTypeValue(KType::Signature(s))` on
-the data side. Those two forms genuinely differ — a slot annotation
-(`Er :OrderedSig`) means "any module satisfying OrderedSig," the constraint form,
-while value-position lookups want the identity-bearing signature carrier itself,
-which carries a live `decl_scope` the constraint can't reconstruct. Closing this
-last dual-write is tracked in
-[eliminate SIG's dual-write](../../roadmap/refactor/eliminate-sig-dual-write.md).
+SIG installs the same way, through
+[`Scope::register_type_upsert`](../../src/machine/core/scope.rs): a single
+`KType::Signature { sig, pinned_slots }` identity in `bindings.types` serves
+*both* roles that previously needed two entries. As a slot annotation
+(`Er :OrderedSig`) it is the constraint form — "any module satisfying
+OrderedSig"; as a value (`KTypeValue(KType::Signature { .. })`) it is the
+identity-bearing signature carrier, carrying the live `decl_scope` via `sig`.
+The roles are disambiguated by position, not by separate variants, so no
+value-side carrier is written; `bindings.data` holds zero type carriers. With
+this, every nominal binder is a single type-namespace write — there are no
+dual-writers left.
 
 `LET <Type-class> = <module/sig/struct-value>` (e.g.
 `LET IntOrdA = (IntOrd :| OrderedSig)`) installs the *original* type's identity
 under the alias name rather than minting a fresh `scope_id` — aliasing is
 type-equivalent, so a slot typed by the alias dispatches to the same overload as
-a slot typed by the original. Struct / union / module / Result aliases route
-through `register_type` (type-only); only the SIG-alias arm keeps
-`register_nominal`. Anonymous `UNION (...)` is not a valid surface — every tagged
-value carries a real per-declaration identity.
+a slot typed by the original. Struct / union / module / Result / signature
+aliases all route through `register_type` (type-only). Anonymous `UNION (...)`
+is not a valid surface — every tagged value carries a real per-declaration
+identity.
 
 ## Cycle close for mutually recursive nominals
 

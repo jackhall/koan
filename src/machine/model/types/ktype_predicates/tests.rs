@@ -135,7 +135,8 @@ fn type_slot_admits_bare_builtin_tokens_and_user_type_carriers() {
         arena.alloc(KObject::KTypeValue(KType::Module { module, frame: None }));
     assert!(!t.accepts_part(&ExpressionPart::Future(kt_module)));
     let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
-    let kt_sig: &KObject<'_> = arena.alloc(KObject::KTypeValue(KType::Signature(sig)));
+    let kt_sig: &KObject<'_> =
+        arena.alloc(KObject::KTypeValue(KType::Signature { sig, pinned_slots: Vec::new() }));
     assert!(!t.accepts_part(&ExpressionPart::Future(kt_sig)));
     let n: &KObject<'_> = arena.alloc(KObject::Number(7.0));
     let s: &KObject<'_> = arena.alloc(KObject::KString("hi".into()));
@@ -223,15 +224,16 @@ fn user_type_specificity_lattice() {
 /// the bound value's nominal identity meaningful at the type level.
 #[test]
 fn is_type_denoting_table() {
-    let sb = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 1),
-        sig_path: "OrderedSig".into(),
-        pinned_slots: Vec::new(),
-    };
+    use crate::builtins::default_scope;
+    use crate::machine::core::RuntimeArena;
+    use crate::machine::model::values::Signature;
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    let sig = arena.alloc_signature(Signature::new("OrderedSig".into(), scope));
+    let sb = KType::Signature { sig, pinned_slots: Vec::new() };
     assert!(sb.is_type_denoting());
-    let sb_pinned = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 1),
-        sig_path: "OrderedSig".into(),
+    let sb_pinned = KType::Signature {
+        sig,
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
     assert!(sb_pinned.is_type_denoting());
@@ -271,43 +273,51 @@ fn is_type_denoting_table() {
     .is_type_denoting());
 }
 
-/// `SatisfiesSignature { pinned_slots }` specificity rules:
+/// `KType::Signature { pinned_slots }` specificity rules (constraint role):
 /// - A non-empty `pinned_slots` strictly refines an empty same-`sig_id` form when
 ///   every pin in the empty side appears (with equal `KType`) in the non-empty side.
 /// - Different `sig_id`s are incomparable.
 /// - Same `sig_id` with disjoint constraint keys is incomparable.
 /// - Same-key-different-`KType` is incomparable.
-/// - A `SatisfiesSignature` (pinned or not) strictly refines `AnyUserType { kind: Module }`.
+/// - A `Signature` (pinned or not) strictly refines `AnyModule`.
 #[test]
 fn is_more_specific_for_pinned_signature_bound() {
-    let bare = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 1),
-        sig_path: "OrderedSig".into(),
-        pinned_slots: Vec::new(),
-    };
-    let pinned_number = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 1),
-        sig_path: "OrderedSig".into(),
+    use crate::builtins::default_scope;
+    use crate::machine::core::RuntimeArena;
+    use crate::machine::model::values::Signature;
+    let arena = RuntimeArena::new();
+    let scope = default_scope(&arena, Box::new(std::io::sink()));
+    // Two distinct decl_scopes → two distinct `sig_id`s.
+    let ordered_scope = arena.alloc_scope(crate::machine::Scope::child_under_sig(
+        scope,
+        "OrderedSig".into(),
+    ));
+    let hashed_scope = arena.alloc_scope(crate::machine::Scope::child_under_sig(
+        scope,
+        "HashedSig".into(),
+    ));
+    let ordered = arena.alloc_signature(Signature::new("OrderedSig".into(), ordered_scope));
+    let hashed = arena.alloc_signature(Signature::new("HashedSig".into(), hashed_scope));
+
+    let bare = KType::Signature { sig: ordered, pinned_slots: Vec::new() };
+    let pinned_number = KType::Signature {
+        sig: ordered,
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
-    let pinned_str = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 1),
-        sig_path: "OrderedSig".into(),
+    let pinned_str = KType::Signature {
+        sig: ordered,
         pinned_slots: vec![("Type".into(), KType::Str)],
     };
-    let pinned_two = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 1),
-        sig_path: "OrderedSig".into(),
+    let pinned_two = KType::Signature {
+        sig: ordered,
         pinned_slots: vec![("Type".into(), KType::Number), ("Elt".into(), KType::Str)],
     };
-    let other_sig = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 2),
-        sig_path: "HashedSig".into(),
+    let other_sig = KType::Signature {
+        sig: hashed,
         pinned_slots: vec![("Type".into(), KType::Number)],
     };
-    let pinned_elt = KType::SatisfiesSignature {
-        sig_id: ScopeId::from_raw(0, 1),
-        sig_path: "OrderedSig".into(),
+    let pinned_elt = KType::Signature {
+        sig: ordered,
         pinned_slots: vec![("Elt".into(), KType::Number)],
     };
     let any_module = KType::AnyModule;

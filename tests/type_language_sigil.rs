@@ -57,19 +57,16 @@ fn run_expect_err(arena: &RuntimeArena, src: &str) -> String {
 }
 
 /// Read the SIG named `sig_name`'s decl_scope value-binding for `name` as a
-/// `KType` carrier. Walks through both the run-root scope's `lookup` to grab
-/// the Signature carrier and then the Signature's decl_scope's `iter_data` view.
+/// `KType` carrier. Reads the run-root scope's type side (`resolve_type`) to grab
+/// the Signature carrier, then walks the Signature's decl_scope's `iter_data` view.
 fn lookup_sig_value_kt<'a>(
     scope: &'a Scope<'a>,
     sig_name: &str,
     name: &str,
 ) -> KType<'a> {
-    let s = match scope.lookup(sig_name) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-        other => panic!(
-            "`{sig_name}` should bind a Signature, got {:?}",
-            other.map(|o| o.ktype())
-        ),
+    let s = match scope.resolve_type(sig_name) {
+        Some(KType::Signature { sig, .. }) => *sig,
+        other => panic!("`{sig_name}` should bind a Signature KType, got {:?}", other),
     };
     let entries = s.decl_scope().bindings().iter_data();
     let (_, obj) = entries
@@ -277,7 +274,7 @@ fn sigil_functor_forward_reference_defers_via_combine() {
     match mk {
         KType::KFunctor { params, ret } => {
             assert_eq!(params.len(), 1);
-            // OrderedSig resolves to its SatisfiesSignature identity post-Combine.
+            // OrderedSig resolves to its `Signature { .. }` identity post-Combine.
             // The carrier type's name (`OrderedSig`) is enough to confirm the
             // forward reference resolved through the deferral path.
             assert!(

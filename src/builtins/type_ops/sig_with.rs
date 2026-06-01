@@ -10,7 +10,7 @@ use crate::builtins::ascribe::{abstract_type_names_of, is_abstract_type_name};
 use crate::builtins::err;
 
 /// `SIG_WITH <sig:Signature> <bindings:KExpression>` → `TypeExprRef` carrying
-/// `KType::SatisfiesSignature { sig_id, sig_path, pinned_slots }`.
+/// `KType::Signature { sig, pinned_slots }`.
 ///
 /// Each binding pair is `(SlotName <value>)` where `SlotName` is a bare Type token
 /// and `<value>` is one of:
@@ -165,14 +165,10 @@ pub fn body<'a>(
         }
     }
 
-    let sig_id = s.sig_id();
-    let sig_path = s.path.clone();
-
     if sub_dispatches.is_empty() {
         return BodyResult::Value(
-            scope.arena.alloc(KObject::KTypeValue(KType::SatisfiesSignature {
-                sig_id,
-                sig_path,
+            scope.arena.alloc(KObject::KTypeValue(KType::Signature {
+                sig: s,
                 pinned_slots: pinned,
             })),
         );
@@ -204,9 +200,8 @@ pub fn body<'a>(
             }
         }
         BodyResult::Value(
-            scope.arena.alloc(KObject::KTypeValue(KType::SatisfiesSignature {
-                sig_id,
-                sig_path,
+            scope.arena.alloc(KObject::KTypeValue(KType::Signature {
+                sig: s,
                 pinned_slots: pinned,
             })),
         )
@@ -227,21 +222,22 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
-        let sig_id = match scope.bindings().data().get("OrderedSig").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Signature(s))) => s.sig_id(),
-            _ => panic!("OrderedSig must bind a KSignature"),
+        // SIG installs a single type-side identity; read the `sig_id` from there.
+        let sig_id = match scope.resolve_type("OrderedSig") {
+            Some(KType::Signature { sig, .. }) => sig.sig_id(),
+            _ => panic!("OrderedSig must bind a Signature KType"),
         };
         let result = run_one(scope, parse_one("SIG_WITH OrderedSig ((Type :Number))"));
         match result {
             KObject::KTypeValue(kt) => match kt {
-                KType::SatisfiesSignature { sig_id: id, sig_path, pinned_slots } => {
-                    assert_eq!(*id, sig_id);
-                    assert_eq!(sig_path, "OrderedSig");
+                KType::Signature { sig, pinned_slots } => {
+                    assert_eq!(sig.sig_id(), sig_id);
+                    assert_eq!(sig.path, "OrderedSig");
                     assert_eq!(pinned_slots.len(), 1);
                     assert_eq!(pinned_slots[0].0, "Type");
                     assert_eq!(pinned_slots[0].1, KType::Number);
                 }
-                other => panic!("expected SatisfiesSignature, got {:?}", other),
+                other => panic!("expected Signature, got {:?}", other),
             },
             other => panic!("expected KTypeValue, got {:?}", other.ktype()),
         }
@@ -258,14 +254,14 @@ mod tests {
         );
         let result = run_one(scope, parse_one("SIG_WITH Set ((Elt :Number) (Ord :Str))"));
         match result {
-            KObject::KTypeValue(KType::SatisfiesSignature { pinned_slots, .. }) => {
+            KObject::KTypeValue(KType::Signature { pinned_slots, .. }) => {
                 assert_eq!(pinned_slots.len(), 2);
                 assert_eq!(pinned_slots[0].0, "Elt");
                 assert_eq!(pinned_slots[0].1, KType::Number);
                 assert_eq!(pinned_slots[1].0, "Ord");
                 assert_eq!(pinned_slots[1].1, KType::Str);
             }
-            other => panic!("expected SatisfiesSignature KTypeValue, got {:?}", other.ktype()),
+            other => panic!("expected Signature KTypeValue, got {:?}", other.ktype()),
         }
     }
 
@@ -287,8 +283,8 @@ mod tests {
             parse_one("SIG_WITH SetSig ((Elt (MODULE_TYPE_OF Elem Type)))"),
         );
         match result {
-            KObject::KTypeValue(KType::SatisfiesSignature { sig_path, pinned_slots, .. }) => {
-                assert_eq!(sig_path, "SetSig");
+            KObject::KTypeValue(KType::Signature { sig, pinned_slots }) => {
+                assert_eq!(sig.path, "SetSig");
                 assert_eq!(pinned_slots.len(), 1);
                 assert_eq!(pinned_slots[0].0, "Elt");
                 match &pinned_slots[0].1 {
@@ -301,7 +297,7 @@ mod tests {
                     ),
                 }
             }
-            other => panic!("expected SatisfiesSignature KTypeValue, got {:?}", other.ktype()),
+            other => panic!("expected Signature KTypeValue, got {:?}", other.ktype()),
         }
     }
 

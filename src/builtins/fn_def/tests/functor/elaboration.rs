@@ -1,7 +1,6 @@
 //! Scope-aware type elaboration of FN signatures: signature-bound params, LET→FN ordering, type-value bindings.
 
 use crate::builtins::test_support::{fn_is_registered, lookup_fn, run, run_root_silent};
-use crate::machine::model::KObject;
 use crate::machine::RuntimeArena;
 
 /// `LET MyList = (LIST_OF Number)` writes the elaborated `KType::List(Number)`
@@ -37,10 +36,9 @@ fn elaborator_lowers_ktype_value_binding() {
 }
 
 /// A parameter typed `Er :OrderedSig` lowers via `elaborate_type_expr` into
-/// `KType::SatisfiesSignature { sig_id, sig_path: "OrderedSig", .. }` with `sig_id`
-/// matching the declaring `Signature::sig_id()`. Also pins that the SIG and FN can
-/// land in the same batch — the FN's signature elaboration parks on the SIG
-/// placeholder.
+/// `KType::Signature { sig, pinned_slots: [] }` with `sig.sig_id()` matching the
+/// declaring `Signature::sig_id()`. Also pins that the SIG and FN can land in the
+/// same batch — the FN's signature elaboration parks on the SIG placeholder.
 #[test]
 fn fn_with_signature_bound_param_records_signature_bound_ktype() {
     use crate::machine::model::{Argument, KType, SignatureElement};
@@ -51,10 +49,10 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
         "SIG OrderedSig = (VAL compare :Number)\n\
          FN (USE_ORD Er :OrderedSig) -> Null = (PRINT \"ok\")",
     );
-    let data = scope.bindings().data();
-    let sig_id = match data.get("OrderedSig").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => s.sig_id(),
-        other => panic!("OrderedSig should be a signature, got {:?}", other.map(|o| o.ktype())),
+    // SIG installs a single type-side identity; read it from `bindings.types`.
+    let sig_id = match scope.resolve_type("OrderedSig") {
+        Some(KType::Signature { sig, .. }) => sig.sig_id(),
+        other => panic!("OrderedSig should be a Signature KType, got {:?}", other),
     };
     let f = lookup_fn(scope, "USE_ORD");
     match f.signature.elements.as_slice() {
@@ -62,15 +60,15 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             assert_eq!(kw, "USE_ORD");
             assert_eq!(name, "Er");
             match ktype {
-                KType::SatisfiesSignature { sig_id: id, sig_path, pinned_slots } => {
-                    assert_eq!(*id, sig_id, "sig_id must match Signature::sig_id()");
-                    assert_eq!(sig_path, "OrderedSig");
+                KType::Signature { sig, pinned_slots } => {
+                    assert_eq!(sig.sig_id(), sig_id, "sig_id must match Signature::sig_id()");
+                    assert_eq!(sig.path, "OrderedSig");
                     assert!(pinned_slots.is_empty(), "bare OrderedSig has no pinned slots");
                 }
-                other => panic!("expected SatisfiesSignature, got {:?}", other),
+                other => panic!("expected Signature, got {:?}", other),
             }
         }
-        _ => panic!("expected [Keyword(USE_ORD), Argument(Er :SatisfiesSignature)]"),
+        _ => panic!("expected [Keyword(USE_ORD), Argument(Er :Signature)]"),
     }
 }
 

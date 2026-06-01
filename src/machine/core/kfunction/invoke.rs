@@ -311,9 +311,9 @@ fn signature_argument_by_name<'a>(
 ///
 /// | Declared `KType`               | Bound `KObject`                                  | Identity                                              |
 /// | ------------------------------ | ------------------------------------------------ | ----------------------------------------------------- |
-/// | `SatisfiesSignature { .. }`    | `KTypeValue(KType::Module { module, frame })`    | `KType::Module { module, frame }` (same carrier)      |
+/// | `Signature { .. }` (slot)      | `KTypeValue(KType::Module { module, frame })`    | `KType::Module { module, frame }` (same carrier)      |
 /// | `AnyModule`                    | `KTypeValue(KType::Module { module, frame })`    | same                                                  |
-/// | `AnySignature`                 | `KTypeValue(KType::Signature(s))`                | `KType::Signature(s)` (same carrier)                  |
+/// | `AnySignature`                 | `KTypeValue(KType::Signature { .. })`            | `KType::Signature { .. }` (same carrier)              |
 /// | `Type`                         | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
 /// | `TypeExprRef`                  | `KTypeValue(kt)`                                 | `kt.clone()`                                          |
 /// | `TypeExprRef`                  | `TypeNameRef(t)`                                 | elaborated via `definition_scope.resolve_type_expr`   |
@@ -328,7 +328,7 @@ pub(crate) fn type_identity_for<'a>(
     definition_scope: &'a Scope<'a>,
 ) -> Result<Option<KType<'a>>, KError> {
     match declared {
-        KType::SatisfiesSignature { .. } => Ok(match obj {
+        KType::Signature { .. } => Ok(match obj {
             KObject::KTypeValue(kt @ KType::Module { .. }) => Some(kt.clone()),
             _ => None,
         }),
@@ -337,7 +337,7 @@ pub(crate) fn type_identity_for<'a>(
             _ => None,
         }),
         KType::AnySignature => Ok(match obj {
-            KObject::KTypeValue(kt @ KType::Signature(_)) => Some(kt.clone()),
+            KObject::KTypeValue(kt @ KType::Signature { .. }) => Some(kt.clone()),
             _ => None,
         }),
         KType::Type => Ok(match obj {

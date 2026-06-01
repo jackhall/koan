@@ -66,9 +66,9 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG Monad = ((LET Wrap = (TYPE_CONSTRUCTOR Type)))");
-        let s = match scope.bindings().data().get("Monad").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-            _ => panic!("Monad must bind a KSignature"),
+        let s = match scope.resolve_type("Monad") {
+            Some(KType::Signature { sig, .. }) => *sig,
+            _ => panic!("Monad must bind a Signature KType"),
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         match wrap_kt {
@@ -150,9 +150,9 @@ mod tests {
                 panic!("expr {} errored: {}", i, e);
             }
         }
-        let s = match scope.bindings().data().get("Monad").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-            other => panic!("Monad must bind a KSignature, got {:?}", other.map(|o| o.ktype())),
+        let s = match scope.resolve_type("Monad") {
+            Some(KType::Signature { sig, .. }) => *sig,
+            other => panic!("Monad must bind a Signature KType, got {:?}", other),
         };
         let wrap_kt: &KType = s.decl_scope().bindings().expect_type("Wrap");
         assert!(matches!(

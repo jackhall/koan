@@ -298,14 +298,39 @@ fn let_type_class_in_sig_body_still_works() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "SIG WithType = ((LET Type = Number) (VAL zero :Number))");
-    let s = match scope.bindings().data().get("WithType").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
-        other => panic!("WithType should be a signature, got {:?}", other.map(|o| o.ktype())),
+    let s = match scope.resolve_type("WithType") {
+        Some(KType::Signature { sig, .. }) => *sig,
+        other => panic!("WithType should be a Signature KType, got {:?}", other),
     };
     let types = s.decl_scope().bindings().types();
     assert!(
         types.contains_key("Type"),
         "Type binding should survive in SIG types map after Type-class LET",
+    );
+}
+
+/// A Type-classified SIG alias `LET Po = OrderedSig` writes the *same* unified
+/// `KType::Signature` identity into `bindings.types[Po]` as `OrderedSig` carries,
+/// so `:Po` and `:OrderedSig` are dispatch-identical. Pins the merged-variant
+/// LET path: the generic `KTypeValue(kt)` arm shared with struct/union/module
+/// aliases, with no separate signature-only install branch.
+#[test]
+fn let_type_class_signature_alias_preserves_identity() {
+    use crate::builtins::test_support::{run, run_root_silent};
+    use crate::machine::RuntimeArena;
+    let arena = RuntimeArena::new();
+    let scope = run_root_silent(&arena);
+    run(scope, "SIG OrderedSig = (VAL compare :Number)\nLET Po = OrderedSig");
+    let original = scope.resolve_type("OrderedSig").expect("OrderedSig type binding");
+    let aliased = scope.resolve_type("Po").expect("Po type binding");
+    assert!(
+        matches!(aliased, KType::Signature { .. }),
+        "Po must alias to a Signature KType, got {:?}",
+        aliased,
+    );
+    assert_eq!(
+        *original, *aliased,
+        "alias `Po` must carry the same signature identity as `OrderedSig`",
     );
 }
 

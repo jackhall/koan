@@ -60,14 +60,13 @@ impl<'a> Scope<'a> {
 /// canonical value-side `KObject` carrier.
 ///
 /// - Parameterized shapes (`List<...>`, `Function<...>` etc.) are rejected with `ShapeError`.
-/// - For a SIG nominal identity (`SatisfiesSignature`), recover the paired value-side
-///   `KSignature` carrier when present (SIG still dual-writes), so downstream operators
-///   see the signature value rather than a synthesized `KTypeValue`. The synthesis below
-///   covers the now-common type-only case (struct / union / module / Result), where no
-///   value-side carrier exists.
+/// - For a `UserType` / `Module` identity, recover the paired value-side carrier when
+///   present, so downstream operators see the original value rather than a synthesized
+///   `KTypeValue`. No nominal binder dual-writes anymore (SIG was the last), so the
+///   recovery typically misses and falls through to synthesis.
 /// - Otherwise synthesize `KObject::KTypeValue(kt.clone())` so the value sits in the
 ///   same dispatch transport every other body consumes — this is how a struct / union /
-///   module / Result type token reaches a constructor or ATTR call site now.
+///   module / Result / signature type token reaches a constructor or ATTR call site.
 /// - Miss surfaces `UnboundName(name)`.
 pub fn coerce_type_token_value<'a>(
     scope: &'a Scope<'a>,
@@ -83,13 +82,7 @@ pub fn coerce_type_token_value<'a>(
     let name = t.name.as_str();
     match scope.resolve_type_with_chain(name, chain) {
         Some(kt) => {
-            if matches!(
-                kt,
-                KType::UserType { .. }
-                    | KType::SatisfiesSignature { .. }
-                    | KType::Module { .. }
-                    | KType::Signature(_)
-            ) {
+            if matches!(kt, KType::UserType { .. } | KType::Module { .. }) {
                 if let Some(obj) = scope.lookup_with_chain(name, chain) {
                     return Ok(obj);
                 }
@@ -164,14 +157,11 @@ impl<'k, 'a> Iterator for KTypeUserRefs<'k, 'a> {
                 KType::UserType { scope_id, name, .. } => {
                     return Some((*scope_id, name.as_str()));
                 }
-                KType::SatisfiesSignature { sig_id, sig_path, .. } => {
-                    return Some((*sig_id, sig_path.as_str()));
+                KType::Signature { sig, .. } => {
+                    return Some((sig.sig_id(), sig.path.as_str()));
                 }
                 KType::Module { module, .. } => {
                     return Some((module.scope_id(), module.path.as_str()));
-                }
-                KType::Signature(s) => {
-                    return Some((s.sig_id(), s.path.as_str()));
                 }
                 KType::AbstractType { source_module, name } => {
                     return Some((source_module.scope_id(), name.as_str()));

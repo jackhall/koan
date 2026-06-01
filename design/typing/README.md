@@ -27,8 +27,8 @@ Type-system mechanics:
 - [user-types.md](user-types.md) — `KType::UserType` as the
   per-declaration identity for STRUCT, named UNION, MODULE, opaque
   ascription, and NEWTYPE. Covers specificity stratification with the
-  `AnyUserType` wildcard, finalize-time atomic install through
-  `Scope::register_nominal`, cycle close for mutually recursive nominals,
+  `AnyUserType` wildcard, finalize-time type-only install through
+  `Scope::register_type_upsert`, cycle close for mutually recursive nominals,
   and the `NEWTYPE` keyword's `Wrapped` carrier with its newtype-over-newtype
   collapse invariant encoded in the field type.
 - [lookup-protocol.md](lookup-protocol.md) — the three-layer foundation

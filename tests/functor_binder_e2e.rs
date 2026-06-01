@@ -9,8 +9,8 @@
 //!    `Er`'s type-language identity into the body's child scope.
 //! 3. **Produce** — the body's `MODULE Result = (...)` returns a module value
 //!    that the LET RHS binds as `IntSet`. The Stage-5 allowlist routes the
-//!    Module carrier through `derive_nominal_identity` so `IntSet` lands both
-//!    in `bindings.types` and `bindings.data`.
+//!    `KTypeValue(Module)` carrier to a single type-side `register_type` install,
+//!    so `IntSet` lands only in `bindings.types`.
 //!
 //! Mirror of the dispatch/type-checking already covered by the smaller-scope
 //! tests in `src/builtins/fn_def/tests/functor/` and

@@ -139,13 +139,13 @@ single owner doc.
 A third, stronger resolution is to *dissolve* the seam: fold the
 duplicated state into a single carrier so the protocol stops being a
 contract-by-convention at all. The nominal types take this path — a
-`STRUCT` / `UNION` / `MODULE` / `Result` declaration carries its schema in
-the `UserTypeKind` identity payload and writes only `bindings.types`, so a
-reader finds the rule in one place (the identity owns the schema) rather
-than as a dual-write contract restated across the typing docs. SIG is the
-lone residual dual-writer (its constraint and value forms genuinely
-differ), tracked in
-[eliminate SIG's dual-write](../roadmap/refactor/eliminate-sig-dual-write.md).
+`STRUCT` / `UNION` / `MODULE` / `Result` / `SIG` declaration carries its
+schema (or signature) in its `KType` identity and writes only
+`bindings.types`, so a reader finds the rule in one place (the identity owns
+the schema) rather than as a dual-write contract restated across the typing
+docs. SIG folds its constraint and value forms into one
+`KType::Signature { sig, pinned_slots }` variant the same way, so no nominal
+binder dual-writes — the seam is dissolved rather than merely documented.
 
 The operational test: if pulling the items into a new module reduces
 the metric (especially under paired doc consolidation), it's a seam.
