@@ -16,13 +16,13 @@ use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CallArena, CatchFinish, KError, KErrorKind,
-    RuntimeArena, Scope, SchedulerHandle,
+    RuntimeArena, SchedulerHandle, Scope,
 };
 
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
-use crate::machine::core::kfunction::body::split_body_statements;
 use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
+use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use crate::machine::core::kfunction::body::split_body_statements;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -109,7 +109,10 @@ fn dispatch_branch<'a>(
     let _ = child.bind_value(
         "it".to_string(),
         it_obj,
-        BindingIndex { idx: 0, nominal_binder: true },
+        BindingIndex {
+            idx: 0,
+            nominal_binder: true,
+        },
     );
     // Multi-statement arms (`tag -> ((s_0) ... (s_{N-1}))`) submit the first N-1 as
     // siblings at chain indices `1..N-1` and tail-replace into the last at `N`.
@@ -123,11 +126,7 @@ fn dispatch_branch<'a>(
         let mut stmts = statements;
         let last = stmts.pop().expect("n >= 2");
         for (i, stmt) in stmts.into_iter().enumerate() {
-            let chain = LexicalFrame::push(
-                Some(call_site_chain.clone()),
-                arm_scope_id,
-                i + 1,
-            );
+            let chain = LexicalFrame::push(Some(call_site_chain.clone()), arm_scope_id, i + 1);
             sched.with_active_frame(frame.clone(), &mut |s| {
                 s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
             });
@@ -143,12 +142,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "TRY",
-        sig(KType::Any, vec![
-            kw("TRY"),
-            arg("expr", KType::KExpression),
-            kw("WITH"),
-            arg("branches", KType::KExpression),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("TRY"),
+                arg("expr", KType::KExpression),
+                kw("WITH"),
+                arg("branches", KType::KExpression),
+            ],
+        ),
         body,
     );
 }

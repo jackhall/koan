@@ -1,10 +1,10 @@
 use crate::builtins::default_scope;
-use crate::machine::NameOutcome;
 use crate::machine::core::source::Spanned;
-use crate::machine::execute::Scheduler;
 use crate::machine::execute::dispatch::resolve_name_part;
+use crate::machine::execute::Scheduler;
 use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::{KObject, KType};
+use crate::machine::NameOutcome;
 use crate::machine::{BindingIndex, RuntimeArena};
 
 #[test]
@@ -12,7 +12,9 @@ fn resolve_name_part_identifier_resolved() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let bound = arena.alloc(KObject::Number(7.0));
-    scope.bind_value("x".to_string(), bound, BindingIndex::BUILTIN).unwrap();
+    scope
+        .bind_value("x".to_string(), bound, BindingIndex::BUILTIN)
+        .unwrap();
     let part = ExpressionPart::Identifier("x".to_string());
     let sched = Scheduler::new();
     match resolve_name_part(scope, &part, &sched, None) {
@@ -51,7 +53,9 @@ fn resolve_name_part_parked() {
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("_".into()))]),
         scope,
     );
-    scope.install_placeholder("fwd".to_string(), producer, BindingIndex::BUILTIN).unwrap();
+    scope
+        .install_placeholder("fwd".to_string(), producer, BindingIndex::BUILTIN)
+        .unwrap();
     let part = ExpressionPart::Identifier("fwd".to_string());
     match resolve_name_part(scope, &part, &sched, None) {
         NameOutcome::Parked(p) => assert_eq!(p, producer),
@@ -83,7 +87,9 @@ fn resolve_name_part_self_park_is_cycle() {
         ))]),
         scope,
     );
-    scope.install_placeholder("self_ref".to_string(), slot, BindingIndex::BUILTIN).unwrap();
+    scope
+        .install_placeholder("self_ref".to_string(), slot, BindingIndex::BUILTIN)
+        .unwrap();
     let part = ExpressionPart::Identifier("self_ref".to_string());
     match resolve_name_part(scope, &part, &sched, Some(slot)) {
         NameOutcome::Cycle(name) => assert_eq!(name, "self_ref"),

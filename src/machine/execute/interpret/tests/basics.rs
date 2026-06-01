@@ -57,7 +57,10 @@ fn match_unmatched_branch_skips_let_side_effect() {
         &arena,
         captured.clone(),
     );
-    assert!(scope.bindings().data().get("y").is_none(), "unmatched branch's LET must not have bound y");
+    assert!(
+        scope.bindings().data().get("y").is_none(),
+        "unmatched branch's LET must not have bound y"
+    );
     assert_eq!(captured.borrow().as_slice(), b"after\n");
 }
 
@@ -65,11 +68,17 @@ fn match_unmatched_branch_skips_let_side_effect() {
 fn interprets_nested_expression() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(r#"(PRINT (LET msg = "hello world!"))"#, &arena, captured.clone());
+    let scope = run(
+        r#"(PRINT (LET msg = "hello world!"))"#,
+        &arena,
+        captured.clone(),
+    );
 
     assert_eq!(captured.borrow().as_slice(), b"hello world!\n");
     let data = scope.bindings().data();
-    assert!(matches!(data.get("msg").map(|(o, _)| *o), Some(KObject::KString(s)) if *s == "hello world!"));
+    assert!(
+        matches!(data.get("msg").map(|(o, _)| *o), Some(KObject::KString(s)) if *s == "hello world!")
+    );
 }
 
 #[test]
@@ -119,8 +128,8 @@ fn let_binds_stamped_empty_list_from_typed_fn_return() {
 /// stamped upstream, so the empty-container rule rejects it.
 #[test]
 fn let_binds_an_empty_list_literal_errors() {
-    use crate::machine::KErrorKind;
     use crate::machine::execute::interpret_with_writer;
+    use crate::machine::KErrorKind;
     let result = interpret_with_writer("LET xs = []\n", Box::new(std::io::sink()));
     match result {
         Err(e) => assert!(

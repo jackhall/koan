@@ -9,11 +9,11 @@ use std::rc::Rc;
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, CatchFinish, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BodyResult, CatchFinish, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, err, kw, register_builtin, sig};
+use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -61,10 +61,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "CATCH",
-        sig(KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() }, vec![
-            kw("CATCH"),
-            arg("expr", KType::KExpression),
-        ]),
+        sig(
+            KType::AnyUserType {
+                kind: UserTypeKind::tagged_sentinel(),
+            },
+            vec![kw("CATCH"), arg("expr", KType::KExpression)],
+        ),
         body,
     );
 }

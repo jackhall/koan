@@ -20,8 +20,8 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
-use crate::machine::model::ast::TypeExpr;
 use crate::machine::core::kfunction::{KFunction, NodeId};
+use crate::machine::model::ast::TypeExpr;
 use crate::machine::model::types::{KType, UntypedKey};
 use crate::machine::model::values::KObject;
 
@@ -68,18 +68,27 @@ pub struct BindingIndex {
 }
 
 impl BindingIndex {
-    pub const BUILTIN: BindingIndex = BindingIndex { idx: 0, nominal_binder: false };
+    pub const BUILTIN: BindingIndex = BindingIndex {
+        idx: 0,
+        nominal_binder: false,
+    };
 
     /// LET, FN body capture, MATCH / TRY `it`, FN parameters: strictly
     /// lexically gated, sees only earlier-positioned siblings.
     pub const fn value(idx: usize) -> Self {
-        BindingIndex { idx, nominal_binder: false }
+        BindingIndex {
+            idx,
+            nominal_binder: false,
+        }
     }
 
     /// STRUCT, named UNION, SIG, FUNCTOR, MODULE: visible to siblings on the
     /// same block regardless of source order.
     pub const fn nominal(idx: usize) -> Self {
-        BindingIndex { idx, nominal_binder: true }
+        BindingIndex {
+            idx,
+            nominal_binder: true,
+        }
     }
 }
 
@@ -136,11 +145,7 @@ impl<'a> Bindings<'a> {
     /// is off-chain (or unfiltered) — everything is visible. `None` return
     /// means no visible entry at this scope; the caller keeps walking
     /// ancestors and surfaces `UnboundName` on chain exhaustion.
-    pub fn lookup_value(
-        &self,
-        name: &str,
-        chain_cutoff: Option<usize>,
-    ) -> Option<Resolution<'a>> {
+    pub fn lookup_value(&self, name: &str, chain_cutoff: Option<usize>) -> Option<Resolution<'a>> {
         if let Some((obj, idx)) = self.data.borrow().get(name).copied() {
             if Self::visible(idx, chain_cutoff) {
                 return Some(Resolution::Value(obj));
@@ -156,11 +161,7 @@ impl<'a> Bindings<'a> {
 
     /// Per-scope type-side lookup. Mirrors [`Self::lookup_value`] for the
     /// `types` map.
-    pub fn lookup_type(
-        &self,
-        name: &str,
-        chain_cutoff: Option<usize>,
-    ) -> Option<&'a KType<'a>> {
+    pub fn lookup_type(&self, name: &str, chain_cutoff: Option<usize>) -> Option<&'a KType<'a>> {
         let types = self.types.borrow();
         let (kt, idx) = types.get(name).copied()?;
         if Self::visible(idx, chain_cutoff) {
@@ -269,7 +270,9 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn functions(&self) -> Ref<'_, HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>> {
+    pub fn functions(
+        &self,
+    ) -> Ref<'_, HashMap<UntypedKey, Vec<(&'a KFunction<'a>, BindingIndex)>>> {
         self.functions.borrow()
     }
 
@@ -279,9 +282,7 @@ impl<'a> Bindings<'a> {
     }
 
     #[cfg(test)]
-    pub fn pending_overloads(
-        &self,
-    ) -> Ref<'_, HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>> {
+    pub fn pending_overloads(&self) -> Ref<'_, HashMap<UntypedKey, Vec<(NodeId, BindingIndex)>>> {
         self.pending_overloads.borrow()
     }
 
@@ -399,7 +400,9 @@ impl<'a> Bindings<'a> {
         };
         match types.get(name).map(|(t, _)| *t) {
             Some(existing) if *existing != *kt => {
-                return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+                return Err(KError::new(KErrorKind::Rebind {
+                    name: name.to_string(),
+                }));
             }
             // Absent, or identity-equal (cycle-close pre-install): write the
             // schema-bearing identity, replacing any payload-empty pre-install.
@@ -512,7 +515,9 @@ impl<'a> Bindings<'a> {
             Err(_) => return Ok(ApplyOutcome::Conflict),
         };
         if types.contains_key(name) {
-            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+            return Err(KError::new(KErrorKind::Rebind {
+                name: name.to_string(),
+            }));
         }
         types.insert(name.to_string(), (kt, index));
         drop(types);
@@ -563,10 +568,16 @@ impl<'a> Bindings<'a> {
         if let Some(data) = data.as_ref() {
             if let Some((existing, _)) = data.get(name) {
                 match fn_part {
-                    None => return Err(KError::new(KErrorKind::Rebind { name: name.to_string() })),
+                    None => {
+                        return Err(KError::new(KErrorKind::Rebind {
+                            name: name.to_string(),
+                        }))
+                    }
                     Some(_) => {
                         if !matches!(existing, KObject::KFunction(_, _)) {
-                            return Err(KError::new(KErrorKind::Rebind { name: name.to_string() }));
+                            return Err(KError::new(KErrorKind::Rebind {
+                                name: name.to_string(),
+                            }));
                         }
                     }
                 }

@@ -4,10 +4,10 @@
 //! Shape-checking is name-presence only; full type-shape checks are deferred to
 //! the inference scheduler.
 
-use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
 use crate::machine::model::values::Module;
+use crate::machine::model::{KObject, KType};
+use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use super::{arg, kw, register_builtin, sig};
 
@@ -43,17 +43,20 @@ pub fn body_opaque<'a>(
         for name in abstract_type_names_of(s.decl_scope()) {
             let kt = match sig_bindings.lookup_type(&name, None) {
                 Some(KType::UserType {
-                    kind: UserTypeKind::TypeConstructor { schema, param_names }, ..
-                }) => {
-                    KType::UserType {
-                        kind: UserTypeKind::TypeConstructor {
-                            schema: std::rc::Rc::clone(schema),
-                            param_names: param_names.clone(),
+                    kind:
+                        UserTypeKind::TypeConstructor {
+                            schema,
+                            param_names,
                         },
-                        scope_id: new_module.scope_id(),
-                        name: name.clone(),
-                    }
-                }
+                    ..
+                }) => KType::UserType {
+                    kind: UserTypeKind::TypeConstructor {
+                        schema: std::rc::Rc::clone(schema),
+                        param_names: param_names.clone(),
+                    },
+                    scope_id: new_module.scope_id(),
+                    name: name.clone(),
+                },
                 _ => KType::AbstractType {
                     source_module: new_module,
                     name: name.clone(),
@@ -75,9 +78,10 @@ pub fn body_opaque<'a>(
 
     new_module.mark_satisfies(s.sig_id());
 
-    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(
-        KType::Module { module: new_module, frame: None },
-    ));
+    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Module {
+        module: new_module,
+        frame: None,
+    }));
     BodyResult::Value(module_obj)
 }
 
@@ -101,9 +105,10 @@ pub fn body_transparent<'a>(
         m.child_scope(),
     ));
     new_module.mark_satisfies(s.sig_id());
-    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(
-        KType::Module { module: new_module, frame: None },
-    ));
+    let module_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Module {
+        module: new_module,
+        frame: None,
+    }));
     BodyResult::Value(module_obj)
 }
 
@@ -113,7 +118,9 @@ fn shape_check<'a>(
     src_scope: &Scope<'a>,
 ) -> Result<(), KError> {
     let abstract_names: std::collections::HashSet<String> =
-        abstract_type_names_of(sig.decl_scope()).into_iter().collect();
+        abstract_type_names_of(sig.decl_scope())
+            .into_iter()
+            .collect();
     let sig_names: Vec<String> = sig
         .decl_scope()
         .bindings()
@@ -160,7 +167,9 @@ pub(super) fn abstract_type_names_of<'a>(scope: &crate::machine::Scope<'a>) -> V
 /// lowercase elsewhere). See [design/typing/tokens.md](../../design/typing/tokens.md).
 pub(super) fn is_abstract_type_name(name: &str) -> bool {
     let mut chars = name.chars();
-    let Some(first) = chars.next() else { return false; };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_uppercase() {
         return false;
     }
@@ -169,7 +178,13 @@ pub(super) fn is_abstract_type_name(name: &str) -> bool {
 
 fn resolve_module_and_signature<'a>(
     bundle: &ArgumentBundle<'a>,
-) -> Result<(&'a crate::machine::model::values::Module<'a>, &'a crate::machine::model::values::Signature<'a>), KError> {
+) -> Result<
+    (
+        &'a crate::machine::model::values::Module<'a>,
+        &'a crate::machine::model::values::Signature<'a>,
+    ),
+    KError,
+> {
     let m = bundle.require_module("m")?;
     let s = bundle.require_signature("s")?;
     Ok((m, s))
@@ -182,21 +197,27 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         ":|",
-        sig(KType::AnyModule, vec![
-            arg("m", KType::AnyModule),
-            kw(":|"),
-            arg("s", KType::AnySignature),
-        ]),
+        sig(
+            KType::AnyModule,
+            vec![
+                arg("m", KType::AnyModule),
+                kw(":|"),
+                arg("s", KType::AnySignature),
+            ],
+        ),
         body_opaque,
     );
     register_builtin(
         scope,
         ":!",
-        sig(KType::AnyModule, vec![
-            arg("m", KType::AnyModule),
-            kw(":!"),
-            arg("s", KType::AnySignature),
-        ]),
+        sig(
+            KType::AnyModule,
+            vec![
+                arg("m", KType::AnyModule),
+                kw(":!"),
+                arg("s", KType::AnySignature),
+            ],
+        ),
         body_transparent,
     );
 }

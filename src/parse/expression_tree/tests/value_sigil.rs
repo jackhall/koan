@@ -33,10 +33,7 @@ fn quote_sigil_inside_list_literal() {
 
 #[test]
 fn quote_sigil_as_dict_value() {
-    assert_eq!(
-        tree("{x: #(y)}").unwrap(),
-        "[D{t(x): [t(QUOTE) [t(y)]]}]",
-    );
+    assert_eq!(tree("{x: #(y)}").unwrap(), "[D{t(x): [t(QUOTE) [t(y)]]}]",);
 }
 
 #[test]
@@ -91,10 +88,7 @@ fn comma_continuation_with_bare_sigil_parse_errors() {
 
 #[test]
 fn comma_continuation_with_paren_sigil_parses() {
-    assert_eq!(
-        top("add 1,\n  #(2)").unwrap(),
-        top("add 1, #(2)").unwrap(),
-    );
+    assert_eq!(top("add 1,\n  #(2)").unwrap(), top("add 1, #(2)").unwrap(),);
     assert_eq!(
         top("add 1,\n  #(2)").unwrap(),
         vec!["[t(add) n(1) [t(QUOTE) [n(2)]]]"],

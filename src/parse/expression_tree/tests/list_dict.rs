@@ -22,10 +22,7 @@ fn flat_list_literal() {
 
 #[test]
 fn list_literal_with_identifiers_and_strings() {
-    assert_eq!(
-        tree(r#"[a "hi" 4]"#).unwrap(),
-        "[L[t(a) s(hi) n(4)]]",
-    );
+    assert_eq!(tree(r#"[a "hi" 4]"#).unwrap(), "[L[t(a) s(hi) n(4)]]",);
 }
 
 #[test]
@@ -145,19 +142,13 @@ fn empty_dict_literal() {
 
 #[test]
 fn two_pairs_with_comma() {
-    assert_eq!(
-        tree("{a: 1, b: 2}").unwrap(),
-        "[D{t(a): n(1), t(b): n(2)}]",
-    );
+    assert_eq!(tree("{a: 1, b: 2}").unwrap(), "[D{t(a): n(1), t(b): n(2)}]",);
 }
 
 #[test]
 fn two_pairs_without_comma() {
     // Auto-commit: `b` arriving while value=[1] commits the prior pair.
-    assert_eq!(
-        tree("{a: 1 b: 2}").unwrap(),
-        "[D{t(a): n(1), t(b): n(2)}]",
-    );
+    assert_eq!(tree("{a: 1 b: 2}").unwrap(), "[D{t(a): n(1), t(b): n(2)}]",);
 }
 
 #[test]
@@ -183,18 +174,12 @@ fn number_and_bool_keys_dict() {
 
 #[test]
 fn nested_dict_in_dict() {
-    assert_eq!(
-        tree("{a: {b: 1}}").unwrap(),
-        "[D{t(a): D{t(b): n(1)}}]",
-    );
+    assert_eq!(tree("{a: {b: 1}}").unwrap(), "[D{t(a): D{t(b): n(1)}}]",);
 }
 
 #[test]
 fn nested_list_in_dict() {
-    assert_eq!(
-        tree("{a: [1 2]}").unwrap(),
-        "[D{t(a): L[n(1) n(2)]}]",
-    );
+    assert_eq!(tree("{a: [1 2]}").unwrap(), "[D{t(a): L[n(1) n(2)]}]",);
 }
 
 #[test]
@@ -207,10 +192,7 @@ fn nested_dict_in_list() {
 
 #[test]
 fn sub_expression_as_key() {
-    assert_eq!(
-        tree("{(name): 1}").unwrap(),
-        "[D{[t(name)]: n(1)}]",
-    );
+    assert_eq!(tree("{(name): 1}").unwrap(), "[D{[t(name)]: n(1)}]",);
 }
 
 #[test]
@@ -258,7 +240,10 @@ fn glued_colon_outside_dict_emits_type() {
 fn comma_in_expression_is_whitespace() {
     assert_eq!(tree("a, b").unwrap(), tree("a b").unwrap());
     assert_eq!(tree("(a,, b)").unwrap(), tree("(a b)").unwrap());
-    assert_eq!(tree("(a :Number, b :Str)").unwrap(), tree("(a :Number b :Str)").unwrap());
+    assert_eq!(
+        tree("(a :Number, b :Str)").unwrap(),
+        tree("(a :Number b :Str)").unwrap()
+    );
 }
 
 #[test]

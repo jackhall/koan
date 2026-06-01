@@ -30,11 +30,19 @@ pub struct LexicalFrame {
 
 impl LexicalFrame {
     pub fn root(scope_id: ScopeId, index: usize) -> Rc<Self> {
-        Rc::new(LexicalFrame { scope_id, index, parent: None })
+        Rc::new(LexicalFrame {
+            scope_id,
+            index,
+            parent: None,
+        })
     }
 
     pub fn push(parent: Option<Rc<Self>>, scope_id: ScopeId, index: usize) -> Rc<Self> {
-        Rc::new(LexicalFrame { scope_id, index, parent })
+        Rc::new(LexicalFrame {
+            scope_id,
+            index,
+            parent,
+        })
     }
 
     /// A chain mentioning no real scope: `index_for` returns `None` for every
@@ -42,7 +50,11 @@ impl LexicalFrame {
     /// binding in it as visible. Used for ambient-chain-less submission (REPL, test
     /// fixtures) against an existing scope so previously-bound names resolve.
     pub fn detached() -> Rc<Self> {
-        Rc::new(LexicalFrame { scope_id: ScopeId::DETACHED, index: 0, parent: None })
+        Rc::new(LexicalFrame {
+            scope_id: ScopeId::DETACHED,
+            index: 0,
+            parent: None,
+        })
     }
 
     /// First frame's `index` whose `scope_id` matches, walking head-first. `None`

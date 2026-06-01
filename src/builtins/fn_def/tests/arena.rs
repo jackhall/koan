@@ -1,8 +1,8 @@
 //! Run-root arena and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::RuntimeArena;
 use crate::machine::execute::Scheduler;
+use crate::machine::RuntimeArena;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
@@ -125,7 +125,11 @@ fn body_subexpression_slots_recycle_across_calls() {
 
     let n = 30;
     for i in 1..=n {
-        let src = if i % 2 == 0 { "LOOK (Bit (one null))" } else { "LOOK (Bit (zero null))" };
+        let src = if i % 2 == 0 {
+            "LOOK (Bit (one null))"
+        } else {
+            "LOOK (Bit (zero null))"
+        };
         sched.add_dispatch(parse_one(src), scope);
         sched.execute().expect("LOOK should run");
     }

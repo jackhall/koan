@@ -1,7 +1,9 @@
 use std::rc::Rc;
 
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{
+    ArgumentBundle, BodyResult, CallArena, KError, KErrorKind, SchedulerHandle, Scope,
+};
 
 use super::{arg, err, kw, register_builtin, sig};
 
@@ -53,7 +55,9 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent, run_root_with_buf};
+    use crate::builtins::test_support::{
+        parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
+    };
     use crate::machine::{KErrorKind, RuntimeArena};
 
     fn run_program(source: &str) -> Vec<u8> {
@@ -100,9 +104,7 @@ mod tests {
 
     #[test]
     fn multiline_sigil_collapse_roundtrip() {
-        let bytes = run_program(
-            "LET q =\n  #3\nPRINT $(q)",
-        );
+        let bytes = run_program("LET q =\n  #3\nPRINT $(q)");
         assert_eq!(bytes, b"3\n");
     }
 

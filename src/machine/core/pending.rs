@@ -15,7 +15,11 @@ use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 /// stay intact. Each variant carries the original [`BindingIndex`] so the drained
 /// write lands under the same lexical position the conflicted write would have used.
 enum PendingWrite<'a> {
-    Value { name: String, obj: &'a KObject<'a>, index: BindingIndex },
+    Value {
+        name: String,
+        obj: &'a KObject<'a>,
+        index: BindingIndex,
+    },
     Function {
         name: String,
         fn_ref: &'a KFunction<'a>,
@@ -35,11 +39,15 @@ pub struct PendingQueue<'a> {
 
 impl<'a> PendingQueue<'a> {
     pub fn new() -> Self {
-        Self { pending: RefCell::new(Vec::new()) }
+        Self {
+            pending: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn defer_value(&self, name: String, obj: &'a KObject<'a>, index: BindingIndex) {
-        self.pending.borrow_mut().push(PendingWrite::Value { name, obj, index });
+        self.pending
+            .borrow_mut()
+            .push(PendingWrite::Value { name, obj, index });
     }
 
     pub fn defer_function(
@@ -49,9 +57,12 @@ impl<'a> PendingQueue<'a> {
         obj: &'a KObject<'a>,
         index: BindingIndex,
     ) {
-        self.pending
-            .borrow_mut()
-            .push(PendingWrite::Function { name, fn_ref, obj, index });
+        self.pending.borrow_mut().push(PendingWrite::Function {
+            name,
+            fn_ref,
+            obj,
+            index,
+        });
     }
 
     pub fn defer_type(
@@ -60,7 +71,9 @@ impl<'a> PendingQueue<'a> {
         kt: &'a crate::machine::model::types::KType<'a>,
         index: BindingIndex,
     ) {
-        self.pending.borrow_mut().push(PendingWrite::Type { name, kt, index });
+        self.pending
+            .borrow_mut()
+            .push(PendingWrite::Type { name, kt, index });
     }
 
     /// Items that still hit a borrow conflict re-queue (eventually-consistent, not
@@ -97,21 +110,25 @@ impl<'a> PendingQueue<'a> {
                         }
                     }
                 }
-                PendingWrite::Function { name, fn_ref, obj, index } => {
-                    match bindings.try_register_function(&name, fn_ref, obj, index) {
-                        Ok(ApplyOutcome::Applied) => {}
-                        Ok(ApplyOutcome::Conflict) => {
-                            still_pending
-                                .push(PendingWrite::Function { name, fn_ref, obj, index });
-                        }
-                        Err(_e) => {
-                            debug_assert!(
-                                false,
-                                "PendingQueue::drain hit invariant violation: {_e}",
-                            );
-                        }
+                PendingWrite::Function {
+                    name,
+                    fn_ref,
+                    obj,
+                    index,
+                } => match bindings.try_register_function(&name, fn_ref, obj, index) {
+                    Ok(ApplyOutcome::Applied) => {}
+                    Ok(ApplyOutcome::Conflict) => {
+                        still_pending.push(PendingWrite::Function {
+                            name,
+                            fn_ref,
+                            obj,
+                            index,
+                        });
                     }
-                }
+                    Err(_e) => {
+                        debug_assert!(false, "PendingQueue::drain hit invariant violation: {_e}",);
+                    }
+                },
                 PendingWrite::Type { name, kt, index } => {
                     match bindings.try_register_type(&name, kt, index) {
                         Ok(ApplyOutcome::Applied) => {}
@@ -155,7 +172,10 @@ mod tests {
         queue.defer_type("Foo".to_string(), kt, BindingIndex::BUILTIN);
         assert!(bindings.types().get("Foo").is_none());
         queue.drain(&bindings);
-        let (stored, _) = *bindings.types().get("Foo").expect("Foo should be in types after drain");
+        let (stored, _) = *bindings
+            .types()
+            .get("Foo")
+            .expect("Foo should be in types after drain");
         assert!(std::ptr::eq(stored, kt));
     }
 

@@ -28,7 +28,10 @@ fn kfunction_with_existing_anchor_preserves_it() {
     match lifted {
         KObject::KFunction(_, frame) => {
             let f = frame.expect("pre-anchored frame must persist");
-            assert!(Rc::ptr_eq(&f, &other), "must reuse existing anchor, not re-derive");
+            assert!(
+                Rc::ptr_eq(&f, &other),
+                "must reuse existing anchor, not re-derive"
+            );
         }
         other => panic!("expected KFunction, got {:?}", other.ktype()),
     }
@@ -38,8 +41,7 @@ fn kfunction_with_existing_anchor_preserves_it() {
         "preserved anchor clones the existing Rc once",
     );
     assert_eq!(
-        dying_after,
-        dying_before,
+        dying_after, dying_before,
         "preserved anchor must not also touch the dying frame's Rc",
     );
 }
@@ -92,7 +94,10 @@ fn kmodule_with_local_child_scope_anchors() {
 
     let module = Module::new("LocalMod".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
-    let obj = KObject::KTypeValue(KType::Module { module: m_ref, frame: None });
+    let obj = KObject::KTypeValue(KType::Module {
+        module: m_ref,
+        frame: None,
+    });
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&obj, &dying);
@@ -119,7 +124,10 @@ fn kmodule_with_foreign_child_scope_does_not_anchor() {
 
     let module = Module::new("ForeignMod".into(), scope);
     let m_ref: &Module = arena.alloc_module(module);
-    let obj = KObject::KTypeValue(KType::Module { module: m_ref, frame: None });
+    let obj = KObject::KTypeValue(KType::Module {
+        module: m_ref,
+        frame: None,
+    });
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&obj, &dying);

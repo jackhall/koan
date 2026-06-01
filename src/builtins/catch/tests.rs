@@ -18,9 +18,8 @@ fn run_program(source: &str) -> Vec<u8> {
 fn success_wraps_value_in_ok() {
     // Double "v\n": PRINT both renders and returns its argument, so the ok
     // arm's `(PRINT it)` re-prints the same string CATCH captured.
-    let bytes = run_program(
-        "MATCH (CATCH (PRINT \"v\")) WITH (ok -> (PRINT it) error -> (PRINT \"no\"))",
-    );
+    let bytes =
+        run_program("MATCH (CATCH (PRINT \"v\")) WITH (ok -> (PRINT it) error -> (PRINT \"no\"))");
     assert_eq!(bytes, b"v\nv\n");
 }
 
@@ -46,7 +45,10 @@ fn catch_in_let_does_not_short_circuit() {
          (PRINT \"after\")",
     );
     let text = std::str::from_utf8(&bytes).unwrap();
-    assert!(text.contains("after"), "expected program to continue, got {text:?}");
+    assert!(
+        text.contains("after"),
+        "expected program to continue, got {text:?}"
+    );
 }
 
 #[test]
@@ -88,8 +90,16 @@ fn catch_result_shares_identity_with_constructed_result() {
     let constructed = run_one(scope, parse_one("Result (ok 1)"));
     match (caught, constructed) {
         (
-            KObject::Tagged { name: n1, scope_id: s1, .. },
-            KObject::Tagged { name: n2, scope_id: s2, .. },
+            KObject::Tagged {
+                name: n1,
+                scope_id: s1,
+                ..
+            },
+            KObject::Tagged {
+                name: n2,
+                scope_id: s2,
+                ..
+            },
         ) => {
             assert_eq!(n1, "Result");
             assert_eq!(n1, n2);

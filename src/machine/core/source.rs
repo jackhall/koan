@@ -43,7 +43,11 @@ impl SourceFile {
                 line_starts.push((i as u32) + 1);
             }
         }
-        SourceFile { path: path.into(), text, line_starts }
+        SourceFile {
+            path: path.into(),
+            text,
+            line_starts,
+        }
     }
 
     /// Resolve a byte offset into `(line, col_utf16)`, both 1-based.
@@ -111,7 +115,9 @@ pub struct CurrentFileGuard {
 
 impl CurrentFileGuard {
     pub fn push(id: FileId) -> Self {
-        Self { prev: set_current(Some(id)) }
+        Self {
+            prev: set_current(Some(id)),
+        }
     }
 }
 
@@ -135,7 +141,10 @@ impl<T> Spanned<T> {
     }
 
     pub fn at(value: T, span: Span) -> Self {
-        Self { value, span: Some(span) }
+        Self {
+            value,
+            span: Some(span),
+        }
     }
 }
 

@@ -13,8 +13,8 @@
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 /// Position-independent identity for a [`Scope`](super::Scope). Equality is by
 /// the `(session, idx)` pair, minted once at construction time.
@@ -38,7 +38,10 @@ impl ScopeId {
     pub const DETACHED: ScopeId = ScopeId { session: 0, idx: 1 };
 
     pub fn next() -> ScopeId {
-        ScopeId { session: session_id(), idx: next_idx() }
+        ScopeId {
+            session: session_id(),
+            idx: next_idx(),
+        }
     }
 
     /// Build a `ScopeId` from raw halves. Reserved for test fixtures
@@ -48,8 +51,12 @@ impl ScopeId {
         ScopeId { session, idx }
     }
 
-    pub const fn session(self) -> u64 { self.session }
-    pub const fn idx(self) -> u64 { self.idx }
+    pub const fn session(self) -> u64 {
+        self.session
+    }
+    pub const fn idx(self) -> u64 {
+        self.idx
+    }
 }
 
 impl std::fmt::Debug for ScopeId {
@@ -72,7 +79,11 @@ fn session_id() -> u64 {
         let mut h = RandomState::new().build_hasher();
         h.write_u8(0);
         let v = h.finish();
-        if v == 0 { 1 } else { v }
+        if v == 0 {
+            1
+        } else {
+            v
+        }
     })
 }
 

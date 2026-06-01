@@ -3,14 +3,14 @@ use std::rc::Rc;
 use crate::machine::core::LexicalFrame;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, RuntimeArena, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CallArena, KError, KErrorKind, RuntimeArena,
+    SchedulerHandle, Scope,
 };
 
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
-use crate::machine::core::kfunction::body::split_body_statements;
 use super::branch_walk::find_branch_body;
 use super::{arg, err, kw, register_builtin, sig};
+use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
+use crate::machine::core::kfunction::body::split_body_statements;
 
 /// `MATCH <value:Any> WITH <branches:KExpression>` — branch by tag.
 ///
@@ -29,7 +29,11 @@ pub fn body<'a>(
     let (tag, value) = match bundle.get("value") {
         Some(KObject::Tagged { tag, value, .. }) => (tag.clone(), Rc::clone(value)),
         Some(KObject::Bool(b)) => (
-            if *b { "true".to_string() } else { "false".to_string() },
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
             Rc::new(KObject::Null),
         ),
         Some(other) => {
@@ -73,7 +77,10 @@ pub fn body<'a>(
     let _ = child.bind_value(
         "it".to_string(),
         it_obj,
-        BindingIndex { idx: 0, nominal_binder: true },
+        BindingIndex {
+            idx: 0,
+            nominal_binder: true,
+        },
     );
     // Multi-statement arms (`tag -> ((s_0) ... (s_{N-1}))`) submit the first N-1 as
     // siblings at chain indices `1..N-1` and tail-replace into the last at `N`.
@@ -87,11 +94,7 @@ pub fn body<'a>(
         let mut stmts = statements;
         let last = stmts.pop().expect("n >= 2");
         for (i, stmt) in stmts.into_iter().enumerate() {
-            let chain = LexicalFrame::push(
-                Some(call_site_chain.clone()),
-                arm_scope_id,
-                i + 1,
-            );
+            let chain = LexicalFrame::push(Some(call_site_chain.clone()), arm_scope_id, i + 1);
             sched.with_active_frame(frame.clone(), &mut |s| {
                 s.add_dispatch_with_chain(stmt.clone(), child, chain.clone());
             });
@@ -107,19 +110,24 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "MATCH",
-        sig(KType::Any, vec![
-            kw("MATCH"),
-            arg("value", KType::Any),
-            kw("WITH"),
-            arg("branches", KType::KExpression),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("MATCH"),
+                arg("value", KType::Any),
+                kw("WITH"),
+                arg("branches", KType::KExpression),
+            ],
+        ),
         body,
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent, run_root_with_buf};
+    use crate::builtins::test_support::{
+        parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
+    };
     use crate::machine::{KErrorKind, RuntimeArena};
 
     fn run_program(source: &str) -> Vec<u8> {
@@ -187,17 +195,15 @@ mod tests {
 
     #[test]
     fn match_on_bool_true_takes_true_branch() {
-        let bytes = run_program(
-            "MATCH true WITH (true -> (PRINT \"yes\") false -> (PRINT \"no\"))",
-        );
+        let bytes =
+            run_program("MATCH true WITH (true -> (PRINT \"yes\") false -> (PRINT \"no\"))");
         assert_eq!(bytes, b"yes\n");
     }
 
     #[test]
     fn match_on_bool_false_takes_false_branch() {
-        let bytes = run_program(
-            "MATCH false WITH (true -> (PRINT \"yes\") false -> (PRINT \"no\"))",
-        );
+        let bytes =
+            run_program("MATCH false WITH (true -> (PRINT \"yes\") false -> (PRINT \"no\"))");
         assert_eq!(bytes, b"no\n");
     }
 

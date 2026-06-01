@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::model::KObject;
 use crate::machine::model::types::KType;
+use crate::machine::model::KObject;
 use crate::machine::CallArena;
 
 use super::{alloc_local_kf, defeat_fast_path};
@@ -96,7 +96,9 @@ fn list_with_pre_anchored_variants_skips_them() {
     let future = KFuture {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
-        bundle: ArgumentBundle { args: HashMap::new() },
+        bundle: ArgumentBundle {
+            args: HashMap::new(),
+        },
     };
     let items = Rc::new(vec![
         KObject::KFunction(kf_ref, Some(Rc::clone(&other))),
@@ -118,7 +120,10 @@ fn list_with_pre_anchored_variants_skips_them() {
         ),
         other => panic!("expected List, got {:?}", other.ktype()),
     }
-    assert_eq!(dying_after, before, "pre-anchored variants must not bump dying Rc");
+    assert_eq!(
+        dying_after, before,
+        "pre-anchored variants must not bump dying Rc"
+    );
 }
 
 /// Unanchored KFuture inside a list whose function captured the dying scope
@@ -134,7 +139,9 @@ fn list_with_unanchored_kfuture_anchors() {
     let future = KFuture {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
-        bundle: ArgumentBundle { args: HashMap::new() },
+        bundle: ArgumentBundle {
+            args: HashMap::new(),
+        },
     };
     let list = KObject::list(vec![KObject::KFuture(future, None)]);
     let before = Rc::strong_count(&dying);
@@ -159,7 +166,10 @@ fn list_with_unanchored_kmodule_anchors() {
     let module = Module::new("LocalM".into(), dying.scope());
     let m_ref: &Module = dying.arena().alloc_module(module);
 
-    let list = KObject::list(vec![KObject::KTypeValue(KType::Module { module: m_ref, frame: None })]);
+    let list = KObject::list(vec![KObject::KTypeValue(KType::Module {
+        module: m_ref,
+        frame: None,
+    })]);
     let before = Rc::strong_count(&dying);
 
     let lifted = lift_kobject(&list, &dying);
@@ -340,8 +350,17 @@ fn tagged_no_borrow_clones_inner_rc() {
     let lifted = lift_kobject(&tagged, &dying);
     let count_after = Rc::strong_count(&inner);
     match lifted {
-        KObject::Tagged { tag, value, scope_id, name, .. } => {
-            assert!(Rc::ptr_eq(&value, &inner), "no-borrow Tagged must reuse inner Rc");
+        KObject::Tagged {
+            tag,
+            value,
+            scope_id,
+            name,
+            ..
+        } => {
+            assert!(
+                Rc::ptr_eq(&value, &inner),
+                "no-borrow Tagged must reuse inner Rc"
+            );
             assert_eq!(tag, "Just");
             assert_eq!(name, "Maybe");
             assert_eq!(scope_id, sid);
@@ -374,7 +393,13 @@ fn tagged_with_local_kfunction_rebuilds_and_anchors() {
     let lifted = lift_kobject(&tagged, &dying);
     let count_after = Rc::strong_count(&dying);
     match lifted {
-        KObject::Tagged { tag, value, scope_id, name, .. } => {
+        KObject::Tagged {
+            tag,
+            value,
+            scope_id,
+            name,
+            ..
+        } => {
             assert_eq!(tag, "Wrap");
             assert_eq!(name, "Carrier");
             assert_eq!(scope_id, sid);

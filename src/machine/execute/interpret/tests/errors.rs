@@ -1,8 +1,8 @@
 //! `errors` interpret/execute integration tests.
 
 use super::*;
-use crate::machine::KErrorKind;
 use crate::machine::execute::interpret_with_writer_path;
+use crate::machine::KErrorKind;
 
 #[test]
 fn unbound_name_at_top_level_returns_error() {
@@ -57,10 +57,7 @@ fn error_short_circuits_program_outcome() {
 /// keyword tokens, so dispatch finds no matching signature.
 #[test]
 fn dispatch_failure_surfaces_as_kerror() {
-    let result = interpret_with_writer(
-        "WAT THIS IS NOT FUNC",
-        Box::new(std::io::sink()),
-    );
+    let result = interpret_with_writer("WAT THIS IS NOT FUNC", Box::new(std::io::sink()));
     match result {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::DispatchFailed { .. }),
@@ -133,8 +130,7 @@ fn frame_chain_walks_nested_user_fn_calls() {
     );
     match result {
         Err(e) => {
-            let frame_names: Vec<String> =
-                e.frames.iter().map(|f| f.function.clone()).collect();
+            let frame_names: Vec<String> = e.frames.iter().map(|f| f.function.clone()).collect();
             assert!(
                 frame_names.iter().any(|n| n.contains("INNER")),
                 "expected a frame mentioning INNER, got {:?} (full error: {})",

@@ -10,16 +10,20 @@ use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins::default_scope;
-use crate::machine::SchedulerHandle;
 use crate::machine::execute::Scheduler;
 use crate::machine::model::{KObject, KType, Parseable};
+use crate::machine::SchedulerHandle;
 use crate::machine::{KError, KErrorKind, RuntimeArena, Scope};
 use crate::parse::parse;
 
 struct Sink;
 impl Write for Sink {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { Ok(b.len()) }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
@@ -28,7 +32,9 @@ impl Write for SharedBuf {
         self.0.borrow_mut().extend_from_slice(b);
         Ok(b.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn run_scope<'a>(arena: &'a RuntimeArena, source: &str) -> &'a Scope<'a> {
@@ -59,8 +65,7 @@ fn run_collect_err(source: &str) -> Option<KError> {
 
 #[test]
 fn forward_value_let_at_same_level_is_unbound() {
-    let err = run_collect_err("LET y = z\nLET z = 1")
-        .expect("forward LET should error");
+    let err = run_collect_err("LET y = z\nLET z = 1").expect("forward LET should error");
     assert!(
         matches!(&err.kind, KErrorKind::UnboundName(n) if n == "z"),
         "expected UnboundName('z'), got {err}",
@@ -145,8 +150,12 @@ fn mutual_recursion_across_sibling_fns_resolves_via_body_chain() {
     )
     .expect("parse should succeed");
     let mut sched = Scheduler::new();
-    for e in exprs { sched.add_dispatch(e, scope); }
-    sched.execute().expect("mutual FN recursion via body chain should succeed");
+    for e in exprs {
+        sched.add_dispatch(e, scope);
+    }
+    sched
+        .execute()
+        .expect("mutual FN recursion via body chain should succeed");
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 42.0),
         "expected out = 42 via mutual PING/PONG; got {:?}",
@@ -219,8 +228,14 @@ fn mutual_recursion_across_nominal_struct_binders() {
         "STRUCT Alpha = (b :Beta)\n\
          STRUCT Beta = (a :Alpha)",
     );
-    assert!(scope.resolve_type("Alpha").is_some(), "STRUCT Alpha should be registered");
-    assert!(scope.resolve_type("Beta").is_some(), "STRUCT Beta should be registered");
+    assert!(
+        scope.resolve_type("Alpha").is_some(),
+        "STRUCT Alpha should be registered"
+    );
+    assert!(
+        scope.resolve_type("Beta").is_some(),
+        "STRUCT Beta should be registered"
+    );
 }
 
 /// A forward `MODULE A` referenced by an earlier sibling resolves via the same

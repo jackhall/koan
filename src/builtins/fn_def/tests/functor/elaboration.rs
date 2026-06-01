@@ -23,8 +23,8 @@ fn list_of_let_binding_is_ktype_value() {
 #[test]
 fn elaborator_lowers_ktype_value_binding() {
     use crate::machine::model::ast::TypeExpr;
-    use crate::machine::model::KType;
     use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
+    use crate::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     run(scope, "LET MyList = (LIST_OF Number)");
@@ -61,9 +61,16 @@ fn fn_with_signature_bound_param_records_signature_bound_ktype() {
             assert_eq!(name, "Er");
             match ktype {
                 KType::Signature { sig, pinned_slots } => {
-                    assert_eq!(sig.sig_id(), sig_id, "sig_id must match Signature::sig_id()");
+                    assert_eq!(
+                        sig.sig_id(),
+                        sig_id,
+                        "sig_id must match Signature::sig_id()"
+                    );
                     assert_eq!(sig.path, "OrderedSig");
-                    assert!(pinned_slots.is_empty(), "bare OrderedSig has no pinned slots");
+                    assert!(
+                        pinned_slots.is_empty(),
+                        "bare OrderedSig has no pinned slots"
+                    );
                 }
                 other => panic!("expected Signature, got {:?}", other),
             }
@@ -96,5 +103,8 @@ fn let_then_fn_in_same_batch_works() {
         scope.resolve_type("MyList").is_some(),
         "MyList should be bound in bindings.types after the batch executes",
     );
-    assert!(fn_is_registered(scope, "USE"), "USE should be registered by the FN definition");
+    assert!(
+        fn_is_registered(scope, "USE"),
+        "USE should be registered by the FN definition"
+    );
 }

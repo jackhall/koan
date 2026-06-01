@@ -141,9 +141,13 @@ impl<'a> BodyResult<'a> {
 /// at least one element.
 pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpression<'a>> {
     let is_multi = body.parts.len() >= 2
-        && body.parts.iter().all(|p| matches!(p.value, ExpressionPart::Expression(_)));
+        && body
+            .parts
+            .iter()
+            .all(|p| matches!(p.value, ExpressionPart::Expression(_)));
     if is_multi {
-        body.parts.into_iter()
+        body.parts
+            .into_iter()
             .filter_map(|p| match p.value {
                 ExpressionPart::Expression(e) => Some(*e),
                 _ => None,
@@ -156,11 +160,8 @@ pub(crate) fn split_body_statements<'a>(body: KExpression<'a>) -> Vec<KExpressio
 
 /// Builtin body. `Scope` is `&'a` (not `&mut`) — every node spawned during the body
 /// shares it; mutability is interior via `RefCell`.
-pub type BuiltinFn = for<'a> fn(
-    &'a Scope<'a>,
-    &mut dyn SchedulerHandle<'a>,
-    ArgumentBundle<'a>,
-) -> BodyResult<'a>;
+pub type BuiltinFn =
+    for<'a> fn(&'a Scope<'a>, &mut dyn SchedulerHandle<'a>, ArgumentBundle<'a>) -> BodyResult<'a>;
 
 /// Dispatch-time name extractor for a binder builtin. Returning `Some(name)` installs
 /// `placeholders[name] = NodeId(this_slot)` so a sibling looking up `name` while the
@@ -200,7 +201,10 @@ mod tests {
         match result {
             BodyResult::Err(e) => match e.kind {
                 KErrorKind::MissingArg(name) => assert_eq!(name, "x"),
-                other => panic!("expected MissingArg, got {:?}", std::mem::discriminant(&other)),
+                other => panic!(
+                    "expected MissingArg, got {:?}",
+                    std::mem::discriminant(&other)
+                ),
             },
             _ => panic!("expected BodyResult::Err"),
         }
@@ -223,8 +227,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "ctx-err: expected Value, got Err(missing argument 'y')")]
     fn expect_value_panics_on_err() {
-        let err: BodyResult<'_> =
-            BodyResult::err(KError::new(KErrorKind::MissingArg("y".into())));
+        let err: BodyResult<'_> = BodyResult::err(KError::new(KErrorKind::MissingArg("y".into())));
         let _ = err.expect_value("ctx-err");
     }
 }

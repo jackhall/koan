@@ -70,10 +70,7 @@ fn parent_with_two_children() {
 
 #[test]
 fn nested_three_deep() {
-    assert_eq!(
-        collapse_whitespace("a\n  b\n    c").unwrap(),
-        "(a (b (c)))"
-    );
+    assert_eq!(collapse_whitespace("a\n  b\n    c").unwrap(), "(a (b (c)))");
 }
 
 #[test]
@@ -195,10 +192,7 @@ fn nested_multiline_dict_inside_list() {
 
 #[test]
 fn trailing_comma_continues_expression() {
-    assert_eq!(
-        collapse_whitespace("add 1,\n    2").unwrap(),
-        "(add 1, 2)",
-    );
+    assert_eq!(collapse_whitespace("add 1,\n    2").unwrap(), "(add 1, 2)",);
 }
 
 #[test]
@@ -213,8 +207,7 @@ fn trailing_comma_chain_across_three_lines() {
 fn trailing_comma_inside_paren_expression() {
     // Motivating UNION shape.
     assert_eq!(
-        collapse_whitespace("UNION Maybe = (some :Number,\n               none :Null)")
-            .unwrap(),
+        collapse_whitespace("UNION Maybe = (some :Number,\n               none :Null)").unwrap(),
         "(UNION Maybe = (some :Number, none :Null))",
     );
 }
@@ -314,10 +307,7 @@ fn quote_sigil_continuation_wraps_outside_paren() {
 
 #[test]
 fn eval_sigil_continuation_wraps_outside_paren() {
-    assert_eq!(
-        collapse_whitespace("foo\n  $q").unwrap(),
-        "(foo $(q))",
-    );
+    assert_eq!(collapse_whitespace("foo\n  $q").unwrap(), "(foo $(q))",);
 }
 
 #[test]
@@ -328,10 +318,7 @@ fn quote_sigil_at_top_level_wraps_outside_paren() {
 #[test]
 fn sigil_with_paren_operand_still_legal() {
     // Double wrapping is fine: `peel_redundant` collapses it downstream.
-    assert_eq!(
-        collapse_whitespace("foo\n  #(3)").unwrap(),
-        "(foo #((3)))",
-    );
+    assert_eq!(collapse_whitespace("foo\n  #(3)").unwrap(), "(foo #((3)))",);
 }
 
 #[test]
@@ -351,10 +338,7 @@ fn sigil_continuation_with_deeper_children() {
 
 #[test]
 fn comma_continuation_with_bare_sigil_stays_bare() {
-    assert_eq!(
-        collapse_whitespace("add 1,\n  #2").unwrap(),
-        "(add 1, #2)",
-    );
+    assert_eq!(collapse_whitespace("add 1,\n  #2").unwrap(), "(add 1, #2)",);
 }
 
 #[test]
@@ -438,10 +422,14 @@ fn sibling_lines_anchor_each_paren() {
     assert_eq!(
         raw("foo\nbar"),
         cat(&[
-            &jmp(0), b"(foo",
-            &jmp(3), b") ",
-            &jmp(4), b"(bar",
-            &jmp(7), b")",
+            &jmp(0),
+            b"(foo",
+            &jmp(3),
+            b") ",
+            &jmp(4),
+            b"(bar",
+            &jmp(7),
+            b")",
         ]),
     );
 }
@@ -452,10 +440,14 @@ fn nested_block_anchors_per_frame() {
     assert_eq!(
         raw("a\n  b"),
         cat(&[
-            &jmp(0), b"(a ",
-            &jmp(4), b"(b",
-            &jmp(5), b")",
-            &jmp(5), b")",
+            &jmp(0),
+            b"(a ",
+            &jmp(4),
+            b"(b",
+            &jmp(5),
+            b")",
+            &jmp(5),
+            b")",
         ]),
     );
 }
@@ -467,12 +459,18 @@ fn dedent_then_sibling_anchors_correctly() {
     assert_eq!(
         raw("foo\n    bar\nbaz"),
         cat(&[
-            &jmp(0), b"(foo ",
-            &jmp(8), b"(bar",
-            &jmp(11), b")",
-            &jmp(11), b") ",
-            &jmp(12), b"(baz",
-            &jmp(15), b")",
+            &jmp(0),
+            b"(foo ",
+            &jmp(8),
+            b"(bar",
+            &jmp(11),
+            b")",
+            &jmp(11),
+            b") ",
+            &jmp(12),
+            b"(baz",
+            &jmp(15),
+            b")",
         ]),
     );
 }
@@ -483,11 +481,7 @@ fn continuation_join_space_carries_anchor() {
     // frame; the synthetic joining space is preceded by a JUMP at orig of `2`.
     assert_eq!(
         raw("add 1,\n  2"),
-        cat(&[
-            &jmp(0), b"(add 1,",
-            &jmp(9), b" 2",
-            &jmp(10), b")",
-        ]),
+        cat(&[&jmp(0), b"(add 1,", &jmp(9), b" 2", &jmp(10), b")",]),
     );
 }
 
@@ -497,11 +491,7 @@ fn sigil_led_top_level_emits_two_jumps_around_sigil() {
     // gets its own JUMP at offset 1 (orig of `3`).
     assert_eq!(
         raw("#3"),
-        cat(&[
-            &jmp(0), b"#",
-            &jmp(1), b"(3",
-            &jmp(2), b")",
-        ]),
+        cat(&[&jmp(0), b"#", &jmp(1), b"(3", &jmp(2), b")",]),
     );
 }
 
@@ -512,11 +502,16 @@ fn sigil_led_continuation_anchors_at_real_sigil_offset() {
     assert_eq!(
         raw("foo\n  #3"),
         cat(&[
-            &jmp(0), b"(foo ",
-            &jmp(6), b"#",
-            &jmp(7), b"(3",
-            &jmp(8), b")",
-            &jmp(8), b")",
+            &jmp(0),
+            b"(foo ",
+            &jmp(6),
+            b"#",
+            &jmp(7),
+            b"(3",
+            &jmp(8),
+            b")",
+            &jmp(8),
+            b")",
         ]),
     );
 }
@@ -528,13 +523,7 @@ fn literal_passthrough_keeps_mask_jump_then_emits_close_jump() {
     // that shape to `collapse_whitespace` directly to confirm it passes the literal
     // sequence through verbatim and lands the closing `)` JUMP at orig 7.
     let masked = cat(&[b"'", &lit(0, 5), b"'", &jmp(7)]);
-    let expected = cat(&[
-        &jmp(0), b"('",
-        &lit(0, 5),
-        b"'",
-        &jmp(7),
-        &jmp(7), b")",
-    ]);
+    let expected = cat(&[&jmp(0), b"('", &lit(0, 5), b"'", &jmp(7), &jmp(7), b")"]);
     assert_eq!(raw_bytes(&masked), expected);
 }
 
@@ -545,10 +534,14 @@ fn blank_lines_advance_cursor_for_following_anchors() {
     assert_eq!(
         raw("foo\n\nbar"),
         cat(&[
-            &jmp(0), b"(foo",
-            &jmp(3), b") ",
-            &jmp(5), b"(bar",
-            &jmp(8), b")",
+            &jmp(0),
+            b"(foo",
+            &jmp(3),
+            b") ",
+            &jmp(5),
+            b"(bar",
+            &jmp(8),
+            b")",
         ]),
     );
 }
@@ -560,10 +553,6 @@ fn list_continuation_anchors_each_joined_line() {
     // content start.
     assert_eq!(
         raw("[1\n 2]"),
-        cat(&[
-            &jmp(0), b"([1",
-            &jmp(4), b" 2]",
-            &jmp(6), b")",
-        ]),
+        cat(&[&jmp(0), b"([1", &jmp(4), b" 2]", &jmp(6), b")",]),
     );
 }

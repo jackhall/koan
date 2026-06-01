@@ -6,12 +6,14 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::machine::model::KObject;
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
-use crate::machine::{KError, RuntimeArena, Scope};
 use crate::machine::execute::Scheduler;
 use crate::machine::model::ast::KExpression;
+use crate::machine::model::types::{
+    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
+};
+use crate::machine::model::KObject;
+use crate::machine::{KError, RuntimeArena, Scope};
 use crate::parse::parse;
 
 use super::default_scope;
@@ -68,7 +70,9 @@ pub(crate) fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KO
 pub(crate) fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> KError {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
-    sched.execute().expect("scheduler should not surface errors directly");
+    sched
+        .execute()
+        .expect("scheduler should not surface errors directly");
     match sched.read_result(id) {
         Ok(_) => panic!("expected error"),
         Err(e) => e.clone(),
@@ -98,7 +102,10 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
                 _ => None,
             });
             if first_kw == Some(keyword) {
-                assert!(found.is_none(), "ambiguous: multiple overloads under `{keyword}`");
+                assert!(
+                    found.is_none(),
+                    "ambiguous: multiple overloads under `{keyword}`"
+                );
                 found = Some(f);
             }
         }
@@ -109,14 +116,18 @@ pub(crate) fn lookup_fn<'a>(scope: &'a Scope<'a>, keyword: &str) -> &'a KFunctio
 /// True iff some `functions` bucket holds an overload whose first keyword is `keyword`.
 /// Negative-path companion to [`lookup_fn`] for "this FN should not register" assertions.
 pub(crate) fn fn_is_registered(scope: &Scope<'_>, keyword: &str) -> bool {
-    scope.bindings().iter_functions().into_iter().any(|(_, bucket)| {
-        bucket.iter().any(|f| {
-            f.signature.elements.iter().find_map(|e| match e {
-                SignatureElement::Keyword(s) => Some(s.as_str()),
-                _ => None,
-            }) == Some(keyword)
+    scope
+        .bindings()
+        .iter_functions()
+        .into_iter()
+        .any(|(_, bucket)| {
+            bucket.iter().any(|f| {
+                f.signature.elements.iter().find_map(|e| match e {
+                    SignatureElement::Keyword(s) => Some(s.as_str()),
+                    _ => None,
+                }) == Some(keyword)
+            })
         })
-    })
 }
 
 /// Allocate a labeled marker object on `scope`'s arena. Dispatch tests register builtins

@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
-use crate::machine::model::KObject;
-use crate::machine::{
-    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, Scope, SchedulerHandle,
-};
 use crate::machine::core::ScopeId;
 use crate::machine::model::ast::KExpression;
+use crate::machine::model::KObject;
+use crate::machine::{
+    CallArena, CatchFinish, CombineFinish, KError, LexicalFrame, NodeId, SchedulerHandle, Scope,
+};
 
 use super::nodes::NodeWork;
 use dep_graph::DepGraph;
@@ -17,12 +17,12 @@ mod execute;
 mod finish;
 mod literal;
 mod node_store;
-mod submit;
-mod work_queues;
 #[cfg(test)]
 mod run_tests;
+mod submit;
 #[cfg(test)]
 mod tests;
+mod work_queues;
 
 /// A dynamic DAG of dispatch and execution work.
 ///
@@ -82,7 +82,11 @@ impl<'a> Scheduler<'a> {
         let prev_frame = std::mem::replace(&mut self.active_frame, node_frame);
         let prev_chain = self.active_chain.replace(node_chain);
         let prev_reserve = std::mem::replace(&mut self.active_reserve, node_reserve);
-        SlotStepGuard { prev_frame, prev_chain, prev_reserve }
+        SlotStepGuard {
+            prev_frame,
+            prev_chain,
+            prev_reserve,
+        }
     }
 
     /// Restore the values saved by [`Scheduler::enter_slot_step`] and return
@@ -118,7 +122,9 @@ impl<'a> Scheduler<'a> {
     }
 
     #[cfg(test)]
-    pub fn tail_reuse_count(&self) -> usize { self.tail_reuse_count }
+    pub fn tail_reuse_count(&self) -> usize {
+        self.tail_reuse_count
+    }
 
     /// Only valid before the slot terminalizes — once a slot is `Done` the payload
     /// (and its chain) has been moved out by `take_for_run`.
@@ -127,8 +133,12 @@ impl<'a> Scheduler<'a> {
         self.store.chain_of(id)
     }
 
-    pub fn len(&self) -> usize { self.store.len() }
-    pub fn is_empty(&self) -> bool { self.store.is_empty() }
+    pub fn len(&self) -> usize {
+        self.store.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.store.is_empty()
+    }
 
     /// An errored sub counts as ready — parents short-circuit on it.
     pub(in crate::machine::execute) fn is_result_ready(&self, id: NodeId) -> bool {
@@ -238,7 +248,9 @@ impl<'a> Scheduler<'a> {
 }
 
 impl<'a> Default for Scheduler<'a> {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
@@ -256,12 +268,7 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         Scheduler::add_combine(self, owned_subs, park_producers, scope, finish)
     }
 
-    fn add_catch(
-        &mut self,
-        from: NodeId,
-        scope: &'a Scope<'a>,
-        finish: CatchFinish<'a>,
-    ) -> NodeId {
+    fn add_catch(&mut self, from: NodeId, scope: &'a Scope<'a>, finish: CatchFinish<'a>) -> NodeId {
         Scheduler::add_catch(self, from, scope, finish)
     }
 
@@ -289,7 +296,9 @@ impl<'a> SchedulerHandle<'a> for Scheduler<'a> {
         let candidate = self.active_frame.take()?;
         if Rc::strong_count(&candidate) == 1 && Rc::weak_count(&candidate) == 0 {
             #[cfg(test)]
-            { self.tail_reuse_count += 1; }
+            {
+                self.tail_reuse_count += 1;
+            }
             Some(candidate)
         } else {
             self.active_frame = Some(candidate);

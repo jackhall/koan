@@ -1,15 +1,15 @@
 use std::rc::Rc;
 
+use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::{KType, SignatureElement};
 use crate::machine::{
     BindingIndex, CatchFinish, CombineFinish, FunctionLookup, KFunction, LexicalFrame, NodeId,
     Scope,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression};
-use crate::machine::model::{KType, SignatureElement};
 
-use super::super::nodes::{Node, NodeWork, work_park_producers};
-use super::dep_graph::work_owned_edges;
 use super::super::dispatch::DispatchState;
+use super::super::nodes::{work_park_producers, Node, NodeWork};
+use super::dep_graph::work_owned_edges;
 use super::Scheduler;
 
 /// Submission-time binder-install info — see [design/execution-model.md
@@ -39,16 +39,15 @@ fn extract_binder_install<'a>(
             FunctionLookup::Bucket(b) => b,
             FunctionLookup::Pending(_) | FunctionLookup::None => continue,
         };
-        let picked: Option<(&KFunction<'a>, BinderKey)> =
-            bucket_fns.iter().find_map(|f| {
-                if let Some(name) = f.binder_name.and_then(|extractor| extractor(expr)) {
-                    Some((*f, BinderKey::Name(name)))
-                } else {
-                    f.binder_bucket
-                        .and_then(|extractor| extractor(expr))
-                        .map(|bucket| (*f, BinderKey::Bucket(bucket)))
-                }
-            });
+        let picked: Option<(&KFunction<'a>, BinderKey)> = bucket_fns.iter().find_map(|f| {
+            if let Some(name) = f.binder_name.and_then(|extractor| extractor(expr)) {
+                Some((*f, BinderKey::Name(name)))
+            } else {
+                f.binder_bucket
+                    .and_then(|extractor| extractor(expr))
+                    .map(|bucket| (*f, BinderKey::Bucket(bucket)))
+            }
+        });
         let Some((picked_fn, install_key)) = picked else {
             continue;
         };
@@ -110,7 +109,14 @@ impl<'a> Scheduler<'a> {
         let park_count = park_producers.len();
         let mut deps = park_producers;
         deps.extend(owned_subs);
-        self.add(NodeWork::Combine { deps, park_count, finish }, scope)
+        self.add(
+            NodeWork::Combine {
+                deps,
+                park_count,
+                finish,
+            },
+            scope,
+        )
     }
 
     /// Schedule a `Catch` slot.
@@ -127,7 +133,11 @@ impl<'a> Scheduler<'a> {
     /// (REPL-style submission, test fixtures), synthesize a detached chain so
     /// the visibility predicate treats every scope as "complete" — the
     /// submission then reads through to every previously-bound name.
-    pub(in crate::machine::execute::scheduler) fn add(&mut self, work: NodeWork<'a>, scope: &'a Scope<'a>) -> NodeId {
+    pub(in crate::machine::execute::scheduler) fn add(
+        &mut self,
+        work: NodeWork<'a>,
+        scope: &'a Scope<'a>,
+    ) -> NodeId {
         if self.active_chain.is_some() {
             self.add_with_chain(work, scope, None)
         } else {
@@ -147,55 +157,55 @@ impl<'a> Scheduler<'a> {
     ) -> NodeId {
         // Compute the chain FIRST so recursive sub-submissions inherit the
         // parent's lexical chain (and therefore its visibility index).
-        let chain = explicit_chain
-            .or_else(|| self.active_chain.clone())
-            .expect(
-                "every dispatched node has a chain — submission outside enter_block / \
+        let chain = explicit_chain.or_else(|| self.active_chain.clone()).expect(
+            "every dispatched node has a chain — submission outside enter_block / \
                  ambient active_chain is a bug",
-            );
+        );
         // Nested binder pre-submission — see [design/execution-model.md
         // § Submission-time binder install and recursive sub-Dispatch](../../../../design/execution-model.md#submission-time-binder-install-and-recursive-sub-dispatch).
         let placeholder_install: Option<BinderInstall> = match &work {
             NodeWork::Dispatch { expr, .. } => extract_binder_install(expr, scope),
             _ => None,
         };
-        let pre_subs: Vec<(usize, NodeId)> = if let (
-            Some(install),
-            NodeWork::Dispatch { expr, .. },
-        ) = (placeholder_install.as_ref(), &work)
-        {
-            let mut subs = Vec::new();
-            for (i, part) in expr.parts.iter().enumerate() {
-                if !install.eager_slot_mask.get(i).copied().unwrap_or(false) {
-                    continue;
+        let pre_subs: Vec<(usize, NodeId)> =
+            if let (Some(install), NodeWork::Dispatch { expr, .. }) =
+                (placeholder_install.as_ref(), &work)
+            {
+                let mut subs = Vec::new();
+                for (i, part) in expr.parts.iter().enumerate() {
+                    if !install.eager_slot_mask.get(i).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    let ExpressionPart::Expression(boxed) = &part.value else {
+                        continue;
+                    };
+                    let sub_expr = (**boxed).clone();
+                    // Pass the parent's chain explicitly: without it, a top-level
+                    // submission with no ambient `active_chain` would assign a
+                    // detached chain, bypassing index-gated visibility and letting
+                    // a forward sibling resolve.
+                    let sub_id = self.add_with_chain(
+                        NodeWork::dispatch(sub_expr),
+                        scope,
+                        Some(chain.clone()),
+                    );
+                    subs.push((i, sub_id));
                 }
-                let ExpressionPart::Expression(boxed) = &part.value else { continue; };
-                let sub_expr = (**boxed).clone();
-                // Pass the parent's chain explicitly: without it, a top-level
-                // submission with no ambient `active_chain` would assign a
-                // detached chain, bypassing index-gated visibility and letting
-                // a forward sibling resolve.
-                let sub_id = self.add_with_chain(
-                    NodeWork::dispatch(sub_expr),
-                    scope,
-                    Some(chain.clone()),
-                );
-                subs.push((i, sub_id));
-            }
-            subs
-        } else {
-            Vec::new()
-        };
+                subs
+            } else {
+                Vec::new()
+            };
         // Rewrite Dispatch work to carry the pre-submitted sub-NodeIds.
         // `pre_subs` are not read-deps of this Dispatch (they become owned-deps
         // of the Bind Phase 4 spawns), so `work_owned_edges` is unaffected.
         let work = match work {
-            NodeWork::Dispatch { expr, state: prior_state } => {
+            NodeWork::Dispatch {
+                expr,
+                state: prior_state,
+            } => {
                 let prior_pre_subs = match prior_state {
                     DispatchState::Initialized(i) => i.pre_subs,
-                    _ => unreachable!(
-                        "add_with_chain only receives Dispatch in Initialized state"
-                    ),
+                    _ => unreachable!("add_with_chain only receives Dispatch in Initialized state"),
                 };
                 debug_assert!(
                     prior_pre_subs.is_empty(),
@@ -230,9 +240,14 @@ impl<'a> Scheduler<'a> {
             .filter(|p| !self.is_result_ready(*p))
             .collect();
         let no_park = work_park_producers(&work).is_empty();
-        let id = self
-            .store
-            .alloc_slot(Node { work, scope, frame, reserve_frame: None, function: None, chain });
+        let id = self.store.alloc_slot(Node {
+            work,
+            scope,
+            frame,
+            reserve_frame: None,
+            function: None,
+            chain,
+        });
         self.deps.install_for_slot(id, owned_edges, &pending_owned);
         for p in &pending_park {
             self.deps.add_park_edge(*p, id);

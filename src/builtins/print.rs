@@ -1,5 +1,5 @@
 use crate::machine::model::{KObject, KType, Parseable};
-use crate::machine::{ArgumentBundle, BodyResult, Scope, SchedulerHandle};
+use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope};
 
 use super::{arg, err, kw, register_builtin, sig};
 

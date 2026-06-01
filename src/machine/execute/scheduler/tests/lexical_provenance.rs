@@ -29,7 +29,10 @@ fn top_level_statements_get_root_frames_with_consecutive_indices() {
     );
     let chains: Vec<_> = ids.iter().map(|id| sched.chain_of(*id).unwrap()).collect();
     for (i, chain) in chains.iter().enumerate() {
-        assert!(chain.parent.is_none(), "top-level frame i={i} must have parent: None");
+        assert!(
+            chain.parent.is_none(),
+            "top-level frame i={i} must have parent: None"
+        );
         assert_eq!(chain.scope_id, root.id);
         // Indices start at 1; `BindingIndex::BUILTIN` occupies 0.
         assert_eq!(chain.index, i + 1);
@@ -127,10 +130,7 @@ fn cons_head_subdispatch_inherits_parent_chain() {
     // CONS; pinned indirectly via a multi-statement FN body folded into CONS.
     let arena = RuntimeArena::new();
     let scope = crate::builtins::test_support::run_root_silent(&arena);
-    crate::builtins::test_support::run(
-        scope,
-        "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))",
-    );
+    crate::builtins::test_support::run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     use crate::machine::model::KObject;
     let v = crate::builtins::test_support::run_one(
         scope,
@@ -149,9 +149,9 @@ fn add_with_chain_without_chain_panics() {
     let scope = default_scope(&arena, Box::new(std::io::sink()));
     let mut sched = Scheduler::new();
     sched.add_with_chain(
-        super::super::super::nodes::NodeWork::dispatch(KExpression::new(vec![
-            Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),
-        ])),
+        super::super::super::nodes::NodeWork::dispatch(KExpression::new(vec![Spanned::bare(
+            ExpressionPart::Literal(KLiteral::Number(1.0)),
+        )])),
         scope,
         None,
     );

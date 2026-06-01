@@ -1,4 +1,4 @@
-use crate::machine::core::kfunction::{Body, BodyResult, BuiltinFn, KFunction, BinderNameFn};
+use crate::machine::core::kfunction::{BinderNameFn, Body, BodyResult, BuiltinFn, KFunction};
 use crate::machine::core::{BindingIndex, KError, Scope};
 use crate::machine::model::types::{
     Argument, ExpressionSignature, KType, ReturnType, SignatureElement, UserTypeKind,
@@ -42,13 +42,22 @@ pub(crate) fn kw<'a>(s: &str) -> SignatureElement<'a> {
 
 /// Signature-element constructor for an argument slot.
 pub(crate) fn arg<'a>(name: &str, ktype: KType<'a>) -> SignatureElement<'a> {
-    SignatureElement::Argument(Argument { name: name.into(), ktype })
+    SignatureElement::Argument(Argument {
+        name: name.into(),
+        ktype,
+    })
 }
 
 /// Assemble an `ExpressionSignature` with `Resolved(return_type)`. Builtins needing
 /// `Deferred(...)` build the `ExpressionSignature` directly.
-pub(crate) fn sig<'a>(return_type: KType<'a>, elements: Vec<SignatureElement<'a>>) -> ExpressionSignature<'a> {
-    ExpressionSignature { return_type: ReturnType::Resolved(return_type), elements }
+pub(crate) fn sig<'a>(
+    return_type: KType<'a>,
+    elements: Vec<SignatureElement<'a>>,
+) -> ExpressionSignature<'a> {
+    ExpressionSignature {
+        return_type: ReturnType::Resolved(return_type),
+        elements,
+    }
 }
 
 pub fn register_builtin<'a>(
@@ -69,7 +78,16 @@ pub(crate) fn register_builtin_with_binder<'a>(
     body: BuiltinFn,
     binder_name: Option<BinderNameFn>,
 ) {
-    register_builtin_full(scope, name, signature, body, binder_name, None, false, false);
+    register_builtin_full(
+        scope,
+        name,
+        signature,
+        body,
+        binder_name,
+        None,
+        false,
+        false,
+    );
 }
 
 /// Like [`register_builtin_with_binder`] but stamps the overload as a *nominal* binder
@@ -127,28 +145,44 @@ pub fn default_scope<'a>(
     scope.register_type("Str".into(), KType::Str, BindingIndex::BUILTIN);
     scope.register_type("Bool".into(), KType::Bool, BindingIndex::BUILTIN);
     scope.register_type("Null".into(), KType::Null, BindingIndex::BUILTIN);
-    scope.register_type("List".into(), KType::List(Box::new(KType::Any)), BindingIndex::BUILTIN);
+    scope.register_type(
+        "List".into(),
+        KType::List(Box::new(KType::Any)),
+        BindingIndex::BUILTIN,
+    );
     scope.register_type(
         "Dict".into(),
         KType::Dict(Box::new(KType::Any), Box::new(KType::Any)),
         BindingIndex::BUILTIN,
     );
-    scope.register_type("KExpression".into(), KType::KExpression, BindingIndex::BUILTIN);
+    scope.register_type(
+        "KExpression".into(),
+        KType::KExpression,
+        BindingIndex::BUILTIN,
+    );
     scope.register_type("Type".into(), KType::Type, BindingIndex::BUILTIN);
     // User-declared-type surface names lower to the wildcard `AnyUserType { kind }`
     // carrier so the resolver and the parser-side fast path agree.
     scope.register_type(
         "Tagged".into(),
-        KType::AnyUserType { kind: UserTypeKind::tagged_sentinel() },
+        KType::AnyUserType {
+            kind: UserTypeKind::tagged_sentinel(),
+        },
         BindingIndex::BUILTIN,
     );
     scope.register_type(
         "Struct".into(),
-        KType::AnyUserType { kind: UserTypeKind::struct_sentinel() },
+        KType::AnyUserType {
+            kind: UserTypeKind::struct_sentinel(),
+        },
         BindingIndex::BUILTIN,
     );
     scope.register_type("Module".into(), KType::AnyModule, BindingIndex::BUILTIN);
-    scope.register_type("Signature".into(), KType::AnySignature, BindingIndex::BUILTIN);
+    scope.register_type(
+        "Signature".into(),
+        KType::AnySignature,
+        BindingIndex::BUILTIN,
+    );
     scope.register_type("Any".into(), KType::Any, BindingIndex::BUILTIN);
 
     let_binding::register(scope);

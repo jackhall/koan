@@ -6,9 +6,9 @@ use indexmap::IndexMap;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::scope_id::ScopeId;
 use crate::machine::core::source::{self, FileId, SourceLoc, Span};
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::types::Parseable;
 use crate::machine::model::values::KObject;
-use crate::machine::model::ast::KExpression;
 
 /// Structured runtime error propagated as a value via `BodyResult::Err`. `frames` accumulate
 /// as the error walks up the call graph; innermost call is `frames[0]`.
@@ -20,26 +20,51 @@ pub struct KError {
 
 #[derive(Clone)]
 pub enum KErrorKind {
-    TypeMismatch { arg: String, expected: String, got: String },
+    TypeMismatch {
+        arg: String,
+        expected: String,
+        got: String,
+    },
     MissingArg(String),
     UnboundName(String),
-    ArityMismatch { expected: usize, got: usize },
+    ArityMismatch {
+        expected: usize,
+        got: usize,
+    },
     /// Multiple registered functions matched with equal specificity.
-    AmbiguousDispatch { expr: String, candidates: usize },
-    DispatchFailed { expr: String, reason: String },
+    AmbiguousDispatch {
+        expr: String,
+        candidates: usize,
+    },
+    DispatchFailed {
+        expr: String,
+        reason: String,
+    },
     /// A builtin's structural assumption about an argument's shape didn't hold.
     ShapeError(String),
-    ParseError { message: String, span: Option<Span>, file: Option<FileId> },
+    ParseError {
+        message: String,
+        span: Option<Span>,
+        file: Option<FileId>,
+    },
     /// In-language `RAISE`-style builtin landing pad.
     User(String),
     /// Same-scope rebind rejected; cross-scope shadowing remains allowed.
-    Rebind { name: String },
+    Rebind {
+        name: String,
+    },
     /// Distinct from `Rebind` — collision is per-signature within the same name's bucket.
-    DuplicateOverload { name: String, signature: String },
+    DuplicateOverload {
+        name: String,
+        signature: String,
+    },
     /// LET on a Type-class binder with a non-type RHS. `got` is the rendered
     /// name of the offending value's type (e.g. `"Number"`), pre-stringified
     /// so `KError` stays lifetime-free.
-    TypeClassBindingExpectsType { name: String, got: String },
+    TypeClassBindingExpectsType {
+        name: String,
+        got: String,
+    },
     /// A `TypeNameRef` carrier reached `type_identity_for` but its `TypeExpr`
     /// couldn't elaborate because some referenced type-binding is still
     /// pending finalization.
@@ -50,7 +75,10 @@ pub enum KErrorKind {
     },
     /// Scheduler drained its work queues with nodes still parked on
     /// dependencies that can no longer fire (dependency cycle).
-    SchedulerDeadlock { pending: usize, sample: String },
+    SchedulerDeadlock {
+        pending: usize,
+        sample: String,
+    },
 }
 
 /// One entry in an error's call-stack trace. `function` and `expression` are
@@ -97,14 +125,21 @@ fn location_from_expr(expr: &KExpression<'_>) -> Option<SourceLoc> {
     expr.span.zip(expr.file).map(|(span, file)| {
         source::with(file, |f| {
             let (line, col_utf16) = f.resolve(span.start);
-            SourceLoc { path: f.path.clone(), line, col_utf16 }
+            SourceLoc {
+                path: f.path.clone(),
+                line,
+                col_utf16,
+            }
         })
     })
 }
 
 impl KError {
     pub fn new(kind: KErrorKind) -> Self {
-        Self { kind, frames: Vec::new() }
+        Self {
+            kind,
+            frames: Vec::new(),
+        }
     }
 
     /// Parse-pass error constructor. Resolves `file` from the thread-local
@@ -213,7 +248,10 @@ impl KErrorKind {
                 "AmbiguousDispatch".to_string(),
                 vec![
                     ("expr".to_string(), KObject::KString(expr.clone())),
-                    ("candidates".to_string(), KObject::Number(*candidates as f64)),
+                    (
+                        "candidates".to_string(),
+                        KObject::Number(*candidates as f64),
+                    ),
                 ],
             ),
             KErrorKind::DispatchFailed { expr, reason } => (
@@ -229,7 +267,11 @@ impl KErrorKind {
                 "ShapeError".to_string(),
                 vec![("message".to_string(), KObject::KString(msg.clone()))],
             ),
-            KErrorKind::ParseError { message, span, file } => {
+            KErrorKind::ParseError {
+                message,
+                span,
+                file,
+            } => {
                 let mut fields: Vec<(String, KObject<'a>)> = Vec::with_capacity(6);
                 fields.push(("message".to_string(), KObject::KString(message.clone())));
                 let (path, line, col_utf16) = match (span, file) {
@@ -258,7 +300,10 @@ impl KErrorKind {
                     "path".to_string(),
                     KObject::KString(path.unwrap_or_default()),
                 ));
-                fields.push(("line".to_string(), KObject::Number(line.unwrap_or(0) as f64)));
+                fields.push((
+                    "line".to_string(),
+                    KObject::Number(line.unwrap_or(0) as f64),
+                ));
                 fields.push((
                     "col_utf16".to_string(),
                     KObject::Number(col_utf16.unwrap_or(0) as f64),
@@ -323,12 +368,18 @@ impl fmt::Display for KErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             KErrorKind::TypeMismatch { arg, expected, got } => {
-                write!(f, "type mismatch for argument '{arg}': expected {expected}, got {got}")
+                write!(
+                    f,
+                    "type mismatch for argument '{arg}': expected {expected}, got {got}"
+                )
             }
             KErrorKind::MissingArg(name) => write!(f, "missing argument '{name}'"),
             KErrorKind::UnboundName(name) => write!(f, "unbound name '{name}'"),
             KErrorKind::ArityMismatch { expected, got } => {
-                write!(f, "arity mismatch = expected {expected} arguments, got {got}")
+                write!(
+                    f,
+                    "arity mismatch = expected {expected} arguments, got {got}"
+                )
             }
             KErrorKind::AmbiguousDispatch { expr, candidates } => write!(
                 f,
@@ -338,7 +389,11 @@ impl fmt::Display for KErrorKind {
                 write!(f, "dispatch failed for {expr}: {reason}")
             }
             KErrorKind::ShapeError(reason) => write!(f, "shape error: {reason}"),
-            KErrorKind::ParseError { message, span, file } => {
+            KErrorKind::ParseError {
+                message,
+                span,
+                file,
+            } => {
                 let loc = match (span, file) {
                     (Some(sp), Some(fid)) => source::with(*fid, |sf| {
                         let (line, col_utf16) = sf.resolve(sp.start);
@@ -365,7 +420,11 @@ impl fmt::Display for KErrorKind {
                 f,
                 "type-class binding `{name}` expects a type value, got `{got}`",
             ),
-            KErrorKind::TypeIdentityPendingAtDispatch { param, surface, pending_on } => write!(
+            KErrorKind::TypeIdentityPendingAtDispatch {
+                param,
+                surface,
+                pending_on,
+            } => write!(
                 f,
                 "per-call type identity for `{param}` (surface form `{surface}`) is \
                  pending finalize on producer node(s) {pending_on:?}",

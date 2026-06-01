@@ -10,10 +10,10 @@ use std::rc::Rc;
 
 use crate::machine::core::kfunction::SchedulerHandle;
 use crate::machine::core::source::Spanned;
+use crate::machine::core::ScopeId;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::KObject;
-use crate::machine::core::ScopeId;
 use crate::machine::{NodeId, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
@@ -44,7 +44,11 @@ pub(in crate::machine::execute) fn dispatch_construct_struct<'a>(
     launch(
         ctx,
         value_parts,
-        CtorKind::Struct { name, scope_id, fields },
+        CtorKind::Struct {
+            name,
+            scope_id,
+            fields,
+        },
         scope,
         idx,
     )
@@ -70,7 +74,12 @@ pub(in crate::machine::execute) fn dispatch_construct_tagged<'a>(
     launch(
         ctx,
         vec![value_part],
-        CtorKind::Tagged { schema, name, scope_id, tag },
+        CtorKind::Tagged {
+            schema,
+            name,
+            scope_id,
+            tag,
+        },
         scope,
         idx,
     )
@@ -115,8 +124,14 @@ fn launch<'a>(
         let values: Vec<&'a KObject<'a>> = staged_values.into_iter().map(|o| o.unwrap()).collect();
         return finish(scope, &kind, &values);
     }
-    let track = CtorTrack { subs, staged_values, kind };
-    let init = Initialized { pre_subs: Vec::new() };
+    let track = CtorTrack {
+        subs,
+        staged_values,
+        kind,
+    };
+    let init = Initialized {
+        pre_subs: Vec::new(),
+    };
     ctx.replace_with_parked_dispatch(DispatchState::ConstructorCall(CtorState::with_track(
         init, track,
     )))
@@ -130,10 +145,17 @@ pub(in crate::machine::execute::dispatch) fn finish<'a>(
     values: &[&'a KObject<'a>],
 ) -> NodeStep<'a> {
     let result = match kind {
-        CtorKind::Struct { name, scope_id, fields } => {
-            struct_value::construct(name, *scope_id, fields, values)
-        }
-        CtorKind::Tagged { schema, name, scope_id, tag } => {
+        CtorKind::Struct {
+            name,
+            scope_id,
+            fields,
+        } => struct_value::construct(name, *scope_id, fields, values),
+        CtorKind::Tagged {
+            schema,
+            name,
+            scope_id,
+            tag,
+        } => {
             debug_assert_eq!(values.len(), 1);
             tagged_union::construct(schema, name, *scope_id, tag.clone(), values[0])
         }

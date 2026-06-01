@@ -5,8 +5,8 @@
 //! [design/execution-model.md § Dependency graph invariants](../../../../design/execution-model.md#dependency-graph-invariants)
 //! for the Inv-A / Inv-B / Inv-C contract.
 
+use super::super::nodes::{work_deps, NodeWork};
 use crate::machine::NodeId;
-use super::super::nodes::{NodeWork, work_deps};
 
 /// Backward edge in `dep_edges[consumer]`. Kind only matters at reclaim:
 /// `free` recurses into `Owned` children but stops at `Notify` so the walk
@@ -121,7 +121,11 @@ impl DepGraph {
     /// parking `consumer` on `producer` would deadlock (e.g. `LET Ty = Ty`,
     /// where the sub-Dispatch would park on its own ancestor). Caller surfaces
     /// a structured error instead of installing the park edge.
-    pub(in crate::machine::execute::scheduler) fn would_create_cycle(&self, producer: NodeId, consumer: NodeId) -> bool {
+    pub(in crate::machine::execute::scheduler) fn would_create_cycle(
+        &self,
+        producer: NodeId,
+        consumer: NodeId,
+    ) -> bool {
         if producer == consumer {
             return true;
         }
@@ -194,6 +198,9 @@ impl DepGraph {
 
     #[cfg(test)]
     pub(super) fn notify_list_iter(&self) -> impl Iterator<Item = (usize, &Vec<usize>)> {
-        self.rows.iter().enumerate().map(|(i, row)| (i, &row.notify))
+        self.rows
+            .iter()
+            .enumerate()
+            .map(|(i, row)| (i, &row.notify))
     }
 }

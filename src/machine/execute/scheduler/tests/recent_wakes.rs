@@ -1,9 +1,9 @@
 use crate::builtins::default_scope;
 use crate::machine::core::source::Spanned;
-use crate::machine::execute::Scheduler;
 use crate::machine::execute::nodes::{LiftState, NodeOutput, NodeWork};
-use crate::machine::model::KObject;
+use crate::machine::execute::Scheduler;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
+use crate::machine::model::KObject;
 use crate::machine::{NodeId, RuntimeArena};
 
 /// `recent_wakes` is Dispatch-only; non-Dispatch consumers must drain empty.

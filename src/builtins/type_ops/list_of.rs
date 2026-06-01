@@ -1,5 +1,5 @@
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, Scope, SchedulerHandle};
+use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope};
 
 use crate::builtins::err;
 

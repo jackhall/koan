@@ -15,12 +15,12 @@
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use crate::machine::core::{CallArena, LexicalFrame, Scope};
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::NodeId;
+use crate::machine::core::{CallArena, LexicalFrame, Scope};
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::KError;
+use crate::machine::NodeId;
 
 use super::super::nodes::{LiftState, Node, NodeOutput, NodeWork};
 
@@ -29,21 +29,37 @@ use super::super::nodes::{LiftState, Node, NodeOutput, NodeWork};
 struct SlotVec<T>(Vec<T>);
 
 impl<T> SlotVec<T> {
-    fn new() -> Self { Self(Vec::new()) }
-    fn push(&mut self, v: T) { self.0.push(v); }
-    fn len(&self) -> usize { self.0.len() }
-    fn is_empty(&self) -> bool { self.0.is_empty() }
-    fn get(&self, id: NodeId) -> Option<&T> { self.0.get(id.index()) }
-    fn iter(&self) -> impl Iterator<Item = &T> { self.0.iter() }
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+    fn push(&mut self, v: T) {
+        self.0.push(v);
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn get(&self, id: NodeId) -> Option<&T> {
+        self.0.get(id.index())
+    }
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
 }
 
 impl<T> Index<NodeId> for SlotVec<T> {
     type Output = T;
-    fn index(&self, id: NodeId) -> &T { &self.0[id.index()] }
+    fn index(&self, id: NodeId) -> &T {
+        &self.0[id.index()]
+    }
 }
 
 impl<T> IndexMut<NodeId> for SlotVec<T> {
-    fn index_mut(&mut self, id: NodeId) -> &mut T { &mut self.0[id.index()] }
+    fn index_mut(&mut self, id: NodeId) -> &mut T {
+        &mut self.0[id.index()]
+    }
 }
 
 enum SlotState<'a> {
@@ -127,11 +143,16 @@ impl<'a> NodeStore<'a> {
         // SAFETY: `frame` is about to land in `self.slots[id]`, whose span equals `'a`.
         // The `Rc<CallArena>` co-located in the same node payload outlives every read
         // through this `'a` reference, and any prior frame was removed by `take_for_run`.
-        let scope: &'a Scope<'a> = unsafe {
-            std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope())
-        };
-        self.slots[id] =
-            SlotState::PreRun(Node { work, scope, frame: Some(frame), reserve_frame, function, chain });
+        let scope: &'a Scope<'a> =
+            unsafe { std::mem::transmute::<&Scope<'_>, &'a Scope<'a>>(frame.scope()) };
+        self.slots[id] = SlotState::PreRun(Node {
+            work,
+            scope,
+            frame: Some(frame),
+            reserve_frame,
+            function,
+            chain,
+        });
     }
 
     /// Callers must pair this with the dep-graph notify-walk so consumers
@@ -270,7 +291,10 @@ impl<'a> NodeStore<'a> {
     /// `run_dispatch` on entry via `Scheduler::take_recent_wakes`; the
     /// side-channel stays empty for non-`Dispatch` work by construction in
     /// `push_recent_wake`.
-    pub(in crate::machine::execute::scheduler) fn take_recent_wakes(&mut self, consumer: NodeId) -> Vec<NodeId> {
+    pub(in crate::machine::execute::scheduler) fn take_recent_wakes(
+        &mut self,
+        consumer: NodeId,
+    ) -> Vec<NodeId> {
         std::mem::take(&mut self.recent_wakes[consumer])
     }
 

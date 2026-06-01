@@ -1,9 +1,9 @@
 //! Per-declaration dispatch separation, wildcard slot admission, finalize idempotency.
 
-use crate::machine::BindingIndex;
 use crate::builtins::test_support::{parse_one, run_one, run_root_silent};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
+use crate::machine::BindingIndex;
 use crate::machine::RuntimeArena;
 
 /// `finalize_struct` is idempotent against a cycle-close payload-empty pre-install:
@@ -32,7 +32,10 @@ fn finalize_struct_idempotent_after_cycle_close_pre_install() {
     assert!(matches!(first, crate::machine::BodyResult::Value(_)));
     let stored = scope.resolve_type("Foo").expect("Foo identity in types");
     match stored {
-        KType::UserType { kind: UserTypeKind::Struct { fields }, .. } => {
+        KType::UserType {
+            kind: UserTypeKind::Struct { fields },
+            ..
+        } => {
             assert_eq!(fields.as_ref(), &vec![("x".to_string(), KType::Number)]);
         }
         other => panic!("expected populated Struct identity, got {other:?}"),
@@ -45,7 +48,9 @@ fn finalize_struct_idempotent_after_cycle_close_pre_install() {
         BindingIndex::nominal(0),
     );
     match second {
-        crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType { name, .. })) => {
+        crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType {
+            name, ..
+        })) => {
             assert_eq!(name, "Foo");
         }
         _ => panic!("expected short-circuit Value(KTypeValue(UserType)) from finalize_struct"),
@@ -131,4 +136,3 @@ fn wildcard_struct_slot_admits_any_struct_carrier() {
         _ => panic!("expected both PICK calls to return \"any\""),
     }
 }
-

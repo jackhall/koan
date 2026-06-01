@@ -16,20 +16,22 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::machine::core::source::{Span, Spanned};
-use crate::machine::model::is_keyword_token;
 use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeExpr};
+use crate::machine::model::is_keyword_token;
 use crate::machine::KError;
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
 
-static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap()
-});
+static FLOAT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap());
 
 /// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
 /// being desugared as `(attr 3 14)`. `start` is the token's original-source byte
 /// offset, used to compute absolute spans for atoms and operator triggers.
 pub fn classify_token<'a>(tok: &str, start: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
-    let token_span = Span { start, end: start + tok.len() as u32 };
+    let token_span = Span {
+        start,
+        end: start + tok.len() as u32,
+    };
     if let Some(part) = try_literal(tok) {
         return Ok(Spanned::at(part, token_span));
     }
@@ -97,7 +99,10 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
             Some(token_span),
         ));
     }
-    if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric() && *c != '_') {
+    if let Some(bad) = tok
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && *c != '_')
+    {
         return Err(KError::parse(
             format!(
                 "identifier `{tok}` contains invalid character {bad:?}; \
@@ -112,7 +117,9 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
 /// First char ASCII-uppercase plus at least one ASCII-lowercase elsewhere.
 fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
-    let Some(first) = chars.next() else { return false; };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_uppercase() {
         return false;
     }
@@ -158,7 +165,10 @@ fn parse_compound<'a>(
 
 fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
     let start = token_start + ci as u32;
-    Span { start, end: start + c.len_utf8() as u32 }
+    Span {
+        start,
+        end: start + c.len_utf8() as u32,
+    }
 }
 
 /// Errors on an empty atom — operators must have an atom between them.
@@ -276,7 +286,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn negation() {
         assert_eq!(classify("!foo").unwrap(), "[t(NOT) t(foo)]");
@@ -284,10 +293,7 @@ mod tests {
 
     #[test]
     fn double_negation() {
-        assert_eq!(
-            classify("!!foo").unwrap(),
-            "[t(NOT) [t(NOT) t(foo)]]"
-        );
+        assert_eq!(classify("!!foo").unwrap(), "[t(NOT) [t(NOT) t(foo)]]");
     }
 
     #[test]

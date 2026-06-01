@@ -10,8 +10,8 @@ use crate::machine::RuntimeArena;
 #[test]
 fn sharing_constraint_rejects_mismatched_module_type() {
     use crate::machine::model::ast::ExpressionPart;
-    use crate::machine::model::KType;
     use crate::machine::model::values::{Module, Signature};
+    use crate::machine::model::KType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
     // Real signature so the slot's `sig.sig_id()` is the one modules `mark_satisfies`.
@@ -27,18 +27,30 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         "NumPinned".into(),
     ));
     let m_num: &Module<'_> = arena.alloc_module(Module::new("NumPinned".into(), child_a));
-    m_num.type_members.borrow_mut().insert("Type".into(), KType::Number);
+    m_num
+        .type_members
+        .borrow_mut()
+        .insert("Type".into(), KType::Number);
     m_num.mark_satisfies(sig_id);
-    let m_num_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_num, frame: None }));
+    let m_num_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+        module: m_num,
+        frame: None,
+    }));
 
     let child_b = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
         "StrPinned".into(),
     ));
     let m_str: &Module<'_> = arena.alloc_module(Module::new("StrPinned".into(), child_b));
-    m_str.type_members.borrow_mut().insert("Type".into(), KType::Str);
+    m_str
+        .type_members
+        .borrow_mut()
+        .insert("Type".into(), KType::Str);
     m_str.mark_satisfies(sig_id);
-    let m_str_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_str, frame: None }));
+    let m_str_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+        module: m_str,
+        frame: None,
+    }));
 
     let child_c = arena.alloc_scope(crate::machine::Scope::child_under_module(
         scope,
@@ -46,7 +58,10 @@ fn sharing_constraint_rejects_mismatched_module_type() {
     ));
     let m_none: &Module<'_> = arena.alloc_module(Module::new("NoTypePin".into(), child_c));
     m_none.mark_satisfies(sig_id);
-    let m_none_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_none, frame: None }));
+    let m_none_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+        module: m_none,
+        frame: None,
+    }));
 
     let slot = KType::Signature {
         sig,
@@ -65,10 +80,16 @@ fn sharing_constraint_rejects_mismatched_module_type() {
         "Unascribed".into(),
     ));
     let m_unascribed: &Module<'_> = arena.alloc_module(Module::new("Unascribed".into(), child_d));
-    m_unascribed.type_members.borrow_mut().insert("Type".into(), KType::Number);
+    m_unascribed
+        .type_members
+        .borrow_mut()
+        .insert("Type".into(), KType::Number);
     // No mark_satisfies: compatible_sigs stays empty, so the sig-membership gate trips
     // before the pin comparison.
-    let m_unascribed_obj = arena.alloc(KObject::KTypeValue(KType::Module { module: m_unascribed, frame: None }));
+    let m_unascribed_obj = arena.alloc(KObject::KTypeValue(KType::Module {
+        module: m_unascribed,
+        frame: None,
+    }));
     assert!(!slot.matches_value(m_unascribed_obj));
     assert!(!slot.accepts_part(&ExpressionPart::Future(m_unascribed_obj)));
 }
@@ -167,7 +188,9 @@ fn functor_return_with_mismatched_sharing_constraint_errors() {
     );
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("MAKEBAD IntOrdView"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let res = sched.read_result(id);
     assert!(
         res.is_err(),

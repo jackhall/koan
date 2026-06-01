@@ -7,7 +7,7 @@ mod register;
 mod types;
 
 use super::Scope;
-use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::values::KObject;
 
 pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {

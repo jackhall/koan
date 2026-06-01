@@ -106,9 +106,7 @@ fn functor_bare_value_carrier_is_dispatch_no_match_not_typemismatch() {
     let err = run_expecting_dispatch_error(scope, parse_one("MAKETREE 7"));
     match &err.kind {
         KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_) => {}
-        _ => panic!(
-            "expected dispatch no-match (DispatchFailed) for non-type carrier, got {err}",
-        ),
+        _ => panic!("expected dispatch no-match (DispatchFailed) for non-type carrier, got {err}",),
     }
 }
 
@@ -137,10 +135,7 @@ fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
     use crate::machine::model::ReturnType;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)",
-    );
+    run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
     let f = crate::builtins::test_support::lookup_fn(scope, "BUILD");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -150,7 +145,10 @@ fn functor_deferred_return_resolves_against_builtin_keyed_bind() {
     let result = run_one(scope, parse_one("BUILD Number"));
     match result {
         KObject::Number(n) if *n == 42.0 => {}
-        other => panic!("expected Number(42) from BUILD Number, got {:?}", other.ktype()),
+        other => panic!(
+            "expected Number(42) from BUILD Number, got {:?}",
+            other.ktype()
+        ),
     }
 }
 
@@ -162,13 +160,12 @@ fn functor_deferred_return_builtin_keyed_mismatch_surfaces_per_call_diagnostic()
     use crate::machine::execute::Scheduler;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)",
-    );
+    run(scope, "FUNCTOR (BUILD Elt :Type) -> :Elt = (42)");
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("BUILD Str"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("BUILD Str should fail the per-call return-type check"),

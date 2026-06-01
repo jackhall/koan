@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{CallArena, KFuture, RuntimeArena};
-use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 /// Lift a KObject out of `dying_frame`'s arena into the destination arena, attaching
 /// an `Rc<CallArena>` to anchor any descendant that borrows into the dying arena.
@@ -44,7 +44,10 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
         }
         // Mirror of the `KFunction` arm: anchor on the dying frame if the module's
         // child scope was alloc'd there (e.g. a functor body's `MODULE Result = (...)`).
-        KObject::KTypeValue(KType::Module { module: m, frame: existing }) => {
+        KObject::KTypeValue(KType::Module {
+            module: m,
+            frame: existing,
+        }) => {
             let new_frame = if existing.is_some() {
                 existing.clone()
             } else {
@@ -56,16 +59,17 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                     None
                 }
             };
-            KObject::KTypeValue(KType::Module { module: m, frame: new_frame })
+            KObject::KTypeValue(KType::Module {
+                module: m,
+                frame: new_frame,
+            })
         }
         // Carrier type (`elem` / `k` / `v`) is preserved across rebuild: lifting only
         // attaches arena anchors, never changes a descendant's `ktype()`.
         KObject::List(items, elem) => {
             if items.iter().any(|x| needs_lift(x, dying_frame)) {
-                let lifted: Vec<KObject<'b>> = items
-                    .iter()
-                    .map(|x| lift_kobject(x, dying_frame))
-                    .collect();
+                let lifted: Vec<KObject<'b>> =
+                    items.iter().map(|x| lift_kobject(x, dying_frame)).collect();
                 KObject::list_with_type(Rc::new(lifted), (**elem).clone())
             } else {
                 KObject::list_with_type(Rc::clone(items), (**elem).clone())
@@ -82,7 +86,13 @@ pub(super) fn lift_kobject<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> 
                 KObject::dict_with_type(Rc::clone(entries), (**k).clone(), (**v).clone())
             }
         }
-        KObject::Tagged { tag, value, scope_id, name, type_args } => {
+        KObject::Tagged {
+            tag,
+            value,
+            scope_id,
+            name,
+            type_args,
+        } => {
             if needs_lift(value, dying_frame) {
                 KObject::Tagged {
                     tag: tag.clone(),
@@ -122,9 +132,7 @@ where
         KObject::List(items, _) => items.iter().any(|x| any_descendant(x, predicate)),
         KObject::Dict(entries, _, _) => entries.values().any(|x| any_descendant(x, predicate)),
         KObject::Tagged { value, .. } => any_descendant(value, predicate),
-        KObject::Struct { fields, .. } => fields
-            .values()
-            .any(|x| any_descendant(x, predicate)),
+        KObject::Struct { fields, .. } => fields.values().any(|x| any_descendant(x, predicate)),
         KObject::KExpression(e) => e.parts.iter().any(|p| match &p.value {
             ExpressionPart::Future(obj) => any_descendant(obj, predicate),
             ExpressionPart::Expression(inner) | ExpressionPart::SigiledTypeExpr(inner) => {
@@ -157,7 +165,10 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
         KObject::KFuture(_, Some(_)) => Some(false),
         KObject::KFuture(t, None) => Some(kfuture_borrows_dying_arena(t, dying_frame.arena())),
         KObject::KTypeValue(KType::Module { frame: Some(_), .. }) => Some(false),
-        KObject::KTypeValue(KType::Module { module: m, frame: None }) => {
+        KObject::KTypeValue(KType::Module {
+            module: m,
+            frame: None,
+        }) => {
             let module_runtime: *const RuntimeArena = m.child_scope().arena;
             Some(std::ptr::eq(module_runtime, dying_runtime))
         }
@@ -171,7 +182,10 @@ fn needs_lift<'b>(v: &KObject<'b>, dying_frame: &Rc<CallArena>) -> bool {
 /// borrow sites: the function ref's captured arena, the parsed expression's
 /// `Future(&KObject)` parts, and the bundle args.
 fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> bool {
-    if std::ptr::eq(t.function.captured_scope().arena, arena as *const RuntimeArena) {
+    if std::ptr::eq(
+        t.function.captured_scope().arena,
+        arena as *const RuntimeArena,
+    ) {
         return true;
     }
     if expression_borrows_arena(&t.parsed, arena) {
@@ -184,7 +198,9 @@ fn kfuture_borrows_dying_arena<'b>(t: &KFuture<'b>, arena: &RuntimeArena) -> boo
 }
 
 fn expression_borrows_arena<'b>(expr: &KExpression<'b>, arena: &RuntimeArena) -> bool {
-    expr.parts.iter().any(|p| part_borrows_arena(&p.value, arena))
+    expr.parts
+        .iter()
+        .any(|p| part_borrows_arena(&p.value, arena))
 }
 
 fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bool {
@@ -195,9 +211,9 @@ fn part_borrows_arena<'b>(part: &ExpressionPart<'b>, arena: &RuntimeArena) -> bo
         // recurse through the type-context marker.
         ExpressionPart::SigiledTypeExpr(e) => expression_borrows_arena(e, arena),
         ExpressionPart::ListLiteral(items) => items.iter().any(|p| part_borrows_arena(p, arena)),
-        ExpressionPart::DictLiteral(pairs) => pairs.iter().any(|(k, v)| {
-            part_borrows_arena(k, arena) || part_borrows_arena(v, arena)
-        }),
+        ExpressionPart::DictLiteral(pairs) => pairs
+            .iter()
+            .any(|(k, v)| part_borrows_arena(k, arena) || part_borrows_arena(v, arena)),
         _ => false,
     }
 }
@@ -218,14 +234,12 @@ fn kobject_borrows_arena<'b>(v: &KObject<'b>, arena: &RuntimeArena) -> bool {
             m.child_scope().arena,
             arena as *const RuntimeArena,
         )),
-        KObject::List(..)
-        | KObject::Dict(..)
-        | KObject::Tagged { .. }
-        | KObject::Struct { .. } => None,
+        KObject::List(..) | KObject::Dict(..) | KObject::Tagged { .. } | KObject::Struct { .. } => {
+            None
+        }
         _ => Some(false),
     })
 }
-
 
 #[cfg(test)]
 mod tests;

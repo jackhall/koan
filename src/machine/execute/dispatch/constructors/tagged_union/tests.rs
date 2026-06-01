@@ -2,12 +2,12 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::machine::model::ast::KExpression;
-use crate::parse::parse;
 use crate::builtins::default_scope;
 use crate::machine::core::{KErrorKind, RuntimeArena, Scope};
 use crate::machine::execute::Scheduler;
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::KObject;
+use crate::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 impl Write for SharedBuf {
@@ -15,7 +15,9 @@ impl Write for SharedBuf {
         self.0.borrow_mut().extend_from_slice(b);
         Ok(b.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
@@ -44,13 +46,12 @@ fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     sched.read(id)
 }
 
-fn run_one_err<'a>(
-    scope: &'a Scope<'a>,
-    expr: KExpression<'a>,
-) -> crate::machine::core::KError {
+fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> crate::machine::core::KError {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
-    sched.execute().expect("scheduler should not surface errors directly");
+    sched
+        .execute()
+        .expect("scheduler should not surface errors directly");
     match sched.read_result(id) {
         Ok(_) => panic!("expected error"),
         Err(e) => e.clone(),

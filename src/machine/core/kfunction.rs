@@ -21,7 +21,7 @@ pub mod pick;
 pub mod scheduler_handle;
 
 pub use argument_bundle::ArgumentBundle;
-pub use body::{Body, BodyResult, BuiltinFn, BinderBucketFn, BinderNameFn};
+pub use body::{BinderBucketFn, BinderNameFn, Body, BodyResult, BuiltinFn};
 pub use pick::ClassifiedSlots;
 pub use scheduler_handle::{CatchFinish, CombineFinish, NodeId, SchedulerHandle};
 
@@ -155,7 +155,10 @@ impl<'a> KFunction<'a> {
                             got: part_value.summarize(),
                         }));
                     }
-                    args.insert(arg.name.clone(), Rc::new(part_value.resolve_for(&arg.ktype)));
+                    args.insert(
+                        arg.name.clone(),
+                        Rc::new(part_value.resolve_for(&arg.ktype)),
+                    );
                 }
             }
         }
@@ -205,10 +208,10 @@ impl<'a> KFunction<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::machine::model::ast::{KLiteral, TypeExpr};
     use crate::builtins::test_support::{marker, run_root_bare};
     use crate::builtins::{default_scope, register_builtin};
     use crate::machine::core::{RuntimeArena, Scope};
+    use crate::machine::model::ast::{KLiteral, TypeExpr};
     use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType};
 
     fn body_any<'a>(
@@ -222,10 +225,7 @@ mod tests {
     /// Coarse bucket-key lookup over the scope chain. Returns the first strict-shape
     /// match, falling back to any overload registered under the bucket so the
     /// classification check still runs against a real `KFunction` shape.
-    fn find_match<'a>(
-        scope: &'a Scope<'a>,
-        expr: &KExpression<'a>,
-    ) -> Option<&'a KFunction<'a>> {
+    fn find_match<'a>(scope: &'a Scope<'a>, expr: &KExpression<'a>) -> Option<&'a KFunction<'a>> {
         let key = expr.untyped_key();
         let mut current: Option<&Scope<'a>> = Some(scope);
         while let Some(s) = current {
@@ -254,7 +254,10 @@ mod tests {
             return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("OP".into()),
-                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Number }),
+                SignatureElement::Argument(Argument {
+                    name: "v".into(),
+                    ktype: KType::Number,
+                }),
             ],
         };
         register_builtin(scope, "OP", sig, body_any);
@@ -363,7 +366,7 @@ mod tests {
     /// `KType::KFunctor`; unflagged stays `KType::KFunction`.
     #[test]
     fn function_value_ktype_projects_kfunctor_when_flagged() {
-        use crate::machine::model::types::{ReturnType, ExpressionSignature};
+        use crate::machine::model::types::{ExpressionSignature, ReturnType};
         let arena = RuntimeArena::new();
         let scope = run_root_bare(&arena);
         let make_sig = || ExpressionSignature {
@@ -409,7 +412,10 @@ mod tests {
             return_type: ReturnType::Resolved(KType::Any),
             elements: vec![
                 SignatureElement::Keyword("OP".into()),
-                SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
+                SignatureElement::Argument(Argument {
+                    name: "v".into(),
+                    ktype: KType::Any,
+                }),
             ],
         };
         register_builtin(scope, "OP", sig, body_any);

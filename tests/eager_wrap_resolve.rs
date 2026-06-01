@@ -27,7 +27,9 @@ fn run_capturing(source: &str) -> Result<String, koan::machine::KError> {
             self.0.borrow_mut().extend_from_slice(b);
             Ok(b.len())
         }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     interpret_with_writer(source, Box::new(SharedBuf(captured.clone())))?;
     let bytes = captured.borrow().clone();
@@ -128,8 +130,14 @@ fn dict_literal_backward_identifier_value_resolves_through_real_wake() {
     )
     .expect("backward Identifier in dict literal value should resolve");
     // Dict serialization wraps keys+values in `{}`.
-    assert!(out.trim().contains("99"), "expected output to contain `99`, got `{out}`");
-    assert!(out.trim().contains("\"a\""), "expected output to contain `\"a\"`, got `{out}`");
+    assert!(
+        out.trim().contains("99"),
+        "expected output to contain `99`, got `{out}`"
+    );
+    assert!(
+        out.trim().contains("\"a\""),
+        "expected output to contain `\"a\"`, got `{out}`"
+    );
 }
 
 /// Lazy-candidate eager filter, exercised end-to-end through the fused walk.

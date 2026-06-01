@@ -176,7 +176,10 @@ fn functor_binder_and_sigil_coexist() {
     match &outer.signature.return_type {
         ReturnType::Resolved(KType::KFunctor { .. }) => {}
         ReturnType::Resolved(other) => {
-            panic!("outer return type should elaborate to KFunctor, got {}", other.name())
+            panic!(
+                "outer return type should elaborate to KFunctor, got {}",
+                other.name()
+            )
         }
         ReturnType::Deferred(_) => {
             panic!("outer return type should be statically Resolved (no param ref)")

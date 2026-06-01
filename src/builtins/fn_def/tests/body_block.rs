@@ -11,10 +11,7 @@ use super::capture_program_output;
 fn multi_statement_fn_body_returns_last_value() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))",
-    );
+    run(scope, "FN (FOO) -> Number = ((LET x = 1) (LET y = 2) (y))");
     let v = run_one(scope, parse_one("FOO"));
     assert!(matches!(v, KObject::Number(n) if *n == 2.0));
 }
@@ -26,9 +23,21 @@ fn multi_statement_fn_body_runs_each_statement() {
     let bytes = capture_program_output(
         "FN (FOO) -> Str = ((PRINT \"a\") (PRINT \"b\") (PRINT \"c\"))\nFOO",
     );
-    assert!(bytes.windows(2).any(|w| w == b"a\n"), "missing 'a' in {:?}", String::from_utf8_lossy(&bytes));
-    assert!(bytes.windows(2).any(|w| w == b"b\n"), "missing 'b' in {:?}", String::from_utf8_lossy(&bytes));
-    assert!(bytes.windows(2).any(|w| w == b"c\n"), "missing 'c' in {:?}", String::from_utf8_lossy(&bytes));
+    assert!(
+        bytes.windows(2).any(|w| w == b"a\n"),
+        "missing 'a' in {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(
+        bytes.windows(2).any(|w| w == b"b\n"),
+        "missing 'b' in {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(
+        bytes.windows(2).any(|w| w == b"c\n"),
+        "missing 'c' in {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
 }
 
 /// Backward reference across siblings: the visibility predicate (`binder.idx < consumer`)

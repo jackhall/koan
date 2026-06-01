@@ -3,15 +3,15 @@ use std::io::Write;
 
 use crate::machine::model::ast::KExpression;
 
-use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
-use crate::machine::model::values::KObject;
 use super::arena::RuntimeArena;
-use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 pub use super::bindings::Resolution;
+use super::bindings::{ApplyOutcome, BindingIndex, Bindings};
 use super::kerror::{KError, KErrorKind};
 use super::lexical_frame::LexicalFrame;
 use super::pending::PendingQueue;
 use super::scope_id::ScopeId;
+use crate::machine::core::kfunction::{ArgumentBundle, KFunction, NodeId};
+use crate::machine::model::values::KObject;
 
 /// Index-gated visibility predicate. Production lookups apply this inside
 /// [`Bindings::lookup_value`] / [`Bindings::lookup_type`] /
@@ -116,7 +116,11 @@ pub enum ScopeKind {
 }
 
 impl<'a> Scope<'a> {
-    pub fn run_root(arena: &'a RuntimeArena, outer: Option<&'a Scope<'a>>, out: Box<dyn Write + 'a>) -> Self {
+    pub fn run_root(
+        arena: &'a RuntimeArena,
+        outer: Option<&'a Scope<'a>>,
+        out: Box<dyn Write + 'a>,
+    ) -> Self {
         Self {
             outer,
             bindings: ScopeBindings::Owned(Bindings::new()),
@@ -301,9 +305,15 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().register_function(name, fn_ref, obj, index);
+            return self
+                .write_target()
+                .register_function(name, fn_ref, obj, index);
         }
-        match self.bindings.get().try_register_function(&name, fn_ref, obj, index)? {
+        match self
+            .bindings
+            .get()
+            .try_register_function(&name, fn_ref, obj, index)?
+        {
             ApplyOutcome::Applied => Ok(()),
             ApplyOutcome::Conflict => {
                 self.pending.defer_function(name, fn_ref, obj, index);
@@ -354,7 +364,11 @@ impl<'a> Scope<'a> {
             return self.write_target().register_type_upsert(name, ktype, index);
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(ktype);
-        match self.bindings.get().try_register_type_upsert(&name, kt_ref, index)? {
+        match self
+            .bindings
+            .get()
+            .try_register_type_upsert(&name, kt_ref, index)?
+        {
             ApplyOutcome::Applied => Ok(kt_ref),
             ApplyOutcome::Conflict => panic!(
                 "register_type_upsert borrow conflict on `{name}` — nominal finalize sites \
@@ -380,7 +394,8 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
     ) {
         if self.bindings.is_borrowed() {
-            self.write_target().cycle_close_install_identity(name, ktype, index);
+            self.write_target()
+                .cycle_close_install_identity(name, ktype, index);
             return;
         }
         let kt_ref: &'a crate::machine::model::types::KType<'a> = self.arena.alloc(ktype);
@@ -446,11 +461,7 @@ impl<'a> Scope<'a> {
     /// [`visible`] before being returned; hidden entries (later siblings, or
     /// value-style binders before their lexical position) are skipped and the walk
     /// continues outward.
-    pub fn resolve_with_chain(
-        &self,
-        name: &str,
-        chain: Option<&LexicalFrame>,
-    ) -> Resolution<'a> {
+    pub fn resolve_with_chain(&self, name: &str, chain: Option<&LexicalFrame>) -> Resolution<'a> {
         self.ancestors()
             .find_map(|scope| {
                 let cutoff = chain.and_then(|c| c.index_for(scope.id));
@@ -471,7 +482,9 @@ impl<'a> Scope<'a> {
         if self.bindings.is_borrowed() {
             return self.write_target().install_placeholder(name, idx, index);
         }
-        self.bindings.get().try_install_placeholder(name, idx, index)
+        self.bindings
+            .get()
+            .try_install_placeholder(name, idx, index)
     }
 
     /// Bucket-keyed companion to [`Self::install_placeholder`]: appends a
@@ -487,9 +500,13 @@ impl<'a> Scope<'a> {
         index: BindingIndex,
     ) -> Result<(), KError> {
         if self.bindings.is_borrowed() {
-            return self.write_target().install_pending_overload(bucket, idx, index);
+            return self
+                .write_target()
+                .install_pending_overload(bucket, idx, index);
         }
-        self.bindings.get().try_install_pending_overload(bucket, idx, index)
+        self.bindings
+            .get()
+            .try_install_pending_overload(bucket, idx, index)
     }
 
     /// Type-side analogue of [`Self::lookup`] — no `Placeholder` variant. Visibility

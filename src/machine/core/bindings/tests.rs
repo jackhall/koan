@@ -15,7 +15,10 @@ fn try_register_type_inserts_into_types_map() {
         .try_register_type("Foo", kt, BindingIndex::BUILTIN)
         .expect("try_register_type should succeed on fresh bindings");
     assert!(matches!(outcome, ApplyOutcome::Applied));
-    let (stored, _) = *bindings.types().get("Foo").expect("Foo should be in types map");
+    let (stored, _) = *bindings
+        .types()
+        .get("Foo")
+        .expect("Foo should be in types map");
     assert!(std::ptr::eq(stored, kt));
     assert!(bindings.data().get("Foo").is_none());
 }
@@ -34,7 +37,10 @@ fn try_register_type_rejects_collision_with_rebind() {
         Ok(_) => panic!("second register on same name should error, not succeed"),
     };
     assert!(matches!(err.kind, KErrorKind::Rebind { ref name } if name == "Foo"));
-    let (stored, _) = *bindings.types().get("Foo").expect("Foo should still be present");
+    let (stored, _) = *bindings
+        .types()
+        .get("Foo")
+        .expect("Foo should still be present");
     assert!(std::ptr::eq(stored, kt1));
 }
 

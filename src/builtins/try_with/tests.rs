@@ -1,7 +1,9 @@
 //! TRY-WITH branch dispatch over success and per-`KErrorKind` arms, plus re-raise on
 //! no-match and wildcard `_` coverage of dispatcher-internal kinds.
 
-use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent, run_root_with_buf};
+use crate::builtins::test_support::{
+    parse_one, run, run_one_err, run_root_silent, run_root_with_buf,
+};
 use crate::machine::{KErrorKind, RuntimeArena};
 
 fn run_program(source: &str) -> Vec<u8> {
@@ -14,17 +16,13 @@ fn run_program(source: &str) -> Vec<u8> {
 
 #[test]
 fn ok_arm_runs_on_success_and_binds_it_to_value() {
-    let bytes = run_program(
-        "TRY (PRINT \"hello\") WITH (ok -> (PRINT \"caught ok\"))",
-    );
+    let bytes = run_program("TRY (PRINT \"hello\") WITH (ok -> (PRINT \"caught ok\"))");
     assert_eq!(bytes, b"hello\ncaught ok\n");
 }
 
 #[test]
 fn ok_binds_it_to_success_value() {
-    let bytes = run_program(
-        "TRY (PRINT \"value\") WITH (ok -> (PRINT it))",
-    );
+    let bytes = run_program("TRY (PRINT \"value\") WITH (ok -> (PRINT it))");
     assert_eq!(bytes, b"value\nvalue\n");
 }
 
@@ -87,9 +85,7 @@ fn missing_ok_arm_on_success_raises_shape_error() {
     let scope = run_root_silent(&arena);
     let err = run_one_err(
         scope,
-        parse_one(
-            "TRY (PRINT \"x\") WITH (type_mismatch -> (PRINT \"never\"))",
-        ),
+        parse_one("TRY (PRINT \"x\") WITH (type_mismatch -> (PRINT \"never\"))"),
     );
     assert!(
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("missing ok arm")),

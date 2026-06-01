@@ -18,10 +18,7 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
          MODULE IntOrd = ((LET Type = Number) (LET compare = 7))\n\
          LET IntOrdView = (IntOrd :! OrderedSig)",
     );
-    run(
-        scope,
-        "FN (USE_ID Er :OrderedSig) -> Er = (Er)",
-    );
+    run(scope, "FN (USE_ID Er :OrderedSig) -> Er = (Er)");
     let f = lookup_fn(scope, "USE_ID");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -30,7 +27,10 @@ fn functor_return_bare_parameter_name_resolves_per_call() {
     );
     let result = run_one(scope, parse_one("USE_ID IntOrdView"));
     match result {
-        KObject::KTypeValue(KType::Module { module: _, frame: _ }) => {}
+        KObject::KTypeValue(KType::Module {
+            module: _,
+            frame: _,
+        }) => {}
         other => panic!("expected KModule from USE_ID, got {:?}", other.ktype()),
     }
 }
@@ -57,7 +57,13 @@ fn functor_return_module_type_of_parameter_resolves_per_call() {
          LET IntOrdView = (IntOrd :| WithZero)",
     );
     assert!(
-        matches!(scope.resolve_type("IntOrdView"), Some(KType::Module { module: _, frame: _ })),
+        matches!(
+            scope.resolve_type("IntOrdView"),
+            Some(KType::Module {
+                module: _,
+                frame: _
+            })
+        ),
         "IntOrdView should be an opaquely-ascribed module (type-only) satisfying WithZero's \
          VAL zero slot",
     );
@@ -126,7 +132,9 @@ fn functor_deferred_return_type_mismatch_surfaces_per_call_diagnostic() {
     );
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("BAD IntOrdView"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("BAD should fail per-call return-type check"),

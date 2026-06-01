@@ -82,7 +82,12 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0, cursor: 0, just_jumped: false }
+        Self {
+            bytes,
+            pos: 0,
+            cursor: 0,
+            just_jumped: false,
+        }
     }
 
     fn peek_byte(&self) -> Option<u8> {
@@ -105,8 +110,7 @@ impl<'a> Reader<'a> {
     fn advance_codepoint(&mut self) -> char {
         let b = self.bytes[self.pos];
         let width = utf8_width(b);
-        let c = decode_char_at(self.bytes, self.pos)
-            .expect("masked stream must be valid UTF-8");
+        let c = decode_char_at(self.bytes, self.pos).expect("masked stream must be valid UTF-8");
         self.pos += width;
         if self.just_jumped {
             self.just_jumped = false;
@@ -139,7 +143,10 @@ impl<'a> Reader<'a> {
         self.pos += 1;
         let idx = self.read_decimal(LEN_SEP, "LITERAL marker idx")?;
         if self.peek_byte() != Some(LEN_SEP) {
-            return Err(KError::parse("LITERAL marker missing length separator", None));
+            return Err(KError::parse(
+                "LITERAL marker missing length separator",
+                None,
+            ));
         }
         self.pos += 1;
         let len = self.read_decimal_until_non_digit("LITERAL marker length")?;
@@ -163,7 +170,10 @@ impl<'a> Reader<'a> {
         }
         let digits = &self.bytes[start..self.pos];
         if digits.is_empty() {
-            return Err(KError::parse(format!("{label}: empty decimal payload"), None));
+            return Err(KError::parse(
+                format!("{label}: empty decimal payload"),
+                None,
+            ));
         }
         std::str::from_utf8(digits)
             .ok()
@@ -182,7 +192,10 @@ impl<'a> Reader<'a> {
         }
         let digits = &self.bytes[start..self.pos];
         if digits.is_empty() {
-            return Err(KError::parse(format!("{label}: empty decimal payload"), None));
+            return Err(KError::parse(
+                format!("{label}: empty decimal payload"),
+                None,
+            ));
         }
         std::str::from_utf8(digits)
             .ok()
@@ -278,7 +291,10 @@ pub fn build_tree<'a>(
                     &mut buf,
                     '[',
                     prev,
-                    Frame::List { items: Vec::new(), span_start },
+                    Frame::List {
+                        items: Vec::new(),
+                        span_start,
+                    },
                     &mut token_start,
                 )?;
                 reader.advance_byte();
@@ -304,7 +320,10 @@ pub fn build_tree<'a>(
                     &mut buf,
                     '{',
                     prev,
-                    Frame::Dict { dict: DictFrame::new(), span_start },
+                    Frame::Dict {
+                        dict: DictFrame::new(),
+                        span_start,
+                    },
                     &mut token_start,
                 )?;
                 reader.advance_byte();
@@ -338,7 +357,10 @@ pub fn build_tree<'a>(
                     match reader.peek_byte() {
                         Some(b'|') => {
                             reader.advance_byte();
-                            let span = Span { start: colon_cursor, end: reader.cursor };
+                            let span = Span {
+                                start: colon_cursor,
+                                end: reader.cursor,
+                            };
                             stack.push_part(Spanned::at(
                                 ExpressionPart::Keyword(":|".to_string()),
                                 span,
@@ -348,7 +370,10 @@ pub fn build_tree<'a>(
                         }
                         Some(b'!') => {
                             reader.advance_byte();
-                            let span = Span { start: colon_cursor, end: reader.cursor };
+                            let span = Span {
+                                start: colon_cursor,
+                                end: reader.cursor,
+                            };
                             stack.push_part(Spanned::at(
                                 ExpressionPart::Keyword(":!".to_string()),
                                 span,
@@ -411,11 +436,11 @@ pub fn build_tree<'a>(
                 flush_token(&mut stack, &mut buf, &mut token_start)?;
                 let start = reader.cursor;
                 reader.advance_byte();
-                let span = Span { start, end: reader.cursor };
-                stack.push_part(Spanned::at(
-                    ExpressionPart::Keyword(c.to_string()),
-                    span,
-                ));
+                let span = Span {
+                    start,
+                    end: reader.cursor,
+                };
+                stack.push_part(Spanned::at(ExpressionPart::Keyword(c.to_string()), span));
             }
             // `mask_quotes` rewrote the body as either an empty pair or
             // `LITERAL_MARK <idx> LEN_SEP <len>` + closing quote + trailing JUMP.
@@ -431,7 +456,10 @@ pub fn build_tree<'a>(
                         // Empty literal: no marker, no JUMP — both quotes
                         // advanced the cursor verbatim.
                         reader.advance_byte();
-                        let span = Span { start: literal_open_cursor, end: reader.cursor };
+                        let span = Span {
+                            start: literal_open_cursor,
+                            end: reader.cursor,
+                        };
                         stack.push_part(Spanned::at(
                             ExpressionPart::Literal(KLiteral::String(String::new())),
                             span,
@@ -454,7 +482,10 @@ pub fn build_tree<'a>(
                         let literal = quotes.get(&idx).cloned().ok_or_else(|| {
                             KError::parse(format!("unknown literal placeholder index: {idx}"), None)
                         })?;
-                        let span = Span { start: literal_open_cursor, end: reader.cursor };
+                        let span = Span {
+                            start: literal_open_cursor,
+                            end: reader.cursor,
+                        };
                         stack.push_part(Spanned::at(
                             ExpressionPart::Literal(KLiteral::String(literal)),
                             span,
@@ -500,7 +531,11 @@ fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
     let outer_span = expr.span;
     let outer_file = expr.file;
     while expr.parts.len() == 1 && matches!(expr.parts[0].value, ExpressionPart::Expression(_)) {
-        if let Some(Spanned { value: ExpressionPart::Expression(inner), .. }) = expr.parts.pop() {
+        if let Some(Spanned {
+            value: ExpressionPart::Expression(inner),
+            ..
+        }) = expr.parts.pop()
+        {
             expr = *inner;
         }
     }
@@ -515,7 +550,10 @@ fn peel_redundant<'a>(mut expr: KExpression<'a>) -> KExpression<'a> {
 }
 
 fn peel_spanned<'a>(part: Spanned<ExpressionPart<'a>>) -> Spanned<ExpressionPart<'a>> {
-    Spanned { value: peel_part(part.value), span: part.span }
+    Spanned {
+        value: peel_part(part.value),
+        span: part.span,
+    }
 }
 
 fn peel_part<'a>(part: ExpressionPart<'a>) -> ExpressionPart<'a> {

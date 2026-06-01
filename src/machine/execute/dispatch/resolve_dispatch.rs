@@ -97,35 +97,41 @@ impl<'a> Scope<'a> {
         // Innermost pending-overload producer, surfaced post-walk only if no
         // bucket admits anywhere.
         let mut pending_producer: Option<NodeId> = None;
-        let picked = self.ancestors().find_map(|scope| -> Option<ResolveOutcome<'a>> {
-            let cutoff = chain.and_then(|c| c.index_for(scope.id));
-            match scope.bindings().lookup_function(&key, cutoff) {
-                FunctionLookup::None => None,
-                FunctionLookup::Pending(producer) => {
-                    if pending_producer.is_none() {
-                        pending_producer = Some(producer);
-                    }
-                    None
-                }
-                FunctionLookup::Bucket(candidates) => {
-                    let bucket = OverloadBucket { candidates: &candidates };
-                    match bucket.pick_strict(expr, bare_outcomes) {
-                        PickPass::Picked(f) => Some(ResolveOutcome::Resolved(build_resolved(f, expr))),
-                        // Tie with an unevaluated eager part may break once it
-                        // evaluates: a typed `Future(List …)` re-dispatch is
-                        // element-aware where the bare literal is shape-only.
-                        // Defer; a genuine tie resurfaces as `Ambiguous` on the
-                        // post-eager-subs pass.
-                        PickPass::Tie(n) if expr_has_eager_part(expr) => {
-                            let _ = n;
-                            Some(ResolveOutcome::Deferred)
+        let picked = self
+            .ancestors()
+            .find_map(|scope| -> Option<ResolveOutcome<'a>> {
+                let cutoff = chain.and_then(|c| c.index_for(scope.id));
+                match scope.bindings().lookup_function(&key, cutoff) {
+                    FunctionLookup::None => None,
+                    FunctionLookup::Pending(producer) => {
+                        if pending_producer.is_none() {
+                            pending_producer = Some(producer);
                         }
-                        PickPass::Tie(n) => Some(ResolveOutcome::Ambiguous(n)),
-                        PickPass::Empty => None,
+                        None
+                    }
+                    FunctionLookup::Bucket(candidates) => {
+                        let bucket = OverloadBucket {
+                            candidates: &candidates,
+                        };
+                        match bucket.pick_strict(expr, bare_outcomes) {
+                            PickPass::Picked(f) => {
+                                Some(ResolveOutcome::Resolved(build_resolved(f, expr)))
+                            }
+                            // Tie with an unevaluated eager part may break once it
+                            // evaluates: a typed `Future(List …)` re-dispatch is
+                            // element-aware where the bare literal is shape-only.
+                            // Defer; a genuine tie resurfaces as `Ambiguous` on the
+                            // post-eager-subs pass.
+                            PickPass::Tie(n) if expr_has_eager_part(expr) => {
+                                let _ = n;
+                                Some(ResolveOutcome::Deferred)
+                            }
+                            PickPass::Tie(n) => Some(ResolveOutcome::Ambiguous(n)),
+                            PickPass::Empty => None,
+                        }
                     }
                 }
-            }
-        });
+            });
         if let Some(outcome) = picked {
             return outcome;
         }
@@ -207,58 +213,65 @@ fn signature_admits_strict<'a>(
     // `ExpressionPart::Expression` relaxes other non-`KExpression` slots to
     // admit `Expression` / `SigiledTypeExpr` parts speculatively (they route
     // through `eager_indices` post-pick). Required by FN / FUNCTOR overloads.
-    let has_lazy_kexpr_slot = sig.elements.iter().zip(&expr.parts).any(|(el, part)| match (
-        el,
-        &part.value,
-    ) {
-        (SignatureElement::Argument(arg), ExpressionPart::Expression(_)) => {
-            matches!(arg.ktype, KType::KExpression)
-        }
-        _ => false,
-    });
-    sig.elements.iter().zip(&expr.parts).enumerate().all(|(i, (el, part))| {
-        match (el, &part.value) {
-            (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
-            (SignatureElement::Keyword(_), _) => false,
-            (SignatureElement::Argument(arg), part_value) => {
-                // Binder declaration slot: the slot owns the name, so admission
-                // is shape-only. SigiledTypeExpr still admits speculatively (it
-                // sub-dispatches to a type-side carrier).
-                if matches!(arg.ktype, KType::Identifier | KType::TypeExprRef) {
-                    if matches!(part_value, ExpressionPart::SigiledTypeExpr(_)) {
+    let has_lazy_kexpr_slot =
+        sig.elements
+            .iter()
+            .zip(&expr.parts)
+            .any(|(el, part)| match (el, &part.value) {
+                (SignatureElement::Argument(arg), ExpressionPart::Expression(_)) => {
+                    matches!(arg.ktype, KType::KExpression)
+                }
+                _ => false,
+            });
+    sig.elements
+        .iter()
+        .zip(&expr.parts)
+        .enumerate()
+        .all(|(i, (el, part))| {
+            match (el, &part.value) {
+                (SignatureElement::Keyword(s), ExpressionPart::Keyword(t)) => s == t,
+                (SignatureElement::Keyword(_), _) => false,
+                (SignatureElement::Argument(arg), part_value) => {
+                    // Binder declaration slot: the slot owns the name, so admission
+                    // is shape-only. SigiledTypeExpr still admits speculatively (it
+                    // sub-dispatches to a type-side carrier).
+                    if matches!(arg.ktype, KType::Identifier | KType::TypeExprRef) {
+                        if matches!(part_value, ExpressionPart::SigiledTypeExpr(_)) {
+                            return true;
+                        }
+                        return arg.matches(part_value);
+                    }
+                    // SigiledTypeExpr in a non-KExpression slot sub-dispatches to a
+                    // type-side carrier.
+                    if matches!(part_value, ExpressionPart::SigiledTypeExpr(_))
+                        && !matches!(arg.ktype, KType::KExpression)
+                    {
                         return true;
                     }
-                    return arg.matches(part_value);
-                }
-                // SigiledTypeExpr in a non-KExpression slot sub-dispatches to a
-                // type-side carrier.
-                if matches!(part_value, ExpressionPart::SigiledTypeExpr(_))
-                    && !matches!(arg.ktype, KType::KExpression)
-                {
-                    return true;
-                }
-                // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`).
-                if has_lazy_kexpr_slot
-                    && matches!(part_value, ExpressionPart::Expression(_))
-                    && !matches!(arg.ktype, KType::KExpression)
-                {
-                    return true;
-                }
-                match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
-                    Some(NameOutcome::Resolved(obj)) => {
-                        arg.ktype.accepts_part(&ExpressionPart::Future(obj))
+                    // Lazy-candidate relaxation (see `has_lazy_kexpr_slot`).
+                    if has_lazy_kexpr_slot
+                        && matches!(part_value, ExpressionPart::Expression(_))
+                        && !matches!(arg.ktype, KType::KExpression)
+                    {
+                        return true;
                     }
-                    // Speculative admit so the splice/park walk can surface the
-                    // precise per-slot diagnostic.
-                    Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
-                        arg.matches(part_value)
+                    match bare_outcomes.get(i).and_then(|o| o.as_ref()) {
+                        Some(NameOutcome::Resolved(obj)) => {
+                            arg.ktype.accepts_part(&ExpressionPart::Future(obj))
+                        }
+                        // Speculative admit so the splice/park walk can surface the
+                        // precise per-slot diagnostic.
+                        Some(NameOutcome::Parked(_)) | Some(NameOutcome::Unbound(_)) => {
+                            arg.matches(part_value)
+                        }
+                        Some(NameOutcome::Cycle(_)) | Some(NameOutcome::ProducerErrored(_)) => {
+                            false
+                        }
+                        None => arg.matches(part_value),
                     }
-                    Some(NameOutcome::Cycle(_)) | Some(NameOutcome::ProducerErrored(_)) => false,
-                    None => arg.matches(part_value),
                 }
             }
-        }
-    })
+        })
 }
 
 /// True iff `expr` carries any part shape the scheduler's eager loop would

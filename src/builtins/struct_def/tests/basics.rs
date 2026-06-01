@@ -18,21 +18,33 @@ fn struct_named_registers_type_in_scope() {
     let scope = run_root_silent(&arena);
     // STRUCT is type-only now: the declaration yields a `KTypeValue(UserType)` whose
     // `Struct { fields }` payload carries the schema, and registers it into `types`.
-    let result = run_one(
-        scope,
-        parse_one("STRUCT Point = (x :Number, y :Number)"),
-    );
+    let result = run_one(scope, parse_one("STRUCT Point = (x :Number, y :Number)"));
     match result {
-        KObject::KTypeValue(KType::UserType { kind: UserTypeKind::Struct { fields }, name, .. }) => {
+        KObject::KTypeValue(KType::UserType {
+            kind: UserTypeKind::Struct { fields },
+            name,
+            ..
+        }) => {
             assert_eq!(name, "Point");
             assert_eq!(fields.len(), 2);
             assert_eq!(fields[0], ("x".to_string(), KType::Number));
             assert_eq!(fields[1], ("y".to_string(), KType::Number));
         }
-        other => panic!("expected KTypeValue(UserType Struct), got {:?}", other.ktype()),
+        other => panic!(
+            "expected KTypeValue(UserType Struct), got {:?}",
+            other.ktype()
+        ),
     }
-    let kt = scope.resolve_type("Point").expect("Point should be in types");
-    assert!(matches!(kt, KType::UserType { kind: UserTypeKind::Struct { .. }, .. }));
+    let kt = scope
+        .resolve_type("Point")
+        .expect("Point should be in types");
+    assert!(matches!(
+        kt,
+        KType::UserType {
+            kind: UserTypeKind::Struct { .. },
+            ..
+        }
+    ));
     assert!(
         scope.bindings().data().get("Point").is_none(),
         "STRUCT must not write a value-side carrier into data",
@@ -53,11 +65,20 @@ fn struct_returns_type_value() {
 fn struct_preserves_field_order() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run_one(scope, parse_one("STRUCT Backwards = (b :Number, a :Number)"));
+    run_one(
+        scope,
+        parse_one("STRUCT Backwards = (b :Number, a :Number)"),
+    );
     let kt = scope.resolve_type("Backwards").expect("Backwards in types");
     match kt {
-        KType::UserType { kind: UserTypeKind::Struct { fields }, .. } => {
-            assert_eq!(fields[0].0, "b", "first field should be `b` (declaration order)");
+        KType::UserType {
+            kind: UserTypeKind::Struct { fields },
+            ..
+        } => {
+            assert_eq!(
+                fields[0].0, "b",
+                "first field should be `b` (declaration order)"
+            );
             assert_eq!(fields[1].0, "a");
         }
         _ => panic!("expected UserType Struct identity for Backwards"),

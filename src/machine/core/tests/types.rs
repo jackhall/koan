@@ -1,11 +1,10 @@
 //! `register_type` / `resolve_type` tests: type bindings land in `types` (not `data`),
 //! `resolve_type` walks the outer chain, and inner scopes shadow outer type bindings.
 
-use crate::machine::BindingIndex;
 use super::super::{RuntimeArena, Scope};
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::model::types::KType;
-
+use crate::machine::BindingIndex;
 
 #[test]
 fn register_type_inserts_into_types_map_not_data() {

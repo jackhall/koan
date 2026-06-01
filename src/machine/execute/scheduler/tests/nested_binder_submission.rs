@@ -15,8 +15,12 @@ use crate::parse::parse;
 
 struct Sink;
 impl Write for Sink {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { Ok(b.len()) }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[test]

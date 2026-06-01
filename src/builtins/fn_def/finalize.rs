@@ -15,8 +15,8 @@ use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{Elaborator, ReturnType};
 use crate::machine::model::{ExpressionSignature, KObject, SignatureElement};
 use crate::machine::{
-    BindingIndex, Body, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope,
-    SchedulerHandle,
+    BindingIndex, Body, BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle,
+    Scope,
 };
 
 use super::return_type::{
@@ -65,10 +65,7 @@ pub(crate) struct CombineInputs<'a> {
 /// Arms differ only in how they shape the [`ReturnTypeCapture`] and merge the
 /// two parking lists. All eight `(ReturnTypeState × ParamListResult)` combos
 /// route to exactly one [`FnPlan`] outcome — no further routing downstream.
-pub(crate) fn classify<'a>(
-    rt: ReturnTypeState<'a>,
-    params: ParamListResult<'a>,
-) -> FnPlan<'a> {
+pub(crate) fn classify<'a>(rt: ReturnTypeState<'a>, params: ParamListResult<'a>) -> FnPlan<'a> {
     match (rt, params) {
         (ReturnTypeState::Done(kt), ParamListResult::Done(elements)) => FnPlan::Synchronous {
             elements,
@@ -89,7 +86,10 @@ pub(crate) fn classify<'a>(
         }
         (
             ReturnTypeState::Done(kt),
-            ParamListResult::Pending { park_producers, sub_dispatches },
+            ParamListResult::Pending {
+                park_producers,
+                sub_dispatches,
+            },
         ) => FnPlan::Combine(CombineInputs {
             capture: ReturnTypeCapture::Resolved(kt),
             park_producers,
@@ -98,7 +98,10 @@ pub(crate) fn classify<'a>(
         }),
         (
             ReturnTypeState::Deferred(d),
-            ParamListResult::Pending { park_producers, sub_dispatches },
+            ParamListResult::Pending {
+                park_producers,
+                sub_dispatches,
+            },
         ) => FnPlan::Combine(CombineInputs {
             // Return type is per-call-deferred: carry the carrier verbatim
             // through to `finalize_fn` once params land.
@@ -109,7 +112,10 @@ pub(crate) fn classify<'a>(
         }),
         (
             ReturnTypeState::ExprToSubDispatch(e),
-            ParamListResult::Pending { park_producers, sub_dispatches },
+            ParamListResult::Pending {
+                park_producers,
+                sub_dispatches,
+            },
         ) => {
             // `[park ++ return_type_sub ++ sub_dispatches...]` puts the
             // return-type result at `results[park_producers.len()]`.
@@ -132,8 +138,14 @@ pub(crate) fn classify<'a>(
             })
         }
         (
-            ReturnTypeState::Pending { te, producers: rt_producers },
-            ParamListResult::Pending { mut park_producers, sub_dispatches },
+            ReturnTypeState::Pending {
+                te,
+                producers: rt_producers,
+            },
+            ParamListResult::Pending {
+                mut park_producers,
+                sub_dispatches,
+            },
         ) => {
             park_producers.extend(rt_producers);
             FnPlan::Combine(CombineInputs {
@@ -205,7 +217,10 @@ pub(crate) fn finalize_fn_with_flag<'a>(
         }
     };
 
-    let user_sig = ExpressionSignature { return_type, elements };
+    let user_sig = ExpressionSignature {
+        return_type,
+        elements,
+    };
 
     let arena = scope.arena;
     // `is_nominal_binder = false` regardless of `is_functor`: the FUNCTOR
@@ -249,7 +264,12 @@ pub(crate) fn defer_via_combine<'a>(
     is_functor: bool,
     bind_index: BindingIndex,
 ) -> BodyResult<'a> {
-    let CombineInputs { capture, park_producers, return_type_sub, sub_dispatches } = inputs;
+    let CombineInputs {
+        capture,
+        park_producers,
+        return_type_sub,
+        sub_dispatches,
+    } = inputs;
     // Result layout: `[park_producers ++ return_type_sub? ++ sub_dispatches...]`.
     // Park producers are read-only (no cascade-free); the rest are owned subs.
     // `splice_layout[k] = (slot_idx, results_pos)` indexes the combined slice;

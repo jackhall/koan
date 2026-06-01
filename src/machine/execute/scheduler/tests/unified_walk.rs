@@ -47,7 +47,9 @@ fn self_referential_let_surfaces_unbound_name() {
     let exprs = parse("LET Ty = Ty").expect("parse should succeed");
     let mut sched = Scheduler::new();
     let ids = sched.enter_block(scope.id, exprs, scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(ids[0]) {
         Err(e) => e.clone(),
         Ok(_) => panic!("self-referential LET should surface UnboundName"),
@@ -76,7 +78,9 @@ fn forward_reference_parks_then_resolves_on_wake() {
     .expect("parse should succeed");
     let mut sched = Scheduler::new();
     sched.enter_block(scope.id, exprs, scope);
-    sched.execute().expect("dispatch with bare-name park should complete");
+    sched
+        .execute()
+        .expect("dispatch with bare-name park should complete");
     let captured = buf.borrow().clone();
     // `fwd` binds the struct's `KTypeValue(UserType)` identity; exact rendering of
     // that type value isn't load-bearing here.

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::ExpressionPart;
 use crate::machine::core::{KError, KErrorKind, ScopeId};
+use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
 

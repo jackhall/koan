@@ -37,8 +37,10 @@ fn fn_call_dispatches_body_at_call_time() {
     run(scope, "LET x = 42\nFN (GETX) -> Number = (x)");
 
     let result = run_one(scope, parse_one("GETX"));
-    assert!(matches!(result, KObject::Number(n) if *n == 42.0),
-        "GETX should return the value bound to x at call time");
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 42.0),
+        "GETX should return the value bound to x at call time"
+    );
 }
 
 #[test]

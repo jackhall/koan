@@ -3,7 +3,9 @@
 use super::*;
 use crate::machine::core::kfunction::NodeId;
 
-fn render(kind: KErrorKind) -> String { format!("{}", KError::new(kind)) }
+fn render(kind: KErrorKind) -> String {
+    format!("{}", KError::new(kind))
+}
 
 #[test]
 fn display_type_mismatch() {
@@ -12,22 +14,34 @@ fn display_type_mismatch() {
         expected: "Number".into(),
         got: "Str".into(),
     });
-    assert_eq!(s, "type mismatch for argument 'x': expected Number, got Str");
+    assert_eq!(
+        s,
+        "type mismatch for argument 'x': expected Number, got Str"
+    );
 }
 
 #[test]
 fn display_missing_arg() {
-    assert_eq!(render(KErrorKind::MissingArg("y".into())), "missing argument 'y'");
+    assert_eq!(
+        render(KErrorKind::MissingArg("y".into())),
+        "missing argument 'y'"
+    );
 }
 
 #[test]
 fn display_unbound_name() {
-    assert_eq!(render(KErrorKind::UnboundName("foo".into())), "unbound name 'foo'");
+    assert_eq!(
+        render(KErrorKind::UnboundName("foo".into())),
+        "unbound name 'foo'"
+    );
 }
 
 #[test]
 fn display_arity_mismatch() {
-    let s = render(KErrorKind::ArityMismatch { expected: 2, got: 3 });
+    let s = render(KErrorKind::ArityMismatch {
+        expected: 2,
+        got: 3,
+    });
     assert_eq!(s, "arity mismatch = expected 2 arguments, got 3");
 }
 
@@ -37,7 +51,10 @@ fn display_ambiguous_dispatch() {
         expr: "(F 1)".into(),
         candidates: 2,
     });
-    assert_eq!(s, "ambiguous dispatch: 2 candidates match (F 1) with equal specificity");
+    assert_eq!(
+        s,
+        "ambiguous dispatch: 2 candidates match (F 1) with equal specificity"
+    );
 }
 
 #[test]
@@ -51,21 +68,25 @@ fn display_dispatch_failed() {
 
 #[test]
 fn display_shape_error() {
-    assert_eq!(render(KErrorKind::ShapeError("bad parts".into())), "shape error: bad parts");
+    assert_eq!(
+        render(KErrorKind::ShapeError("bad parts".into())),
+        "shape error: bad parts"
+    );
 }
 
 #[test]
 fn display_parse_error_without_location() {
-    let kind = KErrorKind::ParseError { message: "eof".into(), span: None, file: None };
+    let kind = KErrorKind::ParseError {
+        message: "eof".into(),
+        span: None,
+        file: None,
+    };
     assert_eq!(render(kind), "parse error: eof");
 }
 
 #[test]
 fn display_parse_error_with_location_renders_path_line_col() {
-    let id = source::register(source::SourceFile::new(
-        "<t>",
-        "a\nbcd".to_string(),
-    ));
+    let id = source::register(source::SourceFile::new("<t>", "a\nbcd".to_string()));
     let kind = KErrorKind::ParseError {
         message: "bad token".into(),
         span: Some(Span { start: 3, end: 4 }),
@@ -91,7 +112,10 @@ fn display_duplicate_overload() {
         name: "F".into(),
         signature: "(Number)".into(),
     });
-    assert_eq!(s, "function 'F' already has an overload with signature (Number)");
+    assert_eq!(
+        s,
+        "function 'F' already has an overload with signature (Number)"
+    );
 }
 
 #[test]
@@ -100,7 +124,10 @@ fn display_type_class_binding_expects_type() {
         name: "T".into(),
         got: "Number".into(),
     });
-    assert_eq!(s, "type-class binding `T` expects a type value, got `Number`");
+    assert_eq!(
+        s,
+        "type-class binding `T` expects a type value, got `Number`"
+    );
 }
 
 #[test]
@@ -127,7 +154,11 @@ fn with_frame_renders_call_stack_inline() {
 
 #[test]
 fn frame_with_location_appends_path_line_col() {
-    let loc = SourceLoc { path: "lib.koan".into(), line: 4, col_utf16: 7 };
+    let loc = SourceLoc {
+        path: "lib.koan".into(),
+        line: 4,
+        col_utf16: 7,
+    };
     let err = KError::new(KErrorKind::User("boom".into())).with_frame(Frame {
         function: "F".into(),
         expression: "(F 1)".into(),
@@ -138,15 +169,14 @@ fn frame_with_location_appends_path_line_col() {
 
 #[test]
 fn debug_matches_display() {
-    let err = KError::new(KErrorKind::MissingArg("z".into()))
-        .with_frame(Frame::bare("F", "(F)"));
+    let err = KError::new(KErrorKind::MissingArg("z".into())).with_frame(Frame::bare("F", "(F)"));
     assert_eq!(format!("{:?}", err), format!("{}", err));
 }
 
 #[test]
 fn clone_for_propagation_preserves_kind_and_frames() {
-    let err = KError::new(KErrorKind::UnboundName("q".into()))
-        .with_frame(Frame::bare("H", "(H q)"));
+    let err =
+        KError::new(KErrorKind::UnboundName("q".into())).with_frame(Frame::bare("H", "(H q)"));
     let copy = err.clone_for_propagation();
     assert_eq!(copy.to_string(), err.to_string());
     assert_eq!(copy.frames.len(), 1);

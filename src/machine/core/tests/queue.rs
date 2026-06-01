@@ -1,13 +1,13 @@
 //! `queue` arm of `machine::core` tests.
 
-use crate::machine::BindingIndex;
 use super::super::RuntimeArena;
 use crate::builtins::test_support::run_root_bare;
 use crate::machine::core::kfunction::{Body, KFunction};
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
+use crate::machine::BindingIndex;
 
-use super::{unit_signature, body_no_op};
+use super::{body_no_op, unit_signature};
 
 /// A re-entrant `bind_value` under a live `data` borrow queues silently; the held
 /// iteration sees the pre-write state and the write surfaces only after `drain_pending`.
@@ -16,13 +16,17 @@ fn add_during_active_data_borrow_queues_and_drains() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     let pre = arena.alloc(KObject::Number(1.0));
-    scope.bind_value("pre".to_string(), pre, BindingIndex::BUILTIN).unwrap();
+    scope
+        .bind_value("pre".to_string(), pre, BindingIndex::BUILTIN)
+        .unwrap();
 
     let new_entry = arena.alloc(KObject::Number(2.0));
     {
         let snapshot = scope.bindings().data();
         assert!(snapshot.contains_key("pre"));
-        scope.bind_value("during".to_string(), new_entry, BindingIndex::BUILTIN).unwrap();
+        scope
+            .bind_value("during".to_string(), new_entry, BindingIndex::BUILTIN)
+            .unwrap();
         assert!(!snapshot.contains_key("during"));
     }
     assert!(scope.bindings().data().get("during").is_none());
@@ -40,15 +44,27 @@ fn add_during_active_data_borrow_queues_and_drains() {
 fn drain_debug_asserts_on_invariant_violation() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let kfn1 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let kfn1 = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj1 = arena.alloc(KObject::KFunction(kfn1, None));
-    let kfn2 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let kfn2 = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj2 = arena.alloc(KObject::KFunction(kfn2, None));
 
     let snapshot = scope.bindings().data();
-    scope.bind_value("a".to_string(), obj1, BindingIndex::BUILTIN).unwrap();
+    scope
+        .bind_value("a".to_string(), obj1, BindingIndex::BUILTIN)
+        .unwrap();
     drop(snapshot);
-    scope.register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN).unwrap();
+    scope
+        .register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN)
+        .unwrap();
     scope.drain_pending();
 }
 
@@ -59,12 +75,18 @@ fn drain_debug_asserts_on_invariant_violation() {
 fn register_function_defers_and_drains_through_function_arm() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let kfn = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let kfn = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj = arena.alloc(KObject::KFunction(kfn, None));
     let key = kfn.signature.untyped_key();
     {
         let snapshot = scope.bindings().functions();
-        scope.register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN).unwrap();
+        scope
+            .register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN)
+            .unwrap();
         assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
     }
     scope.drain_pending();
@@ -83,12 +105,16 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
     let obj = arena.alloc(KObject::Number(7.0));
 
     let snapshot = scope.bindings().data();
-    scope.bind_value("v".to_string(), obj, BindingIndex::BUILTIN).unwrap();
+    scope
+        .bind_value("v".to_string(), obj, BindingIndex::BUILTIN)
+        .unwrap();
     scope.drain_pending();
     assert!(!snapshot.contains_key("v"));
     drop(snapshot);
     scope.drain_pending();
-    assert!(matches!(scope.bindings().data().get("v").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0));
+    assert!(
+        matches!(scope.bindings().data().get("v").map(|(o, _)| *o), Some(KObject::Number(n)) if *n == 7.0)
+    );
 }
 
 /// `Function`-arm `Conflict` re-queue — same shape as the `Value` variant, but the
@@ -97,12 +123,18 @@ fn drain_requeues_value_on_persistent_borrow_conflict() {
 fn drain_requeues_function_on_persistent_borrow_conflict() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let kfn = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let kfn = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj = arena.alloc(KObject::KFunction(kfn, None));
     let key = kfn.signature.untyped_key();
 
     let snapshot = scope.bindings().functions();
-    scope.register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN).unwrap();
+    scope
+        .register_function("g".to_string(), kfn, obj, BindingIndex::BUILTIN)
+        .unwrap();
     scope.drain_pending();
     assert!(snapshot.get(&key).map(|b| b.is_empty()).unwrap_or(true));
     drop(snapshot);
@@ -136,15 +168,27 @@ fn drain_requeues_type_on_persistent_borrow_conflict() {
 fn drain_debug_asserts_on_function_arm_invariant_violation() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let kfn1 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let kfn1 = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj1 = arena.alloc(KObject::KFunction(kfn1, None));
-    let kfn2 = arena.alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let kfn2 = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj2 = arena.alloc(KObject::KFunction(kfn2, None));
 
     let snapshot = scope.bindings().functions();
-    scope.register_function("a".to_string(), kfn1, obj1, BindingIndex::BUILTIN).unwrap();
+    scope
+        .register_function("a".to_string(), kfn1, obj1, BindingIndex::BUILTIN)
+        .unwrap();
     drop(snapshot);
-    scope.register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN).unwrap();
+    scope
+        .register_function("b".to_string(), kfn2, obj2, BindingIndex::BUILTIN)
+        .unwrap();
     scope.drain_pending();
 }
 

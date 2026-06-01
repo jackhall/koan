@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use koan::builtins::default_scope;
 use koan::machine::model::{KObject, KType, Parseable};
-use koan::machine::{RuntimeArena, Scheduler, Scope, SchedulerHandle};
+use koan::machine::{RuntimeArena, Scheduler, SchedulerHandle, Scope};
 use koan::parse::parse;
 
 /// Scaffolding: spin up a fresh arena + default scope, run `source` end-to-end through
@@ -25,7 +25,9 @@ fn run<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>, source: &str
             self.0.borrow_mut().extend_from_slice(b);
             Ok(b.len())
         }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     let scope = default_scope(arena, Box::new(SharedBuf(captured)));
     let exprs = parse(source).expect("parse should succeed");
@@ -41,8 +43,12 @@ fn run_collecting_first_err(source: &str) -> Option<koan::machine::KError> {
     let arena = RuntimeArena::new();
     struct Sink;
     impl std::io::Write for Sink {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { Ok(b.len()) }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     let scope = default_scope(&arena, Box::new(Sink));
     let exprs = parse(source).expect("parse should succeed");
@@ -109,7 +115,10 @@ fn module_body_backward_value_reference_resolves() {
     let scope = run(&arena, captured, "MODULE Mod = ((LET x = 1) (LET y = x))");
     // MODULE is type-only — the `&Module` rides the identity in `types`.
     let m = match scope.resolve_type("Mod") {
-        Some(KType::Module { module: m, frame: _ }) => *m,
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
         _ => panic!("Mod should be a module identity in types"),
     };
     let y = m.child_scope().lookup("y");
@@ -131,7 +140,10 @@ fn multi_name_forward_reference_is_unbound() {
     )
     .expect("forward refs in FN call should surface UnboundName");
     assert!(
-        matches!(&err.kind, KErrorKind::UnboundName(_) | KErrorKind::DispatchFailed { .. }),
+        matches!(
+            &err.kind,
+            KErrorKind::UnboundName(_) | KErrorKind::DispatchFailed { .. }
+        ),
         "expected UnboundName or DispatchFailed, got {err}",
     );
 }
@@ -168,7 +180,10 @@ fn forward_call_by_name_is_dispatch_failure() {
     )
     .expect("forward FN call should surface a dispatch error");
     assert!(
-        matches!(&err.kind, KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_)),
+        matches!(
+            &err.kind,
+            KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_)
+        ),
         "expected DispatchFailed or UnboundName, got {err}",
     );
 }
@@ -187,7 +202,10 @@ fn forward_attr_lookup_through_value_let_is_unbound() {
     )
     .expect("forward ATTR on value LET should surface UnboundName");
     assert!(
-        matches!(&err.kind, KErrorKind::UnboundName(_) | KErrorKind::DispatchFailed { .. }),
+        matches!(
+            &err.kind,
+            KErrorKind::UnboundName(_) | KErrorKind::DispatchFailed { .. }
+        ),
         "expected UnboundName or DispatchFailed, got {err}",
     );
 }
@@ -219,7 +237,10 @@ fn forward_let_type_alias_is_unbound() {
     let err = run_collecting_first_err("LET Ty = Un\nLET Un = Number")
         .expect("forward LET type alias should surface UnboundName");
     assert!(
-        matches!(&err.kind, KErrorKind::UnboundName(_) | KErrorKind::DispatchFailed { .. }),
+        matches!(
+            &err.kind,
+            KErrorKind::UnboundName(_) | KErrorKind::DispatchFailed { .. }
+        ),
         "expected UnboundName or DispatchFailed, got {err}",
     );
 }
@@ -317,15 +338,20 @@ fn producer_error_propagates_to_parked_consumer() {
             self.0.borrow_mut().extend_from_slice(b);
             Ok(b.len())
         }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     let scope = default_scope(&arena, Box::new(SharedBuf(captured.clone())));
     let exprs = parse(
         "LET x = (UNDEFINED_FN)\n\
          LET y = (x)",
-    ).expect("parse should succeed");
+    )
+    .expect("parse should succeed");
     let mut sched = Scheduler::new();
-    for e in exprs { let _ = sched.add_dispatch(e, scope); }
+    for e in exprs {
+        let _ = sched.add_dispatch(e, scope);
+    }
     let exec_result = sched.execute();
     let err = exec_result.expect_err("execute should surface UNDEFINED_FN's dispatch failure");
     assert!(
@@ -364,7 +390,9 @@ fn fn_bare_arg_call_parks_on_pending_overload_bucket() {
     assert!(
         matches!(scope.lookup("out"), Some(KObject::Number(n)) if *n == 7.0),
         "expected `out` to be 7.0 via bucket-keyed FN park; got {}",
-        scope.lookup("out").map_or("None".to_string(), |o| o.summarize()),
+        scope
+            .lookup("out")
+            .map_or("None".to_string(), |o| o.summarize()),
     );
 }
 

@@ -22,47 +22,59 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "LIST_OF",
-        sig(KType::TypeExprRef, vec![kw("LIST_OF"), arg("elem", KType::TypeExprRef)]),
+        sig(
+            KType::TypeExprRef,
+            vec![kw("LIST_OF"), arg("elem", KType::TypeExprRef)],
+        ),
         list_of::body,
     );
     register_builtin(
         scope,
         "DICT_OF",
-        sig(KType::TypeExprRef, vec![
-            kw("DICT_OF"),
-            arg("key", KType::TypeExprRef),
-            arg("value", KType::TypeExprRef),
-        ]),
+        sig(
+            KType::TypeExprRef,
+            vec![
+                kw("DICT_OF"),
+                arg("key", KType::TypeExprRef),
+                arg("value", KType::TypeExprRef),
+            ],
+        ),
         dict_of::body,
     );
     register_builtin(
         scope,
         "FUNCTION_OF",
-        sig(KType::TypeExprRef, vec![
-            kw("FUNCTION_OF"),
-            arg("args", KType::KExpression),
-            kw("->"),
-            arg("ret", KType::TypeExprRef),
-        ]),
+        sig(
+            KType::TypeExprRef,
+            vec![
+                kw("FUNCTION_OF"),
+                arg("args", KType::KExpression),
+                kw("->"),
+                arg("ret", KType::TypeExprRef),
+            ],
+        ),
         function_of::body,
     );
     register_builtin(
         scope,
         "MODULE_TYPE_OF",
-        sig(KType::TypeExprRef, vec![
-            kw("MODULE_TYPE_OF"),
-            arg("m", KType::AnyModule),
-            arg("name", KType::TypeExprRef),
-        ]),
+        sig(
+            KType::TypeExprRef,
+            vec![
+                kw("MODULE_TYPE_OF"),
+                arg("m", KType::AnyModule),
+                arg("name", KType::TypeExprRef),
+            ],
+        ),
         module_type_of::body,
     );
     register_builtin(
         scope,
         "TYPE_CONSTRUCTOR",
-        sig(KType::TypeExprRef, vec![
-            kw("TYPE_CONSTRUCTOR"),
-            arg("param", KType::TypeExprRef),
-        ]),
+        sig(
+            KType::TypeExprRef,
+            vec![kw("TYPE_CONSTRUCTOR"), arg("param", KType::TypeExprRef)],
+        ),
         type_constructor::body,
     );
     // `bindings` is `KExpression` (lazy) so sub-Dispatch of inner value
@@ -70,11 +82,14 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "SIG_WITH",
-        sig(KType::TypeExprRef, vec![
-            kw("SIG_WITH"),
-            arg("sig", KType::AnySignature),
-            arg("bindings", KType::KExpression),
-        ]),
+        sig(
+            KType::TypeExprRef,
+            vec![
+                kw("SIG_WITH"),
+                arg("sig", KType::AnySignature),
+                arg("bindings", KType::KExpression),
+            ],
+        ),
         sig_with::body,
     );
 }

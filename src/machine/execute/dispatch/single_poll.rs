@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::builtins::newtype_def::newtype_construct;
 use super::coerce_type_token_value;
 use super::constructors;
+use crate::builtins::newtype_def::newtype_construct;
 use crate::machine::core::kfunction::BodyResult;
 use crate::machine::core::source::Spanned;
 use crate::machine::core::ScopeId;
@@ -20,7 +20,7 @@ use crate::machine::model::{KObject, KType};
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
-use super::{DispatchCtx, extract_named_call_inner, keyworded::KeywordedState, Initialized};
+use super::{extract_named_call_inner, keyworded::KeywordedState, DispatchCtx, Initialized};
 
 pub(in crate::machine::execute) struct BareIdState<'a> {
     pub(in crate::machine::execute) init: Initialized,
@@ -77,13 +77,19 @@ pub(in crate::machine::execute) struct LitState<'a> {
 
 impl<'a> BareIdState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, _ph: PhantomData }
+        Self {
+            init,
+            _ph: PhantomData,
+        }
     }
 }
 
 impl<'a> BareTypeState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, _ph: PhantomData }
+        Self {
+            init,
+            _ph: PhantomData,
+        }
     }
 }
 
@@ -93,7 +99,10 @@ impl<'a> CtorState<'a> {
     }
 
     pub(in crate::machine::execute) fn with_track(init: Initialized, track: CtorTrack<'a>) -> Self {
-        Self { init, track: Some(track) }
+        Self {
+            init,
+            track: Some(track),
+        }
     }
 
     /// Drain the parked subs into `staged_values` and tail-call
@@ -107,8 +116,11 @@ impl<'a> CtorState<'a> {
     ) -> Result<NodeStep<'a>, KError> {
         let CtorState { init, track } = self;
         let _ = init;
-        let CtorTrack { subs, mut staged_values, kind } =
-            track.expect("ConstructorCall resume only entered after a track is installed");
+        let CtorTrack {
+            subs,
+            mut staged_values,
+            kind,
+        } = track.expect("ConstructorCall resume only entered after a track is installed");
         for (slot_idx, sub_id) in &subs {
             match ctx.read_result(*sub_id) {
                 Ok(v) => staged_values[*slot_idx] = Some(v),
@@ -133,13 +145,19 @@ impl<'a> CtorState<'a> {
 
 impl<'a> SigilState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, _ph: PhantomData }
+        Self {
+            init,
+            _ph: PhantomData,
+        }
     }
 }
 
 impl<'a> LitState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, _ph: PhantomData }
+        Self {
+            init,
+            _ph: PhantomData,
+        }
     }
 }
 
@@ -179,16 +197,20 @@ pub(super) fn bare_type_leaf<'a>(
     let chain = ctx.chain_deref();
     match coerce_type_token_value(scope, t, chain) {
         Ok(obj) => NodeStep::Done(NodeOutput::Value(obj)),
-        Err(KError { kind: KErrorKind::UnboundName(n), .. }) => {
-            NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n))))
-        }
+        Err(KError {
+            kind: KErrorKind::UnboundName(n),
+            ..
+        }) => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::UnboundName(n)))),
         Err(e) => NodeStep::Done(NodeOutput::Err(e)),
     }
 }
 
 pub(super) fn sigiled_type_expr<'a>(expr: KExpression<'a>) -> NodeStep<'a> {
     let inner = match expr.parts.into_iter().next() {
-        Some(Spanned { value: ExpressionPart::SigiledTypeExpr(boxed), .. }) => *boxed,
+        Some(Spanned {
+            value: ExpressionPart::SigiledTypeExpr(boxed),
+            ..
+        }) => *boxed,
         _ => unreachable!("SigiledTypeExpr shape implies single SigiledTypeExpr part"),
     };
     NodeStep::Replace {
@@ -209,7 +231,11 @@ pub(super) fn literal_pass_through<'a>(
     scope: &'a Scope<'a>,
     idx: usize,
 ) -> NodeStep<'a> {
-    let only = expr.parts.into_iter().next().expect("LiteralPassThrough shape implies one part");
+    let only = expr
+        .parts
+        .into_iter()
+        .next()
+        .expect("LiteralPassThrough shape implies one part");
     match only.value {
         ExpressionPart::Literal(_) => {
             let allocated = scope.arena.alloc(only.value.resolve());
@@ -304,43 +330,52 @@ pub(super) fn constructor_call<'a>(
         }
     };
     match identity {
-        KType::UserType { kind: UserTypeKind::Struct { fields }, scope_id, name } => {
-            constructors::dispatch_construct_struct(
-                ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(fields),
-                inner_parts,
-                scope,
-                idx,
-            )
-        }
-        KType::UserType { kind: UserTypeKind::Tagged { schema }, scope_id, name } => {
-            constructors::dispatch_construct_tagged(
-                ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(schema),
-                inner_parts,
-                scope,
-                idx,
-            )
-        }
-        KType::UserType { kind: UserTypeKind::Newtype { .. }, .. } => {
+        KType::UserType {
+            kind: UserTypeKind::Struct { fields },
+            scope_id,
+            name,
+        } => constructors::dispatch_construct_struct(
+            ctx,
+            name.clone(),
+            *scope_id,
+            Rc::clone(fields),
+            inner_parts,
+            scope,
+            idx,
+        ),
+        KType::UserType {
+            kind: UserTypeKind::Tagged { schema },
+            scope_id,
+            name,
+        } => constructors::dispatch_construct_tagged(
+            ctx,
+            name.clone(),
+            *scope_id,
+            Rc::clone(schema),
+            inner_parts,
+            scope,
+            idx,
+        ),
+        KType::UserType {
+            kind: UserTypeKind::Newtype { .. },
+            ..
+        } => {
             let body = newtype_construct(scope, ctx, identity, inner_parts);
             schedule_constructor_body(ctx, body, idx)
         }
-        KType::UserType { kind: UserTypeKind::TypeConstructor { schema, .. }, scope_id, name } => {
-            constructors::dispatch_construct_tagged(
-                ctx,
-                name.clone(),
-                *scope_id,
-                Rc::clone(schema),
-                inner_parts,
-                scope,
-                idx,
-            )
-        }
+        KType::UserType {
+            kind: UserTypeKind::TypeConstructor { schema, .. },
+            scope_id,
+            name,
+        } => constructors::dispatch_construct_tagged(
+            ctx,
+            name.clone(),
+            *scope_id,
+            Rc::clone(schema),
+            inner_parts,
+            scope,
+            idx,
+        ),
         _ => NodeStep::Done(NodeOutput::Err(KError::new(KErrorKind::TypeMismatch {
             arg: "verb".to_string(),
             expected: "constructible Type".to_string(),
@@ -356,7 +391,13 @@ pub(super) fn schedule_constructor_body<'a>(
     idx: usize,
 ) -> NodeStep<'a> {
     match body {
-        BodyResult::Tail { expr, frame, function, block_entry, body_index } => NodeStep::Replace {
+        BodyResult::Tail {
+            expr,
+            frame,
+            function,
+            block_entry,
+            body_index,
+        } => NodeStep::Replace {
             work: NodeWork::dispatch(expr),
             frame,
             function,

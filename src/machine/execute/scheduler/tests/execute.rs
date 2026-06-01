@@ -1,11 +1,11 @@
 //! Basic dispatch ordering and inter-expression lookup.
 
+use super::super::Scheduler;
 use crate::builtins::default_scope;
-use crate::machine::model::KObject;
-use crate::machine::{RuntimeArena, SchedulerHandle};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
-use super::super::Scheduler;
+use crate::machine::model::KObject;
+use crate::machine::{RuntimeArena, SchedulerHandle};
 
 use super::let_expr;
 
@@ -39,9 +39,9 @@ fn later_expression_sees_earlier_binding_via_lookup() {
         Spanned::bare(ExpressionPart::Keyword("LET".into())),
         Spanned::bare(ExpressionPart::Identifier("b".into())),
         Spanned::bare(ExpressionPart::Keyword("=".into())),
-        Spanned::bare(ExpressionPart::Expression(Box::new(KExpression::new(vec![
-            Spanned::bare(ExpressionPart::Identifier("a".into())),
-        ])))),
+        Spanned::bare(ExpressionPart::Expression(Box::new(KExpression::new(
+            vec![Spanned::bare(ExpressionPart::Identifier("a".into()))],
+        )))),
     ]);
     sched.enter_block(root.id, vec![let_expr("a", 10.0), lookup_a], root);
 

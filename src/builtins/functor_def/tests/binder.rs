@@ -15,7 +15,10 @@ fn functor_binder_sets_is_functor_flag() {
          FUNCTOR (MAKESET Er :OrderedSig) -> Module = (MODULE Result = (LET inner = 1))",
     );
     let f = lookup_fn(scope, "MAKESET");
-    assert!(f.is_functor, "FUNCTOR-bound KFunction must carry is_functor: true");
+    assert!(
+        f.is_functor,
+        "FUNCTOR-bound KFunction must carry is_functor: true"
+    );
 }
 
 #[test]

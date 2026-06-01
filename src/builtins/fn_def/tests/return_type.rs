@@ -3,9 +3,9 @@
 use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
+use crate::machine::execute::Scheduler;
 use crate::machine::model::{KObject, KType, ReturnType};
 use crate::machine::{KErrorKind, RuntimeArena};
-use crate::machine::execute::Scheduler;
 use crate::parse::parse;
 
 #[test]
@@ -31,7 +31,10 @@ fn fn_without_return_type_annotation_does_not_register() {
         sched.add_dispatch(expr, scope);
     }
     let _ = sched.execute();
-    assert!(!fn_is_registered(scope, "DOUBLE"), "DOUBLE should not be registered without -> Type");
+    assert!(
+        !fn_is_registered(scope, "DOUBLE"),
+        "DOUBLE should not be registered without -> Type"
+    );
 }
 
 #[test]
@@ -40,7 +43,9 @@ fn fn_with_unknown_return_type_name_errors() {
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Number) -> Bogus = (x)"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("unknown type name should error"),
@@ -58,7 +63,9 @@ fn user_fn_return_type_mismatch_surfaces_as_kerror() {
     run(scope, "FN (LIE) -> Number = (\"oops\")");
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("LIE"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("LIE should fail return-type check"),
@@ -111,7 +118,9 @@ fn fn_return_type_surface_name_preserved_in_error() {
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("FN (DOIT) -> SomeWeirdName = (1)"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("unknown type name should error"),

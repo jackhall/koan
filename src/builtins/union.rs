@@ -2,20 +2,22 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
-use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    Scope, SchedulerHandle,
-};
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+};
+use crate::machine::model::{KObject, KType};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
+    SchedulerHandle, Scope,
 };
 
 use crate::machine::model::ast::KExpression;
 
-use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_nominal_binder, sig};
+use crate::machine::core::kfunction::argument_bundle::{
+    extract_bare_type_name, extract_kexpression,
+};
 
 /// `UNION <name:TypeExprRef> = (<schema>)` — declare a named tagged-union type.
 ///
@@ -69,7 +71,10 @@ pub fn body<'a>(
     match outcome {
         FieldListOutcome::Done(fields) => finalize_union(scope, name, fields, bind_index),
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
-        FieldListOutcome::Pending { park_producers, sub_dispatches } => defer_union_via_combine(
+        FieldListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => defer_union_via_combine(
             scope,
             sched,
             name,
@@ -94,15 +99,15 @@ fn finalize_union<'a>(
     // Idempotent-finalize guard: short-circuit only on a populated `Tagged { schema }`
     // payload, distinguishing it from the cycle-close payload-empty pre-install.
     let bindings = scope.bindings();
-    if let Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) =
-        bindings.lookup_type(&name, None)
+    if let Some(KType::UserType {
+        kind: UserTypeKind::Tagged { schema },
+        ..
+    }) = bindings.lookup_type(&name, None)
     {
         if !schema.is_empty() {
-            return BodyResult::Value(
-                scope.arena.alloc(KObject::KTypeValue(
-                    bindings.lookup_type(&name, None).unwrap().clone(),
-                )),
-            );
+            return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(
+                bindings.lookup_type(&name, None).unwrap().clone(),
+            )));
         }
     }
     if fields.is_empty() {
@@ -115,7 +120,9 @@ fn finalize_union<'a>(
     let schema: HashMap<String, KType<'a>> = fields.into_iter().collect();
     let scope_id = scope.id;
     let identity = KType::UserType {
-        kind: UserTypeKind::Tagged { schema: Rc::new(schema) },
+        kind: UserTypeKind::Tagged {
+            schema: Rc::new(schema),
+        },
         scope_id,
         name: name.clone(),
     };
@@ -171,12 +178,16 @@ fn defer_union_via_combine<'a>(
                 finalize_union(scope, name_for_finish.clone(), fields, bind_index)
             }
             FieldListOutcome::Err(msg) => BodyResult::Err(
-                KError::new(KErrorKind::ShapeError(msg))
-                    .with_frame(Frame::bare("<union>", format!("UNION {} schema", name_for_finish))),
+                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame::bare(
+                    "<union>",
+                    format!("UNION {} schema", name_for_finish),
+                )),
             ),
-            FieldListOutcome::Pending { .. } => BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                "UNION schema elaboration parked again after Combine wake".to_string(),
-            ))),
+            FieldListOutcome::Pending { .. } => {
+                BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                    "UNION schema elaboration parked again after Combine wake".to_string(),
+                )))
+            }
         }
     });
     let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
@@ -193,12 +204,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_nominal_binder(
         scope,
         "UNION",
-        sig(KType::Type, vec![
-            kw("UNION"),
-            arg("name", KType::TypeExprRef),
-            kw("="),
-            arg("schema", KType::KExpression),
-        ]),
+        sig(
+            KType::Type,
+            vec![
+                kw("UNION"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("schema", KType::KExpression),
+            ],
+        ),
         body,
         Some(binder_name),
     );
@@ -224,16 +238,19 @@ mod tests {
         let scope = run_root_silent(&arena);
         // UNION is type-only: the declaration yields a `KTypeValue(UserType)` whose
         // `Tagged { schema }` payload carries the variant schema, registered into `types`.
-        let result = run_one(
-            scope,
-            parse_one("UNION Maybe = (some :Number none :Null)"),
-        );
+        let result = run_one(scope, parse_one("UNION Maybe = (some :Number none :Null)"));
         assert!(matches!(
             result,
-            KObject::KTypeValue(KType::UserType { kind: UserTypeKind::Tagged { .. }, .. })
+            KObject::KTypeValue(KType::UserType {
+                kind: UserTypeKind::Tagged { .. },
+                ..
+            })
         ));
         match scope.resolve_type("Maybe") {
-            Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) => {
+            Some(KType::UserType {
+                kind: UserTypeKind::Tagged { schema },
+                ..
+            }) => {
                 assert_eq!(schema.get("some"), Some(&KType::Number));
                 assert_eq!(schema.get("none"), Some(&KType::Null));
             }
@@ -316,7 +333,10 @@ mod tests {
         );
         assert!(matches!(first, crate::machine::BodyResult::Value(_)));
         match scope.resolve_type("Maybe") {
-            Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) => {
+            Some(KType::UserType {
+                kind: UserTypeKind::Tagged { schema },
+                ..
+            }) => {
                 assert_eq!(schema.get("some"), Some(&KType::Number));
             }
             other => panic!("expected populated Tagged identity, got {other:?}"),
@@ -328,7 +348,10 @@ mod tests {
             BindingIndex::nominal(0),
         );
         match second {
-            crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType { name, .. })) => {
+            crate::machine::BodyResult::Value(KObject::KTypeValue(KType::UserType {
+                name,
+                ..
+            })) => {
                 assert_eq!(name, "Maybe");
             }
             _ => panic!("expected short-circuit Value(KTypeValue(UserType)) from finalize_union"),
@@ -350,17 +373,17 @@ mod tests {
         use crate::machine::execute::Scheduler;
         use crate::parse::parse;
         let mut sched = Scheduler::new();
-        for e in parse(
-            "STRUCT Wrap = (m :Maybe)\nUNION Maybe = (just :Wrap, none :Null)",
-        )
-        .unwrap()
+        for e in parse("STRUCT Wrap = (m :Maybe)\nUNION Maybe = (just :Wrap, none :Null)").unwrap()
         {
             sched.add_dispatch(e, scope);
         }
         sched.execute().unwrap();
         // Both are type-only — read schemas off the type-side identities.
         let wrap_fields = match scope.resolve_type("Wrap") {
-            Some(KType::UserType { kind: UserTypeKind::Struct { fields }, .. }) => fields.clone(),
+            Some(KType::UserType {
+                kind: UserTypeKind::Struct { fields },
+                ..
+            }) => fields.clone(),
             other => panic!("expected Wrap Struct identity, got {other:?}"),
         };
         assert!(
@@ -369,7 +392,10 @@ mod tests {
             wrap_fields[0].1,
         );
         let maybe_schema = match scope.resolve_type("Maybe") {
-            Some(KType::UserType { kind: UserTypeKind::Tagged { schema }, .. }) => schema.clone(),
+            Some(KType::UserType {
+                kind: UserTypeKind::Tagged { schema },
+                ..
+            }) => schema.clone(),
             other => panic!("expected Maybe Tagged identity, got {other:?}"),
         };
         let just_kt = maybe_schema.get("just").expect("just tag");

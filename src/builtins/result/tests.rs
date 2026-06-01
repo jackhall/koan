@@ -10,10 +10,16 @@ fn result_registers_type_constructor_with_schema() {
 
     // Type-only: `Result`'s `TypeConstructor` identity carries both `param_names` and
     // the variant `schema` payload; no value-side carrier in `data`.
-    let identity = scope.resolve_type("Result").expect("Result type registered");
+    let identity = scope
+        .resolve_type("Result")
+        .expect("Result type registered");
     match identity {
         KType::UserType {
-            kind: UserTypeKind::TypeConstructor { param_names, schema },
+            kind:
+                UserTypeKind::TypeConstructor {
+                    param_names,
+                    schema,
+                },
             name,
             ..
         } => {
@@ -36,7 +42,9 @@ fn result_constructs_ok_variant() {
     let scope = run_root_silent(&arena);
     let result = run_one(scope, parse_one("Result (ok 1)"));
     match result {
-        KObject::Tagged { tag, value, name, .. } => {
+        KObject::Tagged {
+            tag, value, name, ..
+        } => {
             assert_eq!(tag, "ok");
             assert_eq!(name, "Result");
             assert!(matches!(&**value, KObject::Number(n) if *n == 1.0));
@@ -51,7 +59,9 @@ fn result_constructs_error_variant() {
     let scope = run_root_silent(&arena);
     let result = run_one(scope, parse_one("Result (error \"x\")"));
     match result {
-        KObject::Tagged { tag, value, name, .. } => {
+        KObject::Tagged {
+            tag, value, name, ..
+        } => {
             assert_eq!(tag, "error");
             assert_eq!(name, "Result");
             assert!(matches!(&**value, KObject::KString(s) if s == "x"));

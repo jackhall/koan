@@ -10,8 +10,11 @@ use crate::machine::core::source::{self, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 pub type UnaryBuild = for<'a> fn(Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
-pub type BinaryBuild =
-    for<'a> fn(Spanned<ExpressionPart<'a>>, Spanned<ExpressionPart<'a>>, Span) -> Spanned<ExpressionPart<'a>>;
+pub type BinaryBuild = for<'a> fn(
+    Spanned<ExpressionPart<'a>>,
+    Spanned<ExpressionPart<'a>>,
+    Span,
+) -> Spanned<ExpressionPart<'a>>;
 
 pub enum OperatorKind {
     /// `<trigger> compound` — builder takes the single operand.
@@ -30,9 +33,18 @@ pub struct Operator {
 /// `[` and `]` are absent: they're list-literal delimiters handled one level
 /// up, so compound indexing like `foo[idx]` isn't expressible here.
 const OPERATORS: &[Operator] = &[
-    Operator { trigger: '!', kind: OperatorKind::Prefix(build_not)  },
-    Operator { trigger: '.', kind: OperatorKind::Infix(build_attr)  },
-    Operator { trigger: '?', kind: OperatorKind::Suffix(build_try)  },
+    Operator {
+        trigger: '!',
+        kind: OperatorKind::Prefix(build_not),
+    },
+    Operator {
+        trigger: '.',
+        kind: OperatorKind::Infix(build_attr),
+    },
+    Operator {
+        trigger: '?',
+        kind: OperatorKind::Suffix(build_try),
+    },
 ];
 
 fn build_prefix<'a>(
@@ -41,7 +53,10 @@ fn build_prefix<'a>(
     trigger: Span,
 ) -> Spanned<ExpressionPart<'a>> {
     let operand_end = operand.span.map(|s| s.end).unwrap_or(trigger.end);
-    let outer = Span { start: trigger.start, end: operand_end };
+    let outer = Span {
+        start: trigger.start,
+        end: operand_end,
+    };
     let kw = Spanned::at(ExpressionPart::Keyword(keyword.to_string()), trigger);
     let kexp = KExpression {
         parts: vec![kw, operand],
@@ -51,10 +66,7 @@ fn build_prefix<'a>(
     Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 
-fn build_not<'a>(
-    expr: Spanned<ExpressionPart<'a>>,
-    trigger: Span,
-) -> Spanned<ExpressionPart<'a>> {
+fn build_not<'a>(expr: Spanned<ExpressionPart<'a>>, trigger: Span) -> Spanned<ExpressionPart<'a>> {
     build_prefix("NOT", expr, trigger)
 }
 
@@ -75,12 +87,12 @@ fn build_attr<'a>(
     Spanned::at(ExpressionPart::Expression(Box::new(kexp)), outer)
 }
 
-fn build_try<'a>(
-    lhs: Spanned<ExpressionPart<'a>>,
-    trigger: Span,
-) -> Spanned<ExpressionPart<'a>> {
+fn build_try<'a>(lhs: Spanned<ExpressionPart<'a>>, trigger: Span) -> Spanned<ExpressionPart<'a>> {
     let start = lhs.span.map(|s| s.start).unwrap_or(trigger.start);
-    let outer = Span { start, end: trigger.end };
+    let outer = Span {
+        start,
+        end: trigger.end,
+    };
     let kw = Spanned::at(ExpressionPart::Keyword("TRY".to_string()), trigger);
     let kexp = KExpression {
         parts: vec![kw, lhs],
@@ -111,7 +123,7 @@ pub fn find_suffix(c: char) -> Option<SuffixOp> {
         .find(|op| op.trigger == c)
         .and_then(|op| match op.kind {
             OperatorKind::Prefix(_) => None,
-            OperatorKind::Infix(b)  => Some(SuffixOp::Infix(b)),
+            OperatorKind::Infix(b) => Some(SuffixOp::Infix(b)),
             OperatorKind::Suffix(b) => Some(SuffixOp::Suffix(b)),
         })
 }

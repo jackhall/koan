@@ -30,12 +30,22 @@ fn functor_body_module_dispatch_does_not_dangle() {
     run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
 
     let m = match scope.resolve_type("HeldSet") {
-        Some(KType::Module { module: m, frame: _ }) => *m,
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
         other => panic!("HeldSet should be a module identity in types, got {other:?}"),
     };
-    let inner = m.child_scope().bindings().data().get("inner").map(|(o, _)| *o);
-    assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
-            "HeldSet.inner must still read 1.0 after subsequent churn");
+    let inner = m
+        .child_scope()
+        .bindings()
+        .data()
+        .get("inner")
+        .map(|(o, _)| *o);
+    assert!(
+        matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
+        "HeldSet.inner must still read 1.0 after subsequent churn"
+    );
 }
 
 /// Functor body resolves a type-class parameter via the per-call type-side bind:
@@ -65,9 +75,15 @@ fn functor_body_module_type_of_via_per_call_bind() {
             KType::AbstractType { name, .. } => {
                 assert_eq!(name, "Type", "abstract type member should be named Type");
             }
-            other => panic!("expected AbstractType {{ name = \"Type\", .. }}, got {:?}", other),
+            other => panic!(
+                "expected AbstractType {{ name = \"Type\", .. }}, got {:?}",
+                other
+            ),
         },
-        other => panic!("expected KTypeValue carrying the abstract Type identity, got {:?}", other.ktype()),
+        other => panic!(
+            "expected KTypeValue carrying the abstract Type identity, got {:?}",
+            other.ktype()
+        ),
     }
 }
 

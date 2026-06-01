@@ -6,24 +6,23 @@
 use std::marker::PhantomData;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::Parseable;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, UserTypeKind};
 use crate::machine::model::KObject;
+use crate::machine::model::Parseable;
 use crate::machine::{KError, KErrorKind, NodeId, Resolution, Scope};
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::constructors;
 use super::{
-    DispatchCtx, DispatchState, EagerSubsInstall, EagerSubsTrack, Initialized,
-    extract_named_call_inner, stage_all_eager_parts,
+    extract_named_call_inner, stage_all_eager_parts, DispatchCtx, DispatchState, EagerSubsInstall,
+    EagerSubsTrack, Initialized,
 };
 
 pub(in crate::machine::execute) struct FnValueState<'a> {
     pub(in crate::machine::execute) init: Initialized,
     pub(in crate::machine::execute) eager_subs: Option<EagerSubsTrack<'a>>,
-    pub(in crate::machine::execute) head_placeholder:
-        Option<FnValueHeadPlaceholderTrack<'a>>,
+    pub(in crate::machine::execute) head_placeholder: Option<FnValueHeadPlaceholderTrack<'a>>,
 }
 
 /// Carries the *original* (unspliced) call expression so the resume
@@ -36,27 +35,43 @@ pub(in crate::machine::execute) struct FnValueHeadPlaceholderTrack<'a> {
 
 impl<'a> FnValueHeadPlaceholderTrack<'a> {
     pub(in crate::machine::execute) fn new(expr: KExpression<'a>, producer: NodeId) -> Self {
-        Self { expr, producer, _ph: PhantomData }
+        Self {
+            expr,
+            producer,
+            _ph: PhantomData,
+        }
     }
 }
 
 impl<'a> FnValueState<'a> {
     pub(in crate::machine::execute) fn from_init(init: Initialized) -> Self {
-        Self { init, eager_subs: None, head_placeholder: None }
+        Self {
+            init,
+            eager_subs: None,
+            head_placeholder: None,
+        }
     }
 
     pub(in crate::machine::execute) fn with_eager_subs(
         init: Initialized,
         track: EagerSubsTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: Some(track), head_placeholder: None }
+        Self {
+            init,
+            eager_subs: Some(track),
+            head_placeholder: None,
+        }
     }
 
     pub(in crate::machine::execute) fn with_head_placeholder(
         init: Initialized,
         track: FnValueHeadPlaceholderTrack<'a>,
     ) -> Self {
-        Self { init, eager_subs: None, head_placeholder: Some(track) }
+        Self {
+            init,
+            eager_subs: None,
+            head_placeholder: Some(track),
+        }
     }
 
     pub(super) fn initial(
@@ -87,7 +102,11 @@ impl<'a> FnValueState<'a> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let FnValueState { init, eager_subs, head_placeholder } = self;
+        let FnValueState {
+            init,
+            eager_subs,
+            head_placeholder,
+        } = self;
         let _ = init;
         if let Some(track) = eager_subs {
             debug_assert!(
@@ -123,45 +142,48 @@ impl<'a> FnValueState<'a> {
             // then `(outcome (err "x"))`. The alias carries the type's identity directly
             // (`KTypeValue(UserType { .. })`); construction reads the schema off that
             // identity, the same payload `bindings.types[name]` holds.
-            KObject::KTypeValue(KType::UserType { kind, scope_id, name }) => {
-                match kind {
-                    UserTypeKind::Struct { fields } => Ok(constructors::dispatch_construct_struct(
+            KObject::KTypeValue(KType::UserType {
+                kind,
+                scope_id,
+                name,
+            }) => match kind {
+                UserTypeKind::Struct { fields } => Ok(constructors::dispatch_construct_struct(
+                    ctx,
+                    name.clone(),
+                    *scope_id,
+                    std::rc::Rc::clone(fields),
+                    inner_parts,
+                    scope,
+                    idx,
+                )),
+                UserTypeKind::Tagged { schema } | UserTypeKind::TypeConstructor { schema, .. } => {
+                    Ok(constructors::dispatch_construct_tagged(
                         ctx,
                         name.clone(),
                         *scope_id,
-                        std::rc::Rc::clone(fields),
+                        std::rc::Rc::clone(schema),
                         inner_parts,
                         scope,
                         idx,
-                    )),
-                    UserTypeKind::Tagged { schema }
-                    | UserTypeKind::TypeConstructor { schema, .. } => {
-                        Ok(constructors::dispatch_construct_tagged(
-                            ctx,
-                            name.clone(),
-                            *scope_id,
-                            std::rc::Rc::clone(schema),
-                            inner_parts,
-                            scope,
-                            idx,
-                        ))
-                    }
-                    UserTypeKind::Newtype { .. } => {
-                        let identity_ref: &'a KType<'a> = scope.arena.alloc(KType::UserType {
-                            kind: kind.clone(),
-                            scope_id: *scope_id,
-                            name: name.clone(),
-                        });
-                        let body = crate::builtins::newtype_def::newtype_construct(
-                            scope,
-                            ctx,
-                            identity_ref,
-                            inner_parts,
-                        );
-                        Ok(super::single_poll::schedule_constructor_body(ctx, body, idx))
-                    }
+                    ))
                 }
-            }
+                UserTypeKind::Newtype { .. } => {
+                    let identity_ref: &'a KType<'a> = scope.arena.alloc(KType::UserType {
+                        kind: kind.clone(),
+                        scope_id: *scope_id,
+                        name: name.clone(),
+                    });
+                    let body = crate::builtins::newtype_def::newtype_construct(
+                        scope,
+                        ctx,
+                        identity_ref,
+                        inner_parts,
+                    );
+                    Ok(super::single_poll::schedule_constructor_body(
+                        ctx, body, idx,
+                    ))
+                }
+            },
             other => Ok(NodeStep::Done(NodeOutput::Err(KError::new(
                 KErrorKind::TypeMismatch {
                     arg: "verb".to_string(),
@@ -191,10 +213,14 @@ impl<'a> FnValueState<'a> {
             },
             EagerSubsInstall::Parked(track) => {
                 // FunctionValueCall is non-binder; `pre_subs` is always empty.
-                let init = Initialized { pre_subs: Vec::new() };
-                Ok(ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
-                    Self::with_eager_subs(init, track),
-                ))))
+                let init = Initialized {
+                    pre_subs: Vec::new(),
+                };
+                Ok(
+                    ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
+                        Self::with_eager_subs(init, track),
+                    ))),
+                )
             }
         }
     }
@@ -207,7 +233,9 @@ impl<'a> FnValueState<'a> {
     ) -> NodeStep<'a> {
         ctx.add_park_edge(producer, NodeId(idx));
         let track = FnValueHeadPlaceholderTrack::new(expr, producer);
-        let init = Initialized { pre_subs: Vec::new() };
+        let init = Initialized {
+            pre_subs: Vec::new(),
+        };
         ctx.replace_with_parked_dispatch(DispatchState::FunctionValueCall(Box::new(
             Self::with_head_placeholder(init, track),
         )))

@@ -8,17 +8,19 @@
 //! `BodyResult::DeferTo(combine_id)` so the parent binding lands at Combine-finish,
 //! not when MODULE's body returns to the dispatcher.
 
+use crate::machine::model::values::Module;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
-    Scope, SchedulerHandle,
+    SchedulerHandle, Scope,
 };
-use crate::machine::model::values::Module;
 
 use crate::machine::model::ast::KExpression;
 
-use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_nominal_binder, sig};
+use crate::machine::core::kfunction::argument_bundle::{
+    extract_bare_type_name, extract_kexpression,
+};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -93,13 +95,20 @@ pub fn body<'a>(
         // never fires for a module — its insert-if-absent / non-equal-Rebind behaviour is
         // what carries here, sharing the one nominal-finalize primitive.
         let _ = arena;
-        match parent_scope.register_type_upsert(name_for_finish.clone(), identity.clone(), bind_index) {
+        match parent_scope.register_type_upsert(
+            name_for_finish.clone(),
+            identity.clone(),
+            bind_index,
+        ) {
             Ok(kt_ref) => BodyResult::Value(
-                parent_scope.arena.alloc(KObject::KTypeValue(kt_ref.clone())),
+                parent_scope
+                    .arena
+                    .alloc(KObject::KTypeValue(kt_ref.clone())),
             ),
-            Err(e) => BodyResult::Err(
-                e.with_frame(Frame::bare("<module>", format!("MODULE {} body", name_for_finish))),
-            ),
+            Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
+                "<module>",
+                format!("MODULE {} body", name_for_finish),
+            ))),
         }
     });
     let combine_id = sched.add_combine(deps, vec![], scope, finish);
@@ -115,12 +124,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_nominal_binder(
         scope,
         "MODULE",
-        sig(KType::AnyModule, vec![
-            kw("MODULE"),
-            arg("name", KType::TypeExprRef),
-            kw("="),
-            arg("body", KType::KExpression),
-        ]),
+        sig(
+            KType::AnyModule,
+            vec![
+                kw("MODULE"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
         body,
         Some(binder_name),
     );
@@ -154,7 +166,10 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "MODULE Foo = (LET x = 1)");
-        assert!(matches!(scope.resolve_type("Foo"), Some(KType::Module { .. })));
+        assert!(matches!(
+            scope.resolve_type("Foo"),
+            Some(KType::Module { .. })
+        ));
         assert!(
             scope.bindings().data().get("Foo").is_none(),
             "MODULE is type-only — no value-side carrier in data",
@@ -174,10 +189,7 @@ mod tests {
     fn module_with_multiple_statements_in_parens() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(
-            scope,
-            "MODULE Foo = ((LET x = 1) (LET y = 2))",
-        );
+        run(scope, "MODULE Foo = ((LET x = 1) (LET y = 2))");
         assert!(matches!(run_one(scope, parse_one("Foo.x")), KObject::Number(n) if *n == 1.0));
         assert!(matches!(run_one(scope, parse_one("Foo.y")), KObject::Number(n) if *n == 2.0));
     }
@@ -213,10 +225,7 @@ mod tests {
     fn nested_module_accessible_via_chained_attr() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(
-            scope,
-            "MODULE Outer =\n  MODULE Inner = (LET x = 7)",
-        );
+        run(scope, "MODULE Outer =\n  MODULE Inner = (LET x = 7)");
         let result = run_one(scope, parse_one("Outer.Inner.x"));
         assert!(matches!(result, KObject::Number(n) if *n == 7.0));
     }
@@ -256,7 +265,10 @@ mod tests {
             "Foo".into(),
         ));
         let module: &Module<'_> = arena.alloc_module(Module::new("Foo".into(), child));
-        let identity = KType::Module { module, frame: None };
+        let identity = KType::Module {
+            module,
+            frame: None,
+        };
         // Pre-seed the type-only identity, then re-run `MODULE Foo = ...`. The finalize
         // guard reads `types`, finds the pre-seeded identity, and short-circuits without
         // re-binding — the original `&Module` pointer survives.

@@ -1,7 +1,7 @@
 use std::hash::Hasher;
 
-use crate::machine::model::types::{KType, Parseable, Serializable};
 use super::kobject::KObject;
+use crate::machine::model::types::{KType, Parseable, Serializable};
 
 /// Concrete dict-key implementor for the `Box<dyn Serializable>` slot on
 /// `KObject::Dict`. Restricted to Python's hashable scalars; non-scalar keys
@@ -129,17 +129,26 @@ mod tests {
 
     #[test]
     fn distinct_strings_hash_differently() {
-        assert_ne!(hash_of(&KKey::String("a".into())), hash_of(&KKey::String("b".into())));
+        assert_ne!(
+            hash_of(&KKey::String("a".into())),
+            hash_of(&KKey::String("b".into()))
+        );
     }
 
     #[test]
     fn equal_strings_hash_equal() {
-        assert_eq!(hash_of(&KKey::String("a".into())), hash_of(&KKey::String("a".into())));
+        assert_eq!(
+            hash_of(&KKey::String("a".into())),
+            hash_of(&KKey::String("a".into()))
+        );
     }
 
     #[test]
     fn number_and_string_with_same_text_differ() {
-        assert_ne!(hash_of(&KKey::Number(1.0)), hash_of(&KKey::String("1".into())));
+        assert_ne!(
+            hash_of(&KKey::Number(1.0)),
+            hash_of(&KKey::String("1".into()))
+        );
     }
 
     #[test]

@@ -13,6 +13,6 @@
 
 mod bare_type_token;
 mod deferred_return;
-mod per_call_type_side_bind;
 mod elaboration;
+mod per_call_type_side_bind;
 mod sharing;

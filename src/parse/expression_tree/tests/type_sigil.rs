@@ -118,7 +118,10 @@ fn comma_outside_type_sigil_unchanged_inside_paren() {
 
 #[test]
 fn type_sigil_bare_emits_type_part() {
-    assert_eq!(tree("LET x :Number = 5").unwrap(), "[t(LET) t(x) T(Number) t(=) n(5)]");
+    assert_eq!(
+        tree("LET x :Number = 5").unwrap(),
+        "[t(LET) t(x) T(Number) t(=) n(5)]"
+    );
 }
 
 #[test]
@@ -189,7 +192,10 @@ fn type_sigil_empty_parens_parses() {
 #[test]
 fn type_sigil_bare_type_name_in_parens() {
     // The redundant-Expression peel does NOT apply inside `:(...)` — sigil is the wrapper.
-    assert_eq!(tree("LET x :(Number)").unwrap(), "[t(LET) t(x) :(T(Number))]");
+    assert_eq!(
+        tree("LET x :(Number)").unwrap(),
+        "[t(LET) t(x) :(T(Number))]"
+    );
 }
 
 #[test]

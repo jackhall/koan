@@ -9,12 +9,12 @@
 //! distinct `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks
 //! unambiguously without a specificity tiebreaker.
 
-use crate::machine::model::{KObject, KType};
+use crate::machine::execute::coerce_type_token_value;
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::Module;
-use crate::machine::execute::coerce_type_token_value;
+use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, Scope, SchedulerHandle,
+    ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, SchedulerHandle, Scope,
 };
 
 use super::{arg, err, kw, register_builtin, sig};
@@ -132,11 +132,13 @@ pub fn body_module<'a>(
     };
     let m = match target.as_module() {
         Some(m) => m,
-        None => return err(KError::new(KErrorKind::TypeMismatch {
-            arg: "s".to_string(),
-            expected: "Module".to_string(),
-            got: target.ktype().name(),
-        })),
+        None => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "s".to_string(),
+                expected: "Module".to_string(),
+                got: target.ktype().name(),
+            }))
+        }
     };
     access_module_member(m, &field_name)
 }
@@ -155,13 +157,13 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
     }
 }
 
-fn access_field<'a>(
-    scope: &'a Scope<'a>,
-    target: &KObject<'a>,
-    field: &str,
-) -> BodyResult<'a> {
+fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     match target {
-        KObject::Struct { name: type_name, fields, .. } => match fields.get(field) {
+        KObject::Struct {
+            name: type_name,
+            fields,
+            ..
+        } => match fields.get(field) {
             Some(value) => BodyResult::Value(scope.arena.alloc(value.deep_clone())),
             None => err(KError::new(KErrorKind::ShapeError(format!(
                 "struct `{}` has no field `{}`",
@@ -176,9 +178,7 @@ fn access_field<'a>(
                 return BodyResult::Value(obj);
             }
             if let Some(kt) = scope.resolve_type(field) {
-                return BodyResult::Value(
-                    scope.arena.alloc(KObject::KTypeValue(kt.clone())),
-                );
+                return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt.clone())));
             }
             err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
@@ -210,18 +210,14 @@ fn access_field<'a>(
 /// so the next ATTR step can recurse into the inner module's child scope.
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return BodyResult::Value(
-            m.child_scope().arena.alloc(KObject::KTypeValue(kt)),
-        );
+        return BodyResult::Value(m.child_scope().arena.alloc(KObject::KTypeValue(kt)));
     }
     let scope = m.child_scope();
     if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
         return BodyResult::Value(obj);
     }
     if let Some(kt) = scope.resolve_type(field) {
-        return BodyResult::Value(
-            scope.arena.alloc(KObject::KTypeValue(kt.clone())),
-        );
+        return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt.clone())));
     }
     err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",
@@ -230,45 +226,117 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let struct_ty = KType::AnyUserType { kind: UserTypeKind::struct_sentinel() };
+    let struct_ty = KType::AnyUserType {
+        kind: UserTypeKind::struct_sentinel(),
+    };
     let module_ty = KType::AnyModule;
     let newtype_ty = KType::AnyUserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Any),
+        },
     };
 
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::Identifier), arg("field", KType::Identifier)]),
-        body_identifier);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", struct_ty), arg("field", KType::Identifier)]),
-        body_struct);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", module_ty.clone()), arg("field", KType::Identifier)]),
-        body_module);
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", KType::Identifier),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_identifier,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", struct_ty),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_struct,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", module_ty.clone()),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_module,
+    );
     // NEWTYPE fall-through. The wildcard `Newtype { repr: Any }` slot admits any
     // `KObject::Wrapped` (the manual `UserTypeKind::PartialEq` ignores `repr`). Reuses
     // `body_struct` because `access_field` dispatches on the lhs shape — its `Wrapped`
     // arm recurses one level into `inner`.
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", newtype_ty), arg("field", KType::Identifier)]),
-        body_struct);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::TypeExprRef), arg("field", KType::Identifier)]),
-        body_type_lhs);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::TypeExprRef), arg("field", KType::TypeExprRef)]),
-        body_type_lhs);
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", newtype_ty),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_struct,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", KType::TypeExprRef),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_type_lhs,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", KType::TypeExprRef),
+                arg("field", KType::TypeExprRef),
+            ],
+        ),
+        body_type_lhs,
+    );
     // Module lhs with a Type-classed field (e.g. the `Outer.Inner` step in `Outer.Inner.x`).
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", module_ty), arg("field", KType::TypeExprRef)]),
-        body_module);
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", module_ty),
+                arg("field", KType::TypeExprRef),
+            ],
+        ),
+        body_module,
+    );
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{
-        parse_one, run, run_one, run_one_err, run_root_silent,
-    };
+    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::model::KObject;
     use crate::machine::{KErrorKind, RuntimeArena};
 

@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
+use crate::machine::core::ScopeId;
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::KObject;
 use crate::machine::{
     CallArena, CatchFinish, CombineFinish, KError, KFunction, LexicalFrame, NodeId, Scope,
 };
-use crate::machine::core::ScopeId;
-use crate::machine::model::ast::KExpression;
 
 use super::dispatch::DispatchState;
 
@@ -139,7 +139,9 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
         // `pre_subs` ride along structurally on the slot's `DispatchState`; they are
         // not read-deps of the Dispatch itself.
         NodeWork::Dispatch { .. } => None,
-        NodeWork::Combine { deps, park_count, .. } => Some(deps[*park_count..].to_vec()),
+        NodeWork::Combine {
+            deps, park_count, ..
+        } => Some(deps[*park_count..].to_vec()),
         NodeWork::Catch { from, .. } => Some(vec![*from]),
         NodeWork::Lift(LiftState::Pending(from)) => Some(vec![*from]),
         NodeWork::Lift(LiftState::Ready(_)) => None,
@@ -151,7 +153,9 @@ pub(super) fn work_deps<'a>(work: &NodeWork<'a>) -> Option<Vec<NodeId>> {
 /// each entry as a `Notify` edge separately from the Owned-edge install path.
 pub(super) fn work_park_producers<'a, 'b>(work: &'b NodeWork<'a>) -> &'b [NodeId] {
     match work {
-        NodeWork::Combine { deps, park_count, .. } => &deps[..*park_count],
+        NodeWork::Combine {
+            deps, park_count, ..
+        } => &deps[..*park_count],
         _ => &[],
     }
 }
@@ -169,9 +173,9 @@ mod tests {
 
     #[test]
     fn work_deps_lift_ready_returns_none() {
-        let work = NodeWork::Lift(LiftState::Ready(NodeOutput::Err(
-            KError::new(KErrorKind::User("stamped".to_string())),
-        )));
+        let work = NodeWork::Lift(LiftState::Ready(NodeOutput::Err(KError::new(
+            KErrorKind::User("stamped".to_string()),
+        ))));
         assert!(work_deps(&work).is_none());
     }
 }

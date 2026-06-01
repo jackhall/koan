@@ -1,20 +1,22 @@
 use std::rc::Rc;
 
 use crate::machine::core::{PendingBinderGuard, PendingTypeEntry};
-use crate::machine::model::{KObject, KType};
 use crate::machine::model::types::UserTypeKind;
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
-    Scope, SchedulerHandle,
-};
 use crate::machine::model::types::{
     parse_typed_field_list_via_elaborator, Elaborator, FieldListOutcome,
+};
+use crate::machine::model::{KObject, KType};
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, NodeId,
+    SchedulerHandle, Scope,
 };
 
 use crate::machine::model::ast::KExpression;
 
-use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_nominal_binder, sig};
+use crate::machine::core::kfunction::argument_bundle::{
+    extract_bare_type_name, extract_kexpression,
+};
 
 /// `STRUCT <name:TypeExprRef> = (<schema>)` — declare a named record type.
 ///
@@ -59,11 +61,8 @@ pub fn body<'a>(
     let mut elaborator = Elaborator::new(scope)
         .with_threaded([name.clone()])
         .with_current_decl(name.clone(), UserTypeKind::struct_sentinel(), scope_id);
-    let outcome = parse_typed_field_list_via_elaborator(
-        &schema_expr,
-        "STRUCT schema",
-        &mut elaborator,
-    );
+    let outcome =
+        parse_typed_field_list_via_elaborator(&schema_expr, "STRUCT schema", &mut elaborator);
     // Nominal binder: the placeholder install stamped `nominal_binder: true`;
     // the type-only `register_type_upsert` must carry the same flag for visibility
     // consistency.
@@ -74,7 +73,10 @@ pub fn body<'a>(
     match outcome {
         FieldListOutcome::Done(fields) => finalize_struct(scope, name, fields, bind_index),
         FieldListOutcome::Err(msg) => err(KError::new(KErrorKind::ShapeError(msg))),
-        FieldListOutcome::Pending { park_producers, sub_dispatches } => defer_struct_via_combine(
+        FieldListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => defer_struct_via_combine(
             scope,
             sched,
             name,
@@ -102,15 +104,15 @@ fn finalize_struct<'a>(
     // cycle-close pre-install carries a payload-empty identity, so the guard must
     // distinguish them: only short-circuit on a populated `Struct { fields }` payload.
     let bindings = scope.bindings();
-    if let Some(KType::UserType { kind: UserTypeKind::Struct { fields }, .. }) =
-        bindings.lookup_type(&name, None)
+    if let Some(KType::UserType {
+        kind: UserTypeKind::Struct { fields },
+        ..
+    }) = bindings.lookup_type(&name, None)
     {
         if !fields.is_empty() {
-            return BodyResult::Value(
-                scope.arena.alloc(KObject::KTypeValue(
-                    bindings.lookup_type(&name, None).unwrap().clone(),
-                )),
-            );
+            return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(
+                bindings.lookup_type(&name, None).unwrap().clone(),
+            )));
         }
     }
     if fields.is_empty() {
@@ -120,7 +122,9 @@ fn finalize_struct<'a>(
     }
     let scope_id = scope.id;
     let identity = KType::UserType {
-        kind: UserTypeKind::Struct { fields: Rc::new(fields) },
+        kind: UserTypeKind::Struct {
+            fields: Rc::new(fields),
+        },
         scope_id,
         name: name.clone(),
     };
@@ -191,12 +195,16 @@ fn defer_struct_via_combine<'a>(
                 finalize_struct(scope, name_for_finish.clone(), fields, bind_index)
             }
             FieldListOutcome::Err(msg) => BodyResult::Err(
-                KError::new(KErrorKind::ShapeError(msg))
-                    .with_frame(Frame::bare("<struct>", format!("STRUCT {} schema", name_for_finish))),
+                KError::new(KErrorKind::ShapeError(msg)).with_frame(Frame::bare(
+                    "<struct>",
+                    format!("STRUCT {} schema", name_for_finish),
+                )),
             ),
-            FieldListOutcome::Pending { .. } => BodyResult::Err(KError::new(KErrorKind::ShapeError(
-                "STRUCT schema elaboration parked again after Combine wake".to_string(),
-            ))),
+            FieldListOutcome::Pending { .. } => {
+                BodyResult::Err(KError::new(KErrorKind::ShapeError(
+                    "STRUCT schema elaboration parked again after Combine wake".to_string(),
+                )))
+            }
         }
     });
     let combine_id = sched.add_combine(owned_subs, park_producers, scope, finish);
@@ -214,12 +222,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_nominal_binder(
         scope,
         "STRUCT",
-        sig(KType::Type, vec![
-            kw("STRUCT"),
-            arg("name", KType::TypeExprRef),
-            kw("="),
-            arg("schema", KType::KExpression),
-        ]),
+        sig(
+            KType::Type,
+            vec![
+                kw("STRUCT"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("schema", KType::KExpression),
+            ],
+        ),
         body,
         Some(binder_name),
     );

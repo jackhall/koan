@@ -1,9 +1,9 @@
 //! Primitive ascription behaviors: transparent passthrough, missing-member errors, opaque type-minting.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
+use crate::machine::execute::Scheduler;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{KErrorKind, RuntimeArena};
-use crate::machine::execute::Scheduler;
 use crate::parse::parse;
 
 #[test]
@@ -20,7 +20,10 @@ fn transparent_ascription_returns_module() {
     // in `types`.
     assert!(matches!(
         scope.resolve_type("IntOrdView"),
-        Some(KType::Module { module: _, frame: _ }),
+        Some(KType::Module {
+            module: _,
+            frame: _
+        }),
     ));
 }
 
@@ -62,11 +65,17 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
         }
     }
     let a = match scope.resolve_type("FirstAbstract") {
-        Some(KType::Module { module: m, frame: _ }) => *m,
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
         _ => panic!("FirstAbstract should be a module identity in types"),
     };
     let b = match scope.resolve_type("SecondAbstract") {
-        Some(KType::Module { module: m, frame: _ }) => *m,
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
         _ => panic!("SecondAbstract should be a module identity in types"),
     };
     let a_t = a.type_members.borrow().get("Type").cloned();
@@ -81,7 +90,10 @@ fn opaque_ascription_mints_distinct_module_type_per_application() {
         &b_t,
         Some(KType::AbstractType { name, .. }) if name == "Type"
     ));
-    assert_ne!(a_t, b_t, "two opaque ascriptions must mint distinct module abstract types");
+    assert_ne!(
+        a_t, b_t,
+        "two opaque ascriptions must mint distinct module abstract types"
+    );
 }
 
 #[test]
@@ -95,7 +107,10 @@ fn transparent_ascription_does_not_mint_module_types() {
          LET ViewMod = (IntOrd :! OrderedSig)",
     );
     let v = match scope.resolve_type("ViewMod") {
-        Some(KType::Module { module: m, frame: _ }) => *m,
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
         _ => panic!("ViewMod should be a module identity in types"),
     };
     assert!(v.type_members.borrow().is_empty());
@@ -114,7 +129,10 @@ fn roadmap_example_int_ord_with_ordered_sig() {
     );
 
     let abstract_mod = match scope.resolve_type("IntOrdAbstract") {
-        Some(KType::Module { module: m, frame: _ }) => *m,
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
         _ => panic!("IntOrdAbstract should be a module identity in types"),
     };
     let minted = abstract_mod
@@ -127,9 +145,15 @@ fn roadmap_example_int_ord_with_ordered_sig() {
         KType::AbstractType { name, .. } => assert_eq!(name, "Type"),
         other => panic!("minted abstract type must be AbstractType, got {:?}", other),
     }
-    assert_ne!(minted, KType::Number, "opaque IntOrdAbstract.Type must not equal Number");
+    assert_ne!(
+        minted,
+        KType::Number,
+        "opaque IntOrdAbstract.Type must not equal Number"
+    );
     let compare = abstract_mod
-        .child_scope().bindings().data()
+        .child_scope()
+        .bindings()
+        .data()
         .get("compare")
         .map(|(o, _)| *o);
     assert!(matches!(compare, Some(KObject::Number(n)) if *n == 7.0));

@@ -24,7 +24,7 @@ enum DictPairState<'a> {
 fn single_or_wrapped<'a>(parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     match <[ExpressionPart<'a>; 1]>::try_from(parts) {
         Ok([single]) => single,
-        Err(parts)   => ExpressionPart::expression(parts),
+        Err(parts) => ExpressionPart::expression(parts),
     }
 }
 
@@ -44,7 +44,10 @@ fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
 
 impl<'a> DictFrame<'a> {
     pub(super) fn new() -> Self {
-        Self { pairs: Vec::new(), state: DictPairState::Empty }
+        Self {
+            pairs: Vec::new(),
+            state: DictPairState::Empty,
+        }
     }
 
     /// When the value side already has content and the new part could start a fresh
@@ -73,12 +76,14 @@ impl<'a> DictFrame<'a> {
     /// being built — one `:` per pair.
     pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
-            DictPairState::Empty => {
-                Err(KError::parse("missing key before ':' in dict literal", None))
-            }
-            DictPairState::Key(parts) if parts.is_empty() => {
-                Err(KError::parse("missing key before ':' in dict literal", None))
-            }
+            DictPairState::Empty => Err(KError::parse(
+                "missing key before ':' in dict literal",
+                None,
+            )),
+            DictPairState::Key(parts) if parts.is_empty() => Err(KError::parse(
+                "missing key before ':' in dict literal",
+                None,
+            )),
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Value {
                     key: single_or_wrapped(parts),
@@ -103,9 +108,10 @@ impl<'a> DictFrame<'a> {
                 self.state = DictPairState::Key(parts);
                 Err(KError::parse("key without value in dict literal", None))
             }
-            DictPairState::Value { value, .. } if value.is_empty() => {
-                Err(KError::parse("missing value after ':' in dict literal", None))
-            }
+            DictPairState::Value { value, .. } if value.is_empty() => Err(KError::parse(
+                "missing value after ':' in dict literal",
+                None,
+            )),
             DictPairState::Value { key, value } => {
                 self.pairs.push((key, single_or_wrapped(value)));
                 Ok(())

@@ -3,9 +3,9 @@
 use crate::builtins::test_support::{
     fn_is_registered, lookup_fn, parse_one, run, run_one, run_root_silent,
 };
+use crate::machine::execute::Scheduler;
 use crate::machine::model::{Argument, KObject, KType, SignatureElement};
 use crate::machine::{KErrorKind, RuntimeArena};
-use crate::machine::execute::Scheduler;
 
 use super::capture_program_output;
 
@@ -44,7 +44,9 @@ fn fn_typed_param_rejects_mismatched_call() {
     run(scope, "FN (DOUBLE x :Number) -> Number = (x)");
     let mut sched = Scheduler::new();
     let _ = sched.add_dispatch(parse_one("DOUBLE \"hi\""), scope);
-    let err = sched.execute().expect_err("DOUBLE \"hi\" should fail dispatch");
+    let err = sched
+        .execute()
+        .expect_err("DOUBLE \"hi\" should fail dispatch");
     assert!(
         matches!(&err.kind, KErrorKind::DispatchFailed { .. }),
         "expected DispatchFailed for type-mismatched DOUBLE call, got {err}",
@@ -70,7 +72,9 @@ fn fn_param_without_annotation_is_rejected() {
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("FN (DOUBLE x) -> Number = (x)"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("untyped parameter should error"),
@@ -79,7 +83,10 @@ fn fn_param_without_annotation_is_rejected() {
         matches!(&err.kind, KErrorKind::ShapeError(msg) if msg.contains("`x`")),
         "expected ShapeError mentioning `x`, got {err}",
     );
-    assert!(!fn_is_registered(scope, "DOUBLE"), "DOUBLE should not register");
+    assert!(
+        !fn_is_registered(scope, "DOUBLE"),
+        "DOUBLE should not register"
+    );
 }
 
 #[test]
@@ -88,7 +95,9 @@ fn fn_param_with_unknown_type_name_is_rejected() {
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("FN (DOUBLE x :Bogus) -> Number = (x)"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("unknown param type should error"),

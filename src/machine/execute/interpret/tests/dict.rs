@@ -4,9 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::*;
-use crate::machine::model::KObject;
 use crate::machine::model::types::Serializable;
 use crate::machine::model::values::KKey;
+use crate::machine::model::KObject;
 use crate::machine::KErrorKind;
 
 use super::run;
@@ -59,8 +59,12 @@ fn let_binds_a_dict_with_string_keys() {
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
-            assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0));
-            assert!(matches!(lookup_string_key(entries, "b"), Some(KObject::Number(n)) if *n == 2.0));
+            assert!(
+                matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0)
+            );
+            assert!(
+                matches!(lookup_string_key(entries, "b"), Some(KObject::Number(n)) if *n == 2.0)
+            );
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
@@ -75,8 +79,12 @@ fn let_binds_a_dict_with_number_keys() {
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
-            assert!(matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if s == "a"));
-            assert!(matches!(lookup_number_key(entries, 2.0), Some(KObject::KString(s)) if s == "b"));
+            assert!(
+                matches!(lookup_number_key(entries, 1.0), Some(KObject::KString(s)) if s == "a")
+            );
+            assert!(
+                matches!(lookup_number_key(entries, 2.0), Some(KObject::KString(s)) if s == "b")
+            );
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
@@ -91,8 +99,12 @@ fn let_binds_a_dict_with_bool_keys() {
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
-            assert!(matches!(lookup_bool_key(entries, true), Some(KObject::Number(n)) if *n == 1.0));
-            assert!(matches!(lookup_bool_key(entries, false), Some(KObject::Number(n)) if *n == 0.0));
+            assert!(
+                matches!(lookup_bool_key(entries, true), Some(KObject::Number(n)) if *n == 1.0)
+            );
+            assert!(
+                matches!(lookup_bool_key(entries, false), Some(KObject::Number(n)) if *n == 0.0)
+            );
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
@@ -111,7 +123,9 @@ fn bare_identifier_key_is_looked_up() {
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 1);
-            assert!(matches!(lookup_string_key(entries, "alice"), Some(KObject::Number(n)) if *n == 1.0));
+            assert!(
+                matches!(lookup_string_key(entries, "alice"), Some(KObject::Number(n)) if *n == 1.0)
+            );
             assert!(lookup_string_key(entries, "name").is_none());
         }
         _ => panic!("expected `d` bound to a Dict"),
@@ -126,7 +140,9 @@ fn sub_expression_as_value_evaluates_eagerly() {
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
-            assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 7.0));
+            assert!(
+                matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 7.0)
+            );
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
@@ -137,15 +153,13 @@ fn sub_expression_as_value_evaluates_eagerly() {
 fn sub_expression_as_key_evaluates() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
-        "LET k = \"x\"\nLET d = {(k): 1}\n",
-        &arena,
-        captured,
-    );
+    let scope = run("LET k = \"x\"\nLET d = {(k): 1}\n", &arena, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
-            assert!(matches!(lookup_string_key(entries, "x"), Some(KObject::Number(n)) if *n == 1.0));
+            assert!(
+                matches!(lookup_string_key(entries, "x"), Some(KObject::Number(n)) if *n == 1.0)
+            );
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
@@ -155,17 +169,17 @@ fn sub_expression_as_key_evaluates() {
 fn multiline_dict_binds_correctly() {
     let arena = RuntimeArena::new();
     let captured: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scope = run(
-        "LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n",
-        &arena,
-        captured,
-    );
+    let scope = run("LET d = {\n  \"a\": 1\n  \"b\": 2\n}\n", &arena, captured);
     let data = scope.bindings().data();
     match data.get("d").map(|(o, _)| *o) {
         Some(KObject::Dict(entries, _, _)) => {
             assert_eq!(entries.len(), 2);
-            assert!(matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0));
-            assert!(matches!(lookup_string_key(entries, "b"), Some(KObject::Number(n)) if *n == 2.0));
+            assert!(
+                matches!(lookup_string_key(entries, "a"), Some(KObject::Number(n)) if *n == 1.0)
+            );
+            assert!(
+                matches!(lookup_string_key(entries, "b"), Some(KObject::Number(n)) if *n == 2.0)
+            );
         }
         _ => panic!("expected `d` bound to a Dict"),
     }
@@ -195,10 +209,8 @@ fn nested_dict_in_list_binds_correctly() {
 #[test]
 fn non_scalar_key_returns_shape_error() {
     // The list reaches `KKey::try_from_kobject` at materialization time and is rejected.
-    let result = interpret_with_writer(
-        "LET k = [1 2]\nLET d = {(k): 1}",
-        Box::new(std::io::sink()),
-    );
+    let result =
+        interpret_with_writer("LET k = [1 2]\nLET d = {(k): 1}", Box::new(std::io::sink()));
     match result {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::ShapeError(msg) if msg.contains("dict key")),

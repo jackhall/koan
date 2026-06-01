@@ -9,8 +9,8 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::core::{KError, KErrorKind, ScopeId};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{KObject, NamedPairs};
 

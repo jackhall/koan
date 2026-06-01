@@ -1,5 +1,5 @@
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, Scope, SchedulerHandle};
+use crate::machine::{ArgumentBundle, BodyResult, SchedulerHandle, Scope};
 
 use crate::builtins::err;
 
@@ -18,11 +18,10 @@ pub fn body<'a>(
         Ok(t) => t.clone(),
         Err(e) => return err(e),
     };
-    BodyResult::Value(
-        scope
-            .arena
-            .alloc(KObject::KTypeValue(KType::Dict(Box::new(key), Box::new(value)))),
-    )
+    BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::Dict(
+        Box::new(key),
+        Box::new(value),
+    ))))
 }
 
 #[cfg(test)]

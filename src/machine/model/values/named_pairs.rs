@@ -22,7 +22,11 @@ pub fn parse_named_value_pairs<'a>(
     expr: &KExpression<'a>,
     context: &str,
 ) -> Result<Vec<(String, ExpressionPart<'a>)>, String> {
-    if let [Spanned { value: ExpressionPart::DictLiteral(pairs), .. }] = expr.parts.as_slice() {
+    if let [Spanned {
+        value: ExpressionPart::DictLiteral(pairs),
+        ..
+    }] = expr.parts.as_slice()
+    {
         let mut out: Vec<(String, ExpressionPart<'a>)> = Vec::with_capacity(pairs.len());
         for (key, value) in pairs {
             let name = match key {
@@ -57,7 +61,9 @@ impl<'a> NamedPairs<'a> {
     /// Parse `expr` as a named-value list and wrap it for consume-by-name access.
     pub fn parse(expr: &KExpression<'a>, context: &str) -> Result<Self, String> {
         let pairs = parse_named_value_pairs(expr, context)?;
-        Ok(Self { map: pairs.into_iter().collect() })
+        Ok(Self {
+            map: pairs.into_iter().collect(),
+        })
     }
 
     /// Pop the value bound to `name`, or `None` if the caller did not provide it.
@@ -110,8 +116,12 @@ mod tests {
     #[test]
     fn multiple_eq_pairs_preserve_order() {
         let expr = KExpression::new(vec![
-            sp(ident("y")), sp(eq_kw()), sp(num(4.0)),
-            sp(ident("x")), sp(eq_kw()), sp(num(3.0)),
+            sp(ident("y")),
+            sp(eq_kw()),
+            sp(num(4.0)),
+            sp(ident("x")),
+            sp(eq_kw()),
+            sp(num(3.0)),
         ]);
         let pairs = parse_named_value_pairs(&expr, "ctx").unwrap();
         assert_eq!(pairs.len(), 2);
@@ -122,8 +132,12 @@ mod tests {
     #[test]
     fn duplicate_name_errors() {
         let expr = KExpression::new(vec![
-            sp(ident("x")), sp(eq_kw()), sp(num(1.0)),
-            sp(ident("x")), sp(eq_kw()), sp(num(2.0)),
+            sp(ident("x")),
+            sp(eq_kw()),
+            sp(num(1.0)),
+            sp(ident("x")),
+            sp(eq_kw()),
+            sp(num(2.0)),
         ]);
         let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
         assert!(err.contains("duplicate name"), "got: {err}");
@@ -134,7 +148,10 @@ mod tests {
     fn missing_eq_separator_errors() {
         let expr = KExpression::new(vec![sp(ident("x")), sp(num(3.0)), sp(ident("y"))]);
         let err = parse_named_value_pairs(&expr, "ctx").unwrap_err();
-        assert!(err.contains("`=`") || err.contains("separator"), "got: {err}");
+        assert!(
+            err.contains("`=`") || err.contains("separator"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -154,12 +171,20 @@ mod tests {
     #[test]
     fn named_pairs_take_consumes_by_name() {
         let expr = KExpression::new(vec![
-            sp(ident("x")), sp(eq_kw()), sp(num(3.0)),
-            sp(ident("y")), sp(eq_kw()), sp(num(4.0)),
+            sp(ident("x")),
+            sp(eq_kw()),
+            sp(num(3.0)),
+            sp(ident("y")),
+            sp(eq_kw()),
+            sp(num(4.0)),
         ]);
         let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
-        assert!(matches!(pairs.take("y"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 4.0));
-        assert!(matches!(pairs.take("x"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 3.0));
+        assert!(
+            matches!(pairs.take("y"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 4.0)
+        );
+        assert!(
+            matches!(pairs.take("x"), Some(ExpressionPart::Literal(KLiteral::Number(n))) if n == 3.0)
+        );
         assert!(pairs.take("y").is_none(), "second take returns None");
         assert!(pairs.into_unknown().is_none(), "all entries consumed");
     }
@@ -167,8 +192,12 @@ mod tests {
     #[test]
     fn named_pairs_into_unknown_reports_residual() {
         let expr = KExpression::new(vec![
-            sp(ident("x")), sp(eq_kw()), sp(num(3.0)),
-            sp(ident("z")), sp(eq_kw()), sp(num(9.0)),
+            sp(ident("x")),
+            sp(eq_kw()),
+            sp(num(3.0)),
+            sp(ident("z")),
+            sp(eq_kw()),
+            sp(num(9.0)),
         ]);
         let mut pairs = NamedPairs::parse(&expr, "ctx").unwrap();
         let _ = pairs.take("x");

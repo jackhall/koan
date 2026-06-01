@@ -1,8 +1,8 @@
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, err, kw, register_builtin, sig};
+use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 /// `QUOTE <expr:KExpression>` — surface form `#(expr)`, desugared by the parser
 /// (see `expression_tree::build_tree`). Returns the captured AST as a
@@ -30,7 +30,10 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "QUOTE",
-        sig(KType::KExpression, vec![kw("QUOTE"), arg("expr", KType::KExpression)]),
+        sig(
+            KType::KExpression,
+            vec![kw("QUOTE"), arg("expr", KType::KExpression)],
+        ),
         body,
     );
 }

@@ -75,7 +75,10 @@ fn lookup_value_placeholder_filtered_same_as_value() {
     scope
         .install_placeholder("placeholder".to_string(), NodeId(2), BindingIndex::value(5))
         .unwrap();
-    assert!(scope.bindings().lookup_value("placeholder", Some(3)).is_none());
+    assert!(scope
+        .bindings()
+        .lookup_value("placeholder", Some(3))
+        .is_none());
     match scope.bindings().lookup_value("placeholder", Some(9)) {
         Some(Resolution::Placeholder(id)) => assert_eq!(id, NodeId(2)),
         _ => panic!("placeholder must be visible past its install index"),
@@ -114,8 +117,11 @@ fn lookup_type_nominal_binder_bypasses_cutoff() {
 fn lookup_function_chain_cutoff_none_returns_full_bucket() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let f = arena
-        .alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let f = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj = arena.alloc(KObject::KFunction(f, None));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(99))
@@ -163,14 +169,23 @@ fn lookup_function_filters_per_overload_visibility() {
     let obj_early = arena.alloc(KObject::KFunction(f_early, None));
     let obj_late = arena.alloc(KObject::KFunction(f_late, None));
     scope
-        .register_function("BAR".to_string(), f_early, obj_early, BindingIndex::value(2))
+        .register_function(
+            "BAR".to_string(),
+            f_early,
+            obj_early,
+            BindingIndex::value(2),
+        )
         .unwrap();
     scope
         .register_function("BAR".to_string(), f_late, obj_late, BindingIndex::value(7))
         .unwrap();
     match scope.bindings().lookup_function(&key, Some(5)) {
         FunctionLookup::Bucket(survivors) => {
-            assert_eq!(survivors.len(), 1, "only the earlier-sibling overload is visible");
+            assert_eq!(
+                survivors.len(),
+                1,
+                "only the earlier-sibling overload is visible"
+            );
             assert!(std::ptr::eq(survivors[0], f_early));
         }
         _ => panic!("expected Bucket with one visible overload"),
@@ -208,8 +223,11 @@ fn lookup_function_falls_through_to_pending_overload() {
 fn lookup_function_bucket_shadows_pending_overload() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let f = arena
-        .alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let f = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj = arena.alloc(KObject::KFunction(f, None));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(2))
@@ -230,8 +248,11 @@ fn lookup_function_bucket_shadows_pending_overload() {
 fn lookup_function_empty_bucket_under_full_filter_returns_none_not_bucket() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let f = arena
-        .alloc_function(KFunction::new(unit_signature(), Body::Builtin(body_no_op), scope));
+    let f = arena.alloc_function(KFunction::new(
+        unit_signature(),
+        Body::Builtin(body_no_op),
+        scope,
+    ));
     let obj = arena.alloc(KObject::KFunction(f, None));
     scope
         .register_function("FOO".to_string(), f, obj, BindingIndex::value(9))

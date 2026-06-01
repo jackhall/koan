@@ -171,7 +171,16 @@ mod tests {
         // second literal: content_start=8, close=11, len=3, past=12
         check(
             "'hello''bye'",
-            cat(&[b"'", &lit(0, 5), b"'", &jmp(7), b"'", &lit(1, 3), b"'", &jmp(12)]),
+            cat(&[
+                b"'",
+                &lit(0, 5),
+                b"'",
+                &jmp(7),
+                b"'",
+                &lit(1, 3),
+                b"'",
+                &jmp(12),
+            ]),
             d(&[(0, "hello"), (1, "bye")]),
         );
     }

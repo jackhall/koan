@@ -1,11 +1,11 @@
 //! End-to-end coverage for the bare-name short-circuit, auto-wrap pass, and
 //! replay-park routing in `run_dispatch` (see
 //! [design/execution-model.md § Dispatch-time name placeholders](../../../../design/execution-model.md#dispatch-time-name-placeholders)).
-use crate::builtins::default_scope;
-use crate::machine::SchedulerHandle;
-use crate::machine::model::{KObject, KType};
-use crate::machine::{KErrorKind, RuntimeArena};
 use super::Scheduler;
+use crate::builtins::default_scope;
+use crate::machine::model::{KObject, KType};
+use crate::machine::SchedulerHandle;
+use crate::machine::{KErrorKind, RuntimeArena};
 use crate::parse::parse;
 
 fn parse_one<'a>(src: &str) -> crate::machine::model::ast::KExpression<'a> {
@@ -135,9 +135,14 @@ fn forward_keyword_function_reference_is_unbound() {
         ),
         scope,
     );
-    let err = sched.execute().expect_err("forward-FN call should fail dispatch");
+    let err = sched
+        .execute()
+        .expect_err("forward-FN call should fail dispatch");
     assert!(
-        matches!(&err.kind, KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_)),
+        matches!(
+            &err.kind,
+            KErrorKind::DispatchFailed { .. } | KErrorKind::UnboundName(_)
+        ),
         "expected DispatchFailed or UnboundName, got {err}",
     );
 }
@@ -209,7 +214,10 @@ fn replay_park_propagates_producer_error() {
         exec_result.is_err(),
         "UNDEFINED_FN dispatch failure should surface via execute",
     );
-    assert!(scope.lookup("y").is_none(), "y should not bind when its dependency errors");
+    assert!(
+        scope.lookup("y").is_none(),
+        "y should not bind when its dependency errors"
+    );
 }
 
 /// Bare Type-tokens in `TypeExprRef` slots of non-binders ride the same
@@ -229,7 +237,13 @@ fn bare_type_token_in_typeexprref_slot_parks_when_forward_referenced() {
     }
     sched.execute().unwrap();
     assert!(
-        matches!(scope.resolve_type("AResult"), Some(KType::Module { module: _, frame: _ })),
+        matches!(
+            scope.resolve_type("AResult"),
+            Some(KType::Module {
+                module: _,
+                frame: _
+            })
+        ),
         "AResult should bind to a Module identity (type-only) after replay-park on \
          forward-declared MODULE / SIG",
     );

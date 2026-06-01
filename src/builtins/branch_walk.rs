@@ -32,7 +32,11 @@ pub(crate) fn find_branch_body<'a>(
             // Booleans parse as `KLiteral::Boolean`, not identifiers; accept them so
             // `MATCH` on a `Bool` can spell its arms `true ->` / `false ->`.
             ExpressionPart::Literal(KLiteral::Boolean(b)) => {
-                if *b { "true".to_string() } else { "false".to_string() }
+                if *b {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
             }
             // `_` is a pure-symbol token classified as `Keyword`, not `Identifier`.
             ExpressionPart::Keyword(s) if allow_wildcard && s == "_" => s.clone(),

@@ -1,7 +1,7 @@
 //! Span-population tests. Spans are inclusive-start / exclusive-end byte offsets
 //! into the original source.
 
-use crate::machine::core::source::{self, Span, Spanned, SourceFile};
+use crate::machine::core::source::{self, SourceFile, Span, Spanned};
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
 use crate::parse::expression_tree::{parse, parse_with_path};
 
@@ -34,7 +34,11 @@ fn nested_call_carries_inner_span() {
     assert_eq!(span_of(outer), Some(s(0, 13)));
     assert_eq!(outer.parts[0].span, Some(s(0, 3)));
     assert_eq!(outer.parts[1].span, Some(s(4, 13)));
-    let Spanned { value: ExpressionPart::Expression(inner), .. } = &outer.parts[1] else {
+    let Spanned {
+        value: ExpressionPart::Expression(inner),
+        ..
+    } = &outer.parts[1]
+    else {
         panic!("expected nested Expression part");
     };
     assert_eq!(inner.span, Some(s(4, 13)));
@@ -72,7 +76,11 @@ fn chained_attr_sub_atoms_get_distinct_trigger_spans() {
     assert_eq!(span_of(outer), Some(s(0, 11)));
     assert!(matches!(outer.parts[0].value, ExpressionPart::Keyword(ref k) if k == "ATTR"));
     assert_eq!(outer.parts[0].span, Some(s(7, 8)));
-    let Spanned { value: ExpressionPart::Expression(inner), .. } = &outer.parts[1] else {
+    let Spanned {
+        value: ExpressionPart::Expression(inner),
+        ..
+    } = &outer.parts[1]
+    else {
         panic!("expected nested ATTR Expression");
     };
     assert_eq!(inner.parts[0].span, Some(s(3, 4)));
@@ -119,7 +127,11 @@ fn quote_sigil_outer_covers_hash_and_body_inner_keyword_one_byte() {
     assert_eq!(kw.span, Some(s(0, 1)));
     let body_part = &outer.parts[1];
     assert_eq!(body_part.span, Some(s(1, 6)));
-    let Spanned { value: ExpressionPart::Expression(body), .. } = body_part else {
+    let Spanned {
+        value: ExpressionPart::Expression(body),
+        ..
+    } = body_part
+    else {
         panic!("expected body Expression");
     };
     assert_eq!(body.span, Some(s(1, 6)));
@@ -184,7 +196,10 @@ fn type_sigil_paren_wrapper_starts_at_colon() {
     let outer = &exprs[0];
     assert_eq!(span_of(outer), Some(s(0, 14)));
     assert_eq!(outer.parts[0].span, Some(s(0, 14)));
-    assert!(matches!(outer.parts[0].value, ExpressionPart::SigiledTypeExpr(_)));
+    assert!(matches!(
+        outer.parts[0].value,
+        ExpressionPart::SigiledTypeExpr(_)
+    ));
 }
 
 #[test]
@@ -213,7 +228,9 @@ fn parse_with_path_stamps_file_on_expression_and_resolves_line_col() {
         ExpressionPart::Expression(e) => &**e,
         other => panic!("expected nested Expression part, got {other:?}"),
     };
-    let file_id = nested.file.expect("file should be populated by parse_with_path");
+    let file_id = nested
+        .file
+        .expect("file should be populated by parse_with_path");
     let span = nested.span.expect("span should be populated");
     let (line, col) = source::with(file_id, |f| {
         assert_eq!(&*f.path, "lib.koan");

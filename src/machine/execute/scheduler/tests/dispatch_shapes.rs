@@ -11,6 +11,7 @@
 use crate::builtins::default_scope;
 use crate::builtins::test_support::parse_one;
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle as KfHandle};
+use crate::machine::core::source::Spanned;
 use crate::machine::execute::dispatch::{
     reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count,
 };
@@ -21,7 +22,6 @@ use crate::machine::model::types::{
 };
 use crate::machine::model::{KObject, Parseable};
 use crate::machine::{BindingIndex, KFunction, RuntimeArena, Scope};
-use crate::machine::core::source::Spanned;
 
 fn dispatch_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     let mut sched = Scheduler::new();
@@ -123,7 +123,10 @@ fn function_value_call_named_args_out_of_order_short_circuits() {
     use crate::builtins::test_support::{run, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    run(
+        scope,
+        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
+    );
     let expr = parse_one("f (b = 2, a = 1)");
     reset_resolve_dispatch_entry_count();
     let result = dispatch_one(scope, expr);
@@ -149,12 +152,17 @@ fn function_value_call_named_args_missing_short_circuits() {
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    run(
+        scope,
+        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
+    );
     let expr = parse_one("f (a = 1)");
     reset_resolve_dispatch_entry_count();
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
-    sched.execute().expect("scheduler should not surface errors directly");
+    sched
+        .execute()
+        .expect("scheduler should not surface errors directly");
     let err = match sched.read_result(id) {
         Err(e) => e.clone(),
         Ok(v) => panic!("expected MissingArg error, got value {}", v.summarize()),
@@ -205,7 +213,10 @@ fn fast_lane_weaves_internal_keyword() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    run(
+        scope,
+        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
+    );
     reset_resolve_dispatch_entry_count();
     let result = run_one(scope, parse_one("f (a = 1, b = 2)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -219,7 +230,10 @@ fn fast_lane_named_args_order_independent() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    run(
+        scope,
+        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
+    );
     reset_resolve_dispatch_entry_count();
     let result = run_one(scope, parse_one("f (b = 2, a = 1)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -234,7 +248,10 @@ fn fast_lane_unknown_named_arg() {
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "LET f = (FN (a :Number PICK b :Number) -> Number = (a))");
+    run(
+        scope,
+        "LET f = (FN (a :Number PICK b :Number) -> Number = (a))",
+    );
     reset_resolve_dispatch_entry_count();
     let err = run_one_err(scope, parse_one("f (a = 1, b = 2, c = 3)"));
     assert_eq!(resolve_dispatch_entry_count(), 0);
@@ -316,7 +333,10 @@ fn fast_lane_on_tagged_union_constructs() {
     use crate::builtins::test_support::{run, run_one, run_root_silent};
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "UNION Maybe = (some :Number none :Null)\nLET maybe = Maybe");
+    run(
+        scope,
+        "UNION Maybe = (some :Number none :Null)\nLET maybe = Maybe",
+    );
     reset_resolve_dispatch_entry_count();
     let result = run_one(scope, parse_one("maybe (some 42)"));
     assert_eq!(
@@ -359,7 +379,11 @@ fn fast_lane_on_struct_type_constructs() {
         resolve_dispatch_entry_count(),
     );
     match result {
-        KObject::Struct { name: type_name, fields, .. } => {
+        KObject::Struct {
+            name: type_name,
+            fields,
+            ..
+        } => {
             assert_eq!(type_name, "Pt");
             assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
             assert!(matches!(fields.get("y"), Some(KObject::Number(n)) if *n == 4.0));
@@ -474,7 +498,10 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
     use crate::machine::model::Parseable;
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(scope, "FN (MAKE) -> List = ([(FN (ECHO x :Number) -> Number = (x))])");
+    run(
+        scope,
+        "FN (MAKE) -> List = ([(FN (ECHO x :Number) -> Number = (x))])",
+    );
     let result = run_one(scope, parse_one("(MAKE)"));
     let items = match result {
         KObject::List(items, _) => items,
@@ -487,7 +514,10 @@ fn fast_lane_list_of_closures_escapes_outer_call_with_rc_attached() {
             "list-borne escaping closure must have an :(Rc CallArena) attached by \
              lift_kobject's recursion through the List variant",
         ),
-        other => panic!("list element should be a KFunction, got {}", other.summarize()),
+        other => panic!(
+            "list element should be a KFunction, got {}",
+            other.summarize()
+        ),
     }
 }
 
@@ -507,7 +537,11 @@ fn function_value_call_forward_ref_parks() {
     // fall-through would advance the counter and defeat the routing assertion.
     let producer_target = scope.arena.alloc(KObject::Number(42.0));
     scope
-        .bind_value("producer_target".to_string(), producer_target, BindingIndex::BUILTIN)
+        .bind_value(
+            "producer_target".to_string(),
+            producer_target,
+            BindingIndex::BUILTIN,
+        )
         .expect("bind_value should succeed");
     let producer = sched.add_dispatch(
         KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
@@ -562,7 +596,10 @@ fn classifier_struct_construct_routes_to_type_constructor_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("MyStruct (x = 1, y = 2)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        matches!(
+            classify_dispatch_shape(&expr),
+            DispatchShape::ConstructorCall
+        ),
         "expected ConstructorCall for `MyStruct (x = 1, y = 2)`",
     );
 }
@@ -574,7 +611,10 @@ fn classifier_tagged_construct_routes_to_type_constructor_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Maybe (some 42)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        matches!(
+            classify_dispatch_shape(&expr),
+            DispatchShape::ConstructorCall
+        ),
         "expected ConstructorCall for `Maybe (some 42)`",
     );
 }
@@ -586,7 +626,10 @@ fn classifier_newtype_construct_routes_to_type_constructor_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("Bar (x)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        matches!(
+            classify_dispatch_shape(&expr),
+            DispatchShape::ConstructorCall
+        ),
         "expected ConstructorCall for `Bar (x)`",
     );
 }
@@ -599,7 +642,10 @@ fn classifier_legacy_positional_collapses_to_type_constructor_call() {
     use crate::machine::execute::dispatch::{classify_dispatch_shape, DispatchShape};
     let expr = parse_one("(List Number)");
     assert!(
-        matches!(classify_dispatch_shape(&expr), DispatchShape::ConstructorCall),
+        matches!(
+            classify_dispatch_shape(&expr),
+            DispatchShape::ConstructorCall
+        ),
         "leaf-Type head + leaf-Type args must classify as ConstructorCall",
     );
 }
@@ -655,16 +701,15 @@ fn keyworded_unchanged_with_keyword_in_body() {
 fn stateful_keyworded_eager_subs_resumes_through_state() {
     let arena = RuntimeArena::new();
     let scope = default_scope(&arena, Box::new(std::io::sink()));
-    crate::builtins::test_support::run(
-        scope,
-        "FN (FIRST xs :(LIST OF Number)) -> Number = (1)",
-    );
+    crate::builtins::test_support::run(scope, "FN (FIRST xs :(LIST OF Number)) -> Number = (1)");
     let mut sched = Scheduler::new();
     let exprs = crate::parse::parse("LET y = (FIRST [1 2 3])").expect("parse succeeds");
     for e in exprs {
         sched.add_dispatch(e, scope);
     }
-    sched.execute().expect("LET with eager-sub RHS runs cleanly on the stateful driver");
+    sched
+        .execute()
+        .expect("LET with eager-sub RHS runs cleanly on the stateful driver");
     assert!(
         matches!(scope.lookup("y"), Some(KObject::Number(n)) if *n == 1.0),
         "LET y = (FIRST [1 2 3]) must bind y to 1.0 via the stateful eager-subs track",
@@ -693,7 +738,9 @@ fn stateful_keyworded_deferred_resolves_after_eager_subs() {
     for e in exprs {
         sched.add_dispatch(e, scope);
     }
-    sched.execute().expect("DESCRIBE with eager-sub list resolves cleanly on the stateful driver");
+    sched
+        .execute()
+        .expect("DESCRIBE with eager-sub list resolves cleanly on the stateful driver");
     match scope.lookup("out") {
         Some(KObject::KString(s)) => assert_eq!(s.as_str(), "numbers"),
         Some(other) => panic!("expected KString(\"numbers\"), got {}", other.summarize()),
@@ -727,31 +774,43 @@ fn keyworded_parked_carrier_expr_reads_state() {
     let expected = carrier_expr().summarize();
 
     let with_eager_subs = DispatchState::Keyworded(Box::new(KeywordedState::with_eager_subs(
-        Initialized { pre_subs: Vec::new() },
+        Initialized {
+            pre_subs: Vec::new(),
+        },
         EagerSubsTrack::keyworded(carrier_expr(), Vec::new()),
     )));
     assert_eq!(
-        with_eager_subs.parked_carrier_expr().map(Parseable::summarize),
+        with_eager_subs
+            .parked_carrier_expr()
+            .map(Parseable::summarize),
         Some(expected.clone()),
         "eager-subs track must surface `working_expr` as the parked sample",
     );
 
     let with_bare_name = DispatchState::Keyworded(Box::new(KeywordedState::with_bare_name_park(
-        Initialized { pre_subs: Vec::new() },
+        Initialized {
+            pre_subs: Vec::new(),
+        },
         BareNameParkTrack::new(carrier_expr(), Vec::new()),
     )));
     assert_eq!(
-        with_bare_name.parked_carrier_expr().map(Parseable::summarize),
+        with_bare_name
+            .parked_carrier_expr()
+            .map(Parseable::summarize),
         Some(expected.clone()),
         "bare-name-park track must surface `working_expr` as the parked sample",
     );
 
     let with_overload = DispatchState::Keyworded(Box::new(KeywordedState::with_overload_park(
-        Initialized { pre_subs: Vec::new() },
+        Initialized {
+            pre_subs: Vec::new(),
+        },
         OverloadParkTrack::new(carrier_expr(), Vec::new()),
     )));
     assert_eq!(
-        with_overload.parked_carrier_expr().map(Parseable::summarize),
+        with_overload
+            .parked_carrier_expr()
+            .map(Parseable::summarize),
         Some(expected),
         "overload-park track must surface its original `expr` as the parked sample",
     );

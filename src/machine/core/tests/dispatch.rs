@@ -1,24 +1,44 @@
 //! `dispatch` arm of `machine::core` tests.
 
+use super::super::{RuntimeArena, Scope};
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use crate::machine::model::types::{Argument, ExpressionSignature, KType, ReturnType, SignatureElement};
+use crate::machine::model::types::{
+    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
+};
 use crate::machine::{BindingIndex, LexicalFrame, ResolveOutcome};
-use super::super::{RuntimeArena, Scope};
 
-fn body_a<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "a")) }
-fn body_b<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "b")) }
+fn body_a<'a>(
+    s: &'a Scope<'a>,
+    _h: &mut dyn SchedulerHandle<'a>,
+    _a: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    BodyResult::Value(marker(s, "a"))
+}
+fn body_b<'a>(
+    s: &'a Scope<'a>,
+    _h: &mut dyn SchedulerHandle<'a>,
+    _a: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    BodyResult::Value(marker(s, "b"))
+}
 
 fn two_slot_sig<'a>(a: KType<'a>, b: KType<'a>) -> ExpressionSignature<'a> {
     ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
-            SignatureElement::Argument(Argument { name: "a".into(), ktype: a }),
+            SignatureElement::Argument(Argument {
+                name: "a".into(),
+                ktype: a,
+            }),
             SignatureElement::Keyword("OP".into()),
-            SignatureElement::Argument(Argument { name: "b".into(), ktype: b }),
+            SignatureElement::Argument(Argument {
+                name: "b".into(),
+                ktype: b,
+            }),
         ],
     }
 }
@@ -29,7 +49,9 @@ fn resolve_returns_resolved_with_classified_indices_for_known_overload() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
     register_builtin(scope, "ONE", one_slot_sig("v", KType::Any), body_a);
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
+        "foo".into(),
+    ))]);
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&expr, Some(&chain), &[]) {
         ResolveOutcome::Resolved(r) => {
@@ -65,7 +87,12 @@ fn resolve_returns_ambiguous_for_tied_overloads() {
 fn resolve_does_not_descend_outer_on_inner_ambiguity() {
     let arena = RuntimeArena::new();
     let outer = run_root_bare(&arena);
-    register_builtin(outer, "OUTER", two_slot_sig(KType::Number, KType::Number), body_a);
+    register_builtin(
+        outer,
+        "OUTER",
+        two_slot_sig(KType::Number, KType::Number),
+        body_a,
+    );
     let inner = arena.alloc_scope(outer.child_for_call());
     register_builtin(inner, "NA", two_slot_sig(KType::Number, KType::Any), body_a);
     register_builtin(inner, "AN", two_slot_sig(KType::Any, KType::Number), body_b);
@@ -97,9 +124,15 @@ fn resolve_carries_placeholder_name_for_binder_function() {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
             SignatureElement::Keyword("LETLIKE".into()),
-            SignatureElement::Argument(Argument { name: "n".into(), ktype: KType::Identifier }),
+            SignatureElement::Argument(Argument {
+                name: "n".into(),
+                ktype: KType::Identifier,
+            }),
             SignatureElement::Keyword("=".into()),
-            SignatureElement::Argument(Argument { name: "v".into(), ktype: KType::Any }),
+            SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: KType::Any,
+            }),
         ],
     };
     register_builtin_with_binder(scope, "LETLIKE", sig, body_a, Some(name_extractor));
@@ -125,8 +158,15 @@ fn resolve_carries_placeholder_name_for_binder_function() {
 fn resolve_tentative_falls_back_only_when_strict_empty() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(scope, "ONE_ID", one_slot_sig("v", KType::Identifier), body_a);
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(KLiteral::Number(5.0)))]);
+    register_builtin(
+        scope,
+        "ONE_ID",
+        one_slot_sig("v", KType::Identifier),
+        body_a,
+    );
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(
+        KLiteral::Number(5.0),
+    ))]);
     let chain = LexicalFrame::detached();
     assert!(matches!(
         scope.resolve_dispatch(&expr, Some(&chain), &[]),
@@ -143,8 +183,15 @@ fn resolve_tentative_falls_back_only_when_strict_empty() {
 fn resolve_returns_deferred_for_nested_expression_in_typed_slot() {
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(scope, "PLUS", two_slot_sig(KType::Number, KType::Number), body_a);
-    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("deep_call".into()))]);
+    register_builtin(
+        scope,
+        "PLUS",
+        two_slot_sig(KType::Number, KType::Number),
+        body_a,
+    );
+    let inner = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
+        "deep_call".into(),
+    ))]);
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Expression(Box::new(inner))),
         Spanned::bare(ExpressionPart::Keyword("OP".into())),
@@ -166,8 +213,10 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     use crate::machine::NodeId;
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let bucket_single: UntypedKey =
-        vec![UntypedElement::Keyword("MAKESET".into()), UntypedElement::Slot];
+    let bucket_single: UntypedKey = vec![
+        UntypedElement::Keyword("MAKESET".into()),
+        UntypedElement::Slot,
+    ];
     scope
         .install_pending_overload(bucket_single, NodeId(42), BindingIndex::BUILTIN)
         .expect("install_pending_overload");
@@ -179,8 +228,10 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
     let chain = LexicalFrame::detached();
     match scope.resolve_dispatch(&bare, Some(&chain), &[]) {
         ResolveOutcome::ParkOnProducers(ps) => assert_eq!(ps, vec![NodeId(42)]),
-        other => panic!("expected ParkOnProducers([42]) for matching bucket, got {}",
-            std::any::type_name_of_val(&other)),
+        other => panic!(
+            "expected ParkOnProducers([42]) for matching bucket, got {}",
+            std::any::type_name_of_val(&other)
+        ),
     }
 
     let multi = KExpression::new(vec![
@@ -190,7 +241,10 @@ fn pending_overload_parks_only_on_exact_bucket_match() {
         Spanned::bare(ExpressionPart::Identifier("other".into())),
     ]);
     assert!(
-        matches!(scope.resolve_dispatch(&multi, Some(&chain), &[]), ResolveOutcome::Unmatched),
+        matches!(
+            scope.resolve_dispatch(&multi, Some(&chain), &[]),
+            ResolveOutcome::Unmatched
+        ),
         "different-bucket call must not park on a lead-keyword sibling",
     );
 }
@@ -205,8 +259,7 @@ fn sibling_pending_overloads_park_on_earliest_visible_entry() {
     use crate::machine::NodeId;
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    let bucket: UntypedKey =
-        vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
+    let bucket: UntypedKey = vec![UntypedElement::Keyword("PICK".into()), UntypedElement::Slot];
     scope
         .install_pending_overload(bucket.clone(), NodeId(101), BindingIndex::value(3))
         .expect("first install");

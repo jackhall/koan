@@ -3,10 +3,10 @@ use std::rc::Rc;
 
 use typed_arena::Arena;
 
+use super::scope::Scope;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::{KObject, Module, Signature};
-use super::scope::Scope;
 /// Run-lifetime allocator. Lives for one program run. Sub-arenas store `T<'static>`
 /// (phantom); each `alloc*` re-anchors to the caller's `'a` on the way out.
 ///
@@ -61,7 +61,6 @@ impl RuntimeArena {
         }
     }
 
-
     /// Whether `ptr` was returned by a prior `alloc::<KObject<_>>` on this arena.
     pub fn owns_object<'a>(&self, ptr: *const KObject<'a>) -> bool {
         // `KObject` is invariant in `'a`, so the through-`'static` cast is required despite
@@ -79,49 +78,51 @@ impl RuntimeArena {
     /// allocation site rather than later as use-after-free.
     pub fn alloc_function<'a>(&'a self, f: KFunction<'a>) -> &'a KFunction<'a> {
         debug_assert!(
-            std::ptr::eq(self as *const RuntimeArena, f.captured_scope().arena as *const RuntimeArena),
+            std::ptr::eq(
+                self as *const RuntimeArena,
+                f.captured_scope().arena as *const RuntimeArena
+            ),
             "alloc_function invariant :KFunction must be allocated into the same RuntimeArena \
              that owns its captured scope"
         );
-        let static_f: KFunction<'static> = unsafe {
-            std::mem::transmute::<KFunction<'a>, KFunction<'static>>(f)
-        };
+        let static_f: KFunction<'static> =
+            unsafe { std::mem::transmute::<KFunction<'a>, KFunction<'static>>(f) };
         let stored: &'a mut KFunction<'static> = self.functions.alloc(static_f);
         unsafe { std::mem::transmute::<&'a mut KFunction<'static>, &'a KFunction<'a>>(stored) }
     }
 
     pub fn alloc_scope<'a>(&'a self, s: Scope<'a>) -> &'a Scope<'a> {
-        let static_s: Scope<'static> = unsafe {
-            std::mem::transmute::<Scope<'a>, Scope<'static>>(s)
-        };
+        let static_s: Scope<'static> =
+            unsafe { std::mem::transmute::<Scope<'a>, Scope<'static>>(s) };
         let stored: &'a mut Scope<'static> = self.scopes.alloc(static_s);
         unsafe { std::mem::transmute::<&'a mut Scope<'static>, &'a Scope<'a>>(stored) }
     }
 
     pub fn alloc_module<'a>(&'a self, m: Module<'a>) -> &'a Module<'a> {
-        let static_m: Module<'static> = unsafe {
-            std::mem::transmute::<Module<'a>, Module<'static>>(m)
-        };
+        let static_m: Module<'static> =
+            unsafe { std::mem::transmute::<Module<'a>, Module<'static>>(m) };
         let stored: &'a mut Module<'static> = self.modules.alloc(static_m);
         unsafe { std::mem::transmute::<&'a mut Module<'static>, &'a Module<'a>>(stored) }
     }
 
     pub fn alloc_signature<'a>(&'a self, s: Signature<'a>) -> &'a Signature<'a> {
-        let static_s: Signature<'static> = unsafe {
-            std::mem::transmute::<Signature<'a>, Signature<'static>>(s)
-        };
+        let static_s: Signature<'static> =
+            unsafe { std::mem::transmute::<Signature<'a>, Signature<'static>>(s) };
         let stored: &'a mut Signature<'static> = self.signatures.alloc(static_s);
         unsafe { std::mem::transmute::<&'a mut Signature<'static>, &'a Signature<'a>>(stored) }
     }
 
-
     /// When true, no value can hold a `&KFunction` pointing into this arena — see the
     /// `alloc_function` invariant.
-    pub fn functions_is_empty(&self) -> bool { self.functions.len() == 0 }
+    pub fn functions_is_empty(&self) -> bool {
+        self.functions.len() == 0
+    }
 }
 
 impl Default for RuntimeArena {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// True iff any descendant of `obj` carries an `Rc<CallArena>` whose backing `RuntimeArena`
@@ -147,7 +148,9 @@ fn obj_anchors_to(obj: &KObject<'_>, arena_ptr: *const RuntimeArena) -> bool {
 
 fn ktype_anchors_to(t: &KType<'_>, arena_ptr: *const RuntimeArena) -> bool {
     match t {
-        KType::Module { frame: Some(rc), .. } => rc_targets(rc, arena_ptr),
+        KType::Module {
+            frame: Some(rc), ..
+        } => rc_targets(rc, arena_ptr),
         _ => false,
     }
 }
@@ -171,11 +174,11 @@ impl<'a> CycleGated<'a> for KObject<'a> {
         obj_anchors_to(self, arena_ptr)
     }
     fn alloc_local(self, arena: &'a RuntimeArena) -> &'a Self {
-        let static_obj: KObject<'static> = unsafe {
-            std::mem::transmute::<KObject<'a>, KObject<'static>>(self)
-        };
+        let static_obj: KObject<'static> =
+            unsafe { std::mem::transmute::<KObject<'a>, KObject<'static>>(self) };
         let stored: &'a mut KObject<'static> = arena.objects.alloc(static_obj);
-        arena.allocated_objects
+        arena
+            .allocated_objects
             .borrow_mut()
             .push(stored as *const _ as usize);
         unsafe { std::mem::transmute::<&'a mut KObject<'static>, &'a KObject<'a>>(stored) }
@@ -187,9 +190,8 @@ impl<'a> CycleGated<'a> for KType<'a> {
         ktype_anchors_to(self, arena_ptr)
     }
     fn alloc_local(self, arena: &'a RuntimeArena) -> &'a Self {
-        let static_t: KType<'static> = unsafe {
-            std::mem::transmute::<KType<'a>, KType<'static>>(self)
-        };
+        let static_t: KType<'static> =
+            unsafe { std::mem::transmute::<KType<'a>, KType<'static>>(self) };
         let stored: &'a mut KType<'static> = arena.ktypes.alloc(static_t);
         unsafe { std::mem::transmute::<&'a mut KType<'static>, &'a KType<'a>>(stored) }
     }
@@ -265,11 +267,17 @@ fn project<'a>(v: &'static StaticKValue) -> &'a KObject<'a> {
     unsafe { std::mem::transmute::<&'static KObject<'static>, &'a KObject<'a>>(r) }
 }
 
-pub fn null_singleton<'a>() -> &'a KObject<'a> { project(&NULL_HOLDER) }
+pub fn null_singleton<'a>() -> &'a KObject<'a> {
+    project(&NULL_HOLDER)
+}
 
-pub fn true_singleton<'a>() -> &'a KObject<'a> { project(&TRUE_HOLDER) }
+pub fn true_singleton<'a>() -> &'a KObject<'a> {
+    project(&TRUE_HOLDER)
+}
 
-pub fn false_singleton<'a>() -> &'a KObject<'a> { project(&FALSE_HOLDER) }
+pub fn false_singleton<'a>() -> &'a KObject<'a> {
+    project(&FALSE_HOLDER)
+}
 
 /// One user-fn call's allocation frame. `Rc`-pinned so an escaping closure can extend
 /// the frame's life past slot finalize. Field order is load-bearing: `arena` drops before
@@ -300,9 +308,8 @@ impl CallArena {
         // SAFETY: heap-pinning keeps `arena_ptr` valid for the Rc's lifetime, which exceeds
         // this function's duration; `outer` lives long enough by caller contract.
         let arena_ref: &'static RuntimeArena = unsafe { &*arena_ptr };
-        let outer_static: &Scope<'static> = unsafe {
-            std::mem::transmute::<&Scope<'_>, &Scope<'static>>(outer)
-        };
+        let outer_static: &Scope<'static> =
+            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(outer) };
         let mut child = Scope::child_under(outer_static);
         // `child_under` defaults `arena` to `outer.arena`; override to the per-call arena.
         child.arena = arena_ref;
@@ -317,9 +324,7 @@ impl CallArena {
     }
 
     pub fn scope<'a>(&'a self) -> &'a Scope<'a> {
-        unsafe {
-            std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.scope_ptr)
-        }
+        unsafe { std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.scope_ptr) }
     }
 
     /// Scope handle bounded by `&'p Rc<Self>` — strictly shorter than the `&'a Scope<'a>`
@@ -330,31 +335,27 @@ impl CallArena {
     /// SAFETY: `scope_ptr` is stable for the `Rc`'s lifetime (heap-pinned by `Rc`); the
     /// returned `'p` is bounded by the receiver so the borrow cannot outlive it.
     pub fn scope_for_bind<'p>(self: &'p Rc<Self>) -> &'p Scope<'p> {
-        unsafe {
-            std::mem::transmute::<&Scope<'static>, &'p Scope<'p>>(&*self.scope_ptr)
-        }
+        unsafe { std::mem::transmute::<&Scope<'static>, &'p Scope<'p>>(&*self.scope_ptr) }
     }
 
-    pub fn arena(&self) -> &RuntimeArena { &self.arena }
+    pub fn arena(&self) -> &RuntimeArena {
+        &self.arena
+    }
 
     /// Reset this frame in place for a tail-call iteration: drop the old arena storage,
     /// install a fresh `RuntimeArena` escaping into `new_outer.arena`, re-allocate the
     /// child `Scope` under `new_outer`. Returns `false` (untouched) when `Rc::get_mut`
     /// fails — any other live `Rc` foreclosing in-place reuse. See
     /// [per-call-arena-protocol.md § TCO frame reuse](../../../design/per-call-arena-protocol.md#tco-frame-reuse).
-    pub fn try_reset_for_tail<'p>(
-        self: &mut Rc<Self>,
-        new_outer: &'p Scope<'p>,
-    ) -> bool {
+    pub fn try_reset_for_tail<'p>(self: &mut Rc<Self>, new_outer: &'p Scope<'p>) -> bool {
         if Rc::get_mut(self).is_none() {
             return false;
         }
         let escape: *const RuntimeArena = new_outer.arena;
         // SAFETY: lexical-scoping invariant — `new_outer.arena` outlives this frame
         // (it is the captured definition scope's arena, or a longer-lived ancestor).
-        let outer_static: &Scope<'static> = unsafe {
-            std::mem::transmute::<&Scope<'_>, &Scope<'static>>(new_outer)
-        };
+        let outer_static: &Scope<'static> =
+            unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'static>>(new_outer) };
         let this = Rc::get_mut(self).expect("just-verified unique above");
         this.scope_ptr = std::ptr::null();
         this.outer_frame = None;
@@ -380,8 +381,8 @@ mod tests {
 
     use super::*;
     use crate::builtins::default_scope;
-    use crate::machine::BindingIndex;
     use crate::machine::model::types::KType;
+    use crate::machine::BindingIndex;
 
     #[test]
     fn null_singleton_returns_null_kobject() {
@@ -441,7 +442,9 @@ mod tests {
         let inner_arena: &RuntimeArena = unsafe { &*(arena_ptr as *const _) };
         let child: &Scope<'_> = unsafe { &*(scope_ptr as *const _) };
         let it_obj: &KObject<'_> = inner_arena.alloc(KObject::Number(42.0));
-        child.bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN).unwrap();
+        child
+            .bind_value("it".to_string(), it_obj, BindingIndex::BUILTIN)
+            .unwrap();
         assert!(matches!(child.lookup("it"), Some(KObject::Number(n)) if *n == 42.0));
     }
 
@@ -469,8 +472,14 @@ mod tests {
         let outer = CallArena::new(run_scope, None);
         let inner = CallArena::new(outer.scope(), Some(outer.clone()));
         drop(outer);
-        let outer_scope = inner.scope().outer.expect("inner.scope().outer must be Some");
-        assert!(std::ptr::eq(outer_scope.arena, inner.scope().outer.unwrap().arena));
+        let outer_scope = inner
+            .scope()
+            .outer
+            .expect("inner.scope().outer must be Some");
+        assert!(std::ptr::eq(
+            outer_scope.arena,
+            inner.scope().outer.unwrap().arena
+        ));
         assert!(outer_scope.outer.is_some());
     }
 
@@ -478,15 +487,16 @@ mod tests {
     /// it once the local Rc handle is dropped.
     #[test]
     fn call_arena_scope_re_anchored_into_struct_alongside_rc() {
-        struct Holder<'a> { s: &'a Scope<'a>, _f: Rc<CallArena> }
+        struct Holder<'a> {
+            s: &'a Scope<'a>,
+            _f: Rc<CallArena>,
+        }
 
         let arena = RuntimeArena::new();
         let scope = default_scope(&arena, Box::new(std::io::sink()));
         let h = {
             let f = CallArena::new(scope, None);
-            let s: &Scope<'_> = unsafe {
-                std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope())
-            };
+            let s: &Scope<'_> = unsafe { std::mem::transmute::<&Scope<'_>, &Scope<'_>>(f.scope()) };
             Holder { s, _f: f }
         };
         assert!(h.s.outer.is_some());
@@ -531,7 +541,10 @@ mod tests {
         assert_eq!(frame.arena().alloc_count(), 1);
 
         let v = frame.arena().alloc(KObject::Number(42.0));
-        frame.scope().bind_value("k".to_string(), v, BindingIndex::BUILTIN).unwrap();
+        frame
+            .scope()
+            .bind_value("k".to_string(), v, BindingIndex::BUILTIN)
+            .unwrap();
         assert!(matches!(frame.scope().lookup("k"), Some(KObject::Number(n)) if *n == 42.0));
         assert!(frame.scope().outer.is_some());
     }
@@ -574,11 +587,16 @@ mod tests {
         let dummy_fn_obj = outer.alloc(KObject::KFunction(
             outer.alloc_function(crate::machine::core::kfunction::KFunction::new(
                 crate::machine::model::types::ExpressionSignature {
-                    return_type: crate::machine::model::types::ReturnType::Resolved(crate::machine::model::types::KType::Null),
-                    elements: vec![crate::machine::model::types::SignatureElement::Keyword("DUMMY".into())],
+                    return_type: crate::machine::model::types::ReturnType::Resolved(
+                        crate::machine::model::types::KType::Null,
+                    ),
+                    elements: vec![crate::machine::model::types::SignatureElement::Keyword(
+                        "DUMMY".into(),
+                    )],
                 },
-                crate::machine::core::kfunction::Body::Builtin(|_, _, _|
-                    crate::machine::core::kfunction::BodyResult::Value(null_singleton())),
+                crate::machine::core::kfunction::Body::Builtin(|_, _, _| {
+                    crate::machine::core::kfunction::BodyResult::Value(null_singleton())
+                }),
                 scope,
             )),
             None,

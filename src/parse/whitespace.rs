@@ -9,8 +9,8 @@
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
-use crate::machine::KError;
 use crate::machine::core::source::Span;
+use crate::machine::KError;
 use crate::parse::quotes::{JUMP_MARK, LEN_SEP, LITERAL_MARK};
 
 /// Each non-blank line becomes a `(...)` group; deeper indents nest, dedents close. Tabs and
@@ -87,7 +87,10 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
         let orig_at_next_line_start = orig_at_content_end + trailing_ws_len + nl_advance;
 
         let paren_delta = line_paren_delta(content);
-        let content_span = Span { start: orig_at_content_start, end: orig_at_content_end };
+        let content_span = Span {
+            start: orig_at_content_start,
+            end: orig_at_content_end,
+        };
 
         macro_rules! join_line {
             () => {{
@@ -99,7 +102,11 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
                 continuing = content.ends_with(',');
                 last_content_orig_end = orig_at_content_end;
                 orig_at_line_start = orig_at_next_line_start;
-                line_start = if line_end < bytes.len() { line_end + 1 } else { bytes.len() + 1 };
+                line_start = if line_end < bytes.len() {
+                    line_end + 1
+                } else {
+                    bytes.len() + 1
+                };
                 lineno += 1;
             }};
         }
@@ -143,14 +150,20 @@ fn collapse_str(input: &str) -> Result<Vec<u8>, KError> {
             let off = orig_at_line_start + tab_pos as u32;
             return Err(KError::parse(
                 format!("tab indentation not allowed on line {}", lineno + 1),
-                Some(Span { start: off, end: off + 1 }),
+                Some(Span {
+                    start: off,
+                    end: off + 1,
+                }),
             ));
         }
         if !indent.is_multiple_of(2) {
             let off = orig_at_line_start;
             return Err(KError::parse(
                 format!("odd-numbered space indentation on line {}", lineno + 1),
-                Some(Span { start: off, end: off + indent as u32 }),
+                Some(Span {
+                    start: off,
+                    end: off + indent as u32,
+                }),
             ));
         }
 

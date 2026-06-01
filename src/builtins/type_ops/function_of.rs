@@ -1,6 +1,6 @@
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::{KObject, KType};
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use crate::builtins::err;
 
@@ -41,12 +41,10 @@ pub fn body<'a>(
             }
         }
     }
-    BodyResult::Value(
-        scope.arena.alloc(KObject::KTypeValue(KType::KFunction {
-            args,
-            ret: Box::new(ret),
-        })),
-    )
+    BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::KFunction {
+        args,
+        ret: Box::new(ret),
+    })))
 }
 
 #[cfg(test)]

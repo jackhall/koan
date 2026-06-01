@@ -115,9 +115,7 @@ pub(super) fn close_collection<'a>(
     token_start: &mut Option<u32>,
     end: u32,
 ) -> Result<(), KError> {
-    let top_matches = stack
-        .peek_top()
-        .is_some_and(|f| f.matches_closer(closer));
+    let top_matches = stack.peek_top().is_some_and(|f| f.matches_closer(closer));
     if !top_matches {
         return Err(KError::parse(mismatch_msg, None));
     }
@@ -131,7 +129,8 @@ pub(super) fn close_collection<'a>(
 }
 
 fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), KError> {
-    if matches!(prev, None | Some('(' | '[' | '{')) || matches!(prev, Some(c) if c.is_whitespace()) {
+    if matches!(prev, None | Some('(' | '[' | '{')) || matches!(prev, Some(c) if c.is_whitespace())
+    {
         return Ok(());
     }
     Err(KError::parse(
@@ -144,7 +143,8 @@ fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), KError> 
 }
 
 fn check_close_adjacency(closer: char, next: Option<char>) -> Result<(), KError> {
-    if matches!(next, None | Some(')' | ']' | '}')) || matches!(next, Some(c) if c.is_whitespace()) {
+    if matches!(next, None | Some(')' | ']' | '}')) || matches!(next, Some(c) if c.is_whitespace())
+    {
         return Ok(());
     }
     Err(KError::parse(

@@ -1,5 +1,5 @@
 use crate::machine::model::KObject;
-use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, Scope, SchedulerHandle};
+use crate::machine::{ArgumentBundle, BodyResult, KError, KErrorKind, SchedulerHandle, Scope};
 
 use crate::builtins::err;
 
@@ -67,7 +67,10 @@ mod tests {
         let id = sched.add_dispatch(parse_one("MODULE_TYPE_OF Foo Bogus"), scope);
         sched.execute().expect("scheduler runs to completion");
         let res = sched.read_result(id);
-        assert!(res.is_err(), "expected MODULE_TYPE_OF on missing member to err");
+        assert!(
+            res.is_err(),
+            "expected MODULE_TYPE_OF on missing member to err"
+        );
     }
 
     /// Miri audit-slate: pins type-op dispatch through the per-call arena under tree
@@ -99,10 +102,18 @@ mod tests {
         run(scope, "LET Other = (LIFT_TYPE (ElemMod))");
 
         let m = match scope.resolve_type("Held") {
-            Some(KType::Module { module: m, frame: _ }) => *m,
+            Some(KType::Module {
+                module: m,
+                frame: _,
+            }) => *m,
             other => panic!("Held should be a module identity in types, got {other:?}"),
         };
-        let probe = m.child_scope().bindings().data().get("probe").map(|(o, _)| *o);
+        let probe = m
+            .child_scope()
+            .bindings()
+            .data()
+            .get("probe")
+            .map(|(o, _)| *o);
         assert!(
             matches!(probe, Some(KObject::Number(n)) if *n == 11.0),
             "Held.probe must still read 11.0 after subsequent churn",

@@ -10,17 +10,19 @@
 //! `LET Type = TypeExpr` for abstract type declarations. The ascription operators
 //! (`:|` / `:!`) iterate the stored scope at ascription time.
 
+use crate::machine::model::values::Signature;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
+    SchedulerHandle, Scope,
 };
-use crate::machine::model::values::Signature;
 
 use crate::machine::model::ast::KExpression;
 
-use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_nominal_binder, sig};
+use crate::machine::core::kfunction::argument_bundle::{
+    extract_bare_type_name, extract_kexpression,
+};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -61,12 +63,16 @@ pub fn body<'a>(
         // which synthesizes `KTypeValue(KType::Signature { .. })`. SIG doesn't join an SCC
         // type cycle, so the upsert's overwrite arm never fires — its insert-if-absent /
         // non-equal-Rebind behaviour (two `SIG Foo` in one scope error) carries here.
-        let identity = KType::Signature { sig, pinned_slots: Vec::new() };
+        let identity = KType::Signature {
+            sig,
+            pinned_slots: Vec::new(),
+        };
         match parent_scope.register_type_upsert(name_for_finish.clone(), identity, bind_index) {
             Ok(kt_ref) => BodyResult::Value(arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
-            Err(e) => BodyResult::Err(
-                e.with_frame(Frame::bare("<signature>", format!("SIG {} body", name_for_finish))),
-            ),
+            Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
+                "<signature>",
+                format!("SIG {} body", name_for_finish),
+            ))),
         }
     });
     let combine_id = sched.add_combine(deps, vec![], scope, finish);
@@ -83,12 +89,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_nominal_binder(
         scope,
         "SIG",
-        sig(KType::AnySignature, vec![
-            kw("SIG"),
-            arg("name", KType::TypeExprRef),
-            kw("="),
-            arg("body", KType::KExpression),
-        ]),
+        sig(
+            KType::AnySignature,
+            vec![
+                kw("SIG"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
         body,
         Some(binder_name),
     );
@@ -169,5 +178,4 @@ mod tests {
             "Foo must not bind (type side) when its body errors",
         );
     }
-
 }

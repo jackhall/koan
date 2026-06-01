@@ -3,14 +3,14 @@ mod param_refs;
 pub(crate) mod return_type;
 pub(crate) mod signature;
 
+use crate::machine::model::types::Elaborator;
 use crate::machine::model::KType;
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
 };
-use crate::machine::model::types::Elaborator;
 
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, err, kw, register_builtin_full, sig};
+use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 use finalize::{classify, defer_via_combine, finalize_fn, FnPlan, ParamListResult};
 use return_type::{classify_return_type, extract_return_type_raw};
@@ -67,9 +67,13 @@ pub fn body<'a>(
     let params = match signature::parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
         ParamListOutcome::Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
-        ParamListOutcome::Pending { park_producers, sub_dispatches } => {
-            ParamListResult::Pending { park_producers, sub_dispatches }
-        }
+        ParamListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => ParamListResult::Pending {
+            park_producers,
+            sub_dispatches,
+        },
     };
 
     // Value-style bind_index: FN produces a callable but registers no
@@ -80,12 +84,19 @@ pub fn body<'a>(
         .unwrap_or(BindingIndex::BUILTIN);
 
     match classify(return_type_state, params) {
-        FnPlan::Synchronous { elements, return_type } => {
-            finalize_fn(scope, elements, return_type, body_expr, bind_index)
-        }
-        FnPlan::Combine(inputs) => {
-            defer_via_combine(scope, sched, signature_expr, inputs, body_expr, false, bind_index)
-        }
+        FnPlan::Synchronous {
+            elements,
+            return_type,
+        } => finalize_fn(scope, elements, return_type, body_expr, bind_index),
+        FnPlan::Combine(inputs) => defer_via_combine(
+            scope,
+            sched,
+            signature_expr,
+            inputs,
+            body_expr,
+            false,
+            bind_index,
+        ),
     }
 }
 
@@ -112,14 +123,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_full(
         scope,
         "FN",
-        sig(KType::Any, vec![
-            kw("FN"),
-            arg("signature", KType::KExpression),
-            kw("->"),
-            arg("return_type", KType::TypeExprRef),
-            kw("="),
-            arg("body", KType::KExpression),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("FN"),
+                arg("signature", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::TypeExprRef),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
         body,
         None,
         Some(binder_bucket),
@@ -129,14 +143,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_full(
         scope,
         "FN",
-        sig(KType::Any, vec![
-            kw("FN"),
-            arg("signature", KType::KExpression),
-            kw("->"),
-            arg("return_type", KType::KExpression),
-            kw("="),
-            arg("body", KType::KExpression),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("FN"),
+                arg("signature", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::KExpression),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
         body,
         None,
         Some(binder_bucket),

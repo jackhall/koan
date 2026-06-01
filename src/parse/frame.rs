@@ -57,20 +57,42 @@ impl<'a> Frame<'a> {
     pub(super) fn into_part(self, end: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
         let file = source::current();
         match self {
-            Frame::Expression { mut expr, head: None, span_start, .. } => {
-                let span = Span { start: span_start, end };
+            Frame::Expression {
+                mut expr,
+                head: None,
+                span_start,
+                ..
+            } => {
+                let span = Span {
+                    start: span_start,
+                    end,
+                };
                 expr.span = Some(span);
                 expr.file = file;
-                Ok(Spanned::at(ExpressionPart::Expression(Box::new(expr)), span))
+                Ok(Spanned::at(
+                    ExpressionPart::Expression(Box::new(expr)),
+                    span,
+                ))
             }
-            Frame::Expression { mut expr, head: Some(head), span_start, sigil_cursor } => {
-                let body_span = Span { start: span_start, end };
+            Frame::Expression {
+                mut expr,
+                head: Some(head),
+                span_start,
+                sigil_cursor,
+            } => {
+                let body_span = Span {
+                    start: span_start,
+                    end,
+                };
                 expr.span = Some(body_span);
                 expr.file = file;
-                let sc = sigil_cursor
-                    .expect("sigil-headed Expression frame must carry sigil_cursor");
+                let sc =
+                    sigil_cursor.expect("sigil-headed Expression frame must carry sigil_cursor");
                 let outer_span = Span { start: sc, end };
-                let sigil_span = Span { start: sc, end: sc + 1 };
+                let sigil_span = Span {
+                    start: sc,
+                    end: sc + 1,
+                };
                 let wrapped = KExpression {
                     parts: vec![
                         Spanned::at(ExpressionPart::Keyword(head.to_string()), sigil_span),
@@ -79,18 +101,36 @@ impl<'a> Frame<'a> {
                     span: Some(outer_span),
                     file,
                 };
-                Ok(Spanned::at(ExpressionPart::Expression(Box::new(wrapped)), outer_span))
+                Ok(Spanned::at(
+                    ExpressionPart::Expression(Box::new(wrapped)),
+                    outer_span,
+                ))
             }
             Frame::List { items, span_start } => {
-                let span = Span { start: span_start, end };
+                let span = Span {
+                    start: span_start,
+                    end,
+                };
                 Ok(Spanned::at(ExpressionPart::ListLiteral(items), span))
             }
             Frame::Dict { dict, span_start } => {
-                let span = Span { start: span_start, end };
-                Ok(Spanned::at(ExpressionPart::DictLiteral(dict.finish()?), span))
+                let span = Span {
+                    start: span_start,
+                    end,
+                };
+                Ok(Spanned::at(
+                    ExpressionPart::DictLiteral(dict.finish()?),
+                    span,
+                ))
             }
-            Frame::TypeExpr { mut expr, span_start } => {
-                let span = Span { start: span_start, end };
+            Frame::TypeExpr {
+                mut expr,
+                span_start,
+            } => {
+                let span = Span {
+                    start: span_start,
+                    end,
+                };
                 expr.span = Some(span);
                 expr.file = file;
                 Ok(Spanned::at(
@@ -125,11 +165,17 @@ pub(super) fn close_paren_to_part<'a>(
         Frame::TypeExpr { .. } => frame.into_part(end),
         Frame::List { span_start, .. } => Err(KError::parse(
             "unclosed '[': this list literal was never closed with a matching ']'",
-            Some(Span { start: span_start, end: span_start + 1 }),
+            Some(Span {
+                start: span_start,
+                end: span_start + 1,
+            }),
         )),
         Frame::Dict { span_start, .. } => Err(KError::parse(
             "unclosed '{': this dict literal was never closed with a matching '}'",
-            Some(Span { start: span_start, end: span_start + 1 }),
+            Some(Span {
+                start: span_start,
+                end: span_start + 1,
+            }),
         )),
     }
 }

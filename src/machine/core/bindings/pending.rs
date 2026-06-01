@@ -29,7 +29,9 @@ pub struct PendingTypes<'a> {
 
 impl<'a> PendingTypes<'a> {
     pub fn new() -> Self {
-        Self { map: RefCell::new(HashMap::new()) }
+        Self {
+            map: RefCell::new(HashMap::new()),
+        }
     }
 
     pub fn get(&self) -> Ref<'_, HashMap<String, PendingTypeEntry<'a>>> {
@@ -42,11 +44,7 @@ impl<'a> PendingTypes<'a> {
     /// Panics on borrow conflict — pending-type writes happen at body-entry,
     /// outside the re-entrant `try_apply` hot path. Panics on duplicate name —
     /// placeholders should block a second dispatch from reaching body-entry.
-    pub fn insert(
-        &'a self,
-        name: String,
-        entry: PendingTypeEntry<'a>,
-    ) -> PendingBinderGuard<'a> {
+    pub fn insert(&'a self, name: String, entry: PendingTypeEntry<'a>) -> PendingBinderGuard<'a> {
         let mut map = self.map.borrow_mut();
         if map.contains_key(&name) {
             panic!(
@@ -55,7 +53,10 @@ impl<'a> PendingTypes<'a> {
             );
         }
         map.insert(name.clone(), entry);
-        PendingBinderGuard { pending: self, name }
+        PendingBinderGuard {
+            pending: self,
+            name,
+        }
     }
 
     /// Append `to` to `from`'s adjacency list (no-op if `from` isn't a pending

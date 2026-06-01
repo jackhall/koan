@@ -67,9 +67,7 @@ impl<'a> Module<'a> {
     /// Re-attach `'a` to the stored scope pointer. SAFETY: the underlying scope is
     /// arena-allocated; the arena outlives every `&Module<'a>` by construction.
     pub fn child_scope(&self) -> &'a Scope<'a> {
-        unsafe {
-            std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.child_scope_ptr)
-        }
+        unsafe { std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.child_scope_ptr) }
     }
 
     /// Stable identity used to seed `KType::UserType { kind: Module, scope_id, .. }`.
@@ -103,9 +101,7 @@ impl<'a> Signature<'a> {
     }
 
     pub fn decl_scope(&self) -> &'a Scope<'a> {
-        unsafe {
-            std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.decl_scope_ptr)
-        }
+        unsafe { std::mem::transmute::<&Scope<'static>, &'a Scope<'a>>(&*self.decl_scope_ptr) }
     }
 
     /// Stable identity for `KType::Signature { sig, .. }` (its dispatch identity is
@@ -192,9 +188,11 @@ mod tests {
     fn functor_per_call_module_lifts_correctly() {
         use crate::machine::core::kfunction::{Body, KFunction};
         use crate::machine::core::{CallArena, RuntimeArena as RA};
-        use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement, ReturnType};
-        use crate::machine::model::values::KObject;
         use crate::machine::execute::lift_kobject_for_test;
+        use crate::machine::model::types::{
+            ExpressionSignature, KType, ReturnType, SignatureElement,
+        };
+        use crate::machine::model::values::KObject;
         use std::rc::Rc;
 
         let outer_arena = RuntimeArena::new();
@@ -222,11 +220,15 @@ mod tests {
 
         // Module's `child_scope` lives in `inner_arena` — exactly the shape a functor
         // body's `MODULE Result = (...)` produces. Lift must observe the arena match.
-        let inner_scope = inner_arena.alloc_scope(
-            crate::machine::core::Scope::child_under_module(frame.scope(), "Inner".into()),
-        );
+        let inner_scope = inner_arena.alloc_scope(crate::machine::core::Scope::child_under_module(
+            frame.scope(),
+            "Inner".into(),
+        ));
         let module = inner_arena.alloc_module(Module::new("Inner".into(), inner_scope));
-        let m_obj = KObject::KTypeValue(KType::Module { module, frame: None });
+        let m_obj = KObject::KTypeValue(KType::Module {
+            module,
+            frame: None,
+        });
 
         let strong_before = Rc::strong_count(&frame);
         let lifted = lift_kobject_for_test(&m_obj, &frame);

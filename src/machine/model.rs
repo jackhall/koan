@@ -3,7 +3,7 @@ pub(crate) mod types;
 pub(crate) mod values;
 
 pub use types::{
-    Argument, DeferredReturn, ExpressionSignature, KType, Parseable, ReturnType, Serializable,
-    SignatureElement, UntypedElement, UntypedKey, UserTypeKind, is_keyword_token,
+    is_keyword_token, Argument, DeferredReturn, ExpressionSignature, KType, Parseable, ReturnType,
+    Serializable, SignatureElement, UntypedElement, UntypedKey, UserTypeKind,
 };
 pub use values::{KKey, KObject};

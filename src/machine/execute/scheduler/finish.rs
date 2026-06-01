@@ -1,7 +1,5 @@
 use crate::machine::model::KObject;
-use crate::machine::{
-    BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId, Scope,
-};
+use crate::machine::{BodyResult, CatchFinish, CombineFinish, Frame, KError, NodeId, Scope};
 
 use super::super::dispatch::propagate_dep_error;
 use super::super::nodes::{LiftState, NodeOutput, NodeStep, NodeWork};
@@ -35,28 +33,29 @@ impl<'a> Scheduler<'a> {
         let make_frame = || Frame::bare("<combine>", "combine");
         for dep in &deps {
             if let Err(e) = self.read_result(*dep) {
-                return NodeStep::Done(NodeOutput::Err(
-                    propagate_dep_error(e, Some(make_frame())),
-                ));
+                return NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(make_frame()))));
             }
         }
         // Pre-collect refs so `finish` (which takes `&mut self`) doesn't reborrow for reads.
         let values: Vec<&'a KObject<'a>> = deps.iter().map(|d| self.read(*d)).collect();
-        let owned_indices: Vec<usize> =
-            deps[park_count..].iter().map(|d| d.index()).collect();
+        let owned_indices: Vec<usize> = deps[park_count..].iter().map(|d| d.index()).collect();
         let body = finish(scope, self, &values);
         self.reclaim_deps(idx, owned_indices);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
-                NodeStep::Replace {
-                    work: NodeWork::dispatch(expr),
-                    frame,
-                    function,
-                    block_entry,
-                    body_index,
-                }
-            }
+            BodyResult::Tail {
+                expr,
+                frame,
+                function,
+                block_entry,
+                body_index,
+            } => NodeStep::Replace {
+                work: NodeWork::dispatch(expr),
+                frame,
+                function,
+                block_entry,
+                body_index,
+            },
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
@@ -81,15 +80,19 @@ impl<'a> Scheduler<'a> {
         self.reclaim_deps(idx, vec![from.index()]);
         match body {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
-                NodeStep::Replace {
-                    work: NodeWork::dispatch(expr),
-                    frame,
-                    function,
-                    block_entry,
-                    body_index,
-                }
-            }
+            BodyResult::Tail {
+                expr,
+                frame,
+                function,
+                block_entry,
+                body_index,
+            } => NodeStep::Replace {
+                work: NodeWork::dispatch(expr),
+                frame,
+                function,
+                block_entry,
+                body_index,
+            },
             BodyResult::DeferTo(id) => self.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
@@ -102,10 +105,9 @@ impl<'a> Scheduler<'a> {
     pub(super) fn run_lift(state: LiftState<'a>) -> NodeOutput<'a> {
         match state {
             LiftState::Ready(output) => output,
-            LiftState::Pending(_) => panic!(
-                "scheduler invariant: notify-walk must stamp Lift to Ready before enqueue",
-            ),
+            LiftState::Pending(_) => {
+                panic!("scheduler invariant: notify-walk must stamp Lift to Ready before enqueue",)
+            }
         }
     }
-
 }

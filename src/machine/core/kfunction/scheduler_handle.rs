@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::core::kerror::KError;
+use crate::machine::core::{CallArena, LexicalFrame, Scope, ScopeId};
 use crate::machine::model::values::KObject;
 
 use super::body::BodyResult;
@@ -17,7 +17,9 @@ use super::body::BodyResult;
 pub struct NodeId(pub usize);
 
 impl NodeId {
-    pub fn index(self) -> usize { self.0 }
+    pub fn index(self) -> usize {
+        self.0
+    }
 }
 
 pub trait SchedulerHandle<'a> {
@@ -39,12 +41,7 @@ pub trait SchedulerHandle<'a> {
     /// Schedule a `Catch` slot: wait on `from` to terminalize, then run `finish` with its
     /// `Result`. Unlike `Combine`, an errored `from` does not short-circuit — the closure
     /// receives `Err(KError)` and can choose to recover or re-raise.
-    fn add_catch(
-        &mut self,
-        from: NodeId,
-        scope: &'a Scope<'a>,
-        finish: CatchFinish<'a>,
-    ) -> NodeId;
+    fn add_catch(&mut self, from: NodeId, scope: &'a Scope<'a>, finish: CatchFinish<'a>) -> NodeId;
     /// Active slot's `Rc<CallArena>`. See
     /// [per-call-arena-protocol.md § Active-frame propagation](../../../../design/per-call-arena-protocol.md#active-frame-propagation)
     /// and [§ Outer-frame chain](../../../../design/per-call-arena-protocol.md#outer-frame-chain-for-builtin-built-frames).
@@ -130,9 +127,9 @@ pub type CombineFinish<'a> = Box<
 /// `Result` so the closure can branch on either outcome.
 pub type CatchFinish<'a> = Box<
     dyn FnOnce(
-        &'a Scope<'a>,
-        &mut dyn SchedulerHandle<'a>,
-        Result<&'a KObject<'a>, KError>,
-    ) -> BodyResult<'a>
-    + 'a,
+            &'a Scope<'a>,
+            &mut dyn SchedulerHandle<'a>,
+            Result<&'a KObject<'a>, KError>,
+        ) -> BodyResult<'a>
+        + 'a,
 >;

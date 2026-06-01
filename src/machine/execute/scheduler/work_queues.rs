@@ -13,10 +13,14 @@ pub(in crate::machine::execute::scheduler) struct WorkQueues {
 }
 
 impl WorkQueues {
-    pub(super) fn new() -> Self { Self::default() }
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
 
     pub(super) fn pop_next(&mut self) -> Option<usize> {
-        self.in_flight.pop_front().or_else(|| self.fresh.pop_front())
+        self.in_flight
+            .pop_front()
+            .or_else(|| self.fresh.pop_front())
     }
 
     pub(super) fn push_fresh(&mut self, idx: usize) {

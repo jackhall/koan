@@ -1,12 +1,12 @@
 //! `free` / node-reclamation invariants.
 
-use crate::builtins::default_scope;
-use crate::machine::model::KObject;
-use crate::machine::RuntimeArena;
-use crate::machine::model::ast::KExpression;
 use super::super::super::nodes::{NodeOutput, NodeWork};
 use super::super::dep_graph::DepEdge;
 use super::super::Scheduler;
+use crate::builtins::default_scope;
+use crate::machine::model::ast::KExpression;
+use crate::machine::model::KObject;
+use crate::machine::RuntimeArena;
 
 #[test]
 fn free_reclaims_owned_subtree() {
@@ -26,17 +26,29 @@ fn free_reclaims_owned_subtree() {
     sched.store.set_result(s1, NodeOutput::Value(value));
     sched.store.set_result(s2, NodeOutput::Value(value));
     sched.store.set_result(s3, NodeOutput::Value(value));
-    sched.deps.set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
-    sched.deps.set_dep_edges(s1.index(), vec![DepEdge::Owned(s2)]);
-    sched.deps.set_dep_edges(s2.index(), vec![DepEdge::Owned(s3)]);
+    sched
+        .deps
+        .set_dep_edges(s0.index(), vec![DepEdge::Owned(s1)]);
+    sched
+        .deps
+        .set_dep_edges(s1.index(), vec![DepEdge::Owned(s2)]);
+    sched
+        .deps
+        .set_dep_edges(s2.index(), vec![DepEdge::Owned(s3)]);
 
     sched.free(s1.index());
 
     assert!(sched.store.result_is_none(s1), "s1 result cleared");
     assert!(sched.store.result_is_none(s2), "s2 result cleared");
     assert!(sched.store.result_is_none(s3), "s3 result cleared");
-    assert!(sched.deps.dep_edges_at(s1.index()).is_empty(), "s1 deps drained");
-    assert!(sched.deps.dep_edges_at(s2.index()).is_empty(), "s2 deps drained");
+    assert!(
+        sched.deps.dep_edges_at(s1.index()).is_empty(),
+        "s1 deps drained"
+    );
+    assert!(
+        sched.deps.dep_edges_at(s2.index()).is_empty(),
+        "s2 deps drained"
+    );
     let s0_edges = sched.deps.dep_edges_at(s0.index());
     assert_eq!(s0_edges.len(), 1, "s0 edges untouched");
     assert!(
@@ -48,8 +60,14 @@ fn free_reclaims_owned_subtree() {
     assert_eq!(freed, vec![s1, s2, s3]);
 
     let reused = sched.add(mk_dispatch(), root);
-    assert!(sched.store.free_list_len() == 2, "one slot popped from free_list");
-    assert!([s1, s2, s3].contains(&reused), "reused index came from free_list");
+    assert!(
+        sched.store.free_list_len() == 2,
+        "one slot popped from free_list"
+    );
+    assert!(
+        [s1, s2, s3].contains(&reused),
+        "reused index came from free_list"
+    );
 }
 
 #[test]
@@ -70,7 +88,11 @@ fn free_skips_live_slot_and_is_idempotent() {
     sched.free(s.index());
     assert_eq!(sched.store.free_list_snapshot(), vec![s]);
     sched.free(s.index());
-    assert_eq!(sched.store.free_list_snapshot(), vec![s], "no duplicate free");
+    assert_eq!(
+        sched.store.free_list_snapshot(),
+        vec![s],
+        "no duplicate free"
+    );
 }
 
 #[test]
@@ -93,12 +115,14 @@ fn free_does_not_recurse_through_notify_edges() {
     sched.store.set_result(s_sibling, NodeOutput::Value(value));
     // Sibling self-loop is synthetic: a real scheduler never installs one, but it
     // gives the bug-shape something to walk into so we can assert the walk stopped.
-    sched.deps.set_dep_edges(s_owner.index(), vec![
-        DepEdge::Owned(s_owned),
-        DepEdge::Notify(s_sibling),
-    ]);
+    sched.deps.set_dep_edges(
+        s_owner.index(),
+        vec![DepEdge::Owned(s_owned), DepEdge::Notify(s_sibling)],
+    );
     sched.deps.set_dep_edges(s_owned.index(), Vec::new());
-    sched.deps.set_dep_edges(s_sibling.index(), vec![DepEdge::Owned(s_sibling)]);
+    sched
+        .deps
+        .set_dep_edges(s_sibling.index(), vec![DepEdge::Owned(s_sibling)]);
 
     sched.free(s_owner.index());
 
@@ -106,7 +130,10 @@ fn free_does_not_recurse_through_notify_edges() {
     freed.sort();
     let mut expected = vec![s_owner, s_owned];
     expected.sort();
-    assert_eq!(freed, expected, "free must not recurse through Notify edges");
+    assert_eq!(
+        freed, expected,
+        "free must not recurse through Notify edges"
+    );
     assert!(
         sched.store.result_is_some(s_sibling),
         "sibling's result must survive free of a slot that only parked on it",
@@ -138,8 +165,12 @@ fn freed_slot_does_not_appear_in_other_notify_lists() {
     }
     sched.execute().expect("program should run");
 
-    let freed: std::collections::HashSet<usize> =
-        sched.store.free_list_snapshot().into_iter().map(|id| id.index()).collect();
+    let freed: std::collections::HashSet<usize> = sched
+        .store
+        .free_list_snapshot()
+        .into_iter()
+        .map(|id| id.index())
+        .collect();
     for (producer_idx, consumers) in sched.deps.notify_list_iter() {
         for &consumer in consumers {
             assert!(
