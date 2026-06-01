@@ -52,25 +52,23 @@ pub fn body<'a>(
             }
             s.clone()
         }
-        Some(KObject::TypeNameRef(t)) => match &t.params {
-            crate::machine::model::ast::TypeParams::None => {
-                let resolved_name = t.name.clone();
-                if !is_admissible_type_class_rhs(value) {
-                    return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
-                        name: resolved_name,
-                        got: value.ktype().name(),
-                    }));
-                }
-                // Struct / union / module / Result / signature aliases are type-only:
-                // their schema (or `&Module` / `&Signature`) rides the `KType` identity,
-                // so a plain `types` write preserves dispatch identity without a
-                // value-side copy.
-                if let KObject::KTypeValue(kt) = value {
-                    type_for_types_map = Some(kt.clone());
-                }
-                resolved_name
+        Some(KObject::TypeNameRef(t)) => {
+            let resolved_name = t.name.clone();
+            if !is_admissible_type_class_rhs(value) {
+                return err(KError::new(KErrorKind::TypeClassBindingExpectsType {
+                    name: resolved_name,
+                    got: value.ktype().name(),
+                }));
             }
-        },
+            // Struct / union / module / Result / signature aliases are type-only:
+            // their schema (or `&Module` / `&Signature`) rides the `KType` identity,
+            // so a plain `types` write preserves dispatch identity without a
+            // value-side copy.
+            if let KObject::KTypeValue(kt) = value {
+                type_for_types_map = Some(kt.clone());
+            }
+            resolved_name
+        }
         // `TypeExprRef` overload: only leaf-named variants are valid binder names.
         Some(KObject::KTypeValue(t)) => match t {
             KType::List(_)

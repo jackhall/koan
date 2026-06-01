@@ -240,11 +240,10 @@ functor-heavy collections both build on:
 Untangle dispatch into queue-order-independent name resolution plus a single
 unified ancestor walk per call site. The provenance-plumbing, index-gated
 resolution, recursive-binder-submission, type-language-via-dispatch,
-walk-unification, and keyworded self-recursion phases have shipped (see
-"What's shipped so far"); the remaining items retire the legacy positional
-type surface and add the user-functor application surface:
+walk-unification, keyworded self-recursion, and positional-type-surface
+retirement phases have shipped (see "What's shipped so far"); the remaining
+item adds the user-functor application surface:
 
-- [Remove positional type syntax and prune TypeParams](roadmap/dispatch_fix/remove-positional-type-syntax.md)
 - [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)

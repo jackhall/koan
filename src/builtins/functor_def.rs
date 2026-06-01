@@ -17,11 +17,11 @@
 //! separate predicate closure threaded through `defer_via_combine`.
 
 use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::Elaborator;
 use crate::machine::model::KType;
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
 use super::fn_def::finalize::{
@@ -85,9 +85,13 @@ pub fn body<'a>(
     let params = match parse_fn_param_list(&signature_expr, &mut elaborator) {
         ParamListOutcome::Done(es) => ParamListResult::Done(es),
         ParamListOutcome::Err(msg) => return err(KError::new(KErrorKind::ShapeError(msg))),
-        ParamListOutcome::Pending { park_producers, sub_dispatches } => {
-            ParamListResult::Pending { park_producers, sub_dispatches }
-        }
+        ParamListOutcome::Pending {
+            park_producers,
+            sub_dispatches,
+        } => ParamListResult::Pending {
+            park_producers,
+            sub_dispatches,
+        },
     };
 
     // D7 nominal-binder carve-out: mutual recursion across FUNCTOR siblings.
@@ -97,9 +101,10 @@ pub fn body<'a>(
         .unwrap_or(BindingIndex::BUILTIN);
 
     match classify(return_type_state, params) {
-        FnPlan::Synchronous { elements, return_type } => {
-            finalize_fn_with_flag(scope, elements, return_type, body_expr, true, bind_index)
-        }
+        FnPlan::Synchronous {
+            elements,
+            return_type,
+        } => finalize_fn_with_flag(scope, elements, return_type, body_expr, true, bind_index),
         FnPlan::Combine(inputs) => {
             // `is_functor: true` gates the resolved-return admissibility check
             // at Combine-finish — no separate predicate closure threaded here.
@@ -131,9 +136,7 @@ fn collect_param_types<'a>(
     while i < parts.len() {
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-                Some(t.name.clone())
-            }
+            ExpressionPart::Type(t) => Some(t.name.clone()),
             _ => None,
         };
         if let Some(name) = param_name {
@@ -162,14 +165,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_full(
         scope,
         "FUNCTOR",
-        sig(KType::Any, vec![
-            kw("FUNCTOR"),
-            arg("signature", KType::KExpression),
-            kw("->"),
-            arg("return_type", KType::TypeExprRef),
-            kw("="),
-            arg("body", KType::KExpression),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("FUNCTOR"),
+                arg("signature", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::TypeExprRef),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
         body,
         None,
         Some(super::fn_def::binder_bucket),
@@ -180,14 +186,17 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_full(
         scope,
         "FUNCTOR",
-        sig(KType::Any, vec![
-            kw("FUNCTOR"),
-            arg("signature", KType::KExpression),
-            kw("->"),
-            arg("return_type", KType::KExpression),
-            kw("="),
-            arg("body", KType::KExpression),
-        ]),
+        sig(
+            KType::Any,
+            vec![
+                kw("FUNCTOR"),
+                arg("signature", KType::KExpression),
+                kw("->"),
+                arg("return_type", KType::KExpression),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
         body,
         None,
         Some(super::fn_def::binder_bucket),

@@ -4,19 +4,19 @@
 //! value with the NEWTYPE identity; the `Wrapped.inner` is invariantly non-`Wrapped`
 //! (newtype-over-newtype collapses to a single layer).
 
-use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
-use crate::machine::core::ApplyOutcome;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_bare_type_name, extract_ktype, extract_type_name_ref,
 };
-use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, Scope,
-    SchedulerHandle,
-};
+use crate::machine::core::source::Spanned;
+use crate::machine::core::ApplyOutcome;
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::{KObject, NonWrappedRef};
 use crate::machine::model::KType;
+use crate::machine::{
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, SchedulerHandle,
+    Scope,
+};
 
 use super::{arg, err, kw, register_builtin_with_binder, sig};
 
@@ -49,12 +49,6 @@ pub fn body<'a>(
                 Some(te) => te,
                 None => unreachable!("get(TypeNameRef) then extract_type_name_ref must succeed"),
             };
-            if !matches!(te.params, TypeParams::None) {
-                return err(KError::new(KErrorKind::ShapeError(format!(
-                    "NEWTYPE repr must be a bare type name, got `{}`",
-                    te.render(),
-                ))));
-            }
             match scope.resolve_type(&te.name) {
                 Some(kt) => kt.clone(),
                 None => {
@@ -76,7 +70,9 @@ pub fn body<'a>(
     // concrete identity.
     let scope_id = scope.id;
     let identity = KType::UserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(repr) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(repr),
+        },
         scope_id,
         name: name.clone(),
     };
@@ -86,7 +82,10 @@ pub fn body<'a>(
         .current_lexical_chain()
         .map(|chain| BindingIndex::value(chain.index))
         .unwrap_or(BindingIndex::BUILTIN);
-    match scope.bindings().try_register_type(&name, kt_ref, bind_index) {
+    match scope
+        .bindings()
+        .try_register_type(&name, kt_ref, bind_index)
+    {
         Ok(ApplyOutcome::Applied) => {
             let v: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(kt_ref.clone()));
             BodyResult::Value(v)
@@ -122,17 +121,29 @@ pub fn newtype_construct<'a>(
     parts: Vec<Spanned<ExpressionPart<'a>>>,
 ) -> BodyResult<'a> {
     if parts.is_empty() {
-        return err(KError::new(KErrorKind::ArityMismatch { expected: 1, got: 0 }));
+        return err(KError::new(KErrorKind::ArityMismatch {
+            expected: 1,
+            got: 0,
+        }));
     }
     let value_expr = KExpression::new(parts);
     let value_id = sched.add_dispatch(value_expr, scope);
     let finish: CombineFinish<'a> = Box::new(move |scope, _sched, results| {
-        debug_assert_eq!(results.len(), 1, "newtype_construct registered exactly one dep");
+        debug_assert_eq!(
+            results.len(),
+            1,
+            "newtype_construct registered exactly one dep"
+        );
         let value: &'a KObject<'a> = results[0];
         // `unreachable!` is structurally guarded by the `ConstructorCall` fast lane.
         let repr: &KType = match identity {
-            KType::UserType { kind: UserTypeKind::Newtype { repr }, .. } => repr.as_ref(),
-            _ => unreachable!("ConstructorCall fast lane routed non-Newtype identity into newtype_construct"),
+            KType::UserType {
+                kind: UserTypeKind::Newtype { repr },
+                ..
+            } => repr.as_ref(),
+            _ => unreachable!(
+                "ConstructorCall fast lane routed non-Newtype identity into newtype_construct"
+            ),
         };
         if !repr.matches_value(value) {
             return BodyResult::Err(KError::new(KErrorKind::TypeMismatch {
@@ -159,12 +170,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin_with_binder(
         scope,
         "NEWTYPE",
-        sig(KType::Type, vec![
-            kw("NEWTYPE"),
-            arg("name", KType::TypeExprRef),
-            kw("="),
-            arg("repr", KType::TypeExprRef),
-        ]),
+        sig(
+            KType::Type,
+            vec![
+                kw("NEWTYPE"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("repr", KType::TypeExprRef),
+            ],
+        ),
         body,
         Some(binder_name),
     );
@@ -172,13 +186,11 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{
-        parse_one, run, run_one, run_one_err, run_root_silent,
-    };
+    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::execute::Scheduler;
-    use crate::machine::{KErrorKind, RuntimeArena};
     use crate::machine::model::types::UserTypeKind;
     use crate::machine::model::{KObject, KType};
+    use crate::machine::{KErrorKind, RuntimeArena};
 
     /// NEWTYPE writes the identity into `bindings.types` and nothing into
     /// `bindings.data` — the declaration has no payload value to bind.
@@ -347,7 +359,13 @@ mod tests {
         run(scope, "NEWTYPE Distance = Number");
         let err = run_one_err(scope, parse_one("Distance ()"));
         assert!(
-            matches!(&err.kind, KErrorKind::ArityMismatch { expected: 1, got: 0 }),
+            matches!(
+                &err.kind,
+                KErrorKind::ArityMismatch {
+                    expected: 1,
+                    got: 0
+                }
+            ),
             "expected ArityMismatch(1, 0) on Distance(), got {err}",
         );
     }

@@ -14,7 +14,7 @@
 
 use crate::machine::core::kfunction::NodeId;
 use crate::machine::core::{KError, KErrorKind, LexicalFrame, Scope, ScopeId};
-use crate::machine::model::ast::{TypeExpr, TypeParams};
+use crate::machine::model::ast::TypeExpr;
 use crate::machine::model::types::KType;
 use crate::machine::model::values::KObject;
 
@@ -73,12 +73,6 @@ pub fn coerce_type_token_value<'a>(
     t: &TypeExpr,
     chain: Option<&LexicalFrame>,
 ) -> Result<&'a KObject<'a>, KError> {
-    if !matches!(t.params, TypeParams::None) {
-        return Err(KError::new(KErrorKind::ShapeError(format!(
-            "parameterized type expression `{}` is not a value-lookup target",
-            t.render()
-        ))));
-    }
     let name = t.name.as_str();
     match scope.resolve_type_with_chain(name, chain) {
         Some(kt) => {

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::machine::model::ast::{KExpression, TypeExpr, TypeParams};
+use crate::machine::model::ast::{KExpression, TypeExpr};
 
 use crate::machine::core::{KError, KErrorKind};
 use crate::machine::model::types::KType;
@@ -118,9 +118,7 @@ pub(crate) fn extract_bare_type_name<'a>(
     surface: &str,
 ) -> Result<String, KError> {
     match bundle.get(name) {
-        Some(KObject::TypeNameRef(t)) => match &t.params {
-            TypeParams::None => Ok(t.name.clone()),
-        },
+        Some(KObject::TypeNameRef(t)) => Ok(t.name.clone()),
         Some(KObject::KTypeValue(t)) => match t {
             KType::Number
             | KType::Str

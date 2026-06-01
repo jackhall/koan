@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use crate::machine::core::source::Spanned;
-use crate::machine::model::{KKey, KObject, Serializable};
-use crate::machine::{BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId, Scope};
 use crate::machine::model::ast::ExpressionPart;
+use crate::machine::model::{KKey, KObject, Serializable};
+use crate::machine::{
+    BodyResult, CombineFinish, Frame, KError, KErrorKind, NameOutcome, NodeId, Scope,
+};
 
 use super::super::dispatch::resolve_name_part;
 use super::super::nodes::NodeWork;
@@ -41,13 +43,8 @@ impl<'a> Scheduler<'a> {
         let mut park_producers: Vec<NodeId> = Vec::new();
         for part in items {
             // List elements are not name-resolved; bare identifiers stay `Static`.
-            let slot = self.classify_aggregate_part(
-                part,
-                scope,
-                &mut deps,
-                &mut park_producers,
-                false,
-            );
+            let slot =
+                self.classify_aggregate_part(part, scope, &mut deps, &mut park_producers, false);
             layout.push(slot);
         }
         let park_count = park_producers.len();
@@ -56,8 +53,7 @@ impl<'a> Scheduler<'a> {
                 .into_iter()
                 .map(|slot| slot.materialize(results, park_count))
                 .collect();
-            let allocated: &'a KObject<'a> =
-                scope.arena.alloc(KObject::list(items));
+            let allocated: &'a KObject<'a> = scope.arena.alloc(KObject::list(items));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
@@ -75,20 +71,10 @@ impl<'a> Scheduler<'a> {
         let mut deps: Vec<NodeId> = Vec::new();
         let mut park_producers: Vec<NodeId> = Vec::new();
         for (k, v) in pairs {
-            let key_slot = self.classify_aggregate_part(
-                k,
-                scope,
-                &mut deps,
-                &mut park_producers,
-                true,
-            );
-            let val_slot = self.classify_aggregate_part(
-                v,
-                scope,
-                &mut deps,
-                &mut park_producers,
-                true,
-            );
+            let key_slot =
+                self.classify_aggregate_part(k, scope, &mut deps, &mut park_producers, true);
+            let val_slot =
+                self.classify_aggregate_part(v, scope, &mut deps, &mut park_producers, true);
             layout.push((key_slot, val_slot));
         }
         let frame_label = || Frame::bare("<dict>", "dict literal");
@@ -100,14 +86,15 @@ impl<'a> Scheduler<'a> {
                 let value_obj = v_slot.materialize(results, park_count);
                 let kkey = match KKey::try_from_kobject(&key_obj) {
                     Ok(k) => k,
-                    Err(msg) => return BodyResult::Err(
-                        KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label()),
-                    ),
+                    Err(msg) => {
+                        return BodyResult::Err(
+                            KError::new(KErrorKind::ShapeError(msg)).with_frame(frame_label()),
+                        )
+                    }
                 };
                 map.insert(Box::new(kkey), value_obj);
             }
-            let allocated: &'a KObject<'a> =
-                scope.arena.alloc(KObject::dict(map));
+            let allocated: &'a KObject<'a> = scope.arena.alloc(KObject::dict(map));
             BodyResult::Value(allocated)
         });
         self.add_combine(deps, park_producers, scope, finish)
@@ -146,10 +133,7 @@ impl<'a> Scheduler<'a> {
             ref p @ ExpressionPart::Identifier(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, scope, deps, park_producers)
             }
-            ref p @ ExpressionPart::Type(ref t)
-                if wrap_identifiers
-                    && matches!(t.params, crate::machine::model::ast::TypeParams::None) =>
-            {
+            ref p @ ExpressionPart::Type(_) if wrap_identifiers => {
                 self.resolve_aggregate_bare_name(p, scope, deps, park_producers)
             }
             other => Slot::Static(other.resolve()),
@@ -174,12 +158,9 @@ impl<'a> Scheduler<'a> {
                 park_producers.push(producer);
                 Slot::Park(pos)
             }
-            NameOutcome::Unbound(_)
-            | NameOutcome::ProducerErrored(_)
-            | NameOutcome::Cycle(_) => {
-                let expr = crate::machine::model::ast::KExpression::new(vec![
-                    Spanned::bare(part.clone()),
-                ]);
+            NameOutcome::Unbound(_) | NameOutcome::ProducerErrored(_) | NameOutcome::Cycle(_) => {
+                let expr =
+                    crate::machine::model::ast::KExpression::new(vec![Spanned::bare(part.clone())]);
                 let sub_id = self.add(NodeWork::dispatch(expr), scope);
                 let pos = deps.len();
                 deps.push(sub_id);

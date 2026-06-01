@@ -1,7 +1,7 @@
 //! Signature parsing for the `FN` builtin.
 
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator, Parseable};
 use crate::machine::model::{Argument, KObject, SignatureElement};
 use crate::machine::NodeId;
@@ -15,7 +15,7 @@ pub(crate) fn collect_param_names_from_signature(signature: &KExpression<'_>) ->
     while i < parts.len() {
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => Some(t.name.clone()),
+            ExpressionPart::Type(t) => Some(t.name.clone()),
             _ => None,
         };
         if let Some(name) = param_name {
@@ -72,7 +72,7 @@ pub(crate) fn parse_fn_param_list<'a>(
         // parameter-name position denotes a binder, not a type reference.
         let param_name: Option<String> = match &parts[i].value {
             ExpressionPart::Identifier(name) => Some(name.clone()),
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => Some(t.name.clone()),
+            ExpressionPart::Type(t) => Some(t.name.clone()),
             _ => None,
         };
         match (param_name, &parts[i].value) {
@@ -215,7 +215,7 @@ pub(crate) fn binder_bucket(
                     i += 1;
                 }
             }
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+            ExpressionPart::Type(_) => {
                 let next_is_type_slot = parts.get(i + 1).is_some_and(|p| {
                     matches!(
                         p.value,

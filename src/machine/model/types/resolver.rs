@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use crate::machine::core::{Resolution, Scope, ScopeId};
-use crate::machine::model::ast::{TypeExpr, TypeParams};
+use crate::machine::model::ast::TypeExpr;
 use crate::machine::NodeId;
 
 use super::ktype::{KType, UserTypeKind};
@@ -121,52 +121,49 @@ impl<'s, 'a> Elaborator<'s, 'a> {
 /// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
 /// walk — they sub-Dispatch through the standalone dispatcher.
 pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeExpr) -> ElabResult<'a> {
-    match (&t.name, &t.params) {
-        (name, TypeParams::None) => {
-            if el.threaded.contains(name) {
-                el.fired_self_ref_for.insert(name.clone());
-                return ElabResult::Done(KType::RecursiveRef(name.clone()));
-            }
-            if let Some(kt) = el.scope.resolve_type(name) {
-                return ElabResult::Done(kt.clone());
-            }
-            match el.scope.resolve(name) {
-                Resolution::Placeholder(id) => {
-                    // Record the edge unconditionally: the parked-on name may not be in
-                    // `pending_types` yet, but DFS sees the persistent edge list later
-                    // and closes the cycle when the second binder records its reciprocal
-                    // edge. Trivial self-cycles (`LET T = T`) are caught earlier by the
-                    // dispatch driver's eager-resolve pass.
-                    if let Some(decl) = el.current_decl_name.clone() {
-                        el.scope.bindings().record_pending_edge(&decl, name.clone());
-                        if let Some(members) = detect_pending_cycle(el.scope, &decl) {
-                            close_type_cycle(el.scope, &members);
-                            if let Some(kt) = el.scope.resolve_type(name) {
-                                return ElabResult::Done(kt.clone());
-                            }
-                        }
+    let name = &t.name;
+    if el.threaded.contains(name) {
+        el.fired_self_ref_for.insert(name.clone());
+        return ElabResult::Done(KType::RecursiveRef(name.clone()));
+    }
+    if let Some(kt) = el.scope.resolve_type(name) {
+        return ElabResult::Done(kt.clone());
+    }
+    match el.scope.resolve(name) {
+        Resolution::Placeholder(id) => {
+            // Record the edge unconditionally: the parked-on name may not be in
+            // `pending_types` yet, but DFS sees the persistent edge list later
+            // and closes the cycle when the second binder records its reciprocal
+            // edge. Trivial self-cycles (`LET T = T`) are caught earlier by the
+            // dispatch driver's eager-resolve pass.
+            if let Some(decl) = el.current_decl_name.clone() {
+                el.scope.bindings().record_pending_edge(&decl, name.clone());
+                if let Some(members) = detect_pending_cycle(el.scope, &decl) {
+                    close_type_cycle(el.scope, &members);
+                    if let Some(kt) = el.scope.resolve_type(name) {
+                        return ElabResult::Done(kt.clone());
                     }
-                    ElabResult::Park(vec![id])
                 }
-                // `from_name` is tried first in both arms so fixture scopes that skip
-                // builtin registration still resolve builtin names. The split only
-                // affects the miss message: a `Value` resolution means the name *is*
-                // bound, just in the value language, so the diagnostic must name the
-                // type-language / value-language layering rather than read as an
-                // unknown-name failure (see design/typing/functors.md).
-                Resolution::Value(_) => match KType::<'a>::from_name(name) {
-                    Some(kt) => ElabResult::Done(kt),
-                    None => ElabResult::Unbound(format!(
-                        "`{name}` is value-language only — a type slot needs a type-language \
-                         binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
-                    )),
-                },
-                Resolution::UnboundName => match KType::<'a>::from_name(name) {
-                    Some(kt) => ElabResult::Done(kt),
-                    None => ElabResult::Unbound(format!("unknown type name `{name}`")),
-                },
             }
+            ElabResult::Park(vec![id])
         }
+        // `from_name` is tried first in both arms so fixture scopes that skip
+        // builtin registration still resolve builtin names. The split only
+        // affects the miss message: a `Value` resolution means the name *is*
+        // bound, just in the value language, so the diagnostic must name the
+        // type-language / value-language layering rather than read as an
+        // unknown-name failure (see design/typing/functors.md).
+        Resolution::Value(_) => match KType::<'a>::from_name(name) {
+            Some(kt) => ElabResult::Done(kt),
+            None => ElabResult::Unbound(format!(
+                "`{name}` is value-language only — a type slot needs a type-language \
+                 binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
+            )),
+        },
+        Resolution::UnboundName => match KType::<'a>::from_name(name) {
+            Some(kt) => ElabResult::Done(kt),
+            None => ElabResult::Unbound(format!("unknown type name `{name}`")),
+        },
     }
 }
 

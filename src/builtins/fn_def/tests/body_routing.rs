@@ -12,10 +12,7 @@ use crate::machine::{KErrorKind, RuntimeArena};
 fn fn_def_parens_return_type_with_identifier_param_ref_defers() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "FN (USE xs :Number) -> (somefn xs) = (xs)",
-    );
+    run(scope, "FN (USE xs :Number) -> (somefn xs) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -29,10 +26,7 @@ fn fn_def_parens_return_type_with_identifier_param_ref_defers() {
 fn fn_def_parens_return_type_with_list_literal_param_ref_defers() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "FN (USE xs :Number) -> ([xs]) = (xs)",
-    );
+    run(scope, "FN (USE xs :Number) -> ([xs]) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -46,10 +40,7 @@ fn fn_def_parens_return_type_with_list_literal_param_ref_defers() {
 fn fn_def_parens_return_type_with_dict_literal_param_ref_defers() {
     let arena = RuntimeArena::new();
     let scope = run_root_silent(&arena);
-    run(
-        scope,
-        "FN (USE xs :Number) -> ({\"k\": xs}) = (xs)",
-    );
+    run(scope, "FN (USE xs :Number) -> ({\"k\": xs}) = (xs)");
     let f = lookup_fn(scope, "USE");
     assert!(
         matches!(f.signature.return_type, ReturnType::Deferred(_)),
@@ -100,8 +91,7 @@ fn fn_def_expr_sub_dispatched_return_with_pending_param_routes_through_combine()
 }
 
 /// A bare forward-LET return type with no parameters parks on the LET's placeholder
-/// and routes through `ReturnTypeCapture::Unresolved(name)` (`make_capture`'s
-/// `TypeParams::None` branch).
+/// and routes through `ReturnTypeCapture::Unresolved(name)` (`make_capture`).
 #[test]
 fn fn_def_forward_let_bare_return_type_resolves_after_wake() {
     let arena = RuntimeArena::new();
@@ -128,7 +118,9 @@ fn fn_def_parens_param_type_non_type_value_errors() {
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("FN (USE xs (1)) -> Null = (xs)"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("non-type param type expression should error"),
@@ -149,7 +141,9 @@ fn fn_def_parens_return_type_non_type_value_errors() {
     let scope = run_root_silent(&arena);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(parse_one("FN (NOP) -> (1) = (1)"), scope);
-    sched.execute().expect("execute does not surface per-slot errors");
+    sched
+        .execute()
+        .expect("execute does not surface per-slot errors");
     let err = match sched.read_result(id) {
         Err(e) => e,
         Ok(_) => panic!("non-type return-type expression should error"),

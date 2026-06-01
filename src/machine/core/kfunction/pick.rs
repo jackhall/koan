@@ -4,7 +4,7 @@
 //! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, SignatureElement};
 
 use super::KFunction;
@@ -78,7 +78,11 @@ impl<'a> KFunction<'a> {
                 },
             }
         }
-        if has_lazy_slot { Some(eager_indices) } else { None }
+        if has_lazy_slot {
+            Some(eager_indices)
+        } else {
+            None
+        }
     }
 
     /// Per-slot classification of `expr` against `self`'s signature into the three index
@@ -90,8 +94,16 @@ impl<'a> KFunction<'a> {
         let mut wrap_indices: Vec<usize> = Vec::new();
         let mut ref_name_indices: Vec<usize> = Vec::new();
         let picked_has_binder_name = self.binder_name.is_some();
-        for (i, (el, part)) in self.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
-            let SignatureElement::Argument(arg) = el else { continue };
+        for (i, (el, part)) in self
+            .signature
+            .elements
+            .iter()
+            .zip(expr.parts.iter())
+            .enumerate()
+        {
+            let SignatureElement::Argument(arg) = el else {
+                continue;
+            };
             if !is_bare_name(&part.value) {
                 continue;
             }
@@ -116,13 +128,12 @@ impl<'a> KFunction<'a> {
 }
 
 /// True iff `part` is the "bare-name" shape — a bare `Identifier` or a leaf
-/// `Type`-token (`TypeParams::None`). Both name-shaped parts ride the same
-/// auto-wrap and replay-park rails, so the symmetry is load-bearing for
-/// `LET T = Number` vs `LET y = z` walking identical scheduler paths.
+/// `Type`-token. Both name-shaped parts ride the same auto-wrap and replay-park
+/// rails, so the symmetry is load-bearing for `LET T = Number` vs `LET y = z`
+/// walking identical scheduler paths.
 fn is_bare_name(part: &ExpressionPart<'_>) -> bool {
     matches!(
         part,
-        ExpressionPart::Identifier(_)
-            | ExpressionPart::Type(TypeExpr { params: TypeParams::None, .. })
+        ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
     )
 }

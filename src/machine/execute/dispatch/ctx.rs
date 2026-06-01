@@ -26,18 +26,18 @@ use std::rc::Rc;
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
 use crate::machine::core::{CallArena, ScopeId};
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
 use crate::machine::{
-    CatchFinish, CombineFinish, KError, KFuture, LexicalFrame, NameOutcome, NodeId, Scope,
-    SchedulerHandle,
+    CatchFinish, CombineFinish, KError, KFuture, LexicalFrame, NameOutcome, NodeId,
+    SchedulerHandle, Scope,
 };
 
 use super::super::nodes::{NodeOutput, NodeStep, NodeWork};
 use super::super::scheduler::Scheduler;
 use super::{
-    DispatchState, EagerSubsInstall, EagerSubsTrack, PendingSub, bind_frame_err,
-    keyworded::KeywordedState, resolve_name_part,
+    bind_frame_err, keyworded::KeywordedState, resolve_name_part, DispatchState, EagerSubsInstall,
+    EagerSubsTrack, PendingSub,
 };
 
 /// Newtype wrapping `&'b mut Scheduler<'a>`, exposing exactly the
@@ -157,15 +157,19 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         use crate::machine::core::kfunction::BodyResult;
         match future.function.invoke(scope, self, future.bundle) {
             BodyResult::Value(v) => NodeStep::Done(NodeOutput::Value(v)),
-            BodyResult::Tail { expr, frame, function, block_entry, body_index } => {
-                NodeStep::Replace {
-                    work: NodeWork::dispatch(expr),
-                    frame,
-                    function,
-                    block_entry,
-                    body_index,
-                }
-            }
+            BodyResult::Tail {
+                expr,
+                frame,
+                function,
+                block_entry,
+                body_index,
+            } => NodeStep::Replace {
+                work: NodeWork::dispatch(expr),
+                frame,
+                function,
+                block_entry,
+                body_index,
+            },
             BodyResult::DeferTo(id) => self.sched.defer_to_lift(idx, id),
             BodyResult::Err(e) => NodeStep::Done(NodeOutput::Err(e)),
         }
@@ -204,10 +208,7 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         parts
             .iter()
             .map(|p| match &p.value {
-                ExpressionPart::Identifier(_) => {
-                    Some(resolve_name_part(scope, &p.value, self.sched, None))
-                }
-                ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
                     Some(resolve_name_part(scope, &p.value, self.sched, None))
                 }
                 _ => None,
@@ -262,12 +263,12 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
     /// Standard `NodeStep::Replace` for parked-Dispatch install sites:
     /// drops the entry expression to an empty placeholder (the state
     /// carries the evolving `working_expr` from here on).
-    pub(super) fn replace_with_parked_dispatch(
-        &self,
-        state: DispatchState<'a>,
-    ) -> NodeStep<'a> {
+    pub(super) fn replace_with_parked_dispatch(&self, state: DispatchState<'a>) -> NodeStep<'a> {
         NodeStep::Replace {
-            work: NodeWork::Dispatch { expr: KExpression::new(Vec::new()), state },
+            work: NodeWork::Dispatch {
+                expr: KExpression::new(Vec::new()),
+                state,
+            },
             frame: None,
             function: None,
             block_entry: None,
@@ -289,7 +290,11 @@ impl<'a, 'b> DispatchCtx<'a, 'b> {
         scope: &'a Scope<'a>,
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
-        let EagerSubsTrack { mut working_expr, subs, picked } = track;
+        let EagerSubsTrack {
+            mut working_expr,
+            subs,
+            picked,
+        } = track;
         for (_, sub_id) in &subs {
             if let Err(e) = self.read_result(*sub_id) {
                 return Ok(bind_frame_err(e, &working_expr));
@@ -335,15 +340,11 @@ impl<'a, 'b> SchedulerHandle<'a> for DispatchCtx<'a, 'b> {
         scope: &'a Scope<'a>,
         finish: CombineFinish<'a>,
     ) -> NodeId {
-        self.sched.add_combine(owned_subs, park_producers, scope, finish)
+        self.sched
+            .add_combine(owned_subs, park_producers, scope, finish)
     }
 
-    fn add_catch(
-        &mut self,
-        from: NodeId,
-        scope: &'a Scope<'a>,
-        finish: CatchFinish<'a>,
-    ) -> NodeId {
+    fn add_catch(&mut self, from: NodeId, scope: &'a Scope<'a>, finish: CatchFinish<'a>) -> NodeId {
         self.sched.add_catch(from, scope, finish)
     }
 

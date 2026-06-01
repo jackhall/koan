@@ -14,7 +14,7 @@
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, Scope, SchedulerHandle,
+    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, NodeId, SchedulerHandle, Scope,
 };
 
 use super::{arg, err, kw, register_builtin, sig};
@@ -100,7 +100,9 @@ fn build_kfunction_carrier<'a>(
 ) -> BodyResult<'a> {
     let head = if is_functor { "FUNCTOR" } else { "FN" };
     match extract_param_types(scope, &sig_expr, head) {
-        ExtractOutcome::Done(args) => BodyResult::Value(finalize_carrier(scope, args, ret, is_functor)),
+        ExtractOutcome::Done(args) => {
+            BodyResult::Value(finalize_carrier(scope, args, ret, is_functor))
+        }
         ExtractOutcome::Err(e) => err(e),
         ExtractOutcome::Park(producers) => {
             defer_via_combine(scope, sched, sig_expr, ret, producers, is_functor)
@@ -115,9 +117,15 @@ fn finalize_carrier<'a>(
     is_functor: bool,
 ) -> &'a KObject<'a> {
     let kt = if is_functor {
-        KType::KFunctor { params: args, ret: Box::new(ret) }
+        KType::KFunctor {
+            params: args,
+            ret: Box::new(ret),
+        }
     } else {
-        KType::KFunction { args, ret: Box::new(ret) }
+        KType::KFunction {
+            args,
+            ret: Box::new(ret),
+        }
     };
     scope.arena.alloc(KObject::KTypeValue(kt))
 }
@@ -140,11 +148,13 @@ fn defer_via_combine<'a>(
                 BodyResult::Value(finalize_carrier(scope, args, ret.clone(), is_functor))
             }
             ExtractOutcome::Err(e) => BodyResult::Err(e),
-            ExtractOutcome::Park(_) => BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
-                "{head} parameter type: forward type reference still unresolved after \
+            ExtractOutcome::Park(_) => {
+                BodyResult::Err(KError::new(KErrorKind::ShapeError(format!(
+                    "{head} parameter type: forward type reference still unresolved after \
                  Combine wake — every producer was terminal by invariant; scheduling \
                  inconsistency"
-            )))),
+                ))))
+            }
         }
     });
     let combine_id = sched.add_combine(vec![], producers, scope, finish);
@@ -168,7 +178,6 @@ fn extract_param_types<'a>(
     head: &str,
 ) -> ExtractOutcome<'a> {
     use crate::machine::ResolveTypeExprOutcome;
-    use crate::machine::model::ast::TypeParams;
     let parts = &sig_expr.parts;
     let mut out: Vec<KType<'a>> = Vec::new();
     let mut parks: Vec<NodeId> = Vec::new();
@@ -178,11 +187,7 @@ fn extract_param_types<'a>(
         // either `Identifier` or a parameterless `Type` token is a valid name.
         let name_present = matches!(
             &parts[i].value,
-            ExpressionPart::Identifier(_)
-                | ExpressionPart::Type(crate::machine::model::ast::TypeExpr {
-                    params: TypeParams::None,
-                    ..
-                })
+            ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
         );
         if !name_present {
             return ExtractOutcome::Err(KError::new(KErrorKind::ShapeError(format!(
@@ -234,44 +239,52 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "LIST",
-        sig(KType::Type, vec![
-            kw("LIST"),
-            kw("OF"),
-            arg("elem", KType::Type),
-        ]),
+        sig(
+            KType::Type,
+            vec![kw("LIST"), kw("OF"), arg("elem", KType::Type)],
+        ),
         body_list_of,
     );
     register_builtin(
         scope,
         "MAP",
-        sig(KType::Type, vec![
-            kw("MAP"),
-            arg("k", KType::Type),
-            kw("->"),
-            arg("v", KType::Type),
-        ]),
+        sig(
+            KType::Type,
+            vec![
+                kw("MAP"),
+                arg("k", KType::Type),
+                kw("->"),
+                arg("v", KType::Type),
+            ],
+        ),
         body_map,
     );
     register_builtin(
         scope,
         "FN",
-        sig(KType::Type, vec![
-            kw("FN"),
-            arg("sig", KType::KExpression),
-            kw("->"),
-            arg("ret", KType::Type),
-        ]),
+        sig(
+            KType::Type,
+            vec![
+                kw("FN"),
+                arg("sig", KType::KExpression),
+                kw("->"),
+                arg("ret", KType::Type),
+            ],
+        ),
         body_fn,
     );
     register_builtin(
         scope,
         "FUNCTOR",
-        sig(KType::Type, vec![
-            kw("FUNCTOR"),
-            arg("sig", KType::KExpression),
-            kw("->"),
-            arg("ret", KType::Type),
-        ]),
+        sig(
+            KType::Type,
+            vec![
+                kw("FUNCTOR"),
+                arg("sig", KType::KExpression),
+                kw("->"),
+                arg("ret", KType::Type),
+            ],
+        ),
         body_functor,
     );
 }
@@ -302,7 +315,10 @@ mod tests {
         let result = run_one(scope, parse_one(":(MAP Str -> Number)"));
         match result {
             KObject::KTypeValue(kt) => {
-                assert_eq!(*kt, KType::Dict(Box::new(KType::Str), Box::new(KType::Number)));
+                assert_eq!(
+                    *kt,
+                    KType::Dict(Box::new(KType::Str), Box::new(KType::Number))
+                );
             }
             other => panic!("expected KTypeValue, got {:?}", other.ktype()),
         }
@@ -365,5 +381,4 @@ mod tests {
             other => panic!("expected KTypeValue, got {:?}", other.ktype()),
         }
     }
-
 }

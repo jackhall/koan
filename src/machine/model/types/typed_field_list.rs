@@ -5,7 +5,7 @@
 use super::ktype::KType;
 use super::resolver::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::KObject;
 use crate::machine::model::Parseable;
 use crate::machine::{NodeId, Scope};
@@ -112,9 +112,7 @@ fn rewrite_threaded_self_refs<'a>(
         .iter()
         .map(|p| {
             let value = match &p.value {
-                ExpressionPart::Type(t)
-                    if matches!(t.params, TypeParams::None) && threaded.contains(&t.name) =>
-                {
+                ExpressionPart::Type(t) if threaded.contains(&t.name) => {
                     let obj = scope
                         .arena
                         .alloc(KObject::KTypeValue(KType::RecursiveRef(t.name.clone())));

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::machine::core::kfunction::argument_bundle::{
     extract_kexpression, extract_ktype, extract_type_name_ref,
 };
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::types::{DeferredReturn, ReturnType};
 use crate::machine::model::{KObject, KType};
 use crate::machine::ResolveTypeExprOutcome;
@@ -182,25 +182,21 @@ fn verdict_for_deferred_type_expr<'a>(
     te: &TypeExpr,
     param_type_map: &HashMap<String, KType<'a>>,
 ) -> AdmissibleVerdict {
-    match &te.params {
-        TypeParams::None => {
-            // Map miss means the param-type slot didn't elaborate eagerly; admit
-            // conservatively and let downstream resolution surface any structured error.
-            if let Some(param_kt) = param_type_map.get(&te.name) {
-                if param_kt.is_type_denoting() {
-                    AdmissibleVerdict::Admissible
-                } else {
-                    AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
-                        "FUNCTOR return-type slot must denote a module, signature, or functor; \
-                         parameter `{}` is declared as `{}`, which is not type-denoting",
-                        te.name,
-                        param_kt.name(),
-                    ))))
-                }
-            } else {
-                AdmissibleVerdict::Admissible
-            }
+    // Map miss means the param-type slot didn't elaborate eagerly; admit
+    // conservatively and let downstream resolution surface any structured error.
+    if let Some(param_kt) = param_type_map.get(&te.name) {
+        if param_kt.is_type_denoting() {
+            AdmissibleVerdict::Admissible
+        } else {
+            AdmissibleVerdict::Rejected(KError::new(KErrorKind::ShapeError(format!(
+                "FUNCTOR return-type slot must denote a module, signature, or functor; \
+                 parameter `{}` is declared as `{}`, which is not type-denoting",
+                te.name,
+                param_kt.name(),
+            ))))
         }
+    } else {
+        AdmissibleVerdict::Admissible
     }
 }
 
@@ -232,9 +228,7 @@ fn verdict_for_deferred_expression(e: &KExpression<'_>) -> AdmissibleVerdict {
 }
 
 pub(super) fn make_capture<'a>(te: TypeExpr) -> ReturnTypeCapture<'a> {
-    match te.params {
-        TypeParams::None => ReturnTypeCapture::Unresolved(te.name),
-    }
+    ReturnTypeCapture::Unresolved(te.name)
 }
 
 /// Park-arm outcomes from `Scope::resolve_type_expr` are protocol errors here: every

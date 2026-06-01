@@ -12,7 +12,7 @@
 //! carriers (`KFunction`, `List`, ...) are lifted directly.
 
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
     ArgumentBundle, BindingIndex, BodyResult, CombineFinish, KError, KErrorKind, NodeId,
@@ -120,11 +120,8 @@ pub fn body<'a>(
         }
         // A `TypeNameRef` carrier always holds a bare-leaf `TypeExpr` now —
         // parameterized surface forms sub-Dispatch and never reach this slot — so the
-        // leaf is the only shape and always re-dispatches against decl_scope. The
-        // `matches!` guard is a Phase-2 tautology (the enum is single-variant); the
-        // structural-park branch that used to follow it was dead and is deleted.
+        // leaf is the only shape and always re-dispatches against decl_scope.
         CarrierForm::Raw(te) => {
-            debug_assert!(matches!(te.params, TypeParams::None));
             let resolve_id = schedule_type_resolve(sched, scope, &te);
             defer_val_via_combine(scope, sched, name, te, resolve_id, bind_index)
         }

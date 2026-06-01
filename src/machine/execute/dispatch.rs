@@ -17,14 +17,12 @@
 
 use crate::machine::core::kfunction::KFunction;
 use crate::machine::core::source::Spanned;
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::Parseable;
-use crate::machine::{
-    Frame, KError, KErrorKind, NodeId, Resolution, Scope,
-};
+use crate::machine::{Frame, KError, KErrorKind, NodeId, Resolution, Scope};
 
-use super::scheduler::Scheduler;
 use super::nodes::{NodeOutput, NodeStep};
+use super::scheduler::Scheduler;
 
 mod constructors;
 mod ctx;
@@ -40,9 +38,9 @@ mod tests;
 pub(in crate::machine::execute) use ctx::DispatchCtx;
 use fn_value::FnValueState;
 use keyworded::KeywordedState;
-pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 #[cfg(test)]
 pub use resolve_dispatch::{reset_resolve_dispatch_entry_count, resolve_dispatch_entry_count};
+pub use resolve_dispatch::{NameOutcome, ResolveOutcome, Resolved};
 pub use resolve_type_expr::{coerce_type_token_value, ResolveTypeExprOutcome};
 use single_poll::{BareIdState, BareTypeState, CtorState, LitState, SigilState};
 
@@ -72,15 +70,17 @@ pub(super) enum DispatchShape {
 /// `(f IF x)` goes to `Keyworded`; only with the no-keyword
 /// precondition established do we branch on head shape.
 pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
-    if expr.parts.iter().any(|p| matches!(&p.value, ExpressionPart::Keyword(_))) {
+    if expr
+        .parts
+        .iter()
+        .any(|p| matches!(&p.value, ExpressionPart::Keyword(_)))
+    {
         return DispatchShape::Keyworded;
     }
     if let [only] = expr.parts.as_slice() {
         return match &only.value {
             ExpressionPart::Identifier(_) => DispatchShape::BareIdentifier,
-            ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-                DispatchShape::BareTypeLeaf
-            }
+            ExpressionPart::Type(_) => DispatchShape::BareTypeLeaf,
             ExpressionPart::SigiledTypeExpr(_) => DispatchShape::SigiledTypeExpr,
             ExpressionPart::Literal(_)
             | ExpressionPart::Future(_)
@@ -94,9 +94,7 @@ pub(super) fn classify_dispatch_shape(expr: &KExpression<'_>) -> DispatchShape {
         return DispatchShape::Keyworded;
     };
     match &head_part.value {
-        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-            DispatchShape::ConstructorCall
-        }
+        ExpressionPart::Type(_) => DispatchShape::ConstructorCall,
         ExpressionPart::Identifier(_) => DispatchShape::FunctionValueCall,
         _ => DispatchShape::Keyworded,
     }
@@ -113,9 +111,7 @@ pub(super) fn resolve_name_part<'a>(
 ) -> NameOutcome<'a> {
     let (name, is_type) = match part {
         ExpressionPart::Identifier(n) => (n.as_str(), None),
-        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => {
-            (t.name.as_str(), Some(t))
-        }
+        ExpressionPart::Type(t) => (t.name.as_str(), Some(t)),
         _ => unreachable!("resolve_name_part only called on bare-name parts"),
     };
     let chain = scheduler.chain_deref();
@@ -126,8 +122,7 @@ pub(super) fn resolve_name_part<'a>(
                     Err(e) => NameOutcome::ProducerErrored(e.clone_for_propagation()),
                     Ok(_) => NameOutcome::Unbound(name.to_string()),
                 }
-            } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c))
-            {
+            } else if matches!(consumer, Some(c) if scheduler.would_create_cycle(producer, c)) {
                 NameOutcome::Cycle(name.to_string())
             } else {
                 NameOutcome::Parked(producer)
@@ -141,7 +136,10 @@ pub(super) fn resolve_name_part<'a>(
     match is_type {
         Some(t) => match coerce_type_token_value(scope, t, chain) {
             Ok(obj) => NameOutcome::Resolved(obj),
-            Err(KError { kind: KErrorKind::UnboundName(n), .. }) => NameOutcome::Unbound(n),
+            Err(KError {
+                kind: KErrorKind::UnboundName(n),
+                ..
+            }) => NameOutcome::Unbound(n),
             Err(e) => NameOutcome::ProducerErrored(e),
         },
         None => NameOutcome::Unbound(name.to_string()),
@@ -153,7 +151,7 @@ pub(super) fn resolve_name_part<'a>(
 pub(super) fn bare_name_of<'a>(part: &ExpressionPart<'a>) -> Option<String> {
     match part {
         ExpressionPart::Identifier(n) => Some(n.clone()),
-        ExpressionPart::Type(t) if matches!(t.params, TypeParams::None) => Some(t.name.clone()),
+        ExpressionPart::Type(t) => Some(t.name.clone()),
         _ => None,
     }
 }
@@ -179,7 +177,10 @@ pub(in crate::machine::execute) struct PartWalkResult<'a> {
 pub(super) fn extract_named_call_inner<'a>(
     expr: &KExpression<'a>,
 ) -> Result<Vec<Spanned<ExpressionPart<'a>>>, KError> {
-    let [Spanned { value: ExpressionPart::Expression(inner), .. }] = expr.parts[1..].as_ref()
+    let [Spanned {
+        value: ExpressionPart::Expression(inner),
+        ..
+    }] = expr.parts[1..].as_ref()
     else {
         return Err(KError::new(KErrorKind::DispatchFailed {
             expr: expr.summarize(),
@@ -211,7 +212,10 @@ pub(super) fn bind_frame_err<'a>(e: &KError, working_expr: &KExpression<'a>) -> 
 /// through unchanged.
 pub(super) fn stage_all_eager_parts<'a>(
     parts: Vec<Spanned<ExpressionPart<'a>>>,
-) -> (Vec<Spanned<ExpressionPart<'a>>>, Vec<(usize, PendingSub<'a>)>) {
+) -> (
+    Vec<Spanned<ExpressionPart<'a>>>,
+    Vec<(usize, PendingSub<'a>)>,
+) {
     let mut new_parts: Vec<Spanned<ExpressionPart<'a>>> = Vec::with_capacity(parts.len());
     let mut staged: Vec<(usize, PendingSub<'a>)> = Vec::new();
     for (i, part) in parts.into_iter().enumerate() {
@@ -222,9 +226,8 @@ pub(super) fn stage_all_eager_parts<'a>(
                 new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
             }
             ExpressionPart::SigiledTypeExpr(boxed) => {
-                let wrapped = KExpression::new(vec![Spanned::bare(
-                    ExpressionPart::SigiledTypeExpr(boxed),
-                )]);
+                let wrapped =
+                    KExpression::new(vec![Spanned::bare(ExpressionPart::SigiledTypeExpr(boxed))]);
                 staged.push((i, PendingSub::Dispatch(wrapped)));
                 new_parts.push(Spanned::bare(ExpressionPart::Identifier(String::new())));
             }
@@ -284,7 +287,11 @@ impl<'a> EagerSubsTrack<'a> {
         working_expr: KExpression<'a>,
         subs: Vec<(usize, NodeId)>,
     ) -> Self {
-        Self { working_expr, subs, picked: None }
+        Self {
+            working_expr,
+            subs,
+            picked: None,
+        }
     }
 
     pub(in crate::machine::execute) fn fn_value(
@@ -292,7 +299,11 @@ impl<'a> EagerSubsTrack<'a> {
         subs: Vec<(usize, NodeId)>,
         picked: &'a KFunction<'a>,
     ) -> Self {
-        Self { working_expr, subs, picked: Some(picked) }
+        Self {
+            working_expr,
+            subs,
+            picked: Some(picked),
+        }
     }
 }
 
@@ -325,9 +336,7 @@ impl<'a> DispatchState<'a> {
     /// `NodeWork::Dispatch.expr` to an empty placeholder on park, so
     /// the drain-end deadlock summary needs this fallback to render a
     /// parked sample.
-    pub(in crate::machine::execute) fn parked_carrier_expr(
-        &self,
-    ) -> Option<&KExpression<'a>> {
+    pub(in crate::machine::execute) fn parked_carrier_expr(&self) -> Option<&KExpression<'a>> {
         match self {
             DispatchState::Keyworded(ks) => ks.track.as_ref().map(|t| t.carrier_expr()),
             DispatchState::FunctionValueCall(fs) => {

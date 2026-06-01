@@ -4,16 +4,16 @@
 use std::marker::PhantomData;
 
 use crate::machine::core::kfunction::KFunction;
-use crate::machine::model::Parseable;
 use crate::machine::model::ast::KExpression;
+use crate::machine::model::Parseable;
 use crate::machine::{
     BindingIndex, Frame, KError, KErrorKind, NameOutcome, NodeId, ResolveOutcome, Scope,
 };
 
 use super::super::nodes::{NodeOutput, NodeStep};
 use super::{
-    DispatchCtx, DispatchState, EagerSubsInstall, EagerSubsTrack, Initialized, PartWalkResult,
-    PendingSub, bare_name_of, propagate_dep_error,
+    bare_name_of, propagate_dep_error, DispatchCtx, DispatchState, EagerSubsInstall,
+    EagerSubsTrack, Initialized, PartWalkResult, PendingSub,
 };
 
 pub(in crate::machine::execute) struct KeywordedState<'a> {
@@ -61,7 +61,11 @@ impl<'a> BareNameParkTrack<'a> {
         working_expr: KExpression<'a>,
         producers: Vec<NodeId>,
     ) -> Self {
-        Self { working_expr, producers, _ph: PhantomData }
+        Self {
+            working_expr,
+            producers,
+            _ph: PhantomData,
+        }
     }
 }
 
@@ -75,11 +79,12 @@ pub(in crate::machine::execute) struct OverloadParkTrack<'a> {
 }
 
 impl<'a> OverloadParkTrack<'a> {
-    pub(in crate::machine::execute) fn new(
-        expr: KExpression<'a>,
-        producers: Vec<NodeId>,
-    ) -> Self {
-        Self { expr, producers, _ph: PhantomData }
+    pub(in crate::machine::execute) fn new(expr: KExpression<'a>, producers: Vec<NodeId>) -> Self {
+        Self {
+            expr,
+            producers,
+            _ph: PhantomData,
+        }
     }
 }
 
@@ -92,21 +97,30 @@ impl<'a> KeywordedState<'a> {
         init: Initialized,
         track: EagerSubsTrack<'a>,
     ) -> Self {
-        Self { init, track: Some(ParkTrack::EagerSubs(track)) }
+        Self {
+            init,
+            track: Some(ParkTrack::EagerSubs(track)),
+        }
     }
 
     pub(in crate::machine::execute) fn with_bare_name_park(
         init: Initialized,
         track: BareNameParkTrack<'a>,
     ) -> Self {
-        Self { init, track: Some(ParkTrack::BareName(track)) }
+        Self {
+            init,
+            track: Some(ParkTrack::BareName(track)),
+        }
     }
 
     pub(in crate::machine::execute) fn with_overload_park(
         init: Initialized,
         track: OverloadParkTrack<'a>,
     ) -> Self {
-        Self { init, track: Some(ParkTrack::Overload(track)) }
+        Self {
+            init,
+            track: Some(ParkTrack::Overload(track)),
+        }
     }
 
     /// Entry from the dispatch router. Resolved-no-parks-no-subs
@@ -124,7 +138,10 @@ impl<'a> KeywordedState<'a> {
         for outcome in bare_outcomes.iter().flatten() {
             if let NameOutcome::ProducerErrored(e) = outcome {
                 let frame = Frame::from_expr("<wrap-resolve>", &expr);
-                return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(e, Some(frame)))));
+                return Ok(NodeStep::Done(NodeOutput::Err(propagate_dep_error(
+                    e,
+                    Some(frame),
+                ))));
             }
         }
         let chain = ctx.chain_deref();
@@ -155,7 +172,9 @@ impl<'a> KeywordedState<'a> {
                 return Self::install_eager_only(ctx, expr, scope, idx);
             }
             ResolveOutcome::ParkOnProducers(producers) => {
-                return Ok(Self::install_overload_park(ctx, producers, expr, pre_subs, idx));
+                return Ok(Self::install_overload_park(
+                    ctx, producers, expr, pre_subs, idx,
+                ));
             }
         };
         let lex_index = ctx
@@ -172,8 +191,7 @@ impl<'a> KeywordedState<'a> {
             }
         }
         if let Some(bucket) = resolved.pending_overload_bucket.as_ref() {
-            if let Err(e) =
-                scope.install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
+            if let Err(e) = scope.install_pending_overload(bucket.clone(), NodeId(idx), bind_index)
             {
                 return Ok(NodeStep::Done(NodeOutput::Err(e)));
             }
@@ -189,7 +207,11 @@ impl<'a> KeywordedState<'a> {
             Ok(w) => w,
             Err(e) => return Ok(NodeStep::Done(NodeOutput::Err(e))),
         };
-        let PartWalkResult { new_parts, producers_to_wait, staged_subs } = walk;
+        let PartWalkResult {
+            new_parts,
+            producers_to_wait,
+            staged_subs,
+        } = walk;
         let new_expr = KExpression::new(new_parts);
         if !producers_to_wait.is_empty() {
             // Park-precedence guard: drop staged_subs on the floor;
@@ -221,9 +243,7 @@ impl<'a> KeywordedState<'a> {
         idx: usize,
     ) -> Result<NodeStep<'a>, KError> {
         let KeywordedState { init, track } = self;
-        let track = track.expect(
-            "Keyworded resume is only entered after a track is installed",
-        );
+        let track = track.expect("Keyworded resume is only entered after a track is installed");
         match track {
             ParkTrack::Overload(OverloadParkTrack { expr, .. }) => {
                 Self::initial(ctx, expr, init.pre_subs, scope, idx)
@@ -357,9 +377,11 @@ impl<'a> KeywordedState<'a> {
             }
             EagerSubsInstall::Parked(track) => {
                 let init = Initialized { pre_subs };
-                Ok(ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
-                    Self::with_eager_subs(init, track),
-                ))))
+                Ok(
+                    ctx.replace_with_parked_dispatch(DispatchState::Keyworded(Box::new(
+                        Self::with_eager_subs(init, track),
+                    ))),
+                )
             }
         }
     }
@@ -372,14 +394,16 @@ impl<'a> KeywordedState<'a> {
 /// unbound wrap), not a scheduler-level error.
 fn part_walk<'a>(
     ctx: &mut DispatchCtx<'a, '_>,
-    parts: Vec<crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'a>>>,
+    parts: Vec<
+        crate::machine::core::source::Spanned<crate::machine::model::ast::ExpressionPart<'a>>,
+    >,
     pre_subs: &[(usize, NodeId)],
     bare_outcomes: &[Option<NameOutcome<'a>>],
     slots: &crate::machine::core::kfunction::ClassifiedSlots,
     idx: usize,
 ) -> Result<PartWalkResult<'a>, KError> {
     use crate::machine::core::source::Spanned;
-    use crate::machine::model::ast::{ExpressionPart, TypeParams};
+    use crate::machine::model::ast::ExpressionPart;
 
     let wrap_set = &slots.wrap_indices;
     let ref_name_set = &slots.ref_name_indices;
@@ -397,7 +421,10 @@ fn part_walk<'a>(
         if wrap_set.contains(&i) {
             match &bare_outcomes[i] {
                 Some(NameOutcome::Resolved(obj)) => {
-                    new_parts.push(Spanned { value: ExpressionPart::Future(obj), span });
+                    new_parts.push(Spanned {
+                        value: ExpressionPart::Future(obj),
+                        span,
+                    });
                 }
                 Some(NameOutcome::Parked(p)) => {
                     if ctx.would_create_cycle(*p, NodeId(idx)) {
@@ -410,7 +437,10 @@ fn part_walk<'a>(
                     if !producers_to_wait.contains(p) {
                         producers_to_wait.push(*p);
                     }
-                    new_parts.push(Spanned { value: part.value, span });
+                    new_parts.push(Spanned {
+                        value: part.value,
+                        span,
+                    });
                 }
                 Some(NameOutcome::Unbound(name)) => {
                     return Err(KError::new(KErrorKind::UnboundName(name.clone())));
@@ -423,17 +453,19 @@ fn part_walk<'a>(
                 }
                 None => {
                     debug_assert!(false, "wrap_indices implies bare-name part");
-                    new_parts.push(Spanned { value: part.value, span });
+                    new_parts.push(Spanned {
+                        value: part.value,
+                        span,
+                    });
                 }
             }
             continue;
         }
         if ref_name_set.contains(&i) {
-            let park_eligible = matches!(&part.value, ExpressionPart::Identifier(_))
-                || matches!(
-                    &part.value,
-                    ExpressionPart::Type(t) if matches!(t.params, TypeParams::None)
-                );
+            let park_eligible = matches!(
+                &part.value,
+                ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
+            );
             if park_eligible {
                 if let Some(NameOutcome::Parked(p)) = &bare_outcomes[i] {
                     if ctx.would_create_cycle(*p, NodeId(idx)) {
@@ -448,7 +480,10 @@ fn part_walk<'a>(
                     }
                 }
             }
-            new_parts.push(Spanned { value: part.value, span });
+            new_parts.push(Spanned {
+                value: part.value,
+                span,
+            });
             continue;
         }
         let in_eager_filter = eager_filter.is_none_or(|idxs| idxs.contains(&i));
@@ -480,8 +515,15 @@ fn part_walk<'a>(
                 other => new_parts.push(Spanned { value: other, span }),
             }
         } else {
-            new_parts.push(Spanned { value: part.value, span });
+            new_parts.push(Spanned {
+                value: part.value,
+                span,
+            });
         }
     }
-    Ok(PartWalkResult { new_parts, producers_to_wait, staged_subs })
+    Ok(PartWalkResult {
+        new_parts,
+        producers_to_wait,
+        staged_subs,
+    })
 }

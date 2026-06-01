@@ -28,7 +28,6 @@ pub enum KLiteral {
 #[derive(Debug)]
 pub struct TypeExpr {
     pub name: String,
-    pub params: TypeParams,
     pub builtin_cache: OnceCell<KType<'static>>,
 }
 
@@ -40,7 +39,6 @@ impl Clone for TypeExpr {
         }
         TypeExpr {
             name: self.name.clone(),
-            params: self.params.clone(),
             builtin_cache: cache,
         }
     }
@@ -48,7 +46,7 @@ impl Clone for TypeExpr {
 
 impl PartialEq for TypeExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.params == other.params
+        self.name == other.name
     }
 }
 
@@ -57,24 +55,13 @@ impl Eq for TypeExpr {}
 impl std::hash::Hash for TypeExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);
-        self.params.hash(state);
     }
-}
-
-/// Inner-type carrier on a `TypeExpr`. Parameterized surface forms (`:(LIST OF X)`,
-/// `:(MAP K -> V)`, `:(FN (args) -> R)`) route through the dispatcher, not this carrier,
-/// so the only remaining variant is the bare-leaf marker. The field is staged for full
-/// removal (Phase 2).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypeParams {
-    None,
 }
 
 impl TypeExpr {
     pub fn leaf(name: String) -> TypeExpr {
         TypeExpr {
             name,
-            params: TypeParams::None,
             builtin_cache: OnceCell::new(),
         }
     }

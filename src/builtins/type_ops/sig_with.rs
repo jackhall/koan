@@ -3,7 +3,7 @@ use crate::machine::model::ast::ExpressionPart;
 use crate::machine::model::types::{elaborate_type_expr, ElabResult, Elaborator};
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BodyResult, CombineFinish, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
 use crate::builtins::ascribe::{abstract_type_names_of, is_abstract_type_name};
@@ -46,15 +46,7 @@ pub fn body<'a>(
             ))));
         }
         let slot_name = match &parts[0].value {
-            ExpressionPart::Type(t) if matches!(t.params, crate::machine::model::ast::TypeParams::None) => {
-                t.name.clone()
-            }
-            ExpressionPart::Type(t) => {
-                return Err(KError::new(KErrorKind::ShapeError(format!(
-                    "SIG_WITH binding name must be a bare Type token (e.g. `Type`, `Elt`), got `{}`",
-                    t.render(),
-                ))));
-            }
+            ExpressionPart::Type(t) => t.name.clone(),
             ExpressionPart::Identifier(name) => {
                 return Err(KError::new(KErrorKind::ShapeError(format!(
                     "SIG_WITH binding name `{name}` must be a Type token (Capital-first, with \
@@ -74,7 +66,9 @@ pub fn body<'a>(
 
     let mut triples: Vec<(String, ExpressionPart<'a>, usize)> = Vec::new();
     let parts = &bindings_expr.parts;
-    let inner_exprs = bindings_expr.borrow_inner_expressions().filter(|v| !v.is_empty());
+    let inner_exprs = bindings_expr
+        .borrow_inner_expressions()
+        .filter(|v| !v.is_empty());
     let is_single_pair = parts.len() == 2 && inner_exprs.is_none();
     if is_single_pair {
         if let Err(e) = parse_pair(parts, &mut triples, 0) {
@@ -166,12 +160,10 @@ pub fn body<'a>(
     }
 
     if sub_dispatches.is_empty() {
-        return BodyResult::Value(
-            scope.arena.alloc(KObject::KTypeValue(KType::Signature {
-                sig: s,
-                pinned_slots: pinned,
-            })),
-        );
+        return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::Signature {
+            sig: s,
+            pinned_slots: pinned,
+        })));
     }
 
     // `submission_layout[k] = pinned_idx` maps `results[k]` to `pinned[pinned_idx]`.
@@ -199,12 +191,10 @@ pub fn body<'a>(
                 }
             }
         }
-        BodyResult::Value(
-            scope.arena.alloc(KObject::KTypeValue(KType::Signature {
-                sig: s,
-                pinned_slots: pinned,
-            })),
-        )
+        BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(KType::Signature {
+            sig: s,
+            pinned_slots: pinned,
+        })))
     });
     let combine_id = sched.add_combine(deps, vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
@@ -221,7 +211,10 @@ mod tests {
     fn sig_with_one_slot_returns_signature_bound_with_pinned_slot() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
+        run(
+            scope,
+            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))",
+        );
         // SIG installs a single type-side identity; read the `sig_id` from there.
         let sig_id = match scope.resolve_type("OrderedSig") {
             Some(KType::Signature { sig, .. }) => sig.sig_id(),
@@ -305,7 +298,10 @@ mod tests {
     fn sig_with_rejects_unknown_slot() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
+        run(
+            scope,
+            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))",
+        );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig ((Bogus :Number))"), scope);
         sched.execute().expect("scheduler runs to completion");
@@ -326,7 +322,10 @@ mod tests {
     fn sig_with_rejects_identifier_slot_name() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
+        run(
+            scope,
+            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))",
+        );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig ((type :Number))"), scope);
         sched.execute().expect("scheduler runs to completion");
@@ -348,7 +347,10 @@ mod tests {
     fn sig_with_rejects_non_parens_bindings_form() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
-        run(scope, "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))");
+        run(
+            scope,
+            "SIG OrderedSig = ((LET Type = Number) (VAL compare :Number))",
+        );
         let mut sched = Scheduler::new();
         let id = sched.add_dispatch(parse_one("SIG_WITH OrderedSig (Type Number Extra)"), scope);
         sched.execute().expect("scheduler runs to completion");
@@ -358,7 +360,9 @@ mod tests {
         };
         let msg = format!("{}", err);
         assert!(
-            msg.contains("SIG_WITH bindings") || msg.contains("parens-wrapped") || msg.contains("pair"),
+            msg.contains("SIG_WITH bindings")
+                || msg.contains("parens-wrapped")
+                || msg.contains("pair"),
             "expected diagnostic to mention the bindings shape, got: {msg}",
         );
     }

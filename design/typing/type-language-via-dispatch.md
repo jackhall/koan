@@ -166,12 +166,6 @@ FN / FUNCTOR do not install on the name channel.
   surface into `KType::KFunction` / `KType::KFunctor` identity so a
   function-typed slot can enforce that callers use the declared
   parameter names.
-- [Remove positional type syntax and prune
-  TypeParams](../../roadmap/dispatch_fix/remove-positional-type-syntax.md) —
-  Phase 1 (retiring the positional sigil, folding `try_synth_legacy`
-  into the `rewrite_threaded_self_refs` path, and deleting the
-  `TypeParams::List` / `Function` arms) has landed; Phase 2 strips the
-  now-vestigial `params` field down to its `TypeParams::None` marker.
 - [User-defined TypeConstructor keyworded
   application](../../roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md) —
   give a user `LET Wrap = (TYPE_CONSTRUCTOR T)` a keyworded
