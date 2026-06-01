@@ -69,6 +69,19 @@ impl<V> Record<V> {
         self.fields.get(name)
     }
 
+    /// Insert (or replace) `name`'s value, returning the previous value if any. A new
+    /// name appends in insertion order; a replace keeps the existing position. Backs the
+    /// runtime carriers (e.g. the argument bundle) built up one field at a time.
+    pub fn insert(&mut self, name: String, value: V) -> Option<V> {
+        self.fields.insert(name, value)
+    }
+
+    /// Remove and return `name`'s value, if present. O(1); does not preserve order (used
+    /// when a consume-by-name carrier moves a value out, where residual order is moot).
+    pub fn remove(&mut self, name: &str) -> Option<V> {
+        self.fields.swap_remove(name)
+    }
+
     /// Map each field's value through `f`, preserving names and declaration order.
     /// Used to derive a value-level record's memoized type record
     /// (`Record<KObject>` → `Record<KType>` via `ktype()`).

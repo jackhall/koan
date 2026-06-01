@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::builtins::default_scope;
-use crate::machine::model::types::KType;
+use crate::machine::model::types::{KType, Record};
 use crate::machine::model::KObject;
 use crate::machine::CallArena;
 
@@ -97,7 +97,7 @@ fn list_with_pre_anchored_variants_skips_them() {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle {
-            args: HashMap::new(),
+            args: Record::new(),
         },
     };
     let items = Rc::new(vec![
@@ -140,7 +140,7 @@ fn list_with_unanchored_kfuture_anchors() {
         parsed: KExpression::new(vec![]),
         function: kf_ref,
         bundle: ArgumentBundle {
-            args: HashMap::new(),
+            args: Record::new(),
         },
     };
     let list = KObject::list(vec![KObject::KFuture(future, None)]);

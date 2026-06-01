@@ -2,7 +2,6 @@
 //! a `Body` (builtin `fn` pointer or captured user-defined `KExpression`), and the
 //! lexical scope captured at definition time.
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -11,7 +10,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 use crate::machine::core::{KError, KErrorKind, KFuture, Scope};
-use crate::machine::model::types::{ExpressionSignature, Parseable, SignatureElement};
+use crate::machine::model::types::{ExpressionSignature, Parseable, Record, SignatureElement};
 use crate::machine::model::values::{KObject, NamedPairs};
 
 pub mod argument_bundle;
@@ -128,7 +127,7 @@ impl<'a> KFunction<'a> {
                 got: expr.parts.len(),
             }));
         }
-        let mut args: HashMap<String, Rc<KObject<'a>>> = HashMap::new();
+        let mut args: Record<Rc<KObject<'a>>> = Record::new();
         for (el, part) in self.signature.elements.iter().zip(expr.parts.iter()) {
             let part_value = &part.value;
             match el {

@@ -1,17 +1,16 @@
 //! `ArgumentBundle` — the resolved name-to-value map produced by `KFunction::bind` and
 //! consumed by a builtin or user-defined body.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::machine::model::ast::{KExpression, TypeName};
 
 use crate::machine::core::{KError, KErrorKind};
-use crate::machine::model::types::KType;
+use crate::machine::model::types::{KType, Record};
 use crate::machine::model::values::{KObject, Module, Signature};
 
 pub struct ArgumentBundle<'a> {
-    pub args: HashMap<String, Rc<KObject<'a>>>,
+    pub args: Record<Rc<KObject<'a>>>,
 }
 
 impl<'a> ArgumentBundle<'a> {
@@ -22,11 +21,11 @@ impl<'a> ArgumentBundle<'a> {
     /// Independent copy; `Rc` sharing in the original is not preserved.
     pub fn deep_clone(&self) -> ArgumentBundle<'a> {
         ArgumentBundle {
-            args: self
-                .args
-                .iter()
-                .map(|(k, v)| (k.clone(), Rc::new(v.deep_clone())))
-                .collect(),
+            args: Record::from_pairs(
+                self.args
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Rc::new(v.deep_clone()))),
+            ),
         }
     }
 

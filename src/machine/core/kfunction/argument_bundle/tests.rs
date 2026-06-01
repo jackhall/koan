@@ -3,7 +3,7 @@ use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
 fn one_slot_bundle<'a>(name: &str, obj: KObject<'a>) -> ArgumentBundle<'a> {
-    let mut args = HashMap::new();
+    let mut args = Record::new();
     args.insert(name.to_string(), Rc::new(obj));
     ArgumentBundle { args }
 }
@@ -20,7 +20,7 @@ fn extract_kexpression_clones_when_rc_is_shared() {
     let shared = Rc::new(KObject::KExpression(expr));
     let _outside = Rc::clone(&shared);
     let mut bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     bundle.args.insert("e".into(), shared);
     let got = extract_kexpression(&mut bundle, "e").expect("clone path should return Some");
@@ -34,7 +34,7 @@ fn extract_kexpression_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::Number(1.0));
     let _outside = Rc::clone(&shared);
     let mut bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     bundle.args.insert("e".into(), shared);
     assert!(extract_kexpression(&mut bundle, "e").is_none());
@@ -45,7 +45,7 @@ fn extract_ktype_clones_when_rc_is_shared() {
     let shared = Rc::new(KObject::KTypeValue(KType::Number));
     let _outside = Rc::clone(&shared);
     let mut bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     bundle.args.insert("t".into(), shared);
     assert_eq!(extract_ktype(&mut bundle, "t"), Some(KType::Number));
@@ -56,7 +56,7 @@ fn extract_ktype_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::Number(2.0));
     let _outside = Rc::clone(&shared);
     let mut bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     bundle.args.insert("t".into(), shared);
     assert!(extract_ktype(&mut bundle, "t").is_none());
@@ -67,7 +67,7 @@ fn extract_type_name_ref_clones_when_rc_is_shared() {
     let shared = Rc::new(type_name_ref("Foo"));
     let _outside = Rc::clone(&shared);
     let mut bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     bundle.args.insert("t".into(), shared);
     let got = extract_type_name_ref(&mut bundle, "t").expect("clone path should return Some");
@@ -79,7 +79,7 @@ fn extract_type_name_ref_shared_non_matching_variant_returns_none() {
     let shared = Rc::new(KObject::KTypeValue(KType::Number));
     let _outside = Rc::clone(&shared);
     let mut bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     bundle.args.insert("t".into(), shared);
     assert!(extract_type_name_ref(&mut bundle, "t").is_none());
@@ -141,7 +141,7 @@ fn extract_bare_type_name_rejects_non_type_carrier() {
 #[test]
 fn extract_bare_type_name_missing_slot_returns_missing_arg() {
     let bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     let err = extract_bare_type_name(&bundle, "T", "STRUCT").expect_err("should reject");
     match err.kind {
@@ -203,7 +203,7 @@ fn require_signature_mismatch_routes_through_mismatch_helper() {
 #[test]
 fn require_missing_slot_returns_missing_arg() {
     let bundle = ArgumentBundle {
-        args: HashMap::new(),
+        args: Record::new(),
     };
     let err = unwrap_err(bundle.require("x"));
     match err.kind {
