@@ -1,25 +1,15 @@
-//! Dict-literal sub-state-machine factored out of `expression_tree::build_tree`. Owns
-//! the in-progress key/value pair so the surrounding character handlers can delegate to
-//! `accept_colon`, `accept_comma`, and `finish` instead of pattern-matching the dict
-//! state inline. Multi-part keys/values collapse into a sub-expression via
-//! `single_or_wrapped`.
+//! Dict-literal sub-state-machine for `build_tree`. The surrounding character handlers
+//! delegate to `accept_colon`, `accept_comma`, and `finish`; multi-part keys/values
+//! collapse into a sub-expression via `single_or_wrapped`.
 
 use crate::machine::model::ast::ExpressionPart;
 use crate::machine::KError;
 
-/// In-progress dict literal: completed pairs plus the state of the current pair. Owns its
-/// own state machine so character handlers in `build_tree` delegate to `accept_colon`,
-/// `accept_comma`, and `finish` instead of pattern-matching the state inline.
 pub(super) struct DictFrame<'a> {
     pairs: Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>,
     state: DictPairState<'a>,
 }
 
-/// State of the in-progress key/value pair inside a `DictFrame`. `Empty` is "ready for a
-/// fresh key", `Key(parts)` is "accumulating key parts before we see ':'", `Value { key,
-/// value }` is "saw ':', now collecting value parts until `,`, `}`, or auto-commit fires".
-/// A multi-part key/value collapses via `single_or_wrapped`: one part stays as-is, multiple
-/// parts wrap into a sub-expression.
 enum DictPairState<'a> {
     Empty,
     Key(Vec<ExpressionPart<'a>>),
@@ -29,19 +19,17 @@ enum DictPairState<'a> {
     },
 }
 
-/// Collapse the buffered parts of one half of a dict pair: a single part is the half
-/// directly; multiple parts wrap as a sub-expression so the scheduler dispatches them.
+/// Single part stays as-is; multiple parts wrap as a sub-expression so the scheduler
+/// dispatches them.
 fn single_or_wrapped<'a>(parts: Vec<ExpressionPart<'a>>) -> ExpressionPart<'a> {
     match <[ExpressionPart<'a>; 1]>::try_from(parts) {
         Ok([single]) => single,
-        Err(parts)   => ExpressionPart::expression(parts),
+        Err(parts) => ExpressionPart::expression(parts),
     }
 }
 
-/// Auto-commit threshold for `DictFrame`'s value side: any incoming part that could
-/// plausibly start a fresh key (i.e. would be a complete dict half on its own). Used to
-/// make commas optional — `{a: 1 b: 2}` parses identically to `{a: 1, b: 2}` because the
-/// `b` token, arriving while `value = [1]`, triggers the previous pair's commit.
+/// Auto-commit trigger on the value side: any part that could be a fresh key on its own.
+/// Lets commas be optional — `{a: 1 b: 2}` parses identically to `{a: 1, b: 2}`.
 fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
     matches!(
         part,
@@ -56,12 +44,14 @@ fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
 
 impl<'a> DictFrame<'a> {
     pub(super) fn new() -> Self {
-        Self { pairs: Vec::new(), state: DictPairState::Empty }
+        Self {
+            pairs: Vec::new(),
+            state: DictPairState::Empty,
+        }
     }
 
-    /// Accept an incoming part. Either appends to the current key/value being accumulated,
-    /// or — when a value-side already has content and the new part could plausibly start a
-    /// fresh key — auto-commits the in-progress pair before opening a new key.
+    /// When the value side already has content and the new part could start a fresh
+    /// key, auto-commit the in-progress pair before opening a new key.
     pub(super) fn push(&mut self, part: ExpressionPart<'a>) {
         match &mut self.state {
             DictPairState::Empty => {
@@ -82,17 +72,18 @@ impl<'a> DictFrame<'a> {
         }
     }
 
-    /// Handle a `:` — promote the buffered key parts into a finalized key and switch to
-    /// accumulating the value side. Errors if no key was buffered or if a `:` arrives
-    /// while a value is already being built (one `:` per pair).
+    /// Errors if no key was buffered or if a `:` arrives while a value is already
+    /// being built — one `:` per pair.
     pub(super) fn accept_colon(&mut self) -> Result<(), KError> {
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
-            DictPairState::Empty => {
-                Err(KError::parse("missing key before ':' in dict literal", None))
-            }
-            DictPairState::Key(parts) if parts.is_empty() => {
-                Err(KError::parse("missing key before ':' in dict literal", None))
-            }
+            DictPairState::Empty => Err(KError::parse(
+                "missing key before ':' in dict literal",
+                None,
+            )),
+            DictPairState::Key(parts) if parts.is_empty() => Err(KError::parse(
+                "missing key before ':' in dict literal",
+                None,
+            )),
             DictPairState::Key(parts) => {
                 self.state = DictPairState::Value {
                     key: single_or_wrapped(parts),
@@ -101,16 +92,14 @@ impl<'a> DictFrame<'a> {
                 Ok(())
             }
             DictPairState::Value { key, value } => {
-                // Restore for diagnostic context, then error.
                 self.state = DictPairState::Value { key, value };
                 Err(KError::parse("unexpected ':' inside dict value", None))
             }
         }
     }
 
-    /// Handle a `,` — commit the in-progress pair if a value has been collected. Trailing
-    /// or repeated commas no-op (`{a: 1,}` and `{a: 1,, b: 2}` both legal); a comma after
-    /// a key without a value, or after `:` with no value, errors.
+    /// Trailing or repeated commas no-op (`{a: 1,}` and `{a: 1,, b: 2}` both legal);
+    /// a comma after a key without `:`, or after `:` with no value, errors.
     pub(super) fn accept_comma(&mut self) -> Result<(), KError> {
         match std::mem::replace(&mut self.state, DictPairState::Empty) {
             DictPairState::Empty => Ok(()),
@@ -119,9 +108,10 @@ impl<'a> DictFrame<'a> {
                 self.state = DictPairState::Key(parts);
                 Err(KError::parse("key without value in dict literal", None))
             }
-            DictPairState::Value { value, .. } if value.is_empty() => {
-                Err(KError::parse("missing value after ':' in dict literal", None))
-            }
+            DictPairState::Value { value, .. } if value.is_empty() => Err(KError::parse(
+                "missing value after ':' in dict literal",
+                None,
+            )),
             DictPairState::Value { key, value } => {
                 self.pairs.push((key, single_or_wrapped(value)));
                 Ok(())
@@ -129,8 +119,8 @@ impl<'a> DictFrame<'a> {
         }
     }
 
-    /// Handle `}` — commit any in-progress pair and yield the completed pair list. Errors
-    /// for a key without `:` or a `:` without a value.
+    /// Commit any in-progress pair and yield the completed pair list. Errors for a
+    /// key without `:` or a `:` without a value.
     pub(super) fn finish(
         mut self,
     ) -> Result<Vec<(ExpressionPart<'a>, ExpressionPart<'a>)>, KError> {

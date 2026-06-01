@@ -16,18 +16,21 @@ free name has nowhere to bind:
 - *Type-parameter inference from value-slot arguments.* Parameterized
   values carry their type arguments
   ([ktype.md § Runtime type-parameter carriers](../../design/typing/ktype.md#runtime-type-parameter-carriers)),
-  and a `:(List T)` / `:(Result T E)` slot admits a value structurally
+  and a `:(LIST OF T)` / `:(Result T E)` slot admits a value structurally
   via the [`matches_value`](../../src/machine/model/types/ktype_predicates.rs)
   `ConstructorApply` / container arms. But a free type-parameter name in
-  the slot has nowhere to bind: `FN head (xs :(List T)) -> :T = ...`
+  the slot has nowhere to bind: `FN head (xs :(LIST OF T)) -> :T = ...`
   can't be defined, because `T` in the deferred return resolves through
   scope and nothing populates that scope from the argument the call
-  actually carried. The generic-destructuring unifier
-  ([`unify_slot`](../../src/machine/model/types/unify.rs)) — which walks
-  a slot's surface `TypeExpr` against a value's carried `KType` and
-  collects `(param_name, concrete)` bindings — is unit-tested but not
-  wired into [`invoke.rs`](../../src/machine/core/kfunction/invoke.rs);
-  the re-export is `#[allow(unused_imports)]` at the crate level.
+  actually carried. A generic-destructuring unifier — walking a slot's
+  elaborated `KType` against a value's carried `KType` and collecting
+  `(param_name, concrete)` bindings — is the missing piece, and nothing
+  in [`invoke.rs`](../../src/machine/core/kfunction/invoke.rs) populates
+  the per-call scope from the argument. (An earlier `TypeExpr`-walking
+  `unify_slot` scaffold was removed when positional type syntax was
+  retired; with parameterized surface `TypeExpr`s gone, the unifier must
+  walk `KType` ↔ `KType` — a value's carried `KType` against a slot's
+  elaborated `KType` — not surface `TypeExpr` ↔ `KType`.)
 
 - *Cross-parameter references in the same signature.* `(FN (MAKE T:
   Type elt: T) -> T = ...)` errors at FN-definition because `T` isn't
@@ -46,15 +49,15 @@ slot's type is determined per call against the per-dispatch frame."
 A third gap is **name discrimination**. Without an explicit declarator
 for free type-parameter names, a slot leaf that doesn't resolve in scope
 would have to be inferred as a free param — making a typo
-(`:(List U)` for the intended `:(List T)`) silently register `U` as a
+(`:(LIST OF U)` for the intended `:(LIST OF T)`) silently register `U` as a
 fresh free parameter rather than erroring. The signature would accept
 more values than the author intended, and the misspelled return would
 unify trivially with anything.
 
 **Impact.**
 
-- *Generic value-slot functions become definable.* `FN head (xs :(List
-  T)) -> :T` and `FN unwrap (r :(Result T E)) -> :T` type-check per call
+- *Generic value-slot functions become definable.* `FN head (xs :(LIST
+  OF T)) -> :T` and `FN unwrap (r :(Result T E)) -> :T` type-check per call
   against the argument the caller actually passed. Type-parameter
   dispatch on value slots resolves the deferred return against the
   bound concrete type, so the per-call return matches the argument's
@@ -90,16 +93,19 @@ unify trivially with anything.
   [`ExpressionSignature::return_type`](../../src/machine/model/types/signature.rs).
   Selection at FN-definition: scan each parameter type's `TypeExpr` for
   leaves matching either an earlier parameter name *or* a slot-local
-  free type-parameter name (e.g. `T` in `:(List T)`).
+  free type-parameter name (e.g. `T` in `:(LIST OF T)`).
 - *Binding-source unification — decided.* Both sources install
   `(param_name, concrete)` into the per-call scope via
-  `Scope::register_type` before deferred elaboration runs. `unify_slot`
-  handles the argument-extraction case; the earlier-parameter case
-  routes through the existing per-call type-side install path for
-  type-denoting parameter values.
+  `Scope::register_type` before deferred elaboration runs. A
+  `KType`-walking unifier handles the argument-extraction case; the
+  earlier-parameter case routes through the existing per-call type-side
+  install path for type-denoting parameter values. Once parameter signatures
+  carry the [record substrate](record-substrate.md)'s shape, the unifier walks
+  the parameter record's field types; the free type-parameter names it
+  collects (`T`) are a distinct axis from the record's field-name keys
+  (`elt`).
 - *Per-call binding site — decided.* The invoke per-call type-side install
-  site, before deferred-return elaboration — the seam `unify_slot` was
-  built against.
+  site, before deferred-return elaboration — the seam the unifier targets.
 - *Type-parameter declaration — decided.* Free type-params are declared
   explicitly via `LET TypeName = <bound>` at FN/module scope — the same
   arity-0 declarator that SIG bodies already use for abstract type slots
@@ -164,7 +170,10 @@ unify trivially with anything.
   Type elt: T)`, the other `(MAKE T: Type elt: Number)`) need a
   comparison rule for "more specific." Today's overload resolution is
   concrete-type-keyed; dependent annotations need a partial-order
-  extension.
+  extension. This is the same `is_more_specific` partial order that
+  [record structural subtyping](record-subtyping.md) grows for width/depth;
+  the two should land as one coherent specificity lattice, not parallel
+  rules.
 - *Tripwire extension — decided.* The existing
   [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
   `debug_assert!` that guards deferred-return Any-coarsening
@@ -180,11 +189,10 @@ unify trivially with anything.
 **Requires:**
 
 None — the substrate (runtime carriers, `matches_value` admission arms,
-ascription stamping, `unify_slot` core, `ReturnType` carrier, per-call
-type-side install for type-denoting parameters) is shipped; this item
-wires the existing
-machinery into the invoke path and widens parameter slots to admit the
-deferred-carrier shape.
+ascription stamping, `ReturnType` carrier, per-call type-side install for
+type-denoting parameters) is shipped; this item builds the
+`KType`-walking slot unifier, wires it into the invoke path, and widens
+parameter slots to admit the deferred-carrier shape.
 
 **Unblocks:**
 
@@ -198,3 +206,8 @@ parameterized type
 ([error-handling](../../design/error-handling.md)) already function on
 the shipped carriers; this item extends them to generic value-slot
 signatures and to cross-parameter-referencing signatures.
+
+The invoke-path wiring this item adds rebases onto the record
+block-install path if argument-binding unification lands first (a soft
+ordering preference, not a dependency edge); no content is dropped, only
+the bind surface it targets.

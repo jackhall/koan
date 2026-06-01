@@ -1,11 +1,7 @@
 //! Source-file registry and span/location primitives. Owns the thread-local
-//! `SOURCES` vector keyed by `FileId`, the active `CURRENT_FILE` for the parse pass,
-//! and the wrapper types (`Span`, `Spanned`) that thread byte-offset metadata through
-//! the AST.
-//!
-//! Phase 1 scaffolding — only types, the registry, and the RAII guard live here.
-//! Wiring into the parser, into `KError::Frame`, and into `KErrorKind::ParseError`
-//! lands in later phases.
+//! `SOURCES` vector keyed by `FileId`, the active `CURRENT_FILE` for the parse
+//! pass, and the wrapper types (`Span`, `Spanned`) that thread byte-offset
+//! metadata through the AST.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -47,7 +43,11 @@ impl SourceFile {
                 line_starts.push((i as u32) + 1);
             }
         }
-        SourceFile { path: path.into(), text, line_starts }
+        SourceFile {
+            path: path.into(),
+            text,
+            line_starts,
+        }
     }
 
     /// Resolve a byte offset into `(line, col_utf16)`, both 1-based.
@@ -94,8 +94,7 @@ pub fn with<R>(id: FileId, f: impl FnOnce(&SourceFile) -> R) -> R {
     })
 }
 
-/// Active source for parse-side error attribution. Read by `KError::parse`
-/// in later phases.
+/// Active source for parse-side error attribution. Read by `KError::parse`.
 pub fn current() -> Option<FileId> {
     CURRENT_FILE.with(Cell::get)
 }
@@ -116,7 +115,9 @@ pub struct CurrentFileGuard {
 
 impl CurrentFileGuard {
     pub fn push(id: FileId) -> Self {
-        Self { prev: set_current(Some(id)) }
+        Self {
+            prev: set_current(Some(id)),
+        }
     }
 }
 
@@ -126,10 +127,8 @@ impl Drop for CurrentFileGuard {
     }
 }
 
-/// Wraps an AST node with optional span metadata. The variant payload stays
-/// untouched on `value`; the wrapper carries the span (and any future per-part
-/// metadata: scheduler hints, type info). Used for `ExpressionPart`; the
-/// enclosing `KExpression` keeps span as a direct field instead.
+/// Wraps an AST node with optional span metadata. Used for `ExpressionPart`;
+/// the enclosing `KExpression` keeps span as a direct field instead.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Spanned<T> {
     pub value: T,
@@ -142,7 +141,10 @@ impl<T> Spanned<T> {
     }
 
     pub fn at(value: T, span: Span) -> Self {
-        Self { value, span: Some(span) }
+        Self {
+            value,
+            span: Some(span),
+        }
     }
 }
 

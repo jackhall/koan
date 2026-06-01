@@ -12,13 +12,9 @@
 
 use crate::machine::model::ast::{ExpressionPart, KExpression};
 
-/// Walk `expr.parts` as repeated `<Identifier(name)> <Keyword(sep)> <slot>` triples and
-/// return an ordered list of `(name, T)` pairs.
-///
-/// `context` is a surface-form description woven into every error message; `sep` is the
-/// expected keyword text between name and slot (typically `"="`).
-///
-/// Empty `parts` yields an empty `Vec` — supports zero-arg calls like `f ()`.
+/// `context` is woven into every error message; `sep` is the expected keyword text
+/// between name and slot (typically `"="`). Empty `parts` yields an empty `Vec` so
+/// zero-arg calls like `f ()` are handled here.
 pub fn parse_keyword_triple_list<'a, T>(
     expr: &KExpression<'a>,
     context: &str,
@@ -63,12 +59,7 @@ pub fn parse_keyword_triple_list<'a, T>(
     Ok(out)
 }
 
-/// Walk `expr.parts` as repeated `<Identifier(name)> <slot>` pairs and return an ordered
-/// list of `(name, T)` pairs. Used for typed-field declarations after the Design-B sigil
-/// consumes the `:` separator — `xs :Number` becomes `[Identifier("xs"), Type(Number)]`.
-///
-/// `context` is the surface-form description used in errors. Empty `parts` yields an
-/// empty `Vec`.
+/// `context` is woven into error messages. Empty `parts` yields an empty `Vec`.
 pub fn parse_pair_list<'a, T>(
     expr: &KExpression<'a>,
     context: &str,

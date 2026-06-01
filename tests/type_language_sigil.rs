@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use koan::builtins::default_scope;
-use koan::machine::model::{KObject, KType};
+use koan::machine::model::{KObject, KType, UserTypeKind};
 use koan::machine::{RuntimeArena, Scheduler, Scope};
 use koan::parse::parse;
 
@@ -27,7 +27,9 @@ impl std::io::Write for SharedBuf {
         self.0.borrow_mut().extend_from_slice(b);
         Ok(b.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn run<'a>(arena: &'a RuntimeArena, src: &str) -> &'a Scope<'a> {
@@ -57,18 +59,14 @@ fn run_expect_err(arena: &RuntimeArena, src: &str) -> String {
 }
 
 /// Read the SIG named `sig_name`'s decl_scope value-binding for `name` as a
-/// `KType` carrier. Walks through both the run-root scope's `lookup` to grab
-/// the Signature carrier and then the Signature's decl_scope's `iter_data` view.
-fn lookup_sig_value_kt<'a>(
-    scope: &'a Scope<'a>,
-    sig_name: &str,
-    name: &str,
-) -> KType<'a> {
-    let s = match scope.lookup(sig_name) {
-        Some(KObject::KTypeValue(KType::Signature(s))) => *s,
+/// `KType` carrier. Reads the run-root scope's type side (`resolve_type`) to grab
+/// the Signature carrier, then walks the Signature's decl_scope's `iter_data` view.
+fn lookup_sig_value_kt<'a>(scope: &'a Scope<'a>, sig_name: &str, name: &str) -> KType<'a> {
+    let s = match scope.resolve_type(sig_name) {
+        Some(KType::Signature { sig, .. }) => *sig,
         other => panic!(
-            "`{sig_name}` should bind a Signature, got {:?}",
-            other.map(|o| o.ktype())
+            "`{sig_name}` should bind a Signature KType, got {:?}",
+            other
         ),
     };
     let entries = s.decl_scope().bindings().iter_data();
@@ -78,7 +76,10 @@ fn lookup_sig_value_kt<'a>(
         .unwrap_or_else(|| panic!("`{name}` should be bound"));
     match obj {
         KObject::KTypeValue(kt) => kt.clone(),
-        other => panic!("`{name}` must be a KTypeValue carrier, got {:?}", other.ktype()),
+        other => panic!(
+            "`{name}` must be a KTypeValue carrier, got {:?}",
+            other.ktype()
+        ),
     }
 }
 
@@ -88,10 +89,7 @@ fn lookup_sig_value_kt<'a>(
 #[test]
 fn sigil_list_of_lowers_to_list_carrier() {
     let arena = RuntimeArena::new();
-    let scope = run(
-        &arena,
-        "SIG Sig = ((VAL items :(LIST OF Number)))",
-    );
+    let scope = run(&arena, "SIG Sig = ((VAL items :(LIST OF Number)))");
     let items_kt = lookup_sig_value_kt(scope, "Sig", "items");
     match items_kt {
         KType::List(elem) => assert_eq!(*elem, KType::Number),
@@ -118,10 +116,7 @@ fn sigil_list_of_missing_of_keyword_errors() {
 #[test]
 fn sigil_map_lowers_to_dict_carrier() {
     let arena = RuntimeArena::new();
-    let scope = run(
-        &arena,
-        "SIG Sig = ((VAL table :(MAP Str -> Number)))",
-    );
+    let scope = run(&arena, "SIG Sig = ((VAL table :(MAP Str -> Number)))");
     let table_kt = lookup_sig_value_kt(scope, "Sig", "table");
     match table_kt {
         KType::Dict(k, v) => {
@@ -159,10 +154,7 @@ fn sigil_fn_lowers_to_kfunction_positional() {
 #[test]
 fn sigil_fn_nullary_lowers_to_zero_arg_kfunction() {
     let arena = RuntimeArena::new();
-    let scope = run(
-        &arena,
-        "SIG Sig = ((VAL gen :(FN () -> Number)))",
-    );
+    let scope = run(&arena, "SIG Sig = ((VAL gen :(FN () -> Number)))");
     let gen = lookup_sig_value_kt(scope, "Sig", "gen");
     match gen {
         KType::KFunction { args, ret } => {
@@ -211,10 +203,14 @@ fn sigil_functor_lowers_to_kfunctor() {
 fn struct_field_accepts_keyworded_list_of_sigil() {
     let arena = RuntimeArena::new();
     let scope = run(&arena, "STRUCT Foo = (xs :(LIST OF Number))");
-    let foo = scope.lookup("Foo").expect("Foo should bind");
-    let fields = match foo {
-        KObject::StructType { fields, .. } => fields.clone(),
-        other => panic!("Foo must bind a StructType, got {:?}", other.ktype()),
+    // STRUCT is type-only — its field schema rides the `UserType { Struct { fields } }`
+    // identity in `types`.
+    let fields = match scope.resolve_type("Foo") {
+        Some(KType::UserType {
+            kind: UserTypeKind::Struct { fields },
+            ..
+        }) => fields.clone(),
+        other => panic!("Foo must be a Struct identity in types, got {other:?}"),
     };
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].0, "xs");
@@ -233,10 +229,14 @@ fn union_field_accepts_keyworded_map_sigil() {
         &arena,
         "UNION Maybe = (some :(MAP Str -> Number), none :Null)",
     );
-    let maybe = scope.lookup("Maybe").expect("Maybe should bind");
-    let schema = match maybe {
-        KObject::TaggedUnionType { schema, .. } => schema.clone(),
-        other => panic!("Maybe must bind a TaggedUnionType, got {:?}", other.ktype()),
+    // UNION is type-only — its variant schema rides the `UserType { Tagged { schema } }`
+    // identity in `types`.
+    let schema = match scope.resolve_type("Maybe") {
+        Some(KType::UserType {
+            kind: UserTypeKind::Tagged { schema },
+            ..
+        }) => schema.clone(),
+        other => panic!("Maybe must be a Tagged identity in types, got {other:?}"),
     };
     let some_kt = schema.get("some").expect("some tag");
     match some_kt {
@@ -275,12 +275,13 @@ fn sigil_functor_forward_reference_defers_via_combine() {
     match mk {
         KType::KFunctor { params, ret } => {
             assert_eq!(params.len(), 1);
-            // OrderedSig resolves to its SatisfiesSignature identity post-Combine.
+            // OrderedSig resolves to its `Signature { .. }` identity post-Combine.
             // The carrier type's name (`OrderedSig`) is enough to confirm the
             // forward reference resolved through the deferral path.
             assert!(
                 params[0].name().contains("OrderedSig") || params[0] == KType::AnySignature,
-                "param 0 should carry OrderedSig identity, got {:?}", params[0]
+                "param 0 should carry OrderedSig identity, got {:?}",
+                params[0]
             );
             assert_eq!(*ret, KType::AnyModule);
         }
@@ -309,9 +310,10 @@ fn sigil_user_functor_application_through_dispatch() {
             (MODULE Result = ((LET tag = 0)))\n\
          LET MySet = (MAKESET IntOrd)",
     );
-    let my_set = scope.lookup("MySet").expect("MySet should bind");
-    match my_set {
-        KObject::KTypeValue(KType::Module { .. }) => {}
-        other => panic!("MySet must bind a Module value, got {:?}", other.ktype()),
+    // `MySet` is a module bound under a Type-classed name — type-only, so its identity
+    // lives in `types`.
+    match scope.resolve_type("MySet") {
+        Some(KType::Module { .. }) => {}
+        other => panic!("MySet must be a Module identity in types, got {other:?}"),
     }
 }

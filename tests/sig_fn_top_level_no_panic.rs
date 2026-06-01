@@ -13,10 +13,8 @@ use koan::machine::interpret_with_writer;
 
 #[test]
 fn top_level_sig_then_fn_referencing_it_runs_without_panic() {
-    let source =
-        "SIG OrderedSig = (VAL compare :Number)\n\
+    let source = "SIG OrderedSig = (VAL compare :Number)\n\
          FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)";
     interpret_with_writer(source, Box::new(std::io::sink()))
         .expect("top-level SIG + FN program should run without panic or error");
 }
-

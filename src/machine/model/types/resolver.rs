@@ -1,4 +1,4 @@
-//! Scheduler-aware type-name elaboration. Walks a [`TypeExpr`] against a [`Scope`],
+//! Scheduler-aware type-name elaboration. Walks a [`TypeName`] against a [`Scope`],
 //! threads a "currently elaborating" set so recursive type definitions short-circuit to
 //! [`KType::RecursiveRef`] instead of deadlocking on their own placeholder, and returns
 //! [`ElabResult::Park`] when a referenced type-binding placeholder hasn't finalized so
@@ -10,16 +10,16 @@
 
 use std::collections::HashSet;
 
-use crate::machine::model::ast::{TypeExpr, TypeParams};
-use crate::machine::NodeId;
 use crate::machine::core::{Resolution, Scope, ScopeId};
+use crate::machine::model::ast::TypeName;
+use crate::machine::NodeId;
 
 use super::ktype::{KType, UserTypeKind};
 
 #[cfg(test)]
 mod tests;
 
-/// Outcome of one elaboration walk over a `TypeExpr`.
+/// Outcome of one elaboration walk over a `TypeName`.
 #[derive(Debug)]
 pub enum ElabResult<'a> {
     /// Fully elaborated. Whether to `Mu`-wrap rides on the elaborator's
@@ -114,171 +114,58 @@ impl<'s, 'a> Elaborator<'s, 'a> {
     }
 }
 
-/// Walk a `TypeExpr` against the elaborator's scope. Container / function shapes
-/// recurse and merge inner `Park` producers so the caller can register every dep at
-/// once. Bare leaves route through the threaded set first (recursive back-edge),
-/// then `Scope::resolve_type`, then `Scope::resolve` for the placeholder path, and
-/// finally `KType::from_name` so fixture scopes that skip builtin registration still
-/// resolve builtin names.
-pub fn elaborate_type_expr<'a>(
-    el: &mut Elaborator<'_, 'a>,
-    t: &TypeExpr,
-) -> ElabResult<'a> {
-    match (&t.name, &t.params) {
-        (name, TypeParams::None) => {
-            if el.threaded.contains(name) {
-                el.fired_self_ref_for.insert(name.clone());
-                return ElabResult::Done(KType::RecursiveRef(name.clone()));
-            }
-            if let Some(kt) = el.scope.resolve_type(name) {
-                return ElabResult::Done(kt.clone());
-            }
-            match el.scope.resolve(name) {
-                Resolution::Placeholder(id) => {
-                    // Record the edge unconditionally: the parked-on name may not be in
-                    // `pending_types` yet (its body hasn't dispatched), but DFS sees the
-                    // persistent edge list later and closes the cycle when the second
-                    // binder records its reciprocal edge. Trivial self-cycles
-                    // (`LET T = T`) are caught by the dispatch driver's eager-resolve
-                    // pass before the elaborator runs — see
-                    // `dispatch::resolve_name_part` / `would_create_cycle`.
-                    if let Some(decl) = el.current_decl_name.clone() {
-                        el.scope.bindings().record_pending_edge(&decl, name.clone());
-                        if let Some(members) = detect_pending_cycle(el.scope, &decl) {
-                            close_type_cycle(el.scope, &members);
-                            if let Some(kt) = el.scope.resolve_type(name) {
-                                return ElabResult::Done(kt.clone());
-                            }
-                        }
+/// Walk a `TypeName` against the elaborator's scope. Bare leaves route through the
+/// threaded set first (recursive back-edge), then `Scope::resolve_type`, then
+/// `Scope::resolve` for the placeholder path, and finally `KType::from_name` so
+/// fixture scopes that skip builtin registration still resolve builtin names.
+/// Parameterized shapes (`:(LIST OF X)`, `:(MAP K -> V)`) no longer reach this
+/// walk — they sub-Dispatch through the standalone dispatcher.
+pub fn elaborate_type_expr<'a>(el: &mut Elaborator<'_, 'a>, t: &TypeName) -> ElabResult<'a> {
+    let name = t.as_str();
+    if el.threaded.contains(name) {
+        el.fired_self_ref_for.insert(name.to_string());
+        return ElabResult::Done(KType::RecursiveRef(name.to_string()));
+    }
+    if let Some(kt) = el.scope.resolve_type(name) {
+        return ElabResult::Done(kt.clone());
+    }
+    match el.scope.resolve(name) {
+        Resolution::Placeholder(id) => {
+            // Record the edge unconditionally: the parked-on name may not be in
+            // `pending_types` yet, but DFS sees the persistent edge list later
+            // and closes the cycle when the second binder records its reciprocal
+            // edge. Trivial self-cycles (`LET T = T`) are caught earlier by the
+            // dispatch driver's eager-resolve pass.
+            if let Some(decl) = el.current_decl_name.clone() {
+                el.scope
+                    .bindings()
+                    .record_pending_edge(&decl, name.to_string());
+                if let Some(members) = detect_pending_cycle(el.scope, &decl) {
+                    close_type_cycle(el.scope, &members);
+                    if let Some(kt) = el.scope.resolve_type(name) {
+                        return ElabResult::Done(kt.clone());
                     }
-                    ElabResult::Park(vec![id])
-                }
-                // `from_name` is tried first in both arms so fixture scopes that skip
-                // builtin registration still resolve builtin names. The split only
-                // affects the miss message: a `Value` resolution means the name *is*
-                // bound, just in the value language, so the diagnostic must name the
-                // type-language / value-language layering rather than read as an
-                // unknown-name failure (see design/typing/functors.md).
-                Resolution::Value(_) => match KType::<'a>::from_name(name) {
-                    Some(kt) => ElabResult::Done(kt),
-                    None => ElabResult::Unbound(format!(
-                        "`{name}` is value-language only — a type slot needs a type-language \
-                         binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
-                    )),
-                },
-                Resolution::UnboundName => match KType::<'a>::from_name(name) {
-                    Some(kt) => ElabResult::Done(kt),
-                    None => ElabResult::Unbound(format!("unknown type name `{name}`")),
-                },
-            }
-        }
-        (name, TypeParams::List(items)) if name == "List" && items.len() == 1 => {
-            match elaborate_type_expr(el, &items[0]) {
-                ElabResult::Done(kt) => ElabResult::Done(KType::List(Box::new(kt))),
-                other => other,
-            }
-        }
-        (name, TypeParams::List(items)) if name == "List" => ElabResult::Unbound(format!(
-            ":(List ...) expects exactly 1 type parameter, got {}",
-            items.len()
-        )),
-        (name, TypeParams::List(items)) if name == "Dict" && items.len() == 2 => {
-            let k = elaborate_type_expr(el, &items[0]);
-            let v = elaborate_type_expr(el, &items[1]);
-            match ElabResult::collect([k, v]) {
-                Ok(mut kts) => {
-                    let vt = kts.pop().expect("two slots");
-                    let kt = kts.pop().expect("two slots");
-                    ElabResult::Done(KType::Dict(Box::new(kt), Box::new(vt)))
-                }
-                Err(e) => e,
-            }
-        }
-        (name, TypeParams::List(items)) if name == "Dict" => ElabResult::Unbound(format!(
-            ":(Dict ...) expects exactly 2 type parameters, got {}",
-            items.len()
-        )),
-        (name, TypeParams::Function { args, ret }) if name == "Function" => {
-            // Return slot rides as the last `collect` entry so its result shares the
-            // Unbound > Park > Done precedence with the args.
-            let mut slots: Vec<ElabResult> = args
-                .iter()
-                .map(|a| elaborate_type_expr(el, a))
-                .collect();
-            slots.push(elaborate_type_expr(el, ret));
-            match ElabResult::collect(slots) {
-                Ok(mut kts) => {
-                    let ret_kt = kts.pop().expect("ret slot pushed above");
-                    ElabResult::Done(KType::KFunction {
-                        args: kts,
-                        ret: Box::new(ret_kt),
-                    })
-                }
-                Err(e) => e,
-            }
-        }
-        // `Functor` type-position sigil: same shape rule as `Function` above but lowers
-        // to `KType::KFunctor`. The Type-class token (the head of the `:(Functor ...)`
-        // surface form) stays disjoint from the `FUNCTOR` binder keyword on the same
-        // rule that keeps `Function`/`FN` disjoint — no shared spelling, no shared lex
-        // class. See [design/typing/functors.md](../../../../design/typing/functors.md).
-        (name, TypeParams::Function { args, ret }) if name == "Functor" => {
-            let mut slots: Vec<ElabResult> = args
-                .iter()
-                .map(|a| elaborate_type_expr(el, a))
-                .collect();
-            slots.push(elaborate_type_expr(el, ret));
-            match ElabResult::collect(slots) {
-                Ok(mut kts) => {
-                    let ret_kt = kts.pop().expect("ret slot pushed above");
-                    ElabResult::Done(KType::KFunctor {
-                        params: kts,
-                        ret: Box::new(ret_kt),
-                    })
-                }
-                Err(e) => e,
-            }
-        }
-        (name, TypeParams::List(items)) => {
-            // Scope-aware constructor application. A self-reference of the form
-            // `Wrap<T>` is currently rejected: the threaded set only fires on bare
-            // leaves (the `TypeParams::None` arm) and emits `RecursiveRef` there;
-            // applied recursion needs threaded unfold sets that don't exist yet.
-            if let Some(ctor_kt) = el.scope.resolve_type(name) {
-                if let KType::UserType {
-                    kind: UserTypeKind::TypeConstructor { param_names },
-                    ..
-                } = ctor_kt
-                {
-                    if items.len() != param_names.len() {
-                        return ElabResult::Unbound(format!(
-                            "type constructor `{name}` expects {} type parameter(s), got {}",
-                            param_names.len(),
-                            items.len(),
-                        ));
-                    }
-                    let item_results = items.iter().map(|it| elaborate_type_expr(el, it));
-                    return match ElabResult::collect(item_results) {
-                        Ok(arg_kts) => ElabResult::Done(KType::ConstructorApply {
-                            ctor: Box::new(ctor_kt.clone()),
-                            args: arg_kts,
-                        }),
-                        Err(e) => e,
-                    };
                 }
             }
-            // Forward reference to an in-flight `LET Wrap = ...` whose placeholder is
-            // registered but whose body hasn't dispatched. Trivial self-cycles
-            // (`LET Wrap = Wrap<...>`) are caught earlier by the dispatch driver's
-            // eager-resolve pass — see `dispatch::resolve_name_part`.
-            if let Resolution::Placeholder(id) = el.scope.resolve(name) {
-                return ElabResult::Park(vec![id]);
-            }
-            ElabResult::Unbound(format!("type `{name}` does not take type parameters"))
+            ElabResult::Park(vec![id])
         }
-        (name, TypeParams::Function { .. }) => ElabResult::Unbound(format!(
-            "only `Function` / `Functor` accept a `(args) -> ret` shape; got `{name}`"
-        )),
+        // `from_name` is tried first in both arms so fixture scopes that skip
+        // builtin registration still resolve builtin names. The split only
+        // affects the miss message: a `Value` resolution means the name *is*
+        // bound, just in the value language, so the diagnostic must name the
+        // type-language / value-language layering rather than read as an
+        // unknown-name failure (see design/typing/functors.md).
+        Resolution::Value(_) => match KType::<'a>::from_name(name) {
+            Some(kt) => ElabResult::Done(kt),
+            None => ElabResult::Unbound(format!(
+                "`{name}` is value-language only — a type slot needs a type-language \
+                 binder (a builtin type, a `LET {name} = <type>` alias, or a module/signature)"
+            )),
+        },
+        Resolution::UnboundName => match KType::<'a>::from_name(name) {
+            Some(kt) => ElabResult::Done(kt),
+            None => ElabResult::Unbound(format!("unknown type name `{name}`")),
+        },
     }
 }
 
@@ -298,7 +185,10 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
     on_path.insert(start.to_string());
 
     while let Some((node, idx)) = stack.last().cloned() {
-        let edges = pending.get(&node).map(|e| e.edges.clone()).unwrap_or_default();
+        let edges = pending
+            .get(&node)
+            .map(|e| e.edges.clone())
+            .unwrap_or_default();
         if idx >= edges.len() {
             stack.pop();
             on_path.remove(&node);
@@ -321,11 +211,11 @@ pub(crate) fn detect_pending_cycle(scope: &Scope<'_>, start: &str) -> Option<Vec
     None
 }
 
-/// Synchronous SCC cycle-close. Installs each member's identity
-/// (`KType::UserType { kind, scope_id, name }`) into `bindings.types` so cross-member
-/// `resolve_type` lookups succeed on the very next call. Does NOT build carriers or
-/// write `bindings.data` — each member's own finalize path does that via the
-/// idempotent `try_register_nominal` arm.
+/// Synchronous SCC cycle-close. Installs each member's payload-empty identity
+/// (`KType::UserType { kind, scope_id, name }`, schema not yet elaborated) into
+/// `bindings.types` so cross-member `resolve_type` lookups succeed on the very next
+/// call. Each member's own finalize replaces this sentinel with the schema-bearing
+/// identity via `Scope::register_type_upsert`.
 ///
 /// `pending_types` entries are left in place on purpose: each member's finalize is the
 /// sole remover of its own entry. The elaborator rebuilt inside each finalize sees
@@ -351,21 +241,11 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
             scope_id,
             name: name.clone(),
         };
-        // Cycle members are nominal binders (STRUCT / named UNION). Recover the
-        // member's installed [`BindingIndex`] from its placeholder entry — the
-        // identity installs at the same lexical position the eventual finalize will
-        // use, and the placeholder install at submission has already carved the
-        // member's flag bit. Defensive fallback to a generic nominal tag at index 0:
-        // a cycle-close call without a matching placeholder is a programming error
-        // upstream, not a soft-recovery point.
-        // Recover the cycle member's installed `BindingIndex` from its
-        // placeholder. The lookup is visibility-unfiltered (cycle-close runs
-        // outside any consumer's chain), so a `Placeholder` arm hit returns
-        // the placeholder's producer id; the index lives on the underlying
-        // `placeholders` entry, retrieved here via the test-side raw view
-        // since the typed lookup intentionally drops the index. A cycle-close
-        // call without a matching placeholder is a programming error upstream,
-        // not a soft-recovery point — the fallback below is defensive.
+        // Recover the cycle member's installed `BindingIndex` from its placeholder so
+        // the identity installs at the lexical position the eventual finalize will use.
+        // Lookup is visibility-unfiltered (cycle-close runs outside any consumer's
+        // chain). The `unwrap_or` fallback is defensive: missing placeholder here is
+        // an upstream programming error, not a soft-recovery point.
         let bind_index = scope
             .ancestors()
             .find_map(|s| {
@@ -377,7 +257,10 @@ fn close_type_cycle(scope: &Scope<'_>, members: &[String]) {
                 }
                 s.bindings().placeholder_index(&name)
             })
-            .unwrap_or(crate::machine::core::BindingIndex { idx: 0, nominal_binder: true });
+            .unwrap_or(crate::machine::core::BindingIndex {
+                idx: 0,
+                nominal_binder: true,
+            });
         scope.cycle_close_install_identity(name, identity, bind_index);
     }
 }

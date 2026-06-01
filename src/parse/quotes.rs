@@ -11,16 +11,14 @@
 //! | Byte | Name           | Form                                          | Meaning                                          |
 //! |------|----------------|-----------------------------------------------|--------------------------------------------------|
 //! | 0x1F | `LITERAL_MARK` | `\x1F<idx>\x1E<orig_byte_len>`                | Placeholder: resolve via `dict[idx]`.            |
-//! | 0x1E | `LEN_SEP`      | inside LITERAL                                 | Separator between `<idx>` and `<orig_byte_len>`. |
-//! | 0x1D | `JUMP_MARK`    | `\x1D<abs_offset>\x1D`                        | Snap cursor to `<abs_offset>` (Phase 4+).        |
+//! | 0x1E | `LEN_SEP`      | inside LITERAL                                | Separator between `<idx>` and `<orig_byte_len>`. |
+//! | 0x1D | `JUMP_MARK`    | `\x1D<abs_offset>\x1D`                        | Snap cursor to `<abs_offset>`.                   |
 //!
 //! Each non-empty literal collapses `'foo'` → `'<LITERAL idx len>'<JUMP past>`. The
-//! JUMP-after-literal is the cursor-sync invariant: it is the only mechanism keeping the
+//! JUMP-after-literal is the cursor-sync invariant — the only mechanism keeping the
 //! downstream cursor aligned with original byte offsets after a literal shortens the
 //! stream. Empty literals (`''`) emit two verbatim quote bytes back-to-back with no
-//! placeholder and no JUMP — the stream is already aligned. Markers and the JUMP value
-//! are consumed and discarded by `build_tree` in Phase 2; cursor tracking arrives in
-//! Phase 4.
+//! placeholder and no JUMP; the stream is already aligned.
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
@@ -38,9 +36,7 @@ pub fn mask_quotes(input: &str) -> (Vec<u8>, HashMap<usize, String>) {
     let mut out: Vec<u8> = Vec::with_capacity(input.len());
     let mut dict: HashMap<usize, String> = HashMap::new();
     let mut content = String::new();
-    // `Some((q, content_start_byte))` while inside a literal; `q` is the opening quote
-    // char, `content_start_byte` is the byte offset of the first content byte (i.e.
-    // one past the opening quote).
+    // `Some((opening_quote_char, first_content_byte))` while inside a literal.
     let mut quote: Option<(char, usize)> = None;
     let mut prev = '\0';
     let mut next_index: usize = 0;
@@ -103,7 +99,6 @@ mod tests {
     use super::{mask_quotes, JUMP_MARK, LEN_SEP, LITERAL_MARK};
     use std::collections::HashMap;
 
-    /// Build a `\x1F<idx>\x1E<orig_byte_len>` LITERAL marker.
     fn lit(idx: usize, len: usize) -> Vec<u8> {
         let mut v = vec![LITERAL_MARK];
         v.extend_from_slice(idx.to_string().as_bytes());
@@ -112,7 +107,6 @@ mod tests {
         v
     }
 
-    /// Build a `\x1D<offset>\x1D` JUMP marker.
     fn jmp(offset: usize) -> Vec<u8> {
         let mut v = vec![JUMP_MARK];
         v.extend_from_slice(offset.to_string().as_bytes());
@@ -120,7 +114,6 @@ mod tests {
         v
     }
 
-    /// Concatenate byte slices into a fresh `Vec<u8>`.
     fn cat(parts: &[&[u8]]) -> Vec<u8> {
         parts.iter().flat_map(|p| p.iter().copied()).collect()
     }
@@ -178,7 +171,16 @@ mod tests {
         // second literal: content_start=8, close=11, len=3, past=12
         check(
             "'hello''bye'",
-            cat(&[b"'", &lit(0, 5), b"'", &jmp(7), b"'", &lit(1, 3), b"'", &jmp(12)]),
+            cat(&[
+                b"'",
+                &lit(0, 5),
+                b"'",
+                &jmp(7),
+                b"'",
+                &lit(1, 3),
+                b"'",
+                &jmp(12),
+            ]),
             d(&[(0, "hello"), (1, "bye")]),
         );
     }
@@ -197,14 +199,10 @@ mod tests {
 
     #[test]
     fn backslash_escaped_quote_inside_literal() {
-        // raw input: say 'hel\'lo' to me  (the `\` and `'` are literal chars)
-        // bytes:     s  a  y  ' h e l \ ' l o '   ...
-        //            0  1  2  3 4 5 6 7 8 9 10 11 12 ...
-        // content_start=4, close=12, len=8, past=13.
-        // Wait — let me recount. input as raw string `say 'hel\'lo' to me`:
-        // index 0 's', 1 'a', 2 'y', 3 ' ', 4 '\'', 5 'h', 6 'e', 7 'l', 8 '\\',
-        // 9 '\'', 10 'l', 11 'o', 12 '\'', 13 ' ', ...
-        // content_start = 5, close = 12, len = 7. past = 13.
+        // raw input: `say 'hel\'lo' to me` — backslash is a literal byte.
+        // index:    0 's', 1 'a', 2 'y', 3 ' ', 4 '\'', 5 'h', 6 'e', 7 'l',
+        //           8 '\\', 9 '\'', 10 'l', 11 'o', 12 '\'', 13 ' ', ...
+        // content_start = 5, close = 12, len = 7, past = 13.
         check(
             r"say 'hel\'lo' to me",
             cat(&[b"say '", &lit(0, 7), b"'", &jmp(13), b" to me"]),
@@ -249,9 +247,8 @@ mod tests {
 
     #[test]
     fn unclosed_literal_emits_placeholder_without_jump() {
-        // No closing quote ever arrives, so the trailing-content fallback writes a
-        // LITERAL marker with no following JUMP. `build_tree` flags this as
-        // "unclosed quote".
+        // Trailing-content fallback emits the LITERAL with no JUMP; the downstream
+        // parser detects the missing JUMP and reports "unclosed quote".
         let (out, dict) = mask_quotes("'hello");
         assert_eq!(out, cat(&[b"'", &lit(0, 5)]));
         assert_eq!(dict, d(&[(0, "hello")]));

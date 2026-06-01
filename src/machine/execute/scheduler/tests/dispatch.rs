@@ -1,26 +1,54 @@
-//! Overload routing rules end-to-end through the scheduler.
-//!
-//! Markers and bodies for the dispatch_* tests: each registered builtin returns a
-//! distinct labeled string so the test can assert which overload won by inspecting the
-//! scheduler's terminal value. Counterpart `resolve_dispatch`-only assertions live in
-//! `machine::core::tests::dispatch`.
+//! Overload routing rules end-to-end through the scheduler. Each registered builtin
+//! returns a distinct labeled marker so a test can identify which overload won.
+//! Counterpart `resolve_dispatch`-only assertions live in `machine::core::tests::dispatch`.
 
+use super::super::Scheduler;
 use crate::builtins::register_builtin;
 use crate::builtins::test_support::{marker, one_slot_sig, run_root_bare};
-use crate::machine::model::{KObject, Parseable};
-use crate::machine::model::types::{Argument, ExpressionSignature, KType, SignatureElement, ReturnType};
-use crate::machine::{RuntimeArena, Scope};
 use crate::machine::core::kfunction::{ArgumentBundle, BodyResult, SchedulerHandle};
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression, KLiteral};
-use super::super::Scheduler;
+use crate::machine::model::types::{
+    Argument, ExpressionSignature, KType, ReturnType, SignatureElement,
+};
+use crate::machine::model::{KObject, Parseable};
+use crate::machine::{RuntimeArena, Scope};
 
-
-fn body_identifier<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "identifier")) }
-fn body_marker_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "any")) }
-fn body_inner_any<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "inner_any")) }
-fn body_outer_number<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "outer_number")) }
-fn body_lowercase<'a>(s: &'a Scope<'a>, _h: &mut dyn SchedulerHandle<'a>, _a: ArgumentBundle<'a>) -> BodyResult<'a> { BodyResult::Value(marker(s, "lowercase")) }
+fn body_identifier<'a>(
+    s: &'a Scope<'a>,
+    _h: &mut dyn SchedulerHandle<'a>,
+    _a: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    BodyResult::Value(marker(s, "identifier"))
+}
+fn body_marker_any<'a>(
+    s: &'a Scope<'a>,
+    _h: &mut dyn SchedulerHandle<'a>,
+    _a: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    BodyResult::Value(marker(s, "any"))
+}
+fn body_inner_any<'a>(
+    s: &'a Scope<'a>,
+    _h: &mut dyn SchedulerHandle<'a>,
+    _a: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    BodyResult::Value(marker(s, "inner_any"))
+}
+fn body_outer_number<'a>(
+    s: &'a Scope<'a>,
+    _h: &mut dyn SchedulerHandle<'a>,
+    _a: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    BodyResult::Value(marker(s, "outer_number"))
+}
+fn body_lowercase<'a>(
+    s: &'a Scope<'a>,
+    _h: &mut dyn SchedulerHandle<'a>,
+    _a: ArgumentBundle<'a>,
+) -> BodyResult<'a> {
+    BodyResult::Value(marker(s, "lowercase"))
+}
 
 fn summarize_marker(obj: &KObject<'_>) -> String {
     match obj {
@@ -30,20 +58,44 @@ fn summarize_marker(obj: &KObject<'_>) -> String {
     }
 }
 
-
 /// Inner scope's `Any` overload shadows the outer scope's more-specific `Number`
 /// overload — pure lexical shadowing, innermost match wins regardless of specificity
-/// at outer levels.
+/// at outer levels. Triggered via a keyworded shape so the routing reaches bucket
+/// dispatch; bare-literal shapes fast-lane via `LiteralPassThrough` and never
+/// consult overload buckets.
 #[test]
 fn dispatch_inner_scope_shadows_outer_more_specific() {
     let arena = RuntimeArena::new();
     let outer = run_root_bare(&arena);
-    register_builtin(outer, "outer_specific", one_slot_sig("v", KType::Number), body_outer_number);
+    let outer_sig = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: KType::Number,
+            }),
+        ],
+    };
+    register_builtin(outer, "outer_specific", outer_sig, body_outer_number);
 
     let inner = arena.alloc_scope(outer.child_for_call());
-    register_builtin(inner, "inner_loose", one_slot_sig("v", KType::Any), body_inner_any);
+    let inner_sig = ExpressionSignature {
+        return_type: ReturnType::Resolved(KType::Any),
+        elements: vec![
+            SignatureElement::Keyword("MARK".into()),
+            SignatureElement::Argument(Argument {
+                name: "v".into(),
+                ktype: KType::Any,
+            }),
+        ],
+    };
+    register_builtin(inner, "inner_loose", inner_sig, body_inner_any);
 
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0)))]);
+    let expr = KExpression::new(vec![
+        Spanned::bare(ExpressionPart::Keyword("MARK".into())),
+        Spanned::bare(ExpressionPart::Literal(KLiteral::Number(7.0))),
+    ]);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, inner);
     sched.execute().unwrap();
@@ -55,20 +107,30 @@ fn dispatch_inner_scope_shadows_outer_more_specific() {
     );
 }
 
-/// A bare-identifier slot with no value, no placeholder, and no visible
-/// binding surfaces `UnboundName(name)` directly out of
-/// `stateful_bare_identifier` — no fall-through to a `(v :Identifier)`
-/// overload bucket. Pins the post-cutover contract: bare-name dispatch
-/// is name-resolution-only, not a candidate walk.
+/// Bare-name dispatch is name-resolution-only: an unbound identifier surfaces
+/// `UnboundName(name)` directly rather than falling through to a `(v :Identifier)`
+/// overload bucket.
 #[test]
 fn stateful_bare_identifier_surfaces_unbound_name_directly() {
     use crate::machine::KErrorKind;
     let arena = RuntimeArena::new();
     let scope = run_root_bare(&arena);
-    register_builtin(scope, "any_first", one_slot_sig("v", KType::Any), body_marker_any);
-    register_builtin(scope, "ident_second", one_slot_sig("v", KType::Identifier), body_identifier);
+    register_builtin(
+        scope,
+        "any_first",
+        one_slot_sig("v", KType::Any),
+        body_marker_any,
+    );
+    register_builtin(
+        scope,
+        "ident_second",
+        one_slot_sig("v", KType::Identifier),
+        body_identifier,
+    );
 
-    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier("foo".into()))]);
+    let expr = KExpression::new(vec![Spanned::bare(ExpressionPart::Identifier(
+        "foo".into(),
+    ))]);
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
     sched.execute().unwrap();
@@ -96,7 +158,7 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     let sig = ExpressionSignature {
         return_type: ReturnType::Resolved(KType::Any),
         elements: vec![
-            SignatureElement::Keyword("foo".into()), // lowercase — should be coerced
+            SignatureElement::Keyword("foo".into()),
             SignatureElement::Argument(Argument {
                 name: "v".into(),
                 ktype: KType::Number,
@@ -105,8 +167,6 @@ fn registration_coerces_lowercase_fixed_tokens_to_uppercase() {
     };
     register_builtin(scope, "FOO", sig, body_lowercase);
 
-    // The source-side caller writes `FOO 1` (uppercase), which must match the coerced
-    // `FOO <v>` registration.
     let expr = KExpression::new(vec![
         Spanned::bare(ExpressionPart::Keyword("FOO".into())),
         Spanned::bare(ExpressionPart::Literal(KLiteral::Number(1.0))),

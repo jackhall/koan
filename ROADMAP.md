@@ -18,14 +18,15 @@ covering the type and module systems end-to-end.
 What's shipped that the open items below build on:
 
 - *Module language.* `MODULE` / `SIG` declarators, `:|` / `:!` ascription, `SIG_WITH`
-  sharing constraints, higher-kinded type-constructor slots, and the type-language
+  sharing constraints, higher-kinded type-constructor slots (declared with `TEMPLATE`,
+  applied as `:(arg AS Ctor)`), and the type-language
   collapse that puts modules and signatures in `KType` directly via `KType::Module`,
   `KType::Signature`, and `KType::AbstractType` carriers. Values carry runtime
   type-parameter carriers, stamped at FN return, argument, and `LET` boundaries.
 - *Block-scoped module opening.* `USING … SCOPE` surfaces a module value's members as
   bare names for the duration of a block, splitting reads and writes across the
   transparent-scope `outer` chain.
-- *FUNCTOR binder.* A dedicated `FUNCTOR` binder with its `:(Functor (params) -> R)`
+- *FUNCTOR binder.* A dedicated `FUNCTOR` binder with its `:(FUNCTOR (params) -> R)`
   type-position sigil and the one-way `KFunctor` / `KFunction` admissibility wall.
 - *Effects design.* [design/effects.md](design/effects.md) captures the in-language
   monadic side-effects design (tracked in
@@ -68,7 +69,11 @@ What's shipped that the open items below build on:
   `BinderKey::Name` (`LET` / `STRUCT` / `UNION` / `SIG` / `MODULE`) vs.
   `BinderKey::Bucket` (`FN` / `FUNCTOR`), and `pending_overloads` carries a
   per-bucket Vec so sibling FN / FUNCTOR overloads coexist as distinct
-  wake sources with earliest-index-visible parking.
+  wake sources with earliest-index-visible parking. A self-reference inside
+  a keyworded field sigil (`STRUCT Tree = (children :(LIST OF Tree))`) is
+  pre-resolved to a `RecursiveRef` carrier by `rewrite_threaded_self_refs`
+  before the sub-Dispatch, so it lowers to `List(RecursiveRef("Tree"))`
+  instead of deadlocking on its own placeholder.
 - *Unified walk + strict-only admission.* Each `run_dispatch` builds a
   per-call `bare_outcomes` cache (one `NameOutcome` per bare-name part)
   shared between the resolver's strict admission and the fused
@@ -82,12 +87,29 @@ What's shipped that the open items below build on:
   the unconstrained-name slot types (`Identifier` / `TypeExprRef`) so an
   `ATTR <s:Struct>` overload beats an `ATTR <s:Identifier>` fallback.
   No-keyword shapes (`BareIdentifier`, `BareTypeLeaf`,
-  `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`) ride
-  dedicated fast-lane handlers that never enter the candidate walk.
+  `ConstructorCall`, `FunctionValueCall`, `SigiledTypeExpr`,
+  `LiteralPassThrough`) ride dedicated fast-lane handlers that never
+  enter the candidate walk. With `LiteralPassThrough` covering
+  single-part literal-shaped expressions (`(99)`, `("x")`, `([1 2 3])`,
+  `((inner))`), the fast-lane axis is exhaustive over keyword-free
+  expressions: `Keyworded` ⟺ at-least-one keyword.
+- *Direct constructor dispatch.* `STRUCT` and `UNION` constructions
+  route through `execute::dispatch::constructors` directly — no
+  registered `struct_construct` / `tagged_union_construct` primitives,
+  no `BodyResult::Tail` re-dispatch through the Keyworded bucket. The
+  `ConstructorCall` fast lane (leaf-Type head) and the
+  `FunctionValueCall` fast lane (Identifier head resolving to a
+  `KTypeValue(UserType{..})` alias) both dispatch into
+  `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`,
+  which read the field / variant schema straight from the
+  `UserTypeKind` identity, stage value-cells as per-slot eager
+  sub-Dispatches, and call `struct_value::construct` /
+  `tagged_union::construct` directly. The parked-on-eager-subs case
+  rides `CtorState`'s resume arm.
 - *Stateful dispatch driver.* Every `DispatchShape` variant runs on the
   state-bearing `run_dispatch` driver, which is now the sole dispatch
   body. The carrier shape (`DispatchState` enum + per-variant
-  structs), `recent_wakes` wake-attribution side-channel, five
+  structs), `recent_wakes` wake-attribution side-channel, six
   fast-lane variants, the `Keyworded` variant with its eager-subs /
   bare-name-park / overload-park tracks, and the `FunctionValueCall`
   fast lane with its eager-subs / head-placeholder tracks all carry
@@ -104,6 +126,56 @@ What's shipped that the open items below build on:
   `active_frame` and tail-reuses *it* instead of allocating fresh
   — recovering the per-iteration `CallArena` shell allocation the
   pin-only shape would otherwise pay.
+- *Per-call arena protocol doc.* [design/per-call-arena-protocol.md](design/per-call-arena-protocol.md)
+  is the single named owner of the `Rc<CallArena>` contract — carriers, the
+  lift-time anchor decision, the `alloc_object` cycle gate, active-frame
+  propagation, the `outer_frame` chain for builtin-built frames, TCO frame
+  reuse, and the ping-pong reserve rotation. The five docs that previously
+  carried fragments (memory-model, execution-model, error-handling,
+  typing/functors, typing/modules) keep their topic-specific narrative and
+  cross-link the protocol page for the mechanics.
+- *Dispatcher / scheduler facade.* The dispatch tree lives at
+  `execute::dispatch`, sibling of `execute::scheduler` (and
+  `execute::interpret` / `execute::lift`). Every dispatch entry point
+  takes [`&mut DispatchCtx<'a, '_>`](src/machine/execute/dispatch/ctx.rs) —
+  a newtype over `&mut Scheduler<'a>` exposing exactly the scheduler
+  operations the dispatcher uses (slot queries, `DepGraph` mutations,
+  sub-submission, the recent-wakes side-channel, list/dict-literal
+  scheduling, plus the dispatcher-only `build_bare_outcomes` /
+  `install_eager_subs` / `replace_with_parked_dispatch` /
+  `resume_eager_subs` / `invoke_to_step{,_pinned}` ops). `DispatchCtx`
+  also implements [`SchedulerHandle`](src/machine/core/kfunction/scheduler_handle.rs),
+  so builtin sub-slot routing inherits the dispatcher's contextual
+  frame/chain via the facade rather than re-borrowing the bare
+  scheduler.
+- *Type-only nominal identities.* `STRUCT` / `UNION` / `MODULE` / `Result`
+  declarations write only `bindings.types`: each per-declaration
+  `KType::UserType` identity carries its own schema payload
+  (`UserTypeKind::Struct { fields }`, `Tagged { schema }`,
+  `TypeConstructor { schema, param_names }`, alongside the existing
+  `Newtype { repr }`), and construction reads that schema from the type
+  entry rather than a value-side carrier. The `KObject::StructType` /
+  `TaggedUnionType` carrier variants are gone, so `bindings.data` holds
+  only runtime instances; value-position references synthesise
+  `KTypeValue(identity)` on demand via `coerce_type_token_value`, and
+  recursive types ride a cycle-close pre-install plus a schema-bearing
+  upsert at finalize. `SIG` followed the same path by merging its
+  constraint variant (`SatisfiesSignature`) and value variant
+  (`Signature(s)`) into one `KType::Signature { sig, pinned_slots }` —
+  disambiguated by position — so it writes a single type-side identity and
+  the `register_nominal` / `try_register_nominal` / `derive_nominal_identity`
+  machinery deleted. No nominal binder dual-writes; the type-language /
+  value-language partition is total.
+- *TypeName carrier collapse.* The parser's bare type-leaf carrier is a
+  `TypeName(String)` newtype (`Deref` to `str`, derived eq/hash) in place of the
+  old `TypeExpr` struct, so the `ExpressionPart::Type` / `KObject::TypeNameRef`
+  variants carry the name directly. Dropping `TypeExpr`'s per-token
+  `OnceCell` builtin cache removed the `KType<'static>` → `KType<'a>` transmute
+  in `resolve_for` (one fewer unsafe site), leaving the scope-bound
+  `type_expr_memo` as the sole cache tier; bind-time builtin lowering re-runs the
+  `from_type_expr` → `from_name` match per call. The three leaf-resolution
+  contexts (`elaborate_type_expr`, `coerce_type_token_value`, `resolve_for`) stay
+  distinct but share one `resolve_type_with_chain` + `from_name` lookup.
 
 ## Next items
 
@@ -165,26 +237,18 @@ Rust builtins:
 
 Engine-level type-language substrate — how modules, signatures, functors,
 deferred-return FNs, dependent parameter annotations, generic value-slot
-binding, and VAL-slot identity are represented in `KType` and routed through
-dispatch. The substrate the predicate-typing stages and the stdlib's
-functor-heavy collections both build on:
+binding, record-shaped parameter binding, and VAL-slot identity are
+represented in `KType` and routed through dispatch. The substrate the
+predicate-typing stages and the stdlib's functor-heavy collections both
+build on:
 
 - [Per-call type-parameter binding in parameter signatures](roadmap/type_language/type-parameter-binding.md)
 - [VAL-slot ATTR re-tagging](roadmap/type_language/val-slot-attr-retagging.md)
 - [Structural KFunction admission across deferred parameter and return slots](roadmap/type_language/kfunction-deferred-ret-precision.md)
+- [Record substrate for identifier-keyed binding](roadmap/type_language/record-substrate.md)
 - [FN/FUNCTOR named identity](roadmap/type_language/fn-named-identity.md)
-
-### Dispatch fix — [roadmap/dispatch_fix/](roadmap/dispatch_fix/)
-
-Untangle dispatch into queue-order-independent name resolution plus a single
-unified ancestor walk per call site. The provenance-plumbing, index-gated
-resolution, recursive-binder-submission, type-language-via-dispatch, and
-walk-unification phases have shipped (see "What's shipped so far"); the
-remaining items pick up the SCC-context gap surfaced by routing the type
-language through the dispatcher and the user-functor application surface:
-
-- [SCC-aware dispatcher for parameterized self-recursive types](roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md)
-- [User-defined TypeConstructor keyworded application](roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md)
+- [Record structural subtyping and projection](roadmap/type_language/record-subtyping.md)
+- [Argument-binding unification](roadmap/type_language/argument-binding-unification.md)
 
 ### Editor tooling — [roadmap/editor_tooling/](roadmap/editor_tooling/)
 

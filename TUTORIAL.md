@@ -194,33 +194,33 @@ Every value in Koan has a type. The names you can write in source are:
 | `Str`                      | string                              | `"hi"`, `'hi'`                            |
 | `Bool`                     | boolean                             | `true`, `false`                           |
 | `Null`                     | the null value                      | `null`                                    |
-| `:(List T)`                | ordered sequence                    | `[1, 2, 3]`                               |
-| `:(Dict K V)`              | scalar-keyed map                    | `{a: 1, b: 2}`                            |
-| `:(Function (args) -> R)`  | callable function value             | `(FN (DOUBLE x :Number) -> Number = (x))` |
+| `:(LIST OF T)`             | ordered sequence                    | `[1, 2, 3]`                               |
+| `:(MAP K -> V)`            | scalar-keyed map                    | `{a: 1, b: 2}`                            |
+| `:(FN (args) -> R)`        | callable function value             | `(FN (DOUBLE x :Number) -> Number = (x))` |
 | `Tagged`                   | a value of a tagged union           | `Maybe (some 42)` (see `UNION` below)     |
 | `Any`                      | wildcard — accepts any value        | (used in annotations only)                |
 
 A type name appears wherever you annotate something: the type of a parameter
-slot (`x :(List Number)`), the return type on a function (`-> Number`), the
+slot (`x :(LIST OF Number)`), the return type on a function (`-> Number`), the
 type of a tagged-union variant (`some :Number`). Ascriptions use the
 glued-right `:` sigil with no space between the `:` and the type — `x :Number`,
 not `x: Number`. Parameterized type expressions extend the same form into an
-S-expression group: `:(List Number)`, `:(Dict Str Number)`,
-`:(Function (Number) -> Str)`. Bare non-parameterized type tokens in
+S-expression group: `:(LIST OF Number)`, `:(MAP Str -> Number)`,
+`:(FN (Number) -> Str)`. Bare non-parameterized type tokens in
 non-ascription positions (e.g. the RHS of `LET Type = Number`) keep working
 without the sigil.
 
 Container types are always parameterized — bare `List` lowers to
-`:(List Any)`, bare `Dict` to `:(Dict Any Any)`. There is no bare `Function`;
-write `:(Function (args) -> R)` for a typed function or `Any` for an
+`:(LIST OF Any)`, bare `Dict` to `:(MAP Any -> Any)`. There is no bare `Function`;
+write `:(FN (args) -> R)` for a typed function or `Any` for an
 unconstrained value (a function with no signature has nothing to dispatch
 on).
 
 You'll also see `KExpression` (an unevaluated parenthesized expression carried
 as data) referenced in builtin signatures and error messages — it's a real
 type, but you rarely write it yourself. List/dict literal types are inferred
-as the join of element types: `[1, 2, 3]` is `:(List Number)`, `[1, "x"]` is
-`:(List Any)`, `[]` is `:(List Any)`.
+as the join of element types: `[1, 2, 3]` is `:(LIST OF Number)`, `[1, "x"]` is
+`:(LIST OF Any)`, `[]` is `:(LIST OF Any)`.
 
 ## User-defined functions
 
@@ -235,8 +235,8 @@ FN (DOUBLE x :Number) -> Number = (x)
 FN (a :Str SAID) -> Null = (PRINT a)            # infix-shaped — keyword in non-leading position
 FN (FIRST x :Str y :Str) -> Null = (PRINT x)    # multiple params
 FN (ADD x :Number, y :Number) -> Number = (x)   # commas optional, same shape
-FN (HEAD xs :(List Number)) -> Number = (1)     # parameterized container in a slot
-FN (NUMS) -> :(List Number) = ([1 2 3])         # parameterized return type
+FN (HEAD xs :(LIST OF Number)) -> Number = (1)  # parameterized container in a slot
+FN (NUMS) -> :(LIST OF Number) = ([1 2 3])      # parameterized return type
 
 DOUBLE 21        # → 21
 "hi" SAID        # prints "hi"
@@ -247,14 +247,14 @@ Both the parameter types and the return type are **non-optional**. A bare
 `x` without `:Type` is a parse error. Calls whose argument types don't satisfy
 the signature fail at dispatch (`KErrorKind::DispatchFailed`); the same call
 shape with different parameter types routes to a different overload by
-slot-specificity (more specific wins — `:(List Number)` beats `:(List Any)` beats
+slot-specificity (more specific wins — `:(LIST OF Number)` beats `:(LIST OF Any)` beats
 `Any`). Use `:Any` to opt a slot out of type checking.
 
 The return type is **enforced at runtime**. A body whose result doesn't match
 the declared type fails with `KErrorKind::TypeMismatch { arg: "<return>", … }`.
 For parameterized container returns, the check walks elements: a function
-declared `-> :(List Number)` whose body returns `[1, "x"]` errors with
-`expected :(List Number), got :(List Any)`. Use `-> Any` to opt out.
+declared `-> :(LIST OF Number)` whose body returns `[1, "x"]` errors with
+`expected :(LIST OF Number), got :(LIST OF Any)`. Use `-> Any` to opt out.
 
 A signature must contain at least one `Keyword` (the dispatch token); otherwise
 it would shadow `value_lookup`/`value_pass`.
@@ -589,11 +589,11 @@ One line per surface form. Sources under
 | `NEWTYPE <Name> = <Repr>`                | Declare a fresh nominal identity over a transparent representation. `Name(value)` constructs.    | [newtype_def.rs](src/builtins/newtype_def.rs)        |
 | `MATCH <value:Tagged> WITH (<branches>)` | Branch by tag; only the matching branch's body runs. `it` binds the inner value.                | [match_case.rs](src/builtins/match_case.rs)          |
 | `TRY (<expr>) WITH (<branches>)`         | Evaluate `<expr>` in a catching context; branch on `ok` / the `KErrorKind` tags / `_`. `it` is the value (success) or per-variant payload (error). | [try_with.rs](src/builtins/try_with.rs)              |
-| `<verb:TypeExprRef> (<args>)`            | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [type_call.rs](src/builtins/type_call.rs)            |
-| `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [scheduler/dispatch.rs](src/machine/execute/scheduler/dispatch.rs) (`stateful_fast_lane_function_value_call`) |
+| `<verb:TypeExprRef> (<args>)`            | Construct a tagged or struct value, e.g. `Maybe (some 42)` or `Point (x: 3, y: 4)`.             | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`ConstructorCall` fast lane) |
+| `<verb:Identifier> (<args>)`             | Call a function, tagged-union type, or struct type bound under `<verb>`.                        | [dispatch/fn_value.rs](src/machine/execute/dispatch/fn_value.rs) (`FunctionValueCall` fast lane) |
 | `<s>.<field>` (`ATTR <s> <field>`)       | Read `<field>` off a struct value. Compound-token `.` operator; `s.x.y` chains.                  | [attr.rs](src/builtins/attr.rs)                      |
-| `<v:Identifier>` (single-part)           | Look up `<v>` in scope.                                                                         | [value_lookup.rs](src/builtins/value_lookup.rs)      |
-| `<v>` (single-part literal/expr)         | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [value_pass.rs](src/builtins/value_pass.rs)          |
+| `<v:Identifier>` (single-part)           | Look up `<v>` in scope.                                                                         | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`BareIdentifier` fast lane) |
+| `<v>` (single-part literal/expr)         | Pass the value through (lets `(99)`, `("x")`, etc. dispatch as expressions).                    | [dispatch/single_poll.rs](src/machine/execute/dispatch/single_poll.rs) (`LiteralPassThrough` fast lane) |
 | `#(<expr>)`                              | Quote: capture the body's AST as a `KExpression` value with no evaluation.                       | [quote.rs](src/builtins/quote.rs)                    |
 | `$(<expr>)`                              | Eval: resolve `<expr>`; if the result is a `KExpression`, dispatch the captured AST.             | [eval.rs](src/builtins/eval.rs)                      |
 

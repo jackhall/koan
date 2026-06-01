@@ -1,6 +1,5 @@
 //! `basics` parse cases for `expression_tree::parse`.
 
-
 use super::{top, tree};
 
 #[test]
@@ -25,8 +24,6 @@ fn parse_peels_multiple_redundant_layers() {
 
 #[test]
 fn parse_peels_redundant_wrappers_inside_subexpressions() {
-    // The inner `((bar baz))` collapses to `(bar baz)` — a sub-expression with one
-    // wrapping layer, not two — so peel doesn't change argument arity.
     assert_eq!(
         top("foo ((bar baz))").unwrap(),
         top("foo (bar baz)").unwrap(),
@@ -35,7 +32,6 @@ fn parse_peels_redundant_wrappers_inside_subexpressions() {
 
 #[test]
 fn parse_keeps_meaningful_subexpression_parens() {
-    // A single set of parens around an argument is meaningful structure, not redundancy.
     assert_eq!(
         top("foo (bar baz)").unwrap(),
         vec!["[t(foo) [t(bar) t(baz)]]"],
@@ -140,23 +136,11 @@ fn multi_part_value_in_parens() {
 
 #[test]
 fn multi_part_value_without_parens_errors() {
-    // `{a: foo bar}` parses key=`a`, value=`foo`, auto-commits — then `bar` starts a new
-    // key and `}` closes with that key unterminated. The constraint is intentional:
-    // dict values are single-token unless parenthesized, mirroring list elements.
+    // Dict values are single-token unless parenthesized, mirroring list elements.
     assert!(tree("{a: foo bar}").is_err());
 }
 
 #[test]
 fn sigil_glued_to_token_errors() {
-    // `foo#(...)` — the sigil mid-token isn't allowed. Surfaces as an error at the
-    // sigil site rather than later.
     assert!(tree("foo#(x)").is_err());
 }
-
-// --- Sigils on continuation lines that bypass the wrap-operand fix ---
-//
-// The `collapse_whitespace` wrap-outside-paren rewrite only runs on the indent-driven
-// path. Comma-continuation and bracket/dict-continuation lines append verbatim — a bare
-// `#sym` survives unchanged and `build_tree` rejects it under the sigil-adjacency rule.
-// The companion collapse-output assertions live in `whitespace.rs::tests`; the cases
-// below lock the end-to-end parse contract (error messages, AST shape).

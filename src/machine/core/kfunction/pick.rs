@@ -4,7 +4,7 @@
 //! The classifiers share the "bare-name" predicate ([`is_bare_name`]) — the
 //! load-bearing shape concept the auto-wrap and replay-park rails turn on.
 
-use crate::machine::model::ast::{ExpressionPart, KExpression, TypeExpr, TypeParams};
+use crate::machine::model::ast::{ExpressionPart, KExpression};
 use crate::machine::model::types::{KType, SignatureElement};
 
 use super::KFunction;
@@ -56,27 +56,16 @@ impl<'a> KFunction<'a> {
                     (KType::KExpression, _) => return None,
                     (_, ExpressionPart::Expression(_))
                     | (_, ExpressionPart::SigiledTypeExpr(_)) => {
-                        // Speculative: assume the eager-evaluated result will type-match at
-                        // late dispatch. If not, dispatch will fail at that point.
-                        // SigiledTypeExpr rides the Expression path — sub-dispatch produces
-                        // a type-side Future the receiving slot's check then validates.
+                        // Speculative: assume the eager-evaluated result will type-match
+                        // at late dispatch. SigiledTypeExpr rides the Expression path —
+                        // sub-dispatch produces a type-side Future the slot then validates.
                         eager_indices.push(i);
                     }
                     (_, other) => {
-                        // Bare-name relaxation: a bare Identifier or bare leaf-Type
-                        // part in any slot whose declared type isn't `Identifier` /
-                        // `TypeExprRef` is auto-wrap-eligible. The PR C strict
-                        // admission's [`signature_admits_strict`] does the analogous
-                        // admission step against the bare-name outcome cache; here
-                        // we admit the part for *lazy-candidacy classification*
-                        // purposes. Admitting the part here keeps the function's
-                        // lazy candidacy intact when a sibling `KExpression+Expression`
-                        // slot is the one driving laziness — without this,
-                        // `SIG_WITH OrderedSig (...)` would lose its lazy candidacy
-                        // on the `sig: Signature` / `Type(OrderedSig)` pairing and
-                        // the post-pick eager loop would sub-Dispatch the bindings
-                        // group, defeating the lazy contract for the `KExpression`
-                        // slot.
+                        // Admit bare names in non-literal-name slots so a sibling
+                        // `KExpression+Expression` slot can still drive lazy candidacy
+                        // (else `SIG_WITH OrderedSig (...)` loses laziness on the
+                        // `sig: Signature` / `Type(OrderedSig)` pairing).
                         if is_bare_name(other)
                             && !matches!(arg.ktype, KType::Identifier | KType::TypeExprRef)
                         {
@@ -89,7 +78,11 @@ impl<'a> KFunction<'a> {
                 },
             }
         }
-        if has_lazy_slot { Some(eager_indices) } else { None }
+        if has_lazy_slot {
+            Some(eager_indices)
+        } else {
+            None
+        }
     }
 
     /// Per-slot classification of `expr` against `self`'s signature into the three index
@@ -101,8 +94,16 @@ impl<'a> KFunction<'a> {
         let mut wrap_indices: Vec<usize> = Vec::new();
         let mut ref_name_indices: Vec<usize> = Vec::new();
         let picked_has_binder_name = self.binder_name.is_some();
-        for (i, (el, part)) in self.signature.elements.iter().zip(expr.parts.iter()).enumerate() {
-            let SignatureElement::Argument(arg) = el else { continue };
+        for (i, (el, part)) in self
+            .signature
+            .elements
+            .iter()
+            .zip(expr.parts.iter())
+            .enumerate()
+        {
+            let SignatureElement::Argument(arg) = el else {
+                continue;
+            };
             if !is_bare_name(&part.value) {
                 continue;
             }
@@ -127,13 +128,12 @@ impl<'a> KFunction<'a> {
 }
 
 /// True iff `part` is the "bare-name" shape — a bare `Identifier` or a leaf
-/// `Type`-token (`TypeParams::None`). Both name-shaped parts ride the same
-/// auto-wrap and replay-park rails, so the symmetry is load-bearing for
-/// `LET T = Number` vs `LET y = z` walking identical scheduler paths.
+/// `Type`-token. Both name-shaped parts ride the same auto-wrap and replay-park
+/// rails, so the symmetry is load-bearing for `LET T = Number` vs `LET y = z`
+/// walking identical scheduler paths.
 fn is_bare_name(part: &ExpressionPart<'_>) -> bool {
     matches!(
         part,
-        ExpressionPart::Identifier(_)
-            | ExpressionPart::Type(TypeExpr { params: TypeParams::None, .. })
+        ExpressionPart::Identifier(_) | ExpressionPart::Type(_)
     )
 }

@@ -4,8 +4,8 @@ use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent};
 use crate::machine::model::{KObject, KType};
 use crate::machine::RuntimeArena;
 
-/// Held `KModule` from a functor must keep its child-scope arena alive across
-/// subsequent run-root arena churn. End-to-end mirror of
+/// A held `KModule` from a functor body keeps its child-scope arena alive across
+/// subsequent run-root churn. End-to-end mirror of
 /// [`crate::machine::model::values::module::tests::functor_per_call_module_lifts_correctly`].
 #[test]
 fn functor_body_module_dispatch_does_not_dangle() {
@@ -29,21 +29,29 @@ fn functor_body_module_dispatch_does_not_dangle() {
     }
     run(scope, "LET OtherSet = (MAKESET (IntOrdA))");
 
-    let data = scope.bindings().data();
-    let m = match data.get("HeldSet").map(|(o, _)| *o) {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        other => panic!("HeldSet should be a module, got {:?}", other.map(|o| o.ktype())),
+    let m = match scope.resolve_type("HeldSet") {
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
+        other => panic!("HeldSet should be a module identity in types, got {other:?}"),
     };
-    let inner = m.child_scope().bindings().data().get("inner").map(|(o, _)| *o);
-    assert!(matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
-            "HeldSet.inner must still read 1.0 after subsequent churn");
+    let inner = m
+        .child_scope()
+        .bindings()
+        .data()
+        .get("inner")
+        .map(|(o, _)| *o);
+    assert!(
+        matches!(inner, Some(KObject::Number(n)) if *n == 1.0),
+        "HeldSet.inner must still read 1.0 after subsequent churn"
+    );
 }
 
-/// Functor body resolves a type-class parameter via the per-call type-side
-/// bind: without it the body's auto-wrapped `(Er)` would hit `UnboundName`
-/// against the FN's captured outer scope. Uses opaque ascription (`:|`) so
-/// the bound module carries an abstract `Type` member for `MODULE_TYPE_OF`
-/// to return.
+/// Functor body resolves a type-class parameter via the per-call type-side bind:
+/// without it the body's auto-wrapped `(Er)` would hit `UnboundName` against the
+/// FN's captured outer scope. Uses opaque ascription (`:|`) so the bound module
+/// carries an abstract `Type` member for `MODULE_TYPE_OF` to return.
 #[test]
 fn functor_body_module_type_of_via_per_call_bind() {
     let arena = RuntimeArena::new();
@@ -60,25 +68,30 @@ fn functor_body_module_type_of_via_per_call_bind() {
     );
     let result = run_one(scope, parse_one("USE_TYPE IntOrdView"));
     use crate::machine::model::KType;
-    // Opaque ascription mints a fresh `UserType { kind: Module, name: "Type", .. }`
-    // per ascription site (see `Module::type_members`); the body must return that
-    // abstract identity, not the underlying concrete `Number`.
+    // Opaque ascription mints a fresh abstract `Type` member; the body must return
+    // that identity, not the underlying concrete `Number`.
     match result {
         KObject::KTypeValue(kt) => match kt {
             KType::AbstractType { name, .. } => {
                 assert_eq!(name, "Type", "abstract type member should be named Type");
             }
-            other => panic!("expected AbstractType {{ name = \"Type\", .. }}, got {:?}", other),
+            other => panic!(
+                "expected AbstractType {{ name = \"Type\", .. }}, got {:?}",
+                other
+            ),
         },
-        other => panic!("expected KTypeValue carrying the abstract Type identity, got {:?}", other.ktype()),
+        other => panic!(
+            "expected KTypeValue carrying the abstract Type identity, got {:?}",
+            other.ktype()
+        ),
     }
 }
 
-/// Per-call type-side bind survives closure escape: an inner FN returned from
-/// an outer functor reads its captured `Er` from the outer's per-call
-/// `bindings.types` even after the outer call has returned. The
+/// Per-call type-side bind survives closure escape: an inner FN returned from an
+/// outer functor reads its captured `Er` from the outer's per-call
+/// `bindings.types` after the outer call has returned. The
 /// `KFunction(&fn, Some(Rc<CallArena>))` lift pins the value-side arena; this
-/// test pins the type-side entry alongside it.
+/// pins the type-side entry alongside it.
 #[test]
 fn functor_closure_escape_pins_type_class_bind() {
     let arena = RuntimeArena::new();
@@ -95,7 +108,7 @@ fn functor_closure_escape_pins_type_class_bind() {
             (FN (LOOKUP) -> Any = (MODULE_TYPE_OF Er Type))",
     );
     run(scope, "LET _maker = (MAKE_LOOKUP IntOrdView)");
-    // Churn exercises the per-call arena's drop discipline before the inner call.
+    // Churn the per-call arena's drop discipline before invoking the inner FN.
     for _ in 0..5 {
         run_one(scope, parse_one("PRINT 1"));
     }
@@ -119,14 +132,9 @@ fn functor_closure_escape_pins_type_class_bind() {
     }
 }
 
-/// Roadmap regression test: `FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)`
-/// dispatches and the auto-wrapped `(Er)` body resolves `Er` through the
-/// per-call type-side binding (the data-side write was retired with the
-/// type-language collapse — see [`crate::machine::core::kfunction::invoke`]'s
-/// per-call binding loop). Pins that body resolution works end-to-end without
-/// surfacing `UnboundName`. The companion interpret-seam regression (top-level
-/// `SIG` followed by an FN whose signature references it) is pinned by
-/// `tests/sig_fn_top_level_no_panic.rs`.
+/// `FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)` dispatches and the
+/// auto-wrapped `(Er)` body resolves `Er` through the per-call type-side binding,
+/// returning the passed-through module without surfacing `UnboundName`.
 #[test]
 fn functor_returning_bare_signature_typed_param_does_not_panic() {
     let arena = RuntimeArena::new();
@@ -138,8 +146,6 @@ fn functor_returning_bare_signature_typed_param_does_not_panic() {
          LET OrdView = (IntOrd :! OrderedSig)\n\
          FN (MAKESET Er :OrderedSig) -> OrderedSig = (Er)",
     );
-    // Exercise the FUNCTOR: no panic, result is a module value matching the
-    // OrderedSig constraint (the same `ord` module we passed in).
     let result = run_one(scope, parse_one("MAKESET OrdView"));
     match result {
         KObject::KTypeValue(KType::Module { module, .. }) => {

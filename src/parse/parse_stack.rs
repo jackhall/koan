@@ -1,8 +1,8 @@
-//! `ParseStack` holds the parser's nesting state. The root expression lives directly on
-//! the struct (rather than as the bottom of a `Vec<Frame>`), so `push_part` /
-//! `top_last_part` never need to unwrap an empty stack. Variant-aware pop helpers and the
-//! `open_collection` / `close_collection` shape-shared close-bracket helpers live here
-//! since they bind `ParseStack` and the token-buffer flush.
+//! `ParseStack` holds the parser's nesting state. The root expression lives
+//! directly on the struct so `push_part` never needs to unwrap an empty
+//! stack. Variant-aware pops and the shape-shared `open_collection` /
+//! `close_collection` helpers live here since they bind `ParseStack` and the
+//! token-buffer flush.
 
 use crate::machine::core::source::Spanned;
 use crate::machine::model::ast::{ExpressionPart, KExpression};
@@ -29,9 +29,9 @@ impl<'a> ParseStack<'a> {
         self.rest.push(f);
     }
 
-    /// Push a span-carrying part into the current top frame (root if no nested frame is
-    /// open). The wrapper's span is preserved at the destination when the destination's
-    /// storage is `Vec<Spanned<…>>`; List/Dict/TypeExpr frames discard it.
+    /// Push a span-carrying part into the current top frame (root if none
+    /// open). The span is preserved when the destination's storage is
+    /// `Vec<Spanned<…>>`; List/Dict/TypeExpr frames discard it.
     pub(super) fn push_part(&mut self, part: Spanned<ExpressionPart<'a>>) {
         match self.rest.last_mut() {
             Some(f) => f.push(part),
@@ -43,8 +43,8 @@ impl<'a> ParseStack<'a> {
         self.rest.last()
     }
 
-    /// Top-of-stack frame as a `Dict` for in-place state-machine ops. Returns `None`
-    /// when the top is any other variant (or no frame is nested).
+    /// Top-of-stack frame as a `Dict` for in-place state-machine ops. `None`
+    /// when the top is any other variant or no frame is nested.
     pub(super) fn top_dict_mut(&mut self) -> Option<&mut DictFrame<'a>> {
         match self.rest.last_mut()? {
             Frame::Dict { dict, .. } => Some(dict),
@@ -52,8 +52,8 @@ impl<'a> ParseStack<'a> {
         }
     }
 
-    /// Unconditional pop of the topmost nested frame. Used by `)` which needs to
-    /// destructure all four variants for distinct diagnostics.
+    /// Unconditional pop of the topmost nested frame. Used by `)` which
+    /// destructures all variants for distinct diagnostics.
     pub(super) fn pop_top(&mut self) -> Option<Frame<'a>> {
         self.rest.pop()
     }
@@ -87,8 +87,8 @@ pub(super) fn flush_token<'a>(
     Ok(())
 }
 
-/// Standard open-collection shape shared by `[` and `{`: reject a glued opener, flush any
-/// pending token into the parent frame, then push the new (empty) frame onto the stack.
+/// Open shape shared by `[` and `{`: reject a glued opener, flush any
+/// pending token into the parent, then push the new frame.
 pub(super) fn open_collection<'a>(
     stack: &mut ParseStack<'a>,
     buf: &mut String,
@@ -103,9 +103,9 @@ pub(super) fn open_collection<'a>(
     Ok(())
 }
 
-/// Standard close-collection shape shared by `]` and `}`: verify the topmost frame
-/// matches `closer`, run close-side adjacency, flush any pending token into the closing
-/// frame, then pop and fold the frame into the part it produces.
+/// Close shape shared by `]` and `}`: verify the topmost frame matches
+/// `closer`, run adjacency, flush any pending token, then pop and fold the
+/// frame into the part it produces.
 pub(super) fn close_collection<'a>(
     stack: &mut ParseStack<'a>,
     buf: &mut String,
@@ -115,9 +115,7 @@ pub(super) fn close_collection<'a>(
     token_start: &mut Option<u32>,
     end: u32,
 ) -> Result<(), KError> {
-    let top_matches = stack
-        .peek_top()
-        .is_some_and(|f| f.matches_closer(closer));
+    let top_matches = stack.peek_top().is_some_and(|f| f.matches_closer(closer));
     if !top_matches {
         return Err(KError::parse(mismatch_msg, None));
     }
@@ -131,7 +129,8 @@ pub(super) fn close_collection<'a>(
 }
 
 fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), KError> {
-    if matches!(prev, None | Some('(' | '[' | '{')) || matches!(prev, Some(c) if c.is_whitespace()) {
+    if matches!(prev, None | Some('(' | '[' | '{')) || matches!(prev, Some(c) if c.is_whitespace())
+    {
         return Ok(());
     }
     Err(KError::parse(
@@ -143,9 +142,9 @@ fn check_open_adjacency(opener: char, prev: Option<char>) -> Result<(), KError> 
     ))
 }
 
-/// Symmetric to `check_open_adjacency` for closing brackets.
 fn check_close_adjacency(closer: char, next: Option<char>) -> Result<(), KError> {
-    if matches!(next, None | Some(')' | ']' | '}')) || matches!(next, Some(c) if c.is_whitespace()) {
+    if matches!(next, None | Some(')' | ']' | '}')) || matches!(next, Some(c) if c.is_whitespace())
+    {
         return Ok(());
     }
     Err(KError::parse(

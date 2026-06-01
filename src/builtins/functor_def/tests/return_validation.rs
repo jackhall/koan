@@ -1,13 +1,11 @@
-//! Definition-time return-slot validation tests. Each case fires at the
-//! FUNCTOR binder site (not several Dispatch frames downstream); the
-//! diagnostic is a `ShapeError` mentioning `FUNCTOR return-type slot`.
+//! Definition-time return-slot validation. Each case fires at the FUNCTOR
+//! binder site; the diagnostic is a `ShapeError` mentioning
+//! `FUNCTOR return-type slot`.
 
 use crate::builtins::test_support::{parse_one, run, run_one_err, run_root_silent};
 use crate::machine::KErrorKind;
 use crate::machine::RuntimeArena;
 
-/// Resolved-arm rejection: return slot `Number` doesn't denote a module,
-/// signature, or functor. Fires at the FUNCTOR binder, not downstream.
 #[test]
 fn functor_return_slot_number_rejects() {
     let arena = RuntimeArena::new();
@@ -25,9 +23,6 @@ fn functor_return_slot_number_rejects() {
     }
 }
 
-/// Resolved-arm rejection: a `:(FN (...) -> ...)` carrier is a plain
-/// function type, disjoint from module/signature/functor. Re-uses the
-/// Resolved-arm walk against the elaborated `KType::KFunction`.
 #[test]
 fn functor_return_slot_function_type_rejects() {
     let arena = RuntimeArena::new();
@@ -48,11 +43,9 @@ fn functor_return_slot_function_type_rejects() {
     }
 }
 
-/// Deferred-arm rejection: `(MODULE_TYPE_OF Er Type)` references a parameter
-/// so the return-type carrier routes through `ReturnTypeState::Deferred`. The
-/// head inspector recognizes `MODULE_TYPE_OF` as producing an
-/// `AbstractType` and surfaces the diagnostic without waiting for a per-call
-/// elaboration to fail.
+/// `MODULE_TYPE_OF` references a parameter, so the return carrier routes
+/// through `ReturnTypeState::Deferred`; the head inspector surfaces the
+/// diagnostic without waiting for per-call elaboration.
 #[test]
 fn functor_return_slot_module_type_of_rejects() {
     let arena = RuntimeArena::new();

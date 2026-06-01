@@ -1,16 +1,14 @@
 use std::hash::Hasher;
 
-use crate::machine::model::types::{KType, Parseable, Serializable};
 use super::kobject::KObject;
+use crate::machine::model::types::{KType, Parseable, Serializable};
 
-/// Concrete dict-key type. The `KObject::Dict` runtime variant stores keys as
-/// `Box<dyn Serializable>`; this enum is the implementor that fills that slot. Restricted to
-/// Python's hashable scalars (string, number, bool) — non-scalar keys are rejected at dict
-/// construction time via `try_from_kobject`.
+/// Concrete dict-key implementor for the `Box<dyn Serializable>` slot on
+/// `KObject::Dict`. Restricted to Python's hashable scalars; non-scalar keys
+/// are rejected at construction via `try_from_kobject`.
 ///
-/// `Number` keys hash and compare via `f64::to_bits()`. NaN therefore equals only an identical
-/// NaN bit pattern and otherwise becomes effectively unreachable as a key, matching Python's
-/// behavior for object identity on NaN.
+/// `Number` hashes via `f64::to_bits()`, so NaN equals only an identical NaN
+/// bit pattern — matching Python's object-identity behavior for NaN keys.
 #[derive(Clone, Debug)]
 pub enum KKey {
     String(String),
@@ -19,11 +17,9 @@ pub enum KKey {
 }
 
 impl KKey {
-    /// Try to convert a runtime `KObject` value into a dict key. The dict aggregator calls
-    /// this when materializing a dict literal whose key positions were sub-expressions; a
-    /// non-scalar result (e.g. a List) yields the rejection reason as a string the caller
-    /// wraps into its own structured error. Returning a plain `String` keeps this
-    /// value-type conversion free of the runtime `KError` type.
+    /// Returns the rejection reason as a plain `String` so this value-type
+    /// conversion stays free of the runtime `KError` type; the caller wraps
+    /// it into a structured error.
     pub fn try_from_kobject(obj: &KObject<'_>) -> Result<KKey, String> {
         match obj {
             KObject::KString(s) => Ok(KKey::String(s.clone())),
@@ -50,8 +46,7 @@ impl<'a> Parseable<'a> for KKey {
         }
     }
 
-    /// String keys are quoted in the rendering so a `{"1": x}` and a `{1: x}` look distinct
-    /// when a dict is summarized. Numbers and bools render unquoted.
+    /// String keys are quoted so `{"1": x}` and `{1: x}` render distinctly.
     fn summarize(&self) -> String {
         match self {
             KKey::String(s) => format!("\"{}\"", s),
@@ -134,18 +129,26 @@ mod tests {
 
     #[test]
     fn distinct_strings_hash_differently() {
-        assert_ne!(hash_of(&KKey::String("a".into())), hash_of(&KKey::String("b".into())));
+        assert_ne!(
+            hash_of(&KKey::String("a".into())),
+            hash_of(&KKey::String("b".into()))
+        );
     }
 
     #[test]
     fn equal_strings_hash_equal() {
-        assert_eq!(hash_of(&KKey::String("a".into())), hash_of(&KKey::String("a".into())));
+        assert_eq!(
+            hash_of(&KKey::String("a".into())),
+            hash_of(&KKey::String("a".into()))
+        );
     }
 
     #[test]
     fn number_and_string_with_same_text_differ() {
-        // {1: x} vs {"1": x} must be distinguishable.
-        assert_ne!(hash_of(&KKey::Number(1.0)), hash_of(&KKey::String("1".into())));
+        assert_ne!(
+            hash_of(&KKey::Number(1.0)),
+            hash_of(&KKey::String("1".into()))
+        );
     }
 
     #[test]
@@ -206,12 +209,9 @@ mod tests {
 
     #[test]
     fn nan_number_keys_with_same_bits_hash_equal() {
-        // f64::to_bits() hashing makes NaN equal to itself when the bit pattern matches —
-        // Python-like object-identity behavior for NaN dict keys.
         let nan = KKey::Number(f64::NAN);
         let same = KKey::Number(f64::from_bits(f64::NAN.to_bits()));
         assert_eq!(hash_of(&nan), hash_of(&same));
-        // ...but two NaN values with different payloads hash differently.
         let other_nan = KKey::Number(f64::from_bits(f64::NAN.to_bits() ^ 1));
         assert_ne!(hash_of(&nan), hash_of(&other_nan));
     }

@@ -1,20 +1,9 @@
-//! Regression test for recursive nested-binder submission at the outermost
-//! submission point — see `roadmap/dispatch_fix/nested-binder-submission.md`.
-//!
-//! Submit `LET f = (FN (HELPER x :Number) -> Number = (x))` via
-//! `add_dispatch`. The outer LET is a name-binder (installs `placeholders[f]`);
-//! the inner FN is a bucket-binder (installs `pending_overloads[[HELPER,
-//! Slot]]` — FN registers a function by inner-call bucket key, not by name).
-//! Before the recursive-submission fix, the inner FN's bucket entry installed
-//! only when LET's Phase 4 spawned the sub-Dispatch — after a sibling could
-//! pop under FIFO. Under strict-only admission, any sibling that dispatches a
-//! call shape matching `[HELPER, Slot]` first would hard-error instead of
-//! parking on the binder's still-resolving slot.
-//!
-//! The expected post-fix invariant: after the outer submission returns and
-//! before any node runs, BOTH the LET's name placeholder AND the inner FN's
-//! pending-overload bucket are installed in the dispatching scope's
-//! `bindings`.
+//! After the outer submission of `LET f = (FN (HELPER x :Number) -> Number =
+//! (x))` returns and before any node runs, BOTH the LET's name placeholder
+//! AND the inner FN's pending-overload bucket `[HELPER, Slot]` must be
+//! installed in the dispatching scope's `bindings`. Otherwise a sibling that
+//! dispatches a call shape matching the still-uninstalled bucket would
+//! hard-error under strict-only admission instead of parking.
 
 use std::io::Write;
 
@@ -26,8 +15,12 @@ use crate::parse::parse;
 
 struct Sink;
 impl Write for Sink {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> { Ok(b.len()) }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[test]
@@ -40,8 +33,7 @@ fn nested_binder_installs_inner_placeholder_at_outer_submission() {
     let expr = exprs.remove(0);
     let mut sched = Scheduler::new();
     let _id = sched.add_dispatch(expr, scope);
-    // CRITICAL: read both placeholders AND pending_overloads BEFORE `execute()`
-    // — the fix is that the installs happen at *submission* time, not run time.
+    // Read both maps before any `execute()` — installs must land at submission time.
     let placeholders = scope.bindings().placeholders();
     assert!(
         placeholders.contains_key("f"),

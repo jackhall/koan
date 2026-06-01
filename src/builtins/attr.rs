@@ -1,32 +1,20 @@
-//! `ATTR <s> <field:Identifier>` — struct, module, or NEWTYPE field access. Surface syntax
-//! is the `.` infix operator from `operators::build_attr` (private to `crate::parse`), which
-//! compiles `p.x` into `[Keyword("ATTR"), Identifier("p"), Identifier("x")]`. Several
-//! overloads share the bucket `[Keyword, Slot, Slot]` and pick by lhs shape:
-//!
-//! - [`body_identifier`] — `p.x` form. The lhs is still an `Identifier`, so this body
-//!   does the scope lookup itself, mirroring [`value_lookup`](super::value_lookup), and
-//!   then dispatches to either struct-field or module-member access based on what the
-//!   identifier resolved to.
-//! - [`body_struct`] — chained access like `p.x.y` for structs *and* the stage-4.C
-//!   NEWTYPE fall-through path. The inner `[ATTR p x]` evaluates first and arrives here
-//!   as `Future(KObject::Struct{..})` (`Struct` slot) or `Future(KObject::Wrapped{..})`
-//!   (`Newtype` slot, stage 4.C). The body is share-safe because `access_field` does the
-//!   lhs-shape dispatch — its `Wrapped` arm recurses one level into `inner`, which the
-//!   stage-4.B collapse rule pins as non-`Wrapped`.
-//! - [`body_module`] — chained access like `M.SubModule.foo`. The inner `[ATTR M SubModule]`
-//!   evaluates first and arrives here as `Future(KObject::KModule(_))`. Module-system
-//!   stage 1.
+//! `ATTR <s> <field:Identifier>` — struct, module, or NEWTYPE field access. Surface
+//! syntax is the `.` infix operator. Overloads share the bucket
+//! `[Keyword, Slot, Slot]` and pick by lhs shape: [`body_identifier`] for `p.x` where
+//! the lhs is still an `Identifier`, [`body_struct`] for chained struct access and the
+//! NEWTYPE fall-through, [`body_module`] for chained module access.
 //!
 //! The slot types are disjoint (`KType::Identifier` only matches `ExpressionPart::Identifier`;
-//! `KType::AnyUserType { kind: Struct | Module | Newtype { .. } }` each admit a distinct
-//! `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks unambiguously
-//! without a specificity tiebreaker.
+//! the three `AnyUserType { kind: Struct | Module | Newtype { .. } }` slots each admit a
+//! distinct `KObject` family via the manual `UserTypeKind::PartialEq`), so dispatch picks
+//! unambiguously without a specificity tiebreaker.
 
-use crate::machine::model::{KObject, KType};
+use crate::machine::execute::coerce_type_token_value;
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::values::Module;
+use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, Scope, SchedulerHandle,
+    ArgumentBundle, BodyResult, KError, KErrorKind, Resolution, SchedulerHandle, Scope,
 };
 
 use super::{arg, err, kw, register_builtin, sig};
@@ -52,11 +40,9 @@ pub fn body_identifier<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    // Value-side lookup first (the `p.x` shipping path). On a miss, fall back to the
-    // type-side: a FUNCTOR's signature-typed parameter is bound *only* into
-    // `bindings.types` post-collapse (the paired value-side install was dropped — see
-    // `KFunction::invoke`'s per-call binding loop), so `Er.pure(x)` inside the functor
-    // body must reach the carried `&Module` through `resolve_type`.
+    // Value-side first, then type-side: a FUNCTOR's signature-typed parameter is bound
+    // only into `bindings.types`, so `Er.pure(x)` inside the functor body must reach the
+    // carried `&Module` through `resolve_type`.
     if let Some(target) = scope.lookup(&s_name) {
         return access_field(scope, target, &field_name);
     }
@@ -66,41 +52,29 @@ pub fn body_identifier<'a>(
             KType::AbstractType { source_module, .. } => {
                 return access_module_member(source_module, &field_name);
             }
-            // Other type-side bindings (`KType::Number`, etc.) have no members; fall through
-            // to UnboundName so the diagnostic stays attributed to the lhs identifier
-            // rather than a synthesized rejection that points at the type-language side.
+            // Scalar type-side bindings have no members; fall through to UnboundName so
+            // the diagnostic stays attributed to the lhs identifier rather than the
+            // type-language side.
             _ => {}
         }
     }
     err(KError::new(KErrorKind::UnboundName(s_name)))
 }
 
-/// `ATTR <s:TypeExprRef> <field:_>` — module-system entry point. Module names are
-/// Type-classed tokens (`Foo`, `IntOrd`, `OrderedSig`) per the [token classes in
-/// design/type-system.md](../../design/type-system.md#token-classes--the-parser-level-foundation),
-/// so `Foo.x` parses as
-/// `[ATTR Type(Foo) Identifier(x)]` rather than the `Identifier`-lhs the struct path uses.
-/// `Foo.SubModule` parses as `[ATTR Type(Foo) Type(SubModule)]` — the Type-Type overload
-/// shares this body so chained module access (`Outer.Inner.x`) works regardless of whether
-/// the field at each step is a module name or a regular member. Resolves the type name in
-/// the surrounding scope and dispatches to `access_field` (which routes to module-member
-/// access when the resolved value is a module).
+/// `ATTR <s:TypeExprRef> <field:_>` — entry for a Type-classed lhs. Module names are
+/// Type-classed tokens (see [token classes](../../design/typing/tokens.md)), so `Foo.x`
+/// parses as `[ATTR Type(Foo) Identifier(x)]` instead of the `Identifier`-lhs the struct
+/// path uses. The Type-Type overload shares this body so chained module access
+/// (`Outer.Inner.x`) works regardless of whether each step's field is a module name or
+/// a regular member.
 pub fn body_type_lhs<'a>(
     scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
     bundle: ArgumentBundle<'a>,
 ) -> BodyResult<'a> {
     let s_name = match bundle.get("s") {
-        // Post-`KTypeValue` migration: the lhs's surface name is `KType::name()`. For a
-        // user-typed `Foo.x`, the parser-side `resolve_for` lifted `Foo` to
-        // `KTypeValue(KType::UserType { name: "Foo", .. })` or a similarly leaf-named
-        // variant; `name()` returns the user-facing identifier in either case.
         Some(KObject::KTypeValue(t)) => t.name(),
-        // Stage-2 carrier: a bare-leaf name not in `KType::from_name`'s builtin table
-        // landed here as a `TypeNameRef`. The surface name is the `TypeExpr.name`
-        // directly — `Foo.x` where `Foo` is user-bound resolves to its value-side
-        // binding via `scope.lookup` below, the same path the `KTypeValue` arm takes.
-        Some(KObject::TypeNameRef(t)) => t.name.clone(),
+        Some(KObject::TypeNameRef(t)) => t.render(),
         Some(other) => {
             return err(KError::new(KErrorKind::TypeMismatch {
                 arg: "s".to_string(),
@@ -114,14 +88,15 @@ pub fn body_type_lhs<'a>(
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    // Stays on `scope.lookup`: the Type-classed lhs (`Foo` in `Foo.x`) resolves to a
-    // nominal *value*-side binding — `KObject::KModule` / `StructType` / `TaggedUnionType`
-    // — that lives in `bindings.data`. The post-stage-1.5 `Scope::resolve_type` walks
-    // `bindings.types`, where those nominal value carriers don't live until stage 3
-    // installs a `KType::UserType` next to them.
-    let target = match scope.lookup(&s_name) {
-        Some(obj) => obj,
-        None => return err(KError::new(KErrorKind::UnboundName(s_name))),
+    // The Type-classed lhs is a nominal type-side binding. Modules / signatures keep
+    // a value-side carrier (`KTypeValue(Module/Signature)`), which `coerce_type_token_value`
+    // recovers; struct / union names are type-only now, so it synthesizes a
+    // `KTypeValue(UserType)` that `access_field` rejects with the same TypeMismatch a
+    // static struct field access has always produced.
+    let leaf = crate::machine::model::ast::TypeName::leaf(s_name);
+    let target = match coerce_type_token_value(scope, &leaf, None) {
+        Ok(obj) => obj,
+        Err(e) => return err(e),
     };
     access_field(scope, target, &field_name)
 }
@@ -142,9 +117,6 @@ pub fn body_struct<'a>(
     access_field(scope, target, &field_name)
 }
 
-/// Module-member access. The lhs already resolved to a `KTypeValue(KType::Module { .. })`
-/// after the type-language collapse; look `field` up in the module's child scope's `data`
-/// map.
 pub fn body_module<'a>(
     _scope: &'a Scope<'a>,
     _sched: &mut dyn SchedulerHandle<'a>,
@@ -160,11 +132,13 @@ pub fn body_module<'a>(
     };
     let m = match target.as_module() {
         Some(m) => m,
-        None => return err(KError::new(KErrorKind::TypeMismatch {
-            arg: "s".to_string(),
-            expected: "Module".to_string(),
-            got: target.ktype().name(),
-        })),
+        None => {
+            return err(KError::new(KErrorKind::TypeMismatch {
+                arg: "s".to_string(),
+                expected: "Module".to_string(),
+                got: target.ktype().name(),
+            }))
+        }
     };
     access_module_member(m, &field_name)
 }
@@ -172,14 +146,8 @@ pub fn body_module<'a>(
 fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
     match bundle.get("field") {
         Some(KObject::KString(s)) => Ok(s.clone()),
-        // Module-system stage 1: a Type-classed field (e.g. `Foo.SubModule.x`) lands here as
-        // a `KTypeValue`. `name()` returns the bare leaf identifier — same shape as the
-        // Identifier path.
         Some(KObject::KTypeValue(t)) => Ok(t.name()),
-        // Stage-2 carrier: a Type-classed field whose name isn't in the builtin table
-        // lands as a `TypeNameRef`. `t.name` is the surface identifier — same shape as
-        // the `KTypeValue::name()` path.
-        Some(KObject::TypeNameRef(t)) => Ok(t.name.clone()),
+        Some(KObject::TypeNameRef(t)) => Ok(t.render()),
         Some(other) => Err(KError::new(KErrorKind::TypeMismatch {
             arg: "field".to_string(),
             expected: "Identifier".to_string(),
@@ -189,32 +157,28 @@ fn read_field_name<'a>(bundle: &ArgumentBundle<'a>) -> Result<String, KError> {
     }
 }
 
-fn access_field<'a>(
-    scope: &'a Scope<'a>,
-    target: &KObject<'a>,
-    field: &str,
-) -> BodyResult<'a> {
+fn access_field<'a>(scope: &'a Scope<'a>, target: &KObject<'a>, field: &str) -> BodyResult<'a> {
     match target {
-        KObject::Struct { name: type_name, fields, .. } => match fields.get(field) {
+        KObject::Struct {
+            name: type_name,
+            fields,
+            ..
+        } => match fields.get(field) {
             Some(value) => BodyResult::Value(scope.arena.alloc(value.deep_clone())),
             None => err(KError::new(KErrorKind::ShapeError(format!(
                 "struct `{}` has no field `{}`",
                 type_name, field
             )))),
         },
-        // Post-collapse: module values ride `KTypeValue(KType::Module { .. })`. Project
-        // the `&Module` directly so the access pipeline stays the same shape.
         KObject::KTypeValue(KType::Module { module: m, .. }) => access_module_member(m, field),
         // ATTR over a first-class signature value — reverse-lookup against the decl scope.
-        KObject::KTypeValue(KType::Signature(s)) => {
+        KObject::KTypeValue(KType::Signature { sig: s, .. }) => {
             let scope = s.decl_scope();
             if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
                 return BodyResult::Value(obj);
             }
             if let Some(kt) = scope.resolve_type(field) {
-                return BodyResult::Value(
-                    scope.arena.alloc(KObject::KTypeValue(kt.clone())),
-                );
+                return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt.clone())));
             }
             err(KError::new(KErrorKind::ShapeError(format!(
                 "signature `{}` has no member `{}`",
@@ -225,15 +189,9 @@ fn access_field<'a>(
         KObject::KTypeValue(KType::AbstractType { source_module, .. }) => {
             access_module_member(source_module, field)
         }
-        // Stage 4.C NEWTYPE fall-through. `Wrapped.inner` is invariantly *not* a `Wrapped`
-        // (the construction-time collapse rule in [`super::newtype_def::newtype_construct`]'s
-        // finish closure peels any `Wrapped` value before re-wrapping), so the recursion
-        // descends exactly one level into a non-`Wrapped` target. Whatever the inner is —
-        // `Struct` (the shipping path: `b.x` on `LET b: Boxed = Point(...)`),
-        // `KTypeValue(Module)` (allowed by the type system though no shipping
-        // NEWTYPE-over-module exists today), or a scalar like `Number` (rejected by the
-        // `other` arm below) — the existing arms handle it without a redo at every
-        // accessor.
+        // NEWTYPE fall-through. `Wrapped.inner` is invariantly not a `Wrapped` (the
+        // construction-time collapse rule in `super::newtype_def::newtype_construct`
+        // peels any `Wrapped` before re-wrapping), so this recurses exactly one level.
         KObject::Wrapped { inner, .. } => access_field(scope, inner.get(), field),
         other => err(KError::new(KErrorKind::TypeMismatch {
             arg: "s".to_string(),
@@ -243,41 +201,23 @@ fn access_field<'a>(
     }
 }
 
-/// Look `field` up inside a [`Module`]'s child scope. Tries, in order:
+/// Look `field` up inside a [`Module`]'s child scope: opaque-ascription `type_members`,
+/// then value-side `data`, then type-side `bindings.types`.
 ///
-/// 1. The module's `type_members` table (opaque-ascription type binding: `IntOrd.Type`
-///    resolves to a `KType::AbstractType { source_module, name }` minted at ascription
-///    time). Stored as a `KType` directly — return it as a `KTypeValue`.
-/// 2. The child scope's `data` (`LET`/`FN`/`MODULE`/`STRUCT`/... value bindings under
-///    the module body). Nominal binders like `MODULE Sub = (...)` and `STRUCT P = (...)`
-///    install into both `data` and `bindings.types`; preferring `data` here means
-///    chained access `Outer.Inner.X` reads the inner *module value* from `data` rather
-///    than its type identity (which `bindings.types` carries), so the next ATTR step
-///    can recurse into the inner module's child scope.
-/// 3. The child scope's type-side `bindings.types` via [`Scope::resolve_type`]
-///    (pure-type bindings: `LET Ty = Number` inside the module body lands here via
-///    stage 1.7's `register_type` routing and has no `data` entry). Synthesize a
-///    `KTypeValue` carrier so type-position consumers (e.g. a LET-RHS routing through
-///    Combine) see a first-class `KType` value.
-///
-/// Returns a clean `ShapeError` naming the module's path and the missing member when
-/// none find anything. Takes `&'a Module<'a>` directly (rather than projecting from a
-/// `KObject` lhs) so call sites that already hold the `&Module` — including the
-/// `AbstractType` and `Module` arms of `access_field` — skip the indirection.
+/// Preferring `data` over `bindings.types` matters for nominal binders like
+/// `MODULE Sub = (...)` and `STRUCT P = (...)`, which install into both: chained access
+/// `Outer.Inner.X` needs the inner *module value* from `data`, not its type identity,
+/// so the next ATTR step can recurse into the inner module's child scope.
 fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
     if let Some(kt) = m.type_members.borrow().get(field).cloned() {
-        return BodyResult::Value(
-            m.child_scope().arena.alloc(KObject::KTypeValue(kt)),
-        );
+        return BodyResult::Value(m.child_scope().arena.alloc(KObject::KTypeValue(kt)));
     }
     let scope = m.child_scope();
     if let Some(Resolution::Value(obj)) = scope.bindings().lookup_value(field, None) {
         return BodyResult::Value(obj);
     }
     if let Some(kt) = scope.resolve_type(field) {
-        return BodyResult::Value(
-            scope.arena.alloc(KObject::KTypeValue(kt.clone())),
-        );
+        return BodyResult::Value(scope.arena.alloc(KObject::KTypeValue(kt.clone())));
     }
     err(KError::new(KErrorKind::ShapeError(format!(
         "module `{}` has no member `{}`",
@@ -286,49 +226,117 @@ fn access_module_member<'a>(m: &'a Module<'a>, field: &str) -> BodyResult<'a> {
 }
 
 pub fn register<'a>(scope: &'a Scope<'a>) {
-    let struct_ty = KType::AnyUserType { kind: UserTypeKind::Struct };
+    let struct_ty = KType::AnyUserType {
+        kind: UserTypeKind::struct_sentinel(),
+    };
     let module_ty = KType::AnyModule;
     let newtype_ty = KType::AnyUserType {
-        kind: UserTypeKind::Newtype { repr: Box::new(KType::Any) },
+        kind: UserTypeKind::Newtype {
+            repr: Box::new(KType::Any),
+        },
     };
 
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::Identifier), arg("field", KType::Identifier)]),
-        body_identifier);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", struct_ty), arg("field", KType::Identifier)]),
-        body_struct);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", module_ty.clone()), arg("field", KType::Identifier)]),
-        body_module);
-    // Stage 4.C: NEWTYPE fall-through. The slot's wildcard `AnyUserType { kind: Newtype
-    // { repr: Any } }` admits any `KObject::Wrapped` (the manual `UserTypeKind::PartialEq`
-    // ignores `repr` on the `Newtype` variant). The body reuses `body_struct` because
-    // `access_field` already does the lhs-shape dispatch — the new `Wrapped` arm there
-    // recurses one level into `inner`. Disjoint from the Struct / Module slots above
-    // (`Newtype` is a distinct `UserTypeKind` discriminant), so dispatch picks without
-    // a specificity tiebreaker.
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", newtype_ty), arg("field", KType::Identifier)]),
-        body_struct);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::TypeExprRef), arg("field", KType::Identifier)]),
-        body_type_lhs);
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", KType::TypeExprRef), arg("field", KType::TypeExprRef)]),
-        body_type_lhs);
-    // Chained access where the lhs is a module value (`Outer.Inner.x` after the inner
-    // resolves) and the field is itself a Type token (`Outer.Inner` step in `Outer.Inner.x`).
-    register_builtin(scope, "ATTR",
-        sig(KType::Any, vec![kw("ATTR"), arg("s", module_ty), arg("field", KType::TypeExprRef)]),
-        body_module);
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", KType::Identifier),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_identifier,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", struct_ty),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_struct,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", module_ty.clone()),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_module,
+    );
+    // NEWTYPE fall-through. The wildcard `Newtype { repr: Any }` slot admits any
+    // `KObject::Wrapped` (the manual `UserTypeKind::PartialEq` ignores `repr`). Reuses
+    // `body_struct` because `access_field` dispatches on the lhs shape — its `Wrapped`
+    // arm recurses one level into `inner`.
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", newtype_ty),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_struct,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", KType::TypeExprRef),
+                arg("field", KType::Identifier),
+            ],
+        ),
+        body_type_lhs,
+    );
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", KType::TypeExprRef),
+                arg("field", KType::TypeExprRef),
+            ],
+        ),
+        body_type_lhs,
+    );
+    // Module lhs with a Type-classed field (e.g. the `Outer.Inner` step in `Outer.Inner.x`).
+    register_builtin(
+        scope,
+        "ATTR",
+        sig(
+            KType::Any,
+            vec![
+                kw("ATTR"),
+                arg("s", module_ty),
+                arg("field", KType::TypeExprRef),
+            ],
+        ),
+        body_module,
+    );
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::builtins::test_support::{
-        parse_one, run, run_one, run_one_err, run_root_silent,
-    };
+    use crate::builtins::test_support::{parse_one, run, run_one, run_one_err, run_root_silent};
     use crate::machine::model::KObject;
     use crate::machine::{KErrorKind, RuntimeArena};
 
@@ -435,10 +443,7 @@ mod tests {
         );
     }
 
-    /// Stage 4.C golden path: `b.x` where `b: Boxed = Point(...)` reads the underlying
-    /// struct's field without forcing every accessor to redo. The new ATTR `Newtype`
-    /// overload routes through `access_field`'s `Wrapped` arm, which recurses one level
-    /// into `inner: KObject::Struct`.
+    /// `b.x` on a NEWTYPE-wrapped struct reads through to the underlying field.
     #[test]
     fn access_field_falls_through_wrapped_struct() {
         let arena = RuntimeArena::new();
@@ -454,10 +459,7 @@ mod tests {
         assert!(matches!(run_one(scope, parse_one("b.y")), KObject::Number(n) if *n == 2.0));
     }
 
-    /// `d.x` on a NEWTYPE-over-Number surfaces as `TypeMismatch` — `access_field`'s
-    /// `Wrapped` arm recurses into `inner: KObject::Number`, which hits the existing
-    /// non-Struct / non-Module `other` arm. Pins that wrapping a scalar doesn't grow
-    /// fields out of thin air.
+    /// Wrapping a scalar doesn't grow fields: `d.x` on a NEWTYPE-over-Number errors.
     #[test]
     fn access_field_rejects_wrapped_non_struct() {
         let arena = RuntimeArena::new();
@@ -478,10 +480,8 @@ mod tests {
         }
     }
 
-    /// `b.z` where `b: Boxed = Point(x, y)` surfaces as `ShapeError` naming the inner
-    /// struct's type (`Point`) and the missing field (`z`). Confirms the fall-through
-    /// preserves the inner struct's error attribution — the diagnostic isn't lost in
-    /// the wrapper.
+    /// The fall-through preserves inner-struct error attribution: a missing field on a
+    /// wrapped `Point` names `Point` in the `ShapeError`, not the wrapper.
     #[test]
     fn access_field_falls_through_wrapped_with_missing_field() {
         let arena = RuntimeArena::new();

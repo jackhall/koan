@@ -75,23 +75,16 @@
     ]
   },
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/doc-skill-reminder.sh"
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"Be concise.\"}}'"
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/doc-skill-reminder.sh"
           }
         ]
       }

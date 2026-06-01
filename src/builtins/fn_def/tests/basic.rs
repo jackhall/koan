@@ -8,9 +8,8 @@ use crate::machine::RuntimeArena;
 
 use super::capture_program_output;
 
-/// Smoke test for FN's binder_name extractor: pulls the first Keyword out of the
-/// signature Expression at `parts[1]` (FN's name slot is *inside* the signature,
-/// not at `parts[1]` directly).
+/// FN's name slot lives *inside* the signature Expression at `parts[1]`, not at
+/// `parts[1]` directly; `binder_name` must pull the first Keyword out of the signature.
 #[test]
 fn binder_name_extracts_first_keyword_of_signature() {
     let expr = parse_one("FN (DOUBLE x :Number) -> Number = (x)");
@@ -38,8 +37,10 @@ fn fn_call_dispatches_body_at_call_time() {
     run(scope, "LET x = 42\nFN (GETX) -> Number = (x)");
 
     let result = run_one(scope, parse_one("GETX"));
-    assert!(matches!(result, KObject::Number(n) if *n == 42.0),
-        "GETX should return the value bound to x at call time");
+    assert!(
+        matches!(result, KObject::Number(n) if *n == 42.0),
+        "GETX should return the value bound to x at call time"
+    );
 }
 
 #[test]
@@ -158,10 +159,7 @@ fn fn_signature_with_no_keyword_is_rejected() {
 }
 
 /// `FN` returns the `KObject::KFunction` it just registered, so callers can capture a
-/// callable handle via `LET f = (FN ...)`. Calling the captured handle is tested by
-/// the fast-lane dispatch surface in
-/// `src/machine/execute/scheduler/tests/dispatch_shapes.rs` (the migrated suite
-/// for the deleted `call_by_name` builtin).
+/// callable handle via `LET f = (FN ...)`.
 #[test]
 fn fn_def_returns_the_registered_kfunction() {
     let arena = RuntimeArena::new();

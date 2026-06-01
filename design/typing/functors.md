@@ -22,10 +22,11 @@ machinery ordinary FNs use.
   `KType::KFunctor { params, ret }` surfaced by the value's `ktype()`. The
   dispatch path, scheduler integration, per-call scope, and `KFunction::invoke`
   are unchanged — FUNCTOR is a thin definition-time façade over FN mechanics.
-  Type-position references to functor types use the `:(Functor (params) -> R)`
-  sigil — a Type-class token paralleling `:(Function (args) -> R)` — kept
-  surface-disjoint from the `FUNCTOR` binder keyword on the same rule that
-  keeps `FN` (binder) and `Function` (type) disjoint.
+  Type-position references to functor types use the `:(FUNCTOR (params) -> R)`
+  sigil — a Type-class token paralleling `:(FN (args) -> R)` — kept
+  surface-disjoint from the `FUNCTOR` binder keyword by the `:(...)` sigil
+  context, the same way `:(FN ...)` in type position is disjoint from the
+  bare `FN` binder.
 
 ```
 LET MakeSet = (FUNCTOR (MAKESET Er :OrderedSig) -> SetSig = (
@@ -54,11 +55,12 @@ a functor; the binder makes that knowledge legible to the engine.
 ## Definition-time validation
 
 FUNCTOR's return-type slot must denote a module, signature, or functor
-kind. The admissible carriers are `KType::AnySignature`, `SatisfiesSignature`,
-`(SIG_WITH …)`, `KType::AnyModule`, `KType::Module { .. }`,
-`KType::Signature(_)`, and `KType::KFunctor { … }` (recursively — the
-inner `ret` is validated the same way, so curried multi-module functors
-and any deeper nesting flow through one rule). Any
+kind. The admissible carriers are `KType::AnySignature`,
+`KType::Signature { .. }` (the unified constraint-and-value variant,
+covering both a bare `:OrderedSig` and a `(SIG_WITH …)` pin),
+`KType::AnyModule`, `KType::Module { .. }`, and `KType::KFunctor { … }`
+(recursively — the inner `ret` is validated the same way, so curried
+multi-module functors and any deeper nesting flow through one rule). Any
 other denotation — `Number`, a structural function type, a plain user
 type — is a definition-time error at the FUNCTOR binder, surfaced with
 `FUNCTOR return-type slot must denote a module, signature, or functor`
@@ -126,7 +128,7 @@ a type-language binder at the call site: at each call,
 writes the per-call argument into the child scope's `bindings.types` only
 (not `bindings.data`). The
 [`KType::is_type_denoting`](../../src/machine/model/types/ktype_predicates.rs)
-predicate gates the write — `SatisfiesSignature`, `Type`, `TypeExprRef`,
+predicate gates the write — `Signature { .. }`, `Type`, `TypeExprRef`,
 `KType::AnyModule`, and `KType::AnySignature` all carry meaningful
 type-language identity at the binder, and the corresponding argument is
 admitted as a single carrier shape. Body-position references to the
@@ -157,16 +159,17 @@ model koan does not adopt.
 
 The same no-stratum reasoning extends symmetrically to bare type tokens. A
 `:Type`-typed parameter slot admits any `KTypeValue`-carried type — bare
-builtin tokens (`Number`, `Str`, `Bool`, `Null`) and `TaggedUnionType` /
-`StructType` schema carriers — so `(MAKETREE Number)` against
+builtin tokens (`Number`, `Str`, `Bool`, `Null`) and the
+`KTypeValue(KType::UserType { .. })` carrier a struct / union nominal token
+synthesizes on demand — so `(MAKETREE Number)` against
 `FUNCTOR (MAKETREE Elt :Type) -> …` binds `Elt = KType::Number` per call
 with no call-site wrapping. The per-call type-side bind treats the
 builtin-keyed and nominal-keyed paths identically: a body-position `Elt`
 resolves to `KType::Number` through `Scope::resolve_type`, and a deferred
 return like `-> :Elt` re-elaborates through the same Combine-finish slot
 check the nominal-keyed path uses. The wall on `KType::Module { .. }` /
-`KType::Signature(_)` carriers stays in place — those route through
-`AnyModule` / `AnySignature` / `SatisfiesSignature` slots, keeping the
+`KType::Signature { .. }` carriers stays in place — those route through
+`AnyModule` / `AnySignature` / `Signature { .. }` slots, keeping the
 `:Type` vs `:Module` overload distinction. OCaml structurally cannot match
 this without modular implicits, because its module language is stratified
 above the value language.
@@ -180,7 +183,7 @@ ride a *deferred* return-type carrier through the per-call scope.
 is a `ReturnType<'a>` enum, not a bare `KType`: `Resolved(KType)` covers
 every static case (return types that don't reference a parameter), while
 `Deferred(DeferredReturn<'a>)` holds the surface form verbatim — either
-`TypeExpr(TypeExpr)` for parser-preserved structured forms or
+`TypeExpr(TypeName)` for parser-preserved leaf forms or
 `Expression(KExpression<'a>)` for captured parens-form expressions. Routing
 happens at binder construction in
 [`fn_def.rs`](../../src/builtins/fn_def.rs): a parameter-name scan over the
@@ -193,12 +196,17 @@ Per-call elaboration runs at the dispatch boundary in
 [`KFunction::invoke`](../../src/machine/core/kfunction/invoke.rs). The
 `Deferred(_)` arm spawns the body Dispatch and (for the `Expression`
 carrier) an optional return-type sub-Dispatch under the per-call frame
-via `SchedulerHandle::with_active_frame`, then joins them in a `Combine`
-whose finish closure runs `per_call_ret.matches_value(body_value)` and
-surfaces mismatches with `(per-call return type)` wording. The
-`TypeExpr` carrier elaborates inline against the per-call scope where the
-per-call type-side bind has installed the parameter-name identities; both
-carriers feed the same Combine. The lift-time return-type check in
+via `SchedulerHandle::with_active_frame` (see
+[per-call-arena-protocol.md § Active-frame propagation](../per-call-arena-protocol.md#active-frame-propagation)),
+then joins them in a `Combine` whose finish closure runs
+`per_call_ret.matches_value(body_value)` and surfaces mismatches with
+`(per-call return type)` wording. The
+`TypeExpr` carrier elaborates inline against the per-call scope where
+the per-call type-side bind has installed the parameter-name
+identities; both carriers feed the same Combine. The inline elaboration
+is the standard
+[elaboration.md § Layers](elaboration.md#layers) § Layer 3 walk against
+the per-call scope. The lift-time return-type check in
 [`scheduler/execute.rs`](../../src/machine/execute/scheduler/execute.rs)
 gates on `ReturnType::is_resolved()` so the static-typing pathway stays
 untouched and the deferred slot check runs only inside the Combine
@@ -213,11 +221,11 @@ see [open-work.md](open-work.md) for the precision refinement.
 
 Multi-argument FUNCTORs are ordinary multi-parameter binders. Currying is
 just nested FUNCTORs whose outer return type is the inner functor's type,
-written with the `:(Functor (params) -> R)` sigil:
+written with the `:(FUNCTOR (params) -> R)` sigil:
 
 ```
 LET MakeMap = (FUNCTOR (MAKEMAP Er :OrderedSig)
-                -> :(Functor (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type)))) = (
+                -> :(FUNCTOR (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type)))) = (
   FUNCTOR (Vo :MonoidSig) -> (SIG_WITH Map ((Key: Er.Type))) = (
     MODULE Result = ( ... )
   )
@@ -237,27 +245,29 @@ a type parameter — so parametric abstractions like the `Monad` signature in
 
 ```
 SIG Monad = (
-  (LET Wrap = (TYPE_CONSTRUCTOR Type))
-  (VAL pure :(Function (Number) -> :(Wrap Number)))
-  (VAL bind :(Function (:(Wrap Number), :(Function (Number) -> :(Wrap Number))) -> :(Wrap Number)))
+  (LET Wrap = (TEMPLATE Type))
+  (VAL pure :(FN (Number) -> :(Number AS Wrap)))
+  (VAL bind :(FN (:(Number AS Wrap), :(FN (Number) -> :(Number AS Wrap))) -> :(Number AS Wrap)))
 )
 ```
 
-`(TYPE_CONSTRUCTOR <param>)` is the declaration form: inside a SIG body it
+`(TEMPLATE <param>)` is the declaration form: inside a SIG body it
 binds the slot name (`Wrap` above) to a template
 `KType::UserType { kind: UserTypeKind::TypeConstructor { param_names }, .. }`
 carrying the parameter symbol list. The builtin lives in
 [`type_ops.rs`](../../src/builtins/type_ops.rs).
 
-Application uses the type-expression sigil:
-`:(Wrap Number)` in a type-position slot elaborates through
-[`elaborate_type_expr`](../../src/machine/model/types/resolver.rs)'s
-constructor-application arm into
+Application uses the `AS` keyworded builtin through the type-expression sigil:
+`:(Number AS Wrap)` in a type-position slot lowers to
 `KType::ConstructorApply { ctor: <the Wrap UserType>, args: [Number] }` —
 structural identity by `(ctor, args)`, mirror of `List(_)` / `Dict(_, _)`.
-The arm arity-checks against the constructor's `param_names.len()` and
-parks on a placeholder when the outer name is an in-flight `LET`, the same
-forward-reference path bare-leaf type names use.
+The constructor rides in as the `AS` right-hand `:Type` argument, not as a
+dispatch verb, so the call routes through the ordinary keyworded path the
+same way `:(LIST OF Number)` does; the
+[`AS` builtin](../../src/builtins/type_constructors.rs) checks the right-hand
+side is a `TypeConstructor` and arity-checks against its `param_names.len()`.
+A forward reference to an in-flight `LET` constructor name parks on its
+producer through the same bare-name arg resolution every `:Type` slot uses.
 
 Higher-kinded slots are **per-call generative on the same path as ordinary
 abstract type slots**. Two opaque ascriptions of the same source module
@@ -275,8 +285,8 @@ entry; multi-parameter constructors (`Functor F G`) are tracked in
 [open-work.md](open-work.md). The parameter symbol must be a Type-classified
 token (≥1 lowercase character): the parser rejects single-letter capitals
 (`T`, `E`) at lex time, so surface forms in this section using `T` are
-conceptual — real code writes `(TYPE_CONSTRUCTOR Type)` or
-`(TYPE_CONSTRUCTOR Elt)`. The [token-class rule](tokens.md) is the
+conceptual — real code writes `(TEMPLATE Type)` or
+`(TEMPLATE Elt)`. The [token-class rule](tokens.md) is the
 parser-level cause.
 
 `ConstructorApply` is a type-language-only variant: no `KObject` reports a
@@ -284,14 +294,14 @@ parser-level cause.
 machinery (FN return-type elaboration, signature-body ascription) and the
 value-level admissibility — wrapping a concrete value in `Wrap<Number>` and
 unwrapping it — and cross-module application (`M.Wrap<Number>` reached via
-ATTR-then-apply) are tracked in [open-work.md](open-work.md). Bare `Wrap<T>`
-in a signature body or against a root-scope-bound constructor is the path
-the test suite pins.
+ATTR-then-apply) are tracked in [open-work.md](open-work.md). A bare
+`:(T AS Wrap)` in a signature body or against a root-scope-bound constructor
+is the path the test suite pins.
 
 ## Type expressions and constraints
 
-The `:(...)` type-expression sigil parameterizes `:(List T)`, `:(Dict K V)`,
-and `:(Function (args) -> R)`
+The `:(...)` type-expression sigil parameterizes `:(LIST OF T)`, `:(MAP K -> V)`,
+and `:(FN (args) -> R)`
 ([ktype.md § Container type parameterization](ktype.md#container-type-parameterization))
 for positional structural types. Sharing constraints,
 modular-implicit signature constraints, and witness-typed
@@ -323,3 +333,14 @@ Sharing constraints, modular-implicit signature constraints, and
 witness-typed instantiations share this one builtin family. The
 implicit *marker* itself (which parameter is implicit) is orthogonal —
 see [implicits.md](implicits.md).
+
+## Open work
+
+- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
+  `KType::KFunctor { params }` becomes an ordered identifier-keyed record,
+  sharing equality and hashing with the struct schema and FN parameter types.
+- [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
+  functor parameter names round-trip into `KFunctor` identity.
+- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
+  functor-parameter records admit contravariantly under the same width/depth
+  record subtyping as functions.

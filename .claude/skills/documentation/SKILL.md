@@ -71,6 +71,13 @@ The work item is no longer future work, so it leaves `roadmap/`.
 5. **Update `ROADMAP.md` prose:** add a phrase to the "What's shipped so far" paragraph naming what landed. (The tool only touches the bullet lists.)
 6. **Re-run `doclinks check`** (below).
 
+### When migrating prose between docs
+
+When a doc edit moves prose into a new owner doc (a doc-only seam consolidation, or any "this section now lives in X.md"), the source files that previously linked to the moved sections need a sweep:
+
+1. **Find inbound source links to migrated anchors.** Anchors that disappeared from the old doc are now broken in `src/` even if `doclinks check` reports the file-level link as valid (it doesn't validate `#fragments`). Grep `src/` for `old-doc.md#anchor-name` and update each to the new owner.
+2. **Trim subsumed comments.** Source-file docstrings or module-level prose that duplicates the migrated narrative now duplicates the new owner doc. Replace duplicated prose with a one-line cross-link to the new doc. SAFETY comments, invariants the next line depends on, and call-site-specific rationale stay — only trim what the new doc fully covers.
+
 ### After a Miri run in this session
 
 If the session ran a Miri full-slate invocation, update the slate-duration log

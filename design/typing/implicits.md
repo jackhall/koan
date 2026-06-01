@@ -21,7 +21,7 @@ module language itself.
 A function can declare an **implicit module parameter**:
 
 ```
-LET sort = (FN (SORT xs :(List Mo.Type) {Mo: OrderedSig}) -> :(List Mo.Type) = (...))
+LET sort = (FN (SORT xs :(LIST OF Mo.Type) {Mo: OrderedSig}) -> :(LIST OF Mo.Type) = (...))
 ```
 
 At a call site `(SORT [3, 1, 2])`, the compiler infers `Mo.Type = Number`,
@@ -68,8 +68,8 @@ operations:
 ```
 SIG OrderedSig = (
   (LET Type = ...)
-  (VAL compare :(Function (Type, Type) -> Number))
-  (VAL gen :(Function (Random) -> Type))
+  (VAL compare :(FN (Type, Type) -> Number))
+  (VAL gen :(FN (Random) -> Type))
 
   (AXIOM #((compare x x) = 0))
   (AXIOM #((sign (compare x y)) = (- (sign (compare y x)))))
@@ -97,7 +97,7 @@ non-transitive comparisons, hashes that disagree with their own equality,
 monoids whose identity isn't.
 
 **Generators live in modules; the signature requires them.** A
-`(VAL gen :(Function (Random) -> Type))` slot in a signature body is an
+`(VAL gen :(FN (Random) -> Type))` slot in a signature body is an
 obligation: every ascribing module must supply a generator for the abstract
 type. This folds
 generator presence into the existing structural-conformance check —

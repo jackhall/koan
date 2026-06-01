@@ -1,0 +1,2 @@
+/observe/precommit-coverage.lcov -diff linguist-generated=true
+Cargo.lock -diff linguist-generated=true

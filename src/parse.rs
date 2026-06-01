@@ -1,10 +1,6 @@
-//! Parse — turns Koan source text into a sequence of `KExpression`s. The pipeline runs
-//! `mask_quotes → collapse_whitespace → build_tree`; token classification, operator
-//! desugaring, dict-pair state, and `<...>` type-param folding live in private submodules.
-//!
-//! The `pub use` block below is the entire public surface: the [`parse`] entry point and
-//! the shared `<name>: <slot>` triple walker. The AST node types live in [`crate::machine::model::ast`].
-//! Submodules are private — all callers go through this surface.
+//! Turns Koan source text into a sequence of `KExpression`s. Pipeline:
+//! `mask_quotes → collapse_whitespace → build_tree`. The `pub use` block below
+//! is the entire public surface; submodules are private.
 //!
 //! See [design/expressions-and-parsing.md](../design/expressions-and-parsing.md).
 

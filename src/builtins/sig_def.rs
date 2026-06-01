@@ -1,29 +1,28 @@
-//! `SIG <name:TypeExprRef> = <body:KExpression>` — declare a module signature (an interface
-//! a module can be ascribed to). See
+//! `SIG <name:TypeExprRef> = <body:KExpression>` — declare a module signature (an
+//! interface a module can be ascribed to). See
 //! [design/typing/modules.md](../../design/typing/modules.md).
 //!
-//! Construction shape mirrors [`module_def`](super::module_def): body statements dispatch
-//! against a fresh child scope on the OUTER scheduler, then a `Combine` over those slots
-//! captures the populated scope into a [`Signature`] value, allocates it in the parent's
-//! arena, and binds it under the signature's name. Body declarations are
-//! `LET name = (FN <signature> -> <return> = ...)` for operations and `LET Type = TypeExpr`
-//! for abstract type declarations (stage 4 will add `axiom`s here too).
-//!
-//! Stage 1 stores the raw scope; the ascription operators (`:|` / `:!`) iterate it at
-//! ascription time. Stage 2 (functors) consumes signatures as parameter types; stage 4
-//! attaches axioms.
+//! Construction mirrors [`module_def`](super::module_def): body statements dispatch
+//! against a fresh child scope on the outer scheduler; a `Combine` over those slots
+//! captures the populated scope into a [`Signature`] value, allocates it in the
+//! parent's arena, and binds it under the signature's name. Body declarations are
+//! `LET name = (FN <signature> -> <return> = ...)` for operations and
+//! `LET Type = TypeName` for abstract type declarations. The ascription operators
+//! (`:|` / `:!`) iterate the stored scope at ascription time.
 
+use crate::machine::model::values::Signature;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind, Scope,
-    SchedulerHandle,
+    ArgumentBundle, BindingIndex, BodyResult, CombineFinish, Frame, KError, KErrorKind,
+    SchedulerHandle, Scope,
 };
-use crate::machine::model::values::Signature;
 
 use crate::machine::model::ast::KExpression;
 
-use crate::machine::core::kfunction::argument_bundle::{extract_bare_type_name, extract_kexpression};
 use super::{arg, err, kw, register_nominal_binder, sig};
+use crate::machine::core::kfunction::argument_bundle::{
+    extract_bare_type_name, extract_kexpression,
+};
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -48,7 +47,6 @@ pub fn body<'a>(
 
     let deps = sched.enter_body_block(decl_scope, body_expr);
 
-    // SIG is a nominal binder (D7 carve-out).
     let bind_index = sched
         .current_lexical_chain()
         .map(|chain| BindingIndex::nominal(chain.index))
@@ -58,33 +56,31 @@ pub fn body<'a>(
         let arena = parent_scope.arena;
         let sig: &'a Signature<'a> =
             arena.alloc_signature(Signature::new(name_for_finish.clone(), decl_scope));
-        // Post-collapse: the signature value rides `KTypeValue(KType::Signature(s))`.
-        // The type-side identity carries the *constraint* form
-        // `KType::SatisfiesSignature { sig_id, sig_path, .. }` rather than the
-        // identity-bearing `KType::Signature(_)` — slot annotations `:OrderedSig` mean
-        // "any module satisfying OrderedSig", not "this signature value itself."
-        // Splitting the two storage roles keeps the slot-vs-value semantic distinction
-        // the pre-collapse SatisfiesSignature/Signature split already encoded.
-        let identity = KType::SatisfiesSignature {
-            sig_id: sig.sig_id(),
-            sig_path: name_for_finish.clone(),
+        // One unified identity in `bindings.types`: `KType::Signature { sig, pinned_slots }`
+        // is both the introspectable value (`decl_scope` via `sig`) and the dispatch
+        // constraint. A slot annotation `:OrderedSig` means "any module satisfying
+        // OrderedSig"; the signature value is recovered via `coerce_type_token_value`,
+        // which synthesizes `KTypeValue(KType::Signature { .. })`. SIG doesn't join an SCC
+        // type cycle, so the upsert's overwrite arm never fires — its insert-if-absent /
+        // non-equal-Rebind behaviour (two `SIG Foo` in one scope error) carries here.
+        let identity = KType::Signature {
+            sig,
             pinned_slots: Vec::new(),
         };
-        let sig_obj: &'a KObject<'a> = arena.alloc(KObject::KTypeValue(KType::Signature(sig)));
-        match parent_scope.register_nominal(name_for_finish.clone(), identity, sig_obj, bind_index)
-        {
-            Ok(obj) => BodyResult::Value(obj),
-            Err(e) => BodyResult::Err(
-                e.with_frame(Frame::bare("<signature>", format!("SIG {} body", name_for_finish))),
-            ),
+        match parent_scope.register_type_upsert(name_for_finish.clone(), identity, bind_index) {
+            Ok(kt_ref) => BodyResult::Value(arena.alloc(KObject::KTypeValue(kt_ref.clone()))),
+            Err(e) => BodyResult::Err(e.with_frame(Frame::bare(
+                "<signature>",
+                format!("SIG {} body", name_for_finish),
+            ))),
         }
     });
     let combine_id = sched.add_combine(deps, vec![], scope, finish);
     BodyResult::DeferTo(combine_id)
 }
 
-/// Dispatch-time placeholder extractor for SIG. `parts[1]` is the `Type(t)` token of the
-/// signature's name slot. Same shape as STRUCT / MODULE / named UNION.
+/// Dispatch-time placeholder extractor: pulls the signature name from `parts[1]`'s
+/// `Type(t)` token. Same shape as STRUCT / MODULE / named UNION.
 pub(crate) fn binder_name(expr: &KExpression<'_>) -> Option<String> {
     expr.binder_name_from_type_part()
 }
@@ -93,12 +89,15 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_nominal_binder(
         scope,
         "SIG",
-        sig(KType::AnySignature, vec![
-            kw("SIG"),
-            arg("name", KType::TypeExprRef),
-            kw("="),
-            arg("body", KType::KExpression),
-        ]),
+        sig(
+            KType::AnySignature,
+            vec![
+                kw("SIG"),
+                arg("name", KType::TypeExprRef),
+                kw("="),
+                arg("body", KType::KExpression),
+            ],
+        ),
         body,
         Some(binder_name),
     );
@@ -111,8 +110,6 @@ mod tests {
     use crate::machine::RuntimeArena;
     use crate::parse::parse;
 
-    /// Smoke test for SIG's binder_name extractor: structural extraction of the `Type(_)`
-    /// token at `parts[1]`.
     #[test]
     fn binder_name_extracts_sig_name() {
         let mut exprs = parse("SIG OrderedSig = (VAL x :Number)").expect("parse should succeed");
@@ -127,10 +124,11 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
-        let data = scope.bindings().data();
+        // SIG installs a single type-side identity; nothing lands in `bindings.data`.
+        assert!(scope.bindings().data().get("OrderedSig").is_none());
         assert!(matches!(
-            data.get("OrderedSig").map(|(o, _)| *o),
-            Some(KObject::KTypeValue(KType::Signature(_)))
+            scope.resolve_type("OrderedSig"),
+            Some(KType::Signature { .. })
         ));
     }
 
@@ -140,29 +138,23 @@ mod tests {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG OrderedSig = (VAL x :Number)");
-        let data = scope.bindings().data();
-        let sig = match data.get("OrderedSig").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
+        let sig = match scope.resolve_type("OrderedSig") {
+            Some(KType::Signature { sig, .. }) => *sig,
             _ => panic!("OrderedSig should be a signature"),
         };
         assert_eq!(sig.path, "OrderedSig");
     }
 
-    /// Body-statement forward-reference: a SIG body's `VAL x: SomeType` references an
-    /// outer-scope-bound type alias. Mirrors `module_def::module_body_parks_on_outer_placeholder`
-    /// — post-refactor the body statement's type-resolution sub-Dispatch parks on the
-    /// outer placeholder. The outer `LET MyAlias = Number` (Type-class binder name —
-    /// stays on the LET path) finalizes first; the SIG body's VAL slot then sees
-    /// `MyAlias` resolved against the outer scope.
+    /// Body-statement forward-reference: a SIG body's `VAL x :SomeType` parks on an
+    /// outer-scope-bound type alias and resolves once the alias finalizes.
     #[test]
     fn sig_body_parks_on_outer_placeholder() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "LET MyAlias = Number\nSIG Foo = (VAL x :MyAlias)");
-        let data = scope.bindings().data();
         use crate::machine::model::types::KType;
-        let sig = match data.get("Foo").map(|(o, _)| *o) {
-            Some(KObject::KTypeValue(KType::Signature(s))) => *s,
+        let sig = match scope.resolve_type("Foo") {
+            Some(KType::Signature { sig, .. }) => *sig,
             _ => panic!("Foo should be a signature"),
         };
         let inner = sig.decl_scope().bindings().data();
@@ -174,19 +166,16 @@ mod tests {
         );
     }
 
-    /// Failing body statement surfaces as the SIG node's error and must NOT bind `Foo` in
-    /// the parent scope. The failing surface is a VAL slot whose declared type names a
-    /// nonexistent name; the type-resolution sub-Dispatch errors `UnboundName`, the
-    /// VAL Combine propagates the error, and the SIG Combine short-circuits.
+    /// A failing body statement surfaces as the SIG node's error and must not bind
+    /// `Foo` (type side) in the parent scope.
     #[test]
     fn sig_body_error_short_circuits_finalize() {
         let arena = RuntimeArena::new();
         let scope = run_root_silent(&arena);
         run(scope, "SIG Foo = (VAL x :NonexistentType)");
         assert!(
-            scope.bindings().data().get("Foo").is_none(),
-            "Foo must not bind when its body errors",
+            scope.resolve_type("Foo").is_none(),
+            "Foo must not bind (type side) when its body errors",
         );
     }
-
 }

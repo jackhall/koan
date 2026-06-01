@@ -17,7 +17,9 @@ impl std::io::Write for SharedBuf {
         self.0.borrow_mut().extend_from_slice(b);
         Ok(b.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn build_scope<'a>(arena: &'a RuntimeArena) -> &'a Scope<'a> {
@@ -32,7 +34,9 @@ fn run_collecting_errors<'a>(
     let exprs = parse(source).expect("parse should succeed");
     let mut sched = Scheduler::new();
     let mut ids = Vec::new();
-    for e in exprs { ids.push(sched.add_dispatch(e, scope)); }
+    for e in exprs {
+        ids.push(sched.add_dispatch(e, scope));
+    }
     let _ = sched.execute();
     ids.into_iter()
         .map(|id| sched.read_result(id).map_err(|e| e.clone()))
@@ -116,13 +120,19 @@ fn cross_scope_shadowing_succeeds() {
          MODULE Mod = (LET x = 99)",
     );
     assert!(results[0].is_ok(), "outer LET should succeed");
-    assert!(results[1].is_ok(), "shadowing LET inside MODULE should succeed");
+    assert!(
+        results[1].is_ok(),
+        "shadowing LET inside MODULE should succeed"
+    );
     // Outer x stays 1.
     assert!(matches!(scope.lookup("x"), Some(KObject::Number(n)) if *n == 1.0));
-    // Module's x is 99.
-    let m = match scope.lookup("Mod") {
-        Some(KObject::KTypeValue(KType::Module { module: m, frame: _ })) => *m,
-        _ => panic!("Mod should be a module"),
+    // Module's x is 99. MODULE is type-only — its `&Module` rides the identity in `types`.
+    let m = match scope.resolve_type("Mod") {
+        Some(KType::Module {
+            module: m,
+            frame: _,
+        }) => *m,
+        _ => panic!("Mod should be a module identity in types"),
     };
     let x = m.child_scope().lookup("x");
     assert!(matches!(x, Some(KObject::Number(n)) if *n == 99.0));

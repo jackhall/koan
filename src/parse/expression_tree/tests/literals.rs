@@ -1,6 +1,5 @@
 //! `literals` parse cases for `expression_tree::parse`.
 
-
 use super::tree;
 
 #[test]
@@ -38,10 +37,7 @@ fn floats_and_scientific_are_number_literals() {
 
 #[test]
 fn bool_and_null_literals() {
-    assert_eq!(
-        tree("true false null").unwrap(),
-        "[b(true) b(false) null]"
-    );
+    assert_eq!(tree("true false null").unwrap(), "[b(true) b(false) null]");
 }
 
 #[test]
@@ -89,5 +85,8 @@ fn identifier_token_with_invalid_char_errors() {
 
 #[test]
 fn identifier_underscore_allowed() {
-    assert_eq!(tree("my_var another_one").unwrap(), "[t(my_var) t(another_one)]");
+    assert_eq!(
+        tree("my_var another_one").unwrap(),
+        "[t(my_var) t(another_one)]"
+    );
 }

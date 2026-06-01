@@ -1,15 +1,11 @@
 //! Token classification: turn each whitespace-delimited word into a
-//! `Spanned<ExpressionPart>`. Recognizes literals (numbers, strings, booleans, `null`),
-//! classifies non-literal atoms into keywords / types / identifiers, and desugars
-//! compound atoms — member access (`a.b`), indexing (`a[i]`), and prefix negation — into
-//! nested `ExpressionPart`s using the `operators` table. Consumed by
-//! `expression_tree::build_tree`.
+//! `Spanned<ExpressionPart>`. Recognizes literals, classifies non-literal atoms into
+//! keywords / types / identifiers, and desugars compound atoms (`a.b`, `a[i]`, `!a`)
+//! into nested `ExpressionPart`s using the `operators` table.
 //!
-//! Phase 4: each call carries the token's original-source start offset; sub-atoms walk
-//! `char_indices` so they get sub-spans within the token, and synthetic operator
-//! keywords (ATTR / NOT / TRY) take 1-codepoint trigger spans inside a token-wide
-//! wrapping `Expression`. Mid-token errors attach the enclosing token's span — the
-//! message names the offending char, the span pinpoints the token.
+//! Synthetic operator keywords (ATTR / NOT / TRY) take 1-codepoint trigger spans;
+//! mid-token errors attach the enclosing token's span so the message names the
+//! offending char while the span pinpoints the token.
 //!
 //! See [design/expressions-and-parsing.md](../../design/expressions-and-parsing.md).
 
@@ -20,23 +16,22 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::machine::core::source::{Span, Spanned};
+use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeName};
 use crate::machine::model::is_keyword_token;
-use crate::machine::model::ast::{ExpressionPart, KLiteral, TypeExpr};
 use crate::machine::KError;
 use crate::parse::operators::{find_prefix, find_suffix, is_atom_terminator, SuffixOp, UnaryBuild};
 
-static FLOAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap()
-});
+static FLOAT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$").unwrap());
 
-/// Convert a single whitespace-delimited token into a `Spanned<ExpressionPart>`. `start`
-/// is the token's original-source byte offset, used to compute absolute spans for atoms
-/// and operator triggers. First tries `try_literal` on the whole token (so e.g. `3.14`
-/// stays a number rather than being parsed as `(attr 3 14)`); otherwise hands off to
-/// `parse_compound` to desugar member access, indexing, and negation into nested
-/// expressions with sub-spans for each trigger.
+/// Whole-token literal match runs first so e.g. `3.14` stays a number rather than
+/// being desugared as `(attr 3 14)`. `start` is the token's original-source byte
+/// offset, used to compute absolute spans for atoms and operator triggers.
 pub fn classify_token<'a>(tok: &str, start: u32) -> Result<Spanned<ExpressionPart<'a>>, KError> {
-    let token_span = Span { start, end: start + tok.len() as u32 };
+    let token_span = Span {
+        start,
+        end: start + tok.len() as u32,
+    };
     if let Some(part) = try_literal(tok) {
         return Ok(Spanned::at(part, token_span));
     }
@@ -51,9 +46,8 @@ pub fn classify_token<'a>(tok: &str, start: u32) -> Result<Spanned<ExpressionPar
     Ok(part)
 }
 
-/// Try to parse `tok` as a recognized literal (`null`, `true`, `false`, or a number matching
-/// the `FLOAT` regex). Returns `None` if it isn't one. Shared by `classify_token` and
-/// `classify_atom` so both apply the same literal rules.
+/// Shared between whole-token and sub-token classification so both apply the same
+/// literal rules.
 fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
     match tok {
         "null" => return Some(ExpressionPart::Literal(KLiteral::Null)),
@@ -69,21 +63,13 @@ fn try_literal<'a>(tok: &str) -> Option<ExpressionPart<'a>> {
     None
 }
 
-/// Classify a sub-token (the piece between operators inside a compound token) per the token-class
-/// rules in [design/typing/tokens.md](../../design/typing/tokens.md):
-///
-/// 1. Literal first (`null`, `true`, numbers).
-/// 2. `Keyword` per `is_keyword_token` — pure-symbol or ≥2 uppercase letters with no lowercase.
-/// 3. `Type` if first char ASCII-uppercase AND at least one lowercase char (`Number`, `Foo`,
-///    `OrderedSig`, `KFunction`).
-/// 4. Otherwise, if the token starts uppercase but fits neither rule (e.g. `A`, `AB1` — single
-///    uppercase letter, or uppercase + digits with no lowercase), it's a `ParseError`.
-/// 5. Otherwise `Identifier` (lowercase-leading or `_`-leading names).
-///
-/// Type and Identifier tokens are validated for character content: Types accept only ASCII
-/// letters and digits; Identifiers also accept `_`. Anything else (e.g. `Number>`, `a@b`) is
-/// rejected as a glue error so symbols can't sneak into a name. Keywords are exempt since
-/// `=`, `->`, and `+` are legitimate keyword shapes.
+/// Classify a sub-token per the token-class rules in
+/// [design/typing/tokens.md](../../design/typing/tokens.md). Capital-leading tokens
+/// that match neither the keyword nor the type shape are rejected rather than falling
+/// through to Identifier, so a stray `A` or `K9` can't silently shadow a future
+/// type-position binding. Types and Identifiers reject non-alphanumeric content so
+/// glue like `Number>` or `a@b` errors instead of sneaking through; Keywords are
+/// exempt because `=` / `->` / `+` are legitimate keyword shapes.
 fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, KError> {
     if let Some(part) = try_literal(tok) {
         return Ok(part);
@@ -101,12 +87,8 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
                 Some(token_span),
             ));
         }
-        return Ok(ExpressionPart::Type(TypeExpr::leaf(tok.to_string())));
+        return Ok(ExpressionPart::Type(TypeName::leaf(tok.to_string())));
     }
-    // Capital-leading tokens that are neither a keyword nor a type are reserved syntactic
-    // territory — module-system stage 1 declared the rule explicitly so a single-letter `A`
-    // or a `K9` shape can't slip in as an Identifier and silently shadow a future
-    // type-position binding.
     if tok.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
         return Err(KError::parse(
             format!(
@@ -117,7 +99,10 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
             Some(token_span),
         ));
     }
-    if let Some(bad) = tok.chars().find(|c| !c.is_ascii_alphanumeric() && *c != '_') {
+    if let Some(bad) = tok
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && *c != '_')
+    {
         return Err(KError::parse(
             format!(
                 "identifier `{tok}` contains invalid character {bad:?}; \
@@ -129,25 +114,21 @@ fn classify_atom<'a>(tok: &str, token_span: Span) -> Result<ExpressionPart<'a>, 
     Ok(ExpressionPart::Identifier(tok.to_string()))
 }
 
-/// True iff `tok` looks like a type name: first char ASCII-uppercase plus at least one
-/// ASCII-lowercase elsewhere. Admits `Number`, `Point`, `MyType`, `Point3D`, `KFunction`;
-/// rejects all-caps tokens (caught earlier by `is_keyword_token`) and lowercase-leading
-/// tokens (fall through to `Identifier`).
+/// First char ASCII-uppercase plus at least one ASCII-lowercase elsewhere.
 fn is_type_name(tok: &str) -> bool {
     let mut chars = tok.chars();
-    let Some(first) = chars.next() else { return false; };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_uppercase() {
         return false;
     }
     chars.any(|c| c.is_ascii_lowercase())
 }
 
-/// Recursive-descent parser for compound tokens. Strips leading prefix operators, reads an
-/// atom, then folds in any infix/postfix suffix operators. Each matched operator's builder
-/// constructs the resulting expression — the dispatcher knows operand arity and source per
-/// kind, the builder knows the output shape per operator. Sub-atoms walk
-/// `char_indices` so each one knows its byte offset within the token; operator triggers
-/// take a 1-codepoint span at their position.
+/// Recursive-descent parser for compound tokens. Each matched operator's builder owns
+/// the output shape; the dispatcher just knows arity. Operator triggers take a
+/// 1-codepoint span at their position so error messages can point at the trigger char.
 fn parse_compound<'a>(
     chars: &mut Peekable<CharIndices>,
     start: u32,
@@ -184,12 +165,13 @@ fn parse_compound<'a>(
 
 fn trigger_span(token_start: u32, ci: usize, c: char) -> Span {
     let start = token_start + ci as u32;
-    Span { start, end: start + c.len_utf8() as u32 }
+    Span {
+        start,
+        end: start + c.len_utf8() as u32,
+    }
 }
 
-/// Consume characters from `chars` until the next operator trigger or postfix close char
-/// (driven by `OPERATORS`) and classify the run via `classify_atom`. Returns the classified
-/// atom wrapped in a `Spanned` with its absolute span. Errors on an empty atom.
+/// Errors on an empty atom — operators must have an atom between them.
 fn read_atom<'a>(
     chars: &mut Peekable<CharIndices>,
     token_start: u32,
@@ -304,7 +286,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn negation() {
         assert_eq!(classify("!foo").unwrap(), "[t(NOT) t(foo)]");
@@ -312,10 +293,7 @@ mod tests {
 
     #[test]
     fn double_negation() {
-        assert_eq!(
-            classify("!!foo").unwrap(),
-            "[t(NOT) [t(NOT) t(foo)]]"
-        );
+        assert_eq!(classify("!!foo").unwrap(), "[t(NOT) [t(NOT) t(foo)]]");
     }
 
     #[test]
@@ -385,11 +363,8 @@ mod tests {
         assert!(classify("?foo").is_err());
     }
 
-    // Token-classification tests.
-
     #[test]
     fn keyword_two_uppercase_no_lowercase() {
-        // ≥2 uppercase letters with no lowercase qualifies as a Keyword.
         assert_eq!(classify("LET").unwrap(), "t(LET)");
         assert_eq!(classify("MODULE").unwrap(), "t(MODULE)");
         assert_eq!(classify("FN").unwrap(), "t(FN)");
@@ -397,7 +372,6 @@ mod tests {
 
     #[test]
     fn type_uppercase_first_with_lowercase() {
-        // First uppercase + ≥1 lowercase classifies as Type.
         assert_eq!(classify("Number").unwrap(), "T(Number)");
         assert_eq!(classify("OrderedSig").unwrap(), "T(OrderedSig)");
         assert_eq!(classify("KFunction").unwrap(), "T(KFunction)");
@@ -405,7 +379,6 @@ mod tests {
 
     #[test]
     fn single_uppercase_letter_is_parse_error() {
-        // `A`, `B`, `Z` etc. — neither keyword (only 1 uppercase) nor type (no lowercase).
         assert!(classify("A").is_err());
         assert!(classify("B").is_err());
         assert!(classify("Z").is_err());
@@ -413,18 +386,11 @@ mod tests {
 
     #[test]
     fn uppercase_with_digits_no_lowercase_is_parse_error() {
-        // `K9` — uppercase first, no lowercase. The token-classification rule rejects this rather than letting
-        // it fall through to Identifier (which would silently shadow a future type-position
-        // binding).
         assert!(classify("K9").is_err());
     }
 
     #[test]
     fn pure_symbol_token_is_keyword() {
-        // Pure-symbol tokens (no letters at all) bypass the alphabetic-letter rule. The
-        // ascription operators `:|` / `:!` (assembled at the build_tree layer because `:` and
-        // `!` are themselves expression-tree-level delimiters) and the existing `=` / `->`
-        // are all keywords.
         assert_eq!(classify("=").unwrap(), "t(=)");
         assert_eq!(classify("->").unwrap(), "t(->)");
     }

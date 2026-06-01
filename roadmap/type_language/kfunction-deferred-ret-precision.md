@@ -14,7 +14,7 @@ synthesis Anys out *parameter* slots on the same rule. The symmetric
 coarsening on the admission side lives at
 [`function_compat`](../../src/machine/model/types/ktype_predicates.rs) —
 when a deferred candidate is admission-checked against a slot typed
-`:(Function (SpecificArgs) -> SpecificT)`, the comparison reads the
+`:(FN (SpecificArgs) -> SpecificT)`, the comparison reads the
 deferred position as `Any` and the strict `==` refuses admission
 silently.
 
@@ -33,9 +33,9 @@ the structural `KType` would.
 
 **Impact.**
 
-- *Precise `:(Function (_) -> SpecificT)` slot ascription against
+- *Precise `:(FN (_) -> SpecificT)` slot ascription against
   deferred-return candidates becomes well-defined.* A binding like
-  `LET cb :(Function (Er) -> Er) = make_fn` where `make_fn` returns a
+  `LET cb :(FN (Er) -> Er) = make_fn` where `make_fn` returns a
   `Deferred(Expression)`-carrying FN admits-or-rejects with a real
   shape comparison, not a silent refusal.
 - *Modular-implicit search
@@ -53,12 +53,12 @@ the structural `KType` would.
 - *Synthesis side — open.* Two paths for
   `function_value_ktype` when the source FN's `return_type` is
   `Deferred(_)`:
-  - *(a) Precision-aware variant.* Mint a new `KType` variant
-    (`KFunction` with a `DeferredRet(_)` carrier inside, or a parallel
-    `KType::DeferredKFunction`) that records the deferred expression's
-    surface form. Equality compares the carriers directly. Requires
-    threading the new variant through every consumer of
-    `KType::KFunction`.
+  - *(a) Precision-aware carrier.* Record the deferred expression's
+    surface form as a deferred field type inside `KFunction`'s parameter
+    record (per the [record substrate](record-substrate.md)). Equality
+    compares the carriers directly. A *parallel* `KType::DeferredKFunction`
+    variant is ruled out — it would fork the very `KFunction` arg
+    representation the record work unifies.
   - *(b) Value-aware admission.* Leave the synthesized `KType`
     coarsened but route admission through a helper that reaches back
     to the underlying `KFunction::signature.return_type` when the
@@ -66,13 +66,14 @@ the structural `KType` would.
     language; doesn't help consumers that only see the synthesized
     `KType` (e.g. structural slot ascription that's already lost the
     `KFunction` carrier).
-- *Admission side — open.* The
+- *Admission side — open.* Function-type admission moves to structural
+  record subtyping
+  ([record-subtyping](record-subtyping.md)); this item's remaining
+  question is how a *deferred* field admits under that relation (it reads
+  as `Any` until elaborated). The
   [`function_compat`](../../src/machine/model/types/ktype_predicates.rs)
-  branch's `debug_assert!` is the tripwire — when it fires, the
-  decision between (a) and (b) above is forced. Today's strict-`==`
-  refusal stays safe until the first non-`Any` slot-ret comparison
-  appears, which is gated on either a stage-5 implicit-search
-  consumer or a precise FN-typed slot ascription test landing.
+  `debug_assert!` stays the tripwire that forces the (a)/(b) decision when
+  a non-`Any` slot-ret comparison first appears.
 - *Bridging today's PartialEq path — decided.* `ReturnType`'s own
   `PartialEq` (used by `signatures_exact_equal` in
   [`bindings.rs`](../../src/machine/core/bindings.rs)) stays
@@ -89,6 +90,9 @@ the structural `KType` would.
   extends the existing `debug_assert!` tripwire over parameter-slot
   deferreds. This item covers parameter and return slots in one pass
   once the tripwire fires.
+- [Record structural subtyping and projection](record-subtyping.md) —
+  function-type admission is redefined as structural record subtyping
+  there; this item layers deferred-carrier precision on top.
 
 **Unblocks:**
 

@@ -24,13 +24,18 @@ impl Write for SharedBuf {
         self.0.borrow_mut().extend_from_slice(buf);
         Ok(buf.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
-/// Spin up an arena + default scope, run `source`, return (captured PRINT output, arena,
-/// root scope) so the caller can inspect bindings before the arena drops at end of scope.
-/// Each test that needs both stdout and post-run state uses this rig directly.
-pub(super) fn run<'a>(source: &str, arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
+/// Run `source` and return the root scope so callers can inspect post-run bindings;
+/// PRINT output lands in `captured`.
+pub(super) fn run<'a>(
+    source: &str,
+    arena: &'a RuntimeArena,
+    captured: Rc<RefCell<Vec<u8>>>,
+) -> &'a Scope<'a> {
     let exprs = parse(source).expect("parse should succeed");
     let root = default_scope(arena, Box::new(SharedBuf(captured)));
     let mut scheduler = Scheduler::new();

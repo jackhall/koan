@@ -1,8 +1,8 @@
 //! Run-root arena and scheduler-slot reclamation invariants for user FN calls.
 
 use crate::builtins::test_support::{parse_one, run, run_one, run_root_silent, run_root_with_buf};
-use crate::machine::RuntimeArena;
 use crate::machine::execute::Scheduler;
+use crate::machine::RuntimeArena;
 
 #[test]
 fn chained_user_fn_tail_calls_reuse_one_slot() {
@@ -28,10 +28,6 @@ fn chained_user_fn_tail_calls_reuse_one_slot() {
     );
 }
 
-/// A chain of user-fn tail calls (`AA` → `BB` → `CC` → `DD` → `PRINT`)
-/// exercises the per-call frame reuse path. After the first invocation
-/// allocates a fresh frame for `AA`, each subsequent invoke reuses the
-/// previous step's frame — `tail_reuse_count` bumps once per reuse.
 #[test]
 fn chained_tail_calls_reuse_frames() {
     let arena = RuntimeArena::new();
@@ -58,13 +54,9 @@ fn chained_tail_calls_reuse_frames() {
     );
 }
 
-/// Recursive tail-call through a `MATCH` arm: the user-fn `HOP` tail-calls
-/// itself by way of `match_case::body` returning a `Tail`. The user-fn's frame
-/// gets cloned onto the MATCH-built frame's `outer_frame`, so its
-/// `strong_count` is > 1 at the moment the MATCH-arm body redispatches — reuse
-/// must correctly refuse for the user-fn-on-match-tail step. The cross-step
-/// reuse still happens once the MATCH frame is dropped at the next tail
-/// rewrite.
+/// Recursive tail-call through a `MATCH` arm. Pins the refcount-driven reuse
+/// refusal one step out, resume one step later; see
+/// [per-call-arena-protocol.md § MATCH frame lifetime under tail recursion](../../../../design/per-call-arena-protocol.md#match-frame-lifetime-under-tail-recursion).
 #[test]
 fn match_driven_tail_recursion_completes() {
     let arena = RuntimeArena::new();
@@ -96,9 +88,8 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     }
     let after = arena.alloc_count();
     let growth = after - baseline;
-    // Measured at exactly 50 (one `KObject::Number(7)` lifted per call). The < 150
-    // bound tolerates that and catches any regression that re-introduces a per-call
-    // leak into run-root.
+    // Measured at 50 (one `KObject::Number(7)` lifted per call); < 150 catches
+    // any regression that re-introduces a per-call leak into run-root.
     assert!(
         growth < 50 * 3,
         "per-call leak regression: {growth} new run-root allocations across 50 \
@@ -106,23 +97,11 @@ fn repeated_user_fn_calls_do_not_grow_run_root_per_call() {
     );
 }
 
-/// Repeated calls to a user-fn whose body has an internal sub-expression reuse
-/// scheduler slots. The body of `LOOK` evaluates `MATCH (b) WITH …`; the `(b)`
-/// is a sub-expression that spawns a sub-`Dispatch` and a parent `Bind` per call.
-///
-/// Property under test: after a warmup call has populated the free-list with the
-/// body's transient slots, each subsequent call's growth in `nodes.len()` is
-/// bounded by the *persistent* per-call overhead — the top-level dispatch slot
-/// itself, plus any persistent shim it lifts into. The body's transient sub-
-/// Dispatches/Binds must be recycled, not accumulated.
-///
-/// Without reclamation, every call would leave its body's transient fanout
-/// behind (~5+ slots/call). With reclamation, the steady-state rate is the
-/// persistent overhead alone (a small constant ≤ 2 today). Comparing two
-/// batches catches super-linear growth without coupling to the exact constant.
-///
-/// The truly-recursive variant (where the body tail-calls itself) is exercised
-/// by `match_case::tests::recursive_tagged_match_no_uaf`.
+/// Property: after a warmup call populates the free-list with the body's
+/// transient slots, steady-state per-call growth in `nodes.len()` is bounded
+/// by the *persistent* per-call overhead — the top-level dispatch slot plus
+/// any persistent shim. Without reclamation, every call would leave its
+/// body's transient fanout (~5+ slots/call) behind.
 #[test]
 fn body_subexpression_slots_recycle_across_calls() {
     let arena = RuntimeArena::new();
@@ -139,25 +118,23 @@ fn body_subexpression_slots_recycle_across_calls() {
 
     let mut sched = Scheduler::new();
 
-    // One warmup call: extends `nodes` with the persistent top-level slot(s)
-    // *and* the body's transient pool. After this call returns, the transients
-    // are on the free-list, ready to be recycled by the next call's spawns.
+    // Warmup: populates the free-list with the body's transient pool.
     sched.add_dispatch(parse_one("LOOK (Bit (one null))"), scope);
     sched.execute().expect("LOOK should run");
     let after_warmup = sched.len();
 
-    // Steady-state batch. Each call's body re-spawns the same transient shape;
-    // those slots come off the free-list, so `nodes` only grows by the
-    // persistent per-call overhead.
     let n = 30;
     for i in 1..=n {
-        let src = if i % 2 == 0 { "LOOK (Bit (one null))" } else { "LOOK (Bit (zero null))" };
+        let src = if i % 2 == 0 {
+            "LOOK (Bit (one null))"
+        } else {
+            "LOOK (Bit (zero null))"
+        };
         sched.add_dispatch(parse_one(src), scope);
         sched.execute().expect("LOOK should run");
     }
     let after_batch = sched.len();
 
-    // Sanity: each call printed once.
     assert_eq!(
         captured.borrow().iter().filter(|&&b| b == b'\n').count(),
         n + 1,
@@ -165,12 +142,8 @@ fn body_subexpression_slots_recycle_across_calls() {
         String::from_utf8_lossy(&captured.borrow()),
     );
 
-    // The property: steady-state per-call growth is bounded by persistent
-    // overhead. Currently 2 slots/call (top-level dispatch + Lift shim); if
-    // reclamation regressed and transients leaked, it would be ≥ 5.
-    // The bound of 3 reflects the property, not the exact value — it leaves
-    // daylight for one extra persistent slot per call without admitting any
-    // amount of transient pile-up.
+    // Bound of 3: steady-state is 2 slots/call (top-level dispatch + Lift shim);
+    // a transient leak would push it to ≥ 5.
     let growth = after_batch - after_warmup;
     let per_call = growth as f64 / n as f64;
     assert!(

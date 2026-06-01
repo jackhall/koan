@@ -4,7 +4,7 @@ Functions are first-class values in Koan. `KFunction` is a `KObject` variant
 ([kobject.rs](../src/machine/model/values/kobject.rs)), so a function can be returned from a
 body, bound via `LET`, looked up by name, and invoked through the fast-lane
 `FunctionValueCall` handler
-([dispatch.rs](../src/machine/execute/scheduler/dispatch.rs) —
+([dispatch.rs](../src/machine/execute/dispatch.rs) —
 `fast_lane_function_value_call`) or by appearing in a position the dispatcher
 resolves.
 
@@ -94,13 +94,13 @@ system](typing/modules.md). Modular implicits
 ([stage 5](../roadmap/predicate_typing/modular-implicits.md)) add a second
 kind of dispatch alongside slot-specificity: a function declares an implicit
 module parameter, and the compiler infers and inserts a satisfying module at
-each call site. `sort {Mo : ORDERED} (xs :(List Mo.t))` is an ordinary `FN`
+each call site. `sort {Mo : ORDERED} (xs :(LIST OF Mo.t))` is an ordinary `FN`
 in the value language whose `Mo` is resolved by lexical implicit search rather
 than by a runtime argument. Functors
 ([typing/functors.md](typing/functors.md)) give the *module*
 language the analog of the higher-order story this doc covers — a module
 parameterized by another module, applied generatively to produce fresh
 abstract types. See [typing/](typing/README.md) for the full
-plan; container type parameterization (`:(List Number)`,
-`:(Function (args) -> R)`, etc.) is shipped today and is documented in
+plan; container type parameterization (`:(LIST OF Number)`,
+`:(FN (args) -> R)`, etc.) is shipped today and is documented in
 [typing/ktype.md](typing/ktype.md).

@@ -1,17 +1,34 @@
 #!/usr/bin/env bash
-# PreToolUse hook fired on Edit and Write. When the target path is in the
-# koan doc tree (README.md, TUTORIAL.md, ROADMAP.md, design/*.md, roadmap/*.md),
-# emits an additionalContext nudge reminding Claude to invoke the
-# `documentation` skill. Non-blocking: always exits 0.
+# UserPromptSubmit hook. Fires once per turn (not per Edit/Write). Emits the
+# `documentation` skill reminder only when this turn looks doc-shaped:
+#   (a) the user prompt mentions docs/roadmap/design/README/TUTORIAL/CHANGELOG, OR
+#   (b) the working tree already has pending edits to the koan doc tree.
+# Non-blocking: always exits 0.
 
-file_path=$(python3 -c 'import sys, json; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("file_path",""))' 2>/dev/null)
+set -u
 
-case "$file_path" in
-  /var/home/jack/Code/koan/README.md|/var/home/jack/Code/koan/TUTORIAL.md|/var/home/jack/Code/koan/ROADMAP.md|/var/home/jack/Code/koan/design/*.md|/var/home/jack/Code/koan/roadmap/*.md)
-    cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"This Edit/Write touches the koan doc tree (README.md, TUTORIAL.md, ROADMAP.md, design/, or roadmap/). If you have not already invoked the `documentation` skill this session, do so before continuing — it carries the partition rules and the doclinks workflow (problem-vs-impact partition, design-doc no-historical-narrative rule, and the doclinks check/deps/orphans gating triple)."}}
+repo=/var/home/jack/Code/koan
+
+prompt=$(python3 -c 'import sys, json; d=json.load(sys.stdin); print(d.get("prompt",""))' 2>/dev/null)
+
+prompt_hit=0
+if printf '%s' "$prompt" | grep -qE -i '\b(doc|docs|documentation|roadmap|design|readme|tutorial|changelog|doclinks)\b'; then
+  prompt_hit=1
+fi
+
+git_hit=0
+if [ "$prompt_hit" -eq 0 ]; then
+  if git -C "$repo" status --porcelain 2>/dev/null | \
+       awk '{print $NF}' | \
+       grep -qE '^(README\.md|TUTORIAL\.md|ROADMAP\.md|design/|roadmap/)'; then
+    git_hit=1
+  fi
+fi
+
+if [ "$prompt_hit" -eq 1 ] || [ "$git_hit" -eq 1 ]; then
+  cat <<'JSON'
+{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"This turn looks doc-shaped. If you have not already invoked the `documentation` skill this session, do so before editing the koan doc tree (README.md, TUTORIAL.md, ROADMAP.md, design/, roadmap/) — it carries the partition rules and the doclinks workflow (problem-vs-impact partition, design-doc no-historical-narrative rule, and the doclinks check/deps/orphans gating triple)."}}
 JSON
-    ;;
-esac
+fi
 
 exit 0

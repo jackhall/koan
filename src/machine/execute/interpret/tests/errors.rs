@@ -1,13 +1,9 @@
 //! `errors` interpret/execute integration tests.
 
-
 use super::*;
-use crate::machine::KErrorKind;
 use crate::machine::execute::interpret_with_writer_path;
+use crate::machine::KErrorKind;
 
-
-/// A bare unbound name at the top level surfaces as `KError::UnboundName` rather than
-/// the prior silent `KObject::Null` swallow.
 #[test]
 fn unbound_name_at_top_level_returns_error() {
     let result = interpret_with_writer("foo", Box::new(std::io::sink()));
@@ -20,8 +16,6 @@ fn unbound_name_at_top_level_returns_error() {
     }
 }
 
-/// An error inside a user-fn body carries at least one `Frame` whose function field
-/// names the user-fn — proving the call-stack trace works through user invocation.
 #[test]
 fn error_inside_user_fn_body_carries_frame() {
     let result = interpret_with_writer(
@@ -44,10 +38,9 @@ fn error_inside_user_fn_body_carries_frame() {
     }
 }
 
-/// The first errored top-level expression short-circuits the program's reported
-/// outcome; subsequent top-level dispatches still run (Scheduler::execute keeps
-/// draining the queue), but interpret returns the first error and any later bindings
-/// are observable side-effects rather than program-level "success."
+/// Subsequent top-level dispatches still run (the scheduler keeps draining the queue),
+/// but `interpret` returns the first error; any later bindings are observable
+/// side-effects rather than program-level success.
 #[test]
 fn error_short_circuits_program_outcome() {
     let result = interpret_with_writer("undefined\nLET y = 5", Box::new(std::io::sink()));
@@ -60,15 +53,11 @@ fn error_short_circuits_program_outcome() {
     }
 }
 
-/// A made-up function call with no matching signature surfaces as
-/// `KError::DispatchFailed`. (`WAT THIS IS NOT FUNC` parses as a multi-token expression
-/// with ≥2-uppercase keyword tokens, so dispatch fails to find a match.)
+/// `WAT THIS IS NOT FUNC` parses as a multi-token expression with ≥2 uppercase
+/// keyword tokens, so dispatch finds no matching signature.
 #[test]
 fn dispatch_failure_surfaces_as_kerror() {
-    let result = interpret_with_writer(
-        "WAT THIS IS NOT FUNC",
-        Box::new(std::io::sink()),
-    );
+    let result = interpret_with_writer("WAT THIS IS NOT FUNC", Box::new(std::io::sink()));
     match result {
         Err(e) => assert!(
             matches!(&e.kind, KErrorKind::DispatchFailed { .. }),
@@ -78,13 +67,9 @@ fn dispatch_failure_surfaces_as_kerror() {
     }
 }
 
-/// A type-mismatched argument that fits the bucket shape but fails dispatch's
-/// per-slot type check surfaces as `KError::DispatchFailed` (no overload matches).
-/// `MATCH` requires `branches: KExpression`; passing a string literal in that slot
-/// fits the bucket shape (4 parts: `MATCH _ WITH _`) but fails the slot-type check,
-/// so dispatch finds zero candidates. Type mismatches that DO reach `bind` (only
-/// possible with an overload set richer than today's) would surface as
-/// `TypeMismatch` from the bind step.
+/// `MATCH` requires `branches: KExpression`; a string literal in that slot fits the
+/// bucket shape (`MATCH _ WITH _`) but fails the per-slot type check, so dispatch
+/// finds zero candidates and surfaces `DispatchFailed` rather than reaching bind.
 #[test]
 fn type_mismatch_at_dispatch_surfaces_as_dispatch_failed() {
     let result = interpret_with_writer(
@@ -100,9 +85,9 @@ fn type_mismatch_at_dispatch_surfaces_as_dispatch_failed() {
     }
 }
 
-/// Parse errors carry a span + file when source is registered via `parse_with_path`.
-/// `Display` then renders the `parse error at <path>:<line>:<col>: <message>` shape.
-/// Tab-indented continuation hits `collapse_whitespace`'s tab rejection.
+/// Parse errors registered via `parse_with_path` carry a span + file; `Display`
+/// renders `parse error at <path>:<line>:<col>: <message>`. The tab-indented line
+/// triggers the whitespace-collapse tab rejection.
 #[test]
 fn parse_error_carries_span_and_renders_location() {
     let result = interpret_with_writer_path(
@@ -129,14 +114,12 @@ fn parse_error_carries_span_and_renders_location() {
     }
 }
 
-/// Frame chain walks user-fn calls: an error in INNER, called from OUTER (via a
-/// non-tail position so OUTER's frame survives), surfaces with frames listing both
-/// function names. OUTER's body wraps INNER's call inside a `LET xx = (INNER)` so
-/// the body has 4 parts (not a single-Expression wrapper that the parser would peel)
-/// and INNER becomes a sub-Dispatch within OUTER's body — OUTER's slot then defers
-/// to a `Lift` shim holding OUTER's frame, and the Done arm appends OUTER's frame
-/// as the propagated Err lands on the slot. Direct `((INNER))` would peel to `INNER`
-/// and tail-call into INNER, causing TCO to replace OUTER's frame with INNER's.
+/// OUTER's body wraps INNER's call inside `LET xx = (INNER)` so the body has 4 parts
+/// — not a single-Expression wrapper the parser would peel — and INNER becomes a
+/// sub-Dispatch within OUTER's body. OUTER's slot defers to a `Lift` shim holding
+/// OUTER's frame, so when INNER's Err propagates the lifted slot appends OUTER's
+/// frame and both names show up. Direct `((INNER))` would peel to `INNER` and
+/// tail-call, with TCO replacing OUTER's frame.
 #[test]
 fn frame_chain_walks_nested_user_fn_calls() {
     let result = interpret_with_writer(
@@ -147,8 +130,7 @@ fn frame_chain_walks_nested_user_fn_calls() {
     );
     match result {
         Err(e) => {
-            let frame_names: Vec<String> =
-                e.frames.iter().map(|f| f.function.clone()).collect();
+            let frame_names: Vec<String> = e.frames.iter().map(|f| f.function.clone()).collect();
             assert!(
                 frame_names.iter().any(|n| n.contains("INNER")),
                 "expected a frame mentioning INNER, got {:?} (full error: {})",

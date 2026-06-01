@@ -60,12 +60,12 @@ returning the underlying `Number(0)` is what this item closes.
   facet.
 - *Structural-form inner-name re-elaboration — deferred.*
   [`val_decl.rs`](../../src/builtins/val_decl.rs)'s `CarrierForm::Raw`
-  parameterized branch elaborates structural shapes like `:(Function
+  parameterized branch elaborates structural shapes like `:(FN
   (Type, Type) -> Number)` via `Elaborator` directly against `decl_scope`,
   then sub-Dispatches each free leaf through `value_lookup` if the
   elaboration parks. The leaf-lookup path resolves the *outermost* `Type`
   reference against the SIG-local `LET Type = ...` shadow, but inner
-  positions inside the structural shape (`:(Function (Type, Type) ->
+  positions inside the structural shape (`:(FN (Type, Type) ->
   Number)`'s arg slots) are elaborated once before the leaf sub-Dispatches
   complete — the shadow on inner names isn't honored. Today no shipped
   test exercises a SIG body that shadows `Type` *and* uses it inside a

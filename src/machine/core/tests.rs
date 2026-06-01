@@ -1,11 +1,4 @@
-//! Tests for `machine::core`, split by surface:
-//!
-//! - [`bindings_lookup`] — the per-scope `lookup_value` / `lookup_type` /
-//!   `lookup_function` surface that the index-gated resolver walks.
-//! - [`queue`] — pending-queue drain / borrow-conflict requeue invariants.
-//! - [`register`] — bind_value / register_function shadowing, dedup, overload.
-//! - [`dispatch`] — resolve_dispatch outcomes plus unit-level dispatch routing.
-//! - [`types`] — register_type / resolve_type scope-chain walk.
+//! Tests for `machine::core`, split by surface.
 
 mod bindings_lookup;
 mod dispatch;
@@ -14,7 +7,7 @@ mod register;
 mod types;
 
 use super::Scope;
-use crate::machine::model::types::{ExpressionSignature, KType, SignatureElement, ReturnType};
+use crate::machine::model::types::{ExpressionSignature, KType, ReturnType, SignatureElement};
 use crate::machine::model::values::KObject;
 
 pub(super) fn unit_signature<'a>() -> ExpressionSignature<'a> {

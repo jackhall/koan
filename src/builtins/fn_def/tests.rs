@@ -7,8 +7,7 @@
 //! - [`return_type`] — parsing the `-> Type` slot and runtime return-type checks.
 //! - [`param_type`] — typed-parameter dispatch, overload routing, shape errors.
 //! - [`container_types`] — `List<T>`, `Dict<K,V>`, `Function<…>`, specificity.
-//! - [`functor`] — FN as a functor: module-typed parameters, `SIG_WITH` sharing,
-//!   per-call type-side install, deferred / templated return types.
+//! - [`functor`] — FN as a functor over module-typed parameters.
 
 mod arena;
 mod basic;

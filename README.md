@@ -24,7 +24,7 @@ echo 'PRINT "hello"' | cargo run
 
 The builtins currently wired in are `LET <name> = <value>`, `PRINT <msg>`, `MATCH <value> WITH (<branches>)`, `TRY (<expr>) WITH (<branches>)`, and `FN <signature> -> <ReturnType> = <body>` — one file per builtin under [src/builtins/](src/builtins), pulled together by [default_scope](src/builtins.rs). See [TUTORIAL.md](TUTORIAL.md) for the full builtin reference.
 
-User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(List T)`, `:(Dict K V)`, `:(Function (args) -> R)`, `Type`, `Tagged`, `Struct`, `Module`, `Signature`, `KExpression`, and `Any`. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
+User-defined functions declare a return type in the `-> Type` slot; the scheduler enforces it at runtime via `KErrorKind::TypeMismatch` when the body produces a value whose type doesn't match. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF T)`, `:(MAP K -> V)`, `:(FN (args) -> R)`, `Type`, `Tagged`, `Struct`, `Module`, `Signature`, `KExpression`, and `Any`. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
 Example:
 
@@ -116,105 +116,110 @@ Files without the prefix are infrastructure that don't introduce a single namesa
 [signature.rs](src/machine/model/types/signature.rs) (dispatch shapes and specificity,
 including `ExpressionSignature::most_specific` for the per-bucket tournament),
 [builtins.rs](src/builtins.rs) (registry),
-[tagged_union.rs](src/builtins/tagged_union.rs) (shared structure),
-[struct_value.rs](src/builtins/struct_value.rs) (shared structure),
+[tagged_union.rs](src/machine/execute/dispatch/constructors/tagged_union.rs) (shared structure),
+[struct_value.rs](src/machine/execute/dispatch/constructors/struct_value.rs) (shared structure),
 [typed_field_list.rs](src/machine/model/types/typed_field_list.rs) (helper).
 
 ```
 src/
 ├── main.rs              CLI entry point — re-imports through lib.rs
-├── lib.rs               library facade — declares `parse` and `runtime` so integration tests under tests/ link against the same module graph
+├── lib.rs               library facade — declares `parse`, `builtins`, and `machine` so integration tests under tests/ link against the same module graph
 ├── parse.rs             pub mod parse; …
 ├── parse/
 │   ├── quotes.rs           mask string literals
 │   ├── whitespace.rs       indentation → parens
 │   ├── expression_tree.rs  build nested expressions; top-level parse()
-│   ├── expression_tree_tests.rs  tests for expression_tree.rs and parse()
 │   ├── dict_literal.rs     DictFrame state machine for `{k: v}` parsing
 │   ├── frame.rs            Frame enum — per-paren-group parser sub-state
 │   ├── parse_stack.rs      ParseStack — Frame stack with invariant-preserving methods
 │   ├── triple_list.rs      helper for triple-list parsing
 │   ├── tokens.rs           classify tokens, compound-operator desugaring
 │   └── operators.rs        operator registry
-├── runtime.rs           pub mod builtins / machine
-└── runtime/
-    ├── builtins.rs      try_args!, register_builtin, default_scope()
-    ├── builtins/        one file per builtin (body + register paired)
-    │   ├── let_binding.rs
-    │   ├── print.rs
-    │   ├── value_lookup.rs
-    │   ├── value_pass.rs
-    │   ├── attr.rs
-    │   ├── fn_def.rs
-    │   ├── fn_def/signature.rs   parameter-list parsing for FN
-    │   ├── match_case.rs
-    │   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
-    │   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
-    │   ├── type_call.rs           legacy positional-sigil type-token construction path
-    │   ├── type_constructors.rs   keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
-    │   ├── type_ops.rs            LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF / TYPE_CONSTRUCTOR / SIG_WITH
-    │   ├── union.rs
-    │   ├── struct_def.rs
-    │   ├── struct_value.rs        shared struct-construction representation
-    │   ├── tagged_union.rs        shared tagged-union representation
-    │   ├── newtype_def.rs         NEWTYPE
-    │   ├── module_def.rs          MODULE
-    │   ├── sig_def.rs             SIG
-    │   ├── functor_def.rs         FUNCTOR — modules parameterized by modules
-    │   ├── val_decl.rs            VAL (SIG-body value-slot declarator)
-    │   ├── ascribe.rs             :| / :! module ascription
-    │   ├── test_support.rs
-    │   ├── quote.rs               # surface form `#(expr)`
-    │   └── eval.rs                # surface form `$(expr)`
-    └── machine.rs       pub mod core / model / execute
-        machine/
-        ├── model.rs            re-exports from model::types and model::values
-        ├── model/
-        │   ├── ast.rs                 parsed-expression types (KExpression, ExpressionPart, KLiteral, TypeExpr)
-        │   ├── types.rs
-        │   ├── types/
-        │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
-        │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
-        │   │   ├── ktype_resolution.rs   surface-name and TypeExpr elaboration (from_name, from_type_expr, join)
-        │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
-        │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
-        │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
-        │   │   ├── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
-        │   │   └── unify.rs           unify_slot — generic-destructuring unifier binding type-parameter names per call
-        │   ├── values.rs
-        │   └── values/
-        │       ├── kobject.rs         runtime value type
-        │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
-        │       ├── named_pairs.rs     shared (name, value) ordered-list helper
-        │       └── module.rs          Module / Signature — first-class module values
-        ├── core.rs            module surface for core/
-        ├── core/
-        │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
-        │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
-        │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
-        │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
-        │   ├── scope.rs       Scope, KFuture, plus Scope::resolve_dispatch and the Resolved / ResolveOutcome types
-        │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
-        │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
-        │   ├── kfunction.rs   KFunction, Body, BodyResult — body shapes plus the dispatch-to-execute bridge
-        │   └── kfunction/
-        │       ├── argument_bundle.rs   ArgumentBundle — resolved-slot carrier
-        │       ├── body.rs
-        │       ├── invoke.rs            KFunction::invoke — runtime side of the bind/apply pipeline
-        │       └── scheduler_handle.rs
-        ├── execute.rs
-        └── execute/
-            ├── scheduler.rs   Scheduler struct, execute loop, KFunction::invoke bridge; dep_graph/, node_store/, submit/, work_queues/, tests under it
-            ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
-            ├── run.rs         per-NodeWork-variant run_* methods (impl Scheduler); dispatch/, finish/, literal/ submodules
-            ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
-            └── interpret.rs   parse → dispatch → schedule → execute
+├── builtins.rs          try_args!, register_builtin, default_scope()
+├── builtins/            one file per builtin (body + register paired)
+│   ├── let_binding.rs
+│   ├── print.rs
+│   ├── value_pass.rs
+│   ├── attr.rs
+│   ├── fn_def.rs
+│   ├── fn_def/signature.rs   parameter-list parsing for FN
+│   ├── match_case.rs
+│   ├── try_with.rs           TRY (<expr>) WITH (<branches>) — catch runtime errors
+│   ├── catch.rs              CATCH — error-handling primitive
+│   ├── branch_walk.rs        shared <tag> -> <body> walker for MATCH and TRY
+│   ├── result.rs             Result tagged-union builtin
+│   ├── type_constructors.rs  keyworded type-language overloads (LIST OF / MAP _ -> _ / FN / FUNCTOR)
+│   ├── type_ops.rs           LIST_OF / DICT_OF / FUNCTION_OF / MODULE_TYPE_OF / TEMPLATE / SIG_WITH
+│   ├── union.rs
+│   ├── struct_def.rs
+│   ├── struct_value.rs       shared struct-construction representation
+│   ├── tagged_union.rs       shared tagged-union representation
+│   ├── newtype_def.rs        NEWTYPE
+│   ├── module_def.rs         MODULE
+│   ├── sig_def.rs            SIG
+│   ├── functor_def.rs        FUNCTOR — modules parameterized by modules
+│   ├── val_decl.rs           VAL (SIG-body value-slot declarator)
+│   ├── ascribe.rs            :| / :! module ascription
+│   ├── using_scope.rs        USING — lexical-scope introduction
+│   ├── test_support.rs
+│   ├── quote.rs              # surface form `#(expr)`
+│   └── eval.rs               # surface form `$(expr)`
+├── machine.rs           pub mod core / model / execute
+└── machine/
+    ├── model.rs            re-exports from model::types and model::values
+    ├── model/
+    │   ├── ast.rs                 parsed-expression types (KExpression, ExpressionPart, KLiteral, TypeName)
+    │   ├── types.rs
+    │   ├── types/
+    │   │   ├── ktype.rs           KType — type tag for slots, return types, and runtime values
+    │   │   ├── ktype_predicates.rs   dispatch-time predicates (matches_value, accepts_part, is_more_specific_than)
+    │   │   ├── ktype_resolution.rs   surface-name and TypeName elaboration (from_name, from_type_expr, join)
+    │   │   ├── resolver.rs        Elaborator + elaborate_type_expr — scheduler-aware type-name elaboration with placeholder parking and per-scope resolution memo
+    │   │   ├── signature.rs       ExpressionSignature, UntypedKey, Specificity — dispatch shape + tie-breaker
+    │   │   ├── ktraits.rs         Parseable / Executable / Iterable / Serializable / Monadic
+    │   │   ├── typed_field_list.rs  shared parser for `(name :Type ...)` schemas
+    │   │   └── unify.rs           unify_slot — generic-destructuring unifier binding type-parameter names per call
+    │   ├── values.rs
+    │   └── values/
+    │       ├── kobject.rs         runtime value type
+    │       ├── kkey.rs            KKey — hashable scalar wrapper for dict keys
+    │       ├── named_pairs.rs     shared (name, value) ordered-list helper
+    │       └── module.rs          Module / Signature — first-class module values
+    ├── core.rs            module surface for core/
+    ├── core/
+    │   ├── arena.rs       RuntimeArena, CallArena — per-run and per-call allocation
+    │   ├── bindings.rs    Bindings façade — five-map (data/functions/placeholders/types/pending_overloads) with the validated try_apply write path, try_register_type for nominal type identity, and the visibility-aware lookup_value/lookup_type/lookup_function surface (raw map accessors are #[cfg(test)])
+    │   ├── kerror.rs      KError, KErrorKind, Frame — structured runtime errors
+    │   ├── pending.rs     PendingQueue — deferred re-entrant writes, drained between dispatch nodes
+    │   ├── scope.rs       Scope, KFuture — lexical environment and dispatch-result handle
+    │   ├── resolve_dispatch.rs   Scope::resolve_dispatch — overload-resolution surface; returns Resolved / ResolveOutcome
+    │   ├── resolve_type_expr.rs  type-name elaboration entry point
+    │   ├── source.rs      source-span and provenance carrier for errors
+    │   ├── scope_id.rs    ScopeId — counter-minted nominal scope identity for per-declaration types
+    │   ├── lexical_frame.rs  LexicalFrame — immutable cactus-chain (scope_id, index, parent) attached to every dispatched node
+    │   ├── kfunction.rs   KFunction, Body, BodyResult — body shapes plus the dispatch-to-execute bridge
+    │   └── kfunction/
+    │       ├── argument_bundle.rs   ArgumentBundle — resolved-slot carrier
+    │       ├── body.rs
+    │       ├── invoke.rs            KFunction::invoke — runtime side of the bind/apply pipeline
+    │       ├── pick.rs              per-bucket tournament selecting the most-specific overload
+    │       └── scheduler_handle.rs
+    ├── execute.rs
+    └── execute/
+        ├── scheduler.rs   Scheduler struct, execute loop, KFunction::invoke bridge; dep_graph/, node_store/, submit/, work_queues/, finish/, literal/, tests under it
+        ├── nodes.rs       node types (NodeWork / NodeOutput / NodeStep / Node) + work_deps
+        ├── dispatch.rs    run_dispatch driver + classify_dispatch_shape + DispatchState; ctx/ (DispatchCtx facade), keyworded/, fn_value/, single_poll/ submodules
+        ├── lift.rs        lift_kobject — rebuild values across per-call arena boundaries
+        └── interpret.rs   parse → dispatch → schedule → execute
 ```
 
 ## Design and roadmap
 
 Design rationale — one topical doc each. Mostly shipped behavior, but
 sections may be aspirational where a decision has landed ahead of code.
+[design/README.md](design/README.md) is the design-tree index — what
+each doc owns, the foundation-vs-seam heuristic the refactor analysis
+uses, and pointers to the analysis tooling.
 
 - [design/execution-model.md](design/execution-model.md) — scheduler, deferred dispatch, per-call arenas.
 - [design/memory-model.md](design/memory-model.md) — value ownership, lifting, lexical closures.

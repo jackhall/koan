@@ -32,7 +32,7 @@ discrimination between "host type", "module", and "signature" happens at
 scope resolution, not at lex time — a `.`-compound on a module-class token
 resolves to module member access the same way a `.`-compound on a struct
 value resolves to a field read, and a module-qualified `IntOrd.Type` in type
-position parses as a single structured `TypeExpr`. Abstract type
+position parses as a single `TypeName` leaf. Abstract type
 declarations inside a signature use the Type-class spelling too — the
 convention is `LET Type = ...` for the principal abstract type, with `Elt`,
 `Key`, `Val` etc. when more than one is needed.

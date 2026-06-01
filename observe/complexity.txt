@@ -1,8 +1,9 @@
-# columns: date  short-sha  per-loc  coupling  nesting  size
-# (all four numeric columns are per root-loc)
+# columns: date  short-sha  per-loc  coupling  nesting  size  root-loc
+# (the four scoring columns are per root-loc; root-loc is the absolute
+#  subtree LOC, read back as --reference-loc when scoring candidates)
 # managed by tools/modgraph.py --baseline; newest first, capped to 5 entries
-2026-05-29 5311c96+ 247.29 98.20 63.21 85.88
-2026-05-29 b4c4cda+ 248.30 98.24 63.32 86.73
-2026-05-28 53e99a1+ 248.30 98.24 63.32 86.73
-2026-05-28 e78d7dd+ 248.30 98.24 63.32 86.73
-2026-05-28 940785b+ 248.27 98.24 63.32 86.70
+2026-06-01 6eabe90+ 299.25 162.60 65.55 71.11 14055
+2026-06-01 1a94365+ 298.35 162.21 65.38 70.77 13998
+2026-06-01 5f2ab9d+ 297.59 161.79 65.21 70.58 13998
+2026-06-01 0c1c0b9+ 298.80 162.32 65.37 71.11 14034
+2026-05-31 54324ef+ 313.14 170.74 68.76 73.64 14034

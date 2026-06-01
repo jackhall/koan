@@ -7,16 +7,20 @@ use std::collections::VecDeque;
 /// `fresh` so an in-progress computation finishes before the next fresh top-level
 /// expression starts. Both rules are enforced by the method surface.
 #[derive(Default)]
-pub(super) struct WorkQueues {
+pub(in crate::machine::execute::scheduler) struct WorkQueues {
     fresh: VecDeque<usize>,
     in_flight: VecDeque<usize>,
 }
 
 impl WorkQueues {
-    pub(super) fn new() -> Self { Self::default() }
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
 
     pub(super) fn pop_next(&mut self) -> Option<usize> {
-        self.in_flight.pop_front().or_else(|| self.fresh.pop_front())
+        self.in_flight
+            .pop_front()
+            .or_else(|| self.fresh.pop_front())
     }
 
     pub(super) fn push_fresh(&mut self, idx: usize) {
@@ -27,8 +31,7 @@ impl WorkQueues {
         self.in_flight.push_back(idx);
     }
 
-    /// Front-loads onto the in-flight band so the tail step runs before any
-    /// sibling work.
+    /// Tail step runs before any sibling work.
     pub(super) fn push_after_replace(&mut self, idx: usize) {
         self.in_flight.push_front(idx);
     }

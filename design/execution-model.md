@@ -41,6 +41,37 @@ recover or re-raise. The `TRY-WITH` builtin
 spawns its watched expression as a sub-dispatch and registers a `Catch`
 that picks the matching branch by tag.
 
+## The dispatcher / scheduler boundary
+
+The dispatch tree
+([`execute/dispatch/`](../src/machine/execute/dispatch.rs)) is a sibling
+of [`execute/scheduler/`](../src/machine/execute/scheduler.rs), not
+nested inside it. The two communicate through one typed surface:
+[`DispatchCtx<'a, 'b>`](../src/machine/execute/dispatch/ctx.rs) — a
+newtype over `&'b mut Scheduler<'a>` that every dispatch entry point
+takes in place of a bare `&mut Scheduler<'a>`. `DispatchCtx` exposes
+exactly the scheduler operations the dispatcher uses (slot queries,
+`DepGraph` mutations, sub-submission, the recent-wakes side-channel,
+list/dict-literal scheduling, plus the dispatcher-only ops
+`build_bare_outcomes` / `install_eager_subs` /
+`replace_with_parked_dispatch` / `resume_eager_subs` /
+`invoke_to_step{,_pinned}`). The `DepGraph`, `NodeStore`, and
+active-frame fields stay `pub(in execute::scheduler)`; the dispatch
+shape modules (`keyworded`, `fn_value`, `single_poll`) never name
+scheduler fields directly. Adding a fast-lane shape lists its
+scheduler operations against `DispatchCtx`'s method surface; a future
+scheduler internal rename (`active_chain` → ..., `DepGraph` split) is a
+single-file change inside `scheduler/`.
+
+`DispatchCtx` also implements
+[`SchedulerHandle`](../src/machine/core/kfunction/scheduler_handle.rs)
+— the external builtin-body-facing surface — so closures the dispatcher
+hands off to `KFunction::invoke` (and any sub-slots they spawn) inherit
+the dispatcher's contextual `active_frame` and lexical chain. The
+`with_active_frame` body re-receives `&mut DispatchCtx`, so nested
+builtin invokes still route through the facade rather than re-borrowing
+the bare scheduler.
+
 ## `BodyResult` — the three return shapes
 
 A builtin body returns one of:
@@ -107,17 +138,67 @@ band a push lands in) and the priority rule (which band a pop drains first)
 are both enforced by the wrapper's method surface rather than restated at each
 call site.
 
+## Dependency graph invariants
+
+[`DepGraph`](../src/machine/execute/scheduler/dep_graph.rs)'s three
+parallel vectors — `notify_list`, `pending_deps`, `dep_edges` — share an
+index space with `NodeStore::nodes` and uphold three invariants:
+
+- **Inv-A (wake-pending coherence).** For every consumer slot `c`,
+  `pending_deps[c] == |{ p : c appears in notify_list[p] }|`. Every
+  mutating method on `DepGraph` updates `notify_list`, `pending_deps`,
+  and `dep_edges` in a single atomic body so the two fields cannot
+  desync.
+- **Inv-B (free-cascade source).** `dep_edges[c]` lists every `Owned`
+  sub-slot `c` must cascade-reclaim. Park edges are tagged `Notify` and
+  filtered out of `free`'s walk via `owned_children`. Independent of
+  Inv-A.
+- **Inv-C (lazy notify-scrub on free).** A slot `c` is only freed once
+  every producer's `drain_notify` has run and removed `c` from
+  `notify_list[*]`. The
+  `freed_slot_does_not_appear_in_other_notify_lists` test pins this;
+  `free` relies on Inv-A and Inv-C still holding rather than scrubbing
+  itself.
+
+Inv-B is what makes the eager `dep_edges[idx].clear()` in
+`Scheduler::reclaim_deps` sound at `Combine` / `Catch` success: those
+slots at reclaim time hold only `Owned` edges (their `deps` / `from`,
+all spawned by the slot). `Notify` edges land only on `Dispatch` slots
+via the bare-name short-circuit / replay-park in `run_dispatch`, never
+on `Combine` / `Catch`, so clearing the list cannot drop a wake intent.
+
+## Lift: push/notify single-producer model
+
+[`NodeWork::Lift`](../src/machine/execute/nodes.rs) exists because the
+push/notify model assumes a single producer slot per result. When a
+`Dispatch` defers to a `Bind` / `Combine` for sub-deps, it spawns the
+worker into a new slot and rewrites its own slot to
+`Lift(LiftState::Pending(worker))` so the result still surfaces under
+the original slot index. The notify-walk stamps `Pending → Ready` with
+the producer's terminal output at wake time, and `run_lift` on pop just
+unwraps the stamped `NodeOutput` — no result-table lookup.
+
+The `Pending → Ready` transition is the sole responsibility of
+`Scheduler::finalize`. By the time a Lift slot pops, the notify-walk
+has already stamped its `LiftState` to `Ready`, so the `Pending` arm of
+`run_lift`'s match is a wake-misfire panic that localizes to the
+notify graph: reaching it means a Lift was enqueued without its `from`
+finalizing — a bug in `Scheduler::finalize`'s stamp or `DepGraph`'s
+pending-deps accounting, not in any read-side caller.
+
 ## Working-copy splice
 
 The scheduler dispatches each expression by mutating an **owned working
 copy** of it. `run_dispatch` extracts every nested sub-expression out of
 the parent's `parts` (replacing each with a placeholder `Identifier`),
-spawns it as a sub-Dispatch, and parks the parent as
-`NodeWork::Bind { expr: rewritten_expr, subs }`. When the subs terminalize,
-`run_bind` writes each result back into the parent: `expr.parts[part_idx]
-= ExpressionPart::Future(value)`. The assembled `Future`-laden expression
-then goes through `resolve_dispatch` as if it had been written with
-literals.
+spawns it as a sub-Dispatch, and parks the parent on its own slot via an
+`EagerSubsTrack` carried on `KeywordedState` or `FnValueState`. The
+parent's `NodeWork::Dispatch` stays in place; only its `DispatchState`
+transitions. When the subs terminalize, `DispatchCtx::resume_eager_subs`
+writes each result back into the track's `working_expr`:
+`working_expr.parts[part_idx] = ExpressionPart::Future(value)`. The
+assembled `Future`-laden expression then goes through `resolve_dispatch`
+as if it had been written with literals.
 
 Source-of-truth ASTs are never mutated. The working copy is cloned from
 its source at slot-submission time — `KFunction::invoke` clones the FN
@@ -143,21 +224,11 @@ construction. A chain of tail calls (`A → B → PRINT`, or unbounded
 `LOOP → LOOP`) reuses one slot end-to-end. Verified by two slot-count
 assertions in the test suite.
 
-The slot's `Rc<CallArena>` is held in exactly one place during each step:
-[`Scheduler::execute`](../src/machine/execute/scheduler/execute.rs) moves
-`node.frame` directly into `self.active_frame` (no clone) and reverses the
-move after the step. That single-ownership discipline is what lets the
-tail-reuse path detect "nothing escaped" via `Rc::strong_count == 1`:
-[`SchedulerHandle::try_take_reusable_frame_for_tail`](../src/machine/core/kfunction/scheduler_handle.rs)
-takes the active frame, refuses to hand it out if any clone exists, and
-otherwise lets `KFunction::invoke` reset the frame in place via
-[`CallArena::try_reset_for_tail`](../src/machine/core/arena.rs) — swap the
-inner `RuntimeArena` for a fresh empty one, re-allocate the child `Scope`,
-re-link `outer` to the new call's captured scope. The shell, the heap-pinned
-arena address, and the slot's `frame` field all survive across the
-iteration; only the storage turns over. Frames carrying an escaped closure
-(or any other clone of the `Rc`) fall through to a fresh `CallArena::new`,
-preserving snapshot semantics for the escaped value.
+The slot's `Rc<CallArena>` is held in exactly one place during each step,
+which is what lets the tail-reuse path detect "nothing escaped" and reset
+the frame shell in place across iterations rather than allocating a fresh
+one. See
+[per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse).
 
 A subtle point: host-stack overflow on naïve recursion is solved by the graph
 model itself, not by `Tail`. Every "recursive call" enters the scheduler's
@@ -170,23 +241,28 @@ memory** constant too.
 
 `Tail` reuses the outermost slot but bodies typically have internal
 sub-expressions — the predicate of an `IF`/`MATCH` guard, the argument
-expressions of a recursive call, list/dict literal elements. Each spawns a
-sub-`Dispatch` and a parent `Bind`/`Combine` slot. Without reclamation those
-slots accumulate per body iteration, so realistic recursive code is O(n)
-scheduler memory even when its data footprint is O(1).
+expressions of a recursive call, list/dict literal elements. Each spawns
+a sub-`Dispatch`; the consumer is either the parent `Dispatch` slot
+itself (parked via an eager-subs track on its `DispatchState`) or, for
+list/dict aggregates and combinator builtins like `TRY`, a `Combine` /
+`Catch` slot. Without reclamation those slots accumulate per body
+iteration, so realistic recursive code is O(n) scheduler memory even
+when its data footprint is O(1).
 
-Reclamation runs at the end of `run_bind` / `run_combine`. Once a Bind has
-read its dep results and spliced them into `expr.parts` as `Future(value)`
-(or a Combine's finish closure has produced its result), the dep slots are
-unreachable: a sub-Dispatch is owned by exactly one Bind / Combine, recorded
-in the consumer's `dep_edges` entry as a `DepEdge::Owned(NodeId)`.
-Free walks recursively, recycling each dep's own dep tree, and stops at any
-still-live slot via `NodeStore::is_live` — so a free that dives into another
-in-flight user-fn call leaves that subtree for that call's own reclamation.
+Reclamation runs at the end of `DispatchCtx::resume_eager_subs` (track
+completion), `run_combine`, and `run_catch`. Once the consumer has read
+its dep results and either spliced them into `working_expr.parts` as
+`Future(value)` (eager-subs track) or handed them to its finish closure
+(Combine / Catch), the dep slots are unreachable: a sub-Dispatch is
+owned by exactly one consumer, recorded in the consumer's `dep_edges`
+entry as a `DepEdge::Owned(NodeId)`. Free walks recursively, recycling
+each dep's own dep tree, and stops at any still-live slot via
+`NodeStore::is_live` — so a free that dives into another in-flight
+user-fn call leaves that subtree for that call's own reclamation.
 
 The net effect: recursive bodies whose only persistent state is the call
 result run in O(1) scheduler memory across iterations, with the per-iteration
-fanout (the body's transient sub-Dispatches/Binds) recycled through a
+fanout (the body's transient sub-Dispatches) recycled through a
 free-list of slot indices that `add()` pulls from before extending the vecs.
 Slot-table state lives in a
 [`NodeStore`](../src/machine/execute/scheduler/node_store.rs)
@@ -273,13 +349,24 @@ carries the lexical statement index it was registered at, and a consumer at
 chain cutoff `c` sees only bindings with index `i < c` plus any binding
 flagged `nominal_binder` (the D7 carve-out for `STRUCT` / named `UNION` /
 `SIG` / `FUNCTOR` / `MODULE`, whose declared names cross the cutoff so
-mutual-recursive nominal references work). A *keyword-headed* function call
-(`ID 7`) resolves through the `functions` bucket, which applies the same
-per-overload visibility filter: a later-sibling overload registered after
-this consumer's statement is hidden, and dispatch falls through to outer
-scopes. Forward calls from a function body are unaffected — bodies re-dispatch
-per call against the body's lexical chain, by which point every sibling
-binder has registered.
+mutual-recursive nominal references work). The D7 carve-out rides through
+submission via the picked overload's `is_nominal_binder` flag — the
+[`BinderKey`](../src/machine/execute/scheduler/submit.rs) install stamps
+the corresponding `BindingIndex { idx, nominal_binder }` so the eventual
+finalize and any submission-time placeholder install share the same
+visibility identity.
+
+`LET` is value-style gated (strict `b.idx < c`), so a forward reference to
+a later-sibling `LET` is invisible and surfaces `UnboundName` rather than
+parking. `FN` is also value-style gated — not a nominal binder — so a
+forward call to a later-sibling `FN` overload is invisible under the gate
+and surfaces `DispatchFailed` rather than parking on the not-yet-finalized
+overload. A *keyword-headed* function call (`ID 7`) resolves through the
+`functions` bucket, which applies the same per-overload visibility filter:
+a later-sibling overload registered after this consumer's statement is
+hidden, and dispatch falls through to outer scopes. Forward calls from a
+function *body* are unaffected — bodies re-dispatch per call against the
+body's lexical chain, by which point every sibling binder has registered.
 
 The mechanism lives in two pieces, each routed through a separate install
 channel keyed by the binder's shape.
@@ -334,44 +421,43 @@ The six binder builtins (`LET`, `FN`, `STRUCT`, `SIG`, `UNION`,
 [`register_builtin_with_binder`](../src/machine/core/kfunction.rs);
 everything else stays placeholder-free.
 
-Production reads go through three visibility-aware lookups on the façade:
-[`Bindings::lookup_value`](../src/machine/core/bindings.rs) /
-[`Bindings::lookup_type`](../src/machine/core/bindings.rs) /
-[`Bindings::lookup_function`](../src/machine/core/bindings.rs). Each takes
-a `chain_cutoff: Option<usize>` — the consumer's lexical index within
-*this* scope as computed by
-[`LexicalFrame::index_for`](../src/machine/core/lexical_frame.rs) — and
-applies the [`visible`](../src/machine/core/scope.rs) predicate
-(`b.nominal_binder || b.idx < c`) per entry. `lookup_value` consults
-`data` then `placeholders` and returns `Resolution::Value(&KObject)` for
-a finalized visible binding, `Resolution::Placeholder(NodeId)` for a
-still-running visible producer, or `None` (the caller surfaces
-`Resolution::UnboundName` on chain exhaustion). `lookup_function`
-consults `functions[key]` first, filtered per-overload by visibility,
-and falls through to `pending_overloads[key]` only when no live bucket
-admits — returning `FunctionLookup::Bucket(Vec<&KFunction>)` (non-empty,
-pre-filtered), `FunctionLookup::Pending(NodeId)` (an in-flight FN /
-FUNCTOR binder's producer to park on), or `FunctionLookup::None`. The
-dispatcher records the innermost `Pending` arm during its ancestor walk
-and parks on it only if no bucket admits anywhere, so the bucket /
-pending-overload pair surfaces from one traversal rather than two. The raw map accessors (`data` / `types` /
-`functions` / `placeholders` / `pending_overloads`) are gated
-`#[cfg(test)]`; production sites that genuinely sweep all members
-(`MODULE` member mirroring, signature shape-check, REPL reflection)
-consume the value-yielding `iter_data` / `iter_types` / `iter_functions`,
-which release the underlying borrow at the iterator boundary.
+Production reads thread the three-layer
+[lookup → admit protocol](typing/lookup-protocol.md): `Scope::resolve_*_with_chain`
+walks ancestors, the `Bindings::lookup_*` accessors apply the
+`chain_cutoff`-gated `visible` predicate per entry, and `KType`
+predicates accept or reject the candidate. The placeholder mechanism
+extends the value- and function-side lookups so a still-running visible
+producer surfaces as `Resolution::Placeholder(NodeId)` /
+`FunctionLookup::Pending(NodeId)` rather than `UnboundName` —
+[`Bindings::lookup_value`](../src/machine/core/bindings.rs) consults
+`data` then `placeholders`, and
+[`Bindings::lookup_function`](../src/machine/core/bindings.rs) consults
+`functions[key]` (per-overload visibility-filtered) and falls through to
+`pending_overloads[key]` only when no live bucket admits. The dispatcher
+records the innermost `Pending` arm during its ancestor walk and parks
+on it only if no bucket admits anywhere, so the bucket /
+pending-overload pair surfaces from one traversal rather than two. The
+raw map accessors (`data` / `types` / `functions` / `placeholders` /
+`pending_overloads`) are gated `#[cfg(test)]`; production sites that
+genuinely sweep all members (`MODULE` member mirroring, signature
+shape-check, REPL reflection) consume the value-yielding `iter_data` /
+`iter_types` / `iter_functions`, which release the underlying borrow at
+the iterator boundary. `bind_value` and `register_function` remove their
+own placeholder before inserting into `data` / `functions`, so the two
+tables are mutually exclusive at any moment.
 
-[`Scope::resolve_with_chain`](../src/machine/core/scope.rs) and
-[`resolve_type_with_chain`](../src/machine/core/scope.rs) delegate
-per-ancestor to `lookup_value` / `lookup_type`, mapping the consumer's
-`LexicalFrame` chain to each ancestor scope's `chain_cutoff` and returning
-the first visible hit. The `Scope::resolve` shorthand (no chain argument)
-reads as "see everything" and is reserved for test fixtures and
-builtin-registration paths; production dispatch always threads the
-consumer's `LexicalFrame` chain through. `bind_value` and
-`register_function` remove their own placeholder before inserting into
-`data` / `functions`, so the two tables are mutually exclusive at any
-moment.
+### Miri Lift-park lifetime contract
+
+The bare-name short-circuit and replay-park routes both park through
+`Lift(LiftState::Pending(producer))` (see [Lift: push/notify single-producer
+model](#lift-pushnotify-single-producer-model) for the stamping protocol).
+When the parked Lift pops with `LiftState::Ready(NodeOutput::Value(obj))`,
+the `&KObject<'a>` it carries is the **producer's reference**, not a
+clone — the notify-walk stamped the producer's terminal pointer directly
+into the Lift's state. The producer's arena therefore must outlive every
+wake-and-re-run cycle of every consumer parked through this Lift. The
+`lift_park_minimal_program_for_miri` and `replay_park_minimal_program_for_miri`
+tests pin the contract under Miri tree borrows.
 
 ### Submission-time binder install and recursive sub-Dispatch
 
@@ -407,7 +493,7 @@ The collected `(slot_idx, sub_node_id)` pairs ride through into the
 parent's `NodeWork::Dispatch { expr, pre_subs }`
 ([`nodes.rs`](../src/machine/execute/nodes.rs)). When the parent runs,
 the fused splice / park / eager-sub walk in
-[`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs) consults
+[`dispatch.rs`](../src/machine/execute/dispatch.rs) consults
 `pre_subs` before the `Expression` / `ListLiteral` / `DictLiteral` arms:
 a slot already pre-submitted reuses the existing `NodeId` (and replaces
 the part with an empty-`Identifier` placeholder for the eventual `Bind`
@@ -431,7 +517,7 @@ branch) gets [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 scope visible. This is what lets a REPL query read through to every
 prior bind without sharing an index space with them.
 
-The execute side — [`run_dispatch`](../src/machine/execute/scheduler/dispatch.rs) —
+The execute side — [`run_dispatch`](../src/machine/execute/dispatch.rs) —
 opens with a pre-walk shape classifier. `classify_dispatch_shape` sweeps the
 expression's parts for any `Keyword` first and, if none, branches on the head
 token's shape, producing one of six `DispatchShape` variants. The five
@@ -446,7 +532,7 @@ dep-schedule pipeline below.
 
 The keyworded pipeline runs in four steps. Step 1 builds the bare-name
 outcome cache: one
-[`resolve_name_part`](../src/machine/execute/scheduler/dispatch.rs) call per
+[`resolve_name_part`](../src/machine/execute/dispatch.rs) call per
 bare-name part of `expr` (`Identifier` or leaf `Type`) into
 `bare_outcomes: Vec<Option<NameOutcome<'a>>>`, with `None` for non-bare-name
 parts. The cache is built with `consumer = None` so cycle detection is
@@ -461,7 +547,7 @@ a `<wrap-resolve>` frame before any candidate work.
 Step 3 calls
 [`Scope::resolve_dispatch_with_chain`](../src/machine/core/scope.rs) once,
 passing the cache as `bare_outcomes: &[Option<NameOutcome<'a>>]`. Admission
-is strict-only: [`signature_admits_strict`](../src/machine/core/resolve_dispatch.rs)
+is strict-only: [`signature_admits_strict`](../src/machine/execute/dispatch/resolve_dispatch.rs)
 reads each bare-name slot's cached outcome rather than re-resolving it per
 scope. A `Resolved(obj)` cache entry admits iff
 [`KType::accepts_part`](../src/machine/model/types/ktype_predicates.rs)
@@ -528,17 +614,21 @@ The rails the dispatch driver feeds:
     routes through `coerce_type_token_value` so the dispatch-phase carrier
     matches what `value_lookup::body_type_expr` would synthesize. Failures
     surface directly; there is no candidate-machinery alternative for a
-    bare leaf type.
+    bare leaf type. See
+    [typing/elaboration.md § Layers](typing/elaboration.md#layers)
+    § Layer 4 for the shared coercion seam.
   - `ConstructorCall` (`(MyStruct 1 2)`, `(MyTagged Just 7)`) —
-    `stateful_constructor_call` resolves the head Type token and
-    routes `StructType` / `TaggedUnionType` / `Newtype` / `TypeConstructor`
-    carriers through their construction primitives via a `Tail` rewrite.
-    Opaque / Module / unbound heads fall through to the keyworded
-    `type_call` builtin. The legacy positional sigil shape
-    (`:(List Number)`) classifies here as well — the dispatcher's
-    `SigiledTypeExpr` handler sub-dispatches the inner expression, which
-    then lands in `ConstructorCall` and routes through the same
-    construction primitives.
+    [`constructor_call`](../src/machine/execute/dispatch/single_poll.rs)
+    resolves the head Type token to its `bindings.types` identity and
+    branches on the `UserTypeKind`: `Struct { fields }` and
+    `Tagged { schema }` / `TypeConstructor { schema, .. }` read the schema
+    straight off the identity and dispatch into
+    `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`,
+    while `Newtype` routes into `newtype_construct`. No value-side carrier is
+    fetched — the schema rides the identity. Opaque / Module / unbound heads
+    surface a `TypeMismatch`. A head token that isn't a registered `UserType`
+    (the shape a removed positional `:(List Number)` would take) finds no
+    `bindings.types` identity and surfaces an unbound-name error.
   - `SigiledTypeExpr` (single-part `:(...)` wrapper) — the `run_dispatch`
     arm tail-replaces the slot with a `Dispatch`
     of the wrapped `KExpression`, so the inner expression runs through the
@@ -558,12 +648,14 @@ The rails the dispatch driver feeds:
     `stateful_dispatch_callable_value`, which either binds and invokes
     one-shot or installs the eager-subs track via
     `stateful_install_fn_value_eager_subs_track` when the spliced call
-    carries unresolved eager parts; `StructType { .. }` and `TaggedUnionType
-    { .. }` route through `struct_value::apply` and `tagged_union::apply`
-    respectively, each returning a `BodyResult::Tail` that rewrites the
-    slot as a re-Dispatch through the corresponding construction
-    primitive. Any other carrier (number, string, instance struct,
-    module, …) surfaces `TypeMismatch { arg: "verb", expected:
+    carries unresolved eager parts; a `KTypeValue(KType::UserType { kind, .. })`
+    head — the carrier a value-classified alias of a constructible type
+    synthesizes (`LET outcome = Outcome` then `(outcome (err "x"))`) — branches
+    on `kind` and reads the schema off that identity, dispatching into
+    `constructors::dispatch_construct_struct` / `dispatch_construct_tagged`
+    (or `newtype_construct` for `Newtype`), the same identity-borne schema the
+    `ConstructorCall` lane reads. Any other carrier (number, string, instance
+    struct, module, …) surfaces `TypeMismatch { arg: "verb", expected:
     "KFunction or Type", got }` directly. A `Placeholder` head installs
     the head-placeholder park via `stateful_install_fn_value_head_park`;
     an unbound head surfaces `UnboundName(name)` directly — this shape
@@ -665,10 +757,14 @@ The rails the dispatch driver feeds:
   sub-Dispatch](#submission-time-binder-install-and-recursive-sub-dispatch)),
   `Dispatch(sub_expr)` for a fresh sub-Dispatch, and `ListLit` / `DictLit`
   for the aggregate. With no subs to schedule the driver binds the picked
-  function directly via `invoke_to_step` (a wrap-slot-only call like
-  `MAKESET IntOrd` resolves bare names in Step 4, leaves no eager parts,
-  and binds in one step — no `Bind` detour). Otherwise it builds a
-  `NodeWork::Bind { expr, subs }` and lifts.
+  function directly via `DispatchCtx::invoke_to_step` (a wrap-slot-only
+  call like `MAKESET IntOrd` resolves bare names in Step 4, leaves no
+  eager parts, and binds in one step — no eager-subs-track detour).
+  Otherwise it installs an `EagerSubsTrack` on the slot's
+  `KeywordedState` and parks through
+  `DispatchCtx::replace_with_parked_dispatch`; on track completion
+  `DispatchCtx::resume_eager_subs` re-resolves the spliced
+  `working_expr` and binds via `DispatchCtx::invoke_to_step_pinned`.
 
   Dict and list literals (`classify_aggregate_part` in
   [`scheduler/literal.rs`](../src/machine/execute/scheduler/literal.rs))
@@ -721,7 +817,9 @@ elaboration plugs into the same mechanism: when
 bare type-name leaf whose binder is in `Scope::placeholders` but not yet
 finalized, it returns `ElabResult::Park(producers)` and FN-def's body
 schedules a `Combine` over those producers that re-runs the signature
-elaboration against the now-final scope at finish time. A parens-wrapped
+elaboration against the now-final scope at finish time. (See
+[typing/elaboration.md § Layers](typing/elaboration.md#layers) § Layer 3
+for the elaborator's role in the pipeline.) A parens-wrapped
 parameter type (`xs: (LIST_OF Number)`) rides the same Combine:
 `parse_fn_param_list` records the `(slot_idx, sub_expr)` pair, FN-def
 schedules each sub-expression as its own `Dispatch`, and the Combine's
@@ -747,7 +845,7 @@ diagnostic points at code the reader can act on.
 ### `DispatchState` — per-variant state envelope
 
 Every `NodeWork::Dispatch` slot carries a
-[`DispatchState`](../src/machine/execute/scheduler/dispatch_state.rs) value
+[`DispatchState`](../src/machine/execute/dispatch.rs) value
 that records where the slot is in the per-shape state machine. The enum
 has one variant per `DispatchShape` plus a pre-classification birth
 state:
@@ -790,7 +888,7 @@ construct these and one-shot paths terminalize without installing a
 track.
 
 `Keyworded` carries three mutually-exclusive park tracks, installed by
-named installers in [`dispatch.rs`](../src/machine/execute/scheduler/dispatch.rs):
+named installers in [`dispatch.rs`](../src/machine/execute/dispatch.rs):
 
 - **`eager_subs: Option<EagerSubsTrack>`** — installed by
   `stateful_install_eager_subs_track` (Resolved-with-eager-subs and
@@ -867,10 +965,10 @@ invariant is checked on every wake.
 
 The state is `pub(in crate::machine::execute)` rather than `pub(super)`
 because `nodes.rs` (which carries the `NodeWork::Dispatch { state }`
-variant) lives at `crate::machine::execute::nodes`, outside the
-`scheduler/` submodule. The wider visibility is the minimum needed for
-`NodeWork` to name `DispatchState`; no caller outside the execute tree
-sees the carrier.
+variant) lives at `crate::machine::execute::nodes`, sibling to the
+`dispatch/` and `scheduler/` subtrees. The wider visibility is the
+minimum needed for `NodeWork` to name `DispatchState`; no caller
+outside the execute tree sees the carrier.
 
 The drain-end cycle-detection guard (`NodeStore::unresolved`)
 summarizes parked slots from the state-carried expression rather than
@@ -884,7 +982,7 @@ expression the user-facing diagnostic should sample.
 
 [`KObject`](../src/machine/model/values/kobject.rs) is the universal
 runtime value type. Pure-data variants (`Number`, `KString`, `Bool`,
-`List`, `Dict`, `KExpression`, `*Type` schema carriers, `Tagged`,
+`List`, `Dict`, `KExpression`, `Tagged`,
 `Struct`, `TypeNameRef`, `Null`) carry no references into
 [`machine::core`](../src/machine/core.rs). The runtime-reference
 variants do — `KFunction`, `KFuture`, `Wrapped`, and `KTypeValue`
@@ -905,7 +1003,7 @@ read the concrete runtime shape directly:
 - [`KObject::ktype()`](../src/machine/model/values/kobject.rs)
   projects the carried `KType` directly out of a `KTypeValue`
   carrier — a module value reports `KType::Module { module, .. }`,
-  a signature value reports `KType::Signature(s)` — so the
+  a signature value reports `KType::Signature { sig, .. }` — so the
   dispatcher reads the same identity the carrier holds rather than
   a synthesized shadow.
 - `Parseable::summarize` and `deep_clone` recurse into the variants
@@ -947,19 +1045,22 @@ recursive tree-walker can't get cheaply.
   working copy for [the splice mechanism](#working-copy-splice).
   Clone cost is O(body size). It also acquires a per-call frame —
   either reusing the prev-step's `CallArena` shell via
-  `try_reset_for_tail` (see [memory-model.md § Tail-step frame
-  reuse](memory-model.md#tail-step-frame-reuse)) or allocating a fresh
-  one. The reuse path is allocation-free; the fresh path heap-allocates
-  one `Rc<CallArena>` plus six `typed_arena::Arena::new()` pools.
+  `try_reset_for_tail` (see
+  [per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse))
+  or allocating a fresh one. The reuse path is allocation-free; the
+  fresh path heap-allocates one `Rc<CallArena>` plus six
+  `typed_arena::Arena::new()` pools.
 - **Per dep-result splice.** O(1) write into `expr.parts`.
 - **Per terminal.** Single `notify_list` drain. The cost scales with
-  the producer's dependent count, which is typically 1 (the parent
-  Bind/Combine) but unbounded in principle (forward-reference parks).
+  the producer's dependent count, which is typically 1 (the consumer
+  parked on it through an eager-subs track or a Combine) but unbounded
+  in principle (forward-reference parks).
 
 ### What amortizes
 
 - **Slot recycling.** `Scheduler::reclaim_deps` frees sub-slots eagerly
-  during `run_bind` / `run_combine` / `run_catch`, and `add()` pulls
+  during `resume_eager_subs` / `run_combine` / `run_catch`, and `add()`
+  pulls
   from the free-list before extending the underlying vectors. A
   steady-state recursive body reuses the same slot indices across
   iterations; `body_subexpression_slots_recycle_across_calls` pins the
@@ -971,7 +1072,7 @@ recursive tree-walker can't get cheaply.
   uniquely owned, `try_reset_for_tail` swaps its inner `RuntimeArena`
   for a fresh one and re-binds — no `Rc<CallArena>` box allocation,
   no `Scope` re-anchoring through the heap. See
-  [memory-model.md § Tail-step frame reuse](memory-model.md#tail-step-frame-reuse).
+  [per-call-arena-protocol.md § TCO frame reuse](per-call-arena-protocol.md#tco-frame-reuse).
 
 ### Vs a tree-walking interpreter
 
@@ -1059,6 +1160,26 @@ present via [`LexicalFrame::detached`](../src/machine/core/lexical_frame.rs)
 (so REPL-style submissions outside `enter_block` see every prior bind
 in the target scope).
 
+### Multi-statement FN body split
+
+A user-fn body of the shape `((s_0) (s_1) ... (s_{N-1}))` is split at
+[`KFunction::invoke`](../src/machine/core/kfunction.rs) time. The first
+`N-1` statements submit as **sibling sub-slots** in the per-call body
+scope at chain indices `1..N-1`, and the FN's slot **tail-replaces into
+`s_{N-1}`** at index `N` — so TCO is preserved on the terminal statement.
+Single-statement bodies pass through at index 0 (no split needed).
+
+Effect ordering between siblings is **topological** (sub-slot scheduling),
+not strict source-order: a sibling reads through the index gate
+(`b.idx < c`) and can read any earlier sibling's binding, but the
+scheduler is free to interleave their executions when their dependency
+sets allow it. Backward references across siblings work — a `LET b =
+(a)` at index `i` sees a `LET a = …` at index `j < i` — because the
+visibility predicate admits the earlier sibling's binding at the
+consumer's cutoff. `match_case` arms and `TRY` arms ride the same split
+through `BodyResult::tail_with_frame_at_index` /
+`tail_with_block_at_index` (see [Single entry point: `Scheduler::enter_block`](#single-entry-point-schedulerenter_block) above).
+
 ### FN-body chain assembly
 
 A function's body chain depth must equal the **lexical** nesting of
@@ -1126,3 +1247,8 @@ for test fixtures and builtin-registration paths.
   ([roadmap/monadic-side-effects.md](../roadmap/libraries/monadic-side-effects.md)).
   `Scope::out` is one ad-hoc effect channel today; future effects (IO, time,
   randomness) need a uniform carrier that threads through the same node graph.
+- **Argument-binding unification**
+  ([roadmap/argument-binding-unification.md](../roadmap/type_language/argument-binding-unification.md)).
+  The invoke path's per-entry install into `Bindings.data` collapses to a
+  single record-block install under one frame-level `BindingIndex`, since every
+  parameter of a call shares the same installing position.

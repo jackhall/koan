@@ -86,7 +86,7 @@ nested-parens part holding the kwargs.
 ## Classifier
 
 `classify_dispatch_shape`
-([dispatch.rs](../../src/machine/execute/scheduler/dispatch.rs))
+([dispatch.rs](../../src/machine/execute/dispatch.rs))
 carries a `SigiledTypeExpr` variant whose handler
 (`fast_lane_sigiled_type_expr`) tail-replaces the slot with a
 `Dispatch` of the wrapped `KExpression`. The inner dispatch sees the
@@ -99,7 +99,10 @@ inner expression's parts decide its shape:
   `MAP _ -> _` / `FN` / `FUNCTOR` overloads in
   [`builtins/type_constructors.rs`](../../src/builtins/type_constructors.rs).
 - `BareTypeLeaf` / `BareIdentifier` for single-name sigils
-  (`:(Number)`, `:(MyType)`).
+  (`:(Number)`, `:(MyType)`). The `BareTypeLeaf` fast lane is the
+  primary caller of `coerce_type_token_value` — see
+  [elaboration.md § Layers](elaboration.md#layers) § Layer 4 for the
+  shared coercion seam.
 - `ConstructorCall` for a leaf-Type head with non-empty rest
   (`:(MyStruct 1 2 3)`) — routes Struct / Tagged / Newtype heads
   through their construction primitives.
@@ -115,16 +118,18 @@ reaches a `TypeExprRef` / `Type` / `AnyModule` / `AnySignature` slot
 and surfaces a standard `TypeMismatch`. The sigil handler itself does
 no extra check; the slot-type rails are the single source of truth.
 
-The legacy positional sigil shape (`:(List Number)` →
-`[Type(List), Type(Number)]`) now classifies as `ConstructorCall`
-inside the wrapper. Standalone parameterized-type elaboration is
-served by the keyworded overloads in every freshly-written
-annotation; the field-walker inside `typed_field_list` retains an
-inline `try_synth_legacy` path for legacy positional shapes embedded
-in `STRUCT` / `UNION` field schemas, because the elaborator there
-carries SCC threading context (current declaration name + threaded
-set) that the standalone dispatcher does not yet plumb (see
-[Open work](#open-work)).
+Every parameterized type rides one surface: the keyworded sigil
+(`:(LIST OF Number)`, `:(MAP K -> V)`, `:(FN … -> R)`), served by the
+type-constructor overloads. The field-walker inside `typed_field_list`
+handles the sigil embedded in `STRUCT` / `UNION` field schemas through a
+single path. Keyworded shapes (`:(LIST OF Tree)`, `:(MAP Tree -> _)`)
+sub-Dispatch through the standalone dispatcher, which carries no SCC
+context, so `rewrite_threaded_self_refs` first rewrites every threaded
+self-reference to a `Future(KTypeValue(RecursiveRef(name)))` carrier —
+the same type-side transport `:(LIST OF Number)` rides — before the
+sub-Dispatch. This lowers `STRUCT Tree = (children :(LIST OF Tree))`'s
+field to `List(RecursiveRef("Tree"))` rather than parking on `Tree`'s own
+placeholder and closing a scheduler-deadlock cycle.
 
 ## Binder install: name-keyed vs bucket-keyed
 
@@ -156,23 +161,16 @@ FN / FUNCTOR do not install on the name channel.
 
 ## Open work
 
+- [Record substrate for identifier-keyed binding](../../roadmap/type_language/record-substrate.md) —
+  one ordered identifier-keyed map shape, with order-blind equality and a
+  name+type hash, shared by the struct schema, FN/FUNCTOR parameter types,
+  and the runtime binding carriers.
 - [FN/FUNCTOR named identity](../../roadmap/type_language/fn-named-identity.md) —
-  load parameter names from the `:(FN ...)` / `:(FUNCTOR ...)` sigil
-  surface into `KType::KFunction` / `KType::KFunctor` identity so a
-  function-typed slot can enforce that callers use the declared
-  parameter names.
-- [SCC-aware dispatcher for parameterized self-recursive
-  types](../../roadmap/dispatch_fix/scc-aware-dispatcher-for-self-recursive-types.md) —
-  plumb the elaborator's threaded set + current-declaration context
-  into the dispatcher's bare-Type-leaf and sub-Dispatch paths so a
-  self-reference inside `:(LIST OF Tree)` inside `STRUCT Tree`'s body
-  short-circuits `Tree` to `RecursiveRef` rather than `UnboundName`.
-  Closes the field-walker / dispatcher split and retires the
-  `try_synth_legacy` inline path.
-- [User-defined TypeConstructor keyworded
-  application](../../roadmap/dispatch_fix/user-defined-typeconstructor-keyworded-application.md) —
-  give a user `LET Wrap = (TYPE_CONSTRUCTOR T)` a keyworded
-  application surface so `:(Wrap Number)` routes through dispatch
-  the same way `:(LIST OF Number)` does. Today only the four builtin
-  parameterized types (`LIST`, `MAP`, `FN`, `FUNCTOR`) have
-  keyworded overloads.
+  round-trip parameter names from the `:(FN ...)` / `:(FUNCTOR ...)` sigil
+  surface into `KType::KFunction` / `KType::KFunctor` identity, against the
+  record substrate's equality, so a function-typed slot records the names
+  callers must use.
+- [Record structural subtyping and projection](../../roadmap/type_language/record-subtyping.md) —
+  extend dispatch's specificity lattice with width/depth record subtyping
+  (depth sound under value immutability) plus a `FROM` projection builtin to
+  disambiguate incomparable arms.

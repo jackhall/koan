@@ -1,6 +1,6 @@
+use super::scheduler::Scheduler;
 use crate::builtins::default_scope;
 use crate::machine::{KError, RuntimeArena, SchedulerHandle};
-use super::scheduler::Scheduler;
 use crate::parse::{parse, parse_with_path};
 
 /// Parse Koan source and run it on a fresh `RuntimeArena`; all values allocated by the
@@ -12,15 +12,11 @@ pub fn interpret(source: &str) -> Result<(), KError> {
 /// `interpret` with a caller-supplied writer for `PRINT` output. Source is
 /// registered under the synthetic path `<input>`; use [`interpret_with_writer_path`]
 /// to surface a real filename in error frames.
-pub fn interpret_with_writer(
-    source: &str,
-    out: Box<dyn std::io::Write>,
-) -> Result<(), KError> {
+pub fn interpret_with_writer(source: &str, out: Box<dyn std::io::Write>) -> Result<(), KError> {
     interpret_with_writer_path(source, None, out)
 }
 
-/// `interpret` with both a caller-supplied writer and an optional filename for
-/// the source registry. `None` falls back to `<input>`.
+/// `None` for `path` falls back to `<input>`.
 pub fn interpret_with_writer_path(
     source: &str,
     path: Option<&str>,
@@ -38,13 +34,9 @@ pub fn interpret_with_writer_path(
     // dispatched node inherits from there (cactus chain).
     let top_level = scheduler.enter_block(root.id, exprs, root);
     scheduler.execute()?;
-    // Top-level dispatches share the run-root scope and execute independently; surface
-    // the first errored result as the program's outcome.
-    //
-    // Empty-container error rule: a bare top-level expression is an untyped resolution
-    // boundary. An unstamped empty `[]` / `{}` reaching it has no element type to infer
-    // and was never given one by an annotation — reject it rather than silently resolve to
-    // `List<Any>` / `Dict<Any, Any>`.
+    // A bare top-level expression is an untyped resolution boundary: an unstamped
+    // empty `[]` / `{}` reaching it has no element type to infer, so reject rather
+    // than silently resolve to `List<Any>` / `Dict<Any, Any>`.
     for id in top_level {
         match scheduler.read_result(id) {
             Err(e) => return Err(e.clone()),

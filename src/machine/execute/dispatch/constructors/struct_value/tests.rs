@@ -2,12 +2,12 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::machine::model::ast::KExpression;
-use crate::parse::parse;
 use crate::builtins::default_scope;
 use crate::machine::core::{KErrorKind, RuntimeArena, Scope};
 use crate::machine::execute::Scheduler;
+use crate::machine::model::ast::KExpression;
 use crate::machine::model::values::KObject;
+use crate::parse::parse;
 
 struct SharedBuf(Rc<RefCell<Vec<u8>>>);
 impl Write for SharedBuf {
@@ -15,7 +15,9 @@ impl Write for SharedBuf {
         self.0.borrow_mut().extend_from_slice(b);
         Ok(b.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn build_scope<'a>(arena: &'a RuntimeArena, captured: Rc<RefCell<Vec<u8>>>) -> &'a Scope<'a> {
@@ -44,13 +46,12 @@ fn run_one<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> &'a KObject<'a> {
     sched.read(id)
 }
 
-fn run_one_err<'a>(
-    scope: &'a Scope<'a>,
-    expr: KExpression<'a>,
-) -> crate::machine::core::KError {
+fn run_one_err<'a>(scope: &'a Scope<'a>, expr: KExpression<'a>) -> crate::machine::core::KError {
     let mut sched = Scheduler::new();
     let id = sched.add_dispatch(expr, scope);
-    sched.execute().expect("scheduler should not surface errors directly");
+    sched
+        .execute()
+        .expect("scheduler should not surface errors directly");
     match sched.read_result(id) {
         Ok(_) => panic!("expected error"),
         Err(e) => e.clone(),
@@ -65,7 +66,11 @@ fn struct_construction_via_type_token() {
     run(scope, "STRUCT Point = (x :Number, y :Number)");
     let result = run_one(scope, parse_one("Point (x = 3, y = 4)"));
     match result {
-        KObject::Struct { name: type_name, fields, .. } => {
+        KObject::Struct {
+            name: type_name,
+            fields,
+            ..
+        } => {
             assert_eq!(type_name, "Point");
             assert_eq!(fields.len(), 2);
             assert!(matches!(fields.get("x"), Some(KObject::Number(n)) if *n == 3.0));
@@ -120,12 +125,13 @@ fn struct_construction_value_type_mismatch() {
 
 #[test]
 fn struct_construction_with_identifier_arg() {
-    // Bare identifiers on the value side resolve through value_lookup because `apply`
-    // wraps each value-part in a single-part sub-expression after reordering.
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
-    run(scope, "STRUCT Point = (x :Number, y :Number)\nLET ax = 7\nLET ay = 9");
+    run(
+        scope,
+        "STRUCT Point = (x :Number, y :Number)\nLET ax = 7\nLET ay = 9",
+    );
     let result = run_one(scope, parse_one("Point (x = ax, y = ay)"));
     match result {
         KObject::Struct { fields, .. } => {
@@ -138,8 +144,6 @@ fn struct_construction_with_identifier_arg() {
 
 #[test]
 fn struct_construction_order_independent() {
-    // The user can write fields in any order; `apply` reorders to schema declaration order
-    // before construction. Result is identical regardless of source order.
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
@@ -192,11 +196,9 @@ fn struct_construction_unbound_type_token_errors() {
     );
 }
 
-/// Regression: struct values iterate (and therefore PRINT/`summarize` render) in
-/// declaration order. Pre-Phase-1 this used a `HashMap`, so the surface output sat at
-/// hash-iteration order — which differed from the schema and surprised users. The order
-/// `z, a, m` is chosen to differ from any alphabetical / hash-stable ordering on a small
-/// set of single-letter keys.
+/// Field order is `z, a, m` — picked to differ from any alphabetical or
+/// hash-stable ordering on single-letter keys, so a regression to a hashed
+/// container would be detectable.
 #[test]
 fn struct_value_iterates_in_declaration_order() {
     let arena = RuntimeArena::new();
@@ -224,14 +226,22 @@ fn struct_value_iterates_in_declaration_order() {
 
 #[test]
 fn struct_value_summarizes_with_type_name_and_fields() {
-    // Smoke-tests the `summarize` format so PRINT downstream doesn't surprise users.
     let arena = RuntimeArena::new();
     let captured = Rc::new(RefCell::new(Vec::new()));
     let scope = build_scope(&arena, captured);
     run(scope, "STRUCT Point = (x :Number, y :Number)");
     let result = run_one(scope, parse_one("Point (x = 3, y = 4)"));
     let summary = crate::machine::model::types::Parseable::summarize(result);
-    assert!(summary.starts_with("Point("), "summary should start with Point(, got {summary}");
-    assert!(summary.contains("x: 3"), "summary should include x: 3, got {summary}");
-    assert!(summary.contains("y: 4"), "summary should include y: 4, got {summary}");
+    assert!(
+        summary.starts_with("Point("),
+        "summary should start with Point(, got {summary}"
+    );
+    assert!(
+        summary.contains("x: 3"),
+        "summary should include x: 3, got {summary}"
+    );
+    assert!(
+        summary.contains("y: 4"),
+        "summary should include y: 4, got {summary}"
+    );
 }

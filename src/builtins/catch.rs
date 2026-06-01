@@ -1,23 +1,19 @@
 //! `CATCH <expr>` — lift a single interpreter fault into a `Result` value.
-//!
-//! Reuses the [`add_catch`](crate::machine::execute::Scheduler) primitive that drives
-//! [`TRY-WITH`](super::try_with), minus the branches slot, the `it` binding, and the
-//! re-raise path. `expr` is scheduled as a sub-dispatch; the finish closure wraps the
-//! outcome in the prelude-registered [`Result`](super::result) carrier — `ok(v)` on
-//! success, `error(e)` on failure where `e = KError::to_tagged()`. Per-`KErrorKind`
-//! dispatch is reached by `MATCH`-ing the inner payload after destructuring the
-//! `Result`.
+//! Shares the `add_catch` primitive with [`TRY-WITH`](super::try_with) but
+//! lacks branches, an `it` binding, and the re-raise path: the finish closure
+//! wraps the outcome in the prelude [`Result`](super::result) carrier as
+//! either `ok(v)` or `error(KError::to_tagged())`.
 
 use std::rc::Rc;
 
 use crate::machine::model::types::UserTypeKind;
 use crate::machine::model::{KObject, KType};
 use crate::machine::{
-    ArgumentBundle, BodyResult, CatchFinish, KError, KErrorKind, Scope, SchedulerHandle,
+    ArgumentBundle, BodyResult, CatchFinish, KError, KErrorKind, SchedulerHandle, Scope,
 };
 
-use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 use super::{arg, err, kw, register_builtin, sig};
+use crate::machine::core::kfunction::argument_bundle::extract_kexpression;
 
 pub fn body<'a>(
     scope: &'a Scope<'a>,
@@ -32,14 +28,11 @@ pub fn body<'a>(
             )));
         }
     };
-    // Capture the registered carrier's `scope_id` here in `body`, not in the finish
-    // closure: `scope.id` is the call-site scope (root for a top-level CATCH, a per-call
-    // scope inside a function body), whereas the `Result` carrier's id is fixed at
-    // prelude registration. Matching it is what makes a CATCH-produced value and a
-    // `Result (...)`-constructed value the same nominal type. (Requires `result::register`
-    // to run before `catch::register`.)
-    let result_scope_id = match scope.lookup("Result") {
-        Some(KObject::TaggedUnionType { scope_id, .. }) => *scope_id,
+    // Read the prelude `Result` identity's scope_id at body time (not in the finish
+    // closure) so the CATCH-produced value matches the nominal identity of a
+    // `Result (...)`-constructed one. Requires `result::register` to run first.
+    let result_scope_id = match scope.resolve_type("Result") {
+        Some(KType::UserType { scope_id, .. }) => *scope_id,
         _ => panic!("Result must be registered before CATCH"),
     };
     let sub_id = sched.add_dispatch(expr_inner, scope);
@@ -53,10 +46,9 @@ pub fn body<'a>(
             value: Rc::new(payload),
             scope_id: result_scope_id,
             name: "Result".to_string(),
-            // Erased: CATCH knows only the inhabited side's payload type, not the absent
-            // parameter. `matches_value(ConstructorApply, Tagged)` inspects the inhabited
-            // tag's payload directly, so a `Result<_, MyErr>` slot still correctly rejects a
-            // caught `error(KError)` without a stamped carrier here.
+            // Erased: only the inhabited side's payload type is known here.
+            // `matches_value(ConstructorApply, Tagged)` inspects that payload
+            // directly, so leaving `type_args` empty still types correctly.
             type_args: Rc::new(vec![]),
         };
         BodyResult::Value(scope.arena.alloc(tagged))
@@ -69,10 +61,12 @@ pub fn register<'a>(scope: &'a Scope<'a>) {
     register_builtin(
         scope,
         "CATCH",
-        sig(KType::AnyUserType { kind: UserTypeKind::Tagged }, vec![
-            kw("CATCH"),
-            arg("expr", KType::KExpression),
-        ]),
+        sig(
+            KType::AnyUserType {
+                kind: UserTypeKind::tagged_sentinel(),
+            },
+            vec![kw("CATCH"), arg("expr", KType::KExpression)],
+        ),
         body,
     );
 }
