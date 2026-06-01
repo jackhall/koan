@@ -170,10 +170,11 @@ proposed structural change:
 - [`tools/modgraph.py`](../tools/modgraph.py) — scores the module
   tree against a cargo-modules DOT export with a fractal complexity
   metric (coupling + nesting + comprehension-aware per-file size +
-  owner credit for documented protocols). Use
-  `--reference-loc N` to fix the denominator when comparing
-  refactors that delete code; use `--baseline FILE` to auto-derive
-  it from a captured baseline.
+  owner credit for documented protocols). The bottom-line score is
+  the total cost over a fixed denominator (`--denominator`, default
+  1000) — a constant scale, not the tree's LOC, so deleting code
+  always lowers the score; use `--baseline FILE` to record runs to a
+  tracked trend log.
 - [`tools/modgraph_rewrite.py item`](../tools/modgraph_rewrite.py) —
   SCIP-driven item-level what-if. Given an item (function, method,
   type) and a target module, produces a rewritten DOT + mirrored
